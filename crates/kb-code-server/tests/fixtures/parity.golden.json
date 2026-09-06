@@ -442,6 +442,42 @@
       ]
     },
     {
+      "lang": "haml",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "partial",
+          "reason": "template outline rows (elements and filters) from a first-party scanner — the embedded Ruby fragments get no symbols of their own"
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "partial",
+          "reason": "convention edges only (render / i18n / component, likely|candidate) — no occurrences index, so the ladder has no exact tier"
+        },
+        {
+          "capability": "hover",
+          "state": "partial",
+          "reason": "word-scan resolve over template outline rows — no occurrences index to bind a position"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
       "lang": "dockerfile",
       "tier": "none",
       "cells": [
@@ -514,6 +550,6 @@
       ]
     }
   ],
-  "total": 14,
+  "total": 15,
   "truncated": false
 }
