@@ -500,6 +500,17 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // data, no repo content, no loopback concern. The CLI embeds the SAME
         // file, so `kb-code commands …` and the SPA can never disagree.
         .route("/commands", get(routes::commands))
+        // V72-H1 (D7) — `syntax/1`: `GET /api/syntax` is the file-type
+        // registry (grammar, extraction tier, injection host, extensions/
+        // stems/shebangs) and `GET /api/parity` is the Parity Grid derived
+        // from it. Both are build-time data with no params and no repo
+        // content, on the same ordinary `auth_bearer` surface as
+        // `/themes` and `/commands`. `crate::syntax::V72_H1_ROUTES`
+        // declares the pair; a unit test walks that declaration against
+        // THIS file, so a route added there without a registration here
+        // fails the build rather than shipping dead.
+        .route("/syntax", get(crate::syntax::syntax_route))
+        .route("/parity", get(crate::syntax::parity_route))
         .route("/tree", get(routes::tree))
         .route("/file", get(routes::file))
         .route("/symbols", get(routes::symbols))

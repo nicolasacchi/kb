@@ -1119,6 +1119,19 @@ pub struct FileResponse {
     pub size: u64,
     pub blob_hash: String,
     pub lang: Option<&'static str>,
+    /// V72-H1 (D7) — the `syntax/1` extraction tier for this file TYPE:
+    /// `"full"` | `"highlight_only"` | `"none"`. It says what this
+    /// daemon's pipeline runs for files of this kind, NOT that this
+    /// particular blob has been derived (that is what `symbols`/
+    /// `highlights` themselves report). A `highlight_only` file therefore
+    /// has spans and an honestly EMPTY `symbols` list — "no symbols by
+    /// tier", not an empty list that looks like a bug. Additive: a client
+    /// that ignores both fields sees byte-identical behaviour.
+    pub tier: &'static str,
+    /// Why `tier` is not `"full"` — `null` when it is. An unregistered
+    /// file type says so here rather than being silently indistinguishable
+    /// from a registered one with no grammar.
+    pub tier_reason: Option<&'static str>,
     /// `"utf8"` | `"base64"` — which of `content`'s two encodings applies.
     pub encoding: &'static str,
     pub content: String,
@@ -1173,6 +1186,9 @@ pub async fn file(
     state.secret_policy.check(&params.path)?;
     let read = read_repo_file(repo, &params.path, params.rev.as_deref())?;
     let lang_info = lang::detect(&params.path, Some(&read.bytes));
+    // V72-H1 — the same registry lookup `ingest` makes, so the wire can
+    // never disagree with what the pipeline actually did.
+    let (tier, tier_reason) = crate::syntax::tier_for_path(&params.path, Some(&read.bytes));
 
     let (encoding, content) = match String::from_utf8(read.bytes.clone()) {
         Ok(s) => ("utf8", s),
@@ -1222,6 +1238,8 @@ pub async fn file(
         size: read.bytes.len() as u64,
         blob_hash: read.blob_hash,
         lang: lang_info.map(|l| l.id),
+        tier: tier.as_str(),
+        tier_reason,
         encoding,
         // V70-A2 — sniff the TEXT only; a base64 body is opaque bytes and
         // a hint over its encoding would be noise.
@@ -1288,6 +1306,13 @@ pub async fn symbols(
                 }
                 None => Vec::new(),
             };
+            // V72-H1 — the extraction tier rides the per-file symbol list
+            // for the same reason it rides `/api/file`: an empty
+            // `symbols` array on a `highlight_only`/`none` file is a
+            // DESIGN outcome, and a reader (or an outline renderer) must
+            // be able to say "no symbols by tier" instead of showing an
+            // empty list that reads as a failure.
+            let (tier, tier_reason) = crate::syntax::tier_for_path(path, Some(&read.bytes));
             Ok((
                 [(header::CACHE_CONTROL, "no-store")],
                 Json(serde_json::json!({
@@ -1295,6 +1320,8 @@ pub async fn symbols(
                     "path": path,
                     "ref": params.rev,
                     "lang": lang_info.map(|l| l.id),
+                    "tier": tier.as_str(),
+                    "tier_reason": tier_reason,
                     "symbols": symbols,
                 })),
             )

@@ -1,9 +1,16 @@
-//! Language detection (by file extension, plus a narrow shebang sniff for
-//! extensionless scripts) for the six v1 languages — Rust, Python, Ruby
+//! Grammar plumbing + per-language cache salts for the six v1 languages — Rust, Python, Ruby
 //! (Wave 1) and TypeScript/TSX, JavaScript, Bash, YAML (W2.2) — plus Go,
 //! TOML, JSON (W2.6, the "next-tier languages" — operator ruling "plan for
 //! it: json, go, toml") — plus the shared tree-sitter parse plumbing
 //! `extract.rs`/`highlight.rs` both build on.
+//!
+//! **Detection itself no longer lives here (V72-H1).** Which file is which
+//! language — the extension table, D7's filename-stem table (`Gemfile`,
+//! `Rakefile`, `config.ru`, `*.rake`, `*.jbuilder`, `*.gemspec`) and the
+//! `#!` interpreter sniff — is one declaration in the `syntax/1` registry
+//! (`crate::syntax`), together with the extraction TIER and the Parity
+//! Grid derived from it. [`detect`] is a thin façade over that table and
+//! its contract is unchanged.
 //!
 //! Every derived row (`symbols`/`highlights`) is keyed by `(blob_hash,
 //! salt)` (ADR-2). `salt` bakes in BOTH the grammar crate's exact pinned
@@ -28,8 +35,6 @@
 //! 0.25.0`, `tree-sitter-toml-ng 0.7.0`, `tree-sitter-json 0.24.8`) —
 //! Cargo.toml only pins the minor version, so bump the salt by hand whenever
 //! `cargo update` moves one of these crates forward.
-
-use std::path::Path;
 
 /// One supported language: its id (used as the `files.lang` /
 /// `symbols.salt`-prefix value) and its cache-key salt.
@@ -102,12 +107,20 @@ pub const ERB: LangInfo = LangInfo {
     salt: "erb@0.25.0+q1",
 };
 
-/// Detect a language from the file's extension, or — ONLY when there is no
-/// extension at all AND `content` is given and starts with `#!` — a narrow
-/// bash-family shebang sniff (see [`shebang_is_bash_family`]). `None` means
-/// "no grammar for this file" (still gets a `files` row via
-/// `ingest::index_file`, tagged `lang = "unknown"`, but no
-/// symbols/highlights).
+/// Detect a language from `path` (and, for an extensionless file with a
+/// `#!` line, `content`) — a thin façade over the `syntax/1` registry
+/// (`crate::syntax`), which owns the extension table, D7's filename-stem
+/// table and the interpreter table as ONE declaration.
+///
+/// The contract is unchanged and load-bearing: `Some` means "there is a
+/// tree-sitter grammar for this file, and `salt` keys its derived rows".
+/// A registry row with NO grammar (`sql`, `dockerfile` — named so the gap
+/// is visible on `GET /api/syntax` and the Parity Grid) is therefore
+/// invisible here, exactly as it was before V72-H1; reach for
+/// `syntax::row_for_path` when you want the row rather than the grammar.
+/// `None` still means "no grammar for this file" (a `files` row via
+/// `ingest::index_file`, tagged `lang = "unknown"`, but no symbols or
+/// highlights).
 ///
 /// `content` is `None` at call sites that never had the bytes handy in the
 /// original W1.5 shape; both live call sites gained the bytes in W2.2
@@ -116,66 +129,7 @@ pub const ERB: LangInfo = LangInfo {
 /// comments for why passing `Some(bytes)` there is free (the bytes are
 /// already resident, not a second read).
 pub fn detect(path: &str, content: Option<&[u8]>) -> Option<LangInfo> {
-    match Path::new(path).extension().and_then(|e| e.to_str()) {
-        Some("rs") => return Some(RUST),
-        Some("py") => return Some(PYTHON),
-        Some("rb") => return Some(RUBY),
-        Some("ts") | Some("mts") | Some("cts") => return Some(TYPESCRIPT),
-        Some("tsx") => return Some(TSX),
-        Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => return Some(JAVASCRIPT),
-        Some("sh") | Some("bash") => return Some(BASH),
-        Some("yml") | Some("yaml") => return Some(YAML),
-        Some("go") => return Some(GO),
-        Some("toml") => return Some(TOML),
-        Some("json") => return Some(JSON),
-        // PRR-N3 — `Path::extension()` only ever returns the LAST dotted
-        // component, so `.erb`/`.html.erb`/`.turbo_stream.erb`/`.text.erb`
-        // all collapse to the same `"erb"` match here; the format the ERB
-        // renders (html/turbo_stream/text) is a `frameworks::rails::views`
-        // concern (it inspects the FULL filename suffix, e.g.
-        // `.turbo_stream.erb`, for `turbo_stream_target` detection), not a
-        // `lang::detect` one.
-        Some("erb") => return Some(ERB),
-        Some(_) => return None,
-        None => {}
-    }
-    let bytes = content?;
-    if bytes.starts_with(b"#!") && shebang_is_bash_family(bytes) {
-        Some(BASH)
-    } else {
-        None
-    }
-}
-
-/// `true` if `bytes`' first line is a `#!` shebang naming a bash-family
-/// interpreter (`bash`/`sh`/`dash`/`ksh`), directly (`#!/bin/bash`) or via
-/// `env` indirection (`#!/usr/bin/env bash`). Any OTHER interpreter
-/// (python/perl/node/ruby/...) returns `false` — extensionless-with-shebang
-/// is deliberately BASH-SPECIFIC sniffing (W2.2 scope: Bash is the only
-/// language `detect` ever infers without an extension), not a general
-/// interpreter-detection facility that would risk misclassifying an
-/// extensionless Python/Perl/Node script as Bash.
-fn shebang_is_bash_family(bytes: &[u8]) -> bool {
-    let line_end = bytes
-        .iter()
-        .position(|&b| b == b'\n')
-        .unwrap_or(bytes.len());
-    let Ok(line) = std::str::from_utf8(&bytes[2..line_end]) else {
-        return false;
-    };
-    let mut parts = line.split_whitespace();
-    let Some(first) = parts.next() else {
-        return false;
-    };
-    // `#!/usr/bin/env bash` indirection: the real interpreter is the NEXT
-    // word, not `env` itself.
-    let interpreter = if first == "env" || first.ends_with("/env") {
-        parts.next().unwrap_or("")
-    } else {
-        first
-    };
-    let name = interpreter.rsplit('/').next().unwrap_or(interpreter);
-    matches!(name, "bash" | "sh" | "dash" | "ksh")
+    crate::syntax::row_for_path(path, content).and_then(|row| row.info)
 }
 
 /// Every registered [`LangInfo`], PRODUCTION-reachable (unlike the
@@ -455,75 +409,13 @@ pub(crate) const TAGS_LANG_IDS: &[&str] = &[
 mod tests {
     use super::*;
 
-    #[test]
-    fn detects_every_v1_extension() {
-        assert_eq!(detect("src/lib.rs", None).map(|l| l.id), Some("rust"));
-        assert_eq!(detect("pkg/module.py", None).map(|l| l.id), Some("python"));
-        assert_eq!(detect("app/model.rb", None).map(|l| l.id), Some("ruby"));
-        assert_eq!(detect("src/app.ts", None).map(|l| l.id), Some("typescript"));
-        assert_eq!(
-            detect("src/app.mts", None).map(|l| l.id),
-            Some("typescript")
-        );
-        assert_eq!(
-            detect("src/app.cts", None).map(|l| l.id),
-            Some("typescript")
-        );
-        assert_eq!(detect("src/Widget.tsx", None).map(|l| l.id), Some("tsx"));
-        assert_eq!(detect("src/app.js", None).map(|l| l.id), Some("javascript"));
-        assert_eq!(
-            detect("src/app.jsx", None).map(|l| l.id),
-            Some("javascript")
-        );
-        assert_eq!(
-            detect("src/app.mjs", None).map(|l| l.id),
-            Some("javascript")
-        );
-        assert_eq!(
-            detect("src/app.cjs", None).map(|l| l.id),
-            Some("javascript")
-        );
-        assert_eq!(detect("bin/run.sh", None).map(|l| l.id), Some("bash"));
-        assert_eq!(detect("bin/run.bash", None).map(|l| l.id), Some("bash"));
-        assert_eq!(detect("k8s/deploy.yml", None).map(|l| l.id), Some("yaml"));
-        assert_eq!(detect("k8s/deploy.yaml", None).map(|l| l.id), Some("yaml"));
-        assert_eq!(detect("cmd/main.go", None).map(|l| l.id), Some("go"));
-        assert_eq!(detect("Cargo.toml", None).map(|l| l.id), Some("toml"));
-        assert_eq!(detect("package.json", None).map(|l| l.id), Some("json"));
-        assert_eq!(detect("README.md", None), None);
-        assert_eq!(detect("noextension", None), None);
-    }
-
-    #[test]
-    fn shebang_sniff_only_fires_for_extensionless_bash_family_scripts() {
-        assert_eq!(
-            detect("bin/tool", Some(b"#!/bin/bash\necho hi\n")).map(|l| l.id),
-            Some("bash")
-        );
-        assert_eq!(
-            detect("bin/tool", Some(b"#!/bin/sh\necho hi\n")).map(|l| l.id),
-            Some("bash")
-        );
-        assert_eq!(
-            detect("bin/tool", Some(b"#!/usr/bin/env bash\necho hi\n")).map(|l| l.id),
-            Some("bash")
-        );
-        assert_eq!(
-            detect("bin/tool", Some(b"#!/usr/bin/env dash\n")).map(|l| l.id),
-            Some("bash")
-        );
-        // A python/perl shebang must NOT be misclassified as bash.
-        assert_eq!(detect("bin/tool", Some(b"#!/usr/bin/env python3\n")), None);
-        assert_eq!(detect("bin/tool", Some(b"#!/usr/bin/perl\n")), None);
-        // No `#!` at all, or no content given: no sniff, no match.
-        assert_eq!(detect("bin/tool", Some(b"just some text\n")), None);
-        assert_eq!(detect("bin/tool", None), None);
-        // An extension always wins over content — no sniff attempted.
-        assert_eq!(
-            detect("bin/tool.py", Some(b"#!/bin/bash\n")).map(|l| l.id),
-            Some("python")
-        );
-    }
+    // V72-H1 — the detection TABLE (extensions, D7's filename stems, the
+    // `#!` interpreter sniff) moved to the `syntax/1` registry and is
+    // pinned there: `syntax::tests::
+    // detection_is_byte_identical_for_every_pre_v72_h1_extension` carries
+    // the pre-V72-H1 pairs this module used to assert, plus the stem and
+    // shebang tables the registry adds. What stays here is the part that
+    // is about `LangInfo` itself.
 
     #[test]
     fn detect_and_for_id_agree() {
