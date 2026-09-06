@@ -94,8 +94,8 @@ fn generate_api_route_table() {
     );
     out.push_str(
         "The complete route table, extracted from the router declaration. \
-         The narrative API guide (auth, shapes, examples) stays in \
-         [README.md](../README.md); generated request/response types live in \
+         The narrative API guide (auth, shapes, examples) lives in \
+         [docs/http-api.md](http-api.md); generated request/response types live in \
          [web/src/api/generated/](../web/src/api/generated/).\n\n",
     );
     out.push_str(
