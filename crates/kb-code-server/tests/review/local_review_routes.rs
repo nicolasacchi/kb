@@ -943,3 +943,158 @@ async fn suggestion_apply_404_for_non_loopback() {
         "POST /api/annotations/{{id}}/apply must 404 a non-loopback caller"
     );
 }
+
+/// V73-K2a — per-HUNK viewed state (`review_hunk_viewed`, V0031).
+///
+/// The whole point of this table is that the id is CONTENT-addressed and
+/// minted by the client, so the daemon's job is narrow and this test says
+/// exactly what it is: store the set, echo it back on `/files` as an
+/// ADDITIVE field, refuse a malformed id, 404 an unmark that has nothing
+/// to unmark, and never let one review's marks reach another.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hunk_viewed_put_list_delete_and_isolation() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_feature_branch();
+    let dir = repo_tmp.path();
+    let (_daemon_tmp, base) = boot_with_repo("r", dir, ReviewSection::default()).await;
+    let client = reqwest::Client::new();
+
+    let mut ids = Vec::new();
+    for title in ["first", "second"] {
+        let resp = client
+            .post(format!("{base}/api/reviews"))
+            .json(&serde_json::json!({
+                "repo": "r",
+                "head_ref": "feature",
+                "base_ref": "main",
+                "title": title,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
+        let created: serde_json::Value = resp.json().await.unwrap();
+        ids.push(created["id"].as_i64().unwrap());
+    }
+    let (id1, id2) = (ids[0], ids[1]);
+
+    // An untouched review reports an EMPTY set, not a missing field — the
+    // SPA reads `hunks_viewed ?? []` and a present-but-empty array is what
+    // makes "no marks" and "old daemon" distinguishable.
+    let files: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id1}/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(files["hunks_viewed"], serde_json::json!([]));
+
+    // Two marks on review 1. The ids are opaque to the daemon (16 hex is
+    // what `kbc-hunkid/1` mints today), so this test uses literals.
+    for (hunk_id, path) in [("00112233aabbccdd", "a.txt"), ("445566778899eeff", "b.txt")] {
+        let resp = client
+            .put(format!("{base}/api/reviews/{id1}/hunk-viewed"))
+            .json(&serde_json::json!({ "hunk_id": hunk_id, "path": path }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+    }
+
+    // Idempotent: the same mark twice is one row.
+    let resp = client
+        .put(format!("{base}/api/reviews/{id1}/hunk-viewed"))
+        .json(&serde_json::json!({ "hunk_id": "00112233aabbccdd", "path": "a.txt" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let files: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id1}/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // path-then-hunk ordered, so the wire array is deterministic.
+    assert_eq!(
+        files["hunks_viewed"],
+        serde_json::json!([
+            { "hunk_id": "00112233aabbccdd", "path": "a.txt" },
+            { "hunk_id": "445566778899eeff", "path": "b.txt" }
+        ])
+    );
+
+    // ISOLATION — review 2 sees none of it.
+    let files2: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id2}/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(files2["hunks_viewed"], serde_json::json!([]));
+
+    // A malformed id is a 400 with the rule named, never a stored row.
+    for bad in ["", "NOTLOWER", "has space", "a-b"] {
+        let resp = client
+            .put(format!("{base}/api/reviews/{id1}/hunk-viewed"))
+            .json(&serde_json::json!({ "hunk_id": bad, "path": "a.txt" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "hunk_id {bad:?} should be refused");
+    }
+
+    // Unmark: 204, then 404 — "nothing to unmark" is a miss, exactly as
+    // `delete_viewed` treats an unknown path.
+    let resp = client
+        .delete(format!(
+            "{base}/api/reviews/{id1}/hunk-viewed/00112233aabbccdd"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+    let resp = client
+        .delete(format!(
+            "{base}/api/reviews/{id1}/hunk-viewed/00112233aabbccdd"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    let files: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id1}/files"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        files["hunks_viewed"],
+        serde_json::json!([{ "hunk_id": "445566778899eeff", "path": "b.txt" }])
+    );
+
+    // Deleting the REVIEW cascades the marks away (the FK's ON DELETE
+    // CASCADE, asserted rather than assumed).
+    let resp = client
+        .delete(format!("{base}/api/reviews/{id1}"))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "{}", resp.text().await.unwrap());
+    let resp = client
+        .get(format!("{base}/api/reviews/{id1}/files"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}

@@ -4342,6 +4342,316 @@
       "dispatch": "surface"
     },
     {
+      "id": "diff.hunk-viewed",
+      "title": "Toggle viewed on this hunk",
+      "aka": [
+        "hunk viewed",
+        "seen hunk"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space h"
+        ],
+        "plain": [],
+        "helix": [
+          "Space h"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "hunk"
+      ],
+      "cli": "none:per-hunk viewed state is browser-composed — `kb-code review viewed` is per FILE, and the hunk id is a client-minted content address (kbc-hunkid/1)",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V73-K2a. Under the leader for the SAME reason V70-A5 moved `diff.toggle-viewed` there: bare `v` is the reader's visual mode (D2), and `diff`/`reader` are coactive at depth 20, so a bare `v` here would be an unratifiable same-depth conflict. `Space h` sits beside `Space v` (file) / `Space V` (viewed-advance)."
+    },
+    {
+      "id": "diff.fold",
+      "title": "Fold this hunk",
+      "aka": [
+        "collapse hunk"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z c"
+        ],
+        "plain": [],
+        "helix": [
+          "z c"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "hunk"
+      ],
+      "cli": "none:hunk folding is browser-local diff layout, like `diff.collapse`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V73-K2a. `z` is a PURE-vim prefix in reader scope (`z b`/`z t`/`z z`, all vim_kind), so `shouldWithholdFromBuffer` still withholds it inside a CodeView and these diff-scope rows never reach the buffer — the review diff page has no CodeView at all."
+    },
+    {
+      "id": "diff.unfold",
+      "title": "Unfold this hunk",
+      "aka": [
+        "expand hunk"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z o"
+        ],
+        "plain": [],
+        "helix": [
+          "z o"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "hunk"
+      ],
+      "cli": "none:hunk folding is browser-local diff layout, like `diff.collapse`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.fold-toggle",
+      "title": "Toggle this hunk's fold",
+      "aka": [
+        "fold toggle"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z a"
+        ],
+        "plain": [],
+        "helix": [
+          "z a"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "hunk"
+      ],
+      "cli": "none:hunk folding is browser-local diff layout, like `diff.collapse`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.context-cycle",
+      "title": "Cycle the context dial (3 / 10 / whole file)",
+      "aka": [
+        "context",
+        "more context",
+        "expand context"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space c"
+        ],
+        "plain": [],
+        "helix": [
+          "Space c"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "none:the context dial is a browser-local reading width; widened rows come from `kb-code cat` territory (GET /api/file), never synthesised",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.noise-toggle",
+      "title": "Collapse / show noise-labelled hunks",
+      "aka": [
+        "noise",
+        "collapse noise",
+        "hide generated"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space n"
+        ],
+        "plain": [],
+        "helix": [
+          "Space n"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:noise classification is a pure client-side LABEL with its rule named on the chip — there is no server-side noise verb and there must not be one",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V73-K2a. Collapses, never filters: a labelled hunk stays counted and is one click from open."
+    },
+    {
+      "id": "diff.map-toggle",
+      "title": "Show / hide the file map column",
+      "aka": [
+        "map",
+        "files column"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space m"
+        ],
+        "plain": [],
+        "helix": [
+          "Space m"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:the map column is browser-local layout; its data is `kb-code review files` + `review reading-order`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.ps-next",
+      "title": "Next patchset",
+      "aka": [
+        "newer patchset"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "] p"
+        ],
+        "plain": [],
+        "helix": [
+          "] p"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V73-K2a. Carries NO `vim_kind`, following the `] d`/`] u`/`] s` precedent exactly: `[`/`]` is a MIXED prefix, so a vim arm here would fire the step twice."
+    },
+    {
+      "id": "diff.ps-prev",
+      "title": "Previous patchset",
+      "aka": [
+        "older patchset"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "[ p"
+        ],
+        "plain": [],
+        "helix": [
+          "[ p"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.drafts",
+      "title": "Open the drafts tray",
+      "aka": [
+        "drafts",
+        "pending comments"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space w"
+        ],
+        "plain": [],
+        "helix": [
+          "Space w"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:an unpublished draft never leaves the browser (sessionStorage) — the CLI twin is the PUBLISH verb, `kb-code annotate batch`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.publish",
+      "title": "Publish every draft (one batch)",
+      "aka": [
+        "publish",
+        "submit review"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space W"
+        ],
+        "plain": [],
+        "helix": [
+          "Space W"
+        ]
+      },
+      "scope": "diff",
+      "cli": "kb-code annotate batch",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V73-K2a. ONE `POST /api/annotations/batch` — one store transaction, at most one SSE. All or nothing: a refused batch writes nothing and leaves the tray intact."
+    },
+    {
+      "id": "diff.drafts-discard",
+      "title": "Discard every draft",
+      "aka": [
+        "discard drafts"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space X"
+        ],
+        "plain": [],
+        "helix": [
+          "Space X"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:drafts are browser-local, so discarding them is too — it goes through the shared confirm host, never a bare window.confirm",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
       "id": "dismiss.menu",
       "title": "Close the disposition menu",
       "aka": [],

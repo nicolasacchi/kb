@@ -201,7 +201,9 @@
 //! `GET /reviews/{id}/annotations`) on the ordinary `auth_bearer`-gated
 //! `api` router; mutation routes (`POST /reviews`, `POST
 //! /reviews/{id}/snapshot`, `PATCH`/`DELETE /reviews/{id}`,
-//! `PUT /reviews/{id}/viewed`, `DELETE /reviews/{id}/viewed/{path}`) on the
+//! `PUT /reviews/{id}/viewed`, `DELETE /reviews/{id}/viewed/{path}`, and
+//! V73-K2a's per-hunk twin `PUT /reviews/{id}/hunk-viewed` /
+//! `DELETE /reviews/{id}/hunk-viewed/{hunk_id}`) on the
 //! SAME loopback-only sub-router `checkout`/`prs/fetch` use — they write
 //! `refs/kbc/review/<id>/ps<n>` (the second ref-write namespace after
 //! `refs/kbc/pr/<n>`).
@@ -1048,6 +1050,17 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/reviews/{id}/viewed/{*path}",
             delete(reviews::delete_viewed),
+        )
+        // V73-K2a — per-HUNK viewed state (diff v2). Same loopback-only
+        // review-mutation family as `/viewed` directly above, deliberately
+        // NOT the `review_remote` sub-router: `review_gate`'s own module
+        // doc lists `viewed` among the mutations `remote_mutations` never
+        // reaches, and a per-hunk twin of that state must not quietly ride
+        // a wider gate than the state it refines.
+        .route("/reviews/{id}/hunk-viewed", put(reviews::put_hunk_viewed))
+        .route(
+            "/reviews/{id}/hunk-viewed/{hunk_id}",
+            delete(reviews::delete_hunk_viewed),
         )
         // PRR-R2 (design doc §2 row 5) — wholesale-replace the
         // agent-authored review report. Same loopback-only review-mutation

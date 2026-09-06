@@ -855,6 +855,16 @@ pub struct ViewedBody {
     pub blob_sha: String,
 }
 
+/// V73-K2a — `PUT /api/reviews/{id}/hunk-viewed`. `hunk_id` is the SPA's
+/// own `kbc-hunkid/1` content address, opaque to this daemon (see
+/// `migrations/V0031__review_hunk_viewed.sql`); `path` is stored for
+/// attribution only and is never part of the identity.
+#[derive(Debug, Deserialize)]
+pub struct HunkViewedBody {
+    pub hunk_id: String,
+    pub path: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ListReviewsParams {
     pub repo: String,
@@ -1212,6 +1222,78 @@ pub async fn delete_viewed(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// V73-K2a — the id an opaque content address may take, checked here so a
+/// caller cannot use this column as a free-text side channel: 1..=64 chars
+/// of `[0-9a-z]` (today's `kbc-hunkid/1` is exactly 16 lowercase hex, and
+/// the wider alphabet leaves room for a future scheme without a migration).
+fn is_hunk_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+/// `PUT /api/reviews/{id}/hunk-viewed` — mark ONE hunk viewed. Loopback-
+/// only, the same unconditional gate `PUT .../viewed` rides (this is the
+/// same review-mutation family; `review_gate`'s `remote_mutations` never
+/// reaches it — see that module's "what this gate does NOT touch" list,
+/// which names `viewed`).
+pub async fn put_hunk_viewed(
+    State(state): State<SharedState>,
+    AxumPath(id): AxumPath<i64>,
+    Json(body): Json<HunkViewedBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (_review, _, _) = require_review(&state, id).await?;
+    safe_rel_path(&body.path)?;
+    if !is_hunk_id(&body.hunk_id) {
+        return Err(ApiError::bad_request(format!(
+            "hunk_id must be 1-64 lowercase alphanumerics, got {:?}",
+            body.hunk_id
+        )));
+    }
+    let hunk_id = body.hunk_id.clone();
+    let path = body.path.clone();
+    let now = now_unix();
+    state
+        .store
+        .run_blocking(move |store| store.upsert_hunk_viewed(id, &hunk_id, &path, now))
+        .await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "review_id": id,
+            "hunk_id": body.hunk_id,
+            "path": body.path,
+        })),
+    ))
+}
+
+/// `DELETE /api/reviews/{id}/hunk-viewed/{hunk_id}` — loopback-only.
+/// 404s an id that was never marked, exactly as `delete_viewed` does for a
+/// path: "nothing to unmark" is a miss, not a silent success.
+pub async fn delete_hunk_viewed(
+    State(state): State<SharedState>,
+    AxumPath((id, hunk_id)): AxumPath<(i64, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (_review, _, _) = require_review(&state, id).await?;
+    if !is_hunk_id(&hunk_id) {
+        return Err(ApiError::bad_request(format!(
+            "hunk_id must be 1-64 lowercase alphanumerics, got {hunk_id:?}"
+        )));
+    }
+    let id_c = hunk_id.clone();
+    let ok = state
+        .store
+        .run_blocking(move |store| store.delete_hunk_viewed(id, &id_c))
+        .await?;
+    if !ok {
+        return Err(ApiError::not_found(format!(
+            "no viewed entry for hunk {hunk_id:?}"
+        )));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `POST /api/reviews/gc` — manual GC (same logic capture uses). Loopback.
 #[derive(Debug, Deserialize)]
 pub struct GcBody {
@@ -1526,12 +1608,17 @@ pub async fn review_files(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
 
     let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
-    let (viewed, ann_counts) = state
+    // V73-K2a — `hunks_viewed` rides the SAME single `run_blocking` hop as
+    // the file-level viewed map and the annotation counts: a third round
+    // trip for a set this small would be the N+1 shape the perf sweep
+    // spent a milestone removing.
+    let (viewed, hunk_viewed, ann_counts) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let viewed = store.list_viewed(id)?;
+            let hunk_viewed = store.list_hunk_viewed(id)?;
             let ann_counts = store.open_annotation_counts_by_path(repo_id, &paths)?;
-            Ok((viewed, ann_counts))
+            Ok((viewed, hunk_viewed, ann_counts))
         })
         .await?;
     let viewed_map: HashMap<String, String> =
@@ -1573,6 +1660,17 @@ pub async fn review_files(
             "base_sha": ps.base_sha,
             "tip_sha": ps.tip_sha,
             "files": out,
+            // V73-K2a — ADDITIVE. The per-hunk viewed set for this whole
+            // review, path-then-hunk ordered. It is NOT scoped to `ps`:
+            // a hunk id is a content address (`kbc-hunkid/1`), so the same
+            // change carries its own viewed mark across patchsets by
+            // construction — which is the entire reason the id is content-
+            // addressed rather than positional. A client that does not know
+            // this field reads exactly what it read before.
+            "hunks_viewed": hunk_viewed
+                .iter()
+                .map(|h| serde_json::json!({ "hunk_id": h.hunk_id, "path": h.path }))
+                .collect::<Vec<_>>(),
         })),
     ))
 }
