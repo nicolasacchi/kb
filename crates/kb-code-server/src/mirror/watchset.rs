@@ -34,8 +34,12 @@ pub const ALWAYS_SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
 /// the root itself is watched NON-recursively (root-level file
 /// creates/edits, e.g. a `Cargo.toml` edit, plus noticing a brand-new
 /// top-level entry exists) and every immediate child DIRECTORY is watched
-/// RECURSIVELY, skipping [`ALWAYS_SKIP_DIRS`] and any bare top-level name
-/// found in `.gitignore` (see [`gitignore_top_level_dirs`]).
+/// RECURSIVELY, skipping [`ALWAYS_SKIP_DIRS`], any bare top-level name
+/// found in `.gitignore` (see [`gitignore_top_level_dirs`]), and any
+/// TOP-LEVEL submodule directory (see [`gitmodules_submodule_paths`] — a
+/// checked-out submodule's tree is not this repo's content; descending
+/// into it only burns watch descriptors on churn
+/// [`event_skip_patterns`] would drop anyway).
 ///
 /// Known limitation: a new top-level directory created after boot is
 /// covered by the non-recursive root watch (its own creation is seen) but
@@ -48,6 +52,11 @@ pub const ALWAYS_SKIP_DIRS: &[&str] = &[".git", "target", "node_modules"];
 pub fn working_tree_watch_set(root: &Path) -> Vec<WatchEntry> {
     let mut skip: HashSet<String> = ALWAYS_SKIP_DIRS.iter().map(|s| s.to_string()).collect();
     skip.extend(gitignore_top_level_dirs(root));
+    skip.extend(
+        gitmodules_submodule_paths(root)
+            .into_iter()
+            .filter(|p| !p.contains('/')),
+    );
 
     let mut out = vec![WatchEntry {
         path: root.to_path_buf(),
@@ -154,7 +163,7 @@ pub fn gitignore_top_level_dirs(root: &Path) -> HashSet<String> {
 
 /// Skip patterns for the mirror's WORKING-TREE EVENT filter
 /// (`process_flush`), expressed in `kb_core::watcher`'s skip-pattern
-/// grammar (see `path_matches_skip_pattern`'s doc). Three sources:
+/// grammar (see `path_matches_skip_pattern`'s doc). Four sources:
 ///
 /// - [`ALWAYS_SKIP_DIRS`], as any-depth `**/name/**` patterns — the
 ///   registration skip is top-level-only, but a NESTED `target/` or
@@ -175,6 +184,15 @@ pub fn gitignore_top_level_dirs(root: &Path) -> HashSet<String> {
 ///   `.grokclaude-worktrees/.gitignore`) — the root `.gitignore` never
 ///   mentions these, but the dir's own ignore file declares every
 ///   content un-trackable, so its events are never ingest-worthy either.
+/// - every SUBMODULE path from the repo's `.gitmodules`
+///   ([`parse_gitmodules_paths`]), as a root-anchored `path/**` prefix.
+///   A submodule's working tree is not this repo's content: the HEAD-tree
+///   walk and `git diff` report the gitlink as one leaf path (the sink
+///   already documents "a submodule gitlink has nothing to read"), but a
+///   recursive inotify watch descends INTO the checked-out submodule and
+///   reports its churn as ordinary working-tree events — with no
+///   `.gitignore` line covering it, nothing else in this filter stops
+///   them (measured on h4o: ~21k junk `files` rows under `legacy/`).
 ///
 /// Negations and wildcard patterns stay out of scope (skipped by the
 /// parser): the worst case of a missed pattern is extra events, and the
@@ -196,7 +214,61 @@ pub fn event_skip_patterns(root: &Path) -> Vec<String> {
     for name in self_ignoring_top_level_dirs(root) {
         out.push(format!("{name}/**"));
     }
+    for path in gitmodules_submodule_paths(root) {
+        out.push(format!("{path}/**"));
+    }
     out
+}
+
+/// Submodule paths declared by one `.gitmodules` file — a conservative
+/// git-config-shaped scan for `path = <p>` lines, nothing more. Values are
+/// trimmed and optionally unquoted; anything with a wildcard character, an
+/// absolute/`..` path, or a missing/empty value is skipped (git itself
+/// requires submodule paths to be relative, so a line this parser rejects
+/// was never a usable skip target anyway). Same deliberate-not-a-real-
+/// parser posture as [`parse_gitignore_dir_patterns`].
+fn parse_gitmodules_paths(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "path" {
+            continue;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(value)
+            .trim();
+        if value.is_empty()
+            || value.starts_with('/')
+            || value.contains("..")
+            || value.contains('*')
+            || value.contains('?')
+            || value.contains('[')
+        {
+            continue;
+        }
+        out.push(value.trim_end_matches('/').to_string());
+    }
+    out
+}
+
+/// Every submodule path declared in the repo's root `.gitmodules`
+/// (root-relative, as git writes them). A missing or unreadable
+/// `.gitmodules` — the common case, most repos have none — is an empty
+/// list, not an error.
+pub fn gitmodules_submodule_paths(root: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(root.join(".gitmodules")) else {
+        return Vec::new();
+    };
+    parse_gitmodules_paths(&raw)
 }
 
 /// Immediate child directories of `root` whose own `.gitignore` is exactly
@@ -413,6 +485,83 @@ mod tests {
                 .map(|n| format!("**/{n}/**"))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn parse_gitmodules_paths_parses_path_entries() {
+        let pats = parse_gitmodules_paths(
+            "# a comment\n\
+             ; another comment\n\
+             [submodule \"legacy\"]\n\
+             \tpath = legacy\n\
+             \turl = https://example.com/legacy.git\n\
+             [submodule \"lib\"]\n\
+             \tpath=vendor/lib\n\
+             \tpath = \"quoted/one\"\n\
+             \tpath = \n\
+             \tpath = /absolute\n\
+             \tpath = ../escape\n\
+             [submodule \"nopath\"]\n\
+             \turl = https://example.com/nopath.git\n",
+        );
+        assert_eq!(
+            pats,
+            vec![
+                "legacy".to_string(),
+                "vendor/lib".to_string(),
+                "quoted/one".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn gitmodules_submodule_paths_survive_a_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(gitmodules_submodule_paths(tmp.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn event_skip_patterns_cover_submodule_working_trees() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join(".gitmodules"),
+            "[submodule \"legacy\"]\n\tpath = legacy\n\turl = https://example.com/legacy.git\n",
+        )
+        .unwrap();
+        let pats = event_skip_patterns(root);
+        let matches = |rel: &str| {
+            let basename = rel.rsplit('/').next().unwrap_or(rel);
+            pats.iter()
+                .any(|p| kb_core::watcher::path_matches_skip_pattern(rel, basename, p))
+        };
+        assert!(matches("legacy/hotel/old.rb"));
+        assert!(matches("legacy")); // the gitlink dir itself (a Remove)
+        // Component-boundary, never substring: a real sibling dir whose
+        // name merely shares the prefix stays watched.
+        assert!(!matches("legacy-fixes/new.rb"));
+        assert!(!matches("apps/server/app/models/user.rb"));
+    }
+
+    #[test]
+    fn working_tree_watch_set_skips_top_level_submodule_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join(".gitmodules"),
+            "[submodule \"legacy\"]\n\tpath = legacy\n[submodule \"nested\"]\n\tpath = vendor/nested\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("legacy")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let entries = working_tree_watch_set(root);
+        let paths: HashSet<_> = entries.iter().map(|e| e.path.clone()).collect();
+        assert!(!paths.contains(&root.join("legacy")));
+        assert!(paths.contains(&root.join("src")));
+        // A NESTED submodule path can't be pruned at registration (only
+        // top-level dirs are registered individually) — the event filter
+        // covers it; registration just must not break because of it.
+        assert!(paths.contains(root));
     }
 
     #[test]

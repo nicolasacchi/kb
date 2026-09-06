@@ -880,4 +880,46 @@ mod tests {
         assert!(runtimes[0].gate.held.is_empty());
         assert!(sink.upserts.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn process_flush_drops_events_under_a_submodule_working_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        // No .gitignore line covers a submodule — the h4o `legacy/` leak:
+        // notify descends into the checked-out submodule and reports its
+        // churn as ordinary working-tree events.
+        std::fs::write(
+            root.join(".gitmodules"),
+            "[submodule \"legacy\"]\n\tpath = legacy\n\turl = https://example.com/legacy.git\n",
+        )
+        .unwrap();
+        let mut runtimes = vec![RepoRuntime {
+            repo_ref: RepoRef {
+                name: "fixture".to_string(),
+                root: root.clone(),
+            },
+            git_dir: root.join(".git"),
+            common_dir: root.join(".git"),
+            gate: RepoGate::new(),
+            dirty_cache: reconcile::DirtyCache::new(),
+            quiet_until: None,
+            event_skips: watchset::event_skip_patterns(&root),
+        }];
+        let sink = RecordingSink::default();
+
+        process_flush(
+            &mut runtimes,
+            vec![
+                wt_modify_event(root.join("legacy/hotel/old.rb")),
+                wt_modify_event(root.join("src/lib.rs")),
+            ],
+            &sink,
+        );
+
+        assert_eq!(
+            *sink.upserts.lock().unwrap(),
+            vec![root.join("src/lib.rs")],
+            "submodule churn must not reach the sink; the gitlink leaf is reconcile's job",
+        );
+    }
 }
