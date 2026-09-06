@@ -119,7 +119,7 @@ tracing-appender = "0.2"
 
 # Time + hashing + config formats
 chrono = { version = "0.4", features = ["serde"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 # Cloudflare Pages asset hash (wrangler-compatible): blake3(base64(bytes)‖ext).
 # Both already in the graph (base64 via reqwest/datafusion, blake3 via lance).
