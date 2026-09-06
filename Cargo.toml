@@ -225,6 +225,35 @@ tree-sitter-json = "0.24"
 # MIT/Apache, same "grammar crate pins independently" note as the block
 # above.
 tree-sitter-embedded-template = "0.25"
+# V72-H2a (D7) — the SCSS/CSS/Markdown grammars. Pinned EXACTLY (`=`)
+# rather than by minor: two of the three are the only release their
+# upstream has published, so a caret range would silently accept a future
+# grammar whose node shapes differ, and `lang.rs`'s salt would not know.
+# - tree-sitter-css 0.25.0 — official tree-sitter/tree-sitter-css, MIT.
+#   Bundles highlights.scm (used as-is); no tags.scm, so `crate::css`
+#   walks its CST into a rule/selector outline the same way `keypath`
+#   walks TOML/JSON.
+# - tree-sitter-scss 1.0.0 — tree-sitter-grammars/tree-sitter-scss, MIT.
+#   The ONLY published release (2024-04) and an OLD-STYLE binding: it
+#   depends on `tree-sitter` itself (`>=0.21.0`) and exposes
+#   `language() -> tree_sitter::Language` rather than the ABI-stable
+#   `tree-sitter-language` `LanguageFn` every other grammar here uses.
+#   That resolves to the SAME 0.26 this workspace already pins (checked
+#   in Cargo.lock — one `tree-sitter` entry, not two), and its generated
+#   parser declares LANGUAGE_VERSION 14, inside tree-sitter 0.26's
+#   supported 13..=15 ABI window. Recorded here because a `cargo update`
+#   that split the `tree-sitter` version would break the call site at
+#   COMPILE time (two distinct `Language` types), which is the failure
+#   mode we want rather than a silent one.
+# - tree-sitter-md 0.5.3 — tree-sitter-grammars/tree-sitter-markdown, MIT.
+#   TWO grammars in one crate (`LANGUAGE` = the block structure,
+#   `INLINE_LANGUAGE` = inline content); kb-code registers the BLOCK one
+#   (headings, sections, fenced code) and says so — inline emphasis/link
+#   highlighting is not claimed. Its `parser` feature (a convenience
+#   wrapper that would pull `tree-sitter` in directly) is left OFF.
+tree-sitter-css = "=0.25.0"
+tree-sitter-scss = "=1.0.0"
+tree-sitter-md = { version = "=0.5.3", default-features = false }
 
 # ripgrep engine (code-search surface) — Unlicense OR MIT. grep-matcher is
 # already pulled in transitively by grep-searcher/grep-regex (see

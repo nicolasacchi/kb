@@ -1,0 +1,47 @@
+---
+source: crates/kb-code-server/src/css.rs
+expression: got
+---
+[
+    (
+        "rule",
+        ":root",
+        None,
+    ),
+    (
+        "variable",
+        "--radius",
+        Some(
+            ":root",
+        ),
+    ),
+    (
+        "variable",
+        "--brand",
+        Some(
+            ":root",
+        ),
+    ),
+    (
+        "rule",
+        ".btn, .btn--primary",
+        None,
+    ),
+    (
+        "at_rule",
+        "@media (min-width: 40rem)",
+        None,
+    ),
+    (
+        "rule",
+        ".btn",
+        Some(
+            "@media (min-width: 40rem)",
+        ),
+    ),
+    (
+        "keyframes",
+        "pulse",
+        None,
+    ),
+]

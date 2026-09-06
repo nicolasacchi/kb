@@ -504,51 +504,15 @@ pub fn highlight_spans(doc: &Document, src: &str) -> Vec<HlSpan> {
             );
         }
     }
-    for f in &fragments {
-        if !f.verbatim {
-            // A reassembled fragment's text no longer lines up with the
-            // source byte for byte, so painting it would mis-place every
-            // span. Left unpainted rather than approximately painted.
-            continue;
-        }
-        let Ok(inner) = crate::highlight::extract_highlights("ruby", f.text.as_bytes()) else {
-            continue;
-        };
-        for s in inner {
-            spans.push(HlSpan {
-                byte_start: f.span.start + s.byte_start,
-                byte_len: s.byte_len,
-                class: s.class,
-            });
-        }
-    }
-    normalize(spans, src.len() as u32)
-}
-
-/// Sort, clamp and de-overlap. Ties prefer the LONGER span (a tag name
-/// beats a one-byte sigil that starts at the same offset); overlaps after
-/// that are dropped, never truncated, so no span ever claims bytes its
-/// producer did not look at.
-fn normalize(mut spans: Vec<HlSpan>, len: u32) -> Vec<HlSpan> {
-    spans.retain(|s| s.byte_len > 0 && s.byte_start < len);
-    for s in spans.iter_mut() {
-        if s.byte_start + s.byte_len > len {
-            s.byte_len = len - s.byte_start;
-        }
-    }
-    spans.sort_by(|a, b| {
-        a.byte_start
-            .cmp(&b.byte_start)
-            .then(b.byte_len.cmp(&a.byte_len))
-    });
-    let mut out: Vec<HlSpan> = Vec::with_capacity(spans.len());
-    let mut cursor = 0u32;
-    for s in spans {
-        if s.byte_start < cursor {
-            continue;
-        }
-        cursor = s.byte_start + s.byte_len;
-        out.push(s);
-    }
-    out
+    // V72-H2a — the Ruby inside every VERBATIM fragment, painted and
+    // re-anchored by the shared injection layer rather than by a loop
+    // this module owns. A NON-verbatim fragment (a `|` continuation, a
+    // trailing-comma continuation) is still left unpainted, for the same
+    // reason it always was: its text no longer lines up with the source
+    // byte for byte, so painting it would mis-place every span. That rule
+    // now lives in `injection::haml_fragment_regions`' `verbatim` filter,
+    // and `injection::normalize` is this module's own former one, moved
+    // verbatim — which is why the HAML highlight goldens are unchanged.
+    let regions = crate::injection::haml_fragment_regions(&fragments);
+    crate::injection::paint_regions(spans, &regions, src.len() as u32)
 }

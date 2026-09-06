@@ -63,21 +63,27 @@ pub fn walk_erb_ruby_fragments(
     out: &mut Vec<FrameworkEdge>,
     scan: &mut dyn FnMut(Node, &[u8], u32, &mut Vec<FrameworkEdge>),
 ) {
-    if matches!(node.kind(), "directive" | "output_directive") {
-        if let Some(code_node) = find_erb_code_child(node) {
-            if let Ok(code_text) = code_node.utf8_text(source) {
-                if let Ok((ruby_tree, _language)) = crate::lang::parse("ruby", code_text.as_bytes())
-                {
-                    let offset = code_node.start_position().row as u32;
-                    scan(ruby_tree.root_node(), code_text.as_bytes(), offset, out);
-                }
-            }
+    // V72-H2a — the WALK moved to `crate::injection` (the one place a
+    // host's guest regions are located); this function is now the
+    // per-region re-parse + `scan` invocation and nothing else. The
+    // region list is the same preorder over the same `code` children with
+    // the same `start_position().row`, so the rails-lens goldens are
+    // unchanged.
+    for region in crate::injection::erb_regions(node, source) {
+        if region.kind != crate::injection::RegionKind::Fragment {
+            continue;
         }
-        return;
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_erb_ruby_fragments(child, source, out, scan);
+        let Ok((ruby_tree, _language)) = crate::lang::parse(region.lang, region.source.as_bytes())
+        else {
+            continue;
+        };
+        // `line_offset` is the region's own 0-based host row — exactly
+        // what `support::src_line` adds 1 to.
+        let offset = match &region.map {
+            crate::injection::OffsetMap::Shift { row_base, .. } => *row_base,
+            crate::injection::OffsetMap::Lines(_) => continue,
+        };
+        scan(ruby_tree.root_node(), region.source.as_bytes(), offset, out);
     }
 }
 
@@ -120,12 +126,18 @@ pub fn walk_haml_ruby_fragments(
         Ok(s) => s,
         Err(e) => std::str::from_utf8(&source[..e.valid_up_to()]).unwrap_or(""),
     };
+    // V72-H2a — the synthesized program is now `crate::injection`'s ONE
+    // `Program` region for a HAML host; `ruby_program` still builds it,
+    // and the re-anchoring below still goes through its line map, now
+    // named `OffsetMap::host_line`. Byte-identical output.
     let doc = crate::haml::parser::parse_str(src);
-    let program = crate::haml::extract::ruby_program(&doc, src);
-    if program.source.trim().is_empty() {
+    let Some(program) = crate::injection::haml_regions(&doc, src)
+        .into_iter()
+        .find(|r| r.kind == crate::injection::RegionKind::Program)
+    else {
         return;
-    }
-    let Ok((tree, _language)) = crate::lang::parse("ruby", program.source.as_bytes()) else {
+    };
+    let Ok((tree, _language)) = crate::lang::parse(program.lang, program.source.as_bytes()) else {
         return;
     };
     let mut minted = Vec::new();
@@ -134,7 +146,7 @@ pub fn walk_haml_ruby_fragments(
         match edge.src_line {
             // `src_line` is 1-based (`support::src_line` adds the 1), so
             // the program ROW is one less.
-            Some(line) => match program.haml_line(line.saturating_sub(1) as usize) {
+            Some(line) => match program.map.host_line(line.saturating_sub(1)) {
                 Some(haml_line) => {
                     edge.src_line = Some(haml_line);
                     out.push(edge);
@@ -145,12 +157,6 @@ pub fn walk_haml_ruby_fragments(
             None => out.push(edge),
         }
     }
-}
-
-fn find_erb_code_child(node: Node<'_>) -> Option<Node<'_>> {
-    let mut cursor = node.walk();
-    let found = node.children(&mut cursor).find(|c| c.kind() == "code");
-    found
 }
 
 /// Recursively walk `node`'s whole subtree for `call` nodes (a render call

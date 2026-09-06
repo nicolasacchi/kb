@@ -260,15 +260,88 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// The languages whose symbols come from a direct CST WALK (a hierarchical
-/// key-path outline) rather than a `tags.scm` query — see the dispatch at
-/// the top of [`extract_symbols`] and `crate::yaml`/`crate::keypath`'s
-/// module docs. Named as a const (V72-H1) because the `syntax/1` Parity
-/// Grid has to tell "symbols, as code definitions" from "symbols, as key
-/// paths" without restating this list; the dispatch below is still the
+/// What SHAPE of rows a CST-walk outline mints. The Parity Grid's
+/// `symbols` cell has to tell "symbols, as code definitions" from
+/// "symbols, as key paths" from "symbols, as selectors" — and the reason
+/// string it prints is part of the contract the golden pins, so it is
+/// derived from this rather than written per language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutlineShape {
+    /// Dotted key paths over a data file (`kind = "key"`).
+    KeyPath,
+    /// Selectors, at-rules and stylesheet definitions (`crate::css`).
+    Stylesheet,
+    /// A prose document's heading tree (`crate::markdown`).
+    Document,
+}
+
+impl OutlineShape {
+    /// The Parity Grid's `hover` reason for a row of this shape — what
+    /// the word-scan resolve is scanning OVER. Same rule as
+    /// [`Self::symbols_reason`]: the wording is part of the contract the
+    /// golden pins, so it is derived rather than written per language.
+    pub fn hover_reason(self) -> &'static str {
+        match self {
+            OutlineShape::KeyPath => {
+                "word-scan resolve over key-path rows — no occurrences index to bind a position"
+            }
+            OutlineShape::Stylesheet => {
+                "word-scan resolve over stylesheet outline rows — no occurrences index to bind \
+                 a position"
+            }
+            OutlineShape::Document => {
+                "word-scan resolve over heading rows — no occurrences index to bind a position"
+            }
+        }
+    }
+
+    /// The Parity Grid's `symbols` reason for a row of this shape.
+    pub fn symbols_reason(self) -> &'static str {
+        match self {
+            OutlineShape::KeyPath => {
+                "key-path outline rows (kind \"key\") — a data outline, not code definitions"
+            }
+            OutlineShape::Stylesheet => {
+                "stylesheet outline rows (selectors, at-rules, mixins, functions, variables) — \
+                 a style structure, not callable definitions"
+            }
+            OutlineShape::Document => {
+                "document outline rows (heading sections) — a reading structure, not code \
+                 definitions"
+            }
+        }
+    }
+}
+
+/// The languages whose symbols come from a direct CST WALK rather than a
+/// `tags.scm` query, and what shape each one's rows are — see the dispatch
+/// at the top of [`extract_symbols`] and `crate::yaml`/`crate::keypath`/
+/// `crate::css`/`crate::markdown`'s module docs. Declared once (V72-H1,
+/// widened to carry the shape in V72-H2a); the dispatch below is still the
 /// implementation and `extract_symbols_dispatch_matches_the_cst_outline_set`
 /// pins the two together.
-pub const CST_OUTLINE_LANG_IDS: &[&str] = &["yaml", "toml", "json"];
+pub const CST_OUTLINES: &[(&str, OutlineShape)] = &[
+    ("yaml", OutlineShape::KeyPath),
+    ("toml", OutlineShape::KeyPath),
+    ("json", OutlineShape::KeyPath),
+    ("css", OutlineShape::Stylesheet),
+    ("scss", OutlineShape::Stylesheet),
+    ("markdown", OutlineShape::Document),
+];
+
+/// The outline shape for `id`, or `None` when `id` is not a CST-walk
+/// outline language.
+pub fn cst_outline_shape(id: &str) -> Option<OutlineShape> {
+    CST_OUTLINES
+        .iter()
+        .find(|(lang, _)| *lang == id)
+        .map(|(_, shape)| *shape)
+}
+
+/// Whether `id`'s symbols come from a CST walk.
+pub fn is_cst_outline(id: &str) -> bool {
+    cst_outline_shape(id).is_some()
+}
 
 pub fn extract_symbols(lang_id: &str, source: &[u8]) -> Result<Vec<Symbol>> {
     // YAML has no tags.scm at all (ADR-7) — a hierarchical key-path outline
@@ -282,6 +355,17 @@ pub fn extract_symbols(lang_id: &str, source: &[u8]) -> Result<Vec<Symbol>> {
     }
     if lang_id == "json" {
         return Ok(crate::keypath::outline_json(source)?.symbols);
+    }
+    // V72-H2a (D7) — the same model, two more shapes: a stylesheet's
+    // selectors/at-rules/mixins (`crate::css`) and a Markdown document's
+    // heading sections (`crate::markdown`). Neither grammar ships a
+    // `tags.scm` and neither language has a definition vocabulary a tags
+    // query could target.
+    if lang_id == "css" || lang_id == "scss" {
+        return Ok(crate::css::outline(lang_id, source)?.symbols);
+    }
+    if lang_id == "markdown" {
+        return Ok(crate::markdown::outline(source)?.symbols);
     }
     // PRR-N3 — ERB has no `tags.scm` (deliberately not one of
     // `lang::TOKEN_LEVEL_LANG_IDS`; see `lang::ERB`'s doc). Without this
@@ -788,6 +872,27 @@ pub const OUTLINE_ONLY_KINDS: &[&str] = &[
     "key",
     crate::haml::extract::KIND_ELEMENT,
     crate::haml::extract::KIND_FILTER,
+    // V72-H2a — a stylesheet's rules and a prose document's headings. A
+    // repo map is a token-budgeted skeleton of the code an agent will
+    // read and change; padding it with selectors and headings dilutes
+    // exactly the budget it exists to spend well.
+    //
+    // **Two of `css::KINDS` are deliberately ABSENT: `function` and
+    // `variable`.** This vocabulary is FLAT — a kind is a kind across
+    // every language, which is what lets one reader learn it once — and
+    // those two names are already minted by the tags languages (a Go
+    // `func`, a JS `function`, a Bash `var`). Listing them here would
+    // silently drop every Rust and JavaScript function out of the repo
+    // map, which is how this rule was caught. Minting `scss_function`
+    // instead would buy the exclusion at the cost of a per-language
+    // vocabulary, so the honest trade is the other way round: an SCSS
+    // `@function` and a `$variable` ARE definitions, and they stay in.
+    crate::css::KIND_RULE,
+    crate::css::KIND_PLACEHOLDER,
+    crate::css::KIND_AT_RULE,
+    crate::css::KIND_KEYFRAMES,
+    crate::css::KIND_MIXIN,
+    crate::markdown::KIND_HEADING,
 ];
 
 pub fn is_repo_map_symbol(kind: &str) -> bool {
@@ -895,29 +1000,61 @@ mod tests {
     /// it may.
     #[test]
     fn extract_symbols_dispatch_matches_the_cst_outline_set() {
-        for id in CST_OUTLINE_LANG_IDS {
+        for (id, shape) in CST_OUTLINES {
             assert!(
                 lang::tags_query(id).is_none(),
                 "{id}: a CST-outline language must have no tags query"
             );
-            // A one-key document in each of the three formats — enough to
-            // prove the walk ran rather than the query path.
+            // A one-definition document in each format — enough to prove
+            // the walk ran rather than the query path.
             let src: &[u8] = match *id {
                 "yaml" => b"a: 1\n",
                 "toml" => b"a = 1\n",
                 "json" => b"{\"a\": 1}",
+                "css" => b".a { color: red; }\n",
+                "scss" => b"$a: 1;\n",
+                "markdown" => b"# a\n",
                 other => panic!("no fixture for {other}"),
             };
             let symbols = extract_symbols(id, src).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(!symbols.is_empty(), "{id}: CST outline produced no rows");
-            assert!(
-                symbols.iter().all(|s| s.kind == "key"),
-                "{id}: a CST outline mints key rows"
-            );
+            // Every row is either an OUTLINE-ONLY kind or one of the two
+            // names the stylesheet vocabulary SHARES with the tags
+            // languages — see `OUTLINE_ONLY_KINDS`' own comment for why
+            // those two stay in the repo map.
+            for s in &symbols {
+                assert!(
+                    !is_repo_map_symbol(&s.kind)
+                        || matches!(
+                            s.kind.as_str(),
+                            crate::css::KIND_FUNCTION | crate::css::KIND_VARIABLE
+                        ),
+                    "{id}/{shape:?}: kind {:?} must be in OUTLINE_ONLY_KINDS",
+                    s.kind
+                );
+            }
+            match shape {
+                OutlineShape::KeyPath => assert!(
+                    symbols.iter().all(|s| s.kind == "key"),
+                    "{id}: a key-path outline mints key rows"
+                ),
+                OutlineShape::Stylesheet => assert!(
+                    symbols
+                        .iter()
+                        .all(|s| crate::css::KINDS.contains(&s.kind.as_str())),
+                    "{id}: a stylesheet outline mints css::KINDS rows"
+                ),
+                OutlineShape::Document => assert!(
+                    symbols
+                        .iter()
+                        .all(|s| s.kind == crate::markdown::KIND_HEADING),
+                    "{id}: a document outline mints heading rows"
+                ),
+            }
         }
         for id in lang::TAGS_LANG_IDS {
             assert!(
-                !CST_OUTLINE_LANG_IDS.contains(id),
+                !is_cst_outline(id),
                 "{id}: a tags language must not also be a CST-outline language"
             );
         }
@@ -1330,6 +1467,18 @@ func TopLevel(a int) int {
     #[test]
     fn is_repo_map_symbol_excludes_only_yaml_key_rows() {
         assert!(!is_repo_map_symbol("key"));
+        // V72-H2a — the shape kinds join it, and the two names the
+        // stylesheet vocabulary shares with the tags languages do NOT.
+        for kind in [
+            crate::css::KIND_RULE,
+            crate::css::KIND_PLACEHOLDER,
+            crate::css::KIND_AT_RULE,
+            crate::css::KIND_KEYFRAMES,
+            crate::css::KIND_MIXIN,
+            crate::markdown::KIND_HEADING,
+        ] {
+            assert!(!is_repo_map_symbol(kind), "{kind} describes shape");
+        }
         for kind in [
             "fn",
             "method",

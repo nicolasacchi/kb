@@ -92,6 +92,17 @@ fn extract_quoted_gem_name(s: &str) -> Option<&str> {
 /// across extractors would need a bigger refactor (a shared "parsed Ruby
 /// file" context threaded through every extractor's signature) that isn't
 /// justified by this milestone's actual cost profile.
+/// The language ids [`extract`]'s PATH dispatch below can actually reach —
+/// Ruby source, ERB views and (V72-H3) HAML views. Declared here, beside
+/// the dispatch it describes, because the `syntax/1` Parity Grid's
+/// `usages` cell needs to know whether a language can receive convention
+/// edges at all, and the only alternative was a proxy property.
+///
+/// V72-H2a is why it exists: `injection_host && tier == Full` was that
+/// proxy, exactly true while HAML was the only `Full` injection host, and
+/// silently false the moment `markdown` became the second one.
+pub const LENS_LANG_IDS: &[&str] = &["ruby", "erb", "haml"];
+
 pub fn extract(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkEdge> {
     if is_routes_file(path) {
         let mut out = routes::extract(path, bytes);
@@ -234,6 +245,41 @@ pub fn is_spec_file(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`LENS_LANG_IDS`] must cover every language a path the dispatch
+    /// recognises actually detects to — otherwise the Parity Grid would
+    /// tell a reader a language receives no convention edges while
+    /// `extract` happily mints them for it.
+    #[test]
+    fn lens_lang_ids_covers_every_language_the_path_dispatch_reaches() {
+        for path in [
+            "config/routes.rb",
+            "app/controllers/orders_controller.rb",
+            "app/views/orders/show.html.erb",
+            "app/views/orders/show.html.haml",
+            "app/components/card_component.rb",
+            "app/components/card_component.html.erb",
+            "app/components/card_component.html.haml",
+            "app/models/order.rb",
+            "app/jobs/sync_job.rb",
+            "app/mailers/order_mailer.rb",
+            "spec/models/order_spec.rb",
+        ] {
+            let id = crate::lang::detect(path, None).map(|l| l.id);
+            let id = id.unwrap_or_else(|| panic!("{path}: no language detected"));
+            assert!(
+                LENS_LANG_IDS.contains(&id),
+                "{path} detects to {id:?}, which LENS_LANG_IDS does not list"
+            );
+        }
+        // And every listed id must be a real registry row.
+        for id in LENS_LANG_IDS {
+            assert!(
+                crate::lang::for_id(id).is_some(),
+                "{id}: LENS_LANG_IDS names a language no registry row carries"
+            );
+        }
+    }
 
     #[test]
     fn gemfile_matches_exact_rails_gem_only() {

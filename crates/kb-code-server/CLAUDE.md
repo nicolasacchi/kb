@@ -613,6 +613,55 @@ invariant #2 records).
     once by hand and checked in, `ci-code` is pure Rust, and invariant 10
     is untouched — `tests/haml_corpus.rs` greps its own source for
     `Command::new` to keep that true.
+    (e) **A host's guest regions are located in ONE place, and every
+    re-anchoring goes through ONE offset map** (V72-H2a, D7,
+    `src/injection.rs`). `injection::regions` is the only walk that finds
+    embedded code; `OffsetMap` is the only thing that maps a guest
+    position back. Two shapes, and the difference is load-bearing:
+    `Shift` (the guest IS a contiguous slice — byte offsets AND rows map
+    back) and `Lines` (the guest was REASSEMBLED — only rows map back,
+    `host_byte` returns `None`, and a `None` line-map entry is a line this
+    crate invented). A reassembled region is never painted, because
+    approximating a byte offset for it would put spans on bytes its
+    producer never looked at. Three hosts (`erb`→ruby, `haml`→ruby
+    fragments + one program, `markdown`→whatever a fence's info string
+    resolves to); HTML is NOT one, and the module doc says why (no
+    `tree-sitter-html` in this build) rather than leaving a reader to
+    infer that `<script>` injections work. Painting runs the GUEST's
+    `highlight::extract_highlights_host_only`, which structurally cannot
+    re-enter the layer — that is the entire recursion bound, and there is
+    deliberately no depth counter to get wrong. Two properties must hold
+    together or the layer is a lie: `SyntaxRow::injection_host` must equal
+    `injection::is_host` (pinned), and Markdown's declared guest set must
+    equal what `markdown::resolve_info_string` can actually return
+    (pinned) — a wire that promises a fence language the painter skips is
+    the v7.0 dead-surface defect in a new place. **The Rails lens's ERB
+    and HAML output is byte-identical across this move** and its goldens
+    are the proof: the walks moved, `walk_erb_ruby_fragments` /
+    `walk_haml_ruby_fragments` kept their signatures, and nothing about
+    edge kinds or trust classes changed.
+    (f) **`outline/1` is a VIEW of the symbol rows, never a second
+    extraction** (V72-H2a, D7, `src/outline.rs`). `GET /api/outline` reads
+    exactly the store lookup `GET /api/symbols` does — same blob, same
+    salt, same `extract::Symbol` — and `outline::nest` is the whole
+    transformation: pure, total, deterministic. Deriving rows in the route
+    instead would create a second answer that can disagree with the first,
+    which is the thing one contract exists to prevent. Nesting is RANGE
+    CONTAINMENT (invariant 13's own rule), never name matching: a
+    `container == name` join cannot tell two identically-named symbols
+    apart and reads a YAML row's dotted-path `container` as a name it is
+    not. Row KINDS are the symbol kinds verbatim — this contract invents
+    no vocabulary. Every response carries `honesty` (tier, engine,
+    `derived_from`, and the REASON when there are no rows), so "no symbols
+    by tier", "nothing indexed for this blob yet" and "no registry row at
+    all" are three distinguishable answers rather than one empty list. The
+    Parity Grid's `outline` cell is derived from this and is `yes` exactly
+    when the row's tier derives symbols. The SPA's client-side outline
+    derivations (`web-code/src/lib/outline.ts`, `StructurePopup.tsx`,
+    `OutlineRail.tsx`, `lib/stickyContext.ts`) are NOT converted by
+    V72-H2a and are named in the module doc; when they are, they render
+    this response rather than re-deriving, for invariant 17(a)'s "one
+    projection, two renderers" reason.
 
 19. **The entity DOSSIER raises no trust class, and its budget is a ROW
     budget nothing may spend silently** (V72-G1.1, `entity/1`,

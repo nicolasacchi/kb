@@ -335,6 +335,29 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code outline <PATH> --repo R [--ref REF] [--json]` —
+    /// `GET /api/outline` (`outline/1`): the structure of ONE file, for
+    /// every registered file type. Rust items, YAML/TOML/JSON key paths,
+    /// CSS/SCSS selectors and mixins, Markdown headings, HAML elements —
+    /// one shape, nested by range containment.
+    ///
+    /// The rows are a VIEW of the same symbol table `kb-code symbols`
+    /// prints, never a second extraction, so the two can never disagree.
+    /// A file type whose tier derives no symbols answers with an empty
+    /// outline and the REASON, which is a design outcome, not a failure.
+    Outline {
+        path: String,
+        #[arg(long)]
+        repo: String,
+        /// Read the file at this git ref instead of the working tree.
+        #[arg(long = "ref")]
+        rev: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `outline/1` JSON instead of the tree.
+        #[arg(long)]
+        json: bool,
+    },
     /// Per-file symbol list (PATH), or a repo-wide substring search
     /// (`--query`) — exactly one of the two. Daemon-only
     /// (`GET /api/symbols`); the real fuzzy-match lane is W2.1's job, this
@@ -3543,6 +3566,13 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
         Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
         Cmd::Parity { daemon, json } => parity_cmd(&daemon, json).await,
+        Cmd::Outline {
+            path,
+            repo,
+            rev,
+            daemon,
+            json,
+        } => outline_cmd(&daemon, &repo, &path, rev.as_deref(), json).await,
         Cmd::Symbols {
             path,
             repo,
@@ -6481,6 +6511,112 @@ async fn parity_cmd(daemon: &str, json: bool) -> Result<()> {
         for (i, reason) in legend.iter().enumerate() {
             println!("  [{}] {reason}", i + 1);
         }
+    }
+    Ok(())
+}
+
+// ── V72-H2a — `kb-code outline` ─────────────────────────────────────────
+//
+// Same shape as `syntax`/`parity` above: the route PATH comes from the
+// server crate's own declared contract (`kb_code_server::outline::
+// OUTLINE_ROUTE`), never a string literal, so
+// `cli_requests_send_every_param_their_route_requires` can walk the two
+// against each other.
+
+/// The `GET /api/outline` request: `(path, query)`.
+fn outline_request(
+    repo: &str,
+    file: &str,
+    rev: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query: Vec<(&'static str, String)> =
+        vec![("repo", repo.to_string()), ("path", file.to_string())];
+    if let Some(r) = rev {
+        query.push(("ref", r.to_string()));
+    }
+    (kb_code_server::outline::OUTLINE_ROUTE.path, query)
+}
+
+/// Render one `outline/1` row and its children, depth-indented.
+fn print_outline_rows(rows: &[serde_json::Value], indent: usize) {
+    for r in rows {
+        let range = &r["range"];
+        let (a, b) = (
+            range["line_start"].as_u64().unwrap_or(0),
+            range["line_end"].as_u64().unwrap_or(0),
+        );
+        let lines = if a == b {
+            format!("{a}")
+        } else {
+            format!("{a}-{b}")
+        };
+        let detail = match r["detail"].as_str() {
+            Some(d) => format!("  {d}"),
+            None => String::new(),
+        };
+        println!(
+            "{:indent$}{:<10} {:<6} {}{}",
+            "",
+            r["kind"].as_str().unwrap_or("?"),
+            lines,
+            r["name"].as_str().unwrap_or("?"),
+            detail,
+            indent = indent
+        );
+        if let Some(children) = r["children"].as_array() {
+            print_outline_rows(children, indent + 2);
+        }
+    }
+}
+
+/// `kb-code outline <PATH> --repo R` — `GET /api/outline`.
+async fn outline_cmd(
+    daemon: &str,
+    repo: &str,
+    file: &str,
+    rev: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = outline_request(repo, file, rev);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "{}  ({}, tier {})",
+        body["path"].as_str().unwrap_or(file),
+        body["lang"]
+            .as_str()
+            .unwrap_or("— nothing parses this type"),
+        body["tier"].as_str().unwrap_or("?"),
+    );
+    let rows = body["rows"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        // An empty outline is a real answer, and the reason is the point.
+        println!(
+            "\nno outline rows — {}",
+            body["honesty"]["reason"]
+                .as_str()
+                .unwrap_or("no reason given")
+        );
+        return Ok(());
+    }
+    println!();
+    print_outline_rows(&rows, 0);
+    println!(
+        "\n{} row(s), derived from {}{}",
+        body["total"].as_u64().unwrap_or(0),
+        body["honesty"]["derived_from"].as_str().unwrap_or("?"),
+        if body["truncated"].as_bool().unwrap_or(false) {
+            " (TRUNCATED)"
+        } else {
+            ""
+        },
+    );
+    if let Some(reason) = body["honesty"]["reason"].as_str() {
+        println!("note: {reason}");
     }
     Ok(())
 }
@@ -20396,6 +20532,8 @@ mod tests {
             lane_facts_request("repo", "a.rb", None, None),
             lane_summary_request("repo"),
             lane_ingest_request("repo"),
+            // V72-H2a — `outline/1`.
+            outline_request("repo", "a.rb", None),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -20418,7 +20556,8 @@ mod tests {
             .chain(kb_code_server::entities::dossier::V72_G1_ROUTES.iter())
             // V72-I1 — and one more, the same way.
             .chain(kb_code_server::rails::routes::V72_I1_ROUTES.iter())
-            .chain(kb_code_server::lanes::V72_H4A_ROUTES.iter());
+            .chain(kb_code_server::lanes::V72_H4A_ROUTES.iter())
+            .chain(kb_code_server::outline::V72_H2A_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
@@ -20837,6 +20976,58 @@ mod tests {
     #[test]
     fn entity_requires_a_repo() {
         assert!(Cli::try_parse_from(["kb-code", "entity", "Foo"]).is_err());
+    }
+
+    // ── V72-H2a — `kb-code outline` ──────────────────────────────────────
+
+    #[test]
+    fn outline_parses_its_path_positionally_and_its_flags() {
+        let cli = Cli::try_parse_from([
+            "kb-code",
+            "outline",
+            "app/models/order.rb",
+            "--repo",
+            "r",
+            "--ref",
+            "HEAD~1",
+            "--json",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Outline {
+                path,
+                repo,
+                rev,
+                json,
+                ..
+            } => {
+                assert_eq!(path, "app/models/order.rb");
+                assert_eq!(repo, "r");
+                assert_eq!(rev.as_deref(), Some("HEAD~1"));
+                assert!(json);
+            }
+            other => panic!("expected Cmd::Outline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn outline_requires_a_repo() {
+        assert!(Cli::try_parse_from(["kb-code", "outline", "a.rb"]).is_err());
+    }
+
+    /// `--ref` is optional and is only sent when given — a request that
+    /// carried an empty `ref` would read the working tree at a ref that
+    /// does not exist.
+    #[test]
+    fn outline_request_sends_ref_only_when_asked() {
+        let (path, query) = outline_request("r", "a.rb", None);
+        assert_eq!(path, kb_code_server::outline::OUTLINE_ROUTE.path);
+        assert!(query.iter().all(|(k, _)| *k != "ref"), "{query:?}");
+        let (_, with_ref) = outline_request("r", "a.rb", Some("HEAD"));
+        assert!(
+            with_ref.iter().any(|(k, v)| *k == "ref" && v == "HEAD"),
+            "{with_ref:?}"
+        );
     }
 
     #[test]

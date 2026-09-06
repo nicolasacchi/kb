@@ -32,7 +32,9 @@
 //! 0.24.2`, `tree-sitter-python 0.25.0`, `tree-sitter-ruby 0.23.1`,
 //! `tree-sitter-typescript 0.23.2`, `tree-sitter-javascript 0.25.0`,
 //! `tree-sitter-bash 0.25.1`, `tree-sitter-yaml 0.7.2`, `tree-sitter-go
-//! 0.25.0`, `tree-sitter-toml-ng 0.7.0`, `tree-sitter-json 0.24.8`) —
+//! 0.25.0`, `tree-sitter-toml-ng 0.7.0`, `tree-sitter-json 0.24.8`,
+//! `tree-sitter-css 0.25.0`, `tree-sitter-scss 1.0.0`, `tree-sitter-md
+//! 0.5.3`) —
 //! Cargo.toml only pins the minor version, so bump the salt by hand whenever
 //! `cargo update` moves one of these crates forward.
 
@@ -78,7 +80,10 @@ pub const BASH: LangInfo = LangInfo {
 };
 pub const YAML: LangInfo = LangInfo {
     id: "yaml",
-    salt: "yaml@0.7.2+q1",
+    // +q2: V72-H2a (D7) surfaces anchors (`&a`), aliases (`*a`) and merge
+    // keys (`<<:`) on the key row's `signature` — same rows, new field, so
+    // every cached row extracted under +q1 is stale by definition.
+    salt: "yaml@0.7.2+q2",
 };
 pub const GO: LangInfo = LangInfo {
     id: "go",
@@ -91,6 +96,32 @@ pub const TOML: LangInfo = LangInfo {
 pub const JSON: LangInfo = LangInfo {
     id: "json",
     salt: "json@0.24.8+q1",
+};
+/// V72-H2a (D7) — CSS. Not a tags language (no `tags.scm` upstream, and no
+/// function/class vocabulary to tag); `crate::css` walks the CST into a
+/// STYLESHEET outline (rules, at-rules, custom properties), the same model
+/// `yaml`/`keypath` use for data files.
+pub const CSS: LangInfo = LangInfo {
+    id: "css",
+    salt: "css@0.25.0+q1",
+};
+/// V72-H2a (D7) — SCSS. A DIFFERENT compiled grammar from [`CSS`] (its own
+/// symbol/field ids), so it gets its own salt for the same reason
+/// `typescript` and `tsx` do: a byte-identical `.css`/`.scss` pair must
+/// never share a cache slot.
+pub const SCSS: LangInfo = LangInfo {
+    id: "scss",
+    salt: "scss@1.0.0+q1",
+};
+/// V72-H2a (D7) — Markdown, via `tree-sitter-md`'s BLOCK grammar. The
+/// crate ships two grammars (block structure + inline content); kb-code
+/// registers the block one, whose `section`/`atx_heading` nodes are the
+/// heading outline and whose `fenced_code_block`s are this language's
+/// injection regions. Inline emphasis/link highlighting is NOT claimed —
+/// see `highlights_query`'s own arm.
+pub const MARKDOWN: LangInfo = LangInfo {
+    id: "markdown",
+    salt: "markdown@0.5.3+q1",
 };
 /// PRR-N3 — ERB (Rails' embedded-template grammar; also covers EJS, unused
 /// here). Registered as its own [`LangInfo`] so `files.lang`/cache-key salt
@@ -166,7 +197,8 @@ pub fn detect(path: &str, content: Option<&[u8]>) -> Option<LangInfo> {
 /// set" is equivalent to "is its salt the CURRENT one for whichever
 /// language it names," with no need to also join back through `files.lang`.
 pub(crate) const ALL_LANGS: &[LangInfo] = &[
-    RUST, PYTHON, RUBY, TYPESCRIPT, TSX, JAVASCRIPT, BASH, YAML, GO, TOML, JSON, ERB, HAML,
+    RUST, PYTHON, RUBY, TYPESCRIPT, TSX, JAVASCRIPT, BASH, YAML, GO, TOML, JSON, CSS, SCSS,
+    MARKDOWN, ERB, HAML,
 ];
 
 /// Resolve a language id (as stored in `symbols.salt`'s language or
@@ -185,6 +217,9 @@ pub fn for_id(id: &str) -> Option<LangInfo> {
         "go" => Some(GO),
         "toml" => Some(TOML),
         "json" => Some(JSON),
+        "css" => Some(CSS),
+        "scss" => Some(SCSS),
+        "markdown" => Some(MARKDOWN),
         "erb" => Some(ERB),
         "haml" => Some(HAML),
         _ => None,
@@ -233,6 +268,16 @@ fn ts_language(id: &str) -> Option<tree_sitter::Language> {
         "go" => Some(tree_sitter_go::LANGUAGE.into()),
         "toml" => Some(tree_sitter_toml_ng::LANGUAGE.into()),
         "json" => Some(tree_sitter_json::LANGUAGE.into()),
+        "css" => Some(tree_sitter_css::LANGUAGE.into()),
+        // `tree-sitter-scss` 1.0.0 is the ONE grammar here with an
+        // OLD-STYLE binding: it returns a `tree_sitter::Language` by value
+        // instead of the ABI-stable `LanguageFn` every other crate exposes.
+        // That is safe only while the workspace resolves ONE `tree-sitter`
+        // (its own requirement is a wide `>=0.21.0`) — if a `cargo update`
+        // ever split it, this line stops compiling, which is the failure
+        // mode we want. See the root Cargo.toml comment.
+        "scss" => Some(tree_sitter_scss::language()),
+        "markdown" => Some(tree_sitter_md::LANGUAGE.into()),
         "erb" => Some(tree_sitter_embedded_template::LANGUAGE.into()),
         _ => None,
     }
@@ -296,11 +341,13 @@ pub fn locals_query(id: &str) -> Option<&'static str> {
 /// (loaded via the grammar crate's own `TAGS_QUERY` const, never a
 /// filesystem path) for Rust/Python/Ruby/JavaScript, or one of this crate's
 /// OWN vendored queries above for TypeScript/TSX/Bash/Go. `None` for
-/// `"yaml"`/`"toml"`/`"json"`: none of the three is a tags language at all
-/// (ADR-7 for YAML, same reasoning extended to TOML/JSON in W2.6) —
-/// `extract::extract_symbols` dispatches each to the `yaml`/`keypath`
-/// modules' CST-walk outlines instead of this query path; see those
-/// modules' docs.
+/// the six CST-WALK OUTLINE languages (`extract::CST_OUTLINES` —
+/// `"yaml"`/`"toml"`/`"json"`, plus V72-H2a's `"css"`/`"scss"`/
+/// `"markdown"`): none of them is a tags language at all (ADR-7 for YAML,
+/// the same reasoning extended to TOML/JSON in W2.6 and to stylesheets/
+/// prose in V72-H2a) — `extract::extract_symbols` dispatches each to the
+/// `yaml`/`keypath`/`css`/`markdown` modules' CST-walk outlines instead of
+/// this query path; see those modules' docs.
 pub fn tags_query(id: &str) -> Option<&'static str> {
     match id {
         "rust" => Some(tree_sitter_rust::TAGS_QUERY),
@@ -348,6 +395,17 @@ pub fn highlights_query(id: &str) -> Option<String> {
         "go" => Some(tree_sitter_go::HIGHLIGHTS_QUERY.to_string()),
         "toml" => Some(tree_sitter_toml_ng::HIGHLIGHTS_QUERY.to_string()),
         "json" => Some(tree_sitter_json::HIGHLIGHTS_QUERY.to_string()),
+        "css" => Some(tree_sitter_css::HIGHLIGHTS_QUERY.to_string()),
+        "scss" => Some(tree_sitter_scss::HIGHLIGHTS_QUERY.to_string()),
+        // The BLOCK grammar's query only. `tree-sitter-md` also ships
+        // `HIGHLIGHT_QUERY_INLINE`, which compiles against the SEPARATE
+        // inline grammar — running it here would be a query/tree mismatch,
+        // and registering `markdown_inline` as its own `syntax/1` row would
+        // declare a language no path can address. Emphasis, link text and
+        // inline code spans are therefore NOT painted; the fenced-code
+        // INJECTIONS (`crate::injection`) are, which is the part that
+        // carries real code.
+        "markdown" => Some(tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.to_string()),
         _ => None,
     }
 }
@@ -410,6 +468,9 @@ pub(crate) const ALL_LANG_IDS: &[&str] = &[
     "go",
     "toml",
     "json",
+    "css",
+    "scss",
+    "markdown",
 ];
 
 /// Language ids that go through the `tags.scm`-style definition-query path
@@ -492,7 +553,7 @@ mod tests {
         for id in TAGS_LANG_IDS {
             assert!(tags_query(id).is_some(), "{id} tags.scm");
         }
-        for id in ["yaml", "toml", "json"] {
+        for id in ["yaml", "toml", "json", "css", "scss", "markdown"] {
             assert!(
                 tags_query(id).is_none(),
                 "{id} is a CST-walk outline, not a tags language — see extract::extract_symbols"
@@ -505,7 +566,17 @@ mod tests {
         for id in ["rust", "typescript", "tsx", "python", "ruby"] {
             assert!(locals_query(id).is_some(), "{id} locals.scm");
         }
-        for id in ["javascript", "go", "bash", "yaml", "toml", "json"] {
+        for id in [
+            "javascript",
+            "go",
+            "bash",
+            "yaml",
+            "toml",
+            "json",
+            "css",
+            "scss",
+            "markdown",
+        ] {
             assert!(
                 locals_query(id).is_none(),
                 "{id} must not have a locals query yet (V3.G1 proof set + V71-E1 ruby)"
@@ -543,7 +614,7 @@ mod tests {
         ] {
             assert!(supports_token_level(id), "{id} should be token-level");
         }
-        for id in ["yaml", "toml", "json"] {
+        for id in ["yaml", "toml", "json", "css", "scss", "markdown"] {
             assert!(
                 !supports_token_level(id),
                 "{id} should NOT be token-level (CST-walk outlines, not code)"
@@ -586,6 +657,13 @@ mod tests {
         (GO, "tree-sitter-go"),
         (TOML, "tree-sitter-toml-ng"),
         (JSON, "tree-sitter-json"),
+        (CSS, "tree-sitter-css"),
+        (SCSS, "tree-sitter-scss"),
+        // The crate is `tree-sitter-md`; the LANGUAGE id is `markdown`
+        // (what a reader types, and what `files.lang` carries), so the
+        // salt's prefix is `markdown@` while the version it must embed is
+        // `tree-sitter-md`'s.
+        (MARKDOWN, "tree-sitter-md"),
     ];
 
     /// Walk up from `CARGO_MANIFEST_DIR` (this crate's own directory,

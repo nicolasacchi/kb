@@ -1,0 +1,40 @@
+---
+source: crates/kb-code-server/src/yaml.rs
+expression: got
+---
+[
+    (
+        "defaults",
+        Some(
+            "&defaults",
+        ),
+    ),
+    (
+        "defaults.adapter",
+        None,
+    ),
+    (
+        "defaults.encoding",
+        None,
+    ),
+    (
+        "development",
+        None,
+    ),
+    (
+        "development.<<",
+        Some(
+            "<<: *defaults",
+        ),
+    ),
+    (
+        "development.database",
+        None,
+    ),
+    (
+        "test",
+        Some(
+            "*defaults",
+        ),
+    ),
+]
