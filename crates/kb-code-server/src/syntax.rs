@@ -79,7 +79,8 @@
 //! [`parity_grid`] is `rows × {highlight, symbols, outline, usages, hover,
 //! lens}`, every cell DERIVED from this registry plus the predicates that
 //! already gate those lanes (`lang::supports_token_level`,
-//! `lang::tags_query`, `lang::locals_query`, `extract::CST_OUTLINE_LANG_IDS`)
+//! `lang::tags_query`, `lang::locals_query`, `extract::CST_OUTLINES`,
+//! `crate::outline`, `crate::injection`)
 //! — never hand-typed, so it cannot claim a capability the daemon does not
 //! have. A cell is `yes`, `no` or `partial`, and everything except `yes`
 //! carries a REASON. The grid is pinned by a checked-in golden
@@ -198,10 +199,11 @@ pub struct SyntaxRow {
     /// Who parses it — see [`Engine`].
     pub engine: Engine,
     pub tier: Tier,
-    /// This type embeds other languages (ERB hosts Ruby + HTML). Declared
-    /// for H2a's injection-aware pipeline, which is what will consume it;
-    /// NOTHING reads it today beyond the `syntax/1` wire, and saying so
-    /// here is cheaper than letting a reader assume injections work.
+    /// This type embeds other languages. V72-H2a made it load-bearing:
+    /// `crate::injection` is the ONE place those regions are located, and
+    /// a test pins this flag against `injection::is_host` so the
+    /// declaration and the layer cannot disagree. The WIRE carries the
+    /// derived guest set beside it (`injections`).
     pub injection_host: bool,
     /// Extensions, without the dot, lowercase, matched exactly.
     pub extensions: &'static [&'static str],
@@ -371,6 +373,54 @@ pub const REGISTRY: &[SyntaxRow] = &[
         note: None,
     },
     SyntaxRow {
+        lang: "css",
+        info: Some(lang::CSS),
+        engine: Engine::TreeSitter("tree-sitter-css"),
+        tier: Tier::Full,
+        injection_host: false,
+        extensions: &["css"],
+        filenames: &[],
+        interpreters: &[],
+        note: None,
+    },
+    SyntaxRow {
+        lang: "scss",
+        info: Some(lang::SCSS),
+        engine: Engine::TreeSitter("tree-sitter-scss"),
+        // V72-H2a — the FIRST production `HIGHLIGHT_ONLY` row, and it is
+        // a grammar judgement, not a scope decision. `crate::css` mints a
+        // real stylesheet outline for SCSS and its tests prove it; the
+        // problem is underneath. See `css::tests::
+        // the_scss_grammar_cannot_parse_extend_which_is_why_its_tier_is_highlight_only`
+        // — that test fails the day a better grammar lands, and flipping
+        // this back to `Full` is the one-line change it asks for.
+        tier: Tier::HighlightOnly,
+        injection_host: false,
+        extensions: &["scss"],
+        filenames: &[],
+        interpreters: &[],
+        note: Some(
+            "tree-sitter-scss 1.0.0 (its upstream's only release) cannot parse @extend: the \
+             ERROR swallows the rest of the enclosing block, so an outline would silently \
+             drop every rule after one. Highlighting degrades visibly over an error tree; a \
+             missing outline row does not",
+        ),
+    },
+    SyntaxRow {
+        lang: "markdown",
+        info: Some(lang::MARKDOWN),
+        engine: Engine::TreeSitter("tree-sitter-md"),
+        tier: Tier::Full,
+        // V72-H2a: the third injection host, and the first whose guest set
+        // is not fixed — a fence's info string names it. See
+        // `crate::injection`.
+        injection_host: true,
+        extensions: &["md", "markdown"],
+        filenames: &[],
+        interpreters: &[],
+        note: None,
+    },
+    SyntaxRow {
         lang: "erb",
         info: Some(lang::ERB),
         engine: Engine::TreeSitter("tree-sitter-embedded-template"),
@@ -527,6 +577,11 @@ pub struct SyntaxRowOut {
     /// The derived-row cache salt, `null` in lock-step with `grammar`.
     pub salt: Option<&'static str>,
     pub injection_host: bool,
+    /// The guest languages this host can contain — DERIVED from
+    /// `crate::injection::guest_langs`, which is the same function the
+    /// painter and the lens walks use, so the wire cannot promise a guest
+    /// nothing would extract. Empty for a non-host.
+    pub injections: Vec<&'static str>,
     pub extensions: &'static [&'static str],
     pub filenames: &'static [&'static str],
     pub interpreters: &'static [&'static str],
@@ -557,6 +612,7 @@ pub fn syntax_registry() -> SyntaxOut {
             scanner: r.engine.scanner(),
             salt: r.info.map(|i| i.salt),
             injection_host: r.injection_host,
+            injections: crate::injection::guest_langs(r.lang),
             extensions: r.extensions,
             filenames: r.filenames,
             interpreters: r.interpreters,
@@ -628,8 +684,6 @@ fn no_pass_reason(row: &SyntaxRow) -> Option<&'static str> {
 const SCANNER_SYMBOLS_REASON: &str =
     "template outline rows (elements and filters) from a first-party scanner — the embedded \
      Ruby fragments get no symbols of their own";
-const KEYPATH_SYMBOLS_REASON: &str =
-    "key-path outline rows (kind \"key\") — a data outline, not code definitions";
 
 fn cell_highlight(row: &SyntaxRow) -> ParityCell {
     if row.plan().highlight {
@@ -655,8 +709,8 @@ fn cell_symbols(row: &SyntaxRow) -> ParityCell {
     if row.engine.is_scanner() {
         return cell("symbols", STATE_PARTIAL, Some(SCANNER_SYMBOLS_REASON));
     }
-    if crate::extract::CST_OUTLINE_LANG_IDS.contains(&row.lang) {
-        return cell("symbols", STATE_PARTIAL, Some(KEYPATH_SYMBOLS_REASON));
+    if let Some(shape) = crate::extract::cst_outline_shape(row.lang) {
+        return cell("symbols", STATE_PARTIAL, Some(shape.symbols_reason()));
     }
     cell(
         "symbols",
@@ -665,32 +719,39 @@ fn cell_symbols(row: &SyntaxRow) -> ParityCell {
     )
 }
 
+/// V72-H2a — the universal `outline/1` contract (`crate::outline`) answers
+/// for EVERY registry row, so this cell is no longer the shared "not built
+/// yet" `partial` every row carried. It is now exactly the question "does
+/// `GET /api/outline` return rows for this type", which is one property:
+/// the row's own tier promises symbols, because `outline/1` is DERIVED
+/// from the same symbol set (never a second extraction — that is the whole
+/// point of one contract). A row that derives no symbols gets an honest
+/// empty outline with its tier's reason, which is a `no` here.
 fn cell_outline(row: &SyntaxRow) -> ParityCell {
     let symbols = cell_symbols(row);
     if symbols.state == STATE_NO {
         return cell("outline", STATE_NO, symbols.reason);
     }
-    // Every language that HAS symbols also has an outline today — the
-    // reader's structure popup is a render of `GET /api/symbols`. What
-    // does not exist yet is the universal `outline/1` contract (one
-    // `{kind,name,range,badges}` shape per file type, D7), so no row can
-    // honestly claim a full `yes` here until H2a ships it.
-    cell(
-        "outline",
-        STATE_PARTIAL,
-        Some("rendered from the symbols table; the universal outline/1 contract is not built yet"),
-    )
+    cell("outline", STATE_YES, None)
 }
 
 fn cell_usages(row: &SyntaxRow) -> ParityCell {
     if !lang::supports_token_level(row.lang) {
         // A row with no occurrences index can still answer `usages` — from
         // the Rails lens's convention edges, which `resolve.rs` reads by
-        // `src_path`. That needs the type's declared pipeline to run at
-        // all, which is what `tier == Full` says; a `none`-tier injection
-        // host (ERB) derives nothing under the plan and keeps its honest
-        // `no` here, unchanged from V72-H1.
-        if row.tier == Tier::Full && row.injection_host {
+        // `src_path`. That needs TWO things: the Rails lens's own path
+        // dispatch must be able to reach this language at all
+        // (`frameworks::rails::LENS_LANG_IDS`, declared beside the
+        // dispatch it describes), and the type's declared pipeline must
+        // run, which is what `tier == Full` says. A `none`-tier row (ERB)
+        // derives nothing under the plan and keeps its honest `no`.
+        //
+        // V72-H1 used `injection_host` as the proxy for the first half,
+        // which was true while HAML was the only `Full` host. V72-H2a's
+        // `markdown` is a `Full` injection host the Rails lens never sees,
+        // so the proxy would have started claiming convention edges for
+        // prose — the exact over-claim the derived grid exists to prevent.
+        if row.tier == Tier::Full && crate::frameworks::rails::LENS_LANG_IDS.contains(&row.lang) {
             return cell(
                 "usages",
                 STATE_PARTIAL,
@@ -724,16 +785,15 @@ fn cell_hover(row: &SyntaxRow) -> ParityCell {
         return cell("hover", STATE_YES, None);
     }
     if row.plan().symbols {
-        return cell(
-            "hover",
-            STATE_PARTIAL,
-            Some(if row.engine.is_scanner() {
-                "word-scan resolve over template outline rows — no occurrences index to bind a \
-                 position"
-            } else {
-                "word-scan resolve over key-path rows — no occurrences index to bind a position"
-            }),
-        );
+        let reason = if row.engine.is_scanner() {
+            "word-scan resolve over template outline rows — no occurrences index to bind a \
+             position"
+        } else if let Some(shape) = crate::extract::cst_outline_shape(row.lang) {
+            shape.hover_reason()
+        } else {
+            "word-scan resolve over outline rows — no occurrences index to bind a position"
+        };
+        return cell("hover", STATE_PARTIAL, Some(reason));
     }
     cell(
         "hover",
@@ -841,6 +901,11 @@ mod tests {
     /// fixture) and is read from here (where the only test that can
     /// regenerate it lives).
     const PARITY_GOLDEN: &str = include_str!("../tests/fixtures/parity.golden.json");
+    /// V72-H2a — the registry's OWN wire, golden-pinned for the same
+    /// reason the grid is: adding a language, an extension, a salt or an
+    /// injection guest is a deliberate, reviewable change, and until now
+    /// only its DERIVED consequences were pinned.
+    const SYNTAX_GOLDEN: &str = include_str!("../tests/fixtures/syntax.golden.json");
 
     // ── detection: the pre-V72-H1 table, byte for byte ───────────────────
 
@@ -871,10 +936,18 @@ mod tests {
             ("package.json", Some("json")),
             ("app/views/show.html.erb", Some("erb")),
             ("app/views/show.turbo_stream.erb", Some("erb")),
+            // V72-H2a — `.md` is `markdown` now. The registry may only
+            // ADD detections, never move or drop one, and this is an ADD:
+            // a `.md` file was `unknown` before, i.e. prose the
+            // instrument silently ignored.
+            ("README.md", Some("markdown")),
+            ("docs/notes.markdown", Some("markdown")),
+            ("web/src/app.css", Some("css")),
+            ("app/assets/stylesheets/app.scss", Some("scss")),
             // Not detected before, and STILL not detected: an extension
             // that matches nothing never falls through to the stem table
             // or the shebang sniff.
-            ("README.md", None),
+            ("NOTES.txt", None),
             ("noextension", None),
             ("Gemfile.lock", None),
             ("src/lib.RS", None),
@@ -976,7 +1049,7 @@ mod tests {
             .expect("dockerfile explains itself")
             .contains("no tree-sitter grammar"));
         // Not in the registry at all — distinguishable from the above.
-        let (tier, reason) = tier_for_path("README.md", None);
+        let (tier, reason) = tier_for_path("NOTES.txt", None);
         assert_eq!(tier, Tier::None);
         assert_eq!(reason, Some("no syntax/1 registry row for this file type"));
     }
@@ -1088,7 +1161,7 @@ mod tests {
             if plan.symbols {
                 assert!(
                     lang::tags_query(r.lang).is_some()
-                        || crate::extract::CST_OUTLINE_LANG_IDS.contains(&r.lang)
+                        || crate::extract::is_cst_outline(r.lang)
                         || r.engine.is_scanner(),
                     "{}: tier full promises symbols but has no tags query, no CST outline and \
                      no first-party scanner",
@@ -1124,22 +1197,53 @@ mod tests {
         }
     }
 
-    /// HIGHLIGHT_ONLY ships as a MECHANISM with no production row yet —
-    /// recorded here, with the reason, rather than left to be discovered.
-    /// The first rows arrive with H2a's SCSS/CSS/Markdown grammars; this
-    /// test is the one that will fail then, which is the point.
+    /// **The HIGHLIGHT_ONLY ledger — flipped in V72-H2a.** V72-H1 shipped
+    /// the tier as a mechanism with no production row and recorded that
+    /// emptiness here rather than leaving it to be discovered; this is
+    /// the same ledger, now pinning the row that arrived and WHY.
+    ///
+    /// `scss` is the one row, and it is a grammar judgement rather than a
+    /// scope decision: `crate::css` mints a real stylesheet outline for
+    /// SCSS and its tests prove it, but `tree-sitter-scss` 1.0.0 cannot
+    /// parse `@extend` and its `ERROR` swallows the rest of the enclosing
+    /// block — so a `full` tier would ship outlines that are silently
+    /// short and look complete. Highlighting over an error tree degrades
+    /// VISIBLY (uncoloured text); a missing outline row does not.
+    ///
+    /// `css` and `markdown` are `full`: the official CSS grammar parses
+    /// cleanly, and Markdown's heading tree is exactly what its block
+    /// grammar is for.
     #[test]
-    fn highlight_only_has_no_production_row_yet() {
+    fn the_highlight_only_ledger_is_exactly_scss_and_says_why() {
         let rows: Vec<&str> = REGISTRY
             .iter()
             .filter(|r| r.tier == Tier::HighlightOnly)
             .map(|r| r.lang)
             .collect();
-        assert!(
-            rows.is_empty(),
-            "HIGHLIGHT_ONLY now has production rows ({rows:?}) — update this test AND the \
-             parity golden in the same commit"
+        assert_eq!(
+            rows,
+            vec!["scss"],
+            "the HIGHLIGHT_ONLY ledger changed — update this test, the reason above AND \
+             both goldens in the same commit"
         );
+        for r in REGISTRY.iter().filter(|r| r.tier == Tier::HighlightOnly) {
+            let note = r.note.expect("a highlight_only row must say why");
+            assert!(
+                !note.is_empty(),
+                "{}: an unexplained tier is not a decision on record",
+                r.lang
+            );
+            // The whole mechanism, on the real row: spans yes, symbols no.
+            assert_eq!(
+                r.plan(),
+                Plan {
+                    highlight: true,
+                    symbols: false
+                },
+                "{}",
+                r.lang
+            );
+        }
     }
 
     /// The tier short-circuit itself, exercised over a synthetic row (the
@@ -1220,7 +1324,8 @@ mod tests {
         // outline contract that does not exist yet.
         assert_eq!(find("rust", "highlight").state, STATE_YES);
         assert_eq!(find("rust", "symbols").state, STATE_YES);
-        assert_eq!(find("rust", "outline").state, STATE_PARTIAL);
+        // V72-H2a — `outline/1` answers for every symbol-bearing row.
+        assert_eq!(find("rust", "outline").state, STATE_YES);
         assert_eq!(find("rust", "usages").state, STATE_YES);
         // Token-level without a locals query: no exact tier, and it says so.
         assert_eq!(find("go", "usages").state, STATE_PARTIAL);
@@ -1231,8 +1336,45 @@ mod tests {
         // A CST-outline data language: highlighted, key rows, no code lanes.
         assert_eq!(find("yaml", "highlight").state, STATE_YES);
         assert_eq!(find("yaml", "symbols").state, STATE_PARTIAL);
+        assert!(find("yaml", "symbols")
+            .reason
+            .expect("yaml symbols explains itself")
+            .contains("key-path"));
+        assert_eq!(find("yaml", "outline").state, STATE_YES);
         assert_eq!(find("yaml", "usages").state, STATE_NO);
         assert_eq!(find("yaml", "lens").state, STATE_NO);
+        // V72-H2a — a stylesheet and a prose document are CST outlines
+        // too, and each says which SHAPE its rows are rather than sharing
+        // YAML's key-path wording.
+        assert_eq!(find("css", "highlight").state, STATE_YES);
+        assert_eq!(find("css", "symbols").state, STATE_PARTIAL);
+        assert!(find("css", "symbols")
+            .reason
+            .expect("explains itself")
+            .contains("stylesheet"));
+        assert_eq!(find("css", "outline").state, STATE_YES);
+        assert_eq!(find("css", "usages").state, STATE_NO);
+        assert_eq!(find("css", "hover").state, STATE_PARTIAL);
+        assert_eq!(find("css", "lens").state, STATE_NO);
+        // The HIGHLIGHT_ONLY row: spans, and an explained `no` everywhere
+        // else — the short-circuit, visible on the grid.
+        assert_eq!(find("scss", "highlight").state, STATE_YES);
+        for cap in ["symbols", "outline", "usages", "hover", "lens"] {
+            let c = find("scss", cap);
+            assert_eq!(c.state, STATE_NO, "scss/{cap}");
+            assert!(c.reason.is_some(), "scss/{cap} must say why");
+        }
+        assert!(find("scss", "symbols")
+            .reason
+            .expect("explains itself")
+            .contains("highlight_only"));
+        assert_eq!(find("markdown", "highlight").state, STATE_YES);
+        assert_eq!(find("markdown", "symbols").state, STATE_PARTIAL);
+        assert!(find("markdown", "symbols")
+            .reason
+            .expect("explains itself")
+            .contains("heading"));
+        assert_eq!(find("markdown", "outline").state, STATE_YES);
         // A first-party-scanner row: highlighted and outlined by code this
         // crate owns, convention-edged by the Rails lens, and honestly
         // short of an occurrences index. Every non-`yes` cell says which.
@@ -1262,6 +1404,19 @@ mod tests {
                 assert!(c.reason.is_some(), "{lang}/{cap} must say why");
             }
         }
+    }
+
+    /// The CI gate for the registry itself.
+    #[test]
+    fn the_syntax_registry_matches_the_checked_in_golden() {
+        let actual = serde_json::to_string_pretty(&syntax_registry()).expect("serialize");
+        assert_eq!(
+            actual.trim_end(),
+            SYNTAX_GOLDEN.trim_end(),
+            "the syntax/1 registry differs from tests/fixtures/syntax.golden.json.\n\
+             If the change is intended, replace the golden with the JSON below (this is \
+             exactly `kb-code syntax --json`):\n{actual}"
+        );
     }
 
     /// The CI gate. A capability change is a golden change — reviewable in
@@ -1325,7 +1480,7 @@ mod tests {
             assert!(!crate::hierarchy::supports_hierarchy(id), "{id}: hierarchy");
             assert!(!crate::entities::indexes_lang(id), "{id}: entities");
             assert!(
-                !crate::extract::CST_OUTLINE_LANG_IDS.contains(&id),
+                !crate::extract::is_cst_outline(id),
                 "{id}: CST outline — that dispatch parses a grammar this row has not got"
             );
             assert!(lang::tags_query(id).is_none(), "{id}: tags query");

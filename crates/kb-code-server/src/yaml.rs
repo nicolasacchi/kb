@@ -59,6 +59,29 @@
 //!   dedup-skip: a later item can have keys an earlier item didn't, and
 //!   those child paths are still new.
 //!
+//! ## Anchors, aliases and merge keys (V72-H2a, D7)
+//!
+//! YAML's three reuse constructs are surfaced as FACTS on the key row
+//! that carries them, in `signature`:
+//!
+//! - `&name` — the row's value defines an anchor;
+//! - `*name` — the row's value IS an alias to one;
+//! - `<<: *name` — the row is a merge key (its own path segment is `<<`,
+//!   which is what YAML calls it).
+//!
+//! No new rows and no new kinds: an anchor is a property OF a key, and
+//! minting a second row for it would double every anchored key in the
+//! outline and in `GET /api/symbols?q=`. The fact rides `signature`
+//! because that field already travels on `GET /api/file`, per-file
+//! `GET /api/symbols` and the `outline/1` row's `detail`.
+//!
+//! **What this deliberately does NOT do is resolve them.** `*defaults`
+//! naming `&defaults` is a reference, and turning it into a jump target
+//! would be a `usages` claim — this language has no occurrences index, so
+//! the Parity Grid says `no` for `usages` and this module must not
+//! contradict it. An anchor on a node with no key row (a sequence item, a
+//! bare document root) has nowhere to hang and is not surfaced.
+//!
 //! ## `kind = "key"` and the repo-map exclusion
 //!
 //! YAML key-path rows share the `symbols` table with real code symbols
@@ -230,7 +253,8 @@ impl Walker<'_> {
             let mut child_path = path.clone();
             child_path.push(key_text);
             let full_path = child_path.join(".");
-            self.emit(&pair, &full_path, container.clone(), seen);
+            let fact = self.reuse_fact(pair);
+            self.emit(&pair, &full_path, container.clone(), fact, seen);
 
             // Depth cap: emit this row, but don't descend past MAX_DEPTH
             // segments — see the module doc's "Cardinality caps".
@@ -245,11 +269,50 @@ impl Walker<'_> {
         }
     }
 
+    /// The `&anchor` / `*alias` / `<<: *alias` fact for a mapping pair,
+    /// or `None`. Read from the value field BEFORE `unwrap_value` strips
+    /// the decorators — that helper exists precisely to skip them, which
+    /// is why the fact has to be taken here rather than downstream.
+    fn reuse_fact(&self, pair: Node<'_>) -> Option<String> {
+        let value = pair.child_by_field_name("value")?;
+        let is_merge_key = pair
+            .child_by_field_name("key")
+            .and_then(|k| k.utf8_text(self.source).ok())
+            .map(|t| t.trim() == "<<")
+            .unwrap_or(false);
+        // An anchor DEFINITION is a decorator child of the value wrapper.
+        let mut cursor = value.walk();
+        let anchor = value
+            .named_children(&mut cursor)
+            .find(|c| c.kind() == "anchor")
+            .and_then(|a| a.utf8_text(self.source).ok())
+            .map(|t| t.trim().to_string());
+        if let Some(anchor) = anchor {
+            // `anchor` node text already carries the `&`.
+            return Some(anchor);
+        }
+        // An alias REFERENCE is the unwrapped value itself. A merge key's
+        // value may also be a flow sequence of aliases (`<<: [*a, *b]`),
+        // which YAML allows and which reads as one fact.
+        let inner = unwrap_value(value)?;
+        let aliases = collect_aliases(inner, self.source);
+        if aliases.is_empty() {
+            return None;
+        }
+        let joined = aliases.join(", ");
+        Some(if is_merge_key {
+            format!("<<: {joined}")
+        } else {
+            joined
+        })
+    }
+
     fn emit(
         &mut self,
         pair: &Node<'_>,
         full_path: &str,
         container: Option<String>,
+        fact: Option<String>,
         seen: &mut BTreeSet<String>,
     ) {
         if self.symbols.len() >= MAX_KEYS {
@@ -270,7 +333,10 @@ impl Walker<'_> {
             col_start: start.column as u32,
             col_end: end.column as u32,
             container,
-            signature: None,
+            // V72-H2a — the anchor/alias/merge fact, or `None`. Not a type
+            // signature; see the module doc's own section on why it rides
+            // this field rather than a new column.
+            signature: fact,
             doc: None,
             param_min: None,
             param_max: None,
@@ -279,6 +345,40 @@ impl Walker<'_> {
             self.capped = true;
         }
     }
+}
+
+/// Every alias (`*name`) directly under `node` — the node itself when it
+/// IS one, otherwise its flow-sequence items. Never recurses deeper: a
+/// merge key's value is an alias or a flat list of them, and anything
+/// else is a value, not a reuse fact.
+fn collect_aliases(node: Node<'_>, source: &[u8]) -> Vec<String> {
+    if node.kind() == "alias" {
+        return node
+            .utf8_text(source)
+            .ok()
+            .map(|t| vec![t.trim().to_string()])
+            .unwrap_or_default();
+    }
+    if !matches!(node.kind(), "flow_sequence" | "block_sequence") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut cursor = node.walk();
+    for item in node.named_children(&mut cursor).collect::<Vec<_>>() {
+        let item_value = match item.kind() {
+            "block_sequence_item" => item.named_child(0),
+            _ => Some(item),
+        };
+        let Some(inner) = item_value.and_then(unwrap_value) else {
+            continue;
+        };
+        if inner.kind() == "alias" {
+            if let Ok(t) = inner.utf8_text(source) {
+                out.push(t.trim().to_string());
+            }
+        }
+    }
+    out
 }
 
 /// A `block_node`/`flow_node` wrapper carries decorator children (`anchor`/
@@ -328,6 +428,59 @@ fn scalar_text(key_field: Node<'_>, source: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── V72-H2a (D7): anchors, aliases, merge keys ───────────────────────
+
+    const REUSE_FIXTURE: &str = "defaults: &defaults\n  adapter: postgres\n  encoding: utf8\n\ndevelopment:\n  <<: *defaults\n  database: dev\n\ntest: *defaults\n";
+
+    fn facts(src: &str) -> Vec<(String, Option<String>)> {
+        outline(src.as_bytes())
+            .unwrap()
+            .symbols
+            .into_iter()
+            .map(|s| (s.name, s.signature))
+            .collect()
+    }
+
+    #[test]
+    fn anchors_aliases_and_merge_keys_ride_the_key_rows_signature() {
+        let got = facts(REUSE_FIXTURE);
+        insta::assert_debug_snapshot!(got);
+        let fact = |name: &str| -> Option<String> {
+            got.iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("{name} row: {got:?}"))
+                .1
+                .clone()
+        };
+        assert_eq!(fact("defaults"), Some("&defaults".to_string()));
+        assert_eq!(fact("development.<<"), Some("<<: *defaults".to_string()));
+        assert_eq!(fact("test"), Some("*defaults".to_string()));
+        // A plain key carries no fact — the field stays `None` rather than
+        // an empty string, so "no reuse here" and "reuse we could not
+        // read" are not the same value.
+        assert_eq!(fact("development.database"), None);
+    }
+
+    #[test]
+    fn a_merge_key_with_a_list_of_aliases_reads_as_one_fact() {
+        let got = facts("a: &a\n  x: 1\nb: &b\n  y: 2\nc:\n  <<: [*a, *b]\n");
+        let merge = got
+            .iter()
+            .find(|(n, _)| n == "c.<<")
+            .unwrap_or_else(|| panic!("{got:?}"));
+        assert_eq!(merge.1.as_deref(), Some("<<: *a, *b"));
+    }
+
+    #[test]
+    fn every_row_still_has_kind_key_and_no_new_rows_appeared() {
+        let out = outline(REUSE_FIXTURE.as_bytes()).unwrap();
+        assert!(
+            out.symbols.iter().all(|s| s.kind == "key"),
+            "{:?}",
+            out.symbols
+        );
+    }
 
     fn rows(o: &YamlOutline) -> Vec<(&str, Option<&str>)> {
         o.symbols

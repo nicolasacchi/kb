@@ -1091,3 +1091,134 @@ Not in this unit, by design: the SPA's Facts gutter, rail and hover
 (H4b); any lane beyond the four; the retrofit of kb-lip, rails-lens and
 the DCB doc-lens as lanes; and LLM-produced facts, which this daemon has
 no place for at all.
+
+**V72-H2a (D7) — three grammars, one injection layer, `outline/1`.**
+
+*New languages.* `css`, `scss` and `markdown` join the `syntax/1` registry,
+all three CST-WALK outlines rather than `tags.scm` query languages (the
+model `yaml`/`toml`/`json` already used — none of the three grammars ships
+a tags query, and none of the three languages has a definition vocabulary
+one could target). `css` and `markdown` are tier `full`; **`scss` is tier
+`highlight_only`**, the first production row for the mechanism V72-H1
+shipped, and the reason is a grammar fact rather than a scope decision —
+see "The HIGHLIGHT_ONLY ledger" below. `.md`/`.markdown` were `unknown`
+before, i.e. prose the instrument silently ignored.
+
+- **CSS/SCSS** (`crates/kb-code-server/src/css.rs`) mint a documented
+  seven-kind vocabulary: `rule` (a selector list), `placeholder` (an SCSS
+  `%name` whose whole selector list is one), `at_rule` (`@media`,
+  `@supports`, `@use`, `@import`, `@forward`, `@charset`, `@namespace`,
+  `@at-root`, and any other at-rule — named by its header text),
+  `keyframes`, `mixin`, `function` and `variable` (an SCSS `$name:` or a
+  CSS custom property `--name:`). An ordinary declaration is deliberately
+  NOT a row — a real stylesheet has thousands and an outline that lists
+  every one is a re-print of the file. SCSS control flow (`@if`/`@each`/
+  `@for`/`@while`/`@include` with a block) is not a row either, but the
+  walk descends THROUGH it, so a rule written inside an `@each` still
+  appears. `detail` carries the full header for rows whose name is a
+  fragment of it (`@mixin button($size: md)` for the mixin `button`).
+- **Markdown** (`src/markdown.rs`) mints one `heading` row per heading
+  SECTION — the row's line range covers the whole section, not the heading
+  line, which is what lets `outline/1`'s containment nesting reproduce the
+  document's own structure; `detail` is the level, `h1`..`h6`. Fenced code
+  blocks are injection HOSTS, not rows. **Links are deliberately not
+  minted as candidate refs**: kb already extracts exactly that class of
+  doc→code hint corpus-side (`kb_core::coderefs`, root invariant #2), and
+  a second kb-code-local extractor over the same prose would be a
+  competing lane with its own drift.
+- **YAML gains D7's reuse facts.** An anchor (`&name`), an alias (`*name`)
+  and a merge key (`<<: *name`) ride the key row's `signature`, which is
+  already on `GET /api/file`, `GET /api/symbols` and the `outline/1` row's
+  `detail`. No new rows and no new kinds — an anchor is a property OF a
+  key. They are surfaced, never RESOLVED: `*defaults` naming `&defaults`
+  would be a `usages` claim, and YAML has no occurrences index, so the
+  Parity Grid says `no` there and this lane must not contradict it. (The
+  schema-hover half of D7's YAML item is kb-lip's, not this unit's.)
+
+Grammar crates, all MIT: `tree-sitter-css 0.25.0`, `tree-sitter-scss
+1.0.0`, `tree-sitter-md 0.5.3` (its BLOCK grammar — the crate also ships an
+inline grammar, which kb-code does not register, so inline emphasis/link
+highlighting is not claimed). Each is pinned EXACTLY; `tree-sitter-scss` is
+the one old-style binding in the set (it depends on `tree-sitter` itself
+rather than the ABI-stable `tree-sitter-language`), and the root
+`Cargo.toml` records why that is safe and how it would fail loudly.
+
+*The injection layer* (`src/injection.rs`) is the ONE place a host
+language's embedded guest code is located, replacing the two unrelated
+mechanisms that existed before (ERB's per-directive CST walk, HAML's
+whole-template synthesized Ruby program). A `Region` carries its guest
+language, the host byte range it came from, the guest source, and an
+`OffsetMap` — `Shift` for a contiguous slice (both byte offsets and rows
+map back) or `Lines` for a REASSEMBLED program (only rows map back, and a
+`None` entry is a line kb-code invented). Three hosts: `erb` → ruby,
+`haml` → ruby (fragments plus the one program), `markdown` → whatever a
+fence's info string resolves to. **HTML is not a host** — kb-code links no
+`tree-sitter-html` (the Stimulus scan regex-scans ERB's raw `content`
+nodes instead), so `<script>`/`<style>` injections do not exist here and
+the docs say so rather than implying otherwise. Fence languages resolve
+against the registry itself (a row's `lang` first, then its EXTENSIONS),
+so ```` ```rb ````, ```` ```yml ```` and ```` ```ts ```` work with no alias
+table; a fence naming something nothing parses, and a fence whose body is
+not a contiguous slice (inside a block quote or a list item, where `> `
+markers interleave), yield no region and are left unpainted rather than
+mis-offset. Painting runs the guest's HOST-ONLY highlighter, so it is
+bounded at exactly one level by construction — no depth counter to get
+wrong. `GET /api/syntax` gains a DERIVED `injections: [lang_id…]` per row,
+and a test pins the registry's `injection_host` flag against the layer's
+own `is_host`. **ERB and HAML rails-lens output is byte-identical** (their
+goldens are the proof): the walks moved, the edge minting did not.
+
+*`outline/1`* — `GET /api/outline?repo=&path=[&ref=]`, `kb-code outline
+<PATH> --repo R [--ref REF] [--json]`. One per-file outline contract for
+every registered file type: `{schema, repo, path, ref, lang, tier, rows,
+total, truncated, honesty}`, each row `{kind, name, range{line_start,
+line_end, col_start, col_end}, depth, detail?, children[]}`. Row kinds are
+the SYMBOL kinds, verbatim — this contract invents no vocabulary: Rust/
+Python/Ruby/JS/TS/Go/Bash items from `tags.scm`, `key` for YAML/TOML/JSON,
+`rule`/`at_rule`/`mixin`/… for CSS/SCSS, `heading` for Markdown,
+`element`/`filter` for HAML.
+
+It is a **VIEW of the symbol rows, never a second extraction**: the rows
+come from exactly the store lookup `GET /api/symbols` does — same blob,
+same salt — so the two can never disagree. Nesting is RANGE CONTAINMENT
+(the rule `entities/1` already uses), not name matching, so a file with two
+identically-named symbols nests correctly. `honesty` names the tier, the
+engine (`tree-sitter:<crate>` / `scanner:haml/1` / `none`), what the rows
+were derived from, and — when there are none — WHY, so the four shapes a
+caller can hit are all distinguishable: rows; a `full`-tier file nothing
+has indexed yet; a `highlight_only`/`none` tier (a design outcome); an
+unregistered file type. Nothing is persisted and nothing is cached.
+
+The SPA's three existing consumers (the `gO` structure popup, the outline
+rail, the sticky-context header) still derive their own tree client-side
+from `GET /api/file`'s flat `symbols` array; this unit ships no SPA and
+does not rewrite them. `src/outline.rs`'s module doc names all four files
+so the conversion lands on THIS response rather than a second derivation.
+
+*Parity Grid changes.* The `outline` column flips off its shared "the
+universal `outline/1` contract is not built yet" `partial` — it is now
+`yes` for every row whose tier derives symbols and an explained `no` for
+every row that derives none. The `symbols` and `hover` reasons are now
+derived from the outline's SHAPE (`extract::OutlineShape`), so a stylesheet
+and a prose document no longer borrow YAML's key-path wording. The
+`usages` cell's Rails-lens branch now gates on
+`frameworks::rails::LENS_LANG_IDS` instead of `injection_host && tier ==
+full`: that proxy was exactly true while HAML was the only `full`
+injection host and would have started claiming convention edges for
+Markdown. Both goldens ship: `tests/fixtures/parity.golden.json` and (new)
+`tests/fixtures/syntax.golden.json` — the registry's own wire, pinned for
+the same reason the grid is, so adding a language, an extension, a salt or
+an injection guest is a reviewable golden diff.
+
+*The HIGHLIGHT_ONLY ledger.* V72-H1 shipped the tier as a mechanism with
+no production row and recorded that emptiness with a test. V72-H2a gives
+it exactly one row, `scss`, and it is a GRAMMAR judgement: `crate::css`
+mints a real stylesheet outline for SCSS and its own tests prove it, but
+`tree-sitter-scss` 1.0.0 — its upstream's only release — cannot parse
+`@extend`, and the resulting `ERROR` swallows the REST of the enclosing
+block. A `full` tier would therefore ship outlines that are silently short
+and look complete, where highlighting over an error tree degrades VISIBLY
+(uncoloured text). `css` (the official grammar) and `markdown` are `full`.
+The test that pins the gap fails the day a grammar that parses `@extend`
+lands, at which point flipping the tier back is a one-line change in
+`syntax::REGISTRY`.

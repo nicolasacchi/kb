@@ -1,0 +1,55 @@
+---
+source: crates/kb-code-server/src/css.rs
+expression: got
+---
+[
+    (
+        "at_rule",
+        "@use \"sass:math\"",
+        None,
+    ),
+    (
+        "variable",
+        "$brand",
+        None,
+    ),
+    (
+        "variable",
+        "$radius",
+        None,
+    ),
+    (
+        "placeholder",
+        "%card-base",
+        None,
+    ),
+    (
+        "mixin",
+        "button",
+        None,
+    ),
+    (
+        "function",
+        "double",
+        None,
+    ),
+    (
+        "rule",
+        ".card",
+        None,
+    ),
+    (
+        "rule",
+        ".card__title",
+        Some(
+            ".card",
+        ),
+    ),
+    (
+        "rule",
+        ".card--#{$name}",
+        Some(
+            ".card",
+        ),
+    ),
+]
