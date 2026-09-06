@@ -1,0 +1,147 @@
+[
+  {
+    "version": 1,
+    "name": "initial",
+    "checksum": "13013188961683775435"
+  },
+  {
+    "version": 2,
+    "name": "file_opens",
+    "checksum": "9030583696840063272"
+  },
+  {
+    "version": 3,
+    "name": "transcripts",
+    "checksum": "6341265312121235865"
+  },
+  {
+    "version": 4,
+    "name": "chunk_status",
+    "checksum": "11149664385484836794"
+  },
+  {
+    "version": 5,
+    "name": "commit_sessions",
+    "checksum": "4311157220582697210"
+  },
+  {
+    "version": 6,
+    "name": "annotations",
+    "checksum": "554946995572804805"
+  },
+  {
+    "version": 7,
+    "name": "occurrences_and_doc",
+    "checksum": "5310312124413368518"
+  },
+  {
+    "version": 8,
+    "name": "annotations_v2",
+    "checksum": "17232591500162345961"
+  },
+  {
+    "version": 9,
+    "name": "reading_sets",
+    "checksum": "11487588851633298223"
+  },
+  {
+    "version": 10,
+    "name": "occurrences_source",
+    "checksum": "15288077579676661976"
+  },
+  {
+    "version": 11,
+    "name": "bookmarks",
+    "checksum": "5675082232876571489"
+  },
+  {
+    "version": 12,
+    "name": "todo_items",
+    "checksum": "11514603535412117418"
+  },
+  {
+    "version": 13,
+    "name": "occurrence_locals",
+    "checksum": "18253704929579416598"
+  },
+  {
+    "version": 14,
+    "name": "reviews",
+    "checksum": "8230680514529256857"
+  },
+  {
+    "version": 15,
+    "name": "import_edges",
+    "checksum": "16119088031304467032"
+  },
+  {
+    "version": 16,
+    "name": "call_type_edges",
+    "checksum": "9308685332444119924"
+  },
+  {
+    "version": 17,
+    "name": "behavioral",
+    "checksum": "2328238630757180909"
+  },
+  {
+    "version": 18,
+    "name": "session_signals",
+    "checksum": "6474491656230449448"
+  },
+  {
+    "version": 19,
+    "name": "canvas_sets",
+    "checksum": "5115441224316009401"
+  },
+  {
+    "version": 20,
+    "name": "doc_lens",
+    "checksum": "17600241062780877072"
+  },
+  {
+    "version": 21,
+    "name": "doc_refs",
+    "checksum": "9037644998941684941"
+  },
+  {
+    "version": 22,
+    "name": "reading_sets_doc_provenance",
+    "checksum": "9371146122302251336"
+  },
+  {
+    "version": 23,
+    "name": "review_comments",
+    "checksum": "1454775286830720497"
+  },
+  {
+    "version": 24,
+    "name": "pr_binding_and_findings",
+    "checksum": "5340430751719569948"
+  },
+  {
+    "version": 25,
+    "name": "scip_runs",
+    "checksum": "15562075061697848697"
+  },
+  {
+    "version": 26,
+    "name": "rails_edges",
+    "checksum": "1426794254105896711"
+  },
+  {
+    "version": 27,
+    "name": "mutations_audit",
+    "checksum": "14637529681112741599"
+  },
+  {
+    "version": 28,
+    "name": "workspaces",
+    "checksum": "7553475096158725753"
+  },
+  {
+    "version": 29,
+    "name": "entities",
+    "checksum": "7661795327427029844"
+  }
+]
