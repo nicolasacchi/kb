@@ -168,6 +168,12 @@ pub struct AppState {
     /// (`GET /api/prs`, `GET /api/prs/{n}/comments`), same per-boot-
     /// singleton convention as `kb_client` above.
     pub github: Arc<crate::github::GithubClient>,
+    /// V72-J1 — the effective `comments/1` annotation keyword set
+    /// (`[comments] keywords`), resolved ONCE at boot (same no-live-reload
+    /// posture as `scopes`/`semantic` below) and shared by the extraction
+    /// pass and `GET /api/comments/keywords`, so what the index CONTAINS
+    /// and what the route REPORTS can never disagree.
+    pub comment_keywords: Arc<crate::comments::KeywordSet>,
     /// Phase N — named path-set globs (`[scopes]`), cloned once at boot
     /// (no live-reload — same posture as `semantic`/`kb_daemon`).
     pub scopes: ScopesSection,

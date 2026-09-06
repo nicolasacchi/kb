@@ -143,6 +143,13 @@ pub struct KbCodeConfig {
     #[serde(default)]
     pub lanes: LanesSection,
 
+    /// `[comments]` — V72-J1's `comments/1` annotation keyword grammar
+    /// (`crate::comments::keywords`). Empty by default, which resolves to
+    /// the shipped eight-keyword set; a non-empty list REPLACES it
+    /// wholesale. See [`CommentsSection`].
+    #[serde(default)]
+    pub comments: CommentsSection,
+
     /// `[security]` — V70-A2's local-daemon hardening knobs (SEC-13's
     /// server-enforced secret denylist + SEC-02's strict-request-header
     /// opt-in). Every field has a safe default, so an existing
@@ -150,6 +157,30 @@ pub struct KbCodeConfig {
     /// posture. See [`SecuritySection`].
     #[serde(default)]
     pub security: SecuritySection,
+}
+
+/// `[comments]` — the `comments/1` annotation keyword grammar (V72-J1).
+///
+/// `keywords` REPLACES the shipped default set rather than extending it,
+/// which is the whole point: the default is a vocabulary (RuboCop's six
+/// plus the two markers the pre-`comments/1` TODO index scanned), and a
+/// team whose codebase uses `DEBT`/`PERF` instead wants those EIGHT gone,
+/// not eight more. An all-blank list falls back to the defaults rather
+/// than indexing zero annotations
+/// (`comments::KeywordSet::from_config`).
+///
+/// The effective set is part of the per-row `comments_version` key
+/// (`comments::comments_version_for`), so changing it re-extracts every
+/// file instead of leaving rows classified under the old vocabulary. It
+/// is resolved ONCE at boot — same no-live-reload posture as
+/// `[occurrences]`/`[scopes]` — and threaded to every `ingest::index_file`
+/// call, so the boot walk and a later watcher event can never disagree.
+/// `GET /api/comments/keywords` reports what is actually in force.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommentsSection {
+    /// Uppercase annotation keywords. Empty ⇒ the shipped default set.
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
