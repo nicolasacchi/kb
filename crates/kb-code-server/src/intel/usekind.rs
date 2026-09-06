@@ -79,12 +79,9 @@ fn name_leaf<'t>(
         return Some(node);
     }
     let mut c = node.walk();
-    for child in node.named_children(&mut c) {
-        if child.start_position() <= point && point < child.end_position() && is_name_leaf(child) {
-            return Some(child);
-        }
-    }
-    None
+    node.named_children(&mut c).find(|&child| {
+        child.start_position() <= point && point < child.end_position() && is_name_leaf(child)
+    })
 }
 
 fn is_name_leaf(node: tree_sitter::Node<'_>) -> bool {
