@@ -2614,7 +2614,7 @@ impl Store {
             format!(
                 "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                         body, author, created_at, updated_at, resolved,
-                        review_id, ps_number, side
+                        review_id, ps_number, side, set_id
                  FROM annotations
                  WHERE review_id IN ({placeholders})
                  ORDER BY review_id ASC, created_at ASC, id ASC"
@@ -2623,7 +2623,7 @@ impl Store {
             format!(
                 "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                         body, author, created_at, updated_at, resolved,
-                        review_id, ps_number, side
+                        review_id, ps_number, side, set_id
                  FROM annotations
                  WHERE review_id IN ({placeholders})
                    AND (
@@ -10817,6 +10817,70 @@ mod tests {
             all.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
             vec!["ann_open", "ann_open_reply", "ann_done"]
         );
+    }
+
+    /// Regression (V72-C2): the batch SELECT once omitted `set_id` — a
+    /// 16- vs. 17-column mismatch against `annotation_row_from`'s
+    /// positional `r.get(0..16)` reads (the module doc's own "every SELECT
+    /// spells out the SAME 17-column order" convention, broken by this one
+    /// query). That doesn't just drop the field: `r.get(16)` on a
+    /// 16-column row is a hard `rusqlite::Error::InvalidColumnIndex`, so
+    /// ANY non-empty result set errored out `review_inbox::compose_rows`
+    /// (and therefore both `GET /api/reviews/inbox` and `GET /api/inbox`)
+    /// end to end — caught only at the HTTP layer
+    /// (`review_inbox_timeline`/`unified_inbox` e2e tests), never at this
+    /// store layer, since no prior unit test called this fn with a
+    /// non-empty result. Pins both branches (`include_resolved` true/false)
+    /// against the SAME fixture `list_review_annotations_orders_and_
+    /// filters_resolved_threads` uses, plus a `set_id` round trip the
+    /// singular query already covered.
+    #[test]
+    fn list_review_annotations_batch_matches_the_singular_query_incl_set_id() {
+        let (_tmp, store) = open_temp();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let review_id = store
+            .create_review("r", None, "main", "feature", None, 1_000)
+            .unwrap();
+        let mut open = sample_annotation("ann_open", repo_id, "a.rs");
+        open.review_id = Some(review_id);
+        open.ps_number = Some(1);
+        open.side = Some("new".into());
+        open.set_id = Some("set_abc123456789".into());
+        open.created_at = 100;
+        let mut resolved = sample_annotation("ann_done", repo_id, "a.rs");
+        resolved.review_id = Some(review_id);
+        resolved.ps_number = Some(1);
+        resolved.side = Some("new".into());
+        resolved.resolved = true;
+        resolved.created_at = 200;
+        store.insert_annotation(&open).unwrap();
+        store.insert_annotation(&resolved).unwrap();
+        let reply = sample_reply("ann_open_reply", &open, "ack");
+        store.insert_annotation(&reply).unwrap();
+
+        let open_only = store
+            .list_review_annotations_batch(&[review_id], false)
+            .unwrap();
+        assert_eq!(
+            open_only
+                .get(&review_id)
+                .unwrap()
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ann_open", "ann_open_reply"]
+        );
+
+        let all = store
+            .list_review_annotations_batch(&[review_id], true)
+            .unwrap();
+        let all_rows = all.get(&review_id).unwrap();
+        assert_eq!(
+            all_rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["ann_open", "ann_open_reply", "ann_done"]
+        );
+        let open_row = all_rows.iter().find(|r| r.id == "ann_open").unwrap();
+        assert_eq!(open_row.set_id.as_deref(), Some("set_abc123456789"));
     }
 
     // --- reading sets (Phase E3) --------------------------------------------
