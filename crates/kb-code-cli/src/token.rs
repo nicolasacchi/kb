@@ -49,14 +49,28 @@ use std::path::PathBuf;
 /// secret, so it is safe to build even when the file doesn't exist and
 /// safe to print (`kb-code token path`'s whole job).
 pub fn token_file_path() -> Result<PathBuf> {
-    if let Some(over) = std::env::var_os("KB_CODE_TOKEN_FILE") {
+    let default = KbPaths::new("kb-code")
+        .context("resolve kb-code XDG paths")?
+        .config
+        .join("kb-code-token");
+    Ok(resolve_token_file_path(
+        std::env::var_os("KB_CODE_TOKEN_FILE"),
+        default,
+    ))
+}
+
+/// Pure decision half of [`token_file_path`]: an explicit, non-empty
+/// override wins, else the caller's default. Split out so the ladder is
+/// unit-testable without touching the process environment at all — see the
+/// `tests` module doc for why that matters.
+fn resolve_token_file_path(env_override: Option<std::ffi::OsString>, default: PathBuf) -> PathBuf {
+    if let Some(over) = env_override {
         let over = PathBuf::from(over);
         if !over.as_os_str().is_empty() {
-            return Ok(over);
+            return over;
         }
     }
-    let paths = KbPaths::new("kb-code").context("resolve kb-code XDG paths")?;
-    Ok(paths.config.join("kb-code-token"))
+    default
 }
 
 /// Resolve the bearer token this CLI should send, or `None` when neither
@@ -67,13 +81,42 @@ pub fn token_file_path() -> Result<PathBuf> {
 /// Precedence: `KB_CODE_TOKEN` env (trimmed, non-empty) first, else the
 /// token file (trimmed, non-empty) — see the module doc for why both exist.
 pub fn resolve_bearer_token() -> Option<String> {
-    if let Ok(raw) = std::env::var("KB_CODE_TOKEN") {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
+    resolve_bearer_token_ladder(std::env::var("KB_CODE_TOKEN").ok(), || {
+        token_file_path().ok()
+    })
+}
+
+/// Pure ladder driving [`resolve_bearer_token`]: `env_value` wins when
+/// present and non-empty (trimmed); otherwise the (lazily resolved —
+/// short-circuits the XDG-path lookup when the env wins) file path is read.
+/// Split out, with the env/file halves further split below, so every branch
+/// is unit-testable without any `std::env::set_var`/`remove_var`.
+fn resolve_bearer_token_ladder(
+    env_value: Option<String>,
+    file_path: impl FnOnce() -> Option<PathBuf>,
+) -> Option<String> {
+    if let Some(token) = resolve_bearer_token_from_env(env_value) {
+        return Some(token);
     }
-    let path = token_file_path().ok()?;
+    resolve_bearer_token_from_file(&file_path()?)
+}
+
+/// The `KB_CODE_TOKEN` half of the ladder: trim, degrade absent/blank to
+/// `None`.
+fn resolve_bearer_token_from_env(raw: Option<String>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// The `token_file` half of the ladder: read + trim, degrade ANY failure
+/// (missing, unreadable, empty) to `None` rather than erroring — see the
+/// module doc.
+fn resolve_bearer_token_from_file(path: &std::path::Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -96,83 +139,106 @@ pub fn cmd_token_path() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    //! **No `std::env::set_var`/`remove_var` anywhere in this module.**
+    //!
+    //! The previous version of this suite drove the public,
+    //! process-env-reading entry points (`resolve_bearer_token`,
+    //! `token_file_path`) directly, so each test had to mutate
+    //! `KB_CODE_TOKEN`/`KB_CODE_TOKEN_FILE` for its own duration (restored on
+    //! drop via an `EnvGuard`). That guard prevented LEAKING a mutation
+    //! past its own test, but did nothing to stop a *sibling* test's
+    //! mutation from being observed mid-flight: `cargo test` runs `#[test]`
+    //! fns on parallel threads by default, and `std::env::set_var`/`var`
+    //! read/write the one process-global environment table with no
+    //! synchronization between threads. That's exactly what main CI run
+    //! 34048706473 (commit 7a82ca15) hit:
+    //! `falls_back_to_token_file_when_env_absent` panicked with
+    //! `left: None, right: Some("secret-from-file")` — this test's own
+    //! `KB_CODE_TOKEN` unset raced against `env_var_wins_over_token_file_
+    //! and_is_trimmed`'s concurrent `KB_CODE_TOKEN` set on another thread,
+    //! so the ladder saw a non-empty env value and returned the env
+    //! branch's answer instead of falling through to the file. Intermittent
+    //! by nature (thread scheduling), which is why it passed on the PR runs
+    //! immediately before and after.
+    //!
+    //! The fix here is structural, not a bigger lock: `resolve_bearer_token`
+    //! and `token_file_path` are now thin wrappers over pure functions
+    //! (`resolve_bearer_token_ladder` + its `_from_env`/`_from_file` halves,
+    //! `resolve_token_file_path`) that take their inputs as plain
+    //! parameters. Tests call the pure functions directly — there is no
+    //! process env left to race on.
     use super::*;
     use std::io::Write;
 
-    /// RAII guard: sets an env var for the duration of one test, restores
-    /// the prior value (or removes it) on drop — even on panic — so a
-    /// failing assertion can never leak `KB_CODE_TOKEN`/`KB_CODE_TOKEN_FILE`
-    /// into a sibling test in the same process. `std::env::set_var` is
-    /// process-global, same caveat every other env-based test in this
-    /// workspace already carries (e.g. `KB_HOME` in kb-core's own suite).
-    struct EnvGuard {
-        key: &'static str,
-        prior: Option<std::ffi::OsString>,
-    }
-    impl EnvGuard {
-        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
-            let prior = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, prior }
-        }
-        fn unset(key: &'static str) -> Self {
-            let prior = std::env::var_os(key);
-            std::env::remove_var(key);
-            Self { key, prior }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match self.prior.take() {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-
     #[test]
-    fn env_var_wins_over_token_file_and_is_trimmed() {
-        let _clear_file_override = EnvGuard::unset("KB_CODE_TOKEN_FILE");
-        let _env = EnvGuard::set(
-            "KB_CODE_TOKEN",
-            std::ffi::OsStr::new("  secret-from-env  \n"),
-        );
-        assert_eq!(resolve_bearer_token().as_deref(), Some("secret-from-env"));
-    }
-
-    #[test]
-    fn falls_back_to_token_file_when_env_absent() {
-        let _clear_env = EnvGuard::unset("KB_CODE_TOKEN");
+    fn env_wins_over_a_real_token_file_and_is_trimmed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("kb-code-token");
         std::fs::File::create(&file)
             .unwrap()
             .write_all(b"secret-from-file\n")
             .unwrap();
-        let _file_override = EnvGuard::set("KB_CODE_TOKEN_FILE", file.as_os_str());
-        assert_eq!(resolve_bearer_token().as_deref(), Some("secret-from-file"));
+        let result = resolve_bearer_token_ladder(Some("  secret-from-env  \n".to_string()), || {
+            Some(file.clone())
+        });
+        assert_eq!(result.as_deref(), Some("secret-from-env"));
+    }
+
+    #[test]
+    fn falls_back_to_token_file_when_env_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("kb-code-token");
+        std::fs::File::create(&file)
+            .unwrap()
+            .write_all(b"secret-from-file\n")
+            .unwrap();
+        let result = resolve_bearer_token_ladder(None, || Some(file.clone()));
+        assert_eq!(result.as_deref(), Some("secret-from-file"));
     }
 
     #[test]
     fn missing_and_empty_both_degrade_to_none_never_an_error() {
-        let _clear_env = EnvGuard::unset("KB_CODE_TOKEN");
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("does-not-exist");
-        {
-            let _file_override = EnvGuard::set("KB_CODE_TOKEN_FILE", missing.as_os_str());
-            assert_eq!(resolve_bearer_token(), None);
-        }
+        assert_eq!(
+            resolve_bearer_token_ladder(None, || Some(missing.clone())),
+            None
+        );
+
         let empty = dir.path().join("empty-token");
         std::fs::File::create(&empty).unwrap();
-        let _file_override = EnvGuard::set("KB_CODE_TOKEN_FILE", empty.as_os_str());
-        assert_eq!(resolve_bearer_token(), None);
+        assert_eq!(
+            resolve_bearer_token_ladder(None, || Some(empty.clone())),
+            None
+        );
+    }
+
+    #[test]
+    fn env_absent_or_blank_never_short_circuits_on_its_own() {
+        assert_eq!(resolve_bearer_token_from_env(None), None);
+        assert_eq!(
+            resolve_bearer_token_from_env(Some("   \n".to_string())),
+            None
+        );
     }
 
     #[test]
     fn token_path_honours_the_env_override() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let want = dir.path().join("custom-token-path");
-        let _file_override = EnvGuard::set("KB_CODE_TOKEN_FILE", want.as_os_str());
-        assert_eq!(token_file_path().unwrap(), want);
+        let want = PathBuf::from("/tmp/kb-code-token-fixture/custom-token-path");
+        let default = PathBuf::from("/tmp/kb-code-token-fixture/default-path");
+        assert_eq!(
+            resolve_token_file_path(Some(want.clone().into_os_string()), default),
+            want
+        );
+    }
+
+    #[test]
+    fn token_path_falls_back_to_default_when_override_absent_or_empty() {
+        let default = PathBuf::from("/tmp/kb-code-token-fixture/default-path");
+        assert_eq!(resolve_token_file_path(None, default.clone()), default);
+        assert_eq!(
+            resolve_token_file_path(Some(std::ffi::OsString::new()), default.clone()),
+            default
+        );
     }
 }
