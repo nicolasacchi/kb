@@ -1777,6 +1777,15 @@ export interface ReviewFileRow {
   open_annotations: number;
 }
 
+/// V73-K2a — one `review_hunk_viewed` row (migration V0031), as it rides
+/// `GET /api/reviews/{id}/files`. `hunk_id` is the SPA's OWN content
+/// address (`lib/diffHunks.ts`, `kbc-hunkid/1`) — the daemon stores it
+/// opaquely, so this type is the only place the two halves meet.
+export interface ReviewHunkViewedRow {
+  hunk_id: string;
+  path: string;
+}
+
 /// `GET /api/reviews/{id}/files?ps=` body.
 export interface ReviewFilesOut {
   schema: string;
@@ -1785,6 +1794,12 @@ export interface ReviewFilesOut {
   base_sha: string;
   tip_sha: string;
   files: ReviewFileRow[];
+  /// V73-K2a — ADDITIVE and therefore OPTIONAL: a daemon built before
+  /// V0031 does not send it, and every reader treats absence as "no
+  /// per-hunk marks recorded", never as an error. NOT scoped to `ps` — a
+  /// hunk id is content-addressed, so a mark follows the change across
+  /// patchsets by construction.
+  hunks_viewed?: ReviewHunkViewedRow[];
 }
 
 /// One interdiff file row (no viewed/annotation fields).

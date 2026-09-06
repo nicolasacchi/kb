@@ -576,6 +576,93 @@ obeys the focused-panel rule instead — it stops only the keys it handles
 (`railListHandlesKey`), leaving every chord and global command to reach
 `CommandRoot`.
 
+## Review diff v2 (`V73-K2a`, design §D9, Track K)
+
+`routes/ReviewDiff.tsx` is the full-page review reader. Diff v2 added a
+file-map COLUMN, per-HUNK state, a patchset SWITCHER, a context DIAL, noise
+LABELS and a DRAFTS tray. Five rules, each with a home.
+
+**The URL is the only state.** `?ps=` · `?ctx=` · `?noise=` · `?map=` ·
+`?file=` · `?hunk=` join `lib/codeUrl.ts`'s `ReviewDiffHrefOpts`, appended
+LAST so every pre-V73 golden row is byte-identical, each omitted at its
+default, each with a TOTAL parser (`parseDiffPs`/`parseDiffCtx`/
+`parseNoiseMode`/`parseDiffMap`) that degrades junk to the documented
+default rather than throwing. There is no parallel store: a reload
+reproduces the view, and `routes/ReviewDiff.tsx` writes every one of them
+through ONE `setParam` helper with `replace: true` (a view knob is not a
+navigation step — the pre-existing `view`/`overlay`/`tour` writers already
+had that posture). `?ps=a..b` is the interdiff range; `parseDiffPs`
+REFUSES an inverted range rather than swapping it, because guessing which
+end the operator meant is the quiet repair this codebase does not do
+elsewhere.
+
+**A hunk has a content-addressed NAME.** `lib/diffHunks.ts`'s `hunkId`
+(`kbc-hunkid/1`) hashes the path plus the hunk's own `+`/`-` lines and
+deliberately NOT its line numbers or its `-U3` context, so the id survives
+a rebase — which is what lets `review_hunk_viewed` (migration V0030) store
+a viewed mark that follows the CHANGE rather than a position. The daemon
+stores these ids opaquely; the addressing scheme lives here. The stated
+price is that two identical changes in one file collide onto one id, which
+is why the hunk id is never used as a comment/finding anchor — those keep
+the server's carry-forward ladder. Bumping the recipe means bumping the
+schema string: an old id then simply stops matching, so a viewed hunk
+reads UNVIEWED, never the reverse.
+
+**Noise is a LABEL, never a filter.** `lib/diffNoise.ts` owns the five
+classes (`generated` · `whitespace-only` · `moved` · `rename-only` ·
+`large`), each with its RULE as a sentence that the chip's `title` shows
+verbatim plus a `detail` naming this subject's own evidence.
+`?noise=collapsed` COLLAPSES a labelled hunk — visibly, still counted in
+the census, one click from open — and `noiseCollapses` is the single
+function that decides it, so "a label is not a filter" is one assertion
+rather than a habit spread over three components. Two honesty carve-outs
+are load-bearing: hand-authored `migrations/` are NOT `generated` (they are
+the change, not a rendering of it — only schema DUMPS are), and the `moved`
+rule searches only the file diffs the page has actually loaded, so a
+`moved` label that appears always names its counterpart file while its
+ABSENCE claims nothing. `buildMovedIndex`'s own `scanned`/`capped` census
+is what keeps that partiality on screen.
+
+**Widened context is fetched, never synthesised.** `GET /api/diff` is
+hardcoded to `git diff -U3` and this unit did not add a context param to
+it; `?ctx=10|full` and the per-hunk "expand 10 more" splice REAL rows out
+of `GET /api/file?ref=<patchset tip>` (`lib/diffContext.ts`). When that
+fetch has not landed — or the file is binary, or the ref is gone — the hunk
+renders at its wire width under a caption naming why. The line arithmetic
+lives in that module and is unit-pinned because it has a trap: a context
+row ABOVE a hunk and one BELOW it use DIFFERENT old-side deltas whenever
+the hunk is not size-neutral, and using one for both silently mislabels
+every gutter number under it.
+
+**Drafts are browser state; publish is one transaction.**
+`lib/reviewDrafts.ts` keeps composed comments/questions in
+`sessionStorage` per `(repo, review)` — a recorded CLI-parity exemption of
+the same kind `lib/searchHistory.ts` carries, and `sessionStorage` rather
+than `localStorage` so a draft cannot resurface against a patchset that no
+longer exists. `Publish` sends ONE `POST /api/annotations/batch` (one
+store transaction, at most one SSE); the tray is cleared only after the
+server accepts, so a refusal leaves the review whole in the browser.
+**FINDINGS are deliberately NOT drafted**: the batch route is ordinary
+bearer while `POST /reviews/{id}/findings` rides
+`review_gate::review_mutations_gate`, so an `add_finding` batch op would
+graduate finding creation off its own gate as a side effect of a UI
+feature. The composer's finding tab keeps its own gated route. Folding
+findings into the atomic publish is real work (a gated batch op) and is
+named as open, not smuggled in.
+
+**Keys.** Twelve `scope: "diff"`, `dispatch: "surface"` rows, all
+registered in `ReviewDiff.tsx` and re-checked by
+`commands/diffV2.test.ts` (the family `deadRows.test.ts` structurally
+cannot reach, since that suite gates `central` rows only). `Space h`
+(hunk viewed) is under the leader for the SAME reason V70-A5 moved
+`diff.toggle-viewed` there: bare `v` is the reader's visual mode and
+`diff`/`reader` are coactive at depth 20. `z c`/`z o`/`z a` are safe
+because `z` is a PURE-vim prefix in READER scope — diff-scope rows are
+invisible to `shouldWithholdFromBuffer`, which resolves in `"reader"`, so
+`z` is still withheld inside a CodeView exactly as before. `] p`/`[ p`
+carry no `vim_kind`, following the `] u`/`] d`/`] s` precedent: `[`/`]` is
+a MIXED prefix and a vim arm would fire the step twice.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)

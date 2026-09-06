@@ -1186,6 +1186,25 @@ export function deleteReviewViewed(id: number, path: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/reviews/${id}/viewed/${encodeURIComponent(path)}`);
 }
 
+/// V73-K2a — `PUT /api/reviews/{id}/hunk-viewed`. LOOPBACK-ONLY, the same
+/// unconditional gate its per-file twin above rides (`review_gate`'s own
+/// doc names `viewed` among the mutations `[review] remote_mutations`
+/// never reaches). `hunk_id` is `lib/diffHunks.ts`'s content address.
+export function putReviewHunkViewed(
+  id: number,
+  hunk_id: string,
+  path: string,
+): Promise<unknown> {
+  return sendJson("PUT", `/api/reviews/${id}/hunk-viewed`, { hunk_id, path });
+}
+
+/// `DELETE /api/reviews/{id}/hunk-viewed/{hunk_id}` — LOOPBACK-ONLY. 404s
+/// an id that was never marked (the server's own "nothing to unmark is a
+/// miss" rule), which callers surface as a toast rather than swallow.
+export function deleteReviewHunkViewed(id: number, hunk_id: string): Promise<void> {
+  return sendJson<void>("DELETE", `/api/reviews/${id}/hunk-viewed/${encodeURIComponent(hunk_id)}`);
+}
+
 // --- V3.2-B1 / B2 — behavioral attention signals --------------------------
 
 export interface FetchHotspotsParams {

@@ -331,12 +331,106 @@ export interface ReviewDiffHrefOpts {
   /// (this unit's own report notes the same choice for `parseOverlayParam`'s
   /// twin), so the two are kept in lock-step by hand.
   overlay?: "all" | "findings" | "comments" | "diagnostics" | "none";
+  // --- V73-K2a — diff v2's own six params, appended LAST -----------------
+  //
+  // Same additive rule the `finding`/`overlay` pair already follows (and
+  // `pane2` before it): each is omitted at its default and the append
+  // ORDER below is fixed, so every pre-V73 call site's output is
+  // byte-identical and `codeUrl.test.ts`'s existing golden rows are
+  // unchanged. Diff v2's whole view state lives HERE — a reload
+  // reproduces the view and there is no parallel store that could drift
+  // from it (root CLAUDE.md #23's rule, applied to a page rather than to
+  // a cache; `nav/location.ts`'s Location Contract reaches this route
+  // through its `other` arm, whose encode is the raw URL, so a param
+  // added here needs no `location.ts` change).
+  /// `?ps=<n>` (one patchset) or `?ps=<a>..<b>` (the interdiff RANGE
+  /// between two patchsets). Omitted for the implicit `"latest"`, which is
+  /// what an absent `ps` has always meant on this route.
+  ps?: DiffPsSelection;
+  /// `?ctx=10|full` — the context dial. Omitted for the default `3`, which
+  /// is what `git diff -U3` (the only width `GET /api/diff` produces)
+  /// already returns; `10`/`full` splice real lines fetched from
+  /// `GET /api/file?ref=`, never client-synthesised text.
+  ctx?: DiffCtxDial;
+  /// `?noise=collapsed` — omitted for the default `"shown"`. Never a
+  /// filter; see `lib/diffNoise.ts`'s header.
+  noise?: "shown" | "collapsed";
+  /// `?map=0` — the file-map column is shown by default, so only its
+  /// HIDDEN state is ever written.
+  map?: boolean;
+  /// `?file=<path>` — the map column's cursor and the all-files scroll
+  /// hint. Pre-existed as a param this route READ; diff v2 is the first
+  /// caller to WRITE it through the builder instead of by hand.
+  file?: string;
+  /// `?hunk=<hunk-id>` — the hunk cursor, a `lib/diffHunks.ts` content
+  /// address (`kbc-hunkid/1`), so a shared URL lands on the same CHANGE
+  /// even after a rebase renumbers the file around it.
+  hunk?: string;
+}
+
+/// `?ps=` — one patchset number, or an inclusive `from..to` interdiff
+/// range. `"latest"` is never emitted (absence IS latest — the same
+/// omit-the-default rule `reviewUrl`'s own `ps` follows).
+export type DiffPsSelection = number | { from: number; to: number };
+
+/// `?ctx=` — the three stops of the context dial. `3` is git's own `-U3`
+/// and the omitted default.
+export type DiffCtxDial = 3 | 10 | "full";
+
+export const DIFF_CTX_DIAL: readonly DiffCtxDial[] = [3, 10, "full"];
+
+/// Serialise a `?ps=` selection: a range is `from..to`, a bare number is
+/// itself. Exported so the route never hand-builds one and the golden can
+/// pin the string.
+export function formatDiffPs(ps: DiffPsSelection): string {
+  return typeof ps === "number" ? String(ps) : `${ps.from}..${ps.to}`;
+}
+
+/// Parse `?ps=`. TOTAL — anything unrecognised (the literal `"latest"`,
+/// junk, a zero/negative/non-integer, or an inverted range) is `null`,
+/// which every caller reads as "latest", never as a throw. A `from..to`
+/// with `from >= to` is REJECTED rather than silently swapped: the
+/// operator asked for something that is not an interdiff, and guessing
+/// which end they meant is exactly the kind of quiet repair this codebase
+/// refuses elsewhere.
+export function parseDiffPs(raw: string | null): DiffPsSelection | null {
+  if (raw === null || raw === "" || raw === "latest") return null;
+  const dots = raw.indexOf("..");
+  if (dots === -1) {
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+  const from = Number(raw.slice(0, dots));
+  const to = Number(raw.slice(dots + 2));
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return null;
+  if (from < 1 || to < 1 || from >= to) return null;
+  return { from, to };
+}
+
+/// Parse `?ctx=`. TOTAL — anything unrecognised is the default `3`.
+export function parseDiffCtx(raw: string | null): DiffCtxDial {
+  if (raw === "full") return "full";
+  if (raw === "10") return 10;
+  return 3;
+}
+
+/// The next stop on the dial, wrapping `3 → 10 → full → 3` — one keystroke
+/// cycles it, the same shape `nextOverlayMode` gives the overlay lane.
+export function nextDiffCtx(cur: DiffCtxDial): DiffCtxDial {
+  const i = DIFF_CTX_DIAL.indexOf(cur);
+  return DIFF_CTX_DIAL[(i + 1) % DIFF_CTX_DIAL.length];
+}
+
+/// Parse `?map=`. TOTAL — the column is shown unless the URL says `0`.
+export function parseDiffMap(raw: string | null): boolean {
+  return raw !== "0";
 }
 
 /// `reviewDiffHref(repo, id, file?, opts?)` → `/r/{repo}/~reviews/{id}/diff
-/// [/file]` `[?finding=][&overlay=]`. `opts` params are appended LAST (the
-/// `pane2` precedent, `codeUrl`'s own module doc) so every existing 2/3-arg
-/// call site's URL stays byte-identical — `opts` is purely additive.
+/// [/file]` `[?finding=][&overlay=][&ps=][&ctx=][&noise=][&map=][&file=]
+/// [&hunk=]`. `opts` params are appended LAST (the `pane2` precedent,
+/// `codeUrl`'s own module doc) so every existing 2/3-arg call site's URL
+/// stays byte-identical — `opts` is purely additive.
 export function reviewDiffHref(
   repo: string,
   id: number | string,
@@ -354,6 +448,12 @@ export function reviewDiffHref(
   const params: string[] = [];
   if (opts?.finding) params.push(`finding=${encodeURIComponent(opts.finding)}`);
   if (opts?.overlay && opts.overlay !== "all") params.push(`overlay=${opts.overlay}`);
+  if (opts?.ps !== undefined) params.push(`ps=${encodeURIComponent(formatDiffPs(opts.ps))}`);
+  if (opts?.ctx !== undefined && opts.ctx !== 3) params.push(`ctx=${opts.ctx}`);
+  if (opts?.noise !== undefined && opts.noise !== "shown") params.push(`noise=${opts.noise}`);
+  if (opts?.map === false) params.push("map=0");
+  if (opts?.file) params.push(`file=${encodeURIComponent(opts.file)}`);
+  if (opts?.hunk) params.push(`hunk=${encodeURIComponent(opts.hunk)}`);
   return params.length > 0 ? `${withFile}?${params.join("&")}` : withFile;
 }
 

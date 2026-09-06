@@ -11,6 +11,7 @@ import {
   type DiffCommentsApi,
   type DiffSide,
 } from "../../lib/reviewComments";
+import HunkStrip, { type HunkView } from "./HunkStrip";
 import DiffLineComposer from "../annotations/DiffLineComposer";
 import DiffLineComposerV2 from "./DiffLineComposerV2";
 import DiffThread from "./DiffThread";
@@ -63,6 +64,16 @@ export interface UnifiedHunksProps {
   /// while the overlay is in the `"github"` lane (`DiffFile`'s own doc).
   githubByLine?: Map<string, GithubThread[]> | null;
   githubOrphans?: GithubThread[];
+  /// V73-K2a — one entry per `parsed.hunks` entry, index-aligned. When
+  /// absent (Commit/Compare/SessionDiff, which have no review behind
+  /// them) this renderer behaves exactly as it did before diff v2: the
+  /// bare `@@ … @@` header row and the wire's own lines.
+  hunkViews?: readonly HunkView[] | null;
+  onHunkFold?: (hunkIdx: number) => void;
+  onHunkViewed?: (hunkIdx: number) => void;
+  onHunkExpand?: (hunkIdx: number, dir: "up" | "down") => void;
+  /// The cursor's hunk index — `j`/`k` and `?hunk=` both land here.
+  currentHunk?: number | null;
 }
 
 function lineSpans(highlights: DiffHighlights | null | undefined, line: DiffLine): LineSpan[] | undefined {
@@ -167,6 +178,11 @@ export default function UnifiedHunks({
   diagnosticsByLine,
   githubByLine,
   githubOrphans,
+  hunkViews,
+  onHunkFold,
+  onHunkViewed,
+  onHunkExpand,
+  currentHunk,
 }: UnifiedHunksProps) {
   const reviewMode = !!comments;
   const canComment = !reviewMode && !!repo && !!sha;
@@ -199,10 +215,32 @@ export default function UnifiedHunks({
 
   return (
     <>
-      {parsed.hunks.map((hunk, hi) => (
-        <div className="kbc-diff__hunk" key={hi}>
-          <div className="kbc-diff__hunk-header">{hunk.header}</div>
-          {hunk.lines.map((line, li) => {
+      {parsed.hunks.map((hunk, hi) => {
+        const view = hunkViews?.[hi] ?? null;
+        // The context dial / expand buttons hand back a WIDER line list;
+        // with no view (the non-review surfaces) it is the wire's own.
+        const lines = view ? view.lines : hunk.lines;
+        return (
+        <div
+          className={"kbc-diff__hunk" + (view?.collapsed ? " kbc-diff__hunk--collapsed" : "")}
+          key={hi}
+          data-kbc-diff-hunk={view?.id}
+        >
+          {view ? (
+            <HunkStrip
+              view={view}
+              current={currentHunk === hi}
+              reviewMode={reviewMode}
+              onToggleFold={() => onHunkFold?.(hi)}
+              onToggleViewed={() => onHunkViewed?.(hi)}
+              onExpand={(dir) => onHunkExpand?.(hi, dir)}
+            />
+          ) : (
+            <div className="kbc-diff__hunk-header">{hunk.header}</div>
+          )}
+          {view?.collapsed
+            ? null
+            : lines.map((line, li) => {
             const oldThreads =
               comments && line.oldLine !== null ? threadsAt(comments, path, "old", line.oldLine) : [];
             const newThreads =
@@ -389,7 +427,8 @@ export default function UnifiedHunks({
             );
           })}
         </div>
-      ))}
+        );
+      })}
       {orphans.length > 0 && comments && (
         <div className="kbc-rthread-orphans" data-kbc-review-orphans={path}>
           <div className="kbc-rthread-orphans__head">Orphaned ({orphans.length})</div>
