@@ -170,7 +170,7 @@ pretty_assertions = "1"
 # "worktree-mutation" — kb-code's only working-tree mutation is W4's
 # checkout, a later deliberate decision (CLAUDE.md non-goal: "no editor
 # ever"); this scaffold stays read-only by construction.
-gix = { version = "0.85", default-features = false, features = ["blame", "revision", "sha1"] }
+gix = { version = "0.87", default-features = false, features = ["blame", "revision", "sha1"] }
 
 # W1.6 — RustCrypto sha1, pinned at the exact version gix-hash's own
 # "sha1"-feature dependency (`sha1-checked` → `sha1` 0.10.6) already
