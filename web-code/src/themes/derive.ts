@@ -370,23 +370,33 @@ export function repairContrast(fg: Rgb, bgs: Rgb[], floor: number, appearance: A
 /* Role derivation                                                          */
 /* ---------------------------------------------------------------------- */
 
-/// The 15 `.kbc-hl-*` classes are EXACTLY `HighlightClass`'s fixed set in
-/// `crates/kb-code-server/src/highlight.rs` (Keyword, String, Comment,
-/// Function, Type, Number, Variable, Constant, Operator, Punctuation,
-/// Property, Attribute, Label, Escape, Other). v7.0 does NOT widen the
-/// server vocabulary — that needs the shared-`salt` split (recon §8.2), and
-/// is v7.2's job. `other` is the 15th member; there is no `tag` class.
+/// The 18 `.kbc-hl-*` classes are EXACTLY `HighlightClass`'s fixed set in
+/// `crates/kb-code-server/src/highlight.rs`, in its wire order — the same
+/// list that crate exports as `highlight::ROLES`, and the same union
+/// `api/types.ts`'s `HighlightClass` declares. Three literals, one
+/// vocabulary; keep them in lock-step.
+///
+/// V72-H2b (D16) widened it from fifteen. The widening rode the
+/// `symbol_salt`/`highlight_salt` split (v7.0 could not ship it: one salt
+/// meant re-painting cost a full symbol re-extract), and the three new
+/// members were picked by counting the capture names the grammars in that
+/// build actually emit — `constant.builtin` (9 grammars),
+/// `punctuation.special` (7), `string.special` (7). There is still no
+/// `tag` class: CSS's `tag` maps to `type`, server-side.
 export const SYNTAX_ROLES: readonly string[] = [
   "keyword",
   "string",
+  "string-special",
   "comment",
   "function",
   "type",
   "number",
   "variable",
   "constant",
+  "constant-builtin",
   "operator",
   "punctuation",
+  "punctuation-special",
   "property",
   "attribute",
   "label",
@@ -402,14 +412,27 @@ export const SYNTAX_ROLES: readonly string[] = [
 const SYNTAX_SOURCE: Record<string, string> = {
   keyword: "violet",
   string: "green",
+  // V72-H2b: a symbol / regex / JSON key is a string with a role. `teal`
+  // sits beside `green` on the wheel without colliding with `property`'s
+  // own reading context (a key IS a property, and they never co-occur on
+  // one token).
+  "string-special": "teal",
   comment: "ink-mute",
   function: "blue",
   type: "yellow",
   number: "orange",
   variable: "ink",
   constant: "orange",
+  // V72-H2b: `nil`/`true`/`self` read as keywords in every editor that
+  // separates them at all, so they draw from the keyword anchor rather
+  // than making a fourth use of `orange`.
+  "constant-builtin": "violet",
   operator: "cyan",
   punctuation: "ink-mute",
+  // V72-H2b: interpolation delimiters are the one punctuation a reader
+  // must SEE; `pink` is the theme's most reserved accent (only `escape`
+  // uses it, which is the same "this token is doing something" family).
+  "punctuation-special": "pink",
   property: "teal",
   attribute: "yellow",
   label: "magenta",

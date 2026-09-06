@@ -505,25 +505,36 @@
   --hl-low: var(--rule);
   --hl-med: var(--rule-hi);
 
-  /* --- syntax: the 15 `.kbc-hl-*` classes get their OWN role family -----
+  /* --- syntax: the 18 `.kbc-hl-*` classes get their OWN role family -----
    * Until now the code colours WERE the chrome semantics: `.kbc-hl-number`
    * was literally `--red`, the same `--red` as error dots and deletion
    * tints, so a theme could not change one without changing the other.
    * These fifteen defaults reproduce that mapping EXACTLY (the rendering is
    * byte-identical), but a theme can now recolour code without touching
-   * chrome. The class set is frozen at `HighlightClass`'s fixed fifteen
-   * (`crates/kb-code-server/src/highlight.rs`) — widening it needs the
-   * shared-`salt` split, which is v7.2's job, not this unit's. */
+   * chrome. V72-H2b (D16) widened the set to EIGHTEEN on the back of the
+   * `symbol_salt`/`highlight_salt` split — the class set is
+   * `HighlightClass`'s, in `crates/kb-code-server/src/highlight.rs`, and
+   * that enum is the contract these variables bind to. */
   --syn-keyword: var(--accent-soft);
   --syn-string: var(--green);
+  /* V72-H2b (D16) — the three widened roles. The BUILT-IN palette carries
+   * seven chrome hues, not the eleven a registry theme's anchors do, so
+   * each new role defaults to its PARENT role's token: the widening is
+   * byte-identical here, and separation arrives with a registry theme
+   * (`themes/derive.ts`'s SYNTAX_SOURCE gives all three their own hue).
+   * Inventing a hue the built-in palette does not have would have meant
+   * an unmeasured contrast pair. */
+  --syn-string-special: var(--syn-string);
   --syn-comment: var(--ink-mute);
   --syn-function: var(--blue);
   --syn-type: var(--warn);
   --syn-number: var(--red);
   --syn-variable: var(--ink);
   --syn-constant: var(--red);
+  --syn-constant-builtin: var(--syn-constant);
   --syn-operator: var(--ink-mute);
   --syn-punctuation: var(--ink-mute);
+  --syn-punctuation-special: var(--syn-punctuation);
   --syn-property: var(--blue);
   --syn-attribute: var(--warn);
   --syn-label: var(--warn);

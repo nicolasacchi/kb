@@ -258,14 +258,14 @@ mod tests {
         store
             .replace_symbols(
                 &blob_hash,
-                crate::lang::for_id("ruby").unwrap().salt,
+                crate::lang::for_id("ruby").unwrap().symbol_salt,
                 &crate::extract::extract_symbols("ruby", src.as_bytes()).unwrap(),
             )
             .unwrap();
         store
             .replace_occurrences(
                 &blob_hash,
-                crate::lang::for_id("ruby").unwrap().salt,
+                crate::lang::for_id("ruby").unwrap().symbol_salt,
                 &crate::occurrences::extract_occurrences("ruby", src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -370,14 +370,14 @@ mod tests {
         store
             .replace_symbols(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src.as_bytes()).unwrap(),
             )
             .unwrap();
         store
             .replace_occurrences(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::occurrences::extract_occurrences("rust", src.as_bytes()).unwrap(),
             )
             .unwrap();

@@ -532,6 +532,9 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // a VIEW of; `crate::outline::V72_H2A_ROUTES` declares it and a
         // unit test walks that declaration against THIS file.
         .route("/outline", get(crate::outline::outline_route))
+        // V72-H2b (D7) — `reextract-bill/1`. An ordinary read: it times
+        // the extractors over a bounded sample and writes nothing.
+        .route("/reextract/bill", get(crate::reextract::bill_route))
         .route("/refs", get(routes::refs))
         // V70-A3X — `GET /api/status` (`git_status`'s module doc): working-
         // tree/index status, same ordinary `auth_bearer`-gated `api` router

@@ -606,6 +606,12 @@ pub fn initial_index_one(
                 parsed = stats.parsed,
                 cache_hits = stats.cache_hits,
                 symbols = stats.symbols,
+                // V72-H2b — the INDEPENDENT highlight gate's own tally, so
+                // the cost of a `highlight_salt` bump is a number in the
+                // boot log rather than an inference from wall clock.
+                highlight_hits = stats.highlight_hits,
+                highlight_misses = stats.highlight_misses,
+                highlight_skipped = stats.highlight_skipped,
                 "kb-code initial index complete",
             ),
             Err(e) => tracing::warn!(repo = %repo_name, error = %e, "kb-code initial index failed"),

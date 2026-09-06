@@ -1138,11 +1138,104 @@ reviewable in the diff that causes it. CLI: `kb-code syntax [--json]`,
 `kb-code parity [--json]` — daemon reads, because the honest answer is what
 the DAEMON's build can do.
 
-Not in this unit, by design: new grammars (SCSS/CSS/Markdown), the
+Not in that unit, by design: new grammars (SCSS/CSS/Markdown), the
 injection-aware pipeline, the universal `outline/1` contract, and the
-`symbol_salt`/`highlight_salt` split. `highlight_only` therefore ships as a
-mechanism with no production row yet, recorded by a test that fails when
-the first one lands.
+`symbol_salt`/`highlight_salt` split. `highlight_only` therefore shipped as
+a mechanism with no production row (SCSS became the first, in V72-H2a); the
+salt split is V72-H2b, below.
+
+**The salt split, the highlight cache gate and the eighteen roles
+(V72-H2b, D7 + D16).** One salt used to key every derived row per file, so
+a highlight-query or role-table change re-extracted SYMBOLS too, and a
+`tags.scm` fix re-painted the corpus. `crates/kb-code-server/src/lang.rs`'s
+`LangInfo` now carries two, and each derived family is invalidated on its
+own:
+
+| salt | format | keys |
+|------|--------|------|
+| `symbol_salt` | `{id}@{grammar}+qN` | `symbols`, `occurrences`, `import_specs`, `call_sites`, `type_relations` |
+| `highlight_salt` | `{id}@{grammar}+hN+rolesM` | `highlights` |
+
+`M` is `highlight::ROLE_TABLE_VERSION`, and a test pins every language's
+salt to it — widening the role vocabulary is one edit that invalidates
+every painted row and cannot be forgotten for one language. The two sets
+are disjoint by construction (`+q` vs `+h`), which is what lets the store
+keep asking "is this row's salt in the CURRENT set" per FAMILY with no join
+back through `files.lang`. The V70-A3X stale-salt sweep runs one pass per
+`(table, family)` pair (`store::SWEEP_TABLES`), so a family is stale only
+when ITS OWN salt moved; the V72-B0 completion marker folds BOTH sets into
+its fingerprint, so a highlight-only bump re-arms it. **No migration was
+needed for the split** — two salt strings live in the same `salt` TEXT
+column their family's table already had.
+
+The **highlight cache gate** is the second half. Highlights used to be
+written only inside the symbols cache-MISS branch, so the two could not be
+invalidated separately even in principle. They are now two independent
+gates in `ingest::index_file`, and both ask a new question: `derived_status`
+(migration V0037 — a new migration takes the embedded set's current max +
+1, never a reserved slot: refinery's `abort_missing` makes a gap-FILL a
+hard boot refusal on any volume already migrated past it, which
+`embedded_migration_versions_are_contiguous` now prevents) records
+`(blob_hash, family, salt) → rows`, and the gate
+is the row's EXISTENCE. The old gate was `COUNT(*) > 0` over the derived
+rows themselves, which cannot tell "not derived" from "derived, and zero
+rows was the honest answer" — so every zero-symbol file re-parsed on
+**every visit, forever**: ERB templates (tier `none`, the case V72-H1
+reported), SCSS files (tier `highlight_only`), comment-only Rust files,
+heading-less Markdown. `GET /api/file` gains an additive
+`highlight_cache: "hit" | "miss" | "skipped_tier"` reporting what the gate
+would say for that blob, and the boot walk logs `highlight_hits` /
+`highlight_misses` / `highlight_skipped` beside its existing counters.
+
+The **role table** widens from fifteen classes to **eighteen** (D16), which
+is what the split makes affordable. The three additions were picked by
+counting the capture names the grammars in this build actually emit, and
+the counts are asserted, not narrated:
+
+| role | capture names | grammars |
+|------|---------------|----------|
+| `constant-builtin` | `constant.builtin`, and YAML/TOML's top-level `boolean` | 9 |
+| `punctuation-special` | `punctuation.special` | 7 |
+| `string-special` | `string.special{,.regex,.symbol,.key}` | 7 |
+
+`map_class`'s lookup is now two levels deep — the first two dotted scope
+words, then the top-level word — so every unlisted sub-scope keeps exactly
+the class it always had (`comment.documentation` is still `comment`,
+`string.escape` still `string`). Measured and NOT adopted, recorded by a
+test with their evidence: `constructor` (6 grammars), `variable.parameter`
+(5), `type.builtin` (3), `namespace` (0 — no grammar in this build emits it
+at all; CSS's `@namespace` is an at-rule KEYWORD in the query's pattern
+text, not a capture name), Markdown's `text.*` family (1 grammar, 4
+captures). The wire is kebab-case (`rename_all` moved from
+`snake_case`, byte-identical for all fifteen legacy single-word names), and
+the SPA mirrors the list in three places kept in lock-step by test:
+`api/types.ts`'s `HighlightClass`, `themes/derive.ts`'s `SYNTAX_ROLES`, and
+`styles/tokens.css`'s `--syn-*`. Registry themes give each new role its own
+hue; the built-in palette carries seven chrome hues rather than eleven, so
+there each new role defaults to its parent's token and the widening renders
+byte-identically until a theme separates it.
+
+**The re-extract bill — `GET /api/reextract/bill?repo=[&sample=]`,
+`kb-code reextract --bill [--repo R] [--sample N] [--json]`
+(`reextract-bill/1`).** D7 asks for the cost of a salt bump to be MEASURED
+and recorded per milestone, so the bill has three parts and labels each
+with how it was obtained. (1) The **census** is exact: files and bytes per
+`files.lang`, and rows per derived table over the blobs this repo reaches
+— paged and wall-clock-budgeted for the V72-B0 reason (the un-paged
+`blob_hash IN (SELECT …)` shape is O(every live blob) random seeks per
+table with the store's single connection mutex held), and it says
+`census_complete: false` rather than presenting a partial count as a total.
+(2) The **timed sample** is measured: up to 200 files per language
+(deterministically the first in `path` order, so two runs compare), read
+from the working tree and pushed through the REAL
+`extract::extract_symbols` / `highlight::extract_highlights` with the
+results discarded — the bill writes nothing, because a bill that mutated
+the cache it prices would be measuring its own second run. (3) The
+**projection** is extrapolated and says so on every row: the sample's
+milliseconds scaled by `total bytes / sampled bytes`, with the scale factor
+printed. There is deliberately no verb that PERFORMS a re-extract: bumping
+a salt is an edit to `lang.rs` plus a deploy, and the mirror re-derives
+itself through the ordinary two gates on the next visit to each file.
 
 **`haml/1` (V72-H3, D7) — the first-party HAML scanner.** HAML is the one
 file type kb-code parses with code it owns rather than a tree-sitter

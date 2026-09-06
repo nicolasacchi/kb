@@ -95,6 +95,59 @@ async fn wait_for_indexed(url: &str, repo: &str, expected_files: usize) {
     }
 }
 
+/// Poll one position-addressed `/api/hierarchy/*` lane until it answers
+/// non-empty — the readiness gate every test in this file that reads
+/// `call_sites` needs, and did not have.
+///
+/// V72-H2b. `wait_for_indexed` above stops at `symbol_count > 0`, and its
+/// own comment already records that `file_count` trips before the later
+/// per-blob derivations land. V70-H1 then wrote, in
+/// `implementors_smoke_json` below, that "`callees_smoke_human_and_json`/
+/// `callers_smoke_json` never hit this because they only ever read the
+/// symbols endpoint `wait_for_indexed` already waited on". **That was
+/// wrong**, and CI has since failed both: `callers` and `callees` are fed
+/// by `call_sites`, which `ingest::index_file` writes several passes AFTER
+/// `replace_symbols`, exactly like the `type_relations` rows
+/// `implementors` reads. All three needed the same gate; only one had it.
+///
+/// Anything that lengthens the ingest path widens the window, which is how
+/// this surfaced — V72-H2b's independent highlight gate adds a pass
+/// between the symbols write and the hierarchy one. Sibling of the
+/// `lenses_route` gate fixed in the same unit and of V72-H2a's review-map
+/// gate; the rule they share is that a readiness gate waits for the LAST
+/// derivation the test reads, never the first one it can see.
+///
+/// A readiness gate, not a retry: the deadline still fails the test if the
+/// derivation never lands.
+async fn wait_for_hierarchy(url: &str, repo: &str, lane: &str, path: &str, line: u32, col: u32) {
+    let client = reqwest::Client::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Ok(resp) = client
+            .get(format!("{url}/api/hierarchy/{lane}"))
+            .query(&[
+                ("repo", repo.to_string()),
+                ("path", path.to_string()),
+                ("line", line.to_string()),
+                ("col", col.to_string()),
+            ])
+            .send()
+            .await
+        {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if body[lane].as_array().is_some_and(|a| !a.is_empty()) {
+                    return;
+                }
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "hierarchy/{lane} never landed for {path}:{line}:{col}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 async fn find_fn_pos(url: &str, repo: &str, path: &str, name: &str) -> (u32, u32) {
     let client = reqwest::Client::new();
     let resp = client
@@ -122,6 +175,7 @@ async fn callees_smoke_human_and_json() {
     wait_for_indexed(&url, "fixture", 1).await;
     let (line, col) = find_fn_pos(&url, "fixture", "hier.rs", "run").await;
     let target = format!("hier.rs:{line}:{col}");
+    wait_for_hierarchy(&url, "fixture", "callees", "hier.rs", line, col).await;
 
     Command::cargo_bin("kb-code")
         .unwrap()
@@ -157,6 +211,7 @@ async fn callers_smoke_json() {
     wait_for_indexed(&url, "fixture", 1).await;
     let (line, col) = find_fn_pos(&url, "fixture", "hier.rs", "helper").await;
     let target = format!("hier.rs:{line}:{col}");
+    wait_for_hierarchy(&url, "fixture", "callers", "hier.rs", line, col).await;
 
     let out = Command::cargo_bin("kb-code")
         .unwrap()
@@ -186,12 +241,17 @@ async fn implementors_smoke_json() {
     // the SAME `index_file` visit (`ingest.rs`'s per-file order is
     // symbols -> occurrences -> todos -> imports -> hierarchy), so a poll
     // landing right after symbols land can still see empty `subtypes`.
-    // `callees_smoke_human_and_json`/`callers_smoke_json` never hit this
-    // because they only ever read the symbols endpoint `wait_for_indexed`
-    // already waited on; `implementors` is the one query in this file that
-    // needs the LATER hierarchy write. Retry the query itself (same shape
-    // as `wait_for_indexed`'s own `/api/repos` retry) instead of asserting
-    // on the first response — under a loaded host that window is real.
+    // V72-H2b CORRECTION: V70-H1 wrote here that
+    // `callees_smoke_human_and_json`/`callers_smoke_json` "never hit this
+    // because they only ever read the symbols endpoint". They do not —
+    // both read `call_sites`, and CI failed both once the V72-H2b
+    // highlight gate lengthened the ingest path. They now use
+    // `wait_for_hierarchy` above. `implementors` keeps its own loop
+    // because it addresses a type by NAME rather than by line/col, so the
+    // shared position-addressed gate does not fit it; the shape is the
+    // same. Retry the query itself (same shape as `wait_for_indexed`'s own
+    // `/api/repos` retry) instead of asserting on the first response —
+    // under a loaded host that window is real.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut body: serde_json::Value;
     loop {

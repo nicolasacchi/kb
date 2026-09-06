@@ -13,19 +13,47 @@
 //! its contract is unchanged.
 //!
 //! Every derived row (`symbols`/`highlights`) is keyed by `(blob_hash,
-//! salt)` (ADR-2). `salt` bakes in BOTH the grammar crate's exact pinned
+//! salt)` (ADR-2). A salt bakes in BOTH the grammar crate's exact pinned
 //! version (a grammar bump can change node shapes/field names, which would
 //! silently corrupt cached rows extracted under the old grammar) AND a
-//! bump-able query revision suffix (`+qN` — bump this when
-//! `extract.rs`/`highlight.rs`'s OWN mapping logic changes in a way that
-//! would change the output for unchanged bytes, e.g. a kind-mapping fix).
-//! Bumping either half invalidates every cached row for that language on
-//! next ingest — nothing else has to change. `typescript` and `tsx` get
-//! DISTINCT salts even though W2.2's vendored query text is byte-identical
-//! between them (see `queries/typescript-tags.scm`'s header): they're
-//! different compiled `tree_sitter::Language` grammars (different internal
-//! symbol/field ids), so a byte-identical `.ts`/`.tsx` pair must never share
-//! a cache slot.
+//! bump-able revision suffix for the crate's OWN mapping logic. Bumping
+//! either half invalidates every cached row of that FAMILY for that
+//! language on next ingest — nothing else has to change. `typescript` and
+//! `tsx` get DISTINCT salts even though W2.2's vendored query text is
+//! byte-identical between them (see `queries/typescript-tags.scm`'s
+//! header): they're different compiled `tree_sitter::Language` grammars
+//! (different internal symbol/field ids), so a byte-identical `.ts`/`.tsx`
+//! pair must never share a cache slot.
+//!
+//! ## Two salts, not one (V72-H2b, D7)
+//!
+//! Until V72-H2b ONE salt keyed every derived family, so a highlight-query
+//! or role-table change re-extracted SYMBOLS too (and a `tags.scm` fix
+//! re-painted every file). [`LangInfo`] now carries two:
+//!
+//! - [`LangInfo::symbol_salt`] (`{id}@{grammar}+qN`) — grammar version ×
+//!   symbol queries × extractor version. Keys `symbols`, `occurrences`,
+//!   `import_specs`, `call_sites`, `type_relations` and the `symbols`
+//!   family's `derived_status` marker.
+//! - [`LangInfo::highlight_salt`] (`{id}@{grammar}+hN+rolesM`) — grammar
+//!   version × highlight queries × the ROLE TABLE version. Keys
+//!   `highlights` and the `highlights` family's `derived_status` marker.
+//!   `M` is [`crate::highlight::ROLE_TABLE_VERSION`] and is pinned to it by
+//!   test: widening the role vocabulary bumps every language's highlight
+//!   salt in one edit, and cannot be forgotten for one language.
+//!
+//! The two salt strings are globally unique across BOTH sets (the `+q` /
+//! `+h` suffixes make them structurally unable to collide), which is what
+//! keeps `store`'s "is this row's salt in the CURRENT set" filtering a
+//! per-FAMILY question with no join back through `files.lang`. A family is
+//! stale only when ITS OWN salt moved — see [`SaltFamily`], and
+//! `store::Store::sweep_stale_salt_page`, which sweeps each table against
+//! the salt set of the family that table belongs to.
+//!
+//! **A salt bump is a measured decision, not a free one.** Run the
+//! re-extract bill (`kb-code reextract --bill`, `crate::reextract`) before
+//! shipping one: it prices the bump in files, rows, bytes and a timed
+//! sample per language.
 //!
 //! The salt strings below are hand-pinned against the exact resolved
 //! versions in `Cargo.lock` at the time of writing (`tree-sitter-rust
@@ -38,64 +66,122 @@
 //! Cargo.toml only pins the minor version, so bump the salt by hand whenever
 //! `cargo update` moves one of these crates forward.
 
+/// Which derived FAMILY a salt keys (V72-H2b, D7). The two families are
+/// independently invalidated: bumping one re-extracts only its own tables,
+/// and the stale-salt sweep asks this question per table rather than
+/// holding one "current salt" set for everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SaltFamily {
+    /// `symbols`, `occurrences`, `import_specs`, `call_sites`,
+    /// `type_relations` — everything derived from a `tags.scm`-style
+    /// definition query or a CST outline walk.
+    Symbol,
+    /// `highlights` — spans from a `highlights.scm` query (or, for HAML,
+    /// the first-party scanner) mapped through the role table.
+    Highlight,
+}
+
+impl SaltFamily {
+    /// The `derived_status.family` value — also what the wire and the CLI
+    /// print. Deliberately the TABLE-ish plural, so a reader of a
+    /// `derived_status` row does not have to translate.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SaltFamily::Symbol => "symbols",
+            SaltFamily::Highlight => "highlights",
+        }
+    }
+
+    /// Both families, in wire order.
+    pub const ALL: &'static [SaltFamily] = &[SaltFamily::Symbol, SaltFamily::Highlight];
+}
+
 /// One supported language: its id (used as the `files.lang` /
-/// `symbols.salt`-prefix value) and its cache-key salt.
+/// `symbols.salt`-prefix value) and its two cache-key salts — see the
+/// module doc's "Two salts, not one".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LangInfo {
     pub id: &'static str,
-    pub salt: &'static str,
+    /// Keys every SYMBOL-family derived row. `{id}@{grammar}+qN`.
+    pub symbol_salt: &'static str,
+    /// Keys every HIGHLIGHT-family derived row.
+    /// `{id}@{grammar}+hN+roles{ROLE_TABLE_VERSION}`.
+    pub highlight_salt: &'static str,
+}
+
+impl LangInfo {
+    /// The salt keying `family`'s rows for this language. The ONE place a
+    /// family is turned into a salt, so no call site can pick the wrong
+    /// one by habit.
+    pub fn salt_for(&self, family: SaltFamily) -> &'static str {
+        match family {
+            SaltFamily::Symbol => self.symbol_salt,
+            SaltFamily::Highlight => self.highlight_salt,
+        }
+    }
 }
 
 pub const RUST: LangInfo = LangInfo {
     id: "rust",
     // +q3: V3.1-H1 call_sites + type_relations derived tables.
-    salt: "rust@0.24.2+q3",
+    symbol_salt: "rust@0.24.2+q3",
+    highlight_salt: "rust@0.24.2+h1+roles2",
 };
 pub const PYTHON: LangInfo = LangInfo {
     id: "python",
     // +q3: V3.1-H1 call_sites + type_relations derived tables.
-    salt: "python@0.25.0+q3",
+    symbol_salt: "python@0.25.0+q3",
+    highlight_salt: "python@0.25.0+h1+roles2",
 };
 pub const RUBY: LangInfo = LangInfo {
     id: "ruby",
-    salt: "ruby@0.23.1+q1",
+    symbol_salt: "ruby@0.23.1+q1",
+    highlight_salt: "ruby@0.23.1+h1+roles2",
 };
 pub const TYPESCRIPT: LangInfo = LangInfo {
     id: "typescript",
     // +q3: V3.1-H1 call_sites + type_relations derived tables.
-    salt: "typescript@0.23.2+q3",
+    symbol_salt: "typescript@0.23.2+q3",
+    highlight_salt: "typescript@0.23.2+h1+roles2",
 };
 pub const TSX: LangInfo = LangInfo {
     id: "tsx",
     // +q3: V3.1-H1 call_sites + type_relations derived tables.
-    salt: "tsx@0.23.2+q3",
+    symbol_salt: "tsx@0.23.2+q3",
+    highlight_salt: "tsx@0.23.2+h1+roles2",
 };
 pub const JAVASCRIPT: LangInfo = LangInfo {
     id: "javascript",
-    salt: "javascript@0.25.0+q1",
+    symbol_salt: "javascript@0.25.0+q1",
+    highlight_salt: "javascript@0.25.0+h1+roles2",
 };
 pub const BASH: LangInfo = LangInfo {
     id: "bash",
-    salt: "bash@0.25.1+q1",
+    symbol_salt: "bash@0.25.1+q1",
+    highlight_salt: "bash@0.25.1+h1+roles2",
 };
 pub const YAML: LangInfo = LangInfo {
     id: "yaml",
     // +q2: V72-H2a (D7) surfaces anchors (`&a`), aliases (`*a`) and merge
     // keys (`<<:`) on the key row's `signature` — same rows, new field, so
     // every cached row extracted under +q1 is stale by definition.
-    salt: "yaml@0.7.2+q2",
+    symbol_salt: "yaml@0.7.2+q2",
+    highlight_salt: "yaml@0.7.2+h1+roles2",
 };
 pub const GO: LangInfo = LangInfo {
     id: "go",
-    salt: "go@0.25.0+q1",
+    symbol_salt: "go@0.25.0+q1",
+    highlight_salt: "go@0.25.0+h1+roles2",
 };
 pub const TOML: LangInfo = LangInfo {
     id: "toml",
-    salt: "toml@0.7.0+q1",
+    symbol_salt: "toml@0.7.0+q1",
+    highlight_salt: "toml@0.7.0+h1+roles2",
 };
 pub const JSON: LangInfo = LangInfo {
     id: "json",
-    salt: "json@0.24.8+q1",
+    symbol_salt: "json@0.24.8+q1",
+    highlight_salt: "json@0.24.8+h1+roles2",
 };
 /// V72-H2a (D7) — CSS. Not a tags language (no `tags.scm` upstream, and no
 /// function/class vocabulary to tag); `crate::css` walks the CST into a
@@ -103,7 +189,8 @@ pub const JSON: LangInfo = LangInfo {
 /// `yaml`/`keypath` use for data files.
 pub const CSS: LangInfo = LangInfo {
     id: "css",
-    salt: "css@0.25.0+q1",
+    symbol_salt: "css@0.25.0+q1",
+    highlight_salt: "css@0.25.0+h1+roles2",
 };
 /// V72-H2a (D7) — SCSS. A DIFFERENT compiled grammar from [`CSS`] (its own
 /// symbol/field ids), so it gets its own salt for the same reason
@@ -111,7 +198,8 @@ pub const CSS: LangInfo = LangInfo {
 /// never share a cache slot.
 pub const SCSS: LangInfo = LangInfo {
     id: "scss",
-    salt: "scss@1.0.0+q1",
+    symbol_salt: "scss@1.0.0+q1",
+    highlight_salt: "scss@1.0.0+h1+roles2",
 };
 /// V72-H2a (D7) — Markdown, via `tree-sitter-md`'s BLOCK grammar. The
 /// crate ships two grammars (block structure + inline content); kb-code
@@ -121,7 +209,8 @@ pub const SCSS: LangInfo = LangInfo {
 /// see `highlights_query`'s own arm.
 pub const MARKDOWN: LangInfo = LangInfo {
     id: "markdown",
-    salt: "markdown@0.5.3+q1",
+    symbol_salt: "markdown@0.5.3+q1",
+    highlight_salt: "markdown@0.5.3+h1+roles2",
 };
 /// PRR-N3 — ERB (Rails' embedded-template grammar; also covers EJS, unused
 /// here). Registered as its own [`LangInfo`] so `files.lang`/cache-key salt
@@ -135,7 +224,8 @@ pub const MARKDOWN: LangInfo = LangInfo {
 /// symbols/highlights passes.
 pub const ERB: LangInfo = LangInfo {
     id: "erb",
-    salt: "erb@0.25.0+q1",
+    symbol_salt: "erb@0.25.0+q1",
+    highlight_salt: "erb@0.25.0+h1+roles2",
 };
 
 /// V72-H3 — HAML. The ONE language whose rows are derived by a FIRST-PARTY
@@ -153,7 +243,8 @@ pub const ERB: LangInfo = LangInfo {
 /// to code this crate owns.
 pub const HAML: LangInfo = LangInfo {
     id: "haml",
-    salt: "haml@haml/1+q1",
+    symbol_salt: "haml@haml/1+q1",
+    highlight_salt: "haml@haml/1+h1+roles2",
 };
 
 /// Detect a language from `path` (and, for an extensionless file with a
@@ -192,14 +283,27 @@ pub fn detect(path: &str, content: Option<&[u8]>) -> Option<LangInfo> {
 /// CURRENTLY valid salt" set is harmless, since it can never match a row
 /// that exists). V70-A3X: the single source of truth `store::Store`'s
 /// stale-salt filtering/sweep builds its "every currently valid salt" set
-/// from — salts are globally unique per language (the `"{id}@{version}
-/// +qN"` format), so filtering a derived-table row by "is its salt IN this
-/// set" is equivalent to "is its salt the CURRENT one for whichever
-/// language it names," with no need to also join back through `files.lang`.
+/// from — salts are globally unique per language AND per family (the
+/// `"{id}@{version}+qN"` / `"{id}@{version}+hN+rolesM"` formats), so
+/// filtering a derived-table row by "is its salt IN this family's set" is
+/// equivalent to "is its salt the CURRENT one for whichever language it
+/// names," with no need to also join back through `files.lang`.
+/// V72-H2b: reach for [`current_salts`] rather than mapping this list
+/// yourself — a family's set is the only correct input to a
+/// stale-salt filter, and mapping `symbol_salt` over a HIGHLIGHT read
+/// would declare every current highlight row stale.
 pub(crate) const ALL_LANGS: &[LangInfo] = &[
     RUST, PYTHON, RUBY, TYPESCRIPT, TSX, JAVASCRIPT, BASH, YAML, GO, TOML, JSON, CSS, SCSS,
     MARKDOWN, ERB, HAML,
 ];
+
+/// Every CURRENTLY valid salt for `family`, one per registered language —
+/// the single input to `store`'s stale-salt filtering and to the V72-B0
+/// sweep. Sorted output is NOT promised (callers that persist a
+/// fingerprint sort it themselves, `lib::salt_set_fingerprint`).
+pub(crate) fn current_salts(family: SaltFamily) -> Vec<&'static str> {
+    ALL_LANGS.iter().map(|l| l.salt_for(family)).collect()
+}
 
 /// Resolve a language id (as stored in `symbols.salt`'s language or
 /// `files.lang`) back to its `LangInfo`. `detect` and `for_id` must agree —
@@ -530,10 +634,56 @@ mod tests {
                 "ALL_LANGS is missing {id:?}"
             );
         }
-        let mut salts: Vec<&str> = ALL_LANGS.iter().map(|l| l.salt).collect();
+        // V72-H2b: uniqueness must hold across BOTH families at once —
+        // the sweep filters `salt IN (this family's set)`, so a string
+        // appearing in both sets (or twice in one) would make "current for
+        // family F" ambiguous.
+        let mut salts: Vec<&str> = ALL_LANGS
+            .iter()
+            .flat_map(|l| [l.symbol_salt, l.highlight_salt])
+            .collect();
         salts.sort_unstable();
         salts.dedup();
-        assert_eq!(salts.len(), ALL_LANGS.len(), "every salt must be unique");
+        assert_eq!(
+            salts.len(),
+            ALL_LANGS.len() * 2,
+            "every salt must be unique across both families"
+        );
+    }
+
+    /// V72-H2b — the split's own contract, stated as three assertions
+    /// rather than left to the reader of two string tables.
+    #[test]
+    fn the_two_salt_families_are_disjoint_and_role_versioned() {
+        let roles = format!("+roles{}", crate::highlight::ROLE_TABLE_VERSION);
+        for l in ALL_LANGS {
+            assert_ne!(
+                l.symbol_salt, l.highlight_salt,
+                "{}: the two families must never share a cache slot",
+                l.id
+            );
+            assert!(
+                l.symbol_salt.contains("+q"),
+                "{}: a symbol salt carries the `+qN` query revision, got {:?}",
+                l.id,
+                l.symbol_salt
+            );
+            // The whole point of encoding the ROLE TABLE version in every
+            // highlight salt: widening `highlight::HighlightClass` is one
+            // edit that invalidates every language's painted rows, and
+            // cannot be forgotten for one of them.
+            assert!(
+                l.highlight_salt.ends_with(&roles),
+                "{}: highlight salt {:?} does not end with the current role-table version                  {roles:?} — bump every highlight salt in the same edit that widens                  `highlight::HighlightClass`",
+                l.id,
+                l.highlight_salt
+            );
+            assert_eq!(l.salt_for(SaltFamily::Symbol), l.symbol_salt);
+            assert_eq!(l.salt_for(SaltFamily::Highlight), l.highlight_salt);
+        }
+        for family in SaltFamily::ALL {
+            assert_eq!(current_salts(*family).len(), ALL_LANGS.len());
+        }
     }
 
     #[test]
@@ -637,7 +787,8 @@ mod tests {
 
     #[test]
     fn typescript_and_tsx_have_distinct_salts() {
-        assert_ne!(TYPESCRIPT.salt, TSX.salt);
+        assert_ne!(TYPESCRIPT.symbol_salt, TSX.symbol_salt);
+        assert_ne!(TYPESCRIPT.highlight_salt, TSX.highlight_salt);
     }
 
     /// (this module's `LangInfo`, its grammar crate's package name in
@@ -724,14 +875,23 @@ mod tests {
                 ),
             };
             let expected_prefix = format!("{}@{resolved}", info.id);
-            assert!(
-                info.salt.starts_with(&expected_prefix),
-                "{}: salt {:?} does not embed Cargo.lock's resolved {crate_name} version \
-                 {resolved:?} (expected it to start with {expected_prefix:?}) — bump the \
-                 salt's version segment after this cargo update, see the module doc",
-                info.id,
-                info.salt,
-            );
+            // V72-H2b: BOTH salts embed the grammar version, and both must
+            // be bumped by a `cargo update` — checking only one would let
+            // half the derived rows go on being served under a grammar
+            // that no longer exists in this build.
+            for (family, salt) in [
+                ("symbol", info.symbol_salt),
+                ("highlight", info.highlight_salt),
+            ] {
+                assert!(
+                    salt.starts_with(&expected_prefix),
+                    "{}: {family} salt {salt:?} does not embed Cargo.lock's resolved \
+                     {crate_name} version {resolved:?} (expected it to start with \
+                     {expected_prefix:?}) — bump the salt's version segment after this \
+                     cargo update, see the module doc",
+                    info.id,
+                );
+            }
         }
     }
 }

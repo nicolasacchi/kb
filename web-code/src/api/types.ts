@@ -142,19 +142,25 @@ export interface Symbol {
   doc: string | null;
 }
 
-// Mirrors `highlight::HighlightClass`'s `#[serde(rename_all = "snake_case")]`
-// — one CSS class per bucket (`styles/reader.css` `.kbc-hl-*`).
+// Mirrors `highlight::HighlightClass`'s `#[serde(rename_all = "kebab-case")]`
+// — one CSS class per bucket (`styles/reader.css` `.kbc-hl-*`), and the
+// role vocabulary `themes/derive.ts`'s SYNTAX_ROLES binds. V72-H2b (D16)
+// widened it from fifteen to EIGHTEEN; the fifteen legacy names are
+// byte-identical under kebab-case, so nothing here moved.
 export type HighlightClass =
   | "keyword"
   | "string"
+  | "string-special"
   | "comment"
   | "function"
   | "type"
   | "number"
   | "variable"
   | "constant"
+  | "constant-builtin"
   | "operator"
   | "punctuation"
+  | "punctuation-special"
   | "property"
   | "attribute"
   | "label"

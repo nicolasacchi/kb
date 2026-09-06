@@ -111,7 +111,7 @@ fn index_file_symbols_only(store: &Store, repo_id: i64, path: &str, bytes: &[u8]
     store
         .upsert_file(repo_id, path, blob_hash, lang_info.id, size)
         .unwrap();
-    if store.has_symbols(blob_hash, lang_info.salt).unwrap() {
+    if store.has_symbols(blob_hash, lang_info.symbol_salt).unwrap() {
         return;
     }
     let Ok(symbols) = extract::extract_symbols(lang_info.id, bytes) else {
@@ -121,10 +121,10 @@ fn index_file_symbols_only(store: &Store, repo_id: i64, path: &str, bytes: &[u8]
         return;
     };
     store
-        .replace_symbols(blob_hash, lang_info.salt, &symbols)
+        .replace_symbols(blob_hash, lang_info.symbol_salt, &symbols)
         .unwrap();
     store
-        .put_highlights(blob_hash, lang_info.salt, &spans)
+        .put_highlights(blob_hash, lang_info.symbol_salt, &spans)
         .unwrap();
 }
 
