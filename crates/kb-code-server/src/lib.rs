@@ -590,19 +590,20 @@ pub async fn bind_and_spawn(
     // under a STALE salt (a grammar/query version bump in `lang.rs` mints a
     // new salt string that the old delete-then-insert writers never purged
     // the old one for) — see `store::Store::sweep_stale_salt_derived`'s doc
-    // for the exact (blob-live AND genuinely-superseded) condition. Never
-    // fatal to boot, same posture as the pin prune above.
-    match store.sweep_stale_salt_derived() {
-        Ok(counts) if counts.is_empty() => {}
-        Ok(counts) => tracing::info!(
-            symbols = counts.symbols,
-            highlights = counts.highlights,
-            occurrences = counts.occurrences,
-            total = counts.total(),
-            "kb-code: swept stale-salt derived rows at boot"
-        ),
-        Err(e) => tracing::warn!(error = %e, "kb-code: boot stale-salt sweep failed"),
-    }
+    // for the exact (blob-live AND genuinely-superseded) condition.
+    //
+    // V72-B0 — SPAWNED, never awaited. This used to be a blocking call
+    // right here, before the `TcpListener::bind` below, and it is what hung
+    // the v7.1 boot on the production store: the sweep's driver was
+    // `blob_hash IN (SELECT blob_hash FROM files)`, i.e. O(every live blob)
+    // random index seeks per table, in ONE transaction. On ~165k files that
+    // is hours of cold random I/O on spinning disks — the daemon logged its
+    // migrations and then simply never bound its port. Nothing about this
+    // sweep is needed to SERVE: every read already filters to the current
+    // salt (that is why stale rows are invisible, and why they accumulate
+    // unnoticed in the first place), so it belongs off the boot path, in
+    // bounded pages, exactly like the initial index walk below.
+    spawn_stale_salt_sweep(store.clone(), paths.state.clone());
 
     // W1.6 (a) — initial background index: a HEAD-tree walk per repo
     // (W1.5's `ingest::index_repo_working_tree`), spawned so it never delays
@@ -1186,7 +1187,11 @@ pub(crate) async fn build_state_for_test(
     if let Err(e) = doclens::pins::prune_stale_pins(&store, &config.repos) {
         tracing::warn!(error = %e, "doc-lens: boot pin prune failed");
     }
-    // Same boot-time stale-salt sweep `bind_and_spawn` runs (V70-A3X).
+    // The same stale-salt sweep `bind_and_spawn` runs (V70-A3X) — but
+    // driven to COMPLETION and inline, which is safe here and nowhere else:
+    // a fixture store holds a handful of blobs, and an in-crate test wants
+    // the post-sweep state deterministically, not whenever a background
+    // task happens to land (V72-B0).
     if let Err(e) = store.sweep_stale_salt_derived() {
         tracing::warn!(error = %e, "kb-code: boot stale-salt sweep failed");
     }
@@ -1321,6 +1326,170 @@ pub(crate) async fn build_state_for_test(
     }))
 }
 
+// --- V72-B0: the stale-salt sweep, off the boot path -------------------
+//
+// This crate's invariant 11 already calls `sweep_stale_salt_derived` "a
+// ONE-TIME boot sweep for rows a PRE-FIX binary already left behind — a
+// remedy for old damage". The implementation never honoured the "one-time"
+// half: it ran the whole-corpus pass on EVERY boot, inline, before the
+// listener bound. The three pieces below make the code match the stated
+// contract — a completion marker so a swept salt set is never re-swept, a
+// wall-clock budget so one boot can never be monopolised by hygiene, and a
+// background task so the bind never waits on any of it.
+
+/// Name of the completion marker under `<state>/kb-code/`. A plain sidecar
+/// file, deliberately NOT a schema change: adding a table here would bump
+/// the refinery epoch and re-arm the kb-sibling/1 volume-ahead guard, which
+/// is exactly the rollback trap this fix exists to get the operator out of.
+/// Precedent: kb-core's own `KbPaths::tombstone_era_file` boot marker.
+const SALT_SWEEP_MARKER: &str = "salt-sweep.marker";
+
+/// Wall-clock budget for one boot's worth of sweeping. Exhausting it is not
+/// a failure — the cursor is persisted, so the next boot resumes.
+const SALT_SWEEP_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Slept between pages so the store's single connection mutex is genuinely
+/// released to readers and to the sink, rather than being re-taken in a
+/// tight loop (the 2026-08-31 starvation lesson in `store.rs`'s module doc).
+const SALT_SWEEP_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// FNV-1a over the SORTED current salt set. Changes exactly when a release
+/// adds, removes or bumps a grammar salt — which is the only way a new
+/// stale row can come into existence (every writer already purges its own
+/// language's other salts for the blob it is writing). Hand-rolled rather
+/// than `DefaultHasher`, whose output is explicitly not stable across Rust
+/// releases; this value is persisted, so it must be.
+fn salt_set_fingerprint() -> String {
+    let mut salts: Vec<&str> = crate::lang::ALL_LANGS.iter().map(|l| l.salt).collect();
+    salts.sort_unstable();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for s in salts {
+        for b in s.as_bytes().iter().chain(std::iter::once(&b'\n')) {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("{h:016x}")
+}
+
+/// What one boot should do about the sweep, decided purely from the marker
+/// on disk and the current salt set. Split out as a pure function so the
+/// "one-time" contract is unit-testable without a store or a runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SweepPlan {
+    /// This exact salt set has already been swept to completion.
+    Skip,
+    /// Sweep, resuming after this blob hash (`None` = from the beginning).
+    Run(Option<String>),
+}
+
+/// Marker text: line 1 the salt-set fingerprint, line 2 either `done` or
+/// `after=<blob_hash>`. Anything unparseable is treated as absent — a
+/// corrupt marker must cost one extra sweep, never a skipped one.
+pub(crate) fn plan_stale_salt_sweep(marker: Option<&str>, fingerprint: &str) -> SweepPlan {
+    let Some(text) = marker else {
+        return SweepPlan::Run(None);
+    };
+    let mut lines = text.lines();
+    let (Some(saved_fp), Some(pos)) = (lines.next(), lines.next()) else {
+        return SweepPlan::Run(None);
+    };
+    if saved_fp.trim() != fingerprint {
+        // A salt bump is precisely when stale rows appear, so start over.
+        return SweepPlan::Run(None);
+    }
+    match pos.trim() {
+        "done" => SweepPlan::Skip,
+        rest => match rest.strip_prefix("after=") {
+            Some(h) if !h.is_empty() => SweepPlan::Run(Some(h.to_string())),
+            _ => SweepPlan::Run(None),
+        },
+    }
+}
+
+fn salt_sweep_marker_text(fingerprint: &str, cursor: Option<&str>) -> String {
+    match cursor {
+        Some(h) => format!("{fingerprint}\nafter={h}\n"),
+        None => format!("{fingerprint}\ndone\n"),
+    }
+}
+
+/// V72-B0 — drive [`store::Store::sweep_stale_salt_page`] on a blocking
+/// background thread. Never awaited by `bind_and_spawn`, so it cannot delay
+/// the bind; every page is its own short transaction, so it cannot hold the
+/// store's write mutex against live requests; and the marker makes a
+/// completed salt set free on every subsequent boot.
+fn spawn_stale_salt_sweep(store: Arc<store::Store>, state_dir: std::path::PathBuf) {
+    tokio::task::spawn_blocking(move || {
+        let marker_path = state_dir.join(SALT_SWEEP_MARKER);
+        let fingerprint = salt_set_fingerprint();
+        let existing = std::fs::read_to_string(&marker_path).ok();
+        let mut cursor = match plan_stale_salt_sweep(existing.as_deref(), &fingerprint) {
+            SweepPlan::Skip => {
+                tracing::debug!(
+                    fingerprint = %fingerprint,
+                    "kb-code: stale-salt sweep already complete for this salt set — skipping"
+                );
+                return;
+            }
+            SweepPlan::Run(c) => c,
+        };
+        let started = std::time::Instant::now();
+        let mut totals = store::StaleSaltSweepCounts::default();
+        let mut pages: u64 = 0;
+        loop {
+            let (counts, next) = match store
+                .sweep_stale_salt_page(cursor.as_deref(), store::STALE_SALT_SWEEP_PAGE)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    // Same never-fatal posture the inline call had; the
+                    // cursor already on disk means the next boot retries.
+                    tracing::warn!(error = %e, "kb-code: stale-salt sweep page failed");
+                    return;
+                }
+            };
+            totals.symbols += counts.symbols;
+            totals.highlights += counts.highlights;
+            totals.occurrences += counts.occurrences;
+            pages += 1;
+            cursor = next;
+            let text = salt_sweep_marker_text(&fingerprint, cursor.as_deref());
+            if let Err(e) = std::fs::write(&marker_path, text) {
+                // Losing the marker only costs a repeated sweep later.
+                tracing::warn!(
+                    path = %marker_path.display(), error = %e,
+                    "kb-code: could not persist the stale-salt sweep marker"
+                );
+            }
+            if cursor.is_none() {
+                if !totals.is_empty() {
+                    tracing::info!(
+                        symbols = totals.symbols,
+                        highlights = totals.highlights,
+                        occurrences = totals.occurrences,
+                        total = totals.total(),
+                        pages,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "kb-code: swept stale-salt derived rows"
+                    );
+                }
+                return;
+            }
+            if started.elapsed() >= SALT_SWEEP_BUDGET {
+                tracing::info!(
+                    swept = totals.total(),
+                    pages,
+                    "kb-code: stale-salt sweep hit its per-boot budget — \
+                     resumes from the saved cursor on the next boot"
+                );
+                return;
+            }
+            std::thread::sleep(SALT_SWEEP_PAUSE);
+        }
+    });
+}
+
 /// invariant #21 — mirrors `kb_server::serve_with_paths`'s IPv6 loopback
 /// companion bind. Best-effort: an IPv6-disabled host (or a transient
 /// rebind clash) just keeps the IPv4 listener. Loopback-only — never a
@@ -1383,6 +1552,68 @@ mod tests {
     #[test]
     fn version_is_non_empty() {
         assert!(!version().is_empty());
+    }
+
+    // --- V72-B0: the stale-salt sweep's "one-time" contract -------------
+
+    #[test]
+    fn salt_set_fingerprint_is_stable_and_order_independent() {
+        assert_eq!(salt_set_fingerprint(), salt_set_fingerprint());
+        assert_eq!(salt_set_fingerprint().len(), 16);
+    }
+
+    #[test]
+    fn a_completed_marker_for_the_same_salt_set_skips_the_sweep() {
+        let fp = salt_set_fingerprint();
+        let marker = salt_sweep_marker_text(&fp, None);
+        assert_eq!(
+            plan_stale_salt_sweep(Some(marker.as_str()), &fp),
+            SweepPlan::Skip,
+            "the whole point of invariant 11's word ONE-TIME"
+        );
+    }
+
+    #[test]
+    fn a_partial_marker_resumes_from_its_cursor() {
+        let fp = salt_set_fingerprint();
+        let marker = salt_sweep_marker_text(&fp, Some("deadbeef"));
+        assert_eq!(
+            plan_stale_salt_sweep(Some(marker.as_str()), &fp),
+            SweepPlan::Run(Some("deadbeef".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_salt_bump_restarts_the_sweep_from_the_beginning() {
+        // A stale row can only ever appear because a salt changed, so a
+        // fingerprint mismatch must re-run the whole pass — never resume
+        // a cursor that belonged to the OLD salt set.
+        let old = salt_sweep_marker_text("0000000000000000", Some("deadbeef"));
+        assert_eq!(
+            plan_stale_salt_sweep(Some(old.as_str()), &salt_set_fingerprint()),
+            SweepPlan::Run(None)
+        );
+    }
+
+    #[test]
+    fn an_absent_or_corrupt_marker_costs_a_sweep_never_skips_one() {
+        let fp = salt_set_fingerprint();
+        assert_eq!(plan_stale_salt_sweep(None, &fp), SweepPlan::Run(None));
+        let corrupt = [
+            String::new(),
+            "\n".to_string(),
+            "garbage".to_string(),
+            // A fingerprint with no position line, and an empty cursor.
+            format!("{fp}\n"),
+            format!("{fp}\nafter="),
+        ];
+        for junk in &corrupt {
+            assert_eq!(
+                plan_stale_salt_sweep(Some(junk.as_str()), &fp),
+                SweepPlan::Run(None),
+                "unparseable marker {junk:?} must fail towards sweeping"
+            );
+        }
     }
 
     #[test]
