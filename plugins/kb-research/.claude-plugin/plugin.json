@@ -1,0 +1,6 @@
+{
+  "name": "kb-research",
+  "description": "Author kb-indexed HTML research artifacts and keep them true in one flow. Ships the kb-artifact authoring skill (the kb authoring contract), the kb-audit truth-maintenance skill (reconcile a corpus of research docs' status claims against repo truth, --fix flips stale markers in the source), and a /kb-tools command that prints the live `kb` CLI manifest. Packaging only — no daemon code; everything runs the existing `kb` CLI plus `git`/`rg`.",
+  "version": "0.1.0",
+  "author": { "name": "kb" }
+}

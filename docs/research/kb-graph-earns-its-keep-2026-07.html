@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Making kb&rsquo;s graph earn its keep &mdash; a bench-measured degree boost, the graph report verb, and connective tissue (2026-07)</title>
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, graph, ranking, degree-boost, bench, link-rot, orphans, wikilinks, atlas, connective-tissue, cli, fable">
+<meta name="kb-summary" content="Three deterministic uses for kb's existing graph, built and measured: (1) a flag-gated in-degree search boost — +0.10 Recall@1 on kb-docs hybrid at w=0.25, reproduced across three boots, zero regressions, over-boost regression at w=1.0, corpus-f inconclusive inside a newly-discovered BM25 tie-instability noise floor; (2) `kb graph` — a shipped report verb surfacing hubs, orphans (26% of the fleet), dead-edge rot (5.8% of all edges, two species), and dangling wikilinks; (3) a fully-specified connective-tissue inspector line from data the atlas already computes. No new deps, corpus-local per invariant #29, everything reproducible.">
+
+<style>
+:root{
+  --bg:#f6f8f7; --surface:#eaefed; --fg:#182220; --muted:#4e5f5a;
+  --rule:#d3dcd8; --accent:#0d5f56; --accent-fg:#ffffff;
+  --warn:#8a5800; --danger:#9d2c25; --ok:#22663f;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.6; --maxw:50rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#131917; --surface:#1c2422; --fg:#e5eae8; --muted:#9fb0aa;
+    --rule:#2e3a36; --accent:#6fc7ba; --accent-fg:#062420;
+    --warn:#e0b45f; --danger:#f0928a; --ok:#82ccA0;
+  }
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;padding:0 1.25rem 4rem;font:400 var(--fs-body)/var(--lh) var(--sans);color:var(--fg);background:var(--bg)}
+main{max-width:var(--maxw);margin:0 auto}
+h1{font-size:1.7rem;line-height:1.25;margin:2.5rem 0 .5rem;letter-spacing:-.01em}
+h2{font-size:1.3rem;line-height:1.3;margin:2.75rem 0 .75rem;padding-top:.75rem;border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-size:1.05rem;margin:1.75rem 0 .5rem;scroll-margin-top:1rem}
+p{margin:.75rem 0}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5rem .9rem;border-radius:0 0 var(--radius) var(--radius);z-index:10}
+.skip-link:focus{left:0}
+.kicker{font-size:var(--fs-small);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:2.5rem}
+.lede{font-size:1.15rem;color:var(--muted);margin:.25rem 0 1rem}
+.meta-strip{font-size:var(--fs-small);color:var(--muted);display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.tag{background:var(--surface);border:1px solid var(--rule);border-radius:999px;padding:.05rem .6rem}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.06em .32em;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.85rem 1rem;overflow-x:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;border:0;padding:0}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.9rem}
+th,td{border:1px solid var(--rule);padding:.4rem .55rem;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:var(--ok);font-weight:600}
+.neg{color:var(--danger);font-weight:600}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:.75rem 1rem;margin:1.15rem 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout-label{display:block;font-size:var(--fs-small);font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.25rem}
+ul,ol{padding-left:1.4rem}
+li{margin:.35rem 0}
+.small{font-size:var(--fs-small);color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">design &middot; project:kb &middot; measured</div>
+  <h1>Making kb&rsquo;s graph earn its keep &mdash; a bench-measured degree boost, the graph report verb, and connective tissue (2026-07)</h1>
+  <p class="lede">The edge graph kb already maintains turns out to be worth +0.10 Recall@1 on hybrid search at the right (small) weight, a fleet-wide audit verb that found 244 rotten edges and 478 orphans, and one unbuilt-but-fully-specified inspector line &mdash; all deterministic, all from data the daemon already computes.</p>
+  <div class="meta-strip">
+    <span>2026-07-07</span><span>&middot;</span>
+    <span class="tag">status:open</span><span>&middot;</span>
+    <span class="tag">project:kb</span><span>&middot;</span>
+    <span class="tag">graph</span><span>&middot;</span>
+    <span class="tag">bench-measured</span>
+  </div>
+</header>
+
+<section>
+<h2 id="verdict">Verdict</h2>
+<table>
+<thead><tr><th>Workstream</th><th>Outcome</th><th>The number that decides it</th></tr></thead>
+<tbody>
+<tr><td><strong>1 &middot; Degree boost in search</strong></td><td><strong>Implemented</strong>, flag-gated (<code>[kb.*] graph_boost</code>), <strong>default OFF</strong>; recommend <code>0.25</code> per-kb after a corpus-local bench win</td><td>kb-docs hybrid Recall@1 <span class="pos">+0.100</span> (large &amp; small), MRR <span class="pos">+0.050</span>, zero regressions &mdash; reproduced identically across three daemon boots; w=1.0 <span class="neg">regresses &minus;0.100</span> (dose-response inversion)</td></tr>
+<tr><td><strong>2 &middot; <code>kb graph</code> report</strong></td><td><strong>Shipped</strong>: pure kb-core module + <code>GET /api/kb/{kb}/graph/report</code> + CLI verb</td><td>Fleet prototype: 22 corpora, 1,840 docs, 4,243 edges &mdash; <strong>5.8% dead edges</strong>, <strong>26% orphans</strong>, 4 corpora with 100%-stale edge sets. Numbers justified the verb.</td></tr>
+<tr><td><strong>3 &middot; Connective tissue in the inspector</strong></td><td><strong>Specified, not built</strong> &mdash; SPA-only change, both inputs already computed</td><td>Bridge = link edges spanning &ge;2 <code>atlas_cluster</code> values; zero new backend computation needed</td></tr>
+</tbody>
+</table>
+<div class="callout callout--warn"><span class="callout-label">The finding that outranks the ask</span>While measuring the boost we found the <strong>BM25 arm&rsquo;s tie ordering is unstable</strong>: corpus-f keyword Recall@1 flipped 0.875&harr;0.708 (&plusmn;0.167) with zero code or corpus change, in the same daemon boot &mdash; while semantic deltas stayed exactly 0.000. Any future ranking experiment claiming deltas below this noise floor is unattributable. Details in <a href="#f1-bm25-tie-instability">F1</a>.</div>
+</section>
+
+<section>
+<h2 id="method">Method and provenance</h2>
+<p>Four parallel code surveys (graph substrate; search pipeline + bench harness; atlas + inspector wiring; session/memory/read schemas) grounded every design decision with file:line evidence at commit <code>02f7eff4</code>. A read-only prototype then measured the real fleet (22 prod corpora over the loopback API), the boost was implemented and A/B-benched on the SQ6 harness (<code>bench/kb.local.toml</code> daemon on <code>:4100</code>, warm SQ6 lance state, hand-curated gold sets <code>bench/queries/kb-docs.jsonl</code> — 20 English technical queries — and <code>corpus-f.jsonl</code> — 24 Italian queries), and the report verb was built once the fleet numbers justified it. Bench lab (all baseline/delta JSONs, daemon configs, prototype script + fleet report) preserved at <code>/tmp/kb-graph-lab/</code>.</p>
+<p class="small">Caveats declared up front: the working tree carried unrelated in-flight cascade-delete work (uncommitted <code>cascade.rs</code>, +600 lines in <code>sqlite.rs</code>) — one pre-existing test fails from that work (<code>list_detail_marks_tombstone_when_artifact_deleted</code>: the list entry vanishes instead of tombstoning; deletion semantics, untouched by this change). The kb-docs corpus grew 133&rarr;134 docs mid-sweep (another session shipped artifacts); the confirming runs used the settled corpus. The box ran co-tenant builds (load average 26 at peak), which polluted wall-clock latency — see <a href="#latency">latency</a>.</p>
+</section>
+
+<section>
+<h2 id="the-graph-kb-already-has">The graph kb already has</h2>
+<p>Everything below rides existing machinery — the point of the exercise was that <em>no new substrate</em> was needed:</p>
+<ul>
+<li><strong>Edges</strong>: one per-kb sqlite table <code>(src_artifact, dst_artifact, kind)</code> (<code>V0001__initial.sql:38-45</code>); only <code>kind="link"</code> is ever written. The single writer is <code>EdgeRecordHook</code> (<code>enrich.rs:391-538</code>) — three passes per indexed artifact: artifact-id hrefs, relative-path hrefs, and Markdown wikilinks gated on a literal <code>[[</code>. Corpus-local by construction (invariant #29): no kb column, one db per kb, wikilinks never resolve cross-kb.</li>
+<li><strong>Full-graph reads already exist</strong>: <code>link_pairs()</code> (every edge, <code>sqlite.rs:356</code>) and <code>edge_counts()</code> (per-artifact (out,in) degree in one GROUP-BY, <code>sqlite.rs:403-428</code> — the same map behind the gallery&rsquo;s backlinks/outlinks chips, &ldquo;microsecond territory&rdquo; per its own doc comment). Both return unordered results; every consumer here sorts.</li>
+<li><strong>Session touches</strong> are per-kb <code>session_files</code> rows (<code>V0017</code>) with a resolved <code>target_kb</code>/<code>target_artifact_id</code> when a touched file lands in a mounted corpus. Any aggregation must collapse to the <em>newest capture</em> per session (invariant #11) or it double-counts &mdash; and per invariant #19, <em>touched is not read</em>, which is why the orphan definition below excludes touches.</li>
+<li><strong>Memory links</strong> mean three things: <code>memory_links</code> rows (memory&rarr;kb recall scope, <code>V0010</code>), the <code>kb_session</code> lance column (memory&rarr;origin-session), and ordinary edges from a memory artifact&rsquo;s own links. Only the third participates in the edge graph — and in practice doesn&rsquo;t: see <a href="#f2-memory-corpora-have-no-edges">F2</a>.</li>
+<li><strong>&ldquo;Ever read&rdquo;</strong> comes from the history table&rsquo;s <code>kind='open'</code> visits via <code>reading_rollup()</code> (<code>sqlite.rs:812-901</code>) — with the subtlety that a list <code>read_override</code> can introduce rollup entries for never-opened artifacts (<code>last_opened_unix: None</code>), which a strict &ldquo;never opened&rdquo; must filter out.</li>
+</ul>
+
+<h3 id="what-the-fleet-graph-looks-like">What the fleet graph actually looks like</h3>
+<p>The read-only prototype (GET-only, production daemon, 2026-07-06) over all 22 corpora:</p>
+<table>
+<thead><tr><th>Fleet totals</th><th class="n">Value</th></tr></thead>
+<tbody>
+<tr><td>Documents</td><td class="n">1,840</td></tr>
+<tr><td>Edges (all <code>kind="link"</code>)</td><td class="n">4,243</td></tr>
+<tr><td>Dead-target edges (dst no longer live)</td><td class="n">244 &mdash; <strong>5.8%</strong></td></tr>
+<tr><td>Orphans (never linked &and; never opened)</td><td class="n">478 &mdash; <strong>26.0%</strong></td></tr>
+</tbody>
+</table>
+<p>Selected corpora, because each teaches something different:</p>
+<table>
+<thead><tr><th>Corpus</th><th class="n">docs</th><th class="n">edges</th><th class="n">dead-dst</th><th class="n">orphans</th><th>Lesson</th></tr></thead>
+<tbody>
+<tr><td><code>platform</code></td><td class="n">816</td><td class="n">1,762</td><td class="n">14</td><td class="n">126</td><td>Healthy dense graph; top hub a 48-in-degree idea doc</td></tr>
+<tr><td><code>corpus-a</code> (prod)</td><td class="n">245</td><td class="n">991</td><td class="n">0</td><td class="n">0</td><td>Index-hub topology: the concept map holds 66 in-links</td></tr>
+<tr><td><code>kb-docs</code></td><td class="n">128</td><td class="n">402</td><td class="n">19</td><td class="n">25</td><td>Rot includes <em>non-hex</em> dst rows (<code>'memory'</code>, <code>'sessions-as-episodic-memory-design.html'</code>) — fossils of the pre-<code>9279de1c</code> path-form parser bug</td></tr>
+<tr><td><code>corpus-b</code>, <code>corpus-c</code>, <code>corpus-d</code>, <code>corpus-e</code></td><td class="n">32/7/11/9</td><td class="n">142/18/25/15</td><td class="n">100% each</td><td class="n">&mdash;</td><td><strong>Every edge stale</strong> — the pre-fix parser fingerprint at corpus scale; <code>kb reindex</code> heals it (the known remedy from the showcase-corpus fix)</td></tr>
+<tr><td><code>memory-kb</code></td><td class="n">50</td><td class="n">0</td><td class="n">0</td><td class="n">50</td><td>Memories contribute nothing to the graph — <a href="#f2-memory-corpora-have-no-edges">F2</a></td></tr>
+<tr><td><code>sessions</code></td><td class="n">142</td><td class="n">0</td><td class="n">0</td><td class="n">142</td><td>Transcripts are pull-only episodic memory (invariant #11) — orphanhood is by design; the report should learn to exempt them</td></tr>
+</tbody>
+</table>
+<p class="small">One methodological trap the prototype hit and the shipped verb avoids: the docs list endpoint hard-excludes notes (<code>docs.rs:374</code>), so a note-target looks like a dead edge and dangling-wikilink scans see zero notes. The server-side report reads the unfiltered doc set.</p>
+</section>
+
+<section>
+<h2 id="ws1-degree-boost">Workstream 1 — the degree boost, designed then measured</h2>
+
+<h3 id="ws1-design">Design</h3>
+<p>The signal is <strong>in-degree only</strong>: being linked <em>to</em> is the corpus&rsquo;s own curation judgment, while out-degree would let an index page rank itself up by fan-out. The boost is additive and scaled to the RRF regime the fused scores live in (<code>rrf_fuse</code> emits &Sigma;1/(60+rank), so a top-rank arm contributes 1/60 &asymp; 0.0167):</p>
+<pre><code>score += weight &times; (1/RRF_K) &times; &radic;in_degree / &radic;in_degree_max        (fusion.rs::apply_graph_boost)</code></pre>
+<ul>
+<li><strong>&radic; not ln, deliberately</strong>: IEEE-754 sqrt is correctly-rounded — bit-identical across glibc/musl/macOS, the same op-set discipline as atlas determinism (kb-core invariant #3) — where <code>ln</code> is libm-implementation-defined and can flip equal-score ties across platforms.</li>
+<li><strong>Normalisation is corpus-wide</strong> (max in-degree from the full <code>edge_counts</code> map), so a hit&rsquo;s boost doesn&rsquo;t depend on which other candidates the query surfaced.</li>
+<li><strong>Placement mirrors the title boost exactly</strong>: applied to the full over-fetched pool after <code>apply_title_boost</code>, before filter/truncation, at both hybrid sites — single-kb (<code>search.rs</code> hybrid arm) and per-corpus inside the federated fan-out (before the cross-kb RRF), each corpus boosting against its own degree map. Stable re-sort preserves the deterministic fused tie order. Keyword/semantic modes are untouched — they serve as controls.</li>
+<li><strong>Reranker interaction (SQ4)</strong>: the cross-encoder overwrites scores downstream, so with a reranker enabled the boost only shapes which 50 candidates enter the rerank window — composing them further is a named non-goal of this pass.</li>
+<li><strong>Flag</strong>: <code>[kb.canon] graph_boost = 0.25</code> — an <code>Option&lt;f32&gt;</code> beside the SQ4/SQ5 opt-ins in <code>KbSection</code>, threaded through <code>KbContext</code>, default <code>None</code> = off, query-time only (flipping needs no reindex), validation warns outside (0,&thinsp;4]. Ship rule as commissioned: <strong>no regression on <code>kb bench</code>, or it stays off</strong> — and it ships off.</li>
+</ul>
+
+<h3 id="ws1-results">Results — quality</h3>
+<p>Protocol: <code>kb bench run</code> (Recall@{1,5,10}, MRR, nDCG@10, 20 queries) against the bench daemon, baseline captured flag-off, deltas via <code>--baseline</code>. kb-docs = kb&rsquo;s own <code>docs/research</code> corpus (134 docs, 578 edges, top hub the research index at 33 in-links) indexed three times under bge-small/base/large.</p>
+<table>
+<thead><tr><th>kb-docs &middot; hybrid</th><th class="n">R@1 &Delta;</th><th class="n">R@5 &Delta;</th><th class="n">MRR &Delta;</th><th class="n">nDCG@10 &Delta;</th></tr></thead>
+<tbody>
+<tr><td><strong>w=0.25</strong> &middot; bge-small</td><td class="n pos">+0.100</td><td class="n">0.000</td><td class="n pos">+0.054</td><td class="n pos">+0.040</td></tr>
+<tr><td><strong>w=0.25</strong> &middot; bge-base</td><td class="n pos">+0.050</td><td class="n">0.000</td><td class="n pos">+0.008</td><td class="n pos">+0.005</td></tr>
+<tr><td><strong>w=0.25</strong> &middot; bge-large</td><td class="n pos">+0.100</td><td class="n">0.000</td><td class="n pos">+0.050</td><td class="n pos">+0.041</td></tr>
+<tr><td>w=0.5 &middot; small/base/large</td><td class="n">+0.050 / +0.100 / +0.100</td><td class="n">0 / <span class="neg">&minus;0.050</span> / 0</td><td class="n"><span class="neg">&minus;0.002</span> / +0.032 / +0.050</td><td class="n"><span class="neg">&minus;0.004</span> / +0.018 / +0.041</td></tr>
+<tr><td>w=1.0 &middot; small/base/large</td><td class="n"><span class="neg">&minus;0.100</span> / 0.000 / 0.000</td><td class="n"><span class="neg">&minus;0.050</span> / <span class="neg">&minus;0.050</span> / 0</td><td class="n"><span class="neg">&minus;0.089</span> / <span class="neg">&minus;0.029</span> / <span class="neg">&minus;0.008</span></td><td class="n"><span class="neg">&minus;0.070</span> / <span class="neg">&minus;0.035</span> / <span class="neg">&minus;0.003</span></td></tr>
+</tbody>
+</table>
+<p><strong>The dose-response curve is the strongest evidence the effect is real</strong>: monotone gains at 0.25 (absolute R@1 reaching 0.80 on bge-large, from 0.70), mixed at 0.5, inverted at 1.0 — exactly the signature of a genuine-but-small signal that over-boosting drowns (hub mass displacing true matches). And the w=0.25 row <strong>reproduced identically across three separate daemon boots</strong> (initial run, a confirming run after the corpus settled at 134 docs, and the final clean pair: large-model deltas +0.100/+0.050/+0.041 every time). Semantic mode deltas were exactly 0.000 throughout — a clean control proving the index and embeddings never moved.</p>
+
+<h3 id="ws1-corpus-f">Results — corpus-f, and why it doesn&rsquo;t clear the bar</h3>
+<p>corpus-f (245 Italian docs, sparse hub-dominated graph: 177 edges, 65% never linked, the concept-map index holding 24 of the in-links) was the stress case — most gold answers are <em>unlinked chapters</em>, so a hub-favouring boost could plausibly hurt. Measured across two independent baseline/boost pairs at w=0.25:</p>
+<ul>
+<li>Pair 1: hybrid R@1 <span class="pos">+0.042</span>, R@5 +0.042, MRR +0.032 — all positive.</li>
+<li>Pair 2 (different boots): R@1 +0.000, R@5 <span class="neg">&minus;0.125</span>, MRR <span class="neg">&minus;0.036</span>.</li>
+</ul>
+<p>Those two pairs disagree by more than either delta — because the corpus&rsquo;s <em>flag-independent</em> noise floor is larger than both (<a href="#f1-bm25-tie-instability">F1</a>: same-boot keyword flips of &plusmn;0.167; hybrid baselines varying 0.833&ndash;0.958 R@5 across boots with the flag off). Honest verdict: <strong>on corpus-f the boost is inside the noise — not a proven regression, but not a cleared win either</strong>. Under the ship rule it stays off there, which the per-kb flag makes the natural state. The general principle this pins: <em>enable <code>graph_boost</code> per-kb only where a corpus-local bench shows a clean win</em> — dense, deliberately-linked technical corpora (kb-docs) qualify; sparse index-hub corpora didn&rsquo;t demonstrate benefit.</p>
+
+<h3 id="latency">Results — latency (honest version)</h3>
+<p>Architecturally the boost costs one <code>edge_counts()</code> call per hybrid query — a single grouped scan the code documents as &ldquo;microsecond territory&rdquo; at personal-kb scale and which the gallery already runs per page load — plus O(pool&thinsp;&le;&thinsp;400) hash lookups and a stable sort the title boost already pays. The wall-clock measurements, however, were dominated by environment noise in <em>both directions</em>: flag-on measured 33&nbsp;ms <em>faster</em> than baseline in one quiet run (srv p50 28&nbsp;ms vs 61&nbsp;ms) and 168&nbsp;ms slower in a run taken at load average 26 with co-tenant rustc + Chromium and post-restart embed churn. No latency effect is attributable at these corpus sizes; a dedicated idle-box micro-bench is the named follow-up if sub-millisecond accounting is ever required.</p>
+</section>
+
+<section>
+<h2 id="ws2-graph-report">Workstream 2 — <code>kb graph</code>, the report verb</h2>
+<p>The fleet numbers (5.8% rot, 26% orphans, four corpora with fully-stale edge sets) justified promoting the prototype to a shipped verb. Three pieces, all new files or additive edits:</p>
+<ul>
+<li><strong><code>kb_core::graph_report</code></strong> — a pure function <code>build(docs, edges, degrees, opened, top) &rarr; GraphReport</code>. Every output list explicitly sorted (nothing inherits HashMap order), no clock reads: byte-reproducible for identical inputs, the atlas discipline applied to reporting. 5 unit tests pin the semantics, including a determinism test that permutes input order and asserts identical serialized output.</li>
+<li><strong><code>GET /api/kb/{kb}/graph/report?top=N</code></strong> — gathers <code>list_docs</code> + <code>link_pairs</code> + <code>edge_counts</code> + <code>reading_rollup</code> (filtered to <code>last_opened_unix.is_some()</code> — asserted-read overrides don&rsquo;t count as opened), reads Markdown sources from disk for the wikilink pass, and calls the pure builder. Registered above <code>/graph/{id}</code> (matchit static-segment priority; ids are 12-hex so <code>report</code> can&rsquo;t collide). Pure read — never bumps the index generation (invariant #15).</li>
+<li><strong><code>kb graph &lt;kb&gt; [--top N] [--json]</code></strong> — human summary + full JSON, following the <code>kb related</code> command shape.</li>
+</ul>
+
+<h3 id="ws2-semantics">Report semantics — the decisions that needed making</h3>
+<table>
+<thead><tr><th>Metric</th><th>Definition chosen</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><strong>Hub</strong></td><td>Rank by in-degree, then out-degree, then id (total order)</td><td>In-degree is endorsement; the tiebreak chain keeps output deterministic</td></tr>
+<tr><td><strong>Orphan</strong></td><td>Never linked (degree (0,0)) <strong>and</strong> never opened (a real <code>kind='open'</code> visit)</td><td>Session touches deliberately excluded — invariant #19&rsquo;s touched&nbsp;&ne;&nbsp;read; a list <code>read_override</code> alone doesn&rsquo;t count as opened</td></tr>
+<tr><td><strong>Link-rot</strong></td><td>Edge rows whose dst (or src) isn&rsquo;t a live id; dead-dst rows carry the live source&rsquo;s rel_path</td><td>Dead-dst is <em>expected</em> data: <code>sweep_orphans</code> prunes dead-src only (<code>sqlite.rs:2879-2881</code>), so a deleted target&rsquo;s inbound edges linger until each linker reindexes. The report also fingerprints the second species — pre-<code>9279de1c</code> parser rows with non-hex dsts — and the CLI prints the <code>kb reindex</code> hint.</td></tr>
+<tr><td><strong>Dangling / ambiguous wikilinks</strong></td><td>Re-parse Markdown sources with <code>links::parse_wikilinks</code>, re-resolve down the same ladder the edge hook uses, keep the <code>None</code>/<code>Ambiguous</code> outcomes it discards (with sorted candidate ids)</td><td>These are never persisted anywhere — the edges table stores <code>Resolution::One</code> only; the per-note links route resolves live but nothing aggregates corpus-wide</td></tr>
+</tbody>
+</table>
+<p>Live output against the bench corpus, verbatim shape:</p>
+<pre><code>$ kb graph kb-docs-large --daemon http://127.0.0.1:4100
+graph report — kb-docs-large
+  133 docs · 578 edges · 111 linked · 22 never linked · 0 opened
+  max degree in/out 33/19
+hubs (by in-degree):
+   33in  19out  0eb547304658  kb · research index
+   20in  13out  457a4ebc286c  How kb Wins — Agent-Native Positioning, …
+   …
+orphans (never linked ∧ never opened): 22
+  d2fa76c5943d  daemon-tail-latency-phase3-plan.html
+  578ffc859138  kb-security-review-2026-07.html
+  …
+link-rot: 11 dead-target edges · 0 dead-source edges
+  hint: `kb reindex --kb kb-docs-large` clears rows whose source no longer links there</code></pre>
+<p class="small">Even the report&rsquo;s first real run earned its keep: the security review, the code-craft review, and the tail-latency plan — three of the most substantial recent artifacts — are orphans nothing links to. (The <code>sessions</code> corpus&rsquo;s 142 by-design orphans suggest a future <code>--exempt-category memory-session</code> refinement.)</p>
+</section>
+
+<section>
+<h2 id="ws3-connective-tissue">Workstream 3 — connective tissue in the inspector (spec)</h2>
+<p>Not built this session; fully specified from evidence, using only data the atlas already computes.</p>
+<ul>
+<li><strong>Definition</strong>: an artifact is <em>connective tissue</em> when its <code>link</code> edges connect it to artifacts in &ge;2 distinct <code>atlas_cluster</code> values — &ldquo;this artifact bridges clusters X and Y.&rdquo; Both inputs exist and are deterministic: the edges endpoint (<code>GET /api/kb/{kb}/edges</code>, note-inclusive) and the per-doc <code>atlas_cluster</code> i16 written to lance by every recompute (seeded k-means &le;12 on the high-dim embeddings, fixed <code>DEFAULT_SEED</code>, xorshift RNG, no transcendentals — bit-identical across machines).</li>
+<li><strong>The one data gap</strong>: the single-doc GET omits atlas fields (they ride only <code>projection=atlas</code> on the <em>list</em> endpoint), so the Detail route&rsquo;s doc has no cluster. Recommended fix: no backend change — a <code>useQuery(["docs", kb, "atlas"])</code> hook over the same <code>projection=atlas</code> call AtlasView already makes, per invariant #23 (staleTime Infinity, SSE bridge invalidation; map <code>atlas.recompute.complete</code>/<code>atlas.recluster.complete</code> onto that key if not already covered).</li>
+<li><strong>Placement</strong>: the inspector&rsquo;s <strong>Links tab</strong> (<code>PreviewInspector.tsx</code>), one line above Outlinks — it already owns the graph UI and already fetches the full edge set. Incidental hygiene: that tab is the SPA&rsquo;s last raw-<code>useEffect</code> fetcher; the new hook should replace it, closing the invariant-#23 carve-out it currently squats in.</li>
+<li><strong>Labels</strong>: derived client-side as the cluster&rsquo;s most-frequent tag — the exact convention AtlasView uses (<code>AtlasView.tsx:320-331</code>). <strong>Never persist cluster ids or labels</strong>: k-means label integers churn when the corpus changes or k moves; they are stable only for an identical corpus. Deriving live keeps the line truthful under churn.</li>
+<li><strong>Notes nuance</strong>: atlas <em>compute</em> includes notes (it reads all embeddings); only atlas <em>display</em> filters them. So a note&rsquo;s cluster and its edges are available to the bridge computation for free, even though the atlas canvas never shows them.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="findings">Findings beyond the ask</h2>
+<h3 id="f1-bm25-tie-instability">F1 — the BM25 arm&rsquo;s tie ordering is unstable</h3>
+<p>Observed while controlling the A/B: corpus-f <em>keyword</em> Recall@1 flipped 0.875&harr;0.708 (&plusmn;0.167, 4 of 24 queries) between two runs <strong>in the same daemon boot</strong> with zero code, config, or corpus change — then flipped back. kb-docs-small keyword drifted +0.05 across a restart the same way. Meanwhile semantic deltas were exactly 0.000 in every run: embeddings and vector search are bit-stable. The signature points at equal-BM25-score ties being ordered by index-internal state (segment layout shifting under background reorganisation), which hybrid RRF inherits in damped form. Two consequences: (a) every future ranking experiment needs its noise floor measured flag-off-vs-flag-off before trusting deltas of this size — this is now demonstrated protocol, not hypothesis; (b) a deterministic tiebreak inside the BM25 arm (or at ingestion into <code>rrf_fuse</code>) would harden invariant-grade reproducibility a corpus at rest should have. Filed as the highest-value follow-up.</p>
+<h3 id="f2-memory-corpora-have-no-edges">F2 — memory corpora contribute zero edges</h3>
+<p><code>memory-kb</code> holds 50 memories and 0 edges. Cause: production memories are <em>HTML</em> artifacts, and wikilink parsing is Markdown-gated (<code>enrich.rs:469</code>) — so the <code>[[cross-references]]</code> memory prose carries never become edges, and memory connectivity exists only as recall-scope rows (<code>memory_links</code>) and the session column. If memory-to-memory linking should feed the graph (and the Related-memories rail), either memories become Markdown or the wikilink pass learns a scoped HTML-text mode. Left as an open question — it touches the memory-format contract, not the graph.</p>
+<h3 id="f3-orphan-quarter">F3 — a quarter of the fleet is orphaned, and the orphans are recent</h3>
+<p>26% of fleet docs are never-linked-never-opened, and on kb&rsquo;s own docs corpus the orphan list includes the newest deep-work artifacts (security review, code-craft review). The connective habit — linking new artifacts from an index or their neighbours — decays exactly when output velocity rises. The report verb makes the decay visible; the resurface/reading-queue work is its natural consumer.</p>
+</section>
+
+<section>
+<h2 id="constraints">Constraints, honoured</h2>
+<ul>
+<li><strong>No new dependencies</strong> — zero additions to any Cargo.toml; sqrt over ln was chosen partly to avoid even libm variance.</li>
+<li><strong>Corpus-local (invariant #29)</strong> — the boost normalises within one kb (federated search boosts per-corpus before the cross-kb RRF); the report is strictly per-kb; wikilink re-resolution uses the same corpus-local ladder, golden-pinned in <code>links.rs</code>.</li>
+<li><strong>Reproducible</strong> — boost: pure, stable-sorted, IEEE-exact ops; report: sorted outputs, no clock, permutation-tested; bench: seeded RNG, warm-cache protocol, signed-&Delta; baselines all preserved.</li>
+<li><strong>Invariant budget untouched</strong> — nothing here needs a new entry; the work lives inside #15 (no generation bump on reads), #19 (touched&ne;read), #23 (hook pattern), #29 (corpus-locality), and kb-core #3 (determinism discipline).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="files-and-reproduction">Files touched and how to reproduce</h2>
+<p><strong>Implementation</strong> (in the working tree, uncommitted — the tree carries unrelated in-flight cascade work with one pre-existing failing test; commit after that lands): <code>crates/kb-core/src/fusion.rs</code> (<code>apply_graph_boost</code> + 4 tests), <code>crates/kb-core/src/graph_report.rs</code> (new, + 5 tests), <code>crates/kb-core/src/config.rs</code> (<code>graph_boost</code> field + validation), <code>crates/kb-server/src/{state.rs, lib.rs, routes/search.rs, routes/graph.rs, router.rs}</code>, <code>crates/kb-cli/src/commands/graph.rs</code> (new) + clap wiring, plus mechanical <code>graph_boost: None</code> in 37 test literals. <code>cargo fmt</code> + <code>clippy --all-targets</code> clean; kb-core 949 tests green, kb-cli green, kb-server green except the pre-existing cascade-WIP failure noted above.</p>
+<pre><code># unit surface
+cargo test --profile fast -p kb-core fusion graph_report
+
+# bench A/B (lab config + all baselines preserved in /tmp/kb-graph-lab/)
+./target/fast/kb-server --config /tmp/kb-graph-lab/bench-graph.toml   # :4100
+./target/fast/kb bench run --queries bench/queries/kb-docs.jsonl \
+  --kbs kb-docs-small,kb-docs-base,kb-docs-large --modes hybrid,semantic,keyword \
+  --k 1 --k 5 --k 10 --daemon http://127.0.0.1:4100 \
+  --baseline /tmp/kb-graph-lab/kbdocs-baseline.json
+
+# the report verb
+./target/fast/kb graph kb-docs-large --daemon http://127.0.0.1:4100 --json</code></pre>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>BM25 tie-ordering hardening (F1) — where exactly does the instability enter (tantivy segment order? background compaction?), and is a doc-id tiebreak at the arm boundary enough?</li>
+<li>Should <code>kb graph</code> exempt by-design orphan categories (<code>memory-session</code>) and grow a <code>--fleet</code> fan-out per invariant #28?</li>
+<li>Memory corpora in the graph (F2): Markdown memories, or a scoped HTML wikilink pass?</li>
+<li>Cross-kb link-rot: permalink/subdomain hrefs pointing at <em>other</em> corpora are parseable (the share engine&rsquo;s <code>classify_cross_link</code> grammar) but recorded nowhere; a fleet-level rot report needs a route-layer fan-out resolving against every mounted kb — deliberately out of this corpus-local pass.</li>
+<li>Composing the boost with the SQ4 reranker (fold degree into <code>rerank_hits</code>?) — only worth benching on a reranker-enabled kb.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="provenance">Provenance</h2>
+<p>Produced 2026-07-06/07. Evidence: four parallel read-only code surveys over the kb workspace at <code>02f7eff4</code>; a GET-only fleet prototype against the production daemon (22 corpora; script + full JSON at <code>/tmp/kb-graph-lab/</code>); seven <code>kb bench run</code> invocations against a dedicated bench daemon reusing the SQ6 lance state (gold sets <code>bench/queries/{kb-docs,corpus-f}.jsonl</code>; method lineage: <a href="measuring-kb-search-quality-and-speed.html">measuring-kb-search-quality-and-speed</a>). Related: the July architecture review (private) (graph subsystem), the showcase-corpus path-form fix (<code>9279de1c</code>) whose fossils the rot report now detects, and invariant #29 (<a href="notes-as-connective-tissue.md">notes as connective tissue</a>) which this work extends from notes to the whole corpus.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

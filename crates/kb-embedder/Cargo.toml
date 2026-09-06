@@ -1,0 +1,23 @@
+[package]
+name = "kb-embedder"
+description = "Subprocess that runs fastembed/ONNX at low CPU priority. Spawned by the kb daemon."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kb-embedder"
+path = "src/main.rs"
+
+[dependencies]
+# kb-embedder is the ONE binary that links ONNX Runtime — it enables the
+# in-process backend. Everything else depends on kb-core without this.
+kb-core = { path = "../kb-core", features = ["local-embedder"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>What kb's 50 review sessions never covered — coverage-gap analysis (2026-07)</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:open, project:kb, coverage-gaps, gap-analysis, sessions, meta-review, release-zero, ultracode, fable">
+<meta name="kb-summary" content="A meta-review of the 50 most recent kb sessions: what they covered, what shipped vs stalled as research-only, and 19 verified gaps nobody has ever reviewed — grouped into run-this-month, before-open-sourcing, and nice-to-have, each with a paste-ready session prompt.">
+
+<style>
+:root{
+  --bg:#faf9f6; --surface:#f0efe9; --fg:#1c1e1a; --muted:#575c53;
+  --rule:#d8d7cf; --accent:#2f6b4f; --accent-fg:#ffffff;
+  --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:46rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141712; --surface:#1c201a; --fg:#e6e6df; --muted:#a3a89c;
+    --rule:#2d322a; --accent:#8ecfae; --accent-fg:#0e1a13;
+    --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
+  font-size:var(--fs-body);line-height:var(--lh)}
+main{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 5rem}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+h1{font-family:var(--sans);font-size:1.9rem;line-height:1.25;letter-spacing:-.01em;margin:.2em 0 .3em}
+h2{font-family:var(--sans);font-size:1.3rem;margin:2.4em 0 .5em;padding-top:.6em;
+  border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-family:var(--sans);font-size:1.02rem;margin:1.6em 0 .35em;scroll-margin-top:1rem}
+p{margin:.7em 0}
+.kicker{font:600 .78rem/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.meta-line{color:var(--muted);font-family:var(--sans);font-size:var(--fs-small);margin-bottom:2rem}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.85rem 1rem;overflow:auto;font-size:.83rem;line-height:1.55;white-space:pre-wrap}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.88rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.gap{border:1px solid var(--rule);border-radius:var(--radius);padding:.9rem 1.05rem;margin:1rem 0;background:var(--surface)}
+.gap h3{margin:.1em 0 .4em}
+.gap p{font-size:.95rem;margin:.45em 0}
+.badge{display:inline-block;font:700 .68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  border-radius:999px;padding:.28em .7em;margin-right:.5em;vertical-align:middle}
+.badge--critical{background:var(--danger);color:var(--bg)}
+.badge--high{background:var(--warn);color:var(--bg)}
+.badge--medium{background:var(--accent);color:var(--accent-fg)}
+.badge--low{background:var(--muted);color:var(--bg)}
+.prompt-label{font:600 .72rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  display:block;margin:.6em 0 .25em}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+ul{padding-left:1.3em}
+li{margin:.3em 0}
+.small{font-size:var(--fs-small);color:var(--muted);font-family:var(--sans)}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<p class="kicker">Meta-review · gap analysis</p>
+<h1>What kb's 50 review sessions never covered — coverage-gap analysis (2026-07)</h1>
+<p class="meta-line">2026-07-06 · ultracode workflow wf_003e4eef (11 agents: 7 sonnet mappers, 3 opus gap analysts, 1 opus critic; 670k subagent tokens, 169 tool calls) · companion to <a href="/a/kb-docs/research/session-memory-deep-review-2026-07.html">the session-memory deep review</a></p>
+
+<section id="verdict">
+<h2 id="verdict-h">Verdict</h2>
+<p>kb has been reviewed a lot — but along a narrow set of axes. Since 2026-06-05 there have been dedicated security, architecture, performance, agent-experience, code-craft, and web-UI reviews. What the history shows instead is two systemic failure modes and a set of never-touched surfaces:</p>
+<ul>
+<li><strong>A research-to-implementation gap.</strong> 8 of the 50 sessions are <em>research-only</em>, and they cluster in the last four days: five July reviews produced 10+ verified-findings documents, of which only one slice (the v0.24 plan's first two commits) has landed. The July 2026 security review explicitly says remediation was deferred — and no fix commits followed while kb.example.com is publicly bound.</li>
+<li><strong>Follow-through debt.</strong> 24 explicitly-deferred or left-broken items across the 50 sessions, including a 5-commit perf branch (<code>perf/sweep-2026-07</code>) stranded off main in violation of the repo's own no-long-lived-branch cadence, and a ~900-line uncommitted delete-cascade engine sitting in the working tree right now.</li>
+<li><strong>Whole quality dimensions never run.</strong> No accessibility audit, no backup/restore drill, no schema-migration story, no PII audit of what session capture indexes, no release rehearsal, no scalability ceiling, no chaos testing. These are exactly the dimensions that would embarrass an open-source launch — and Release Zero is the stated next act.</li>
+</ul>
+</section>
+
+<section id="method">
+<h2 id="method-h">Method and limits</h2>
+<p>Seven sonnet agents classified the 50 most recent kb-folder sessions (titles, first prompts, and <code>kb sessions show</code> enrichment) into covered-topic tags, an outcome, and explicitly-unfinished items; one enumerated the reviewable universe (69 areas from CLAUDE.md, the crate layout, docs/, justfile, workflows); one censused all 111 existing deliverables in <code>docs/research/</code> and <code>~/project/research</code>. Three opus analysts then hunted gaps through three frames — subsystem, quality-dimension, follow-through — each gap requiring cited evidence of absence (30 candidates). An opus critic spot-checked candidates against the repo (git log, branch lists, workflow files), killed duplicates and false gaps, and ranked the 20 survivors.</p>
+<div class="callout callout--warn"><span class="callout-label">Known blind spot</span>
+The sessions list API silently caps at 50 rows with no pagination (80 sessions exist for this folder — itself finding B15 of the companion review). The oldest ~30 sessions, pre-2026-06-05, are the foundational build era; gaps were only claimed where the repo itself (docs, git history, branch list) corroborated absence, not just the truncated session list.</div>
+</section>
+
+<section id="coverage-map">
+<h2 id="coverage-map-h">What the 50 sessions did cover</h2>
+<p>Outcome distribution: <strong>33 shipped</strong>, <strong>8 research-only</strong>, <strong>4 ops-routine</strong> (redeploys), <strong>5 unknown</strong> (tiny untitled sessions). The dominant covered surfaces:</p>
+<table>
+<tr><th>Surface</th><th>Sessions</th><th>Character</th></tr>
+<tr><td>docs / authoring</td><td>14</td><td>feature docs, commercialization, CLAUDE.md dieting (twice), visual-floor standardization</td></tr>
+<tr><td>SPA / web UI</td><td>12</td><td>redesign handoff, sidebar consolidation, reader metadata nav, search pages, reading lists</td></tr>
+<tr><td>deploy-ops</td><td>10</td><td>redeploys, outage response, build-mismatch fixes</td></tr>
+<tr><td>distribution</td><td>6</td><td>Release Zero, packaging, installers, cross-compile spike</td></tr>
+<tr><td>architecture reviews</td><td>5</td><td>fresh-eyes assessment, architecture + improvement portfolio, agent-experience, code-craft</td></tr>
+<tr><td>sessions subsystem</td><td>3</td><td>episodic-memory design (R0–R10), sessions UI redesign, cross-machine bundles</td></tr>
+<tr><td>search relevance</td><td>2+</td><td>SQ1–SQ6 program, cross-kb fan-out, filters</td></tr>
+<tr><td>security</td><td>2</td><td>productization P0 hardening; July 2026 audit (findings only)</td></tr>
+</table>
+<p>The pattern of the last week is stark: the July sessions pivoted almost entirely from building to reviewing — five parallel review lenses in four days — without a triage step converting any of it into scheduled work. Review throughput now exceeds implementation throughput by roughly 10:1 in document count.</p>
+</section>
+
+<section id="run-this-month">
+<h2 id="run-this-month-h">Run this month — 4 gaps</h2>
+
+<div class="gap" id="gap-cascade">
+<h3 id="gap-cascade-title"><span class="badge badge--critical">critical</span>Deep-review the in-flight delete-cascade engine, then land the v0.24 slice</h3>
+<p><strong>Evidence:</strong> <code>crates/kb-core/src/cascade.rs</code> is untracked (310 lines); <code>storage/sqlite.rs</code> carries ~600 uncommitted lines adding <code>cascade_delete_doc</code>/<code>CASCADE_STEPS</code>; indexer, actor, and metrics are all dirty. Session 90112cae shipped only R1 panic supervision + a gap-test fix; the cross-store atomicity engine (lance + sqlite + .review + .attachments) appears in no covered-tags and no deliverable — and sits outside the phased-green-CI cadence.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>The v0.24 delete-cascade engine is uncommitted in my working tree (crates/kb-core/src/cascade.rs new + storage/sqlite.rs/indexer.rs/storage/actor.rs/metrics.rs dirty). Deep-review the cross-store atomicity claims (lance + sqlite + .review + .attachments): prove crash-mid-cascade / partial-failure recovery, Full vs KeepUserData correctness, and no orphan-row leaks; add failure-path tests; then split the bundle and land it as phased green-CI commits per our cadence.</pre>
+</div>
+
+<div class="gap" id="gap-pii">
+<h3 id="gap-pii-title"><span class="badge badge--critical">critical</span>Privacy/PII audit: do captured transcripts leak secrets into the index?</h3>
+<p><strong>Evidence:</strong> kb-memory captures <em>every</em> project's sessions globally; <code>session_scrub.rs</code> redaction is opt-in (session 82315ef7 left the aggressiveness question as "notes only"); no session or deliverable has ever audited whether the indexed digest surfaces API keys, tokens, or .env fragments. Digests are searchable on the public instance today.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Trace capture -> session_scrub -> digest -> index end-to-end and audit whether captured session transcripts leak secrets/API-keys/PII into search+recall. Grep the live corpus for real leaks (key patterns, tokens, .env fragments), then set a concrete DEFAULT redaction floor (not opt-in) with tests, and document what the digest is guaranteed never to surface.</pre>
+</div>
+
+<div class="gap" id="gap-perf-branch">
+<h3 id="gap-perf-branch-title"><span class="badge badge--high">high</span>Rescue the stranded perf/sweep-2026-07 branch and finish Phase 3</h3>
+<p><strong>Evidence:</strong> <code>git rev-list main..perf/sweep-2026-07</code> = 5 commits (PS1–PS5), unmerged — a long-lived branch in a repo whose cadence forbids them. The <a href="/a/kb-docs/research/daemon-tail-latency-phase3-plan.html">tail-latency Phase-3 plan</a> (read bypass, embed-IPC timeout, query-priority lanes) remains unimplemented on main.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Rebase perf/sweep-2026-07 (PS1–PS5) onto main and land each perf phase green-CI per cadence, then implement the daemon-tail-latency Phase-3 plan from docs/research/daemon-tail-latency-phase3-plan.html: read-path actor bypass, embed-IPC timeout, and query-priority lanes, with p95/p99 before/after numbers from kb bench.</pre>
+</div>
+
+<div class="gap" id="gap-triage-reviews">
+<h3 id="gap-triage-reviews-title"><span class="badge badge--high">high</span>Triage the five July reviews into one accept/defer/reject backlog</h3>
+<p><strong>Evidence:</strong> five research-only July sessions (architecture + portfolio, agent-experience, code-craft, web-UI board, install-everywhere) produced 10+ documents of verified proposals; <code>docs/research/index.html</code> links zero of them; none have been converted into scheduled or explicitly-declined work. Without a triage pass, the next "review kb" session will re-derive the same findings — this coverage analysis is itself evidence of the loop.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Read kb-architecture-review-2026-07.html, kb-improvement-portfolio-2026-07.html, agent-experience-review-2026-07.html, and the code-craft review; produce ONE consolidated accept/defer/reject ruling per recommendation, fold the accepted ones into the milestone plan file, and record the rejections with rationale so they don't resurface.</pre>
+</div>
+</section>
+
+<section id="before-open-sourcing">
+<h2 id="before-open-sourcing-h">Before open-sourcing — 9 gaps</h2>
+
+<div class="gap" id="gap-backup-drill">
+<h3 id="gap-backup-drill-title"><span class="badge badge--high">high</span>Backup/restore durability drill + written restore runbook</h3>
+<p><strong>Evidence:</strong> <code>backup.rs</code> and the CLI verbs exist with a unit tar test, but no session has ever exercised a full round-trip (backup → wipe → restore → diff lance vectors, sqlite side-store, .review/.attachments) or corruption recovery. The 2026-07-02 fd-exhaustion outage playbook lives only in a Claude memory file, not in the repo.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Run a data-durability drill: kb backup a prod-sized copy of a kb.example.com corpus, wipe it, kb restore into a clean KB_HOME, and diff for byte-for-byte round-trip of lance vectors, the sqlite side-store (history/edges/sessions/lists/notes), and .review/.attachments. Then deliberately corrupt lance/sqlite/.review and verify recovery, add a corruption-recovery test, and write docs/runbook.md (restore steps + retention/off-box policy + the fd-exhaustion nofile playbook).</pre>
+</div>
+
+<div class="gap" id="gap-release-qa">
+<h3 id="gap-release-qa-title"><span class="badge badge--high">high</span>Release-QA rehearsal of the never-exercised release.yml</h3>
+<p><strong>Evidence:</strong> <code>release.yml</code> has never run end-to-end (no public repo, no pushed tag) and carries live <code>TODO(verify-after-public)</code> markers; SECURITY.md and CODE_OF_CONDUCT.md are absent while LICENSE/CONTRIBUTING/CLA exist. This directly gates Release Zero.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Rehearse kb's first public release end-to-end in a throwaway private fork/tag: exercise release.yml (cross-compile matrix + ghcr push), resolve every TODO(verify-after-public) marker, add the missing SECURITY.md + CODE_OF_CONDUCT.md, and produce a repeatable release-QA checklist that the real Release Zero tag can follow.</pre>
+</div>
+
+<div class="gap" id="gap-schema-migration">
+<h3 id="gap-schema-migration-title"><span class="badge badge--high">high</span>Versioned schema-migration path for on-disk kbs</h3>
+<p><strong>Evidence:</strong> migrations today are ad-hoc lazy per-version code (lance v6→v17 upgrades; sqlite <code>CREATE TABLE IF NOT EXISTS</code> with no <code>PRAGMA user_version</code>); an embedding-dim mismatch is detect-and-fail, not migrate. Strangers' older corpora upgrading across versions have no tested path — and the in-flight cascade engine is adding tables right now.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Enumerate every lance (v6-v17) and sqlite lazy migration, then design + implement a versioned schema-migration framework (PRAGMA user_version + ordered steps) plus a lance dim/schema upgrade story. Test forward-upgrade from an old-format corpus and a downgrade/rollback, add a version stamp + guardrail, and write a migration-authoring checklist so a schema bump can never silently corrupt an existing kb.example.com corpus.</pre>
+</div>
+
+<div class="gap" id="gap-ci-hang">
+<h3 id="gap-ci-hang-title"><span class="badge badge--high">high</span>Root-cause the CI --test-threads=1 hang; audit test-suite balance</h3>
+<p><strong>Evidence:</strong> <code>ci.yml</code> still forces serial tests with a comment admitting the parallel hang in the runner container is "still being isolated"; session 86f38ca3 reverted to the workaround with the root cause explicitly ambiguous (cgroup throttling vs overlayfs + poll-watcher fd interaction). The test-quality review (<code>docs/review/tests.html</code>) dates to 2026-06-02, five milestones ago.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Root-cause the CI --test-threads=1 hang inside the runner container (reproduce in-container: cgroup CPU-quota throttling vs overlayfs+poll-watcher fd interaction) and fix it so tests run parallel. Then audit test-suite quality: unit-vs-e2e coverage gaps, and whether the kb-embedder/local-embedder lane can regress unnoticed.</pre>
+</div>
+
+<div class="gap" id="gap-chaos">
+<h3 id="gap-chaos-title"><span class="badge badge--medium">medium</span>Fault-injection harness: kill the storage actor and embedder mid-request</h3>
+<p><strong>Evidence:</strong> search sessions covered fusion and fan-out but never the kb-embedder subprocess lifecycle (handshake, respawn-on-crash, degraded keyword-only fallback — invariant #26); storage-actor panic supervision shipped in R1 but nothing deliberately kills it under load. The cascade engine raises the stakes on mid-write crashes.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Write a fault-injection/chaos test harness that kills (a) the storage actor and (b) the kb-embedder subprocess mid-embed and mid-rerank under concurrent query+ingest load. Assert respawn, IPC-timeout handling, clean degraded-mode fallback to BM25 keyword search (invariant #26) with the daemon SURFACING the degradation, and no partial cascade/write corrupting lance+sqlite — no dropped or 500'd requests.</pre>
+</div>
+
+<div class="gap" id="gap-a11y">
+<h3 id="gap-a11y-title"><span class="badge badge--medium">medium</span>Accessibility audit of the SPA reader portal</h3>
+<p><strong>Evidence:</strong> no dedicated a11y/WCAG pass exists anywhere in docs/ — only ~25 incidental aria mentions. The reader chrome, merged inspector rail, and mobile bottom sheet grew across v0.20–v0.23 with aria added feature-by-feature, never audited whole: keyboard-only nav, focus traps in the sheet/scrim/confirm modal, focus across the iframe annotator boundary, the CodeMirror mirror textarea.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Run a first-pass accessibility audit of the kb SPA against WCAG 2.2 AA: keyboard-only nav through gallery -> search -> reader -> merged inspector rail -> mobile bottom sheet, focus traps in the dialog/scrim sheet and confirm modal, focus management across the iframe annotator boundary, ARIA on the CodeMirror mirror textarea, light/dark contrast, and reduced-motion. File the findings and land the highest-value fixes.</pre>
+</div>
+
+<div class="gap" id="gap-observability">
+<h3 id="gap-observability-title"><span class="badge badge--medium">medium</span>Production observability, alerting, and an in-repo incident runbook</h3>
+<p><strong>Evidence:</strong> metrics SSE, <code>/api/metrics</code>, and <code>kb doctor</code> are all pull/manual; nothing pages anyone. The fd-exhaustion outage was caught by a human noticing slowness, and its fix is recorded only in a Claude memory file — the repo has no runbook.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Define kb.example.com's top prod failure modes (fd exhaustion, embedder crash-loop/degraded, index desync, lance lock, disk), wire /api/metrics to a Prometheus scrape with a couple of alerts (or a lightweight healthcheck+notify), and write the paging runbook capturing the known failure modes currently living only in memory files.</pre>
+</div>
+
+<div class="gap" id="gap-licenses">
+<h3 id="gap-licenses-title"><span class="badge badge--medium">medium</span>Wire licenses-check into CI; set a dependency-review cadence</h3>
+<p><strong>Evidence:</strong> <code>just licenses-check</code> (the THIRD-PARTY-LICENSES.md drift guard) is referenced by zero workflow files, unlike types-check/api-docs-check which are CI-gated — a verified asymmetry. cargo-deny covers advisories, but the NOTICE file has no enforced regeneration cadence.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Harden supply-chain hygiene for open-sourcing: wire `just licenses-check` into CI alongside types-check/api-docs-check, add a dependency-freshness + license review cadence, and verify THIRD-PARTY-LICENSES.md / deny.toml / about.toml are accurate against the current dependency tree (including the ORT CDN-fetch trust boundary).</pre>
+</div>
+
+<div class="gap" id="gap-onboarding">
+<h3 id="gap-onboarding-title"><span class="badge badge--medium">medium</span>First-run dry run for a brand-new user on a clean machine</h3>
+<p><strong>Evidence:</strong> quickstart, packaging docs, install.sh, and /kb-setup all exist — all authored by the person who cannot experience first-run friction. No session has ever walked the happy path on a clean VM as a stranger would.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Dry-run kb's first-run experience as a brand-new user on a clean VM (no local state, no assumptions): follow README/quickstart + install.sh verbatim, exercise /kb-setup, record every friction point and doc/behaviour mismatch, and fix the onboarding path before it becomes strangers' first impression.</pre>
+</div>
+</section>
+
+<section id="nice-to-have">
+<h2 id="nice-to-have-h">Nice to have — 6 gaps</h2>
+
+<div class="gap" id="gap-scalability">
+<h3 id="gap-scalability-title"><span class="badge badge--medium">medium</span>Large-corpus scalability test + documented ceiling</h3>
+<p><strong>Evidence:</strong> no measured corpus-size ceiling exists; the single-writer storage actor (<code>CHANNEL_CAPACITY=1024</code>) and lance compaction have never been load-tested. <code>kb bench</code> measures quality/speed, not capacity — growth-induced back-pressure would first appear in prod.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Load-test a single kb at 10k/50k/100k synthetic artifacts (kb synth): measure ingest back-pressure at CHANNEL_CAPACITY=1024, reconcile-sweep time, lance query + compaction cost, SSE fan-out, and search p95/p99, then document a supported corpus-size ceiling and any compaction/rate-limit tuning needed.</pre>
+</div>
+
+<div class="gap" id="gap-atlas">
+<h3 id="gap-atlas-title"><span class="badge badge--medium">medium</span>Atlas layout subsystem review</h3>
+<p><strong>Evidence:</strong> "atlas" appears in no session's coverage tags and has no deliverable. Determinism is a pinned invariant, but the UMAP/PCA/k-means choice, cost profile, and layout quality under corpus growth have never been reviewed.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Review crates/kb-core/src/atlas.rs end-to-end: validate the determinism invariant under corpus growth, profile UMAP/PCA/k-means cost on a large kb, evaluate layout quality vs a LargeVis/approximation alternative, and decide whether recompute cost + rate-limit tuning is right for prod.</pre>
+</div>
+
+<div class="gap" id="gap-caches">
+<h3 id="gap-caches-title"><span class="badge badge--medium">medium</span>Server-cache invalidation review under reindex churn</h3>
+<p><strong>Evidence:</strong> <code>touches_cache.rs</code> and <code>embed_cache.rs</code> appear in no coverage and no deliverable; the LRU keyed on (kb, id, mtime) is a plausible staleness source when the indexer churns faster than mtime granularity.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Audit touches_cache and embed_cache invalidation: construct a rapid-reindex / same-second-mtime race, verify no stale embedding or touch count survives a content change, check the bump_generation coupling, and add a regression test for cache staleness under reindex churn.</pre>
+</div>
+
+<div class="gap" id="gap-branches">
+<h3 id="gap-branches-title"><span class="badge badge--medium">medium</span>Reconcile the stranded long-lived branches</h3>
+<p><strong>Evidence:</strong> 8+ unmerged local branches (portability/linux-macos-wsl — deferred "pending a macOS retest" since 2026-06-10; feat/installable-pwa and feat/kb-desktop — superseded by the desktop non-goal; feat/markdown-support; v0.6-tui-completion; several spike/*). Each is either unlanded value or unrecorded rejection.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Audit every non-main branch (portability/linux-macos-wsl, feat/installable-pwa, feat/kb-desktop, feat/markdown-support, v0.6-tui-completion, the spike/* set) and for each either rebase-and-land it green-CI or delete it with a recorded rationale, restoring the no-long-lived-branch cadence. (Do perf/sweep-2026-07 via its own rescue session.)</pre>
+</div>
+
+<div class="gap" id="gap-idea-board">
+<h3 id="gap-idea-board-title"><span class="badge badge--medium">medium</span>Implement (or explicitly decline) the web-UI idea board</h3>
+<p><strong>Evidence:</strong> session 345f7c8f produced the idea board (private) with mockups; nothing was built from it and nothing was declined — the worst of both states.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Go through docs/research/kb-web-ui-audit-and-idea-board-2026-07.html, pick the highest-leverage 2–3 ideas that respect kb's non-goals (mobile-is-a-reader, no feature bloat, TUI frozen), implement them as phased SPA commits, and mark the rest explicitly declined with rationale.</pre>
+</div>
+
+<div class="gap" id="gap-docs-drift">
+<h3 id="gap-docs-drift-title"><span class="badge badge--low">low</span>Trim README; refresh the research index (recurring docs drift)</h3>
+<p><strong>Evidence:</strong> README.md is 1109 lines and self-describes as trailing new endpoints; <code>docs/research/index.html</code> links zero 2026-07 files, leaving 10+ recent deliverables undiscoverable. CLAUDE.md got two diet sessions; README and the index got none.</p>
+<span class="prompt-label">Paste-ready session</span>
+<pre>Trim README.md against the generated docs/api-routes.md (the API canon), regenerate docs/research/index.html so it links every 2026-07 deliverable (architecture/security/improvement/agent-experience reviews, tail-latency plan, zigbuild spike, web-ui board), and add a lightweight drift guard so the index stays current.</pre>
+</div>
+</section>
+
+<section id="reading-the-pattern">
+<h2 id="reading-the-pattern-h">Reading the pattern</h2>
+<p>Three structural observations sit above any single gap:</p>
+<ul>
+<li><strong>Reviews are cheap now; rulings are the bottleneck.</strong> Ultracode made producing a 50&nbsp;KB verified review a two-hour affair, so five accumulated in four days. The scarce resource is the accept/defer/reject decision that converts findings into either commits or recorded refusals. A standing rule — <em>no new review session while an untriaged review exists</em> — would have prevented most of the current pile-up.</li>
+<li><strong>The repo's own memory system under-records exactly these sessions.</strong> The five July review sessions are the ones with digest blind spots (multi-agent work invisible — see the <a href="/a/kb-docs/research/session-memory-deep-review-2026-07.html">companion deep review</a>), which is why this gap analysis needed raw-transcript archaeology rather than <code>kb recollect</code>.</li>
+<li><strong>Everything in the "pre-OSS" tier shares one property:</strong> it is work whose absence is invisible to the sole author-operator but immediately visible to a stranger — restore drills, migrations, a11y, first-run, SECURITY.md. That tier is effectively the definition of "productization" left after Release Zero's packaging work.</li>
+</ul>
+</section>
+</main>
+</body>
+</html>

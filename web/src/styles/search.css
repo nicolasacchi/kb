@@ -1,0 +1,941 @@
+/* Track F — the full search page (/search). A deeper, URL-driven companion
+ * to the Cmd+K popup: a prominent query box, rich result cards (F4), a
+ * search-specific filter rail (F5), and federated corpus groups. Leans on
+ * the gallery card tokens; search-only chrome (score bar, snippet
+ * highlight, corpus groups) is namespaced `.kb-search*`. Lives inside the
+ * RailShell `.view`. */
+
+.kb-search {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+  padding: var(--pad-3) var(--pad);
+}
+
+.kb-search__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-width: 0;
+  max-width: 920px;
+}
+
+/* Query box — a large, focused search field with a leading glyph. Echoes
+ * the popup input sizing but inline + persistent. */
+.kb-search__box {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: 0 var(--pad-3);
+  height: 48px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  color: var(--ink-mute);
+  transition:
+    border-color 0.12s var(--ease),
+    box-shadow 0.12s var(--ease);
+}
+.kb-search__box:focus-within {
+  border-color: var(--accent-bor);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kb-search__box svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.kb-search__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: 500 16px/1.2 var(--font-sans);
+  outline: none;
+}
+.kb-search__input::placeholder {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
+/* Kill the native search clear affordance — the box owns its chrome. */
+.kb-search__input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Results header — count · mode · scope · timing. Small mono, muted. */
+.kb-search__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  flex-wrap: wrap;
+  font: 500 12px/1 var(--font-mono);
+  color: var(--ink-mute);
+  padding: 0 var(--pad-1);
+}
+.kb-search__count {
+  color: var(--ink);
+}
+/* FS4 — push the sort menu to the right edge of the results header. */
+.kb-search__meta .sort-control {
+  margin-left: auto;
+}
+
+/* FS8 — search box + saved/recent dropdown row. */
+.kb-search__topbar {
+  display: flex;
+  gap: var(--pad-1);
+  align-items: stretch;
+}
+.kb-search__topbar .kb-search__box {
+  flex: 1;
+}
+/* FS10 — mobile "Filters" button that opens the rail in a drawer. */
+.kb-search__filters-btn {
+  flex: none;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: 500 12px/1 var(--font-mono);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kb-search__filters-btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kb-search-saved {
+  position: relative;
+  flex: none;
+}
+.kb-search-saved__btn {
+  height: 100%;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: 500 12px/1 var(--font-mono);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kb-search-saved__btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kb-search-saved__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+.kb-search-saved__panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 41;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  padding: 6px;
+}
+.kb-search-saved__sect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: 600 10px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  padding: 8px 6px 4px;
+}
+.kb-search-saved__save {
+  border: none;
+  background: transparent;
+  color: var(--accent-soft);
+  font: inherit;
+  cursor: pointer;
+}
+.kb-search-saved__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.kb-search-saved__apply {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: 500 13px/1.2 var(--font-mono);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.kb-search-saved__apply:hover {
+  background: var(--accent-bg);
+}
+.kb-search-saved__recent {
+  color: var(--ink-mute);
+}
+.kb-search-saved__q {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-search-saved__hits {
+  color: var(--ink-dim);
+  font: 500 11px/1 var(--font-mono);
+  flex: none;
+}
+.kb-search-saved__x {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.kb-search-saved__x:hover {
+  color: var(--ink);
+}
+.kb-search-saved__empty {
+  color: var(--ink-dim);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+/* FS5 — active-filter chip bar. */
+.kb-search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 0 var(--pad-1);
+  font: 500 12px/1 var(--font-mono);
+}
+.kb-search-chips__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: 999px;
+  color: var(--accent-soft);
+}
+.kb-search-chips__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.kb-search-chips__x:hover {
+  background: var(--accent-bor);
+  color: var(--bg);
+}
+.kb-search-chips__clear {
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.kb-search-chips__clear:hover {
+  color: var(--ink);
+}
+.kb-search__dot {
+  color: var(--ink-dim);
+}
+.kb-search__cache {
+  color: var(--green);
+}
+
+/* F4 — rich result cards. Borrow the gallery card vocabulary (accent
+ * spine, card surface/shadow tokens, tag pills, glyphs, reading chip) and
+ * add search-only chrome: a relevance score bar + highlighted snippet. */
+.kb-search__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+
+.kb-search-card {
+  position: relative;
+  display: block;
+  padding: var(--pad-3) var(--pad-3) var(--pad-2) calc(var(--pad-3) + 4px);
+  background: var(--card-bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color 0.12s var(--ease),
+    box-shadow 0.12s var(--ease);
+}
+.kb-search-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: var(--card-accent, var(--accent));
+  opacity: 0.7;
+}
+/* W2.6a — roving cursor (`hooks/useRovingCursor.ts`, `routes/search.tsx`).
+ * `SearchResultCard.tsx` isn't owned by this phase, so the focus outline
+ * rides a thin wrapper div (CSS-class focus, never DOM focus theft — same
+ * pattern as gallery.css's `.kb-card--focused`). */
+.kb-search-card--focused {
+  outline: none;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft);
+}
+.kb-search-card--focused .kb-search-card {
+  border-color: var(--accent);
+}
+.kb-search-card:hover {
+  border-color: var(--rule-hi);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.kb-search-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  margin-bottom: 2px;
+}
+.kb-search-card__folder {
+  font: 500 11px/1.2 var(--font-mono);
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-search-card__corpus {
+  flex: none;
+  font: 600 10px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-soft);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-pill);
+  padding: 2px 7px;
+}
+.kb-search-card__title {
+  margin: 0;
+  font: 600 16px/1.3 var(--font-serif);
+  color: var(--ink);
+}
+.kb-search-card__snippet {
+  margin: 4px 0 0;
+  font: 400 13px/1.45 var(--font-sans);
+  color: var(--ink-mute);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-hl {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.kb-search-card__badges,
+.kb-search-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.kb-search-card__badge {
+  font: 500 10px/1.4 var(--font-mono);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--rule-hi);
+  color: var(--ink-mute);
+}
+.kb-search-card__cat {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kb-search-card__sev[data-sev="high"],
+.kb-search-card__sev[data-sev="critical"],
+.kb-search-card__sev[data-sev="sev-1"] {
+  color: var(--red);
+  border-color: var(--red);
+}
+.kb-search-card__sev[data-sev="medium"] {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.kb-search-card__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  margin-top: 10px;
+  font: 500 11px/1 var(--font-mono);
+  color: var(--ink-dim);
+}
+.kb-search-card__glyphs {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-mute);
+}
+.kb-search-card__glyph {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.kb-search-card__glyph svg {
+  width: 13px;
+  height: 13px;
+}
+.kb-search-card__glyph-n {
+  font-size: 9px;
+  color: var(--ink-dim);
+}
+.kb-search-card__words {
+  color: var(--ink-mute);
+}
+.kb-search-card__score {
+  width: 72px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--rule);
+  overflow: hidden;
+}
+.kb-search-card__score i {
+  display: block;
+  height: 100%;
+  background: var(--card-accent, var(--accent));
+  border-radius: var(--radius-pill);
+}
+.kb-search-card__age {
+  margin-left: auto;
+  color: var(--ink-dim);
+}
+/* FS9 — last-opened recency, grouped with the age at the card's right. */
+.kb-search-card__opened {
+  margin-left: auto;
+  color: var(--ink-dim);
+}
+.kb-search-card__opened + .kb-search-card__age {
+  margin-left: var(--pad-1);
+}
+
+/* Federated corpus section header. */
+.kb-search-group {
+  margin-top: var(--pad-2);
+}
+.kb-search-group__h {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  padding: var(--pad-1) 2px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--pad-2);
+}
+.kb-search-group__name {
+  font: 600 12px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+}
+.kb-search-group__ct {
+  font: 500 11px/1 var(--font-mono);
+  color: var(--ink-dim);
+}
+
+/* F5 — search filter rail (mode/scope/category/folder/limit). Mirrors the
+ * gallery Sidebar's monospace rhythm; search-specific so it surfaces only
+ * backend-supported filters. The FolderTree inside reuses the gallery
+ * `.rail-folder*` styles (gallery.css is imported first). */
+.kb-search-rail {
+  position: sticky;
+  top: var(--pad-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font: 400 12px/1.3 var(--font-mono);
+}
+.kb-search-rail__sect {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  margin: 12px 0 4px;
+}
+.kb-search-rail__sect:first-child {
+  margin-top: 0;
+}
+.kb-search-rail__seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.kb-search-rail__seg button {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.1s var(--ease),
+    color 0.1s var(--ease);
+}
+.kb-search-rail__seg button:hover {
+  border-color: var(--rule-hi);
+  color: var(--ink);
+}
+.kb-search-rail__seg button.on {
+  background: var(--accent-bg);
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kb-search-rail__input {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+.kb-search-rail__input:focus {
+  border-color: var(--accent-bor);
+}
+/* FS7 — session / reading-list pickers. */
+.kb-search-rail__select {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.kb-search-rail__select:focus {
+  border-color: var(--accent-bor);
+  outline: none;
+}
+.kb-search-rail__folders {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* FS2 — collapsible filter group (<details>/<summary>). */
+.kb-search-rail__group {
+  margin: 12px 0 0;
+}
+.kb-search-rail__grouph {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  padding: 2px 0;
+}
+.kb-search-rail__grouph::-webkit-details-marker {
+  display: none;
+}
+/* Disclosure triangle, rotated when open. */
+.kb-search-rail__grouph::before {
+  content: "›";
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  transition: transform 0.12s var(--ease);
+  color: var(--ink-mute);
+}
+.kb-search-rail__group[open] > .kb-search-rail__grouph::before {
+  transform: rotate(90deg);
+}
+.kb-search-rail__grouph:hover {
+  color: var(--ink);
+}
+.kb-search-rail__badge {
+  margin-left: auto;
+  min-width: 16px;
+  padding: 0 5px;
+  text-align: center;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: 999px;
+  color: var(--accent-soft);
+  font-size: 10px;
+  line-height: 15px;
+}
+.kb-search-rail__groupbody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px;
+}
+
+/* FS3 — tristate tag chips. */
+.kb-search-rail__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.kb-search-rail__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-mute);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.1s var(--ease),
+    color 0.1s var(--ease);
+}
+.kb-search-rail__tag:hover {
+  border-color: var(--rule-hi);
+  color: var(--ink);
+}
+.kb-search-rail__tag[data-state="include"] {
+  background: var(--accent-bg);
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kb-search-rail__tag[data-state="exclude"] {
+  border-color: var(--rule-hi);
+  color: var(--ink-dim);
+}
+.kb-search-rail__tag[data-state="exclude"] .kb-search-rail__tagname {
+  text-decoration: line-through;
+}
+.kb-search-rail__tagdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.kb-search-rail__tag[data-state="exclude"] .kb-search-rail__tagdot {
+  opacity: 0.4;
+}
+.kb-search-rail__tagct {
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kb-search-rail__empty {
+  color: var(--ink-dim);
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+/* "Show more" — re-query at a higher limit (lance has no offset). */
+.kb-search__more {
+  align-self: center;
+  margin-top: var(--pad-2);
+  padding: 8px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font: 500 12px/1 var(--font-mono);
+  cursor: pointer;
+  transition:
+    border-color 0.1s var(--ease),
+    color 0.1s var(--ease);
+}
+.kb-search__more:hover {
+  border-color: var(--accent-bor);
+  color: var(--ink);
+}
+
+/* F5 — the Cmd+K popup's "escalate to full search" footer affordance. */
+.cmdk__seeall {
+  flex: none;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  font: 500 11px/1 var(--font-mono);
+  padding: 4px 8px;
+  cursor: pointer;
+  transition:
+    border-color 0.1s var(--ease),
+    color 0.1s var(--ease);
+}
+.cmdk__seeall:hover {
+  border-color: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* W1.search item 2 — a match-passage snippet (server query-time extract)
+ * gets a subtle left rule to read as distinct from a plain doc summary;
+ * the mono excerpt look otherwise stays identical. */
+.kb-search-card__snippet--match {
+  padding-left: 8px;
+  border-left: 2px solid var(--card-accent, var(--accent));
+}
+
+/* W1.search item 3 — the score bar becomes a click-to-explain popover
+ * trigger. Local stand-in for the shared ScoreExplain primitive (not yet
+ * in this worktree — see SearchResultCard.tsx's comment); spans only, so
+ * it nests safely inside the card's outer <Link>. */
+.kb-score-pop {
+  position: relative;
+  display: inline-flex;
+}
+.kb-score-pop__trigger {
+  display: inline-flex;
+  cursor: pointer;
+}
+.kb-score-pop__trigger:focus-visible {
+  outline: 2px solid var(--accent-bor);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.kb-score-pop__panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  font: 500 11px/1.4 var(--font-mono);
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+.kb-score-pop__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+}
+.kb-score-pop__total {
+  font-weight: 600;
+}
+.kb-score-pop__terms {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-score-pop__term {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.kb-score-pop__term-detail {
+  color: var(--ink-dim);
+}
+.kb-score-pop__foot {
+  color: var(--ink-dim);
+  border-top: 1px solid var(--rule);
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+/* W1.search item 4 — the rail's "read during" temporal scrubber. */
+.kb-search-rail__temporal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-search-rail__temporal-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-search-rail__temporal-dates .kb-search-rail__input {
+  flex: 1;
+  min-width: 0;
+}
+.kb-search-rail__temporal-sep {
+  color: var(--ink-dim);
+  flex: none;
+}
+
+/* W1.search item 1 — never-empty search recovery (probe strip + museum
+ * delta) and the empty-query "recent misses" row. Quiet chrome by
+ * design — this replaces a dead end, not a call to action. */
+.kb-zero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  margin-top: var(--pad-2);
+}
+.kb-zero__probes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kb-zero__probe {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font: 500 12px/1 var(--font-mono);
+  cursor: pointer;
+  transition:
+    border-color 0.1s var(--ease),
+    color 0.1s var(--ease);
+}
+.kb-zero__probe:hover:not(:disabled) {
+  border-color: var(--accent-bor);
+  color: var(--ink);
+}
+.kb-zero__probe:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.kb-zero__probe-n {
+  color: var(--ink-dim);
+}
+.kb-zero__probe-skel {
+  display: inline-block;
+  width: 14px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--rule-hi);
+  opacity: 0.6;
+}
+.kb-zero__museum-h,
+.kb-zero-memory__h {
+  font: 600 10px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  margin-bottom: 8px;
+}
+.kb-zero__examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.kb-zero__example {
+  padding: 4px 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-pill);
+  color: var(--accent-soft);
+  font: 500 12px/1 var(--font-mono);
+  cursor: pointer;
+}
+.kb-zero__example:hover {
+  border-color: var(--accent-soft);
+}
+.kb-zero__deck {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.kb-zero__deck-card {
+  padding: 8px 12px;
+  max-width: 220px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: 500 12px/1.3 var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-zero__deck-card:hover {
+  border-color: var(--rule-hi);
+}
+.kb-zero-memory {
+  margin-top: var(--pad-1);
+}
+.kb-zero-memory__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kb-zero-memory__chip {
+  padding: 4px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font: 500 12px/1 var(--font-mono);
+  cursor: pointer;
+}
+.kb-zero-memory__chip:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+
+/* Mobile — collapse the rail above the results (single column). */
+@media (max-width: 860px) {
+  .kb-search {
+    grid-template-columns: 1fr;
+  }
+  .kb-search-rail {
+    position: static;
+  }
+}

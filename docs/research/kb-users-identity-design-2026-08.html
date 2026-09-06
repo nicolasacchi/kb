@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>kb-users/1 &mdash; identity is attribution, not authorization (v0.34 frozen design, 2026-08)</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="design,identity,multi-user,authelia,v0.34,status:ratified">
+<meta name="kb-summary" content="Frozen design record for the v0.34 kb-users/1 milestone: N named users with per-user read-state, comment authorship, and API/CLI attribution, while kb gains zero authentication surface. Authelia stays the identity authority; the daemon resolves WHO an already-admitted request is via a four-rung ladder (per-user token > trusted Remote-User header > legacy shared token > loopback). One trust tier is re-affirmed — this partially reverses the 2026-07-06 'one daemon, one operator' ruling, keeping its refusals of roles, ACLs, and in-daemon passwords. Includes the six-path deploy truth table, V0034 data model, and all 14 panel dispositions.">
+
+<style>
+:root{
+  --bg:#faf9f6; --surface:#f1efe9; --fg:#211d28; --muted:#5a5462;
+  --rule:#ddd8ce; --accent:#6d28a8; --accent-fg:#ffffff;
+  --warn:#7d5200; --danger:#a12836; --ok:#1e6e52;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:48rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#171420; --surface:#211d2c; --fg:#eae7f0; --muted:#a8a1b5;
+    --rule:#38324a; --accent:#c4a5f5; --accent-fg:#221540;
+    --warn:#e6b566; --danger:#f2938c; --ok:#7fd2a8;
+  }
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;padding:0 1.25rem 4rem;font:400 var(--fs-body)/var(--lh) var(--sans);color:var(--fg);background:var(--bg)}
+main{max-width:var(--maxw);margin:0 auto}
+h1{font-size:1.75rem;line-height:1.25;margin:2.5rem 0 .5rem;letter-spacing:-.01em}
+h2{font-size:1.3rem;line-height:1.3;margin:2.75rem 0 .75rem;padding-top:.75rem;border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-size:1.05rem;margin:1.75rem 0 .5rem;scroll-margin-top:1rem}
+p{margin:.75rem 0}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5rem .9rem;border-radius:0 0 var(--radius) var(--radius);z-index:10}
+.skip-link:focus{left:0}
+.kicker{font-size:var(--fs-small);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:2.5rem}
+.lede{font-size:1.15rem;color:var(--muted);margin:.25rem 0 1rem}
+.meta-strip{font-size:var(--fs-small);color:var(--muted);display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.tag{background:var(--surface);border:1px solid var(--rule);border-radius:999px;padding:.05rem .6rem}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.06em .32em;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.85rem 1rem;overflow-x:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;border:0;padding:0}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.92rem}
+th,td{border:1px solid var(--rule);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:.75rem 1rem;margin:1.15rem 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout-label{display:block;font-size:var(--fs-small);font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.25rem}
+.slogan{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:1rem 1.15rem;margin:1.25rem 0;font-size:1.15rem;font-weight:600}
+ul,ol{padding-left:1.4rem}
+li{margin:.35rem 0}
+.small{font-size:var(--fs-small);color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">research &middot; project:kb &middot; v0.34 &middot; frozen design record</div>
+  <h1>kb-users/1 &mdash; identity is attribution, not authorization (v0.34 frozen design, 2026-08)</h1>
+  <p class="lede">kb gains N named users &mdash; per-user read-state, per-user comment authorship, per-user API/CLI attribution &mdash; without gaining a single line of authentication: Authelia stays the identity authority, the daemon only resolves <em>who</em> an already-admitted request is, and every identity keeps the operator&rsquo;s full authority.</p>
+  <div class="meta-strip">
+    <span>ratified 2026-08-01 &middot; recorded 2026-08-02</span><span>&middot;</span>
+    <span class="tag">status:ratified</span><span>&middot;</span>
+    <span class="tag">v0.34</span><span>&middot;</span>
+    <span class="tag">authelia</span><span>&middot;</span>
+    <span class="tag">multi-user</span>
+  </div>
+</header>
+
+<section>
+<h2 id="milestone-status">Milestone status at authoring time</h2>
+<p>This artifact is the frozen record of the ratified design. Phase X had landed when it was written; the operator updates the remaining SHAs at milestone close &mdash; the design text itself does not change after this point.</p>
+<table>
+<thead><tr><th>Phase</th><th>Scope (one line)</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td><strong>X</strong> (kb-core)</td><td>Identity config types; V0034 + backfill pass; storage APIs take <code>user</code>; comment <code>user</code> field + server-stamp plumbing in <code>review.rs</code>; events carry <code>user</code>.</td><td><strong>Landed</strong> &mdash; commit <code>4d0ff78</code> (<code>feat(kb-core): v0.34 X &mdash; identity config, V0034 user columns, per-user history/rollup/lists/comments (X1)</code>).</td></tr>
+<tr><td><strong>Y</strong> (kb-server)</td><td>Ladder in <code>auth_bearer</code> + <code>Identity</code> extension; route threading (history/progress/lists/comments/read-filter); <code>/api/identity</code>, <code>/api/users</code>; token registry load; SSE fields; two-user route-level integration test.</td><td>In flight at authoring time.</td></tr>
+<tr><td><strong>Z</strong> (kb-cli)</td><td><code>kb whoami</code> / <code>kb users</code> / <code>kb token issue|revoke</code>; parity rows.</td><td>In flight at authoring time.</td></tr>
+<tr><td><strong>W</strong> (web/)</td><td>Current-user chip; comment user rendering + edit gate; History user chips; Settings users.</td><td>In flight at authoring time.</td></tr>
+<tr><td><strong>D</strong> (docs+e2e)</td><td>Non-goal rewrite; invariant slot #2 filled; e2e two-user scenario (loopback + Remote-User header injection); tag.</td><td>In flight at authoring time.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="provenance">Provenance &mdash; directive, evidence trail, panel</h2>
+<p><strong>Operator directive, 2026-08-01, verbatim:</strong> <em>&ldquo;I want multiple users that track reading/comments/everything separately, visible to each other (a team), and API/CLI usage attributed to a user. Decide Authelia vs something different.&rdquo;</em> Multi-user attribution; team visibility; API/CLI per-user.</p>
+<p>The evidence trail behind the ratified design:</p>
+<ul>
+<li><strong>Repo surface map 1 &mdash; the auth surface.</strong> <code>auth_bearer</code> owns both the trusted-hop verdict and the token match (<code>crates/kb-server/src/middleware.rs:193-233</code>); the trusted-hop gate that guards XFF is <code>peer.is_loopback() || trusted_proxies.contains(peer)</code> (<code>middleware.rs:328-331</code>); the production router chain is <code>authelia@docker</code> &rarr; <code>kb-inject-bearer</code> (overwrites any inbound <code>Authorization</code> with the daemon&rsquo;s shared token, in the reverse-proxy compose file) &rarr; daemon; Authelia&rsquo;s forwardauth middleware already sets <code>authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email</code> (same compose file); <code>grep Remote-User crates/</code> = zero hits before this milestone.</li>
+<li><strong>Repo surface map 2 &mdash; the per-user state surfaces.</strong> The 30-min visit-gap open dedup (<code>history_record_open</code>, <code>crates/kb-core/src/storage/sqlite.rs:788-829</code>), the 5-second search dedup (<code>history_record_search</code>, <code>sqlite.rs:866-868</code>), the reading rollup (<code>reading_rollup_inner</code>, <code>sqlite.rs:1339-1440</code>) and its override overlay (<code>sqlite.rs:1411-1414</code>), <code>list_entries.read_override</code>, and the verdict&rsquo;s hardcoded <code>by: Author::You</code> (<code>crates/kb-core/src/review.rs:836</code>) &mdash; every place a second user would silently merge into the first.</li>
+<li><strong>Grok web research job <code>01KYZFWX1YR448EAP69RRPGBS7</code></strong> &mdash; strict-VERIFIED, 16 findings. Load-bearing among them: traefik&rsquo;s forwardAuth <em>deletes</em> the client-supplied value of every <code>authResponseHeaders</code>-listed header before copying Authelia&rsquo;s (delete-then-replace, confirmed from both docs and <code>forward.go</code> source); Authelia&rsquo;s <code>client_credentials</code> flow sets <strong>no</strong> <code>Remote-User</code> (Remote-* only when introspection yields a username, <code>handler_authz_authn.go</code>); prior-art trusted-header config knobs from Grafana (<code>auth.proxy</code>), Miniflux (<code>AUTH_PROXY_HEADER</code>), FreshRSS, and Gitea/Forgejo.</li>
+<li><strong>Grok panel job <code>01KYZG4W2TVGV2NFTX1D3PJDR0</code></strong> &mdash; 2 seats, both &ldquo;revise&rdquo;, 14 points raised and all 14 dispositioned into the design (<a href="#panel-resolutions">&sect;Panel resolutions</a>).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="scope-reversal">The scope reversal, stated honestly</h2>
+<p>This milestone reverses <strong>half</strong> of the recorded non-goal <em>&ldquo;One daemon, one operator &mdash; no second identity&rdquo;</em>, ruled 2026-07-06 in <a href="kb-second-operator-territory-2026-07.html" data-kb-link="kb-second-operator-territory-2026-07">kb&rsquo;s second-operator territory map</a>. That ruling refused a second human inside the operator&rsquo;s daemon for two families of reasons: identity merge (one <code>you</code>, polluted read-state, unattributed API use) and privacy plus authority (memory/sessions leak, total admin blast radius). kb-users/1 repairs the first family and deliberately re-affirms the second.</p>
+<p>What it reverses: identities now exist &mdash; N named users, per-user read-state, per-user comment authorship, per-user API/CLI attribution. What it <strong>keeps</strong>, and re-records:</p>
+<ul>
+<li><strong>One trust tier.</strong> Every identity wields the operator&rsquo;s full authority (admin, delete, config). No roles, no read-only tokens, no ACLs, no visibility tiers. A team member is a co-operator, not a guest.</li>
+<li><strong>No in-daemon authentication.</strong> kb never stores or checks a password and never manages a login session. Authentication stays at the edge (Authelia) or in possession of a bearer token. kb resolves <em>who</em> an already-authorized request is, never <em>whether</em> it may enter.</li>
+<li><strong>Everything visible to everyone.</strong> All users see all users&rsquo; activity &mdash; that is the point (team awareness), and it is what keeps this out of ACL territory.</li>
+</ul>
+<div class="slogan">Identity is attribution, not authorization.</div>
+<p class="small">Bookkeeping: the README/CLAUDE.md non-goal narrows from &ldquo;one daemon, one operator&rdquo; to &ldquo;one trust tier &mdash; identities are attribution, not authorization&rdquo;, records the 2026-08-01 directive, and keeps the refused list (passwords, ACLs, roles, per-user visibility). Invariant slot #2 &mdash; open since the kb-tui retirement in v0.24 &mdash; is filled with the identity ladder + attribution-not-authorization invariant.</p>
+</section>
+
+<section>
+<h2 id="the-decision">The decision &mdash; stay with Authelia; kb gains an attribution layer only</h2>
+<p>Three candidate architectures were considered:</p>
+<ul>
+<li><strong>(A) In-daemon users</strong> (passwords/sessions in kb): <strong>rejected</strong>. Massively expands daemon scope, contradicts the deterministic/lean daemon ethos, duplicates what Authelia already does well, and turns kb into a security product. Nothing in the ask requires it.</li>
+<li><strong>(B) OIDC in the daemon</strong> (kb as an OIDC RP validating Authelia JWTs): <strong>rejected for v1</strong>. Adds a crypto/JWKS dependency and a config surface for a problem the edge already solves; forward-auth headers deliver the same claim set over a hop we already trust for XFF. Revisit only if kb ever needs to run without a header-trusting proxy AND without tokens.</li>
+<li><strong>(C) Edge-auth + trusted identity header + per-user tokens</strong>: <strong>chosen</strong>. Zero new authentication surface; reuses the existing trusted-hop machinery (invariant #4) verbatim; matches the auth-proxy pattern of <a href="https://grafana.com/docs/grafana/latest/setup-grafana/configure-security/configure-authentication/auth-proxy/">Grafana (<code>auth.proxy</code>)</a>, <a href="https://miniflux.app/docs/configuration.html">Miniflux (<code>AUTH_PROXY_HEADER</code>)</a>, FreshRSS, and <a href="https://docs.gitea.com/administration/authentication">Gitea/Forgejo</a>.</li>
+</ul>
+<div class="callout callout--ok"><span class="callout-label">The plumbing already exists (verified 2026-08-01)</span>Authelia&rsquo;s forwardauth middleware already sets <code>authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email</code> (the reverse-proxy compose file), and users already exist in Authelia&rsquo;s file DB (alex/admins, kb-bot, testbot-e2e). The kb router chain is <code>authelia@docker</code> &rarr; <code>kb-inject-bearer</code> (same compose file) &rarr; daemon &mdash; so every edge request already arrives carrying <em>both</em> transport auth (the shared bearer) and identity (<code>Remote-User</code>); today the daemon reads the former and drops the latter. <code>grep Remote-User crates/</code> = zero hits before this milestone.</div>
+</section>
+
+<section>
+<h2 id="identity-ladder">The identity resolution ladder</h2>
+<p>Identity is resolved <strong>once</strong> per request inside the existing <code>auth_bearer</code> middleware (<code>middleware.rs:193-233</code> &mdash; it already owns both the trusted-hop verdict and the token match), inserted as a request extension <code>Identity { user, source }</code>. Handlers take <code>Extension&lt;Identity&gt;</code>. The order:</p>
+<ol>
+<li><strong>Per-user token</strong> (explicit beats ambient). If a registry token matched &mdash; presented as the <code>Authorization</code> bearer (direct/host lane) OR as <code>X-Kb-Token</code> (edge lane, where <code>kb-inject-bearer</code> overwrites <code>Authorization</code> with the shared daemon token) &mdash; identity = that user, source = <code>token</code>. An agent or script with its own token running behind a proxy session must attribute as itself, and Authelia <code>client_credentials</code> machine clients arrive with <strong>no</strong> <code>Remote-User</code> (verified: Authelia only sets Remote-* when introspection yields a username, <code>handler_authz_authn.go</code>) &mdash; so tokens are the <em>only</em> machine attribution lane. <code>X-Kb-Token</code> is attribution-plus-auth on the direct lane and attribution-only behind the edge; it is honored regardless of peer (possession of a valid token IS the credential).</li>
+<li><strong>Trusted identity header.</strong> If the immediate peer passes the existing trusted-hop gate (<code>peer.is_loopback() || trusted_proxies.contains(peer)</code> &mdash; the <em>same</em> rule that gates XFF, <code>middleware.rs:328-331</code>) and <code>Remote-User</code> is present and valid (<code>^[A-Za-z0-9._@-]{1,64}$</code>), identity = that value, source = <code>header</code>. A non-trusted peer&rsquo;s <code>Remote-User</code> is <strong>never</strong> read (fail-closed, the same posture as XFF). Loopback peers may set it too &mdash; deliberate: loopback already holds full authority; this is how agents, tests, and e2e attribute themselves. Belt-and-braces at the edge is verified: traefik&rsquo;s forwardAuth <em>deletes</em> the client-supplied value of every <code>authResponseHeaders</code>-listed header before copying Authelia&rsquo;s (<code>forward.go</code>: <code>req.Header.Del</code> then copy &mdash; docs + source confirmed).</li>
+<li><strong>Legacy shared token</strong> (<code>&lt;config&gt;/token</code>, unchanged) &rarr; identity = the configured operator, source = <code>legacy</code>.</li>
+<li><strong>Loopback, no credentials</strong> &rarr; operator, source = <code>loopback</code>.</li>
+</ol>
+<h3 id="ladder-notes">Ladder notes (all ratified)</h3>
+<ul>
+<li>The header name is configurable (<code>[identity] header = "Remote-User"</code>) for authentik/oauth2-proxy users; default <code>Remote-User</code>.</li>
+<li>An invalid header value logs once and falls through the ladder &mdash; never a 500.</li>
+<li>401 semantics are <strong>unchanged</strong> for <code>Authorization</code>. An <code>X-Kb-Token</code> that matches the registry also satisfies transport auth on the direct lane (it is a bearer credential by another name); an invalid <code>X-Kb-Token</code> is simply ignored &mdash; the request still needs normal admission.</li>
+<li><strong>Rate-limit buckets key on the resolved user in v1</strong> (panel point 7: under <code>kb-inject-bearer</code> every edge user shares one token-hash bucket today &mdash; multi-user makes that a real regression, not a follow-up). Fallback to the token-hash key when identity is operator-by-default.</li>
+<li>Machine clients through the edge (kb-bot): give them a registry token + <code>X-Kb-Token</code>; without one they attribute as operator via legacy &mdash; documented, never &ldquo;invented&rdquo; (the client_credentials lane sets no Remote-User by design).</li>
+<li><strong>Username normalization (panel point 8):</strong> lowercase-fold at resolve time, header and token-registry users alike; config <code>operator</code>/<code>users[].name</code> are <em>required</em> lowercase (hard config issue otherwise). History is append-only &mdash; case forks would be permanent ledger splits.</li>
+</ul>
+<div class="callout callout--danger"><span class="callout-label">Implementation trap (panel point 4)</span>Today <code>auth_bearer</code> returns <em>early</em> on loopback before reading <code>Authorization</code> (<code>middleware.rs:216-217</code>). The ladder must <strong>always</strong> inspect <code>X-Kb-Token</code>/<code>Authorization</code>/the identity header for <em>attribution</em> even when admission is already decided by loopback &mdash; otherwise a loopback agent with its own token silently attributes as operator. Admission logic stays byte-identical; only identity resolution reads credentials on all paths.</div>
+</section>
+
+<section>
+<h2 id="truth-table">The deploy truth table &mdash; the six real paths</h2>
+<p>Deploy-aware: admission and identity are separate columns on purpose. Admission is what the request needed to get in; identity is who the ladder says it was.</p>
+<table>
+<thead><tr><th>Path</th><th>Admission</th><th>Identity (user, source)</th></tr></thead>
+<tbody>
+<tr><td>Edge SPA: Authelia cookie + <code>kb-inject-bearer</code></td><td>shared token (edge-injected)</td><td>(<code>Remote-User</code>, <code>header</code>) &mdash; the injected token is <em>legacy</em>, ranked below registry; header wins over legacy</td></tr>
+<tr><td>Edge agent/script: + <code>X-Kb-Token</code></td><td>shared token (edge-injected)</td><td>(token owner, <code>token</code>) &mdash; beats header</td></tr>
+<tr><td>Edge machine (kb-bot client_credentials, no <code>X-Kb-Token</code>)</td><td>shared token</td><td>(operator, <code>legacy</code>) &mdash; Authelia sets no <code>Remote-User</code> for client_credentials</td></tr>
+<tr><td>Host CLI @ <code>127.0.0.1:4000</code> (docker-bridge peer, untrusted): registry token</td><td>that token</td><td>(token owner, <code>token</code>); a forged <code>Remote-User</code> is <strong>ignored</strong> (peer untrusted)</td></tr>
+<tr><td>Host CLI: legacy token</td><td>legacy token</td><td>(operator, <code>legacy</code>)</td></tr>
+<tr><td>Loopback dev/agent: no creds / +<code>Remote-User</code> / +registry token / +both</td><td>loopback bypass</td><td>(operator, <code>loopback</code>) / (header user, <code>header</code>) / (token owner, <code>token</code>) / token wins</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="configuration">Configuration</h2>
+<pre><code>[identity]
+operator = "alex"         # attribution for loopback + legacy-token callers.
+                          # Default "operator". RECOMMENDED: set to your
+                          # Authelia username so edge and local attribute
+                          # to the same string.
+header   = "Remote-User"  # trusted identity header (default shown)
+
+[[identity.users]]        # OPTIONAL display metadata only — an unknown
+name    = "alex"          # Remote-User still attributes verbatim (Authelia
+display = "Alex"          # already decided they may enter; kb only records
+                          # who they were). Used by SPA chips + /api/users.
+[[identity.users]]
+name    = "jordan"
+</code></pre>
+<p><strong>Tokens</strong> (secrets never live in <code>kb.toml</code>):</p>
+<ul>
+<li><code>&lt;config&gt;/token</code> &mdash; the unchanged single shared token &rarr; operator (back-compat).</li>
+<li><code>&lt;config&gt;/tokens</code> &mdash; a <strong>new</strong> optional registry, one entry per line: <code>&lt;user&gt;:sha256:&lt;hex&gt;</code> (preferred &mdash; hash at rest, the Gitea lesson) or <code>&lt;user&gt;:&lt;plaintext&gt;</code> (accepted), <code>#</code> comments, mode 0600, loaded at startup beside <code>AuthConfig</code>. Both files may coexist. <code>kb token issue &lt;user&gt;</code> generates 32 random bytes, appends the hashed form, prints the plaintext <em>once</em>. <code>kb token revoke &lt;user&gt;</code> removes the line. Restart to load (same as the existing token file).</li>
+</ul>
+<p><strong>No users table in sqlite.</strong> Usernames are plain strings; the config users list is display sugar. <code>/api/users</code> = configured &cup; observed (distinct users in history/comments), so an unconfigured teammate still shows up.</p>
+</section>
+
+<section>
+<h2 id="data-model-v0034">Data model &mdash; per-kb sqlite, migration V0034</h2>
+<p><strong>Keying rule:</strong> every per-user row stores the <em>resolved username string</em>. No FK, no users table. Usernames come from Authelia (already the identity authority); kb is an attribution ledger, not an identity provider; strings survive config reloads and cross-kb federation trivially (see <a href="#username-strings-tradeoff">the recorded tradeoff</a>).</p>
+<h3 id="history-user-column">history: one column, three keying fixes</h3>
+<p><code>ALTER TABLE history ADD COLUMN user TEXT NOT NULL DEFAULT ''</code> (<code>''</code> = pre-migration, mapped to operator by the startup backfill). The append-only invariant #8 is unchanged. <code>user</code> is stamped on <strong>all three kinds</strong> (open, search, comment) &mdash; panel point 1 caught that this is <em>three</em> keying fixes, not one:</p>
+<ul>
+<li>(a) the 30-min visit-gap re-open dedup (<code>history_record_open</code>, <code>sqlite.rs:788-829</code>) matches the latest open row per <em>(artifact_id, user)</em> &mdash; today two teammates within 30 minutes share one row and overwrite each other&rsquo;s scroll;</li>
+<li>(b) the 5-second search dedup (<code>history_record_search</code>, <code>sqlite.rs:866-868</code>) keys per <em>(query, user)</em>;</li>
+<li>(c) <code>idx_history_artifact_open</code> gains <code>user</code>.</li>
+</ul>
+<p>The scroll/reading upserts are already visit-id-addressed, so they become per-user for free. <code>source</code> (<code>'web'|'cli'</code>) stays &mdash; it is the channel, orthogonal to user. <code>reading_sections</code> (V0014) needs <strong>no</strong> schema change: it keys on <code>visit_id</code>, which becomes per-user once history visits are; the cumulative-idempotent <code>max()</code> upsert (invariant #19) is untouched.</p>
+<h3 id="reading-rollup">Reading rollup and <code>?read=</code></h3>
+<p><code>reading_rollup_inner</code> (<code>sqlite.rs:1339-1440</code>) gains a user filter (<code>WHERE user=?</code> before the <code>ROW_NUMBER</code> partition &mdash; a narrowing, not a multiplication). <code>?read=</code> on <code>/docs</code> AND <code>/search</code> (the grammar is lock-step, invariant #35) now means &ldquo;read state <em>for the requesting user</em>&rdquo;. Rollup consumers &mdash; resurface, daycard, graph &mdash; pass the requester too.</p>
+<div class="callout callout--warn"><span class="callout-label">Load-bearing (panel point 2)</span>The rollup&rsquo;s override <em>overlay</em> at <code>sqlite.rs:1411-1414</code> still reads the frozen <code>list_entries.read_override</code> column &mdash; it <strong>must</strong> switch to <code>list_entry_user_state</code> for the requesting user in the same change, or <code>?read=</code> silently stays operator-global.</div>
+<h3 id="reading-lists">Reading lists: shared objects, per-user state</h3>
+<p>Lists + entries + anchors stay <strong>shared team objects</strong> (the global-unique title index stays). Per-user state moves to a new table <code>list_entry_user_state(entry_id REFERENCES list_entries ON DELETE CASCADE, user TEXT, read_override TEXT, updated_at, PRIMARY KEY(entry_id, user))</code>. The legacy <code>list_entries.read_override</code> column is frozen &mdash; backfilled into the new table for the operator, never written again (refinery files are append-only; columns are not dropped). <code>derive_read_state</code> takes the requester; dwell/scroll signals already flow per-user via visits. Panel point 9: the wire stays <em>requester-only</em> in v1; the &ldquo;read by N&rdquo; per-user map is deferred (an additive wire path exists), and the team-awareness claim is correspondingly narrowed to history + comment attribution.</p>
+<h3 id="comments-user-field">Comments (kb-comments/1, invariant #6)</h3>
+<p>An additive <strong>optional</strong> <code>user</code> field on Comment / Reply / Attachment / Verdict &mdash; the uniform wire name is <code>user</code> everywhere (panel point 11: no <code>by_user</code> wobble; the verdict&rsquo;s hardcoded <code>by: Author::You</code> at <code>review.rs:836</code> gains <code>user</code> too). It is <strong>server-stamped</strong> from resolved identity on every create/reply/attach/verdict &mdash; never client-supplied &mdash; unlike <code>author</code>, which stays the client-sent <code>you|claude</code> <em>role</em>: a &ldquo;claude&rdquo; comment records <em>which user&rsquo;s agent</em> wrote it &mdash; the token owner (panel point 10). Absent <code>user</code> (old files) = operator at render time. The schema string stays <code>kb-comments/1</code> &mdash; additive optional field, old files parse byte-identically, <code>reanchor</code> untouched, and the whole-file <code>review_lock</code> already serializes concurrent authors.</p>
+<div class="callout"><span class="callout-label">Server mutation policy (panel point 3 &mdash; decided)</span>Comment/reply <strong>body edit</strong> and <strong>delete</strong> are owner-only, enforced server-side (403 problem+json when <code>identity.user != row user</code>; legacy rows with no user belong to the operator). <strong>Resolve / reply / attach / reanchor stay open to every user</strong> &mdash; they <em>are</em> the collaboration surface (the agent triage loop resolves the human&rsquo;s comments by design). This is attribution hygiene within one trust tier, not an ACL: any user retains full daemon authority elsewhere. The SPA edit-gate mirrors it (<code>user==me</code>, operator fallback for legacy rows).</div>
+<h3 id="backfill">Backfill</h3>
+<p>One idempotent post-migrate startup pass (config in hand): <code>UPDATE history SET user=:op WHERE user=''</code> plus the <code>read_override</code> copy. Runs on every boot, matches zero rows after the first. <strong>Known limitation, recorded:</strong> all pre-migration rows attribute to the operator &mdash; if informal sharing already happened (someone else read artifacts over the operator&rsquo;s shoulder or session), that history is <em>unrecoverably blended</em>. Accepted: day one of identities is the migration moment.</p>
+<h3 id="what-stays-global">What deliberately stays global/shared in v1</h3>
+<p>Stated in full because the 2026-07-06 ruling&rsquo;s original <em>why</em> was the privacy leak, not just read-state pollution (panel point 6). Adding a teammate means accepting <strong>all</strong> of this; the deploy doc says so in exactly these words:</p>
+<ul>
+<li><strong>Agent memory</strong> (the <code>kb remember</code>/recall corpus) &mdash; every user reads and writes the one shared memory; a teammate sees your memories <em>by design</em>.</li>
+<li>Corkboard anchors, pinned_memories, saved queries, memory decay policy.</li>
+<li><strong>Sessions tables + transcripts</strong> &mdash; captured per-machine by each member&rsquo;s own hooks (a later wave); a teammate <em>can</em> read captured transcripts on this daemon.</li>
+<li>Server-side theme/accent/density (already per-browser localStorage in practice).</li>
+<li>History purge / <code>DELETE /api/kb</code> / config writes / shutdown &mdash; whole-daemon verbs: one trust tier, every user is a co-operator wielding full authority.</li>
+</ul>
+<p class="small"><strong>kb-code-server (kbc.example.com) is out of scope</strong> for kb-users/1 (panel point 12). It reuses <code>auth_bearer</code>, so the ladder arrives there mechanically when its crate recompiles against the shared middleware &mdash; but no kbc route consumes identity in v1, and its annotations/review surfaces stay single-operator. Recorded so nobody assumes otherwise.</p>
+</section>
+
+<section>
+<h2 id="api-surface">API surface</h2>
+<ul>
+<li><code>GET /api/identity</code> gains <code>user</code> + <code>identity_source</code> (already the CLI&rsquo;s probe).</li>
+<li><code>GET /api/users</code> &mdash; configured &cup; observed users, with display names.</li>
+<li><code>?user=</code> filter on the history + comments list routes (analogous to <code>?author=</code>).</li>
+<li>Comments POST bodies: <code>author</code> unchanged; any client-sent <code>user</code> is <strong>ignored</strong> (the server stamps; additive fields must not 400 old clients).</li>
+<li>SSE: additive <code>user</code> on the per-action payloads (<code>history.recorded</code>, comment-carrying events, list entry events). The envelope (<code>types.rs:57-83</code>) is untouched &mdash; payload-level and additive, so the SharedWorker/cursor machinery (invariant #24) and old clients are unaffected.</li>
+<li>Everything else unchanged; <code>scope=all</code> federation untouched (user strings are corpus-independent).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="cli-surface">CLI</h2>
+<ul>
+<li><code>kb whoami</code> &mdash; resolved identity + source (hits <code>/api/identity</code>).</li>
+<li><code>kb users</code> &mdash; list <code>/api/users</code>.</li>
+<li><code>kb token issue &lt;user&gt;</code> / <code>kb token revoke &lt;user&gt;</code> &mdash; manage the registry file (daemon-side file on the same host; restart to load, same as today).</li>
+<li>Existing verbs unchanged &mdash; identity is server-derived from the token, so <code>kb comments add --author claude</code> now lands as (<code>author=claude</code>, <code>user=&lt;token owner&gt;</code>).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="spa-surface">SPA</h2>
+<ul>
+<li>Current-user chip (from <code>/api/identity</code>) in the top bar; users in Settings.</li>
+<li>Comments render <code>user</code> beside the role badge; the edit gate is <code>user==me</code>.</li>
+<li>Read-state UI stays &ldquo;yours&rdquo;; history/recents can show teammates&rsquo; chips (team awareness) &mdash; v1 keeps gallery badges per-requester and adds user chips on the artifact History panel only. Deliberately small: the SPA can grow a &ldquo;team activity&rdquo; surface later without wire changes.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="deployment">Deployment (kb.example.com) &mdash; nothing mandatory changes</h2>
+<p>Authelia already stamps the headers; traefik already forwards them. Adding a teammate = add them to Authelia&rsquo;s <code>users_database.yml</code> (+ optionally <code>[[identity.users]]</code> for a display name + a token via <code>kb token issue</code>). The <code>kb-inject-bearer</code> middleware stays exactly as is.</p>
+<p><strong>Security posture (invariant #4 extension):</strong> <code>Remote-User</code> is honored <em>only</em> from trusted hops &mdash; the same <code>trusted_proxies</code> list, exact-match, empty by default. A direct LAN request to <code>127.0.0.1:4000</code> (docker bridge gateway peer &ne; traefik IP) that forges <code>Remote-User</code> is ignored and falls to the token ladder.</p>
+<div class="callout callout--ok"><span class="callout-label">Header-strip verified; ship gate (panel point 5)</span>Traefik&rsquo;s forwardAuth overwrites every <code>authResponseHeaders</code>-listed header on the forwarded request &mdash; delete-then-replace, confirmed from both <a href="https://doc.traefik.io/traefik/middlewares/http/forwardauth/">the traefik forwardAuth docs</a> and <code>forward.go</code> source (research job <code>01KYZFWX1YR448EAP69RRPGBS7</code>; the pattern is Authelia&rsquo;s documented <a href="https://www.authelia.com/integration/trusted-header-sso/introduction/">trusted-header SSO</a> integration). The ship gate: <code>self-host.md</code> <strong>requires</strong> the configured identity header to be listed in <code>authResponseHeaders</code>, plus negative tests. Token ops (panel point 14): distribute the plaintext once, out-of-band; rotation = revoke + issue + restart &mdash; documented in <code>self-host.md</code> in phase D.</div>
+</section>
+
+<section>
+<h2 id="panel-resolutions">Panel resolutions &mdash; 2 seats, both &ldquo;revise&rdquo;, 14/14 dispositioned</h2>
+<p>Grok panel job <code>01KYZG4W2TVGV2NFTX1D3PJDR0</code>. Every point raised, with where it landed in this design:</p>
+<ol>
+<li>Search-history dedup per <em>(query, user)</em> + <code>user</code> on <strong>all</strong> history kinds &rarr; <a href="#history-user-column">&sect;history</a>.</li>
+<li>The rollup override overlay switches to <code>list_entry_user_state</code> in the same change &rarr; <a href="#reading-rollup">&sect;rollup</a>.</li>
+<li>Server-enforced mutation policy (edit/delete owner-only; resolve/reply/attach/reanchor open) &rarr; <a href="#comments-user-field">&sect;comments</a>.</li>
+<li>The edge/token truth table + the loopback-short-circuit trap &rarr; <a href="#identity-ladder">&sect;ladder</a> / <a href="#truth-table">&sect;truth table</a>.</li>
+<li>Header-strip: <strong>verified</strong> (traefik deletes-then-replaces listed headers, docs + source); ship gate = <code>self-host.md</code> requires the configured identity header in <code>authResponseHeaders</code> + negative tests &rarr; <a href="#deployment">&sect;deployment</a>.</li>
+<li>Memory/pinned/purge/config co-admin honesty recorded in full &rarr; <a href="#what-stays-global">&sect;what stays global</a>.</li>
+<li>Rate-limit keyed by resolved user in v1 &rarr; <a href="#ladder-notes">&sect;ladder notes</a>.</li>
+<li>Username normalization: lowercase-fold at resolve, lowercase required in config &rarr; <a href="#ladder-notes">&sect;ladder notes</a>.</li>
+<li>List read-state wire: requester-only in v1; the &ldquo;read by N&rdquo; per-user map deferred (additive wire path exists); the team-awareness claim narrowed to history + comment attribution &rarr; <a href="#reading-lists">&sect;lists</a> / <a href="#spa-surface">&sect;SPA</a>.</li>
+<li>claude-role comments stamp the token owner&rsquo;s <code>user</code> &rarr; <a href="#comments-user-field">&sect;comments</a>.</li>
+<li>Uniform wire field name <code>user</code> (verdict included, no <code>by_user</code>) &rarr; <a href="#comments-user-field">&sect;comments</a>.</li>
+<li>kb-code-server explicitly out of scope &rarr; <a href="#what-stays-global">&sect;data model</a>.</li>
+<li>A two-user <em>route-level</em> integration test lands in phase Y, not only the phase-D e2e &rarr; <a href="#milestone-status">&sect;status</a>.</li>
+<li>Token ops paragraph (distribute plaintext once out-of-band; rotation = revoke + issue + restart) &rarr; <code>self-host.md</code> in phase D, <a href="#deployment">&sect;deployment</a>.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="username-strings-tradeoff">Recorded tradeoff &mdash; username strings, not numeric user ids</h2>
+<p>Prior art (Miniflux, Gitea, and the research job&rsquo;s recommendation) prefers a users table + numeric <code>user_id</code> FK, because usernames rename. kb deliberately keys by the <strong>resolved username string</strong> anyway:</p>
+<ul>
+<li>kb runs ~20 per-kb sqlite DBs plus cross-kb federation &mdash; a numeric id would need a global identity store kb refuses to own (Authelia <em>is</em> the identity store);</li>
+<li>kb&rsquo;s rows already key on string ids everywhere (<code>artifact_id</code>);</li>
+<li>a rename is an operator event with an operator remedy &mdash; a future <code>kb users rename &lt;old&gt; &lt;new&gt;</code> backfill (UPDATE across the per-user tables + review files) is cheap, mechanical, and recorded here as the accepted mitigation.</li>
+</ul>
+<p>Renames are rare on a personal-team Authelia; FK-less attribution degrades to &ldquo;old rows show the old name&rdquo;, never to data loss.</p>
+</section>
+
+<section>
+<h2 id="docs-bookkeeping">Docs and bookkeeping (phase D)</h2>
+<ul>
+<li>Non-goal rewrite (README + CLAUDE.md): &ldquo;one daemon, one operator&rdquo; narrows to &ldquo;one trust tier &mdash; identities are attribution, not authorization&rdquo;; records the 2026-08-01 operator directive; keeps the refused list (passwords, ACLs, roles, per-user visibility).</li>
+<li>Invariant slot #2 (open since v0.24) is filled with the identity ladder + attribution-not-authorization invariant.</li>
+<li>README API rows; <code>docs/configuration.md</code> <code>[identity]</code>; <code>docs/self-host.md</code> Authelia wiring section (including the <code>authResponseHeaders</code> ship gate and the token-ops paragraph); <code>docs/comment-workflow.md</code> <code>user</code> field.</li>
+</ul>
+<p class="small">This record freezes the ratified design as of 2026-08-01. If implementation diverges in phases Y/Z/W/D, the divergence belongs in the milestone&rsquo;s shipping notes and a dated marker here &mdash; not in silent edits to the design text.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

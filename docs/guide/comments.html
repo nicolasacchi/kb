@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb comments: in-place review, anchors, agent reply/resolve loop, identity.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, comments, review, anchors">
+<title>Comments · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="comments.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/comments.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html">Concepts</a>
+  <a href="search.html">Search</a>
+  <a href="web.html">Web reader</a>
+  <a href="comments.html" aria-current="page">Comments</a>
+  <a href="agent.html">Memory &amp; sessions</a>
+  <a href="organize.html">Lists &amp; notes</a>
+  <a href="operate.html">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">05 · Review</p>
+  <h1>Comments</h1>
+  <p class="lede">Human and agent leave margin notes on rendered artifacts. The daemon owns the review files; the CLI is the only safe mutation path for agents.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#in-ui">In the UI</a></li>
+    <li><a href="#anchors">Anchors and staleness</a></li>
+    <li><a href="#agent-loop">Agent loop</a></li>
+    <li><a href="#apply">Batch apply</a></li>
+    <li><a href="#identity">Identity</a></li>
+  </ol>
+</nav>
+
+<section id="in-ui">
+<h2>In the UI</h2>
+<p>Open an artifact, turn on annotate (comments dock / inspect sheet). Click a block: a text selection becomes a <strong>Selection</strong> anchor, a heading a <strong>Chapter</strong>, an element with an id a <strong>Section</strong>. Threads live in daemon-owned <code>.review/&lt;id&gt;.json</code> (kb-comments/1) — never edit those files by hand; the SPA listens over SSE for live updates.</p>
+</section>
+
+<section id="anchors">
+<h2>Anchors and staleness</h2>
+<p>On every reindex the daemon re-resolves open anchors. If a target moved too far, it marks the comment stale (badge + stale-anchors dashboard). The resolver is <strong>detection-only</strong> — it never silently rewrites the frozen anchor. When you intentionally move a section, re-point with ground truth:</p>
+<pre><code>kb comments reanchor &lt;comment_id&gt; --path &lt;artifact&gt; --anchor section:&lt;new-id&gt;</code></pre>
+<p>Stable heading <code>id</code>s in source HTML are what keep Section anchors healthy across regenerations. Avoid UUID or timestamp ids.</p>
+</section>
+
+<section id="agent-loop">
+<h2>Agent loop</h2>
+<p>Typical agent turn:</p>
+<pre><code>kb find &lt;path-or-name&gt; --json
+kb comments list --path &lt;artifact&gt; --json
+# edit the source file on disk (watcher reindexes)
+kb comments reply &lt;comment_id&gt; --path &lt;artifact&gt; --body "What changed."
+# resolve one comment (kb + artifact id + comment id as positionals):
+kb comments resolve &lt;kb&gt; &lt;artifact_id&gt; &lt;comment_id&gt;
+# or resolve every open comment on an artifact:
+kb comments resolve --path &lt;artifact&gt; --all</code></pre>
+<div class="tldr">
+  <h2>Triage rule</h2>
+  <ul>
+    <li><strong>Clear, small fix</strong> (typo, phrasing) → edit + reply + resolve.</li>
+    <li><strong>Ambiguous or large</strong> → reply with a question or options; leave open.</li>
+    <li><strong>Unsure</strong> → reply rather than silently resolving.</li>
+  </ul>
+</div>
+<p>Realtime loop from a terminal: <code>kb comments watch</code>. Export a full thread with <code>kb comments export</code>; bake comments into a portable HTML copy with <code>--embed</code> and read them back with <code>import</code>.</p>
+</section>
+
+<section id="apply">
+<h2>Batch apply</h2>
+<p>When one review turn produces many mutations, send them atomically:</p>
+<pre><code>kb comments apply --path &lt;artifact&gt; --ops-json '[
+  {"op":"add_reply","comment_id":"c_aaa","author":"claude","body":"fixed in §2"},
+  {"op":"set_anchor","comment_id":"c_bbb","anchor":{"kind":"section","id":"overview"}},
+  {"op":"resolve","comment_id":"c_ccc"}
+]'</code></pre>
+<p>All ops land or none do; one SSE update. A batch cannot reply to a comment it also creates (ids are server-minted).</p>
+</section>
+
+<section id="identity">
+<h2>Identity (attribution, not authorization)</h2>
+<p>kb can record <em>who</em> acted — edge identity (e.g. Authelia <code>Remote-User</code> over a trusted hop), per-user API token, or the configured loopback operator — and keys read-state and comment authorship per user.</p>
+<p>What it does <strong>not</strong> do: passwords, roles, read-only tokens, or ACLs. Every admitted identity is a full co-operator. The one hygiene exception: <strong>editing or deleting a comment body is owner-only</strong> (403 otherwise). Resolve, reply, attach, and reanchor stay open to all collaborators.</p>
+<p><code>author: you|claude</code> is the human↔agent <em>role</em> split; the <code>user</code> field is the identity string.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="web.html"><span class="dir">Previous</span>Web reader</a>
+  <a class="next" href="agent.html"><span class="dir">Next</span>Memory &amp; sessions</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

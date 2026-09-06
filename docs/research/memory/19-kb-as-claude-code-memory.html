@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Hub for a 4-part research series on using kb as a persistent memory store for Claude Code, in the spirit of memplace.app / MemPalace. Frames the problem (session amnesia; what CLAUDE.md and the file-based auto-memory do and don't capture), surveys the 2026 landscape (MemPalace, Mem0, claude-mem, Zep, Anthropic's memory tool + context editing), argues the thesis that kb is already ~80% a memory system and its un-copied edge is being a browsable, comment-curated, self-hosted 'memory cockpit', then compares three approaches — A: corpus + protocol (zero-build), B: dedicated kb CLI verbs, C: native subsystem — across two usefulness lenses and gives a phased recommendation.">
+<meta name="kb-tags" content="claude-code, memory, agent-memory, kb, semantic-search, mcp, mem0, mempalace, anthropic-memory-tool, self-host, curation, persistent-memory">
+<meta name="kb-category" content="research">
+<title>19 · kb as Claude Code memory — hub &amp; recommendation — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="19-kb-as-claude-code-memory.html" class="is-current">19 · Memory hub</a>
+      <a href="20-memory-corpus-and-protocol.html">20 · Simple</a>
+      <a href="21-memory-mcp-and-memory-tool.html">21 · CLI verbs</a>
+      <a href="22-memory-native-subsystem.html">22 · Native</a>
+      <a href="23-memory-implementation-spec.html">23 · Build spec</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 19 · Hub
+    <span>·</span>
+    <span class="meta">kb as Claude Code memory</span>
+    <span>·</span>
+    <span class="meta">Research · 2026-05-22</span>
+  </div>
+  <h1>kb is already most of a memory<br>for Claude Code.</h1>
+  <p class="lede">Claude Code forgets everything between sessions. The usual fixes — <code>CLAUDE.md</code> rules and the file-based auto-memory — hold static facts and compressed summaries, but lose the <em>reasoning</em>: what you tried, why it failed, the conditions that made one approach work. A wave of tools (memplace.app/MemPalace, Mem0, claude-mem) fills that gap with a vector store behind an MCP server. Here's the thing: <strong>kb is that, and more</strong> — hybrid search over a watched corpus, plus a UI, a comment system, and a 2-D atlas. This series asks how to turn kb into Claude Code's memory, across three approaches, and argues kb's real edge isn't storage — it's being the only memory you can <em>see and correct</em>.</p>
+</section>
+
+<section class="section section-tight" id="tldr">
+  <div class="tldr">
+    <span class="lbl">The thesis, and the recommendation</span>
+    <p><strong>Thesis:</strong> storage and retrieval are solved problems; kb already does them well. The differentiated value is a <strong>memory cockpit</strong> — browse it in the SPA, map it in the atlas, and correct it by comment through the loop kb already ships. No off-the-shelf memory tool has a UI. <strong>Recommendation:</strong> start with <a href="20-memory-corpus-and-protocol.html">Approach A</a> (a <code>[kb.memory]</code> corpus + a <code>CLAUDE.md</code> protocol — an afternoon, no code); add <a href="21-memory-mcp-and-memory-tool.html">dedicated <code>kb</code> CLI verbs</a> when the shell-call friction bites; build <a href="22-memory-native-subsystem.html">C</a> only if agent memory becomes a direction kb means to own.</p>
+    <div class="badges">
+      <span class="conf conf--high">kb already does hybrid search + curation</span>
+      <span class="conf conf--high">start zero-build</span>
+      <span class="conf conf--med">landscape · May 2026</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="problem">
+  <div class="section-head">
+    <div class="num">01 — The problem</div>
+    <h2>What CLAUDE.md and auto-memory can't hold</h2>
+    <p class="deck">Two memory mechanisms ship with Claude Code today. Both are real; both have a shape-shaped hole.</p>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong><code>CLAUDE.md</code></strong> — hand-curated rules, always in context. Perfect for "always use the fast profile". But it's static, you maintain it by hand, and it's not searchable beyond being a file the model reads top-to-bottom.</li>
+      <li><strong>File-based auto-memory</strong> (<code>~/.claude/projects/&lt;slug&gt;/memory/</code>) — a <code>MEMORY.md</code> index plus typed markdown notes (user / feedback / project / reference). A real step up: the agent writes and reads these across sessions. But the index is loaded wholesale into context and <strong>grepped, not semantically searched</strong>, and entries trend toward compressed summaries.</li>
+    </ul>
+    <div class="note"><b>The gap everyone names.</b> CLAUDE.md stores rules; auto-memory stores summaries; <em>neither preserves the diagnostic path</em> — the approaches you tried, why some failed, the exact conditions that made one work. That nuance is precisely what you want back three weeks later, and precisely what a summary throws away. Filling it needs (a) a richer store than a one-line note, and (b) <em>semantic</em> recall so you find the memory without remembering its words.</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="landscape">
+  <div class="section-head">
+    <div class="num">02 — The landscape</div>
+    <h2>Everybody bolts a vector store onto an MCP server</h2>
+    <p class="deck">The 2026 memory-for-Claude field, and the baseline kb has to beat.</p>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Persistent-memory options for Claude (May 2026)</caption>
+      <thead><tr><th>Tool</th><th>Hosting</th><th>Integration</th><th>Semantic search</th><th>Human-facing UI</th></tr></thead>
+      <tbody>
+        <tr><td>CLAUDE.md <span class="meta">(baseline)</span></td><td class="center">local file</td><td>always in context</td><td class="center"><span class="n">no</span></td><td class="center"><span class="n">a text file</span></td></tr>
+        <tr><td>Auto-memory <span class="meta">(baseline)</span></td><td class="center">local files</td><td>built-in</td><td class="center"><span class="n">no (grep)</span></td><td class="center"><span class="n">none</span></td></tr>
+        <tr><td>MemPalace</td><td class="center">local</td><td>MCP (~29 tools)</td><td class="center"><span class="y">yes</span></td><td class="center"><span class="n">none</span></td></tr>
+        <tr><td>Mem0</td><td class="center">cloud / self-host</td><td>MCP + lifecycle hooks</td><td class="center"><span class="y">yes</span></td><td class="center"><span class="p">dashboard</span></td></tr>
+        <tr><td>claude-mem</td><td class="center">local</td><td>native plugin (5 hooks)</td><td class="center"><span class="y">yes</span></td><td class="center"><span class="n">none</span></td></tr>
+        <tr><td>Zep / Graphiti</td><td class="center">local</td><td>MCP</td><td class="center"><span class="y">temporal KG</span></td><td class="center"><span class="p">graph view</span></td></tr>
+        <tr><td>Anthropic memory tool</td><td class="center">your backend</td><td>API / Agent SDK</td><td class="center"><span class="p">your call</span></td><td class="center"><span class="n">none</span></td></tr>
+        <tr><td><strong>kb</strong></td><td class="center"><strong>self-host</strong></td><td><strong>skills</strong> · <code>kb</code> CLI verbs</td><td class="center"><span class="y">hybrid</span></td><td class="center"><span class="y">SPA + atlas + comments</span></td></tr>
+      </tbody>
+    </table>
+    <p>Two recurring lessons from the field. <strong>One:</strong> the tools won't fire without a <code>CLAUDE.md</code> telling the agent to save and recall — MemPalace solves it with a "Memory Protocol" injected by its status tool. <strong>Two:</strong> the interesting design choices are about <em>capture</em> (lifecycle hooks vs. manual), <em>recall ergonomics</em> (CLI verbs vs. an MCP server), and <em>curation/trust</em> — not about which vector DB. Everyone ships ChromaDB/Qdrant/SQLite; nobody ships a way for the human to look at and fix the memory.</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="thesis">
+  <div class="section-head">
+    <div class="num">03 — Why kb fits</div>
+    <h2>~80% of a memory system, plus the part nobody else built</h2>
+    <p class="deck">Map a memory layer's needs onto kb's existing surface and most boxes are already ticked.</p>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>What a memory layer needs vs. what kb already has</caption>
+      <thead><tr><th>Need</th><th>kb today</th></tr></thead>
+      <tbody>
+        <tr><td>Semantic + keyword recall</td><td><span class="y">hybrid BM25 + bge-small vector (RRF), shipped since v0.1</span></td></tr>
+        <tr><td>Persist a memory</td><td><span class="p">write an HTML file → watcher indexes it (~400 ms)</span></td></tr>
+        <tr><td>Stable identity across edits</td><td><span class="y">path-based ids — editing keeps the id</span></td></tr>
+        <tr><td>Many corpora (memory / sessions)</td><td><span class="y">multi-kb config; add <code>[kb.memory]</code> in one block</span></td></tr>
+        <tr><td>See &amp; search the store</td><td><span class="y">SPA gallery + full-text/semantic search UI</span></td></tr>
+        <tr><td>Understand the shape of it</td><td><span class="y">UMAP / k-means atlas — a 2-D map of the corpus</span></td></tr>
+        <tr><td>Correct / curate memory</td><td><span class="y">comment system + two-way <code>kb comments watch</code> loop</span></td></tr>
+        <tr><td>Programmatic write (low latency)</td><td><span class="n">no body-POST ingest yet (Approach C adds it)</span></td></tr>
+        <tr><td>First-class memory verbs</td><td><span class="n">no <code>kb recall</code>/<code>remember</code> verbs yet (Approach B adds them)</span></td></tr>
+      </tbody>
+    </table>
+    <div class="rec">
+      <div class="lbl">The cockpit thesis</div>
+      <p>The missing 20% is <em>behaviour</em> (a protocol so the agent uses it), <em>ergonomics</em> (MCP / faster ingest), and <em>framing</em>. The framing is the real insight: every competitor is a black-box store you query and trust. kb is the one memory that's a <strong>browsable, mappable, comment-curated, self-hosted cockpit</strong> — the only place a human can <em>see</em> what the agent remembers, <em>search</em> it, <em>annotate</em> it, and <em>converse to correct</em> it. That's not a vector-DB feature; it's the thing kb already is. Reframe the question from "is kb a good memory store?" to "kb is the missing UI and curation layer for agent memory."</p>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="approaches">
+  <div class="section-head">
+    <div class="num">04 — Three approaches</div>
+    <h2>From an afternoon to a product</h2>
+    <p class="deck">Each gets its own deep-dive; each is judged on usefulness for Claude-the-agent and for the end user.</p>
+  </div>
+  <div class="prose">
+    <div class="findings">
+      <div class="finding">
+        <h3><a href="20-memory-corpus-and-protocol.html">A · Corpus + protocol</a> <span class="meta">(zero-build)</span></h3>
+        <p>A <code>[kb.memory]</code> corpus of HTML memories; a <code>CLAUDE.md</code> recall/remember protocol; tiny <code>recall</code>/<code>remember</code> skills; an optional episodic <code>[kb.sessions]</code> corpus fed by a SessionEnd hook. No kb code. Highest leverage-per-effort — <strong>the place to start.</strong></p>
+      </div>
+      <div class="finding">
+        <h3><a href="21-memory-mcp-and-memory-tool.html">B · dedicated kb CLI verbs</a> <span class="meta">(integrate)</span></h3>
+        <p>Promote A's skills to dedicated <code>kb</code> verbs — <code>kb recall</code> / <code>kb remember</code> — invoked through the Bash tool Claude already has: no MCP server, no extra process, zero context-token tax. (An MCP server, Anthropic's memory tool, and buying Mem0/MemPalace are weighed and rejected for Claude Code.) Small <code>kb-cli</code> code.</p>
+      </div>
+      <div class="finding">
+        <h3><a href="22-memory-native-subsystem.html">C · Native subsystem</a> <span class="meta">(full build)</span></h3>
+        <p>Memory as a first-class kb feature: salience/decay ranking, a real ingest endpoint, lifecycle-hooks plugin, comment-driven invalidation, an SPA Memory view with the atlas as a mind-map. Most powerful, most expensive — <strong>defer unless memory becomes a pillar.</strong></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="matrix">
+  <div class="section-head">
+    <div class="num">05 — Comparison</div>
+    <h2>The two lenses, side by side</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Approaches across both usefulness lenses</caption>
+      <thead><tr><th></th><th>A · corpus+protocol</th><th>B · CLI verbs</th><th>C · native</th></tr></thead>
+      <tbody>
+        <tr><td>kb code change</td><td class="center"><span class="y">none</span></td><td class="center"><span class="p">adapter only</span></td><td class="center"><span class="n">4 crates</span></td></tr>
+        <tr><td>Effort</td><td class="center"><span class="y">an afternoon</span></td><td class="center"><span class="p">days</span></td><td class="center"><span class="n">weeks+</span></td></tr>
+        <tr><td>Useful for Claude</td><td class="center"><span class="p">good (protocol-gated)</span></td><td class="center"><span class="y">better (verbs + recall hook)</span></td><td class="center"><span class="y">best (proactive)</span></td></tr>
+        <tr><td>Useful for the user</td><td class="center"><span class="y">high (cockpit)</span></td><td class="center"><span class="y">high (nothing extra to run)</span></td><td class="center"><span class="y">highest + upkeep</span></td></tr>
+        <tr><td>Recall latency</td><td class="center"><span class="p">~400 ms write</span></td><td class="center"><span class="p">~400 ms write</span></td><td class="center"><span class="y">instant ingest</span></td></tr>
+        <tr><td>Reversible</td><td class="center"><span class="y">fully</span></td><td class="center"><span class="y">mostly</span></td><td class="center"><span class="p">harder</span></td></tr>
+        <tr><td>Build or buy</td><td class="center"><span class="y">build (trivial)</span></td><td class="center"><span class="p">build (small)</span></td><td class="center"><span class="n">build (committed)</span></td></tr>
+      </tbody>
+    </table>
+    <p>The data underneath every approach is the same kb HTML artifacts, so moving up the ladder never migrates memories — only the front door and the polish change. That makes the phasing below low-risk: each step is additive.</p>
+  </div>
+</section>
+
+<section class="section" id="recommendation">
+  <div class="section-head">
+    <div class="num">06 — Recommendation</div>
+    <h2>A phased path</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>Now — Approach A.</strong> Add <code>[kb.memory]</code>, drop the memory protocol into <code>CLAUDE.md</code>, add the <code>recall</code>/<code>remember</code> skills. Live with it. This alone is a real semantic memory with a UI.</li>
+      <li><strong>When the shell-call friction annoys you — Approach B.</strong> Promote the skills to dedicated <code>kb recall</code>/<code>remember</code> verbs and add the <code>UserPromptSubmit</code> recall hook — no MCP, nothing extra to run.</li>
+      <li><strong>Only if agent memory becomes a kb pillar — C.</strong> Pull the native pieces in cheapest-first: a <code>kb remember</code>/<code>recall</code> verb pair → the <code>UserPromptSubmit</code> proactive-recall hook → the Memory view → decay/consolidation.</li>
+      <li><strong>Sanity check.</strong> If a need is purely "remember ambient facts", a throwaway off-the-shelf tool is fine — but spend kb's effort on the long-form, curated material no off-the-shelf tool provides.</li>
+    </ol>
+    <div class="note"><b>Dogfooding note.</b> This report is itself a kb artifact in the <code>kb-docs</code> corpus — so the natural way to react to it is to open it in kb and drop comments on the bits you disagree with. That comment loop is exactly the curation mechanism Approach A proposes for memory. The medium is the message.</div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="page-nav">
+    
+      <span class="dir">← Prev</span>
+      <span class="ttl">18 · Ephemeral sharing</span>
+     (private)
+    <a href="20-memory-corpus-and-protocol.html" class="next">
+      <span class="dir">Next →</span>
+      <span class="ttl">20 · Approach A — corpus + protocol</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb as Claude Code memory — hub &amp; recommendation.</p>
+      <p>kb capabilities verified against the codebase (hybrid search, watcher, comments, atlas, multi-kb config); memory landscape current to May 2026. Deep-dives: <a href="20-memory-corpus-and-protocol.html">20</a> · <a href="21-memory-mcp-and-memory-tool.html">21</a> · <a href="22-memory-native-subsystem.html">22</a>.</p>
+    </div>
+    <div>
+      <h5>Sections</h5>
+      <ul>
+        <li><a href="#problem">The problem</a></li>
+        <li><a href="#landscape">The landscape</a></li>
+        <li><a href="#thesis">Why kb fits</a></li>
+        <li><a href="#approaches">Three approaches</a></li>
+        <li><a href="#recommendation">Recommendation</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Sources</h5>
+      <ul>
+        <li><a href="https://memplace.app/" target="_blank" rel="noopener">MemPalace (memplace.app)</a></li>
+        <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool" target="_blank" rel="noopener">Anthropic · memory tool</a></li>
+        <li><a href="https://www.anthropic.com/news/context-management" target="_blank" rel="noopener">Anthropic · context management</a></li>
+        <li><a href="https://docs.mem0.ai/integrations/claude-code" target="_blank" rel="noopener">Mem0 · Claude Code</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('kb-theme'); if (saved) root.dataset.theme = saved; } catch (e) {}
+  var btn = document.querySelector('[data-action="toggle-theme"]');
+  if (btn) btn.addEventListener('click', function () {
+    var next = root.dataset.theme === 'ink' ? 'paper' : 'ink';
+    root.dataset.theme = next;
+    try { localStorage.setItem('kb-theme', next); } catch (e) {}
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 't' || e.key === 'T') && !/input|textarea/i.test(e.target.tagName)) { if (btn) btn.click(); }
+  });
+  var bar = document.querySelector('.reading-progress');
+  if (bar) {
+    var tick = function () {
+      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+      bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+    };
+    document.addEventListener('scroll', tick, { passive: true });
+    tick();
+  }
+})();
+</script>
+</body>
+</html>

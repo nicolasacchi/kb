@@ -1,0 +1,6 @@
+{
+  "name": "kb-comments",
+  "description": "Triage SPA comments (kb-comments/1) from Claude Code. /kb-comments runs the list → edit-source → reply/resolve round-trip for one artifact; /kb-comments-watch is the live SSE loop that surfaces new reviewer comments as they land. The `kb` CLI is the only safe path — the daemon owns the ETag-protected review files. Packaging only; no daemon code.",
+  "version": "0.1.0",
+  "author": { "name": "kb" }
+}

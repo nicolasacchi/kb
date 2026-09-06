@@ -1,0 +1,58 @@
+---
+source: crates/kb-core/tests/session_digest_snapshots.rs
+expression: "format! (\"{report:#?}\")"
+---
+DigestReport {
+    session_id: "c47a1e58-9d30-4b62-8e15-70af2c3d9b61",
+    message_count: 53,
+    first_user_prompt: Some(
+        "Pull the latest demo tree and rebuild it on the second platform",
+    ),
+    ai_title: Some(
+        "Rebuild the demo tree on a second platform",
+    ),
+    cwd: Some(
+        "/home/user/project/demo",
+    ),
+    all_cwds_count: 2,
+    git_branch: Some(
+        "main",
+    ),
+    model: Some(
+        "claude-fable-5",
+    ),
+    token_total: 3550,
+    tool_calls: 15,
+    error_count: 1,
+    files_read_count: 6,
+    files_edited_count: 3,
+    decisions: [],
+    commits: [
+        (
+            "commit",
+            Some(
+                "3f9c1ab",
+            ),
+            Some(
+                "chore: portable build recipe — justfile os() switch + quickstart",
+            ),
+        ),
+        (
+            "push",
+            Some(
+                "3f9c1ab",
+            ),
+            Some(
+                "push",
+            ),
+        ),
+    ],
+    research: [
+        (
+            "subagent",
+            "Hunt platform-specific build assumptions",
+        ),
+    ],
+    digest: "Rebuild the demo tree on a second platform\nPull the latest demo tree and rebuild it on the second platform\nresearched: Hunt platform-specific build assumptions\ncommits: chore: portable build recipe — justfile os() switch + quickstart; push\nfiles: quickstart.md justfile stamp.sh embed_spawn.rs ci.yml README.md\nclosed: All green on both platforms now. The recipe picks its priority prefix from just's os() switch, the quickstart documents the one-line install for each, and the embed sidecar no longer assumes a Linux-…\nproject: demo branch: main",
+    digest_excerpt: "Rebuild the demo tree on a second platform · Pull the latest demo tree and rebuild it on the second platform · closed: All green on both platforms now. The recipe picks its priority prefix from just's os() switch, the quickstart documents the one-line install for each, and the embed sidecar no longer assumes a Linux-only spawn path. The full suite passes and the release dry-run interpolates the sa",
+}

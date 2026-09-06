@@ -1,0 +1,736 @@
+/* Mobile shell (F5, "kb-code v2 — The Operable Reader") — kb-code's chrome
+ * had ZERO mobile handling before this file: the three-column reader
+ * (tree | CM6 buffer(s) | inspector) simply crushed at a phone's width, with
+ * no drawer, no sheet, no touch-target sizing anywhere.
+ *
+ * Mirrors kb's own mobile system (`web/src/styles/mobile.css`, root
+ * CLAUDE.md invariants #23/#30): ONE breakpoint (`useIsMobile`'s
+ * `MOBILE_MAX_WIDTH`, 860px — MUST match every `max-width: 860px` below),
+ * the tree promoted to an off-canvas `MobileDrawer` (kbc-prefixed port of
+ * kb's own component), the inspector promoted to a bottom SHEET via a CSS
+ * modifier class (mirrors kb's `.kb-pinsp` sheet promotion) rather than a
+ * second component — so the desktop `<aside className="kbc-reader__outline">`
+ * markup + the `InspectorRail`'s own props (`asSheet`/`onMobileClose`, both
+ * false/undefined when `!isMobile`) stay byte-identical to pre-F5 (verified
+ * in `e2e/mobile.spec.ts`).
+ *
+ * Imported LAST in main.tsx so these rules override the desktop chrome.
+ * Desktop (≥861px) is untouched: every rule lives inside
+ * `@media (max-width: 860px)` or `@media (pointer: coarse)` (plus
+ * drawer/sheet BASE styles that only ever render when `isMobile` is true —
+ * see `Reader.tsx`'s own conditionals — so they're inert on desktop
+ * regardless of the media query).
+ *
+ * The companion light-theme parity audit (F5's other half) lives in
+ * `tokens.css`'s own per-fix comments (`--warn`/`--green`/`--red`/`--blue`
+ * darkened under `[data-theme="light"]`, the new `--backdrop`/`--age-tint`
+ * tokens) plus `reader.css`'s `.kbc-vim-status`/`.kbc-kbdhelp__scrim` fixes —
+ * not repeated here, since none of it is breakpoint-gated.
+ */
+
+/* ─────────────────────── hamburger + mobile entry buttons ────────────── */
+
+/* Hidden on desktop, revealed in the mobile media query below. Lives as the
+ * first child of `.kbc-reader__top`. */
+.kbc-burger,
+.kbc-inspector-toggle,
+.kbc-review-sheet-toggle,
+.kbc-rdiff__files-toggle {
+  display: none;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink);
+  cursor: pointer;
+}
+.kbc-burger:hover,
+.kbc-inspector-toggle:hover,
+.kbc-review-sheet-toggle:hover,
+.kbc-rdiff__files-toggle:hover {
+  border-color: var(--rule-hi);
+  background: var(--bg-card-hi);
+}
+.kbc-inspector-toggle__badge,
+.kbc-review-sheet-toggle__badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 9px;
+  font-family: var(--font-mono);
+  display: grid;
+  place-items: center;
+}
+
+/* ───────────────────── tree drawer (MobileDrawer port) ─────────────────
+ * Base styles live outside the media query, same as kb's own
+ * `.kb-drawer-scrim`/`.kb-drawer` — the component only ever mounts on
+ * mobile (`Reader.tsx`'s `isMobile ? <MobileDrawer>… : …`), so a slide-in
+ * is always positioned correctly the instant it renders, with no flash of
+ * unstyled desktop positioning to guard against.
+ */
+.kbc-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--backdrop);
+  opacity: 0;
+  transition: opacity 0.22s var(--ease);
+}
+.kbc-drawer-scrim.is-open {
+  opacity: 1;
+}
+.kbc-drawer {
+  position: fixed;
+  z-index: var(--z-drawer);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--drawer-w);
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  /* SH.C1 — dark-theme depth: a side drawer needs to visibly separate from
+   * the page behind it, not read flat against it. */
+  border-right: 1px solid var(--rule-hi);
+  box-shadow: var(--shadow-lift);
+  transform: translateX(-100%);
+  transition: transform 0.24s var(--ease);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.kbc-drawer.is-open {
+  transform: translateX(0);
+}
+.kbc-drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px 8px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-drawer__title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.kbc-drawer__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-size: 15px;
+  cursor: pointer;
+}
+.kbc-drawer__close:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kbc-drawer__body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 16px;
+}
+/* The FileTree dropped into the drawer fills the width and drops its
+ * desktop right border + fixed sizing. */
+.kbc-drawer .kbc-tree {
+  height: auto;
+}
+.kbc-drawer .kbc-tree__filter {
+  margin: 8px 12px;
+}
+
+/* ────────────────── reader-tools bottom sheet (inspector) ───────────────
+ * Mode-agnostic promotion of the SAME `.kbc-reader__outline` aside +
+ * `InspectorRail` that renders inline on desktop — see this file's header
+ * doc for why this is a CSS-only class-based promotion rather than a second
+ * component the way the tree drawer is one.
+ */
+.kbc-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--backdrop);
+  opacity: 0;
+  transition: opacity 0.22s var(--ease);
+  pointer-events: none;
+}
+.kbc-sheet-scrim.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kbc-drawer,
+  .kbc-drawer-scrim,
+  .kbc-reader__outline,
+  .kbc-sheet-scrim,
+  .kbc-navsheet,
+  .kbc-navsheet-scrim,
+  .kbc-review__side {
+    transition: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .kbc-burger,
+  .kbc-inspector-toggle,
+  .kbc-review-sheet-toggle,
+  .kbc-rdiff__files-toggle {
+    display: inline-flex;
+  }
+
+  .kbc-review-sheet-toggle {
+    margin: 0 0 var(--pad-2);
+  }
+  .kbc-rdiff__files-toggle {
+    gap: var(--pad-1);
+    padding: 0 var(--pad-2);
+    font: inherit;
+    font-size: var(--fs-sm);
+  }
+
+  /* Desktop jump input stays in the DOM (toolbar byte-identical ≥861px);
+   * the files-toggle replaces it at this breakpoint. */
+  .kbc-rdiff__jump {
+    display: none;
+  }
+
+  /* V4.M1 — review cockpit side panel → NavSheet-recipe bottom sheet.
+   * Same CSS promotion as `.kbc-reader__outline`: the `<aside>` stays
+   * in the desktop grid; this query lifts it off-canvas until
+   * `.kbc-review--sheet-open`. */
+  .kbc-review__side {
+    position: fixed;
+    inset: auto 0 0 0;
+    width: auto;
+    height: min(80vh, 620px);
+    max-height: calc(100vh - var(--topbar-h) - 8px);
+    max-height: calc(100dvh - var(--topbar-h) - 8px);
+    z-index: var(--z-drawer);
+    gap: var(--pad-2);
+    border-top: 1px solid var(--rule);
+    border-top-left-radius: var(--radius-lg);
+    border-top-right-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    background: var(--bg-panel);
+    padding: var(--pad-2) var(--pad-3);
+    padding-bottom: calc(var(--pad-3) + env(safe-area-inset-bottom));
+    overflow: auto;
+    overscroll-behavior: contain;
+    transform: translateY(100%);
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+      transform 0.24s var(--ease),
+      visibility 0.24s var(--ease);
+  }
+  .kbc-review--sheet-open .kbc-review__side {
+    transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .kbc-review__sheet-head {
+    display: flex;
+    align-items: center;
+    gap: var(--pad-2);
+    padding-bottom: var(--pad-2);
+    margin-bottom: var(--pad-1);
+    border-bottom: 1px solid var(--rule);
+    flex: 0 0 auto;
+    position: sticky;
+    top: calc(-1 * var(--pad-2));
+    z-index: 1;
+    background: var(--bg-panel);
+  }
+  .kbc-review__sheet-lab {
+    flex: 1 1 auto;
+    font-size: var(--fs-sm);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .kbc-review__sheet-x {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    border: none;
+    background: none;
+    color: var(--ink-mute);
+    cursor: pointer;
+    padding: var(--pad-1);
+  }
+  .kbc-review__sheet-x:hover {
+    color: var(--ink);
+  }
+
+  /* ── SH.C2 — review cockpit file row → two-line layout (audit: at 390px
+   * the diff-stat AND the viewed checkbox sat past the right edge — the
+   * reviewer couldn't mark a file viewed on a phone). CSS-only: the row's
+   * children (`ReviewFileItem.tsx`) are flat flex siblings, so this is a
+   * `flex-wrap` + explicit `order` restructure, no DOM change needed.
+   *
+   * Line 1 — status letter + path. Path keeps `flex: 1 1 auto` (base rule)
+   * so it fills 100% of line 1's free space; `justify-content: flex-end`
+   * below therefore has nothing left to redistribute on this line and only
+   * visibly acts on line 2.
+   * Line 2 — diff-stat + risk/stale/thread badges + viewed checkbox,
+   * right-aligned. A zero-height `::after` with `flex-basis: 100%` is the
+   * force-break: it can't share line 1 (no room after path), so every item
+   * ordered after it lands on a fresh line; those items share ONE `order`
+   * value and simply keep their DOM order (stats → risk → stale → threads
+   * → viewed) as the flex-wrap tiebreak. */
+  .kbc-review__file-row {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .kbc-review__file-status {
+    order: 1;
+  }
+  .kbc-review__file-path {
+    order: 2;
+    /* Truncate from the START, not the end, so the FILENAME (the string's
+     * tail) stays visible instead of the leading directory segments. */
+    direction: rtl;
+    text-align: left;
+  }
+  .kbc-review__file-row::after {
+    content: "";
+    order: 3;
+    flex-basis: 100%;
+    height: 0;
+  }
+  .kbc-review__file-stats,
+  .kbc-review__risk,
+  .kbc-review__stale,
+  .kbc-review__file-ann,
+  .kbc-review__file-viewed {
+    order: 4;
+  }
+  /* Row-tap already opens the inline diff (`onOpen` in ReviewFileItem.tsx);
+   * dropping this redundant link keeps line 2 to the essentials WO2 calls
+   * out instead of spilling to a third line. */
+  .kbc-rdiff__open-file {
+    display: none;
+  }
+
+  /* Unified: hide the OLD gutter, narrow the NEW one. Split stays
+   * unavailable (diff.css already hides the split toggle). */
+  .kbc-diff__gutter-old {
+    display: none;
+  }
+  .kbc-diff__gutter-new {
+    flex: 0 0 36px;
+  }
+
+  .kbc-rdiff__file-row {
+    display: flex;
+    align-items: center;
+    gap: var(--pad-2);
+    width: 100%;
+    min-height: 40px;
+    padding: 0 var(--pad-3);
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  .kbc-rdiff__file-row:hover,
+  .kbc-rdiff__file-row.is-current {
+    background: var(--bg-card-hi);
+  }
+  .kbc-rdiff__file-check {
+    flex: 0 0 20px;
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+  }
+  .kbc-rdiff__file-row-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+  }
+
+  /* ── SH.C2 — shared horizontal-scroll toolbar recipe ────────────────────
+   * THE recurring kb-code mobile defect: a chrome row (reader top bar,
+   * review-diff toolbar, …) carries more buttons/toggles than a phone's
+   * width and either wraps into an illegible second line or clips at both
+   * edges with zero hint there's more to see (audit: reader toolbar's
+   * "Sticky"/"+Set" sliced to slivers; the diff toolbar's Unified/Split/
+   * Prev/Next/Jump row identically clipped). Every row that can outgrow
+   * 390px joins THIS selector list instead of re-solving the problem:
+   * scroll horizontally (mirrors kb's own `.kb-ctxbar` treatment), hide the
+   * native scrollbar (the edge fade below IS the scroll affordance), fade
+   * both edges via `mask-image` so a cut-off control reads as "scroll for
+   * more" rather than "broken", and snap so a swipe settles on a whole
+   * control. Children keep their natural width (`flex-shrink: 0`) instead
+   * of shrinking into illegibility; `flex-wrap: nowrap` overrides any
+   * desktop `flex-wrap: wrap` (`.kbc-rdiff__toolbar` in reviews.css) that
+   * would otherwise fight the scroll with a second wrapped line.
+   *
+   * The NEXT overflowing row: add its selector to every rule below — that's
+   * the whole recipe, nothing else to invent.
+   *
+   * PRR-U8 mobile pass: `.kbc-review__view-tabs` (CockpitTabs — Report /
+   * Files / Map / Order / Timeline, up to 5 tabs) joins the list — it had
+   * NO overflow handling at all (plain `display: flex`, default `nowrap`),
+   * so at 390px the tab row either clipped the later tabs with no scroll
+   * affordance or forced the whole page wider. Same fix, same reasoning. */
+  .kbc-reader__top,
+  .kbc-rdiff__toolbar,
+  .kbc-review__view-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      var(--ink) var(--pad-3),
+      var(--ink) calc(100% - var(--pad-3)),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      var(--ink) var(--pad-3),
+      var(--ink) calc(100% - var(--pad-3)),
+      transparent 100%
+    );
+  }
+  .kbc-reader__top::-webkit-scrollbar,
+  .kbc-rdiff__toolbar::-webkit-scrollbar,
+  .kbc-review__view-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .kbc-reader__top > *,
+  .kbc-rdiff__toolbar > *,
+  .kbc-review__view-tabs > * {
+    flex-shrink: 0;
+    scroll-snap-align: start;
+  }
+
+  /* PRR-U8 — publish preview modal: the `.confirm` base already caps width
+   * (`min(420px, 92vw)`, `.kbc-publish-preview`'s own override widens that
+   * to `min(92vw, 640px)`) but neither caps HEIGHT — a marked set with a
+   * skipped-orphaned block + verdict mapping + CLI hint can outgrow a short
+   * phone viewport with no internal scroll, clipping the "Mark round done"
+   * action off-screen. Cap the dialog to the viewport and let the body
+   * scroll (same "one scroll region" posture `.kbc-reader__outline`'s own
+   * doc already established for the inspector sheet). */
+  .kbc-publish-preview {
+    max-height: min(88vh, 88dvh);
+    display: flex;
+    flex-direction: column;
+  }
+  .kbc-publish-preview__body {
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  /* V4.U5 — TopBar no longer h-scrolls; destinations live in the nav
+   * sheet. The `⌘K` hint is meaningless without a physical keyboard, and
+   * the text label would crowd out the repo pill on a narrow screen — the
+   * search icon alone stays a clear, recognizable affordance. */
+  .kbc-search-mini__label,
+  .kbc-search-mini kbd {
+    display: none;
+  }
+
+  /* ── tree drawer: no desktop counterpart to hide (Reader.tsx renders
+   * EITHER the drawer OR the inline aside, never both) — nothing to do
+   * here beyond what's already unconditional above. */
+
+  /* ── inspector: promote the SAME aside markup to a fixed bottom sheet.
+   * Mounted-but-inert when closed (translated offscreen + pointer-events
+   * none so its focusables aren't tabbable behind the buffer); slides in on
+   * the `.kbc-reader--sheet-open` modifier, mirroring the tree drawer. */
+  .kbc-reader__outline {
+    position: fixed;
+    inset: auto 0 0 0;
+    width: auto;
+    height: min(80vh, 620px);
+    max-height: calc(100vh - var(--topbar-h) - var(--topbar-h) - 8px);
+    max-height: calc(100dvh - var(--topbar-h) - var(--topbar-h) - 8px);
+    z-index: var(--z-drawer);
+    border-left: 0;
+    /* SH.C1 — dark-theme depth: a bottom sheet needs to visibly separate
+     * from the page behind it, not read flat against it. */
+    border-top: 1px solid var(--rule-hi);
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    box-shadow: var(--shadow-lift);
+    padding-bottom: env(safe-area-inset-bottom);
+    /* `.kbc-inspector`'s own `height: 100%` already fills this box exactly
+     * and its `.kbc-inspector__body` owns the internal scroll — override the
+     * desktop `overflow: auto` so the promoted sheet has one scroll region,
+     * not a nested pair. */
+    overflow: hidden;
+    overscroll-behavior: contain;
+    transform: translateY(100%);
+    pointer-events: none;
+    transition:
+      transform 0.24s var(--ease),
+      visibility 0.24s var(--ease);
+    visibility: hidden;
+  }
+  .kbc-reader--sheet-open .kbc-reader__outline {
+    transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  /* The sheet-only grab handle + label + ✕ header (hidden on desktop —
+   * `onMobileClose` is only ever passed a callback when `isMobile`, so this
+   * markup doesn't even exist there). */
+  .kbc-inspector__sheet-head {
+    display: flex;
+    align-items: center;
+    position: relative;
+    padding: 16px 10px 6px;
+    flex: 0 0 auto;
+  }
+  .kbc-inspector__grab {
+    display: block;
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--rule-hi);
+  }
+  .kbc-inspector__sheet-lab {
+    flex: 1 1 auto;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .kbc-inspector__sheet-x {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: var(--ink-mute);
+    cursor: pointer;
+    padding: 4px;
+    display: grid;
+    place-items: center;
+  }
+  .kbc-inspector__sheet-x:hover {
+    color: var(--ink);
+  }
+
+  /* ── V70-A4: the Desk is one column on a phone. The dock is the
+   * off-canvas `MobileDrawer`, the rail is the ONE bottom sheet (the
+   * `.kbc-reader__outline` promotion above, unchanged), and the drawer
+   * sits INSIDE that sheet under the rail — never a second sheet. No
+   * stripes: the sole entry point stays the badged header button. */
+  .kbc-desk {
+    flex-direction: column;
+  }
+  .kbc-desk__sheet-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .kbc-desk__sheet-rail {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Collapsed the drawer is exactly its tab strip; expanded it takes at
+   * most half the sheet, so the rail never disappears behind it. */
+  .kbc-desk__sheet-drawer {
+    flex: 0 0 auto;
+    max-height: 50%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .kbc-desk__sheet-drawer > .kbc-desk__drawer {
+    height: auto;
+    max-height: 100%;
+  }
+
+  /* ── Wave E splits: side-by-side panes don't fit a phone's width — stack
+   * them 50/50 instead. CSS only: flipping `flex-direction` to `column`
+   * turns the existing `.kbc-reader__pane-rule` (a 1px flex-basis divider)
+   * into a horizontal rule automatically, no separate rule needed. */
+  .kbc-reader__panes {
+    flex-direction: column;
+  }
+  .kbc-reader__pane {
+    min-height: 0;
+  }
+
+  /* ── Home dashboard: one card per row (defensive — `auto-fill,
+   * minmax(300px,1fr)` already collapses to one column under ~630px, but
+   * pin it explicitly rather than rely on that arithmetic staying true). */
+  .kbc-home__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ───────────────────── touch targets + momentum scroll ─────────────────
+ * Coarse pointers (touch) get ≥44px hit areas on the small controls the
+ * desktop-dense chrome ships, and native momentum on the panels/strips that
+ * scroll independently of the page. Width-independent (a touch laptop
+ * benefits too), scoped to specific selectors so this doesn't bloat every
+ * button — mirrors kb's own MB5 discipline verbatim.
+ */
+@media (pointer: coarse) {
+  .kbc-burger,
+  .kbc-inspector-toggle,
+  .kbc-search-mini,
+  .kbc-drawer__close,
+  .kbc-inspector__sheet-x,
+  .kbc-topbar__nav-toggle,
+  .kbc-navsheet__row,
+  .kbc-navsheet__close,
+  .kbc-navsheet__theme,
+  .kbc-review-sheet-toggle,
+  .kbc-review__sheet-x,
+  .kbc-verdict__btn,
+  .kbc-review__ps-chip,
+  .kbc-rthread__reply-row button,
+  .kbc-rthread__actions button,
+  .kbc-suggestion__actions button,
+  .kbc-rdiff__files-toggle,
+  .kbc-diff-pill button,
+  .kbc-iconbtn,
+  /* PRR-U8 mobile pass — the Report tab's disposition chip-row
+   * (`DispositionMenu.tsx`'s `.kbc-dispo`, ~24px tall at its desktop
+   * padding) and the publish-mark toggle (`.kbc-publish-mark`, same
+   * pill shape) were both missed by the original coarse-pointer sweep. */
+  .kbc-dispo,
+  .kbc-publish-mark {
+    min-height: 44px;
+  }
+  .kbc-burger,
+  .kbc-inspector-toggle,
+  .kbc-review-sheet-toggle,
+  .kbc-iconbtn {
+    min-width: 44px;
+  }
+  /* Tree rows + working-set chips. */
+  .kbc-tree__row,
+  .kbc-ws-chip,
+  .kbc-rdiff__file-row {
+    min-height: 40px;
+  }
+  /* Inspector rail's icon tabs + comments/annotations action buttons. */
+  .kbc-inspector__itab {
+    min-height: 40px;
+  }
+  /* SH.C1 — omnibox result rows + section headers, missed by the earlier
+   * coarse-pointer sweep. */
+  .kbc-search__row,
+  .kbc-search__header {
+    min-height: 44px;
+  }
+
+  /* SH.C2 — the per-row viewed checkbox (`.kbc-review__file-viewed`, the
+   * `<label>` that natively toggles its `<input>` on click — reviews.css,
+   * shared by the cockpit file list AND the diff toolbar's own viewed
+   * checkboxes) reads at ~18px (reviews.css bump, both pointers). Pad the
+   * label out to a real ~40px tap target rather than growing the checkbox
+   * further; the negative margin cancels the padding's footprint so
+   * neighboring row content doesn't shift. */
+  .kbc-review__file-viewed {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 11px;
+    margin: -11px;
+  }
+
+  /* Review-mode gutter compose is too small; the row-tap pill is the
+   * affordance. Fine pointers keep the gutter buttons. */
+  .kbc-diff__gutter-old--commentable,
+  .kbc-diff__gutter-new--commentable {
+    pointer-events: none;
+  }
+
+  .kbc-diff__line {
+    position: relative;
+  }
+  .kbc-diff__line.is-picked {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .kbc-diff-pill {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    z-index: var(--z-popover);
+    display: flex;
+    gap: var(--pad-1);
+    padding: var(--pad-1);
+    background: var(--bg-panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+  }
+  .kbc-diff-pill button {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--pad-2);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .kbc-diff-pill button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  body,
+  .kbc-ws,
+  .kbc-drawer,
+  .kbc-reader__outline,
+  .kbc-inspector__body,
+  .kbc-tree__scroll,
+  .kbc-review__side {
+    -webkit-overflow-scrolling: touch;
+  }
+}

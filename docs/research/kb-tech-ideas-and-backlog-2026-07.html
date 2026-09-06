@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:open, project:kb, ideas, backlog, performance, build-times, architecture, grok, ultracode">
+<meta name="kb-summary" content="The forward half of the 2026-07-30 deep review: 12 grounded tech ideas (top 3: generation-keyed search memo, ledger batch joins, passage-aware rerank), the deferred perf-architecture backlog (single-parse pipeline, newest-capture materialization, capture-write atomicity), four build-time proposals needing an operator decision, and the test-infra debt list. Every item cites current file:line evidence from the 10-lens grok fanout, 90/131 findings strict-verified.">
+<title>kb tech ideas and strategic backlog — 2026-07</title>
+<style>
+:root{
+  --bg:#f6f4ef; --surface:#fdfcf9; --fg:#232720; --muted:#5c6355; --rule:#d8d4c8;
+  --accent:#5a6b2f; --accent-fg:#ffffff; --warn:#8a5a00; --danger:#963c2a; --ok:#2f6b46;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#191c15; --surface:#22261c; --fg:#e6e8de; --muted:#a8ad9c; --rule:#3a4030;
+    --accent:#b4c977; --accent-fg:#191c15; --warn:#e0b568; --danger:#e08a76; --ok:#8cc9a4;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:56rem;margin:0 auto;padding:2rem 1.25rem 4rem}
+h1{font-size:1.7rem;line-height:1.25;margin:.5rem 0 0}
+h2{font-size:1.25rem;margin:2.2rem 0 .6rem;padding-top:.6rem;border-top:2px solid var(--rule);scroll-margin-top:1rem}
+h3{font-size:1.05rem;margin:1.4rem 0 .4rem;scroll-margin-top:1rem}
+p,li{max-width:48rem}
+a{color:var(--accent)}
+@media (prefers-color-scheme: dark){ a{color:var(--accent)} }
+code{font-family:ui-monospace,monospace;font-size:.88em;background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:0 .25em;overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;margin:.8rem 0;font-size:.92rem}
+th,td{border:1px solid var(--rule);padding:.35rem .55rem;text-align:left;vertical-align:top}
+th{background:var(--surface)}
+.meta{color:var(--muted);font-size:.9rem;margin:.2rem 0 0}
+.callout{background:var(--surface);border-left:4px solid var(--accent);padding:.6rem .9rem;margin:1rem 0;border-radius:0 4px 4px 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--ok{border-left-color:var(--ok)}
+.tag{display:inline-block;border:1px solid var(--rule);border-radius:999px;padding:0 .5em;font-size:.78rem;color:var(--muted);margin-right:.3em}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.4rem .8rem}
+.skip-link:focus{left:.5rem;top:.5rem;z-index:10}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#the-question">Skip to content</a>
+<main>
+<header>
+<h1>kb tech ideas and strategic backlog — 2026-07</h1>
+<p class="meta">2026-07-30 · HEAD <code>889ec81</code> (post v0.31 sessions-rethink) · companion to <a href="kb-perf-quality-deep-review-2026-07.html">the deep review</a> · sources: 10-lens grokclaude fanout (131 findings, 90 strict-verified) + Fable synthesis</p>
+</header>
+
+<section>
+<h2 id="the-question">The question</h2>
+<p>After sessions-rethink (v0.31, +23K lines in 3 days), where should kb's next engineering effort go? This artifact is the <em>forward</em> half of the 2026-07-30 deep review: everything worth doing that was <strong>not</strong> fixed in the same-day repair wave. Each item carries evidence from HEAD — file:line the way the fanout lenses verified it — plus effort, risk, and the invariant surface it touches. The companion review artifact holds the defects that were fixed immediately. Lineage: the <a href="kb-code-craft-review-2026-07.html">2026-07-06 code-craft review</a> (415 findings; 8 of its 10 fix-now defects were still open at this HEAD and are addressed in the companion), and the <a href="workflow-sessions-in-kb-design-2026-07.html">sessions design work</a> this milestone shipped against.</p>
+<p>Verification note: findings marked <span class="tag">verified</span> passed <code>grokclaude verify --strict</code> (evidence re-derived from the working tree); the rest were hand-confirmed or are design judgments.</p>
+</section>
+
+<section>
+<h2 id="top-three-ideas">Top three ideas</h2>
+
+<h3 id="idea-search-generation-memo">1 · Generation-keyed search result memo <span class="tag">verified</span> <span class="tag">effort M</span></h3>
+<p>Gallery already memoizes its row-set + edge counts per <code>(kb, index_generation)</code> (invariant #15; <code>routes/docs.rs:615–648</code>). Search has no equivalent — only the query-embedding LRU (<code>embed_cache.rs</code>). Every identical <code>(q, filters, mode)</code> re-runs BM25 + chunk-vector + RRF (+ rerank) against an unchanged index. A per-kb <code>SearchResultCache</code> keyed on <code>(generation, mode, q, filter-hash, sort, page, rerank-flag)</code> reuses the proven seam. Success signal: second identical hybrid query with stable generation shows zero bm25/vector stage time in <code>/api/metrics</code>; <code>kb bench</code> unchanged.</p>
+
+<h3 id="idea-passage-rerank">2 · Passage-aware SQ4 rerank <span class="tag">verified</span> <span class="tag">effort M</span></h3>
+<p>SQ5 chunking already embeds passages and max-pools chunk scores to documents (<code>chunk.rs</code>, <code>lance.rs:~1193</code>). But SQ4's cross-encoder still scores <code>title + summary</code> (<code>search.rs:1828–1852</code>) — the reranker literally cannot see the passage that made the hit. Feed <code>title + best_chunk_text</code> for chunk-sourced hits, falling back to summary. Open question that gates effort: whether <code>artifact_chunks</code> stores text or only vectors. Same data unlocks <a href="#quick-wins">chunk-sourced snippets</a> (smaller, ship first).</p>
+
+<h3 id="idea-single-parse-pipeline">3 · One transcript parse per capture (architecture) <span class="tag">effort L</span></h3>
+<p>The costliest structural fact from the view-engine lens: <strong>two independent full parsers</strong> walk every transcript — <code>parse_session_activity</code> (facts/digest) and <code>session_view</code> (IR), and a capture+index with open comments pays <strong>4 full Value-walks</strong> of the main JSONL (lens PVIEW's confirmed call-graph table). The 2026-07-30 wave removed the worst per-view re-parse, but the dual-engine shape remains: any classification rule must land twice (the harness ladder is already comment-marked "two engines, one rule" in both files). Target: one streaming typed-event IR both project from; alternatively persist a compact activity sidecar at capture so index skips its second walk. This is the single highest-leverage refactor in kb-core; do it before the next sessions milestone grows either engine further.</p>
+</section>
+
+<section>
+<h2 id="quick-wins">Quick wins (S effort, do opportunistically)</h2>
+<table>
+<tr><th>Idea</th><th>Evidence @ HEAD</th><th>Why</th></tr>
+<tr><td>Reuse gallery <code>edge_counts</code> for <code>graph_boost</code></td><td><code>search.rs:1125–1131</code> re-queries <code>edge_counts()</code> per search when the flag is on; gallery memo already holds the map</td><td>Removes the main runtime cost of ever flipping the bench-gated flag on</td></tr>
+<tr><td><code>SearchStage::Rerank</code> + slow-query ndjson events</td><td><code>state.rs:400–422</code> has Embed|Bm25|Vector|Hybrid only; no per-request slow log anywhere</td><td>Operators cannot attribute an 800 ms search to rerank today</td></tr>
+<tr><td><code>RouteKind::Sessions</code> in request metrics</td><td><code>classify_route</code> (<code>state.rs:530–564</code>) buckets all sessions routes as <code>Other</code></td><td>Post-v0.31 the biggest new surface is invisible in fleet metrics</td></tr>
+<tr><td>Chunk-sourced search snippets</td><td>snippets always cut from full body (<code>search.rs:~1225</code>) even when the vector hit was mid-file</td><td>Long artifacts show head-biased snippets; data already exists</td></tr>
+<tr><td>Capture/quarantine counters on <code>/metrics</code></td><td><code>PipelineMetrics</code> (<code>metrics.rs:260–275</code>) has no capture_ok/fail or quarantine gauge</td><td>Capture data loss is currently visible only in logs</td></tr>
+<tr><td>SPA <code>by-job</code> surface</td><td><code>rg 'by-job' web/src</code> → empty; route + CLI shipped in W4/W5</td><td>Grok-lane job→driver/children pivot exists everywhere except the UI</td></tr>
+<tr><td>Presence-driven projects home badge</td><td>presence poll already in SPA; projects home never shows "live now"</td><td>Cheap UX on shipped signals; #23-compliant (URL-driven)</td></tr>
+<tr><td><code>ViewCarry</code> partial-line buffering</td><td><code>view.rs:1947</code> documents the deferral</td><td>Prerequisite for live-tail SSE push; golden-lockable now</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="perf-architecture-backlog">Perf-architecture backlog (M/L, sequence deliberately)</h2>
+<table>
+<tr><th>Item</th><th>Evidence</th><th>Shape</th><th>Effort</th></tr>
+<tr><td>Newest-capture materialization</td><td><code>newest_capture_pred</code> correlated subquery at 14 sites (<code>sqlite.rs:47–53</code>); cost scales with total captures, and <code>retention_prune</code> never prunes <code>sessions*</code> tables</td><td>Either a <code>sessions_latest</code> map maintained on upsert, a window-function CTE, or capture compaction (drop non-newest rows + children). Measure with EXPLAIN on a multi-Stop corpus first</td><td>L</td></tr>
+<tr><td>Atomic capture write</td><td>enrich sends 5 separate actor messages (<code>enrich.rs:314–507</code>); child failure = warn + durable partial session</td><td>One <code>SessionsCaptureWrite</code> message, one sqlite tx, event fires only on full commit</td><td>M</td></tr>
+<tr><td>Funnel single-pass</td><td>~10 independent COUNT queries each with the newest join (<code>sqlite.rs:3685–3820</code>)</td><td>Conditional aggregates over one newest-scoped join</td><td>M</td></tr>
+<tr><td><code>prepare_cached</code> for static SQL</td><td>72× <code>.prepare(</code>, 0× <code>prepare_cached</code> in <code>sqlite.rs</code></td><td>Mechanical for static statements; skip dynamic filter builders</td><td>M</td></tr>
+<tr><td>Touches cache-miss diet</td><td>full capture <code>read_to_string</code> + <code>list_docs(50_000)</code> per kb per miss (<code>routes/sessions.rs:~3670</code>)</td><td>Use indexed <code>session_files</code> + a generation-keyed KnownDoc slim map instead of a corpus list</td><td>M</td></tr>
+<tr><td><code>/view</code> response defaults</td><td>default = all sections incl. full turns; <code>?turns=</code> filters after full build (<code>ViewFields::all</code>)</td><td>Default to header+stats+outline, or hard cap + continuation token (mirrors replay's 2000 window). Wire-behavior change — decide deliberately</td><td>M</td></tr>
+<tr><td>Live-tail SSE push</td><td>SPA polls <code>/live</code> every 3 s; server already keeps an incremental carry cache</td><td>Loopback-hard stream endpoint or bus event; poll stays as fallback</td><td>M</td></tr>
+<tr><td>Typed-struct line parse</td><td>every JSONL line becomes a full <code>serde_json::Value</code> DOM in both engines</td><td>Typed serde structs for the common record shapes; do together with the single-parse refactor</td><td>L</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="build-time-proposals">Build-time proposals — need an operator decision</h2>
+<p>Lens PBUILD measured the dependency graph: <strong>826 packages in the resolve; lancedb alone pulls 522 transitive crates</strong> (30 datafusion*, 17 lance*); kb-cli links 737. Arrow is correctly single-version 57.3.1 (invariant #1 intact). Four proposals, none taken unilaterally because each changes what ships or how:</p>
+<table>
+<tr><th>Proposal</th><th>Win</th><th>Cost / decision</th></tr>
+<tr><td>Split <code>end_to_end.rs</code> (16,832 LOC, 315 tests, 89% of server test code) into per-domain test binaries + shared harness</td><td>Incremental test rebuilds stop recompiling everything; the ~36 existing <code>// ===</code> section markers are natural split lines</td><td>Low risk; peak RAM during parallel links is the one thing to watch. <strong>Recommended first.</strong></td></tr>
+<tr><td>Decouple kb-cli from kb-server (<code>kb daemon</code> is the sole call site of <code>kb_server::serve_loop</code>)</td><td>CLI-only iteration stops relinking the axum server</td><td>Two binaries or a <code>daemon</code> feature — operator install-path decision</td></tr>
+<tr><td>Feature-gate the lance stack in kb-core</td><td>Largest possible cut for any binary that can drop it</td><td>High risk, deep API seam; only worth it if a real non-lance binary exists (the HTTP-only CLI, after the split above)</td></tr>
+<tr><td>Hygiene: html5ever dedup (scraper 0.20 vs ammonia 4 carry two parser stacks), tokio explicit features, machine-local mold/sccache <code>.cargo/config.toml</code></td><td>Small-medium; 56 multi-version packages total, most datafusion-driven and immovable</td><td>scraper bump risks parser API churn; verify shared html5ever first</td></tr>
+</table>
+<div class="callout callout--warn"><p>Host context: this box is IO-bound (RAID5 spinning disks) — sccache/mold measured only 10–20% here. Proposals that cut <em>bytes compiled</em> beat proposals that add parallelism.</p></div>
+</section>
+
+<section>
+<h2 id="test-infra-backlog">Test-infra backlog (from lens QTEST + RW1 gate evidence)</h2>
+<ul>
+<li><strong>Tame the lance memory-pool CI flake (new, found by RW1's gate runs 2026-07-31)</strong> — under a full <code>just ci</code> workspace run on this host, 6 kb-core atlas tests repeatedly die in lance's <code>merge_insert</code> external sort with "Resources exhausted" and a total pool starved to ~400 KB, while the same tests pass 42/42 solo and at <code>--test-threads=2</code>; two daemon-boot polling tests (end_to_end scrub fixture-wait, notes wikilink-wait) flake under the same load. kb-core configures no datafusion memory pool (<code>rg memory_pool crates/kb-core</code> → empty), so lance's default sizing reacts to transient machine state. Fix directions, cheapest first: pin <code>RUST_TEST_THREADS</code> for the lance-heavy suite in the recipe; configure an explicit pool/budget on the lance connection in tests; investigate the host's permanently-full swap. Until fixed, a red full-gate needs the solo-rerun triage this wave documented.</li>
+<li><strong>HTTP-layer suite for the new session routes</strong> — <code>/view</code>, <code>/raw</code>, <code>by-job</code>, <code>ledger</code>, <code>by-artifact</code> had zero hits in <code>end_to_end.rs</code> at review time. The 2026-07-30 wave added the loopback-403 pins; the wire-shape tests remain open.</li>
+<li><strong>CLI ↔ <code>/view</code> parity pin</strong> — W4's "parity sweep" is not test-pinned; CLI renders from an in-process engine wire, never a live daemon response.</li>
+<li><strong>Equivalence golden widening</strong> — <code>view_append ≡ view_full</code> runs over 3 synthetic fixtures with empty tails; add grok-harness, sidecar-bearing, and malformed-line fixtures.</li>
+<li><strong>Ledger route-level test</strong> — day bucketing + multi-capture collapse asserted only at the ranking-helper level.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="spa-backlog">SPA backlog</h2>
+<ul>
+<li><strong>Virtualize the sessions list</strong> — gallery is virtualized; sessions renders every loaded page as real DOM (<code>sessions.tsx:585–606</code>), with un-memoized rows. M effort with <code>VirtualList</code> reuse.</li>
+<li><strong>Centralize session SSE invalidation</strong> — the reader mounts <code>useArtifactSessions</code> wiring 3× (ArtifactPane, PreviewInspector, FolioChrome) and each sessions hook owns its own subscribe; invariant #23 wants the bridge to own it. M, do as one migration.</li>
+<li><strong>Finish the #23 stragglers</strong> — <code>useReading</code> and <code>HistoryTimeline</code> still useEffect+fetch outside TanStack Query (pre-date sessions-rethink).</li>
+<li><strong>AtlasView split</strong> — 3,678 lines, one component; maintenance risk more than measured hotspot. L, profiler first.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="capture-adapter-unification">Capture-adapter unification</h2>
+<p>The four harness adapters have already drifted (lens QDUP, all findings verified): claude + grok prefer the Rust <code>kb sessions capture</code> writer; codex + opencode hand-roll HTML; tool-output caps differ 8× (opencode 2,000-char head-truncate vs grok 16,384 head-60/tail-40); <code>wrap_envelope</code> never emits <code>kb-harness</code>. Fix shape: keep per-harness translation in shell/jq, but pipe all four through the one Rust writer, and centralize the cap policy next to <code>SESSION_CODE_FIELD_CAP_BYTES</code>. M effort; touches the plugin hooks, so test with a real capture from each harness.</p>
+</section>
+
+<section>
+<h2 id="respected-refusals">What was deliberately not proposed</h2>
+<p>Checked against the recorded non-goals: no in-daemon LLM (ranking/digest stays deterministic), no CRDT/multiplayer, no second identity/ACLs, no TUI rebuild, no mobile authoring, no MCP server (CLI is the protocol), no memory-benchmark arms race. One tempting duplicate was caught pre-proposal: a "session view parse cache" — already shipped as <code>view_cache</code>/<code>replay_cache</code>/<code>live_tail_cache</code> in W7.</p>
+</section>
+
+<section>
+<h2 id="when-to-revisit">When to revisit</h2>
+<ul>
+<li>After the next milestone touches either transcript engine → re-score the single-parse refactor (idea 3) before, not after.</li>
+<li>If <code>sessions_list</code>/funnel latency degrades on prod → the newest-capture materialization item graduates from backlog to fix.</li>
+<li>If a second HTTP-only agent workflow appears → the CLI/server binary split pays for itself.</li>
+<li><code>kb bench</code> after any rerank/snippet change — the SQ-series ship gate ("no regression or it stays off") applies to ideas 2 and the graph-boost wiring.</li>
+</ul>
+</section>
+</main>
+
+</body>
+</html>

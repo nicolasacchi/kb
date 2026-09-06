@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb TUI specification — Claude Design handoff integrated. Six-tab ratatui dashboard, Solarized Light palette, exact tokens / glyphs / keybindings.">
+<title>05 · TUI spec — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="01-lancedb.html">01 · Storage</a>
+      <a href="02-fastembed.html">02 · Embeddings</a>
+      <a href="03-notify.html">03 · Watcher</a>
+      <a href="04-sse-axum.html">04 · SSE</a>
+      <a href="05-ratatui.html" class="is-current">05 · TUI</a>
+      <a href="../surfaces/06-iframe.html">06 · Iframe</a>
+      <a href="../surfaces/07-html-effectiveness.html">07 · HTML</a>
+      <a href="../surfaces/08-prior-art.html">08 · Prior art</a>
+      <a href="../surfaces/09-comments.html">09 · Comments</a>
+      <a href="../surfaces/10-web-gallery.html">10 · Web Gallery</a>
+      <a href="../surfaces/11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 05
+    <span>·</span>
+    <span class="meta">TUI specification</span>
+    <span>·</span>
+    <span class="meta">Design handoff integrated 2026-05-11</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>Six-tab</em> ratatui dashboard.<br>Solarized Light, cell-perfect, command-issuer.</h1>
+  <p class="lede">The Claude Design handoff bundle <code>1XoWvtO0FExl3zEpJ3WqqA</code> is the implementation contract. Six tabs (HOME · SOURCES · DETAIL · STATS · ERRORS · SEARCH) over persistent two-row chrome and a one-row status bar. <em>Every</em> glyph, color, border, and keybinding is final. This page reproduces the spec with research cross-links, raises eight concerns, and proposes seven enhancements the design didn't cover.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR — what the executor builds</span>
+    <p><strong>ratatui ≥ 0.30 + crossterm 0.29 + tokio (multi-thread) + tui-input + unicode-width + custom <code>src/ui/theme.rs</code>.</strong> Six tabs <span class="kbd">1</span>–<span class="kbd">6</span>, persistent header / tab strip / status bar. Solarized Light only. Braille spinner @ 110 ms. Single-line box drawing only (<code>BorderType::Plain</code>). Mode pill changes color per view. <strong>TUI is a command issuer</strong> (<code>:reindex</code>, <code>r</code>, <code>p</code>, <code>y</code>, <code>x</code>, <code>e</code>) — not a pure observer. Mouse out of scope for v1. Three tokio tasks → one <code>mpsc&lt;AppEvent&gt;</code> → 30 Hz dirty-gated render, 60 Hz frame budget when bursty. Phasing: <strong>v0.1 ships HOME + SOURCES + ERRORS</strong>; DETAIL + STATS + SEARCH follow in v0.2 / v0.3.</p>
+    <div class="badges">
+      <span class="conf conf--high">Layout · HIGH (design-locked)</span>
+      <span class="conf conf--high">Pattern · HIGH (component)</span>
+      <span class="conf conf--med">Phasing · MED (scope debt flagged)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight" id="handoff">
+  <div class="section-head">
+    <div class="num">A. Design handoff anchor</div>
+    <h2>The bundle is the spec. This page is the cross-linked read.</h2>
+  </div>
+  <div class="prose">
+    <p>Claude Design (<a href="https://claude.ai/design">claude.ai/design</a>) handoff bundle <code>1XoWvtO0FExl3zEpJ3WqqA</code> contains <code>kb tui.html</code> (the interactive prototype, <strong>the actual spec</strong>), <code>Ratatui variations.html</code> (five static layouts with widget callouts — useful when wiring an individual screen), <code>Approaches.html</code> (earlier paradigm exploration, background only), and a thin <code>README.md</code> (generic coding-agent intro, ~23 lines — not a spec). <strong>Raw bundle archived at <a href="../claude-design-handoff/tui-platform/"><code>claude-design-handoff/tui-platform/</code></a></strong> — open <a href="../claude-design-handoff/tui-platform/project/kb tui.html"><code>kb tui.html</code></a> (the spec) and <a href="../claude-design-handoff/tui-platform/project/Ratatui variations.html"><code>Ratatui variations.html</code></a> directly to see what this page reproduces.</p>
+    <p><strong><code>kb tui.html</code> is the source of truth</strong> — color tokens, view layouts, keybindings, animations. This page reproduces every section with kb-research cross-links, plus the concerns and enhancements that emerged from reconciling it with the existing research (sections G, H below).</p>
+    <h4>Stack</h4>
+    <ul>
+      <li><strong>Language:</strong> Rust edition 2021, MSRV 1.86 (matches ratatui 0.30; some toolchains report 1.88).</li>
+      <li><strong>TUI:</strong> <code>ratatui</code> ≥ 0.30 (compatible with the design's ≥ 0.29 floor), <code>crossterm</code> ≥ 0.29 with <code>event-stream</code>.</li>
+      <li><strong>Async runtime:</strong> <code>tokio</code> (multi-thread).</li>
+      <li><strong>Event stream:</strong> <code>tokio::sync::broadcast</code> from the daemon's SSE consumer (see <a href="04-sse-axum.html">topic 04</a>).</li>
+      <li><strong>Config:</strong> TOML via <code>serde</code> + <code>toml</code>.</li>
+      <li><strong>Logging:</strong> <code>tracing</code> + <code>tracing-appender</code> — <strong>file only</strong>, never stdout while the TUI is up.</li>
+      <li><strong>Helpers:</strong> <code>tui-input</code> (search / command palette buffer), <code>unicode-width</code> (column math), <code>ratatui-image</code> (optional, source thumbnails).</li>
+    </ul>
+    <p><strong>Library deltas from the original research</strong> (section F below has the full background): the design does not pull in <code>ratatui-themes</code> — one custom palette suffices, so a ~30 LOC <code>src/ui/theme.rs</code> covers it. The braille spinner is hand-rolled (10 frames, 110 ms cadence) instead of <code>throbber-widgets-tui</code> to match the design tokens exactly. Both decisions are recorded in concern #8 below.</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="chrome">
+  <div class="section-head">
+    <div class="num">B. Global chrome</div>
+    <h2>Two rows above, one row below. Always visible.</h2>
+  </div>
+  <div class="prose">
+    <h4>Row 0 · header</h4>
+<pre>│ kb work-laptop · rust-learning │ ● :4000 │ uptime 2h 14m │ ⠼ 12/67 │</pre>
+    <p><code>Paragraph</code> + <code>Spans</code>, segments separated by <code>│</code> in <code>fg-faint</code>. <strong>Multi-daemon format (cluster 4):</strong> <code>kb &lt;daemon&gt; · &lt;kb&gt;</code> where <code>&lt;daemon&gt;</code> is the active daemon's name from <code>~/.config/kb/daemons.toml</code>. Single-daemon installs degenerate to <code>kb &lt;kb&gt;</code>. The <code>●</code> dot is <code>green</code> when active daemon is connected, <code>yellow</code> for degraded (spinner pauses, last frame held), <code>red</code> for disconnected (spinner hidden). Active-source braille spinner runs at 110 ms when connected (see section E).</p>
+
+    <h4>Row 1 · tab strip</h4>
+<pre>│  1 home   2 sources   3 detail   4 stats   5 errors   6 search │</pre>
+    <p><code>Tabs</code> widget; <code>highlight_style = Style::default().bg(Color::Blue).fg(Color::Rgb(0xfd,0xf6,0xe3))</code>. Numbered labels — <span class="kbd">1</span>–<span class="kbd">6</span> jumps directly, <span class="kbd">h</span>/<span class="kbd">l</span> cycles.</p>
+
+    <h4>Last row · status bar</h4>
+<pre>│ NORMAL · j/k nav · Enter drill · / filter · : cmd · r reindex · ? help · 1-6 tabs │</pre>
+    <p>Mode pill on the left changes color per view (mapping in section C). Right-aligned spinner + count appears when an indexing run is active.</p>
+
+    <h4>Layout constraints</h4>
+<pre>Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+        Constraint::Length(2),  // header + tabs
+        Constraint::Min(0),     // active view
+        Constraint::Length(1),  // status bar
+    ])</pre>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="views">
+  <div class="section-head">
+    <div class="num">C. Six views</div>
+    <h2>One tab per task. Same chrome. Different widgets.</h2>
+    <p class="deck">Each view has its own mode-pill color, its own widget composition, and its own view-specific keybindings. Mappings: HOME · <code>inv-green</code>, SOURCES · <code>inv-blue</code>, DETAIL · <code>inv-violet</code>, STATS · <code>inv-cyan</code>, ERRORS · <code>inv-red</code>, SEARCH · <code>inv-orange</code>.</p>
+  </div>
+  <div class="prose">
+
+    <h3>V1 · HOME (<span class="kbd">1</span>, default tab)</h3>
+    <p>Three-pane Block layout. Mode pill: <code>inv-green</code>.</p>
+<pre>Horizontal split — sidebar 22 cols | main fill
+  Sidebar (Vertical):
+    [Sources tree]   List · BorderType::Plain · title "▌ sources"
+    [Run progress]   Gauge + Paragraph
+  Main (Vertical):
+    [Overview]       Table · 5 cols (kb, source, duration, files, status)
+    [Totals]         Paragraph (one line, fg-muted)
+    [Activity log]   List · auto-tails new SSE events, max 4 visible</pre>
+    <ul>
+      <li>Sidebar is the focus root on tab open. <span class="kbd">j</span>/<span class="kbd">k</span> moves selection through sources.</li>
+      <li><span class="kbd">Enter</span> drills the highlighted source → tab 3 (DETAIL) with that source loaded.</li>
+      <li>Activity log is read-only here; new events push from the bottom, oldest scrolls off.</li>
+      <li>Run progress gauge mirrors whatever source is <em>currently indexing</em> — not the highlighted one.</li>
+    </ul>
+
+    <h3>V2 · SOURCES (<span class="kbd">2</span>)</h3>
+    <p>Single-table k9s discipline. Mode pill: <code>inv-blue</code>.</p>
+<pre>Vertical:
+  [Filter strip]   Paragraph — "[1] sources [2] runs [3] errors [4] queries  filter: _  N/N rows"
+  [Sources table]  Table · highlight_style bg=selection
+  [Detail strip]   Paragraph (4–5 lines about highlighted row: run id, eta, recent files)</pre>
+    <ul>
+      <li>Columns: <code>KB</code>, <code>SOURCE</code>, <code>FILES</code>, <code>OK</code>, <code>ERR</code>, <code>EDGES</code>, <code>LAST</code>, <code>STATUS</code>.</li>
+      <li>The four numeric tabs at top (<code>[1]…[4]</code>) switch the table's "kind" — same widget, different rows.</li>
+      <li><span class="kbd">r</span> re-runs indexer on highlighted row; <span class="kbd">p</span> toggles pause; <span class="kbd">Enter</span> → V3.</li>
+    </ul>
+
+    <h3>V3 · DETAIL (<span class="kbd">3</span>)</h3>
+    <p>Master/detail with chart canvas. Mode pill: <code>inv-violet</code>.</p>
+<pre>Vertical:
+  [Crumb]      Paragraph — "❯ rust-learning / /home/me/rust · 67 files · ⠼ indexing 12/67 · eta 00:42"
+  [Body]       Horizontal split, 54 cols | fill:
+    Left:  Table of files (path, mtime, size, indexed, status)
+    Right: Vertical split:
+      Top    Chart · ratatui::widgets::Chart with one Dataset (latency dots)
+      Bottom BarChart · histogram of duration buckets (&lt;100, 100–200, 200–300, 300+)</pre>
+    <ul>
+      <li>Selecting a file in the table updates the chart's tooltip dot (highlight that file's latency point).</li>
+      <li><span class="kbd">g</span> opens the neighborhood graph (modal — see V6 graph block for shape).</li>
+      <li><span class="kbd">Esc</span> returns to V2.</li>
+    </ul>
+
+    <h3>V4 · STATS (<span class="kbd">4</span>)</h3>
+    <p>Read-only ambient board. Mode pill: <code>inv-cyan</code>.</p>
+<pre>Vertical:
+  [KPI row]            4 equal columns, each a Paragraph with a huge bold number + delta line
+  [Queries sparkline]  Sparkline (60 cells, last 24h)
+  [Throughput row]     Horizontal: Sparkline (38 cells) | "now indexing" Paragraph + Gauge
+  [Docs by kb]         BarChart, horizontal, 4 bars
+  [Recent strip]       Paragraph — three "[hh:mm:ss] glyph file" entries dot-separated</pre>
+    <ul>
+      <li>No interactive selection here. <span class="kbd">f</span> toggles fullscreen (hide chrome).</li>
+      <li><span class="kbd">e</span> exports current snapshot to <code>kb-stats-&lt;timestamp&gt;.json</code>.</li>
+      <li>Run with <code>kb tui --board</code> for direct entry (matches the design's wall-display mode).</li>
+    </ul>
+
+    <h3>V5 · ERRORS (<span class="kbd">5</span>)</h3>
+    <p>Error triage. Mode pill: <code>inv-red</code>.</p>
+<pre>Vertical:
+  [Summary]    Paragraph — "⚠ 3 errors · archive / … · most recent 14:30:44 · filter: _"
+  [Error list] Table · cols: KIND, PATH, AT, MSG (truncated)
+  [Detail]     Vertical of 3 Paragraphs:
+    - Traceback (frames as "at fn · path:line")
+    - Source context (5 lines around the offending location, with caret underline in red)
+    - Suggested fix + actions</pre>
+    <ul>
+      <li><span class="kbd">r</span> retries the highlighted error; <span class="kbd">x</span> dismisses; <span class="kbd">y</span> applies the suggested fix; <span class="kbd">o</span> opens in <code>$EDITOR</code>.</li>
+      <li>Suggested-fix provenance is concern #7 — daemon supplies it.</li>
+    </ul>
+
+    <h3>V6 · SEARCH (<span class="kbd">6</span>)</h3>
+    <p>Query + results + neighborhood graph. Mode pill: <code>inv-orange</code>.</p>
+<pre>Vertical:
+  [Query]      tui_input::Input — "/&lt;query&gt;_  N hits in Xms · across K kbs"
+  [Filters]    Two rows of Tabs-styled segmented controls (scope, kind)
+  [Results]    List · each row = 2 Spans-rich lines (title + snippet with highlighted match)
+  [Graph]      ASCII-drawn neighborhood Paragraph (precomputed; uses box-drawing chars)</pre>
+    <ul>
+      <li><span class="kbd">Tab</span> cycles scope; <span class="kbd">Shift+Tab</span> cycles kind.</li>
+      <li><span class="kbd">g</span> toggles full-screen graph view; arrow keys move focus node.</li>
+      <li><span class="kbd">Enter</span> or <span class="kbd">o</span> on a hit opens the artifact in the user's browser via <code>xdg-open</code> (matches the design chat: "yes we should be able to open the browser").</li>
+    </ul>
+
+    <h3>Modal overlays</h3>
+    <p>Render with <code>Clear</code> + a centred <code>Block</code>, sized to content.</p>
+    <ul>
+      <li><strong>Help (<span class="kbd">?</span>)</strong> — single-column reference of every keybinding, grouped by <code>▌ navigation</code>, <code>▌ modes</code>, <code>▌ actions</code>. ~45 cols × 25 rows. <span class="kbd">?</span> or <span class="kbd">Esc</span> dismisses.</li>
+      <li><strong>Command palette (<span class="kbd">:</span>)</strong> — vim-style colon prompt. <code>tui_input</code> for the buffer. Below the buffer, a fuzzy-matched list of completions (verb + target). <span class="kbd">Tab</span> accepts the highlighted completion, <span class="kbd">Enter</span> runs the command, <span class="kbd">Esc</span> dismisses. Verbs by HTTP endpoint (<a href="../surfaces/11-daemon-api.html#endpoints">topic 11 §B.3</a>): <code>reindex</code>, <code>pause</code>, <code>resume</code>, <code>export</code>, <code>atlas recompute</code> (cluster-4 addition). TUI-local verbs (no endpoint): <code>connect &lt;daemon&gt;</code> (daemon-switch shortcut for the <span class="kbd">D</span> overlay), <code>add &lt;path&gt;</code> / <code>remove &lt;id&gt;</code> deferred to v0.2 when source-management endpoints land.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="keys">
+  <div class="section-head">
+    <div class="num">D. Canonical keybinding table</div>
+    <h2>Every binding. From the design README.</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <thead><tr><th>Key</th><th>Context</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>1</code>–<code>6</code></td><td>global</td><td>jump to tab</td></tr>
+        <tr><td><code>h</code> / <code>l</code></td><td>global</td><td>previous / next tab</td></tr>
+        <tr><td><code>D</code></td><td>global</td><td>open daemon-switcher overlay (cluster-4 multi-daemon)</td></tr>
+        <tr><td><code>j</code> / <code>k</code></td><td>within list</td><td>down / up (arrow keys also)</td></tr>
+        <tr><td><code>Enter</code></td><td>row selected</td><td>drill into row (open in browser on search hits)</td></tr>
+        <tr><td><code>Esc</code></td><td>overlay or detail</td><td>back / dismiss</td></tr>
+        <tr><td><code>/</code></td><td>global</td><td>enter search mode (jumps to V6)</td></tr>
+        <tr><td><code>:</code></td><td>global</td><td>open command palette</td></tr>
+        <tr><td><code>?</code></td><td>global</td><td>help overlay</td></tr>
+        <tr><td><code>r</code></td><td>row selected</td><td>reindex / retry</td></tr>
+        <tr><td><code>p</code></td><td>row selected</td><td>pause / resume</td></tr>
+        <tr><td><code>g</code></td><td>row selected</td><td>open neighborhood graph (modal)</td></tr>
+        <tr><td><code>o</code></td><td>error / file row</td><td>open in <code>$EDITOR</code></td></tr>
+        <tr><td><code>o</code> / <code>Enter</code></td><td>search hit, html artifact</td><td>open in browser (<code>xdg-open</code>) — enhancement #6</td></tr>
+        <tr><td><code>y</code></td><td>error w/ fix</td><td>apply suggested fix</td></tr>
+        <tr><td><code>x</code></td><td>error row</td><td>dismiss</td></tr>
+        <tr><td><code>f</code></td><td>V4 only</td><td>toggle fullscreen board</td></tr>
+        <tr><td><code>e</code></td><td>V4 only</td><td>export snapshot to JSON</td></tr>
+        <tr><td><code>Tab</code></td><td>V6</td><td>cycle scope filter</td></tr>
+        <tr><td><code>Shift+Tab</code></td><td>V6</td><td>cycle kind filter</td></tr>
+        <tr><td><code>q</code> / <code>Ctrl-C</code></td><td>global</td><td>quit</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="tokens">
+  <div class="section-head">
+    <div class="num">E. Design tokens</div>
+    <h2>Solarized Light. One palette. Cell-precise glyphs.</h2>
+  </div>
+  <div class="prose">
+    <h4>Color palette</h4>
+    <p>Map directly to <code>ratatui::style::Color::Rgb(r, g, b)</code>. Define once in <code>src/ui/theme.rs</code>; do not let widgets reach for raw hex.</p>
+    <table class="alt-table">
+      <thead><tr><th>Token</th><th>Hex</th><th>RGB</th><th>Usage</th></tr></thead>
+      <tbody>
+        <tr><td>bg</td><td><code>#fdf6e3</code></td><td>253, 246, 227</td><td>terminal bg (default — palette handles it)</td></tr>
+        <tr><td>bg-alt</td><td><code>#eee8d5</code></td><td>238, 232, 213</td><td>subtle inset</td></tr>
+        <tr><td>fg</td><td><code>#586e75</code></td><td>88, 110, 117</td><td>body text</td></tr>
+        <tr><td>fg-strong</td><td><code>#073642</code></td><td>7, 54, 66</td><td>borders, primary text</td></tr>
+        <tr><td>fg-muted</td><td><code>#93a1a1</code></td><td>147, 161, 161</td><td>secondary labels</td></tr>
+        <tr><td>fg-faint</td><td><code>#d8d2bd</code></td><td>216, 210, 189</td><td>dividers, separators inside cells</td></tr>
+        <tr><td>yellow</td><td><code>#b58900</code></td><td>181, 137, 0</td><td>warnings, modified-file watcher</td></tr>
+        <tr><td>orange</td><td><code>#cb4b16</code></td><td>203, 75, 22</td><td>search mode pill, errors-tab badge</td></tr>
+        <tr><td>red</td><td><code>#dc322f</code></td><td>220, 50, 47</td><td>errors, unreachable, fail glyphs</td></tr>
+        <tr><td>magenta</td><td><code>#d33682</code></td><td>211, 54, 130</td><td>reserved</td></tr>
+        <tr><td>violet</td><td><code>#6c71c4</code></td><td>108, 113, 196</td><td>active kb, detail mode pill</td></tr>
+        <tr><td>blue</td><td><code>#268bd2</code></td><td>38, 139, 210</td><td>active spinner, in-progress glyph, primary tab pill</td></tr>
+        <tr><td>cyan</td><td><code>#2aa198</code></td><td>42, 161, 152</td><td>section captions (<code>▌ overview</code>), graph nodes, sparklines</td></tr>
+        <tr><td>green</td><td><code>#859900</code></td><td>133, 153, 0</td><td>OK glyphs, running state, NORMAL pill</td></tr>
+        <tr><td>selection</td><td><code>#fef0a8</code></td><td>254, 240, 168</td><td>row highlight bg (light)</td></tr>
+        <tr><td>selS</td><td><code>#fce98a</code></td><td>252, 233, 138</td><td>strong row highlight bg</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Typography</h4>
+    <p>Terminal font is the user's monospace; the design assumes JetBrains Mono / SF Mono / equivalent. <strong>Do not</strong> override the user's font — the design relies only on cell width being uniform.</p>
+
+    <h4>Box drawing</h4>
+    <p><strong>Single-line only:</strong> <code>┌ ┐ └ ┘ ─ │ ├ ┤ ┬ ┴ ┼</code>. <code>BorderType::Plain</code> everywhere. No double-line, no rounded.</p>
+
+    <h4>Glyphs</h4>
+    <ul>
+      <li><strong>Spinner:</strong> braille frames <code>⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏</code> at ~110 ms cadence.</li>
+      <li><strong>Status:</strong> <code>✓</code> ok (green) · <code>✗</code> fail (red) · <code>~</code> modified (yellow) · <code>⏸</code> paused (muted) · <code>⚠</code> warn (orange) · <code>▶</code> in-flight (blue) · <code>?</code> query (cyan).</li>
+      <li><strong>Section caption marker:</strong> <code>▌</code> (cyan).</li>
+      <li><strong>Sparkline cells:</strong> <code>▁ ▂ ▃ ▄ ▅ ▆ ▇ █</code> (use <code>Sparkline</code> widget; it picks these for you).</li>
+      <li><strong>Bar fill:</strong> <code>█</code> filled · <code>░</code> empty (for custom Gauge-style bars in home/detail strips).</li>
+      <li><strong>Tree branches:</strong> <code>▾ ▸ ├ │</code>.</li>
+    </ul>
+
+    <h4>Spacing</h4>
+    <ul>
+      <li>1 cell of horizontal padding inside every <code>Block</code> (ratatui's default — leave it).</li>
+      <li>1 blank row between major sections inside a panel.</li>
+      <li>Section caption (<code>▌ name</code>) sits on its own line, <em>not</em> embedded in the border title (matches the mocks).</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight" id="anim">
+  <div class="section-head">
+    <div class="num">F. Animations & live updates</div>
+    <h2>Cadences from the design README.</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <thead><tr><th>Element</th><th>Cadence</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td>Header spinner</td><td>110 ms</td><td>wall clock — stop when daemon disconnected</td></tr>
+        <tr><td>Run-progress bars</td><td>on event</td><td><code>IndexProgress</code> SSE event</td></tr>
+        <tr><td>Activity log</td><td>on event</td><td><code>Index*</code>, <code>Watch*</code>, <code>Query*</code> SSE events; cap at 200 retained, render last 4</td></tr>
+        <tr><td>Sparklines (V4)</td><td>1 s</td><td>minute-bucketed counters from daemon</td></tr>
+        <tr><td>Uptime</td><td>1 s</td><td>wall clock — daemon sends <code>started_at</code> once on connect</td></tr>
+        <tr><td>KPI numbers</td><td>1 s</td><td>poll <code>/stats</code> over the same socket</td></tr>
+      </tbody>
+    </table>
+    <p>Drive the redraw loop with <code>tokio::select!</code> over <code>(sse_event, terminal_input, refresh_tick)</code>. <strong>Don't redraw on every event</strong> — coalesce to a 60 Hz frame budget; the original research's 30 Hz dirty-gated recommendation still applies as the floor for idle.</p>
+<pre>loop {
+    tokio::select! {
+        Some(input) = crossterm_events.next() =&gt; app.on_input(input),
+        Some(daemon_ev) = sse_rx.recv()       =&gt; app.on_daemon_event(daemon_ev),
+        _ = render_interval.tick()            =&gt; {
+            if app.dirty { terminal.draw(|f| app.render(f))?; app.dirty = false; }
+        }
+    }
+    if app.should_quit { break; }
+}</pre>
+  </div>
+</section>
+
+<section class="section section-tight" id="protocol">
+  <div class="section-head">
+    <div class="num">G. Event protocol</div>
+    <h2>SSE NDJSON. Canonical taxonomy lives in topic 04.</h2>
+  </div>
+  <div class="prose">
+    <p><strong>Canonical event taxonomy moved to <a href="04-sse-axum.html#canonical-taxonomy">topic 04 §canonical-taxonomy</a>.</strong> The original 6-event list in this section was a subset; the deep-review pass found three incompatible taxonomies across topics 04 / 05 / 10 / 11 and rationalized them into one 17-event canonical set keyed by namespace (<code>index.*</code>, <code>artifact.*</code>, <code>watch.*</code>, <code>comment.*</code>, <code>query</code>, <code>error</code>, plus synthetic <code>connection</code>/<code>lag</code>/<code>gap</code>).</p>
+    <p>SSE channel <code>/api/events</code> emits NDJSON lines. Sample (full enumeration in topic 04):</p>
+<pre>{"t":"index.start","run":"r-2c1","kb":"rust-learning","src":"home-me-rust","path":"/home/me/rust","total":67}
+{"t":"index.file","run":"r-2c1","path":"futures.html","ms":188,"edges":5,"ok":true}
+{"t":"index.complete","run":"r-2c1","ok_count":65,"err_count":2,"duration_ms":12400}
+{"t":"artifact.indexed","artifact_id":"a-9f3","kb":"work","path":"draft.html","hash":"…","mtime":172…,"change_kind":"modified"}
+{"t":"watch.modify","kb":"work","path":"draft.html"}
+{"t":"query","kb":"work","q":"borrow checker","hits":5,"ms":14}
+{"t":"error","id":"e-77","kind":"parse","kb":"archive","path":"old-blog/2014/broken.html","msg":"…","fix":{"kind":"remove-trailing-comma"}}
+{"t":"comment.created","id":"c-12","kb":"work","artifact_id":"a-9f3","author":"you","ts":"2026-05-11T14:31:58Z"}
+{"t":"connection","state":"degraded"}</pre>
+    <p>The TUI consumes <code>index.*</code>, <code>artifact.*</code>, <code>watch.*</code>, <code>query</code>, <code>error</code>, <code>connection</code>, <code>lag</code>, <code>gap</code>. It <strong>drops <code>comment.*</code> events in v0.1</strong> — the comments panel is a v0.2 SPA feature; reconsider when the TUI grows a comments view.</p>
+    <p><code>tracing</code> consumes the same stream so logs and TUI agree on ground truth. <code>src</code> field in events is the URL-safe slug (matches the <code>{src}</code> path segment in <a href="../surfaces/11-daemon-api.html#endpoints">topic 11 §B.3</a> commands).</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="state">
+  <div class="section-head">
+    <div class="num">H. State model & file layout</div>
+    <h2>One App. Component panes. Suggested module tree.</h2>
+  </div>
+  <div class="prose">
+    <h4>App struct</h4>
+<pre>pub struct App {
+    pub tab: Tab,                  // Home, Sources, Detail, Stats, Errors, Search
+    pub mode: Mode,                // Normal, Search, Command, Help
+    pub overlay: Option&lt;Overlay&gt;,  // None, Help, Cmd, Graph
+    pub focused_pane: Pane,        // Sidebar, Main, ActivityLog (Home only)
+
+    pub sources: Vec&lt;Source&gt;,
+    pub source_table: TableState,
+    pub home_sidebar: ListState,
+
+    pub detail: Option&lt;DetailScreen&gt;,    // populated when entering V3
+    pub errors: Vec&lt;ErrIssue&gt;,
+    pub error_table: TableState,
+
+    pub search_input: Input,             // tui_input
+    pub search_results: Vec&lt;Hit&gt;,
+    pub search_filters: SearchFilters,
+
+    pub activity: VecDeque&lt;Event&gt;,       // ring buffer, len = 200
+    pub stats: StatsSnapshot,
+    pub spinner_frame: usize,
+    pub connection: ConnectionState,     // Connected, Degraded, Disconnected
+}</pre>
+    <p>Keep <code>App</code> cheap to clone (or wrap heavy fields in <code>Arc</code>); the render fn takes <code>&amp;App</code>.</p>
+
+    <h4>Suggested file layout</h4>
+<pre>crates/
+  kb-tui/
+    Cargo.toml
+    src/
+      main.rs              # entry, terminal setup/teardown
+      app.rs               # App, Mode, Tab, Pane enums + state machine
+      event.rs             # SSE consumer + crossterm input -&gt; AppEvent
+      ui/
+        mod.rs             # render(frame, &amp;App) — top-level layout + chrome
+        theme.rs           # color tokens, glyph constants
+        chrome.rs          # header, tab strip, status bar
+        home.rs            # V1
+        sources.rs         # V2
+        detail.rs          # V3
+        stats.rs           # V4
+        errors.rs          # V5
+        search.rs          # V6
+        overlay/
+          help.rs
+          cmd.rs
+          graph.rs
+        widgets/
+          spinner.rs       # custom — wraps Paragraph w/ frame counter
+          big_number.rs    # large bold figure for V4 KPI cells</pre>
+  </div>
+</section>
+
+<section class="section section-tight" id="concerns">
+  <div class="section-head">
+    <div class="num">I. Raised concerns</div>
+    <h2>Eight push-backs the executor needs to hear.</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>Scope creep.</strong> Six distinct views ≈ 6× the v0.1 surface area the original 3-pane recommendation budgeted. Phase explicitly: <strong>v0.1 ships HOME + SOURCES + ERRORS</strong>; DETAIL + STATS + SEARCH follow in v0.2 / v0.3. Search depends on embeddings, which the briefing roadmaps to v0.2; DETAIL needs the latency-chart wire from the indexer; STATS needs the KPI/sparkline poll endpoint. None of those need to ship together. Cards <span class="kbd">4</span>/<span class="kbd">5</span>/<span class="kbd">6</span> can be empty-state stubs in v0.1.</li>
+      <li><strong>TUI → daemon command channel — missing from existing SSE research. <span style="color:var(--accent)">Resolved 2026-05-11 — see <a href="../surfaces/11-daemon-api.html#endpoints">topic 11 §B.3</a>.</span></strong> The design's <code>:reindex</code>, <code>r</code>, <code>p</code>, <code>y</code>, <code>x</code>, <code>e</code> keybindings imply RPC, not just SSE consumption. <strong>Resolution:</strong> nested kb-scoped endpoints under <code>/api/kb/{kb}/...</code>: <code>POST .../sources/{src}/reindex</code> (202 + run id), <code>.../sources/{src}/pause</code>, <code>.../sources/{src}/resume</code>, <code>.../errors/{err}/apply-fix</code> (202 + run id), <code>.../errors/{err}/dismiss</code>, <code>.../stats/export</code>. Async commands return <code>202 Accepted</code> + <code>{run, events}</code> for SSE-filtered progress (<a href="../surfaces/11-daemon-api.html#async">topic 11 §D</a>). CSRF via Origin allowlist (<a href="../surfaces/11-daemon-api.html#auth">topic 11 §C</a>) — the TUI has no Origin header so it passes. Same TCP:localhost:4000 the design assumes; Unix socket for self-host hardening deferred.</li>
+      <li><strong>SSE event taxonomy was flagged unpublished.</strong> The design supplies the names. Treat them as canonical (section G); emit <code>events.schema.json</code> v0.0.1 using these shapes verbatim. <a href="04-sse-axum.html">Topic 04</a> is the transport spec, this page is the consumer spec.</li>
+      <li><strong>Neighborhood graph view (V3 <span class="kbd">g</span> modal, V6 ASCII graph). <span style="color:var(--accent)">Resolved 2026-05-11 — see <a href="../surfaces/11-daemon-api.html#endpoints">topic 11 §B.2</a>.</span></strong> Endpoint is <code>GET /api/kb/{kb}/graph/{id}?depth=1</code> returning <code>{nodes, edges}</code>. Atlas view in topic 10 §O″ uses UMAP-projected coordinates from the lance store as a fallback when edges are sparse. The anchor semantics from <a href="../surfaces/09-comments.html">topic 09</a> apply to comments, not graph — edges are between artifact ids, not DOM anchors.</li>
+      <li><strong>Mode-pill colors per view are new design language.</strong> Document the mapping in <code>theme.rs</code>: HOME <code>inv-green</code>, SOURCES <code>inv-blue</code>, DETAIL <code>inv-violet</code>, STATS <code>inv-cyan</code>, ERRORS <code>inv-red</code>, SEARCH <code>inv-orange</code>. Don't infer per-view from the active tab — let the view declare its own pill style.</li>
+      <li><strong>State persistence across restarts</strong> (last tab, filters, sort order) is listed as open in the design. Recommendation: <strong>no</strong> for v0.1 — always start on HOME with default filters. Add to <code>kb.toml</code> in v0.2 if asked for.</li>
+      <li><strong>Error "suggested fix" provenance.</strong> The design is silent on who computes the fix. Decision: <strong>the daemon emits the suggestion alongside the <code>error</code> event</strong> — extend the schema to <code>{t:"error", …, fix:{kind:"remove-trailing-comma", patch:"…"}}</code>. TUI is dumb display; <span class="kbd">y</span> POSTs to <code>/errors/{id}/apply-fix</code> and the daemon does the write. Never have the TUI derive fixes.</li>
+      <li><strong>Theme module vs <code>ratatui-themes</code>.</strong> Design assumes custom <code>src/ui/theme.rs</code>; the original research recommended <code>ratatui-themes</code> for multi-theme switching. Pick <code>theme.rs</code> for v0.1 (matches the design's single Solarized Light palette, ~30 LOC, no transitive dependency). Revisit <code>ratatui-themes</code> only if multi-theme switching becomes a requirement (the design's prototype HTML supports five palettes via tweaks panel — that's prototype-only, not in the README handoff).</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight" id="enhancements">
+  <div class="section-head">
+    <div class="num">J. Enhancements — missing from the design</div>
+    <h2>Seven gaps to close before the executor starts.</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>No-TTY fallback.</strong> When <code>kb tui</code> is piped (<code>stdout</code> is not a TTY) or the terminal doesn't support UTF-8, fall back to a line-oriented event firehose — the daemon's SSE stream as text. Detect with <code>std::io::IsTerminal</code> (Rust 1.70+, stable) on <code>stdout</code>. Bonus: makes <code>kb tui | tee log.txt</code> a useful debugging move.
+        <div class="spike-update" style="margin:.4rem 0 .2rem;padding:.5rem .75rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-ratatui</code> confirmed: <strong>without</strong> the <code>IsTerminal</code> guard, crossterm's <code>enable_raw_mode()</code> followed by <code>EnterAlternateScreen</code> fails with bare <code>os error 6</code> ("No such device or address") on non-TTY stdout — an unfriendly UX that surfaces in CI logs, <code>script</code> wrappers without <code>-q</code>, and any pipe. Production must check <code>IsTerminal</code> first and print: <code>"kb-tui must be run from an interactive terminal (try `kb tui` from your shell)"</code> before the fallback to line-firehose mode. Also confirmed: wrapping the binary with <code>script -q -c './target/release/kb-tui' /tmp/kb-tui.log</code> allocates a pseudo-tty so the binary launches and emits alt-screen + cursor-hide ANSI sequences — useful as a no-real-terminal-needed CI smoke test. Full context: <a href="../../spike-findings.md#spike-ratatui--2026-05-11">docs/spike-findings.md</a>.</div>
+      </li>
+      <li><strong>Terminal capability detection &amp; ASCII fallback.</strong> Braille spinner needs UTF-8 + reasonable font coverage. Probe at startup; provide ASCII fallback frames <code>/ - \ |</code> for terminals without braille. Bar fills similarly: <code>█</code>/<code>░</code> fall back to <code>#</code>/<code>.</code>.</li>
+      <li><strong>Colorblind safety note.</strong> The design uses red/green for OK/fail; glyphs (<code>✓ ✗</code>) carry the same information independently. Document this constraint explicitly in <code>theme.rs</code> so future palette additions don't break it.</li>
+      <li><strong>Multi-kb namespacing scaling story.</strong> Design mocks show four kbs hard-coded; v0.0.1 research says "one kb only". The TUI handles N kbs trivially in the sidebar tree; the sources table already has a <code>KB</code> column filter (V2); the activity log labels each event with <code>kb=</code>. No layout change at N=10. Re-flag at N→100 (sidebar tree wants virtualisation; sources table wants a search filter strip).</li>
+      <li><strong>Connection-state freeze on disconnect.</strong> Design proposes desaturating the body and freezing panels (rather than blanking) while the retry counter ticks. Cross-reference <a href="04-sse-axum.html">topic 04</a>'s <code>Last-Event-ID</code> replay: on reconnect with replay → fill the gap silently; without replay → show "snapshot resync" banner and clear the in-memory log to avoid stale state.</li>
+      <li><strong>Open-in-browser vs open-in-editor.</strong> Design chat says <span class="kbd">o</span> opens artifact in browser; design README says <span class="kbd">o</span> opens in <code>$EDITOR</code>. Disambiguate: <span class="kbd">o</span> on a code/error row opens <code>$EDITOR</code>; <span class="kbd">Enter</span> or <span class="kbd">o</span> on a search-hit or HTML artifact row opens via <code>xdg-open</code> (browser for <code>.html</code>). Add to the keybinding table (already reflected in section D).</li>
+      <li><strong>Accessibility escape hatch.</strong> ratatui is not screen-reader friendly. Document that the kb daemon's HTTP API (<code>GET /search?q=</code>, <code>GET /docs/{id}</code>, <code>GET /stats</code>, <code>GET /events</code>) is the non-visual access path. The TUI is <em>one</em> client among many; the daemon is the source of truth.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight" id="background">
+  <div class="section-head">
+    <div class="num">K. Background · ratatui ecosystem in 2026</div>
+    <h2>Why the design's choices match the patterns.</h2>
+    <p class="deck">The handoff doesn't justify every library or pattern choice — this section documents the upstream context so the executor knows why <code>ratatui</code> 0.30 + the component pattern + <code>tokio::select!</code> are the right defaults, and what the alternatives look like if any of them turn out to be wrong.</p>
+  </div>
+  <div class="prose">
+    <h3>Ratatui current state</h3>
+    <p>Latest <strong><code>ratatui = 0.30.0</code></strong>, released 2025-12-26 after a year-long alpha/beta cycle. 0.31 planned but unreleased. MSRV 1.86. 0.30 is the biggest break since the tui-rs fork: workspace split (<code>ratatui-core</code>, <code>ratatui-widgets</code>, backends), <code>no_std</code> support, <code>ratatui::run()</code> entry point, crossterm version flags, <code>Alignment</code> → <code>HorizontalAlignment</code> (alias kept), <code>FrameExt</code> import needed for <code>render_widget_ref</code>.</p>
+    <h3>Has state management crystallised? No.</h3>
+    <p>Ratatui itself is strictly immediate-mode. Three serious add-ons reached usable maturity in 2025 — <code>tui-realm</code> (React/Elm hybrid, prescriptive), <code>ratatui-elm</code> (Iced-inspired, lazy redraw), <code>tears</code> (pure TEA). No canonical winner. The design picks the <strong>component pattern from the async-template / gitui</strong> — sufficient, no framework lock-in, easy to migrate to elm-style later.</p>
+    <h3>Reference TUIs · what kb borrows</h3>
+    <table class="alt-table">
+      <thead><tr><th>Tool</th><th>Stack</th><th>What kb borrows</th></tr></thead>
+      <tbody>
+        <tr><td><strong>k9s</strong></td><td>Go + tcell + tview</td><td><strong>Strongest analog.</strong> Watch-driven; "subscribe to a stream, render the latest state." Maps perfectly to SSE. Command palette as power-user input.</td></tr>
+        <tr><td><strong>gitui</strong></td><td>Rust + ratatui + tui-textarea</td><td>Hand-rolled <code>Component</code> trait; modal stack pattern for <code>?</code> help.</td></tr>
+        <tr><td>bottom</td><td>Rust + ratatui</td><td>Tabs + multi-pane charts; <code>DataCollector</code> task → UI channel.</td></tr>
+        <tr><td>atuin</td><td>Rust + ratatui</td><td>Search-as-you-type through one <code>query: String</code> + debounce; configurable keymap (TOML).</td></tr>
+        <tr><td>lazygit</td><td>Go + gocui</td><td>Multi-pane focus model + per-pane footer hints.</td></tr>
+        <tr><td>gh-dash</td><td>Go + Bubble Tea</td><td>Section-as-config pattern.</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Common pattern across all:</strong> dedicated collector task → channel → main loop drains channel → redraw. <em>Nobody</em> redraws directly from an HTTP/SSE callback. The design's async-edge prescription matches.</p>
+    <h3>Async edges into a synchronous render</h3>
+    <p>A tokio task per async source converts that source into <code>AppEvent</code>s and pushes them onto one <code>mpsc::UnboundedSender&lt;AppEvent&gt;</code>. The render loop drains the receiver in <code>select!</code>. SSE, fs notifications, HTTP responses — all become <code>AppEvent</code> variants. This is the async-template's prescription and what bottom, gitui, and the elm-style frameworks all do under the hood.</p>
+    <h3>SSE client</h3>
+    <p><strong><code>reqwest-eventsource</code></strong> is the lighter pick (auto-retry, GET-friendly). <code>eventsource-client</code> (LaunchDarkly) has more features. For kb (GET-style on localhost), <code>reqwest-eventsource</code>. Spawn one task; forward parsed events through <code>tokio::sync::mpsc::unbounded_channel</code>.</p>
+    <h3>Reconnection UX</h3>
+    <ol>
+      <li><strong>Connected</strong> — quiet green dot in the header.</li>
+      <li><strong>Reconnecting / degraded</strong> — yellow dot + paused spinner + countdown.</li>
+      <li><strong>Disconnected</strong> — red dot, last-seen timestamp, body desaturated (see enhancement #5).</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH (layout)</span> <span class="conf conf--med">Confidence · MED (v0.1 phasing)</span></span>
+    <h4>Library set (v0.1)</h4>
+<pre>[dependencies]
+ratatui              = { version = "0.30", features = ["crossterm"] }
+crossterm            = { version = "0.29", features = ["event-stream"] }
+tokio                = { version = "1", features = ["full"] }
+tokio-util           = "0.7"
+futures              = "0.3"
+reqwest              = { version = "0.12", features = ["json", "stream"] }
+reqwest-eventsource  = "0.6"
+serde                = { version = "1", features = ["derive"] }
+serde_json           = "1"
+toml                 = "0.8"
+tracing              = "0.1"
+tracing-appender     = "0.2"
+tui-input            = "0.10"
+unicode-width        = "0.2"</pre>
+    <p>Skip <code>ratatui-themes</code>, <code>tui-popup</code>, <code>tui-scrollview</code>, <code>throbber-widgets-tui</code>, <code>tui-realm</code>, <code>tears</code> for v0.1. The design's fidelity requirements are easier to hit with thin custom widgets than with library widgets that bring their own opinions.</p>
+    <h4>v0.1 ship list</h4>
+    <ul>
+      <li><strong>HOME + SOURCES + ERRORS</strong> with full chrome (header, tab strip, status bar).</li>
+      <li><strong>DETAIL / STATS / SEARCH</strong> render an empty-state stub ("ships in v0.2 — use <code>kb search</code> on the CLI").</li>
+      <li><strong>Help overlay</strong> (<span class="kbd">?</span>) lists all 6 tab keybindings even though half are stubbed.</li>
+      <li><strong>Command palette</strong> (<span class="kbd">:</span>) with three verbs: <code>reindex</code>, <code>pause</code>, <code>resume</code>. The other four follow when their endpoints land.</li>
+      <li><strong>Activity log</strong> on HOME with the full event taxonomy (section G).</li>
+      <li><strong>SSE consumer</strong> with reconnection / desaturate-on-disconnect / Last-Event-ID gap-fill.</li>
+      <li><strong>No-TTY fallback</strong> (enhancement #1) for piped use.</li>
+    </ul>
+    <p>v0.2 lands DETAIL (needs <code>GET /graph/{doc_id}</code>) and STATS (needs <code>GET /stats</code>). v0.3 lands SEARCH (needs embeddings — see <a href="02-fastembed.html">topic 02</a>).</p>
+  </div>
+
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Decisions · 2026-05-11 (cluster 4: UX gaps — TUI side)</span>
+    <p style="margin:0 0 .55rem;font-size:.95rem;line-height:1.55">Open-points cluster 4 landed. Every TUI-side open question is now resolved.</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Daemon transport.</strong></span> <em>Resolved cluster 1.</em> TCP <code>localhost:4000</code> for v0.1; Unix socket considered for self-host hardening only.</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Search-as-you-type plumbing.</strong></span> <em>Resolved cluster 4.</em> Debounced <code>GET /api/search</code> at 150 ms after the last keystroke (topic 11 §B.1). No streaming query channel for v0.1; revisit if v0.3+ shows it's needed.</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Run history retention.</strong></span> <em>Resolved cluster 4.</em> <strong>Two distinct rings:</strong> the TUI's in-memory <em>display</em> ring is 200 events (renders the last 4); the daemon's <em>replay</em> ring (topic 04) is 1024 events for Last-Event-ID gap-fill. Plus daily-rotated ndjson at <code>~/.local/state/kb/runs/YYYY-MM-DD.ndjson</code> for cross-session history. Scrollback-into-history is a v0.3+ TUI affordance.</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Multi-daemon.</strong> Single per host or several?</span> <em>Resolved cluster 4 — multi-daemon from v0.1.</em> The TUI keeps a daemon list in <code>~/.config/kb/daemons.toml</code> (one section per daemon: <code>[daemon.work-laptop] endpoint = "http://localhost:4000"</code>). The header chrome shows <code>kb &lt;daemon&gt; · &lt;kb&gt;</code> (e.g. <code>kb work-laptop · rust-learning</code>) instead of just <code>active: work</code>. <span class="kbd">D</span> opens a daemon-switcher overlay (modal · same pattern as <span class="kbd">?</span> help). Daemons identify themselves via <code>GET /api/identity</code> (topic 11). Discovery is config-only for v0.1; mDNS / <code>.local</code> auto-discovery defers to v0.4+ team-mode. SSE: TUI subscribes to one daemon at a time (the "active" one); switching daemon flushes and reconnects.</li>
+    </ul>
+  </div>
+
+  <p style="margin-top:1.5rem;font-size:.9rem;color:var(--ink-3)"><em>Resolved by the design handoff:</em> write path (TUI is a command issuer), mouse policy (out of scope for v1), SSE event schema (the design names are canonical), state-management approach (component pattern, no framework). <em>Resolved by clusters 1–4:</em> transport, search plumbing, run history, multi-daemon, command channel, sandbox recipe.</p>
+</section>
+
+<nav class="page-nav section">
+  <a href="04-sse-axum.html"><span class="dir">← Prev</span><span class="ttl">04 · SSE in axum</span></a>
+  <a class="next" href="../surfaces/06-iframe.html"><span class="dir">Next →</span><span class="ttl">06 · Iframe sandbox</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · TUI specification</p>
+      <p>Claude Design handoff <code>1XoWvtO0FExl3zEpJ3WqqA</code> integrated 2026-05-11. Six tabs, Solarized Light, command issuer. Eight raised concerns, seven enhancements proposed. SPA counterpart at <a href="../surfaces/10-web-gallery.html">topic 10</a> — the SPA's status pill consumes the same SSE stream this TUI does (see <a href="#protocol">§G</a>).</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="04-sse-axum.html">04 SSE</a></li>
+        <li><a href="../surfaces/06-iframe.html">06 Iframe</a></li>
+        <li><a href="../surfaces/09-comments.html">09 Comments</a></li>
+        <li><a href="../surfaces/10-web-gallery.html">10 Web Gallery</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://ratatui.rs/highlights/v030/">Ratatui 0.30</a></li>
+        <li><a href="https://ratatui.github.io/async-template/02-structure.html">async-template</a></li>
+        <li><a href="https://github.com/extrawurst/gitui">gitui</a></li>
+        <li><a href="https://claude.ai/design">claude.ai/design</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

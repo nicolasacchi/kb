@@ -1,0 +1,2497 @@
+/* Reader chrome (W4.2) — top bar, left tree, center CM6 view, right
+ * outline, plus the diff view. Every color reaches for a `tokens.css`
+ * variable (dark + light both fall out for free) rather than a literal.
+ */
+
+.kbc-reader {
+  display: flex;
+  flex-direction: column;
+  /* F1 — was `100vh`: the reader now lives inside `.kbc-approute` (below the
+   * global `.kbc-topbar`, see the "App shell" section), which already
+   * constrains its height to "the viewport minus the topbar" — filling
+   * `100%` of that (not the whole viewport) avoids double-counting the
+   * topbar's own height. */
+  height: 100%;
+}
+
+.kbc-reader__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-h);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+  flex: 0 0 auto;
+}
+
+.kbc-reader__body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kbc-reader__tree {
+  width: 260px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.kbc-reader__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+  /* Anchor for the A3 floating chips (vim status, permalink-copied). */
+  position: relative;
+}
+
+.kbc-reader__outline {
+  width: 220px;
+  flex: 0 0 auto;
+  border-left: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  overflow: auto;
+}
+
+.kbc-reader__hint {
+  padding: 24px;
+  color: var(--ink-mute);
+}
+.kbc-reader__hint--error {
+  color: var(--red);
+}
+
+/* --- Breadcrumbs -------------------------------------------------- */
+
+.kbc-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.kbc-breadcrumbs__sep {
+  color: var(--ink-dim);
+  margin: 0 4px;
+}
+.kbc-breadcrumbs__current {
+  color: var(--ink);
+  font-weight: 600;
+}
+.kbc-breadcrumbs a {
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+.kbc-breadcrumbs a:hover {
+  color: var(--accent);
+}
+/* V3.N2 — symbol chain after path segments (cursor-line ancestors). */
+.kbc-breadcrumbs__symbols {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.kbc-breadcrumbs__symbol {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--ink-mute);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-breadcrumbs__symbol:hover {
+  color: var(--accent);
+}
+.kbc-breadcrumbs__ellip {
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* --- F1 — app shell (TopBar above every route) ------------------------- */
+
+.kbc-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+/* TopBar chrome (.kbc-topbar, .kbc-iconbtn, nav menu/sheet) lives in
+ * styles/topbar.css (V4.U5). */
+.kbc-approute {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* --- F3a — toast host (mirrors kb's own `.kb-toasts`, invariant #32) ---- */
+
+.kbc-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  /* V4.U4 — deliberate order change: toast feedback now paints above
+   * modals (`--z-top` 1000 > `--z-modal` 100). */
+  z-index: var(--z-top);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(360px, calc(100vw - 32px));
+}
+.kbc-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--rule-hi);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.kbc-toast--ok {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--rule-hi));
+}
+.kbc-toast--err {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--rule-hi));
+}
+.kbc-toast--warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule-hi));
+}
+.kbc-toast__msg {
+  flex: 1 1 auto;
+  color: var(--ink);
+}
+.kbc-toast__x {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 2px;
+  display: grid;
+  place-items: center;
+}
+.kbc-toast__x:hover {
+  color: var(--ink);
+}
+
+/* --- Repo pill (F1 — replaces the old RepoPicker box) ------------------ */
+
+.kbc-repopill-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+.kbc-repopill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-repopill:hover {
+  border-color: var(--rule-hi);
+  background: var(--bg-card-hi);
+}
+.kbc-repopill-r {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.kbc-repopill-name {
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* F1 — an unscoped view (Home, an all-repo /search): the pill shows the
+ * DEFAULT repo, not a hard pick — dim it + dotted underline, mirroring kb's
+ * own `.kb-ws--unscoped` (root CLAUDE.md invariant #33). */
+.kbc-repopill--unscoped {
+  opacity: 0.72;
+}
+.kbc-repopill--unscoped .kbc-repopill-name {
+  font-weight: 400;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--rule-hi);
+}
+.kbc-repopopover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-popover);
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  min-width: 260px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+}
+.kbc-repopopover__empty {
+  padding: 10px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-repopopover__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.kbc-repopopover__item:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-repopopover__item.is-on {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-repopopover__name {
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.kbc-repopopover__meta {
+  flex: 1 1 auto;
+  color: var(--ink-mute);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.kbc-repopopover__badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
+/* --- Home (F1 minimal landing → F4 fleet dashboard; the container/head
+ * rules stay here since they predate F4, the card grid itself lives in its
+ * own `styles/home.css`, mirroring `history.css`'s "a new complex feature
+ * gets its own stylesheet" precedent). ------------------------------------ */
+
+.kbc-home {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-home__head {
+  margin-bottom: 20px;
+}
+.kbc-home__title {
+  font-size: 28px;
+  margin: 0 0 4px;
+}
+/* S2-A — unified inbox (design-s2.md §S2-A): Home's other documented entry
+ * point besides the TopBar Explore menu (Home has no active repo, so the
+ * repo-scoped review chips never render here). */
+.kbc-home__head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kbc-home__inbox-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+.kbc-home__inbox-link:hover {
+  color: var(--accent-soft);
+}
+.kbc-home__hint {
+  color: var(--ink-mute);
+  margin: 0 0 4px;
+}
+.kbc-home__hint kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--ink-dim);
+}
+.kbc-home__summary {
+  color: var(--ink-dim);
+  font-size: 12px;
+  margin: 0;
+}
+/* S2-B (design-s2.md §S2-B) — the `remote_mutations` capability chip;
+ * `routes/Home.tsx` only renders this element at all once the field is
+ * present on `GET /api/identity`. */
+.kbc-home__capability {
+  color: var(--ink-dim);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+/* --- Shared EmptyState (F6) — mirrors kb's own `web/src/components/
+ * EmptyState.tsx` shape under a `kbc-` prefix; used anywhere a view has
+ * "nothing here, and it's worth explaining" (Home/Search/Branches/Commit/
+ * Reader/PeekPanel/HistoryPanel) rather than a transient loading/error line
+ * (those stay `.kbc-reader__hint`). ---------------------------------------- */
+
+.kbc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--ink-mute);
+}
+.kbc-empty--view {
+  min-height: 40vh;
+  padding: 32px 16px;
+}
+.kbc-empty--rail {
+  padding: 24px 12px;
+}
+.kbc-empty--inline {
+  padding: 14px;
+}
+.kbc-empty__icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+}
+.kbc-empty__title {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink);
+}
+.kbc-empty--rail .kbc-empty__title,
+.kbc-empty--inline .kbc-empty__title {
+  font-size: 13px;
+}
+.kbc-empty__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-mute);
+  max-width: 46ch;
+}
+.kbc-empty__action {
+  margin-top: 2px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.kbc-empty__action:hover {
+  border-color: var(--accent);
+}
+
+/* --- SH.C3 — reader "start here" panel (empty-pane enrichment) --------
+ * Sits below the shared `.kbc-empty--view` card on the reader's own
+ * no-file-selected state ONLY (`Reader.tsx`'s `<ReaderStartCards>`) — a
+ * populated tree next to a near-total void wasn't a good first impression.
+ * Both cards read data the app already tracks client-side (recent-files
+ * ring, a static keyboard pointer); no new fetch. */
+.kbc-reader-start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.kbc-reader-start__cards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto 32px;
+  padding: 0 16px;
+}
+.kbc-reader-start__card {
+  flex: 1 1 240px;
+  min-width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  text-align: left;
+}
+.kbc-reader-start__card h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+.kbc-reader-start__card ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-reader-start__row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 6px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-reader-start__row:hover {
+  background: var(--bg-card-hi);
+  color: var(--ink);
+}
+.kbc-reader-start__card dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-reader-start__key {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.kbc-reader-start__key dt {
+  flex: 0 0 auto;
+}
+.kbc-reader-start__key dt kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.kbc-reader-start__key dd {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+@media (max-width: 520px) {
+  .kbc-reader-start__cards {
+    flex-direction: column;
+  }
+}
+
+/* --- Ref picker ------------------------------------------------------ */
+
+.kbc-refpicker {
+  position: relative;
+}
+.kbc-refpicker__trigger {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbc-refpicker__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 220px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  z-index: var(--z-popover);
+}
+.kbc-refpicker__menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.kbc-refpicker__menu button:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-refpicker__item--active {
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+.kbc-refpicker__group {
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  padding: 6px 8px 2px;
+}
+.kbc-refpicker__head {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--green);
+}
+
+/* --- File tree -------------------------------------------------------- */
+
+.kbc-tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.kbc-tree__head {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px 0;
+  flex: 0 0 auto;
+}
+.kbc-tree__overlay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-mute);
+  cursor: pointer;
+  user-select: none;
+}
+.kbc-tree__overlay-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.kbc-tree__filter {
+  margin: 8px;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 12px;
+}
+/* V3.2-B3 — attention overlay tints via inline style.backgroundColor
+ * (attentionTintStyle → accent opacity). Never red-as-shame. */
+
+.kbc-tree__scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+}
+.kbc-tree__row {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--ink-mute);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbc-tree__row:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-tree__row--dir {
+  color: var(--ink);
+}
+.kbc-tree__row--selected {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+/* SH.C3 (WO6 root cause): `--focused` is FileTree's roving-cursor class,
+ * applied to `rows[focusedIndex]` (React state, default 0 — see
+ * `FileTree.tsx`) whether or not the tree actually holds DOM focus. With
+ * no autofocus-on-mount, a cold page load already has `focusedIndex === 0`,
+ * so the first row (alphabetically `.agents` et al.) painted an orphaned
+ * ring nobody asked for. `focusedIndex`'s default isn't ours to change
+ * (FileTree.tsx, out of scope), but the ring only needs to be VISIBLE
+ * while that roving cursor is actually live — i.e. while something inside
+ * `.kbc-tree` has real focus (in practice the filter input; rows carry no
+ * `tabIndex` of their own). Scoping to `:focus-within` fixes it in CSS
+ * alone: identical class list, identical default state, just conditionally
+ * painted. */
+.kbc-tree:focus-within .kbc-tree__row--focused {
+  outline: 1px solid var(--accent-bor);
+  outline-offset: -1px;
+}
+/* V4.U4 — fixed-width twisty slot so folders (icon) and files (empty)
+ * share one indent column. Row height stays ROW_HEIGHT (24px). */
+.kbc-tree__twisty {
+  display: inline-flex;
+  width: 14px;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Outline rail ------------------------------------------------------ */
+
+.kbc-outline {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0;
+}
+.kbc-outline--empty {
+  padding: 16px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-outline__item {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-outline__item:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-outline__kind {
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+  align-self: center;
+}
+.kbc-outline__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- CodeMirror read-only view ------------------------------------------ */
+
+/* V3.N2 — sticky context stack sits above the CM6 viewport inside the pane. */
+.kbc-codeview-wrap {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+}
+.kbc-codeview-wrap > .kbc-codeview {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.kbc-sticky-context {
+  position: absolute;
+  top: 0;
+  /* Leave the gutter column free so sticky rows don't cover line numbers /
+   * blame dots — CM6 gutters are typically ~60–80px; this is a soft offset. */
+  left: 72px;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  pointer-events: auto;
+}
+.kbc-sticky-context__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-mute);
+  padding: 2px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+.kbc-sticky-context__row:last-child {
+  border-bottom: none;
+}
+.kbc-sticky-context__row:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kbc-sticky-context__kind {
+  color: var(--ink-dim);
+  text-transform: lowercase;
+  flex: 0 0 auto;
+}
+.kbc-sticky-context__name {
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kbc-sticky-context,
+  .kbc-sticky-context__row {
+    transition: none;
+  }
+}
+
+.kbc-sticky-toggle {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.kbc-sticky-toggle.is-on {
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+  background: var(--accent-bg);
+}
+
+/* --- SH.C3 — reading-mode controls (wrap toggle + font-size stepper) --- */
+
+.kbc-fontsize-stepper {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 4px;
+  gap: 2px;
+}
+.kbc-fontsize-stepper__btn {
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.kbc-fontsize-stepper__btn:hover:not(:disabled) {
+  border-color: var(--rule-hi);
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kbc-fontsize-stepper__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The `?`-cheatsheet toolbar row is desktop-chrome by default (mobile
+ * collapses it behind another unit's overflow handling); under a coarse
+ * pointer these two NEW SH.C3 controls still need a real tap target, same
+ * ≥44px floor the rest of the app's pointer:coarse sweep uses. Scoped to
+ * just the wrap toggle + stepper buttons (not every `.kbc-sticky-toggle`
+ * sibling — widening those is a separate, not-yet-run touch-target pass). */
+@media (pointer: coarse) {
+  [data-kbc-wrap-toggle],
+  .kbc-fontsize-stepper__btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+.kbc-codeview {
+  height: 100%;
+}
+.kbc-codeview .cm-editor {
+  height: 100%;
+}
+.kbc-codeview .cm-gutters {
+  background: var(--bg-panel);
+  color: var(--ink-dim);
+  border-right: 1px solid var(--rule);
+}
+.kbc-codeview .cm-content {
+  color: var(--ink);
+}
+.kbc-codeview .cm-activeLine,
+.kbc-codeview .cm-activeLineGutter {
+  background: var(--bg-card-hi);
+}
+
+/* Highlight classes — one per `HighlightClass` bucket
+ * (`crates/kb-code-server/src/highlight.rs`'s fixed 15-member set), mapped
+ * 1:1 via `lib/decorations.ts`'s `cssClassFor`.
+ *
+ * V70-A7 — each class now reads its OWN `--syn-*` role instead of a chrome
+ * token directly. tokens.css defaults every one of the fifteen to exactly
+ * the chrome token it used to name (`--syn-number: var(--red)` and so on),
+ * so this is a byte-identical rendering change for the built-in palette —
+ * but a registry theme can now recolour code without dragging error dots
+ * and deletion tints along with it. Class names are untouched, so
+ * `decorations.ts`, `diffHighlight.ts`, `highlightField.ts` and every test
+ * are unaffected. */
+.kbc-hl-keyword {
+  color: var(--syn-keyword);
+}
+.kbc-hl-string {
+  color: var(--syn-string);
+}
+.kbc-hl-comment {
+  /* SH.C1 — code comments are body text developers actually read;
+   * `--ink-dim` (~3.7:1 post-bump) is legible for labels but fails AA here.
+   * `--ink-mute` (~5:1) clears it. */
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.kbc-hl-function {
+  color: var(--syn-function);
+}
+.kbc-hl-type {
+  color: var(--syn-type);
+}
+.kbc-hl-number {
+  color: var(--syn-number);
+}
+.kbc-hl-variable {
+  color: var(--syn-variable);
+}
+.kbc-hl-constant {
+  color: var(--syn-constant);
+}
+.kbc-hl-operator {
+  color: var(--syn-operator);
+}
+.kbc-hl-punctuation {
+  color: var(--syn-punctuation);
+}
+.kbc-hl-property {
+  color: var(--syn-property);
+}
+.kbc-hl-attribute {
+  color: var(--syn-attribute);
+}
+.kbc-hl-label {
+  color: var(--syn-label);
+}
+.kbc-hl-escape {
+  color: var(--syn-escape);
+}
+.kbc-hl-other {
+  color: var(--syn-other);
+}
+
+/* --- Diff view --------------------------------------------------------- */
+
+.kbc-diff {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.kbc-diff__header {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+.kbc-diff__additions {
+  color: var(--green);
+}
+.kbc-diff__deletions {
+  color: var(--red);
+}
+.kbc-diff__hunk-header {
+  padding: 4px 14px;
+  color: var(--accent-soft);
+  background: var(--bg-panel-2);
+}
+.kbc-diff__line {
+  display: flex;
+  white-space: pre;
+}
+.kbc-diff__line--add {
+  /* V70-A7 — the Lane Budget's diff lane, via its own role. tokens.css
+   * defaults `--diff-add-bg` to this exact expression, so the built-in
+   * palette paints identically; a registry theme swaps in an opaque
+   * `color-mix(in oklch, …)` over `--bg`. */
+  background: var(--diff-add-bg);
+}
+.kbc-diff__line--remove {
+  background: var(--diff-del-bg);
+}
+.kbc-diff__gutter-old,
+.kbc-diff__gutter-new {
+  flex: 0 0 44px;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--ink-dim);
+  user-select: none;
+}
+.kbc-diff__marker {
+  flex: 0 0 14px;
+  color: var(--ink-dim);
+  user-select: none;
+}
+.kbc-diff__text {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* --- Phase D deliverable 4 — diff-anchored comments (Commit/Compare) ---- */
+
+.kbc-diff__gutter-new--commentable {
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  padding-right: 8px;
+}
+.kbc-diff__gutter-new--commentable:hover {
+  color: var(--accent-soft);
+  text-decoration: underline;
+}
+
+.kbc-diffcomment-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-panel-2);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-diffcomment-composer__label {
+  font-size: 11px;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.kbc-diffcomment-composer__body {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  resize: vertical;
+}
+.kbc-diffcomment-composer__actions {
+  display: flex;
+  gap: 6px;
+}
+.kbc-diffcomment-composer__actions button {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-mute);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.kbc-diffcomment-composer__actions button:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.kbc-diffcomment-composer__actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-diffannot {
+  border-top: 1px solid var(--rule);
+  padding: 2px 14px;
+  font-family: var(--font-sans);
+}
+.kbc-diffannot__thread {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-diffannot__thread:last-child {
+  border-bottom: none;
+}
+.kbc-diffannot__thread.is-resolved .kbc-diffannot__body {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+}
+.kbc-diffannot__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.kbc-diffannot__line {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+}
+.kbc-diffannot__sha {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-diffannot__sha:hover {
+  text-decoration: underline;
+}
+.kbc-diffannot__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+}
+.kbc-diffannot__meta {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kbc-diffannot__row button {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.kbc-diffannot__reply {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 4px 20px;
+  font-size: 12px;
+  border-left: 2px solid var(--rule);
+  margin: 4px 0 0 4px;
+}
+.kbc-diffannot__reply .kbc-diffannot__body {
+  font-size: 11px;
+}
+
+/* --- A3 — vim reading buffer chrome ---------------------------------- */
+
+/* CM6 selection layer (drawSelection) + focus affordance. */
+.kbc-codeview .cm-editor.cm-focused {
+  outline: none;
+}
+.kbc-codeview .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+.kbc-codeview .cm-editor.cm-focused .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 30%, transparent) !important;
+}
+
+/* Search / goto-line panels (@codemirror/search) restyled to the tokens. */
+.kbc-codeview .cm-panels {
+  background: var(--bg-panel);
+  color: var(--ink);
+  border-color: var(--rule);
+  z-index: 3;
+}
+.kbc-codeview .cm-panels-bottom {
+  border-top: 1px solid var(--rule);
+}
+.kbc-codeview .cm-panel {
+  font-family: inherit;
+  font-size: 12px;
+}
+.kbc-codeview .cm-panel input,
+.kbc-codeview .cm-panel button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 2px 7px;
+  margin: 2px 3px;
+}
+.kbc-codeview .cm-panel input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.kbc-codeview .cm-panel button:hover {
+  background: var(--bg-card-hi);
+  cursor: pointer;
+}
+.kbc-codeview .cm-panel label {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-codeview .cm-searchMatch {
+  background: color-mix(in srgb, var(--warn) 30%, transparent);
+}
+.kbc-codeview .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
+/* V3.N1 — occurrence highlight (identifier under cursor). Distinct from
+ * `/`-search's warn tint so the two never collide visually. */
+.kbc-codeview .cm-kbc-occurrence {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 2px;
+}
+
+/* V3.N1 — speed-search match mark (trees / outline / recent locations). */
+.kbc-speedsearch__mark {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
+/* V3.N1 — Recent Locations popup rows (rides Omnibox chrome). */
+.kbc-recent-locs__header {
+  padding: 8px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+.kbc-recent-locs__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbc-recent-locs__row:hover,
+.kbc-recent-locs__row.is-active {
+  background: var(--accent-bg, var(--bg-card-hi));
+}
+.kbc-recent-locs__path {
+  color: var(--ink);
+}
+.kbc-recent-locs__snippet {
+  color: var(--ink-mute);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* V3.N1 — outline speed-search filter + focused row. */
+.kbc-outline-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  outline: none;
+}
+.kbc-outline__filter {
+  margin: 8px 8px 0;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 12px;
+}
+.kbc-outline__item--focused {
+  background: var(--accent-bg, var(--bg-card-hi));
+  outline: 1px solid var(--accent-bor, var(--accent));
+  outline-offset: -1px;
+}
+
+/* V3.N2 — structure popup row + bookmarks rail. */
+.kbc-structure-popup__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+}
+.kbc-structure-popup__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbc-structure-popup__line {
+  color: var(--ink-dim);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+/* T1 (design-ui.md §9.2) — the row is now a `<div role="option">` (rather
+ * than the whole `.kbc-recent-locs__row` being a `<button>`) so a
+ * copy-symbol-link icon button can sit alongside the jump button — these
+ * three rules override `.kbc-recent-locs__row`'s own column/padding/cursor
+ * for JUST the wrapper (source order after that rule wins on equal
+ * specificity); its `:hover`/`.is-active` background rule still applies
+ * unchanged since the wrapper keeps that class too. */
+.kbc-structure-popup__row-wrap {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  cursor: default;
+}
+.kbc-structure-popup__row-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 8px 6px 8px 14px;
+  cursor: pointer;
+}
+.kbc-structure-popup__copy-sym {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 4px 12px 4px 4px;
+  display: inline-flex;
+  align-items: center;
+}
+.kbc-structure-popup__copy-sym:hover {
+  color: var(--accent-soft);
+}
+
+.kbc-bookmarks {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.kbc-bookmarks__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 12px;
+  overflow: auto;
+}
+.kbc-bookmarks__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-bookmarks__jump {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbc-bookmarks__jump:hover .kbc-bookmarks__path {
+  color: var(--accent);
+}
+.kbc-bookmarks__mnemonic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  height: 1.4em;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule);
+  color: var(--accent-soft);
+  font-weight: 600;
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.kbc-bookmarks__path {
+  color: var(--ink);
+}
+.kbc-bookmarks__note {
+  flex: 1 1 100%;
+  color: var(--ink-mute);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-bookmarks__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.kbc-bookmarks__act {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.kbc-bookmarks__act:hover {
+  border-color: var(--rule);
+  color: var(--ink-mute);
+}
+.kbc-bookmarks__act--danger:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.kbc-bookmarks__edit {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  width: 100%;
+}
+.kbc-bookmarks__edit input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.kbc-bookmarks__edit button {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.kbc-mnemonic-popup .kbc-bookmarks__mnemonic {
+  margin-right: 6px;
+}
+
+/* Bottom-right mode/pending chip — only rendered when out of normal mode
+   or mid-sequence (`Reader.tsx`), so it never competes with reading. */
+.kbc-vim-status {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  padding: 3px 9px;
+  border: 1px solid var(--rule-hi);
+  border-radius: 5px;
+  background: var(--bg-panel-2);
+  /* F5 light-theme audit fix — was `var(--accent-fg, var(--accent))`.
+   * `--accent-fg` is ALWAYS defined (a permanent `#ffffff`, never the
+   * fallback branch), so this rendered literal white text on `--bg-panel-2`
+   * — fine against dark's near-black panel (19.5:1), but on light's
+   * near-white panel (`#ecebe5`) the two colors are nearly identical
+   * (1.2:1) and the chip went effectively invisible. `--accent-soft` is the
+   * token this crate already uses everywhere else for "accent-colored text
+   * on a neutral panel" (`.kbc-copied-chip` two rules below uses the same
+   * idiom with `--green`) and clears AA in both themes (8.7:1 dark, 5.3:1
+   * light). */
+  color: var(--accent-soft);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  z-index: 4;
+}
+.kbc-vim-status__pending {
+  margin-left: 6px;
+  color: var(--ink-mute);
+  letter-spacing: normal;
+}
+
+/* Transient "Permalink copied" confirmation (the `Y` action). */
+.kbc-copied-chip {
+  position: absolute;
+  right: 14px;
+  top: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule-hi);
+  border-radius: 5px;
+  background: var(--bg-panel-2);
+  color: var(--green);
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* --- A3 — keyboard cheatsheet overlay (`?`) --------------------------- */
+.kbc-kbdhelp__scrim {
+  position: fixed;
+  inset: 0;
+  /* F5 light-theme audit fix — was `color-mix(in srgb, var(--bg) 62%,
+   * transparent)`. That reads as a genuine dimming scrim in dark theme
+   * (`--bg` is near-black), but in light theme `--bg` is near-WHITE
+   * (`#f3f1ec`), so the "scrim" was actually a translucent near-white veil
+   * that barely dimmed the reader behind it — the opposite of what a modal
+   * backdrop needs. `--backdrop` (tokens.css) is the same themed scrim
+   * color the omnibox/confirm-dialog overlays already use, so all three
+   * overlays are visually consistent AND correct in both themes. */
+  background: var(--backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* V4.U4 — ties with omnibox `--z-modal` 100; DOM order breaks the tie
+   * (Omnibox mounts after Routes), so today's behavior is preserved. */
+  z-index: var(--z-modal);
+}
+.kbc-kbdhelp {
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-hi);
+  border-radius: 10px;
+  padding: 16px 20px 20px;
+  box-shadow: var(--shadow-lift);
+}
+.kbc-kbdhelp__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.kbc-kbdhelp__head h2 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.kbc-kbdhelp__close {
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.kbc-kbdhelp__close:hover {
+  color: var(--ink);
+}
+.kbc-kbdhelp__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 26px;
+}
+.kbc-kbdhelp__group h3 {
+  margin: 10px 0 6px;
+  font-size: 12px;
+  color: var(--accent-soft, var(--accent));
+}
+.kbc-kbdhelp__group dl {
+  margin: 0;
+}
+.kbc-kbdhelp__row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.kbc-kbdhelp__row dt {
+  flex: 0 0 108px;
+}
+.kbc-kbdhelp__row dt kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.kbc-kbdhelp__row dd {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+
+/* SH.C3 — context-aware ordering: the current surface's group(s) get a
+ * subtle accent rail + brighter title so they read as "start here" without
+ * hiding anything else (discoverability > decluttering for a cheatsheet). */
+.kbc-kbdhelp__group--primary {
+  padding-left: 8px;
+  border-left: 2px solid var(--accent-bor);
+}
+.kbc-kbdhelp__group--primary h3 {
+  color: var(--accent);
+}
+.kbc-kbdhelp__break {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 2px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kbc-kbdhelp__break::before,
+.kbc-kbdhelp__break::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--rule);
+}
+.kbc-kbdhelp__cols--rest {
+  opacity: 0.85;
+}
+
+/* --- B1 — defs/xrefs peek panel (gd / gr / K) -------------------------- */
+
+/* Primary placement: `position: fixed`, `top`/`left`/`bottom` computed from
+ * `CodeViewHandle.cursorCoords()` (viewport/client coordinates, same frame
+ * `position: fixed` uses). Fallback (`--dock`, no cursor coordinates
+ * available): `position: absolute` docked to the bottom of
+ * `.kbc-reader__main` (already `position: relative` for the vim-status/
+ * copied chips above). */
+.kbc-peek {
+  position: fixed;
+  width: 420px;
+  max-width: calc(100vw - 24px);
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  z-index: var(--z-float);
+  outline: none;
+}
+.kbc-peek--dock {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: auto;
+  max-width: none;
+}
+.kbc-peek__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  flex: 0 0 auto;
+}
+.kbc-peek__mode {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  flex: 0 0 auto;
+}
+.kbc-peek__title {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+/* Honest-precision badge — see `PeekPanel.tsx`'s doc: shown whenever the
+ * current row set is approximate, never hidden. */
+.kbc-peek__badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  white-space: nowrap;
+  cursor: help;
+}
+.kbc-peek__close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 13px;
+}
+.kbc-peek__close:hover {
+  color: var(--ink);
+}
+.kbc-peek__body {
+  overflow: auto;
+  flex: 1 1 auto;
+  padding: 4px;
+}
+.kbc-peek__hint {
+  padding: 12px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-peek__error {
+  color: var(--red);
+}
+.kbc-peek__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-peek__row:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-peek__row--active {
+  background: var(--accent-bg);
+  outline: 1px solid var(--accent-bor);
+  outline-offset: -1px;
+}
+.kbc-peek__row-kind {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  padding-top: 1px;
+}
+.kbc-peek__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-peek__row-loc {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-peek__row-repo {
+  color: var(--accent-soft);
+}
+.kbc-peek__row-repo::after {
+  content: "/";
+  color: var(--ink-dim);
+  margin: 0 3px;
+}
+.kbc-peek__row-line {
+  color: var(--ink-dim);
+}
+.kbc-peek__row-container {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-peek__row-text {
+  display: block;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-peek__counts {
+  padding: 8px;
+  color: var(--ink-mute);
+  font-size: 11px;
+  border-top: 1px solid var(--rule);
+}
+
+/* B3 — resolve's per-candidate precision badge: `file-local` gets a solid,
+ * confident treatment distinct from the amber/accent approximate badge
+ * above (`.kbc-peek__badge` alone, reused for `tags-approx` candidates and
+ * the header's whole-set badge) — same "confirmed vs. caution" color
+ * convention as the repo pill's watcher-state chip
+ * (`.kbc-repopopover__badge--watching`, `provenance.css`). */
+.kbc-peek__badge--local {
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+  color: var(--green);
+}
+
+/* B3 — `K`'s provenance hover card (`PeekPanel.tsx`'s `HoverCardView`) —
+ * replaces `.kbc-peek__body`'s row list entirely once `state.card` lands. */
+.kbc-peek__card {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+.kbc-peek__card-sig {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kbc-peek__card-sig--bare {
+  font-weight: 400;
+  color: var(--ink-mute);
+}
+.kbc-peek__card-doc {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.kbc-peek__card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+}
+.kbc-peek__card-provenance {
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-peek__card-sig-first {
+  font-weight: 600;
+}
+.kbc-peek__card-sig-rest {
+  font-weight: 400;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+/* T1 (design-ui.md §9.1) — the hover card's footer action hints (`Enter go
+ * to def · u usages · h callers`), replacing the old single "open
+ * definition" text link. */
+.kbc-peek__card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kbc-peek__card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: var(--accent-soft);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.kbc-peek__card-action kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 0 3px;
+}
+.kbc-peek__card-action:hover {
+  color: var(--accent);
+}
+
+/* T1 (design-ui.md §9.1/§9.2) — the shared trust-tier badge (`TrustBadge.tsx`
+ * + `lib/trustBadge.ts`), reused by `PeekPanel`'s per-candidate badge AND
+ * `FrameworkCard`'s per-row trust chip: `exact` (solid `--green` tint),
+ * `likely` (amber `--warn`, "today's approximate"), `candidate` (dashed
+ * outline, no fill — the least confident tier gets the least committal
+ * treatment). `precision === "lsp-live"` renders the `exact` treatment PLUS
+ * a small "live" pill naming the provider lane. */
+.kbc-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.kbc-trust__pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: help;
+  /* V70-A7 — the Lane Budget's trust channel. `--kbc-trust-style` comes from
+   * the `.kbc-trust-{exact,likely,candidate,observed}` class the badge also
+   * carries (tokens.css): solid / dashed / dotted, all in ONE hue. An
+   * underline rather than a border, so adding the channel costs no layout —
+   * the pill box is byte-identical to before. */
+  text-decoration-line: underline;
+  text-decoration-style: var(--kbc-trust-style, solid);
+  text-decoration-color: currentColor;
+  text-underline-offset: 2px;
+}
+.kbc-trust__pill--exact {
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+  color: var(--green);
+}
+.kbc-trust__pill--likely {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.kbc-trust__pill--candidate {
+  background: none;
+  /* Was a hardcoded `dashed`, which contradicted the Lane Budget's ladder
+   * (dashed is `likely`). Now the same `--kbc-trust-style` the underline
+   * reads, so the border and the underline can never disagree. */
+  border: 1px var(--kbc-trust-style, dotted) var(--ink-dim);
+  color: var(--ink-mute);
+}
+.kbc-trust__live {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--green) 30%, transparent);
+  color: var(--green);
+  cursor: help;
+}
+
+/* T1 (design-ui.md §9.2) — the copy-symbol-link affordance on a peek
+ * candidate row / hover card meta row (`?sym=` deep links). */
+.kbc-peek__row-copy-sym,
+.kbc-peek__card-meta > button.kbc-peek__row-copy-sym {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+}
+.kbc-peek__row-copy-sym:hover {
+  color: var(--accent-soft);
+}
+
+/* V3.1-H3a — hierarchy class badge middle tier + tree chrome */
+.kbc-peek__badge--likely {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-soft);
+}
+.kbc-hier {
+  max-height: 420px;
+  width: 440px;
+}
+.kbc-hier__twist {
+  flex: 0 0 auto;
+  width: 1.1em;
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+  text-align: center;
+}
+.kbc-hier__name {
+  font-weight: 600;
+  color: var(--ink);
+}
+.kbc-hier__row {
+  align-items: center;
+}
+
+/* V3.1-H3a — param-name inlay widgets */
+.cm-kbc-param-hint {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--ink-dim);
+  opacity: 0.75;
+  margin-right: 2px;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* --- B1 — linkify: clickable paths/URLs/session-ids in comments+strings */
+.kbc-link-token {
+  cursor: pointer;
+  border-bottom: 1px dotted var(--ink-dim);
+}
+.kbc-link-token:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--accent);
+  color: var(--accent-soft);
+}
+
+/* --- Wave E — two-pane splits ------------------------------------------- */
+
+.kbc-reader__panes {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.kbc-reader__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: auto;
+  position: relative;
+}
+/* A quiet indicator of which pane vim actions/the inspector rail currently
+ * follow — an inset top edge rather than a border/background, so it reads
+ * as a hint, not a loud state change. Only MEANS anything once a second
+ * pane exists to distinguish from; `focusedPane` defaults to `1` even with
+ * no split open, so Reader.tsx now only adds `is-focused` to pane1 when
+ * `pane2Loc` is set (SH.C3 — this indicator was rendering unconditionally
+ * on the single, un-split pane, including the empty "select a file" state,
+ * as a stray accent rule with nothing to contrast against). */
+.kbc-reader__pane.is-focused {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+.kbc-reader__pane-rule {
+  flex: 0 0 1px;
+  background: var(--rule);
+}
+
+/* --- Wave E — the working-set strip -------------------------------------
+ *
+ * Deliberately quiet: no background of its own beyond the panel tone, small
+ * type, chips that only reveal their pin/remove affordances on hover — this
+ * sits between the top chrome and the reader body on every reader route, so
+ * it must never compete with the breadcrumbs above it or the code below it.
+ */
+.kbc-ws {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+  scrollbar-width: thin;
+}
+.kbc-ws-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--ink-mute);
+  cursor: pointer;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.kbc-ws-chip:hover {
+  background: var(--bg-card-hi);
+  border-color: var(--rule);
+}
+.kbc-ws-chip.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border-color: var(--accent-bor);
+}
+.kbc-ws-chip__dir {
+  color: var(--ink-dim);
+}
+.kbc-ws-chip.is-active .kbc-ws-chip__dir {
+  color: var(--accent-soft);
+  opacity: 0.7;
+}
+.kbc-ws-chip__base {
+  color: inherit;
+  font-weight: 500;
+}
+.kbc-ws-chip__pin,
+.kbc-ws-chip__x {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 1px;
+  border-radius: 3px;
+}
+.kbc-ws-chip:hover .kbc-ws-chip__pin,
+.kbc-ws-chip:hover .kbc-ws-chip__x,
+.kbc-ws-chip.is-pinned .kbc-ws-chip__pin {
+  display: inline-flex;
+}
+.kbc-ws-chip__pin:hover,
+.kbc-ws-chip__x:hover {
+  color: var(--ink);
+}
+.kbc-ws-chip.is-pinned .kbc-ws-chip__pin {
+  color: var(--accent-soft);
+}
+
+/* V70-A10 — the strip's leading "active workspace" chip. Visually distinct
+ * from the ordinary file chips (a filled pill, not an outline-on-hover),
+ * since it names the WHOLE strip's context rather than one file in it. */
+.kbc-ws-workspace-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border: 1px solid var(--accent-bor);
+  margin-right: 4px;
+}
+.kbc-ws-workspace-chip__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.kbc-ws-workspace-chip__name:hover {
+  text-decoration: underline;
+}
+.kbc-ws-workspace-chip.is-dirty {
+  border-color: var(--warn-bor, var(--accent-bor));
+}
+.kbc-ws-workspace-chip__dirty {
+  color: var(--warn-ink, var(--accent-soft));
+  font-weight: 700;
+}
+.kbc-ws-workspace-chip__update,
+.kbc-ws-workspace-chip__save-as {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+
+/* V3.1-H3b — Code Vision lenses (block widgets above declarations) */
+.kbc-lens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0 3px 0;
+  font-size: 11px;
+  line-height: 1.2;
+  font-family: var(--font-ui);
+  color: var(--ink-mute);
+  /* Sit above the line without overlapping sticky/gutter. */
+  position: relative;
+  z-index: 1;
+}
+.kbc-lens__chip {
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--bg-card-hi) 88%, transparent);
+  color: var(--ink-mute);
+  border-radius: var(--radius-pill);
+  padding: 0 7px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.6;
+}
+.kbc-lens__chip:hover {
+  color: var(--ink);
+  border-color: var(--accent-soft);
+}
+.kbc-lens__chip--usages {
+  color: var(--accent-soft);
+}
+.kbc-lens__chip--impls {
+  color: var(--green);
+}
+.kbc-lens__chip--author {
+  color: var(--ink-dim);
+}
+
+/* V3.1-H3b — impact panel (reuses peek chrome) */
+.kbc-impact {
+  max-height: 480px;
+  width: 460px;
+}
+.kbc-impact__note {
+  padding: 4px 12px 6px;
+  font-size: 11px;
+  color: var(--ink-dim);
+  line-height: 1.35;
+  border-bottom: 1px solid var(--rule);
+  max-height: 3.6em;
+  overflow: hidden;
+}
+.kbc-impact__section {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--bg-card-hi) 60%, transparent);
+  flex-wrap: wrap;
+}
+.kbc-impact__section--tests {
+  border-top: 1px dashed var(--rule);
+  margin-top: 2px;
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+.kbc-impact__section-count {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
+.kbc-impact__prov {
+  width: 100%;
+  padding-left: 1.4em;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-dim);
+}
+.kbc-impact__prov-link {
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-impact__prov-link:hover {
+  text-decoration: underline;
+}
+.kbc-impact__depth {
+  color: var(--ink-dim);
+  font-size: 11px;
+  padding-left: 22px;
+}
+.kbc-impact__depth-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-right: 4px;
+}
+.kbc-impact__trunc {
+  color: var(--ink-dim);
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* V3.1-H3b — ego-graph. `.kbc-ego` itself carries no positioning — it's
+ * shared by TWO renderers with different placement needs: `EgoGraph`'s
+ * modal POPOVER (`.kbc-ego--popover`, below) and `LayeredDag`'s in-flow
+ * review-map panel (`.kbc-layered-dag` in `stacks.css`, no fixed
+ * positioning at all). V70-A3S fix — `LayeredDag` used to inherit this
+ * block's `position: fixed` + centered placement by class-name coincidence
+ * (it reused `.kbc-ego` for the shared node/edge/svg styling below), tearing
+ * the review Map tab out of flow as a transparent, unclipped overlay
+ * painting over the page (THE MAP BUG, kb-code-v7-evidence/recon/
+ * review.md). Only `EgoGraph` applies `--popover` now. */
+.kbc-ego--popover {
+  width: min(720px, 92vw);
+  max-height: 560px;
+  left: 50%;
+  top: 12%;
+  transform: translateX(-50%);
+  position: fixed;
+}
+.kbc-ego__body {
+  overflow: auto;
+  padding: 8px 12px 12px;
+}
+.kbc-ego__svg {
+  display: block;
+  max-width: 100%;
+}
+.kbc-ego__label {
+  pointer-events: none;
+  user-select: none;
+}
+.kbc-ego__more {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+/* V3.1-H3b — entity rail */
+.kbc-entity {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 12px;
+  font-size: 12px;
+}
+.kbc-entity__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-entity__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+}
+.kbc-entity__kind {
+  font-size: 11px;
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.kbc-entity__sig {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--bg-card-hi) 70%, transparent);
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.kbc-entity__doc {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--ink-mute);
+  font-size: 11px;
+  font-family: inherit;
+}
+.kbc-entity__row {
+  color: var(--ink-mute);
+}
+.kbc-entity__lab {
+  color: var(--ink-dim);
+  margin-right: 4px;
+}
+.kbc-entity__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-entity__muted {
+  color: var(--ink-dim);
+}
+.kbc-entity__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.kbc-entity__btn {
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--accent-soft);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-entity__btn:hover {
+  border-color: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* V3.2-B3 — History signals (attention, not quality) */
+.kbc-entity__history {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-entity__history-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.kbc-entity__history-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+  line-height: 1.35;
+}
+.kbc-entity__hist-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-entity__score-details summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+  list-style: none;
+}
+.kbc-entity__score-details summary::-webkit-details-marker {
+  display: none;
+}
+.kbc-entity__terms {
+  margin: 4px 0 0;
+  padding: 4px 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-entity__terms div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kbc-entity__terms dt {
+  margin: 0;
+  color: var(--ink-dim);
+}
+.kbc-entity__terms dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+/* V3.4-C3 — timeseries sparkline in History signals */
+.kbc-entity__spark-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.kbc-entity__ts-note {
+  margin: 0;
+  font-size: 10px;
+  color: var(--ink-dim);
+  line-height: 1.35;
+  max-width: 100%;
+}
+.kbc-entity__ts-trunc {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+}
+.kbc-entity__age-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  min-width: 80px;
+}
+.kbc-entity__age-seg {
+  min-width: 0;
+  /* Neutral accent intensity ladder by sibling order — not red. */
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.kbc-entity__age-seg:nth-child(2) {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.kbc-entity__age-seg:nth-child(3) {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.kbc-entity__age-seg:nth-child(4) {
+  background: color-mix(in srgb, var(--accent) 48%, transparent);
+}
+.kbc-entity__age-seg:nth-child(5) {
+  background: color-mix(in srgb, var(--accent) 58%, transparent);
+}
+.kbc-entity__partners {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kbc-entity__partners-hint {
+  font-size: 10px;
+  color: var(--ink-dim);
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+.kbc-entity__partner-link {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-soft);
+  text-decoration: none;
+  word-break: break-all;
+}
+.kbc-entity__partner-link:hover {
+  text-decoration: underline;
+}

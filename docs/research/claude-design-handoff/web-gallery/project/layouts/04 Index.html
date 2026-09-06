@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>kb · index</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500&display=swap"/>
+<style>
+  :root {
+    --paper: #f4f1e8;
+    --paper-2: #ebe7da;
+    --rule: #2b2820;
+    --ink: #1f1d18;
+    --muted: #7a7568;
+    --soft: #e2dccb;
+    --accent: oklch(0.5 0.14 30);
+    --serif: 'Lora', Georgia, serif;
+    --sans: 'Geist', -apple-system, sans-serif;
+    --mono: 'Geist Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: var(--serif); }
+  body {
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(43,40,32,0.04) 23px, rgba(43,40,32,0.04) 24px);
+  }
+  .nav-back {
+    position: fixed; top: 12px; left: 16px; z-index: 90;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--muted); text-decoration: none;
+    background: var(--paper); padding: 4px 8px; border: 1px solid var(--rule);
+  }
+  .nav-back:hover { color: var(--accent); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 200px 1fr 240px;
+    min-height: 100vh;
+  }
+
+  /* HEAD STRIP — full width */
+  .head {
+    grid-column: 1 / -1;
+    border-bottom: 3px double var(--rule);
+    padding: 18px 36px 14px;
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 24px; align-items: end;
+  }
+  .head .left { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); line-height: 1.6; }
+  .head h1 {
+    font-family: var(--serif); font-weight: 600;
+    font-size: 38px; line-height: 1; letter-spacing: -0.012em;
+    margin: 0; text-align: center;
+  }
+  .head h1 .sub { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-top: 8px; font-weight: 400; }
+  .head .right { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--muted); text-align: right; line-height: 1.6; }
+
+  /* LETTER RAIL */
+  .rail {
+    border-right: 1px solid var(--rule);
+    padding: 32px 0 32px 24px;
+    position: sticky; top: 0; height: 100vh; align-self: start;
+    overflow-y: auto;
+  }
+  .rail h3 {
+    font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 14px;
+  }
+  .rail h3:not(:first-child) { margin-top: 28px; }
+  .alpha { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding-right: 24px; }
+  .alpha a {
+    text-align: center; padding: 4px 0;
+    font-family: var(--serif); font-size: 14px;
+    color: var(--muted); text-decoration: none;
+  }
+  .alpha a.has { color: var(--ink); border-bottom: 1px solid var(--ink); }
+  .alpha a.has:hover { color: var(--accent); border-color: var(--accent); }
+  .alpha a.empty { color: var(--soft); pointer-events: none; }
+
+  .filters { padding-right: 24px; display: flex; flex-direction: column; gap: 4px; }
+  .filters label {
+    display: flex; gap: 8px; align-items: center;
+    font-family: var(--sans); font-size: 13px; cursor: pointer;
+    color: var(--ink);
+  }
+  .filters input { accent-color: var(--accent); }
+  .filters .ct { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  .stats { padding-right: 24px; font-family: var(--mono); font-size: 11px; line-height: 1.7; color: var(--muted); }
+  .stats b { color: var(--ink); font-weight: 500; }
+
+  /* MAIN TABLE */
+  main {
+    padding: 32px 36px 80px;
+  }
+  .toolbar {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 12px;
+  }
+  .toolbar input {
+    flex: 1;
+    border: 0; border-bottom: 1px solid var(--rule);
+    background: transparent; padding: 8px 0;
+    font-family: var(--serif); font-size: 18px;
+    color: var(--ink); outline: none;
+  }
+  .toolbar input::placeholder { color: var(--muted); font-style: italic; }
+  .toolbar .scope {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+
+  .alpha-block {
+    display: grid; grid-template-columns: 56px 1fr;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 28px; padding-bottom: 12px;
+  }
+  .alpha-block .letter {
+    font-family: var(--serif); font-weight: 600;
+    font-size: 76px; line-height: 0.9;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    padding-right: 16px;
+    border-right: 1px solid var(--rule);
+  }
+  .alpha-block .letter small { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.1em; margin-top: 8px; font-weight: 400; }
+  .alpha-block .body { padding-left: 16px; }
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 110px 70px 70px 70px;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px dotted var(--soft);
+    align-items: baseline;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row:hover { background: rgba(0,0,0,0.04); }
+  .row .title {
+    font-family: var(--serif); font-size: 17px; line-height: 1.2;
+    color: var(--ink); letter-spacing: -0.005em;
+    display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: baseline;
+  }
+  .row .title small {
+    font-family: var(--sans); font-size: 12px; color: var(--muted);
+    font-weight: 400; font-style: italic; letter-spacing: 0;
+  }
+  .row .leader {
+    flex: 1;
+    overflow: hidden;
+    color: var(--soft); padding: 0 6px;
+  }
+  .row .num {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    text-align: right; letter-spacing: 0.04em;
+  }
+  .row .tags-c {
+    font-family: var(--mono); font-size: 10.5px; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+
+  /* ASIDE */
+  aside.aside {
+    border-left: 1px solid var(--rule);
+    padding: 32px 24px 32px;
+    position: sticky; top: 0; height: 100vh; align-self: start;
+    overflow-y: auto;
+  }
+  aside h3 {
+    font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 12px;
+  }
+  aside h3:not(:first-child) { margin-top: 28px; }
+  aside .recent {
+    border-top: 1px solid var(--soft);
+    padding: 8px 0;
+    cursor: pointer;
+  }
+  aside .recent .t { font-family: var(--serif); font-size: 13.5px; line-height: 1.2; color: var(--ink); display: block; margin-bottom: 2px; }
+  aside .recent .m { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+  aside .recent:hover .t { color: var(--accent); }
+  aside .quote {
+    font-family: var(--serif); font-size: 14px; line-height: 1.5;
+    color: var(--ink); font-style: italic;
+    padding: 14px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  }
+  aside .quote cite { display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px; font-style: normal; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
+
+  /* DETAIL OVERLAY */
+  .detail-overlay { display: none; position: fixed; inset: 0; background: rgba(31,29,24,0.5); z-index: 200; padding: 36px; }
+  body.is-detail .detail-overlay { display: grid; place-items: center; }
+  .detail-card { width: 100%; max-width: 1200px; height: calc(100vh - 72px); background: var(--paper); border: 1px solid var(--rule); display: grid; grid-template-rows: auto 1fr; box-shadow: 0 18px 60px rgba(0,0,0,0.4); }
+  .detail-head { padding: 14px 24px; border-bottom: 1px solid var(--rule); display: flex; gap: 18px; align-items: baseline; }
+  .detail-head .close { background: transparent; border: 1px solid var(--rule); padding: 4px 10px; font-family: var(--mono); font-size: 11px; cursor: pointer; color: var(--ink); }
+  .detail-head h2 { margin: 0; flex: 1; font-family: var(--serif); font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .detail-head .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+  .detail-body { display: grid; grid-template-columns: 1fr 240px; overflow: hidden; }
+  .detail-body iframe { width: 100%; height: 100%; border: 0; background: white; border-right: 1px solid var(--rule); }
+  .detail-side { padding: 18px 22px; overflow-y: auto; }
+  .detail-side h4 { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 500; }
+  .detail-side h4:not(:first-child) { margin-top: 22px; }
+  .detail-side .kv { display: grid; grid-template-columns: 80px 1fr; padding: 4px 0; gap: 4px; font-size: 13px; }
+  .detail-side .kv span:first-child { font-family: var(--mono); font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .detail-side a.related { display: block; padding: 6px 0; border-bottom: 1px dotted var(--soft); text-decoration: none; color: var(--ink); font-family: var(--serif); font-size: 14px; line-height: 1.25; }
+  .detail-side a.related:hover { color: var(--accent); }
+  .detail-side a.related small { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--muted); margin-top: 2px; letter-spacing: 0.04em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<a class="nav-back" href="../Layouts.html">← layouts</a>
+
+<div class="layout">
+
+  <header class="head">
+    <div class="left">
+      The Index ·<br/>
+      v0.4.2
+    </div>
+    <h1>The Catalogue<span class="sub">artifacts of kb · work</span></h1>
+    <div class="right">
+      89 entries indexed<br/>
+      last gathered 4m ago
+    </div>
+  </header>
+
+  <!-- LEFT RAIL -->
+  <nav class="rail">
+    <h3>By Letter</h3>
+    <div class="alpha" id="alpha"></div>
+    <h3>By Capability</h3>
+    <div class="filters">
+      <label><input type="checkbox" checked> interactive <span class="ct">12</span></label>
+      <label><input type="checkbox" checked> svg <span class="ct">28</span></label>
+      <label><input type="checkbox" checked> long-read <span class="ct">19</span></label>
+      <label><input type="checkbox" checked> code <span class="ct">62</span></label>
+      <label><input type="checkbox"> archived <span class="ct">7</span></label>
+    </div>
+    <h3>Sources</h3>
+    <div class="stats">
+      <b>~/work/kb</b><br/>
+      62 of 89<br/><br/>
+      <b>~/notes/refs</b><br/>
+      19 of 89<br/><br/>
+      <b>imports/</b><br/>
+      8 of 89
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <main>
+    <div class="toolbar">
+      <input id="q" placeholder="filter by title, tag, author, or year…"/>
+      <span class="scope">scope · all · sort · alphabetical</span>
+    </div>
+    <div id="results"></div>
+  </main>
+
+  <!-- ASIDE -->
+  <aside class="aside">
+    <h3>Recent Acquisitions</h3>
+    <div class="recent" data-id="s01"><span class="t">Visualizing the Borrow Checker</span><span class="m">3h · interactive</span></div>
+    <div class="recent" data-id="s03"><span class="t">Everything HTML Can Do, in One Page</span><span class="m">5h · 3.2k words</span></div>
+    <div class="recent" data-id="s02"><span class="t">A Field Guide to Rust Errors</span><span class="m">1d · 6.8k words</span></div>
+    <div class="recent" data-id="o2"><span class="t">Async error propagation</span><span class="m">4d · 2.1k words</span></div>
+
+    <h3>From the Margins</h3>
+    <div class="quote">
+      &ldquo;The unit is one HTML file because it is the smallest thing that can defend itself.&rdquo;
+      <cite>— field note 4 · 2026</cite>
+    </div>
+
+    <h3>This Day in Index</h3>
+    <div class="stats" style="padding: 0">
+      <b>+3</b> added today<br/>
+      <b>+12</b> this week<br/>
+      <b>2</b> errors flagged<br/>
+      <b>0</b> dangling links
+    </div>
+  </aside>
+</div>
+
+<div class="detail-overlay" id="overlay">
+  <div class="detail-card">
+    <div class="detail-head">
+      <button class="close" id="close-d">close</button>
+      <h2 id="d-title">—</h2>
+      <span class="meta" id="d-meta">—</span>
+    </div>
+    <div class="detail-body">
+      <iframe id="d-iframe" src="about:blank"></iframe>
+      <aside class="detail-side">
+        <h4>record</h4>
+        <div class="kv"><span>kb</span><span>work</span></div>
+        <div class="kv"><span>filed</span><span id="d-age">—</span></div>
+        <div class="kv"><span>length</span><span id="d-words">—</span></div>
+        <div class="kv"><span>links in</span><span id="d-bl">—</span></div>
+        <div class="kv"><span>links out</span><span id="d-ol">—</span></div>
+        <div class="kv"><span>tags</span><span id="d-tags">—</span></div>
+        <h4>see also</h4>
+        <div id="d-related"></div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ENTRIES = [
+    { id: 's01', title: 'Visualizing the Borrow Checker', words: 240,  age: '3h ago', bl: 6, ol: 2, tags: ['rust','memory'], src: '../artifacts/fullscreen-viz.html' },
+    { id: 's02', title: 'A Field Guide to Rust Errors',   words: 6800, age: '1d ago', bl: 14, ol: 22, tags: ['rust','errors'], src: '../artifacts/multi-page.html' },
+    { id: 's03', title: 'Everything HTML Can Do',          words: 3200, age: '5h ago', bl: 4, ol: 1, tags: ['html','systems'], src: '../artifacts/kitchen-sink.html' },
+    { id: 'o1',  title: 'A theory of slow software',                    words: 920,  age: '2mo',    bl: 2, ol: 1, tags: ['philosophy'] },
+    { id: 'o2',  title: 'Async error propagation, the ergonomic version', words: 2100, age: '4d ago', bl: 11, ol: 6, tags: ['async','errors'] },
+    { id: 'o3',  title: 'BTreeMap, drawn at fifty times zoom',          words: 1100, age: '3w ago', bl: 4, ol: 2, tags: ['data','visual'] },
+    { id: 'o4',  title: 'Channels: a primer',                            words: 2800, age: '5w',    bl: 8, ol: 3, tags: ['async','channels'] },
+    { id: 'o5',  title: 'Closures, captured environments, and Fn',      words: 1500, age: '6w',    bl: 3, ol: 2, tags: ['rust','closures'] },
+    { id: 'o6',  title: 'Drop, panic, and unwinding',                    words: 1700, age: '2mo',   bl: 5, ol: 4, tags: ['rust','memory'] },
+    { id: 'o7',  title: 'Every smart pointer, charted',                  words: 2800, age: '1mo',   bl: 22, ol: 9, tags: ['memory','pointers'] },
+    { id: 'o8',  title: 'How the executor came to be',                   words: 4400, age: '1mo',   bl: 6, ol: 18, tags: ['async','history'] },
+    { id: 'o9',  title: 'Iterators and the for-loop, revealed',          words: 1900, age: '7w',    bl: 4, ol: 5, tags: ['rust','iterators'] },
+    { id: 'o10', title: 'Lifetimes, in fewer than two thousand words',   words: 1800, age: '3mo',   bl: 9, ol: 7, tags: ['rust','memory'] },
+    { id: 'o11', title: 'Macros: a survey',                              words: 1900, age: '2mo',   bl: 5, ol: 7, tags: ['rust','macros'] },
+    { id: 'o12', title: 'Notes on the unreasonable effectiveness of HTML', words: 1400, age: '2d',  bl: 9, ol: 4, tags: ['html','philosophy'] },
+    { id: 'o13', title: 'Ownership, by way of moving boxes',             words: 1300, age: '3mo',   bl: 7, ol: 4, tags: ['rust','memory'] },
+    { id: 'o14', title: 'Pin, in fewer than fifteen sentences',          words: 580,  age: '2w',    bl: 7, ol: 3, tags: ['async','pin'] },
+    { id: 'o15', title: 'Send and Sync, by counterexample',              words: 1100, age: '8w',    bl: 4, ol: 6, tags: ['async','traits'] },
+    { id: 'o16', title: 'Trait objects and the cost of dyn',             words: 1500, age: '9w',    bl: 5, ol: 3, tags: ['rust','traits'] },
+    { id: 'o17', title: 'The Tokio runtime, stripped to its frame',      words: 3600, age: '1w',    bl: 18, ol: 12, tags: ['async','tokio'] },
+    { id: 'o18', title: 'Unsafe, the parts you actually need',           words: 1700, age: '10w',   bl: 6, ol: 2, tags: ['rust','unsafe'] },
+    { id: 'o19', title: 'Vec, the unreasonably good data structure',     words: 1400, age: '11w',   bl: 8, ol: 1, tags: ['data','rust'] },
+    { id: 'o20', title: 'Workspaces and Cargo, in practice',             words: 1100, age: '12w',   bl: 2, ol: 4, tags: ['cargo'] },
+  ];
+  const byId = {};
+  ENTRIES.forEach(e => byId[e.id] = e);
+
+  function letterOf(t) { return t.replace(/^(the |a |an )/i, '').charAt(0).toUpperCase(); }
+
+  // Alpha rail
+  const alpha = document.getElementById('alpha');
+  const present = new Set(ENTRIES.map(e => letterOf(e.title)));
+  for (let i = 0; i < 26; i++) {
+    const L = String.fromCharCode(65 + i);
+    const a = document.createElement('a');
+    a.textContent = L; a.href = '#L' + L;
+    a.className = present.has(L) ? 'has' : 'empty';
+    alpha.appendChild(a);
+  }
+
+  // Render results grouped by letter
+  function render(filter = '') {
+    const container = document.getElementById('results');
+    container.innerHTML = '';
+    const groups = {};
+    const f = filter.trim().toLowerCase();
+    ENTRIES.filter(e => !f || e.title.toLowerCase().includes(f) || e.tags.some(t => t.toLowerCase().includes(f)))
+      .forEach(e => {
+        const L = letterOf(e.title);
+        (groups[L] ||= []).push(e);
+      });
+    const letters = Object.keys(groups).sort();
+    if (!letters.length) {
+      container.innerHTML = '<p style="font-family: var(--serif); font-size: 17px; color: var(--muted); font-style: italic;">No entries found in the catalogue under those terms.</p>';
+      return;
+    }
+    letters.forEach(L => {
+      const block = document.createElement('section');
+      block.className = 'alpha-block';
+      block.id = 'L' + L;
+      const items = groups[L].sort((a, b) => a.title.replace(/^(the |a |an )/i, '').localeCompare(b.title.replace(/^(the |a |an )/i, '')));
+      block.innerHTML = `
+        <div class="letter">${L}<small>${items.length} entr${items.length===1?'y':'ies'}</small></div>
+        <div class="body">${items.map(e => `
+          <div class="row" data-id="${e.id}">
+            <div class="title"><span>${e.title}</span> <small>kb · work</small></div>
+            <div class="num">${e.age}</div>
+            <div class="num">${e.words ? e.words.toLocaleString() + 'w' : '—'}</div>
+            <div class="num">${e.bl} ← ${e.ol}</div>
+            <div class="tags-c">${e.tags.join(' · ')}</div>
+          </div>`).join('')}
+        </div>`;
+      container.appendChild(block);
+    });
+    container.querySelectorAll('.row').forEach(r => r.addEventListener('click', () => openEntry(r.dataset.id)));
+  }
+
+  function openEntry(id) {
+    const e = byId[id]; if (!e) return;
+    document.body.classList.add('is-detail');
+    document.getElementById('d-title').textContent = e.title;
+    document.getElementById('d-meta').textContent = `${e.id.toUpperCase()} · ${e.age} · ${e.words ? e.words.toLocaleString() + ' words' : 'interactive'}`;
+    document.getElementById('d-age').textContent = e.age;
+    document.getElementById('d-words').textContent = e.words ? e.words.toLocaleString() : 'interactive';
+    document.getElementById('d-bl').textContent = e.bl;
+    document.getElementById('d-ol').textContent = e.ol;
+    document.getElementById('d-tags').textContent = e.tags.join(', ');
+    const ifr = document.getElementById('d-iframe');
+    if (e.src) { ifr.removeAttribute('srcdoc'); ifr.src = e.src; }
+    else {
+      ifr.removeAttribute('src');
+      ifr.srcdoc = `<!doctype html><html><head><style>body{font-family:'Lora',Georgia,serif;background:#f4f1e8;color:#1f1d18;padding:48px 64px;line-height:1.6;}h1{font-size:36px;margin:0 0 16px;letter-spacing:-0.015em;}p.lede{color:#7a7568;font-style:italic;font-size:18px;margin:0 0 28px;max-width:560px;}p{font-size:16px;max-width:560px;margin:0 0 14px;}</style></head><body><h1>${e.title}</h1><p class="lede">A synthetic placeholder · ${e.words ? e.words.toLocaleString() + ' words' : 'interactive'}.</p><p>The catalogue records each artifact and serves it from /api/v1/raw/${e.id}.</p></body></html>`;
+    }
+    const rel = document.getElementById('d-related');
+    rel.innerHTML = '';
+    ENTRIES.filter(x => x.id !== id && x.tags.some(t => e.tags.includes(t))).slice(0, 5).forEach(x => {
+      const a = document.createElement('a'); a.className = 'related';
+      a.innerHTML = `${x.title}<small>${x.tags.join(' · ')} · ${x.age}</small>`;
+      a.onclick = (ev) => { ev.preventDefault(); openEntry(x.id); };
+      rel.appendChild(a);
+    });
+  }
+  document.getElementById('close-d').onclick = () => document.body.classList.remove('is-detail');
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('is-detail'); });
+
+  document.querySelectorAll('aside .recent').forEach(r => r.addEventListener('click', () => openEntry(r.dataset.id)));
+  document.getElementById('q').addEventListener('input', (e) => render(e.target.value));
+
+  render();
+</script>
+</body>
+</html>

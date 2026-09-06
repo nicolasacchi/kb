@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb reading lists, notes, checklists, and wikilinks.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, lists, notes, wikilinks, checklists">
+<title>Lists &amp; notes · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="organize.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/organize.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html">Concepts</a>
+  <a href="search.html">Search</a>
+  <a href="web.html">Web reader</a>
+  <a href="comments.html">Comments</a>
+  <a href="agent.html">Memory &amp; sessions</a>
+  <a href="organize.html" aria-current="page">Lists &amp; notes</a>
+  <a href="operate.html">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">07 · Personal structure</p>
+  <h1>Lists &amp; notes</h1>
+  <p class="lede">Reading lists order the work. Notes hold checklists and wikilinks. Both ride ordinary corpus machinery — no parallel databases for “soft” organization.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#lists">Reading lists</a></li>
+    <li><a href="#notes">Notes and checklists</a></li>
+    <li><a href="#wikilinks">Wikilinks and backlinks</a></li>
+  </ol>
+</nav>
+
+<section id="lists">
+<h2>Reading lists</h2>
+<p>A list is a named, ordered sequence of whole artifacts or <strong>§sections</strong> of them. Read-state is <strong>derived</strong> (override → section dwell → scroll completion) — not a separately stored “read flag” that drifts from reality.</p>
+<pre><code>kb list create "Q3 design pass" --kb research
+kb list add &lt;list&gt; &lt;artifact&gt;
+kb list add &lt;list&gt; &lt;artifact&gt; --section overview
+kb list show &lt;list&gt;
+kb list update &lt;list&gt; &lt;entry&gt; --read     # entry = le_… id or 1-based index
+kb list move &lt;list&gt; &lt;entry&gt; --to 1       # 1-based position (or --before/--after)
+kb list prune &lt;list&gt;                    # dry-run: list tombstones, exit
+kb list prune &lt;list&gt; --yes              # apply: drop them
+kb list export &lt;list&gt; -o reading.md     # kb-list/1 Markdown or JSON
+kb list import reading.md --into &lt;list&gt;</code></pre>
+<p><strong>Tombstoned</strong> entries point at artifacts that were deleted or no longer resolve in the index. Prune removes those list rows; it does not delete source files.</p>
+<p>Share or offline-export a whole list as a self-contained bundle (ordered entries + generated TOC) via <code>kb share --list … --local out.zip</code> — see <a href="operate.html#share">Operate → share</a>.</p>
+</section>
+
+<section id="notes">
+<h2>Notes and checklists</h2>
+<p>A note is a Markdown artifact with <code>kb-category: note</code>. It is searchable and commentable like anything else, but excluded from the gallery grid and atlas so personal scratch does not drown the library.</p>
+<pre><code>kb notes new --folder projects/kb --title "Open threads"
+kb notes append &lt;note&gt; --item "Wire the guide into docs/README"
+kb notes check &lt;note&gt; --item 0
+kb notes list --kb research
+kb notes show &lt;note&gt;</code></pre>
+<p>GFM task items are toggled by document order. Status helpers: <code>done</code>, <code>archive</code>, <code>rm --yes</code>.</p>
+</section>
+
+<section id="wikilinks">
+<h2>Wikilinks and backlinks</h2>
+<p>In notes, <code>[[target|alias]]</code> is connective tissue, not a new table. Links resolve corpus-locally (id → source-rel path → exact title → unique basename) and ride the existing edge graph (<code>kind=link</code>), so they show up in backlink counts, atlas link-lines, and the reader’s Links panel.</p>
+<pre><code>kb notes links &lt;note&gt;      # outlinks + backlinks
+kb backlinks &lt;artifact&gt;    # who points here</code></pre>
+<p>Ambiguous targets are dropped from the graph rather than guessed. Served HTML keeps <code>[[…]]</code> literal; the SPA renders resolved links from the server map.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="agent.html"><span class="dir">Previous</span>Memory &amp; sessions</a>
+  <a class="next" href="operate.html"><span class="dir">Next</span>Operate</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

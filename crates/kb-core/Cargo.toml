@@ -1,0 +1,119 @@
+[package]
+name = "kb-core"
+description = "Core library: parser, indexer, search, storage glue."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Compiles the in-process ONNX/fastembed embedder + reranker backends.
+# ONLY `kb-embedder` enables this, so onnxruntime links into exactly one
+# binary; kb-server/kb-cli build with it OFF and drive embedding /
+# reranking over IPC (see src/embed_ipc.rs). Keep `cargo {test,clippy}
+# --workspace --exclude kb-embedder` (the justfile default) so the feature
+# is not unified ON across the shared kb-core rlib.
+local-embedder = ["dep:fastembed"]
+ts-export = ["dep:ts-rs"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+# Format-preserving config writes (save_preserving) keep operator comments.
+toml_edit = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+directories = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+getrandom = { workspace = true }
+scraper = { workspace = true }
+# Pin ego-tree to scraper 0.20's transitive version so NodeRef<scraper::Node>
+# unifies in the dep graph.
+ego-tree = "=0.6.3"
+
+# Per-kb sqlite (sources/errors/runs/edges); refinery for migrations.
+rusqlite = { workspace = true }
+refinery = { workspace = true }
+
+# Per-kb lance (FTS-indexed Doc rows; embedding column reserved nullable).
+lancedb = { workspace = true }
+lance-index = { workspace = true }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+
+# fastembed + statically-bundled ONNX Runtime (ort-download-binaries; see
+# root Cargo.toml). OPTIONAL — gated behind the `local-embedder` feature so
+# it links into kb-embedder only. The static bundle (not ort-load-dynamic)
+# is the standing decision: the old dlopen path deadlocked (macOS-era
+# finding); the static bundle also keeps the daemon ORT-free and portable.
+fastembed = { workspace = true, optional = true }
+
+# File watcher (notify + debouncer-full ≥0.7 for #711 dedup fix)
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
+walkdir = { workspace = true }
+
+# Streaming HTML rewriter for iframe injection (replaces spike-iframe's text replacement).
+lol_html = { workspace = true }
+
+# U1 (v0.25 quick capture) — opt-in HTML sanitize for uploaded captures.
+ammonia = { workspace = true }
+
+# Markdown → HTML rendering for first-class .md artifacts (serve-time render).
+comrak = { workspace = true }
+
+# Outbound-scrub redaction rules. Hoisted from kb-server in the kb share
+# milestone so the static-export engine + the daemon serve-path share one scrub.
+regex = { workspace = true }
+
+# Text diffing for the Track V artifact version timeline.
+similar = { workspace = true }
+
+# Share publishing — native-REST Cloudflare Pages/Access + GitHub Pages
+# clients. reqwest is already a kb-core transitive (via lancedb →
+# lance-namespace); promoting it to a direct dep + `multipart` powers Pages
+# Direct Upload. base64 + blake3 (both already in the dep graph) compute the
+# wrangler-compatible asset hash. All three reuse the locked versions, so the
+# arrow/lance =57.3.1 pin is untouched.
+reqwest = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+
+# TS bindings for the kb-comments wire types (review.rs) — see the
+# workspace dep comment + `just types`.
+ts-rs = { workspace = true, optional = true }
+
+# I1 — libc::setpriority for the embedder subprocess nice hook. Unix only.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+# GC-C1 — session-digest golden snapshots over real-transcript fixtures.
+insta = { workspace = true }
+# Microbench harness for the perf-review hot paths. default-features off
+# drops plotters/gnuplot (we read the terminal summary), keeping the dev
+# dep graph small. Run with `cargo bench -p kb-core`.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "perf"
+harness = false

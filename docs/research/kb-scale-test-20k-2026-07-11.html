@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>20k-doc full-stack scale test: what actually breaks (GC-D2)</title>
+<meta name="kb-category" content="landscape">
+<meta name="kb-tags" content="status:reference, project:kb, scale, benchmark, storage, ingest, lance, sqlite, bm25, capacity-planning">
+<meta name="description" content="Empirical scale test of kb's daemon between the current hundreds-of-docs fleet and the asserted ~50k-doc storage-consolidation trigger: cold index, restart/reconcile, disk/fragmentation, read-endpoint latency, backup, SSE, and atlas, all measured on real hardware with a synthetic 20,000-doc corpus.">
+<style>
+:root{
+  --bg:#f7f8f6;--surface:#ebede8;--fg:#1b201d;--muted:#5b6560;
+  --rule:#d1d6cf;--accent:#1f6f6b;--accent-fg:#ffffff;
+  --warn:#8a5a00;--danger:#a4291f;--ok:#1f6e3f;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:48rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#14181a;--surface:#1d2225;--fg:#e7eae7;--muted:#a6ada8;
+    --rule:#2c3336;--accent:#7fd1c9;--accent-fg:#0b1a18;
+    --warn:#e3b24f;--danger:#f0897e;--ok:#7ecb9a;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+*{box-sizing:border-box}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.85rem;margin:.2em 0 .3em;font-family:var(--serif)}
+h2{font-size:1.3rem;margin:2.2em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.05rem;margin:1.5em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch;flex-wrap:wrap}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.15rem;margin:.5em 0 1.2em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.76rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.87em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.83rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.shipped-note{display:inline-block;font-family:var(--sans);font-size:.72rem;font-weight:600;border-radius:4px;padding:.1em .5em;margin:.1rem 0 .3rem;border:1px solid var(--ok);color:var(--ok);background:var(--surface)}
+details{border:1px solid var(--rule);border-radius:var(--radius);padding:.6em 1em;margin:1em 0;background:var(--surface)}
+summary{cursor:pointer;font-family:var(--sans);font-weight:600;font-size:.9rem}
+main:focus{outline:none}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--rule);font-size:.82rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="artifact">
+<main id="main" tabindex="-1">
+
+<p class="kicker"><span class="dot"></span>RESEARCH<span class="sep">·</span>LANDSCAPE<span class="sep">·</span>2026-07-11<span class="sep">·</span>GC-D2</p>
+
+<h1>20k-doc full-stack scale test: what actually breaks</h1>
+
+<p class="lede">The only scale benchmark kb had before this was atlas UMAP/k-means at ≤5,000 synthetic
+artifacts. Gallery/facets scans, sqlite side-stores, backup, and index/reconcile had never been
+measured at scale, and a separate piece of storage-consolidation research asserts a ~50k-doc
+migration trigger with no measurement behind it. This report measures the daemon against a real
+20,000-doc synthetic corpus, on real (shared, noisy) hardware, and reports exactly what held up and
+what didn't — including several findings that surprised us.</p>
+
+<div class="meta-strip">
+<span class="tag">kb 0.22-68-ga8dd891f</span>
+<span class="tag">waves/gap-closure-2026-07</span>
+<span class="tag">BM25-only</span>
+<span class="tag">8-core / 62GiB host</span>
+</div>
+
+<div class="callout callout--danger">
+<span class="callout-label">Headline</span>
+A cold bulk index of a large pre-existing corpus is the real cliff, not the read path. Ingest
+throughput fell from 1.73 docs/s to 0.36 docs/s within the first ~1,500 docs of one continuous run,
+and a restart mid-backlog fell further to ~0.05 docs/s — roughly 30&times; slower than the fresh
+start. We could not complete a full 20k cold index inside this test's time budget. Root cause: one
+Lance fragment + manifest commit per document upsert, with no batching across the ingest queue,
+even under a multi-thousand-document backlog.
+<p><span class="shipped-note">fixed 2026-07-12</span> Both halves of this headline are now resolved on
+HEAD: the per-doc-commit cold-index cliff by drain-batched upserts (GC-B7, 2026-07-11) and the
+restart-with-backlog stall by the dedup-heal fix (SC1, 2026-07-12) — a full 20,000-doc restart drain
+now completes in <strong>269.1s (~68 docs/s)</strong>. See <a href="#restart-reconcile">Restart
+&amp; reconcile</a>.</p>
+</div>
+
+<h2 id="method">Method</h2>
+<p>Binary: the shared <code>--profile fast</code> build at
+<code>~/project/kb/target/fast/kb</code> (target dir is symlinked into the
+<code>kb-waves</code> worktree), rebuilt fresh and confirmed at <code>kb 0.22-68-ga8dd891f</code>,
+exactly matching the worktree's HEAD commit <code>a8dd891f</code> at test time (binary mtime after
+the commit timestamp).</p>
+<p>Lab at <code>/tmp/kb-scale-lab</code>, scratch <code>KB_HOME</code>, one <code>[kb.scale]</code>
+corpus. The generator (<code>kb synth</code> exists in-tree for this exact purpose, but its output
+lacks <code>kb-category</code>, <code>&lt;h2&gt;</code> sections, and cross-references, so we wrote
+a small deterministic Python generator instead — seed <code>20260711</code>, reproducible byte-for-byte):</p>
+<ul>
+<li><strong>20,000</strong> single-file HTML artifacts across an 18-folder, 2-level hierarchy
+(<code>changelog/2025</code>, <code>changelog/2026</code>, <code>ideas</code>,
+<code>incidents/{active,resolved}</code>, <code>pm/{initiatives,retros}</code>,
+<code>guides/{setup,advanced}</code>, <code>docs/{api,ops}</code>, <code>features</code>,
+<code>runbooks</code>, <code>decisions</code>, <code>research/{spikes,landscape}</code>,
+<code>postmortems</code>, <code>design-reviews</code>), weighted realistically.</li>
+<li>Real <code>&lt;title&gt;</code>/<code>&lt;h1&gt;</code>/<code>&lt;h2 id="sec-…"&gt;</code>
+structure (2-27 sections per doc), <code>kb-tags</code> drawn from a 40-term zipfian pool (rank-1
+tag ~40&times; more likely than rank-40), <code>kb-category</code> from a 13-value vocabulary.</li>
+<li>~10% of docs (1,962 measured) carry one relative <code>&lt;a href&gt;</code> cross-reference to
+another generated doc, to exercise the edge-record hook / backlink graph the same way real
+internal links do.</li>
+<li>mtimes spread over ~450 days back from generation time, for facet from/to testing.</li>
+<li>Size distribution (n=20,000): min 2,052B · p50 4,795B · p90 18,289B · p95 28,099B · p99
+55,226B · max 68,838B · mean 8,127B. Total corpus: <strong>193MB</strong> on disk. Generation took
+2.6s.</li>
+</ul>
+<p>Embeddings were deliberately out of scope per the task brief. <code>[defaults]
+disable_embedder_fallback = true</code> with no <code>embedding_model</code> anywhere in
+<code>kb.toml</code> resolves every kb to <code>None</code>
+(<code>kb_core::config::KbConfig::resolved_embedding_model</code>), and the daemon log confirms it:
+<code>kb opened: no embedding model configured (semantic/hybrid disabled)</code>. Every number below
+is BM25-only; hybrid/semantic search and atlas layout quality are untested here by design.</p>
+<div class="callout callout--warn">
+<span class="callout-label">Host caveat — read every number with this in mind</span>
+This is a shared dev box, not an isolated bench rig: a 4-core desktop-class box with 64 GiB RAM,
+31GiB swap already ~30GiB in use <em>before</em> this test started from unrelated
+processes (Docker, netdata, several other Claude Code sessions, a VPN
+container), with unrelated background load. <code>uptime</code> load-average samples taken through the run: <strong>5.43 → 16.87 →
+24.83 → 17.32 → 6.22 → 10.96</strong> — a 4-core box repeatedly running well above its core
+count. Every timing below is noisy as a result. Where it matters, we ran the same measurement 3
+times and report the spread, and where a finding could plausibly be host noise instead of a real
+architectural effect, we say so explicitly and note what evidence rules it out (see
+<a href="#restart-reconcile">Restart / reconcile</a>).
+</div>
+
+<h2 id="cold-index">Cold index: throughput decelerates, hard</h2>
+<p>The main attempt pointed the daemon at all 20,000 files and let it cold-index continuously. It
+reached <strong>1,619 docs in 1,222s (20.4 minutes)</strong> before we stopped it — not because we
+ran out of patience arbitrarily, but because the rate had already collapsed to the point where
+finishing was no longer a same-session proposition. Windowed throughput (10-sample rolling windows
+over the run's own progress log):</p>
+<table>
+<thead><tr><th>doc range</th><th class="num">Δt</th><th class="num">rate (docs/s)</th></tr></thead>
+<tbody>
+<tr><td>581 → 1,037</td><td class="num">264.3s</td><td class="num">1.73</td></tr>
+<tr><td>1,037 → 1,291</td><td class="num">205.0s</td><td class="num">1.24</td></tr>
+<tr><td>1,291 → 1,462</td><td class="num">209.0s</td><td class="num">0.82</td></tr>
+<tr><td>1,462 → 1,541</td><td class="num">219.0s</td><td class="num">0.36</td></tr>
+</tbody>
+</table>
+<p>A naive linear extrapolation from the <em>best</em> observed rate (1.73 docs/s) puts a full 20k
+index at ~3.2 hours. Given the visible deceleration, that number is an underestimate, not an
+estimate — we report the trend rather than inventing a false point figure. RSS grew alongside it,
+from a ~140MB idle baseline to a peak <strong>1.48GB (VmHWM 1,482,604KB) at 1,619 docs</strong> —
+call it roughly 800KB-1MB per doc in the observed window, though growth itself slowed as the rate
+slowed.</p>
+<p>To separate "the whole host is just busy" from "the kb corpus is the problem," we ran 3 clean,
+isolated cold-index reps of a 500-doc subset of the same corpus, each against a freshly emptied
+state directory (no backlog, no prior fragmentation):</p>
+<table>
+<thead><tr><th>rep</th><th class="num">elapsed</th><th class="num">docs/s</th><th class="num">peak RSS</th></tr></thead>
+<tbody>
+<tr><td>1</td><td class="num">81.17s</td><td class="num">6.16</td><td class="num">359.7MB</td></tr>
+<tr><td>2</td><td class="num">76.31s</td><td class="num">6.55</td><td class="num">367.3MB</td></tr>
+<tr><td>3</td><td class="num">88.17s</td><td class="num">5.67</td><td class="num">342.4MB</td></tr>
+</tbody>
+</table>
+<p>Mean 81.9s, spread 76.3-88.2s (~15% of the mean) — that's the host-noise band. But the mean rate,
+~6.1 docs/s, is <strong>3-17&times; faster</strong> than the main run's rate at similar-or-lower
+doc counts, measured in overlapping wall-clock windows on the same contended host. Host noise alone
+does not explain a persistent multi-fold gap between "500 docs in one shot" and "the same corpus
+past ~1,000 docs in a continuous run." The corpus's own growth is doing this.</p>
+<p>Root cause, read from source: the ingest consumer calls the storage layer's <strong>singular</strong>
+upsert one document at a time —</p>
+<pre><code>// crates/kb-core/src/indexer.rs:1441
+if let Err(e) = storage.upsert_doc(doc).await {</code></pre>
+<p>— with no batching across the mpsc queue, even when thousands of items are already pending. A
+<strong>batched</strong> API already exists one layer down and is unused by this path:</p>
+<pre><code>// crates/kb-core/src/storage/lance.rs:588
+pub async fn upsert_docs(&amp;self, docs: &amp;[Doc]) -> Result&lt;()&gt; {</code></pre>
+<p>Each singular upsert commits its own Lance fragment <em>and</em> manifest version. kb's own
+<code>compact</code> command help text already names this exact mechanism: "each upsert commits a
+fragment + manifest, so thousands of small writes shred the dataset." That line was written before
+this test; this test is the first measurement of how much it costs at five figures of documents.</p>
+<p><span class="shipped-note">fixed 6c9baa38 2026-07-11 (GC-B7)</span> The batching fix landed the
+same day this report was filed: the ingest loop now drains up to 32 pending same-kind items (8MB
+byte budget) from the mpsc into one <code>storage.upsert_docs</code> merge-insert commit
+(<code>indexer.rs</code>). The commit's own scratch before/after benchmark (git-stashed old code vs
+new, 500 synthetic docs, no embedder — isolating pure commit overhead) measured
+<strong>145.1s → 0.53s per 500 docs</strong> (3.45 → 943.6 docs/s). The deceleration curve above is
+the historical pre-fix record; Recommendation&nbsp;#6 — re-running this harness to completion at
+20k/50k — is the live follow-up.</p>
+
+<h2 id="restart-reconcile">Restart &amp; reconcile: fast when idle, a real stall with a backlog</h2>
+<p>Two very different restart stories, both measured directly:</p>
+<div class="callout callout--ok">
+<span class="callout-label">Good news — idle restart is flat</span>
+Killing and restarting the daemon against an already-fully-indexed 500-doc corpus (no backlog)
+served <code>doc_count=500</code> via <code>/api/stats</code> in <strong>0.74s</strong> — the
+daemon just reopens the existing Lance/sqlite state, it doesn't re-walk or re-embed anything.
+Restarting the larger, partially-indexed corpus (1,621 of 20,000 docs already indexed) reported
+stats in <strong>3.06s</strong>. Restart cost for an idle or fully-caught-up kb does not scale
+with total corpus size in any way that matters.
+</div>
+<div class="callout callout--danger">
+<span class="callout-label">Bad news — restart with a large backlog can stall for minutes</span>
+The SAME restart, with ~18,379 not-yet-discovered files still sitting in the source directory,
+made <strong>zero</strong> visible ingestion progress for over 7.5 minutes (the scheduled
+reconciliation pass never logged "complete" once in that window), then advanced by only
+<strong>24 docs</strong> (1,621 → 1,645) by the time we stopped watching — an effective
+<strong>~0.053 docs/s</strong>, about 30&times; slower than the fresh cold-index rate. The process
+was not hung: it held ~100-157% CPU throughout and RSS grew (882MB → 912MB over 15s), so it was
+doing real work, just not work that resulted in queryable docs. Critically, this happened while
+the host's own load average was <em>falling</em> (from ~17-25 down to 6-11) — ruling out "the host
+got busier" as the explanation. We did not isolate the exact root cause inside this session's
+budget (candidates: an unindexed O(n²) new-vs-known diff, unbounded candidate-list construction
+for the corpus's cross-reference resolution across the whole undiffed backlog, or a full-table
+scan per candidate) — see <a href="#recommendations">Recommendations</a>.
+</div>
+<div class="callout callout--ok">
+<span class="callout-label">Resolved 2026-07-12 (SC1) — root-caused and fixed</span>
+<p><span class="shipped-note">fixed 87dcb0d5 2026-07-12 (SC1)</span> A dedicated follow-up
+(Recommendation&nbsp;#2, re-run in <code>/var/tmp/kb-scale-lab</code>) root-caused this to a single
+line, and it was <em>none</em> of the O(n²) candidates guessed above. The indexer's dedup pre-gate
+(<code>process_ingest_batch</code>, <code>crates/kb-core/src/indexer.rs</code>) called
+<code>storage.touch_mtime</code> <strong>unconditionally</strong> on every dedup-skip — never
+comparing the on-disk mtime against the stored one. <code>LanceStore::touch_mtime</code> is a
+<code>table.update().only_if(id=X)</code>: a full artifacts-table scan (every fragment, all columns
+including body/html/raw) that rewrites one row into a fresh one-row fragment + one manifest commit,
+serialized on the single-writer storage actor <em>ahead of</em> the real <code>UpsertDocs</code>
+batches. Every duplicate emission of an already-indexed <em>unchanged</em> file fired one, and three
+feeders emit duplicates in bulk: the watcher's <code>initial_walk</code> re-emits the WHOLE corpus
+on every restart (no mtime map); the periodic reconcile re-emits every not-yet-indexed file, so any
+backlog outliving one <code>reconcile_secs</code> interval storms mid-drain; and the inotify-overflow
+rescan walks with no mtime map ("the content-hash pre-gate keeps it cheap" — that comment was the
+bug). Touch cost grows with fragment count, which the touches themselves inflate →
+<strong>O(N·(F₀+N)) quadratic</strong>. A scratch build with the heal removed drained the same
+18,379-doc backlog in ~646s — causal proof it was the stall.</p>
+<p>The fix makes the heal <em>conditional</em>: the dedup cache now carries the stored mtime beside
+the content hash (the <code>list_content_hashes</code> projection was extended), and the heal fires
+only when disk ≠ stored — so duplicate emissions (equal mtime) are write-free, while a genuine
+<code>git checkout</code>-style touch still heals exactly once and teaches the cache the new value.
+Secondary: <code>initial_walk</code> now takes a known-mtimes map (the reconcile G5 projection,
+fetched once in <code>bring_up_kb</code>), so a restart emits only new/changed files instead of
+re-hashing the whole corpus. A third bug surfaced alongside (lab flag&nbsp;a): periodic auto-compact
+rode the reconcile loop as a tail call, so <code>reconcile_secs=0</code> silently disabled it AND a
+bulk drain blocked the reconcile emission for the entire backlog — zero compaction passes across a
+20k drain, 625+ fragments at completion. It now runs on its own always-on ticker.</p>
+<p><strong>Re-measured 2026-07-12</strong> (same 20,000-doc corpus, BM25-only, same shared host):
+the identical restart-with-18,379-doc-backlog scenario now drains to 20,000 docs in
+<strong>269.1s (~68 docs/s)</strong> — against 10,725/20,000 still crawling at ~1 doc/s when the
+pre-fix run was killed at t=854s. Manifest versions now grow ~linearly with the batch-commit cadence
+(56 → 900, not the pre-fix 269 → 1,994 per-touch storm); five sub-second periodic auto-compact passes
+fire <em>during</em> the drain (fragments held ≤~217, collapsed to 1 each pass,
+<code>old_versions_removed</code> finally non-zero); and post-drain reconcile passes settle at
+~250ms. An idle restart of the fully-indexed 20k corpus is likewise flat: manifest count pinned, CPU
+bleeding from process-startup ~42% down to ~3% over 240s with zero UPDATE commits — the pre-fix
+~240% CPU / +543-manifests-in-150s idle storm is gone. Regression tests
+(<code>restart_reemission_of_unchanged_corpus_adds_zero_lance_commits</code>,
+<code>touched_but_unchanged_file_heals_mtime_exactly_once</code>) pin both halves in
+<code>kb-core</code>.</p>
+</div>
+<p>Separately, at small scale (500 docs), reconcile itself is exactly as advertised most of the
+time: three consecutive periodic passes logged <code>elapsed_ms</code> of 44, 4, and 3 — "near-free"
+as the docs promise. But we also caught one pass, sandwiched between two restarts, that silently
+re-touched all 500 rows (see next section) despite logging <code>deletes=0</code> — worth flagging
+even though it didn't recur in the passes we watched afterward.</p>
+
+<h2 id="storage-fragmentation">Storage: fragmentation, disk blowup, and compaction's blind spot</h2>
+<p>The main run's state directory was <strong>319MB for 1,619 docs</strong>, against
+~15.6MB of raw source HTML for that same subset (1,619/20,000 × 193MB) — a
+<strong>~20&times; blowup</strong>, directly attributable to the one-fragment-per-doc-commit
+mechanism above.</p>
+<p>We caught the fragment/version churn directly in the daemon's own auto-compact diagnostics. On
+the 500-doc corpus, a reconcile pass logged <code>files=500 deletes=0</code> (i.e. "nothing
+changed"), and was immediately followed by:</p>
+<pre><code>auto-compact: dataset fragmented, optimizing kb=scale500 trigger="periodic" rows=500 fragments=500 small_fragments=500 versions=1823
+auto-compact: done kb=scale500 trigger="periodic" ms=1665 fragments_removed=500 fragments_added=2 old_versions_removed=0</code></pre>
+<p>Versions had been at 1,320 barely a minute earlier (right after the prior startup compact) — so
+roughly <strong>500 new manifest versions</strong>, one per existing doc, were committed during a
+reconcile pass that reported zero real content changes. We watched three subsequent periodic passes
+and none repeated this (each logged 3-4ms, no auto-compact fired) — so this looks like a one-time
+event tied to the two rapid, interrupted restarts that preceded it, not a permanent per-cycle tax,
+but it demonstrates the mechanism is real and reachable.</p>
+<p>Auto-compact itself is a genuine bright spot: fast and effective at the logical level every time
+we saw it fire —</p>
+<table>
+<thead><tr><th>trigger</th><th class="num">before → after (fragments)</th><th class="num">time</th></tr></thead>
+<tbody>
+<tr><td>startup (500-doc corpus)</td><td class="num">141 → 2</td><td class="num">793ms</td></tr>
+<tr><td>periodic (500-doc corpus)</td><td class="num">500 → 2</td><td class="num">1,665ms</td></tr>
+<tr><td>manual <code>kb compact</code> (main, 1,621 docs)</td><td class="num">235 → 2</td><td class="num">3,702ms</td></tr>
+</tbody>
+</table>
+<p>But it has a blind spot: every single compaction we observed reported
+<code>old_versions_removed=0</code> (0 bytes freed), and a raw filesystem count of
+<code>data/*.lance</code> fragment files stayed far above the logical fragment count after
+compaction (1,808 physical files on disk vs. ~2 logical fragments for the 500-doc corpus at one
+point). Old fragment and manifest-version files are retained on disk even after compaction merges
+them away logically — physical disk usage for a heavily-reindexed kb can keep growing under
+routine operation even with compaction running on schedule, unless a longer-horizon vacuum/prune
+is also exercised (we did not find one fire in this test).</p>
+
+<h2 id="read-endpoints">Read endpoints: mostly flat, one real cliff</h2>
+<p>All figures are p50/p95 over 20 samples via timed curl loops (hyperfine wasn't installed on this
+host; a controlled bash loop was the fallback). Two very different regimes: <strong>idle</strong>
+(the fully-indexed, auto-compacted 500-doc corpus, nothing else running) and <strong>under
+load</strong> (the main 1,621-doc corpus, mid-way through its own backlog, actively contending for
+the same storage actor).</p>
+<table>
+<thead><tr><th>endpoint</th><th class="num">idle p50</th><th class="num">idle p95</th><th class="num">under-load p50</th><th class="num">under-load p95</th><th class="num">under-load max</th></tr></thead>
+<tbody>
+<tr><td>docs page 1 (offset=0)</td><td class="num">1.4ms</td><td class="num">3.8ms</td><td class="num">1.2ms</td><td class="num">3.3ms</td><td class="num">1,738.8ms</td></tr>
+<tr><td>docs deep page</td><td class="num">1.2ms</td><td class="num">1.9ms</td><td class="num">1.1ms</td><td class="num">2.8ms</td><td class="num">4.1ms</td></tr>
+<tr><td>facets</td><td class="num">17.8ms</td><td class="num">22.8ms</td><td class="num">67.1ms</td><td class="num">92.0ms</td><td class="num">3,315.0ms</td></tr>
+<tr><td>search "rust"</td><td class="num">0.6ms</td><td class="num">1.6ms</td><td class="num">39.7ms</td><td class="num">1,093.4ms</td><td class="num">3,308.3ms</td></tr>
+<tr><td>search zero-hit</td><td class="num">0.6ms</td><td class="num">1.4ms</td><td class="num">43.1ms</td><td class="num">62.4ms</td><td class="num">3,577.5ms</td></tr>
+</tbody>
+</table>
+<div class="callout callout--ok">
+<span class="callout-label">Good news — pagination has no offset cliff</span>
+Deep-page latency (offset=475 of 500, or offset=1,590 of 1,621) is statistically indistinguishable
+from page-1 latency at every scale tested. Reading <code>crates/kb-core/src/docs_query.rs</code>
+confirms why: <code>paginate()</code> slices an in-memory <code>Vec</code> that the route already
+built from a per-(kb, index-generation) memoized full scan (invariant #15) — the expensive part
+(scan + filter + sort) happens once per index generation and is shared across every page and every
+concurrent requester, so "page 200" costs exactly what "page 1" costs. No classic OFFSET-scan
+antipattern here.
+</div>
+<div class="callout callout--warn">
+<span class="callout-label">Watch this — facets has no such memo</span>
+<code>/facets</code> scales roughly with doc count: 17.8ms idle at 500 docs vs. 67-83ms at 1,621
+docs under load — a bigger jump than the ~3.2&times; doc-count growth alone would predict, but the
+scan-every-time design (no memoization comparable to the docs route) means it will keep climbing
+as the corpus grows. Projected (not measured) at 20k under similar conditions: high hundreds of
+ms to low seconds — worth fixing before it's user-visible.
+</div>
+<p>The multi-second <strong>max</strong> spikes under load (1.7-3.6s, on every endpoint we tested,
+including the flat ones) are the more interesting cliff: kb's storage actor is a single-consumer
+per-kb design (invariant #15/#28), and a foreground read has to wait in the same queue as thousands
+of pending ingest upserts. Running a manual <code>kb compact</code> mid-test dropped search p50 by
+only ~28% (39.7ms → 28.6ms) — a modest fragmentation effect — while the tail spikes barely moved
+(3,308ms → 2,824ms max), pointing at actor-queue contention with the concurrent ingest backlog as
+the dominant tail-latency cause, not fragmentation.</p>
+
+<h2 id="backup-sse">Backup and SSE</h2>
+<p><code>kb backup</code> on the idle 500-doc corpus (state dir 50MB at the time): <strong>1.05s</strong>
+wall time, tarball <strong>3,098,114 bytes (3.0MB)</strong> — roughly 16:1 compression. That ratio is
+almost certainly an artifact of this synthetic corpus's repetitive lorem-ipsum sentence bank; real
+prose would compress less well, so treat the ratio, not the number, as the caveat-worthy part —
+the 1.05s wall time for a 50MB state dir is the more portable data point.</p>
+<p>SSE: connects and starts delivering (including its Last-Event-ID replay ring, invariant #24)
+in well under 50ms. A scripted mutation roundtrip — <code>POST
+/api/kb/scale500/history/open</code> (66ms, 200 OK) — produced the matching
+<code>history.recorded</code> event on the same live SSE stream within the same second. No cliff
+found here at this scale; both the read (event delivery) and write (mutation-to-event) sides held
+up cleanly.</p>
+
+<h2 id="atlas">Atlas: queued behind the backlog, and out of scope anyway</h2>
+<p><code>POST /api/kb/scale/atlas/recompute</code> returned <code>202</code> (queued: run id +
+<code>/api/events</code> filter) in 143ms, but never emitted
+<code>atlas.recompute.complete</code> within a 30s wait while the daemon had an active ingest
+backlog — consistent with the same single-consumer storage-actor queueing described above: the
+recompute's own storage reads have to wait behind thousands of pending ingest upserts.</p>
+<p>Separately, and by design: this test ran BM25-only (no embedder), and
+<code>crates/kb-core/src/atlas.rs</code> has a test literally named
+<code>recompute_for_kb_skips_docs_without_embeddings</code> — every doc in this corpus lacks an
+embedding vector, so a real atlas layout at 20k was never going to happen here regardless of queue
+contention. The task brief called embeddings out of scope for this run, and this confirms exactly
+why: atlas at 20k needs its own follow-up test, with an embedder configured, budgeted separately
+(embedding 20k docs was explicitly out of scope for this session).</p>
+
+<h2 id="stays-flat">What stays flat (the good news, collected)</h2>
+<ul>
+<li>Warm restart of an idle, fully-indexed kb: sub-1s to ~3s, independent of doc count tested.</li>
+<li>Docs-page pagination: offset has no measurable effect on latency at any scale tested.</li>
+<li>SSE connect + mutation roundtrip: fast and correct throughout.</li>
+<li>Auto-compact (the logical-fragment fix, not the disk-space fix): consistently sub-2s even when
+collapsing hundreds of fragments.</li>
+<li>Zero open indexing errors at any point (<code>GET /api/kb/scale/errors</code> returned
+<code>[]</code> throughout, including during the slowest windows).</li>
+</ul>
+
+<h2 id="trigger-verdict">Does the ~50k trigger hold up?</h2>
+<p>Not as stated. The evidence here points to the ingest path degrading well before 50k — the
+deceleration (1.73 → 0.36 docs/s) was already underway by ~1,500 docs into <em>one continuous
+run</em>, and a restart mid-backlog was another ~30&times; slower still. If "50k" means "a single
+bulk cold-import of 50,000 new documents," this test suggests that scenario would be in serious
+trouble well before it gets there — plausibly even at 5,000-10,000 docs in one shot, based on the
+trend, though we did not measure that range directly and say so plainly.</p>
+<p>But that framing matters: this is specifically a <strong>bulk/cold-import</strong> failure mode,
+not organic growth. A kb that gains a handful of files a day via the live watcher pays ~180-200ms
+per new file (measured from individual <code>index.file</code> SSE events during the clean 500-doc
+runs) — utterly negligible at any realistic daily rate. The realistic trigger for this cliff is "I
+just pointed kb at a large pre-existing archive for the first time" or "I restarted the daemon
+before that first migration finished" — not "a single daemon slowly accumulated 50,000 docs over
+years of normal use." The storage-consolidation research's 50k figure may be a reasonable estimate
+for the latter scenario and a serious overestimate for the former; this report can't fully resolve
+which one the original research meant, only that it was asserted without either being measured.</p>
+<p>We also could not reach 20k — let alone 50k — to directly measure steady-state (fully-indexed,
+at-rest) read-path behavior at that scale. The 500→1,621-doc trend (facets 17.8ms→67-83ms p50,
+search 0.6ms→28-40ms p50) is suggestive but confounded by "idle" vs. "still actively indexing," so
+a clean 20k-at-rest number remains a real gap — see below.</p>
+<p><span class="shipped-note">update 2026-07-11</span> The one-commit-per-doc mechanism this verdict
+rests on was fixed the same day (batched ingest upserts, <code>6c9baa38</code>, GC-B7 — measured
+145.1s → 0.53s per 500 docs in its isolated commit-overhead benchmark), so the pre-fix deceleration
+curve no longer describes HEAD; answering the 50k-trigger question on post-fix numbers now needs
+Recommendation&nbsp;#6's re-run at 20k/50k. The restart-with-backlog stall (Recommendation&nbsp;#2)
+was not root-caused or addressed by that fix. <span class="shipped-note">fixed 87dcb0d5 2026-07-12
+(SC1)</span> It has since been root-caused — an unconditional <code>touch_mtime</code> heal in the
+dedup pre-gate, O(N·fragments) quadratic — and fixed: the full 18,379-doc restart backlog now drains
+in 269.1s (~68 docs/s). See <a href="#restart-reconcile">Restart &amp; reconcile</a>.</p>
+
+<h2 id="recommendations">Recommendations</h2>
+<ol>
+<li><strong>Batch the ingest consumer.</strong> <span class="shipped-note">fixed 6c9baa38
+2026-07-11 (GC-B7 — drain-batched <code>upsert_docs</code>, 145.1s → 0.53s per 500 docs)</span>
+Accumulate N pending <code>WatchWork</code> items
+(e.g. 50-200, or a time-boxed drain of the mpsc) into one <code>storage.upsert_docs()</code> call
+instead of one <code>upsert_doc()</code> per event. The batched API already exists
+(<code>lance.rs:588</code>) and is unused by the indexer's consumer loop
+(<code>indexer.rs:1441</code>) — this directly targets the one-fragment-per-doc mechanism behind
+every ingest-side finding in this report.</li>
+<li><strong>Investigate the restart-with-backlog stall specifically.</strong> <span class="shipped-note">fixed
+87dcb0d5 2026-07-12 (SC1 — unconditional dedup-skip <code>touch_mtime</code> heal, O(N·fragments)
+quadratic; 18,379-doc restart backlog now drains in 269.1s / ~68 docs/s)</span> 7.5+ minutes with
+zero visible progress, under active CPU/RSS growth, is a distinct finding from ordinary
+deceleration and deserves its own root-cause session — candidates worth ruling out first: an
+unindexed new-vs-known diff, unbounded candidate-list construction for cross-reference resolution
+across the whole undiffed backlog, or a full-table scan per candidate file.</li>
+<li><strong>Memoize <code>/facets</code></strong> the same way <code>/docs</code> already is (the
+existing per-index-generation row-set memo, invariant #15) — it is the one read endpoint here
+without that protection.</li>
+<li><strong>Give foreground reads a way to not queue behind a large ingest backlog</strong> on the
+same storage actor — even a coarse priority lane would keep search/facets/atlas responsive during
+a large import, which is exactly when an operator is most likely to be checking on progress.</li>
+<li><strong>Add a vacuum/prune pass</strong> <span class="shipped-note">fixed 6c9baa38 2026-07-11
+(GC-B7 — explicit Compact + Prune, 5-minute retention, <code>delete_unverified: true</code>)</span>
+(or lower the retention window) so
+<code>old_versions_removed</code> isn't perpetually 0 in normal operation — otherwise physical disk
+usage for a heavily-reindexed kb keeps growing even with compaction running on schedule.</li>
+<li><strong>Re-run this harness to completion</strong> once (1) lands, ideally on quieter hardware
+or with hyperfine installed, to get a clean 20k (and eventually 50k) number for both the ingest and
+at-rest read paths. This report is a first empirical pass, not the final word — see
+the architecture review (private) and
+<a href="kb-graph-earns-its-keep-2026-07.html">the graph-at-scale findings</a> for related,
+previously-measured surfaces.</li>
+</ol>
+
+<details>
+<summary>Appendix: raw commands and file locations</summary>
+<p>Lab root: <code>/tmp/kb-scale-lab</code> (corpus, generator, timing logs, per-rep daemon logs).
+Corpus generator: <code>/tmp/kb-scale-lab/gen_corpus.py</code> (seed <code>20260711</code>,
+deterministic). Config: <code>/tmp/kb-scale-lab/kb.toml</code>
+(<code>[defaults] disable_embedder_fallback = true</code>, <code>[kb.scale] path =
+"/tmp/kb-scale-lab/corpus"</code>). Daemon bound to <code>127.0.0.1:4123</code> (never 4000 — that's
+production). Throughput windows computed from <code>/tmp/kb-scale-lab/index_timing.txt</code>, a
+20s-interval poll of <code>GET /api/stats</code> against the daemon's own <code>total_docs</code>
+counter. Endpoint latencies via a bash loop over <code>curl -s -o /dev/null -w
+"%{time_total}\n"</code>, 20 samples per endpoint, p50/p95 computed in Python.
+<code>kb --version</code> at test time: <code>kb 0.22-68-ga8dd891f</code>, matching worktree HEAD
+exactly. Host: <code>nproc</code>=8, <code>Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz</code>,
+<code>free -h</code> reported 62GiB RAM / 31GiB swap throughout.</p>
+</details>
+
+
+
+<footer>
+<p>Lab: <code>/tmp/kb-scale-lab</code> (corpus + timing logs retained; state dirs are scratch).
+Worktree: <code>kb-waves</code> @ <code>waves/gap-closure-2026-07</code>. GC-D2.</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

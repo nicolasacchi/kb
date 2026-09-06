@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Come usare kb — l'archivio di riferimento self-hosted per i deliverable AI, le sessioni e la memoria.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, how-to, user-docs, overview">
+<title>kb · Guida utente</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html" aria-current="page">guida kb</a>
+  <span class="lang"><a href="../index.html">EN</a><span class="sep">·</span><a href="index.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">Guida utente</p>
+  <h1>Come usare kb</h1>
+  <p class="lede">kb è l'archivio di riferimento self-hosted e deterministico per tutto ciò che produce la tua AI — deliverable, sessioni episodiche e memoria curata — servito da un daemon locale attraverso una CLI e un reader web.</p>
+  <div class="meta-row">
+    <strong>Destinatari:</strong> umani + coding agent &nbsp;·&nbsp;
+    <strong>Serve da solo:</strong> <code>docs/guide/</code> &nbsp;·&nbsp;
+    <strong>Aggiornato a:</strong> post-v0.24 <code>main</code>
+  </div>
+</header>
+
+<main id="main">
+
+<div class="tldr">
+  <h2>In un minuto</h2>
+  <ul>
+    <li>Si installano due binari (<code>kb</code> + <code>kb-embedder</code>), si avvia <code>kb daemon</code>, si punta a una cartella con <code>kb add</code>.</li>
+    <li>Si cerca con <code>kb search</code> oppure si apre <code>http://127.0.0.1:4000/</code> — ricerca ibrida BM25 + vector di default.</li>
+    <li>Tre registri convivono in un solo daemon: gli <strong>artefatti</strong> scritti, le <strong>sessioni</strong> che li hanno prodotti, le <strong>memorie</strong> che si è scelto di conservare.</li>
+    <li>Il loopback è aperto; un bind pubblico richiede un token bearer e un reverse proxy TLS.</li>
+  </ul>
+</div>
+
+<section id="what">
+<h2>A cosa serve kb</h2>
+<p>Se tu (o il tuo agent) generi molto HTML e Markdown — note di ricerca, design review, RFC, resoconti di sessione — finisci con file validi da soli e difficili da ritrovare insieme. kb osserva quelle cartelle, le indicizza per una ricerca ibrida keyword-plus-meaning e le serve in sicurezza in un reader sandboxato.</p>
+<p>Ha due utenti per design: <strong>tu</strong> e il <strong>tuo coding agent</strong>. Entrambi parlano con lo stesso daemon. Ranking, recall e digest sono algoritmi deterministici — nessun LLM dentro il daemon, nessuna telemetria verso l'esterno.</p>
+</section>
+
+<section id="ledgers">
+<h2>Tre registri, un daemon</h2>
+<div class="table-scroll">
+<table class="nouns">
+  <thead><tr><th>Registro</th><th>Cosa contiene</th><th>Come si interroga</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Deliverable</td>
+      <td>Artefatti HTML/MD renderizzati — la biblioteca</td>
+      <td><code>kb search</code> · <code>kb get</code> · galleria web</td>
+    </tr>
+    <tr>
+      <td>Sessioni episodiche</td>
+      <td>Transcript di agenti catturati (indicizzati come digest)</td>
+      <td><code>kb why</code> · <code>kb recollect</code> · UI sessioni</td>
+    </tr>
+    <tr>
+      <td>Memoria curata</td>
+      <td>Fatti espliciti dell'agente che si è scelto di conservare</td>
+      <td><code>kb remember</code> · <code>kb recall</code></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p>Le sessioni <em>non</em> vengono auto-iniettate nei prompt. Si recuperano quando serve la provenienza o «l'abbiamo già fatto?» — quella separazione è strutturale (non negoziabile).</p>
+</section>
+
+<section id="map">
+<h2>Mappa della guida</h2>
+<p>Si legge dall'alto verso il basso la prima volta, oppure si salta a una superficie. Ogni pagina è HTML semplice con link relativi — questa cartella è l'intero sito.</p>
+<div class="grid">
+  <a class="card" href="start.html">
+    <span class="step">01</span>
+    <h3>Avvio</h3>
+    <p>Installazione, primo corpus, daemon, loop da 60 secondi e il percorso sicuro oltre il loopback.</p>
+  </a>
+  <a class="card" href="concepts.html">
+    <span class="step">02</span>
+    <h3>Concetti</h3>
+    <p>I cinque nomi (artefatto, nota, lista, memoria, sessione), la pipeline e ciò che kb rifiuta deliberatamente.</p>
+  </a>
+  <a class="card" href="search.html">
+    <span class="step">03</span>
+    <h3>Ricerca</h3>
+    <p>Modalità hybrid / keyword / semantic, embedding, filtri e misura della qualità con <code>kb bench</code>.</p>
+  </a>
+  <a class="card" href="web.html">
+    <span class="step">04</span>
+    <h3>Reader web</h3>
+    <p>Galleria, atlante, chrome del reader, cronologia, reflection canvas, sheet mobile.</p>
+  </a>
+  <a class="card" href="comments.html">
+    <span class="step">05</span>
+    <h3>Commenti</h3>
+    <p>Review in loco, ancore, il loop reply/resolve dell'agente e l'identità come attribuzione.</p>
+  </a>
+  <a class="card" href="agent.html">
+    <span class="step">06</span>
+    <h3>Memoria e sessioni</h3>
+    <p>Remember/recall, why/recollect, hook di capture e perché episodico ≠ curato.</p>
+  </a>
+  <a class="card" href="organize.html">
+    <span class="step">07</span>
+    <h3>Liste e note</h3>
+    <p>Liste di lettura, note con checklist, wikilink e backlink.</p>
+  </a>
+  <a class="card" href="operate.html">
+    <span class="step">08</span>
+    <h3>Operare</h3>
+    <p>Share/export, monitoraggio della flotta, token, checklist self-host, CLI a colpo d'occhio.</p>
+  </a>
+</div>
+</section>
+
+<section id="serve">
+<h2>Servire questa guida da sola</h2>
+<p>Questa directory è autosufficiente (HTML + un file CSS). Dalla root del repo:</p>
+<pre><code>cd docs/guide
+python -m http.server 8765
+# open http://127.0.0.1:8765/</code></pre>
+<p>Oppure si punta qualsiasi host statico / reverse proxy a <code>docs/guide/</code>. Non ci sono link assoluti alla root del repo in queste pagine — restano usabili quando la cartella viene copiata o pubblicata da sola.</p>
+<div class="note">
+  <strong>Non in questa guida:</strong> gli invarianti di engineering, le tabelle HTTP API e la design research congelata vivono sotto la documentazione principale del repo (<code>docs/*.md</code>, <code>docs/research/</code>). Questo sito è la superficie per l'operatore — come usare kb giorno per giorno.
+</div>
+</section>
+
+<section id="from-agent">
+<h2>Guidare kb da un agent</h2>
+<p>La CLI <em>è</em> il protocollo. Si esegue <code>kb tools</code> per il manifest dei verb sempre aggiornato. Gli utenti Claude Code possono aggiungere il marketplace in-tree, installare <strong>kb-memory</strong> ed eseguire <code>/kb-setup</code> così gli hook di capture e recall si collegano da soli. Ogni hook è LLM-free; gli hook invocano <code>kb</code> da shell.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <span></span>
+  <a class="next" href="start.html"><span class="dir">Avanti</span>Avvio — installazione e prima esecuzione</a>
+</nav>
+
+<footer class="site">
+  guida utente kb · standalone sotto <code>docs/guide/</code> · sostituisce la vecchia overview monolitica delle feature in research
+</footer>
+</div>
+</body>
+</html>

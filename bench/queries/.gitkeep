@@ -1,0 +1,2 @@
+# `kb bench init --output bench/queries/<corpus>.jsonl` writes here.
+# Labelled query sets get checked in alongside the report once they exist.

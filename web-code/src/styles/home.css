@@ -1,0 +1,307 @@
+/* F4 — Home's fleet-dashboard card grid (`routes/Home.tsx` +
+ * `components/home/RepoCard.tsx`). Same token discipline as every other
+ * kb-code stylesheet (`reader.css`'s own header comment) — every color
+ * reaches for a `tokens.css` variable. `.kbc-empty*` (Home's own no-repos
+ * state) lives in `reader.css` — it's the shared cross-view component, not
+ * something Home owns. */
+
+.kbc-home__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+/* V70-A3S — the two repo-LESS lanes above the repo grid (design doc
+ * §Decisions D23): the "One Inbox" summary + the cross-repo "Continue where
+ * you left off" card. `.kbc-home__section*` are deliberately NEW class
+ * names distinct from `reader.css`'s pre-existing `.kbc-home__head`/
+ * `__title`/`__hint`/`__summary`/`__capability`/`__inbox-link` (that file
+ * owns Home's header chrome; this file owns everything below it). */
+.kbc-home__lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.kbc-home__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+.kbc-home__section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.kbc-home__section-title a {
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-home__section-title a:hover {
+  color: var(--accent-soft);
+}
+.kbc-home__section-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-home__inbox-lanes,
+.kbc-home__continue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-home__inbox-lanes a,
+.kbc-home__continue-row {
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kbc-home__inbox-lanes a:hover,
+.kbc-home__continue-row:hover {
+  color: var(--accent-soft);
+}
+.kbc-home__continue-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.kbc-home__continue-repo {
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.kbc-home__continue-loc {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-home-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.kbc-home-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kbc-home-card__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-home-card__name:hover {
+  color: var(--accent-soft);
+}
+
+.kbc-home-card__subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+a.kbc-home-card__head {
+  text-decoration: none;
+  color: var(--ink-mute);
+}
+a.kbc-home-card__head:hover {
+  color: var(--accent-soft);
+}
+.kbc-home-card__head--unborn {
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.kbc-home-card__head-tag {
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-card-hi);
+  color: var(--ink-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.kbc-home-card__counts {
+  white-space: nowrap;
+}
+
+/* S2-D (design-s2.md §S2-D) — lip/1 provider status chips, one per entry
+ * in `intel_providers` (falling back to the legacy single `intel`,
+ * `lib/diagnostics.ts`'s `effectiveIntelProviders`). */
+.kbc-home-card__intel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.kbc-home-card__intel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.kbc-home-card__intel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-dim);
+}
+.kbc-home-card__intel-chip--alive .kbc-home-card__intel-dot {
+  background: var(--green);
+}
+.kbc-home-card__intel-chip--dead {
+  color: var(--ink-dim);
+}
+.kbc-home-card__intel-chip--dead .kbc-home-card__intel-dot {
+  background: var(--warn);
+}
+
+.kbc-home-card__section {
+  border-top: 1px solid var(--rule);
+  padding-top: 8px;
+}
+.kbc-home-card__section-title {
+  margin: 0 0 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+.kbc-home-card__muted {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+.kbc-home-card__error {
+  margin: 0;
+  color: var(--red);
+  font-size: 12px;
+}
+
+.kbc-home-card__filelist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-home-card__file {
+  display: block;
+  text-decoration: none;
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-home-card__file:hover {
+  color: var(--accent-soft);
+}
+.kbc-home-card__file-dir {
+  color: var(--ink-dim);
+}
+.kbc-home-card__file-base {
+  font-family: var(--font-mono);
+}
+
+.kbc-home-card__branchlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-home-card__branch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+.kbc-home-card__branch-name {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-home-card__branch-name:hover {
+  color: var(--accent-soft);
+}
+.kbc-home-card__branch-chips {
+  display: flex;
+  gap: 6px;
+}
+.kbc-home-card__chip {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-home-card__chip a {
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-home-card__chip a:hover {
+  text-decoration: underline;
+}
+
+.kbc-home-card__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* SH.C1 — was a flat `--bg-card-hi` fill; shares tokens.css's
+ * `.kbc-skeleton` shimmer (paint + motion + reduced-motion override) via
+ * its selector list, so this rule owns only the box model. */
+.kbc-home-card__skeleton-line {
+  height: 10px;
+  width: 72%;
+}
+.kbc-home-card__skeleton-line:nth-child(2) {
+  width: 50%;
+}
+
+.kbc-home-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--rule);
+  padding-top: 8px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kbc-home-card__footer a {
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+.kbc-home-card__footer a:hover {
+  color: var(--accent-soft);
+}

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, search, relevance, ranking, embeddings, reranking, bm25, vector, rrf, chunking, bench">
+<title>Stepping up kb search &amp; recall: findings, options, and a bench-gated plan</title>
+<style>
+:root{
+  --bg:#fbfbfa;--fg:#1b1b1a;--muted:#6b6b68;--rule:#e3e3e0;--accent:#3a5a9f;
+  --warn:#9a6b00;--danger:#a3322b;--ok:#2f6f4f;--code-bg:#f3f3f1;--maxw:48rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16171a;--fg:#e6e6e3;--muted:#9a9a96;--rule:#2c2e33;--accent:#8fb0ee;--code-bg:#1f2126;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.6;font-size:17px}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.95rem;margin:.2em 0 .3em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-top:.4em;border-top:1px solid var(--rule)}
+h3{font-size:1.12rem;margin:1.6em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.2rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--code-bg);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);border-radius:4px;padding:.08em .35em}
+pre{background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;padding:0}
+blockquote{margin:1em 0;padding:.2em 1em;border-left:3px solid var(--rule);color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.88rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--code-bg);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:6px;background:color-mix(in srgb,var(--accent) 6%,transparent);padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 8%,transparent)}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 8%,transparent)}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.callout--ok .callout-label{color:var(--ok)}
+.pill{font-family:var(--mono);font-size:.72rem;border-radius:4px;padding:.05em .5em;border:1px solid var(--rule);white-space:nowrap}
+.pill.hi{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--rule))}
+.pill.med{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--rule))}
+.pill.lo{color:var(--muted)}
+.num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<main tabindex="-1">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> kb</div>
+  <h1>Stepping up kb search &amp; recall: findings, options, and a bench-gated plan</h1>
+  <p class="lede">kb search is already strong and now fast; the biggest untapped lever is that long
+  artifacts are silently truncated to ~400 words in the vector arm — so here is what the code actually
+  does today, the de-risking facts I verified, and a measure-first phased plan to lift relevance.</p>
+  <div class="meta-strip">
+    <span class="num">2026-06-05</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">design</span>
+  </div>
+</header>
+
+<section>
+<h2 id="verdict">Verdict</h2>
+<p>The 2026-05-19 embedding bake-off measured kb's default stack — bge-large-en-v1.5 in hybrid mode —
+at <strong>Recall@1 0.81, MRR 0.87, nDCG@10 0.87</strong> over the 49-file
+<code>docs/research/</code> corpus (32 hand-labelled queries). The last four commits
+(<code>158f252</code>, <code>550120e</code>, <code>0987779</code>, <code>e80e40b</code>) cut latency to
+roughly <strong>5 ms keyword / 120 ms hybrid</strong>. Search works well. But every recent change was
+<em>latency</em>; <em>relevance</em> has not been touched, and a code-level audit found real headroom.</p>
+<div class="callout callout--ok"><span class="callout-label">The one-line answer</span>
+Search is good — don't rewrite it. Improve it surgically and provably: build a measurement spine first,
+then land low-risk fusion wins, then fix the long-document truncation that is the single biggest
+semantic-recall gap. Gate every change on the <code>kb bench</code> harness that already exists.</div>
+
+<h3 id="who-this-is-for">Who this is for</h3>
+<p>A future kb maintainer (human or Claude) deciding what to build next for search, and wanting the
+evidence in one place rather than re-deriving it from the codebase. The execution contract is in this
+artifact's <code>kb-prompt</code> template; the full phasing lives in the plan file
+<code>~/.claude/plans/i-want-to-step-curried-cerf.md</code>.</p>
+</section>
+
+<section>
+<h2 id="what-i-found">What I found</h2>
+<p>I traced a query end-to-end through <code>crates/kb-server/src/routes/search.rs</code> →
+<code>crates/kb-core/src/storage/lance.rs</code>, read the embedder, indexer, query DSL, and the bench
+harness, and validated the hard parts against the pinned <code>lancedb 0.27.2</code> /
+<code>fastembed 5.13.4</code> sources. The picture:</p>
+
+<h3 id="current-pipeline">The current pipeline</h3>
+<p>A search is: embed the query (for hybrid/semantic) → call one of
+<code>bm25_query</code> / <code>vector_query</code> / <code>hybrid_query</code> at
+<code>limit=20</code> → return. The hybrid path
+(<code>storage/lance.rs:713</code>) chains lance's <code>.full_text_search().nearest_to()</code> and lets
+<strong>lance do the Reciprocal Rank Fusion internally</strong> (k=60). Lexical search is SQLite FTS5
+(via lance) over five columns — <code>title, body, headings, code, prompt</code>
+(<code>lance.rs:31</code>); vector search is lance IVF-PQ, cosine, over a single per-doc embedding.</p>
+
+<h3 id="the-truncation-gap">The truncation gap (the headline finding)</h3>
+<p>The indexer embeds each document's <em>entire</em> body as one vector —
+<code>let embed_body = fields.body.clone();</code> at <code>crates/kb-core/src/indexer.rs:1082</code>,
+with no chunking. Every supported model is a BGE/Jina encoder that caps at <strong>512 tokens</strong>
+(<code>SUPPORTED_MODELS</code>, <code>embed.rs:67</code>), and fastembed truncates to that limit. So for a
+long-form research artifact, <strong>the vector arm only encodes roughly the first ~400 words</strong>;
+everything after is invisible to semantic search.</p>
+<div class="callout callout--warn"><span class="callout-label">Why hybrid still scores 0.81</span>
+The BM25/FTS arm indexes the <em>full</em> body (FTS is not truncated), so lexical recall covers the
+whole document and props up the hybrid number. Pure <code>mode=semantic</code> is where the truncation
+bites hardest — and where the most recall is left on the table for long artifacts.</div>
+
+<h3 id="eval-harness-exists">A real eval harness already exists</h3>
+<p>This is the most important enabler: <code>kb bench init|discover|run</code>
+(<code>crates/kb-cli/src/commands/bench.rs</code>) computes <strong>Recall@k, MRR, and nDCG@k</strong>
+against hand-labelled query sets in <code>bench/queries/*.jsonl</code>, with reports in
+<code>docs/bench/</code>. It produced the bge-small vs. base vs. large bake-off
+(<code>docs/research/foundation/14-embedding-bakeoff-2026-05-19.html</code>). It means every change below
+can be <em>measured</em>, not guessed — but it was last run on 2026-05-19 against one corpus.</p>
+
+<h3 id="other-gaps">The other gaps</h3>
+<table>
+<thead><tr><th>Gap</th><th>Today</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>No candidate over-fetch</td><td>both arms fetched at <code>limit</code> (20); a doc ranked #25 lexically but #1 semantically can be missing from the lexical arm entirely</td><td><code>lance.rs:713</code></td></tr>
+<tr><td>No field weighting</td><td>a title match ranks no higher than a body match — all five FTS columns are equal-weight</td><td><code>lance.rs:31</code></td></tr>
+<tr><td>Search ignores the query DSL</td><td>the full OR/NOT/<code>tag:</code>/<code>folder:</code>/<code>since:</code> parser powers only the gallery; <code>/api/search</code> can't filter</td><td><code>query.rs</code>, <code>docs_query.rs</code></td></tr>
+<tr><td>Single-corpus only</td><td>only <code>/api/memory/recall</code> fans out; you can't search all 14 corpora at once</td><td><code>routes/memory.rs</code></td></tr>
+<tr><td>No reranking / no scores exposed</td><td>no cross-encoder, no diversity/recency boost; the <code>Hit</code> struct returns no relevance score to debug with</td><td><code>routes/search.rs:54</code></td></tr>
+<tr><td>Behavioural signal unused</td><td>the append-only <code>history</code> table (opens, reading-progress) never feeds ranking</td><td>invariant #8 / #19</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="load-bearing-findings">Load-bearing findings (what de-risks the work)</h2>
+<p>Six facts, verified against the pinned dependency sources, that make the plan cheaper and safer than
+it first looks:</p>
+<ol>
+<li><strong>lance already exposes per-row scores — on the individual arms.</strong> <code>_score</code>
+(BM25, higher = better) and <code>_distance</code> (cosine, lower = closer) are auto-projected even with an
+explicit column select (the opt-out defaults off and kb never sets it). Reading them into the score-less
+<code>DocSummary</code> is net-new plumbing — kb deliberately ranks on position today (invariant #10) — but
+needs <em>no query change</em>. The <em>combined</em> hybrid call instead surfaces only a fused
+<code>_relevance_score</code>, which is exactly why Phase 2 runs the two arms separately and fuses in Rust.</li>
+<li><strong>lance's hybrid RRF formula is identical to kb's own</strong> (k=60, 0-based,
+<code>1/(k+rank)</code> — lance internally and <code>kb_core::memory::rerank</code>,
+<code>memory.rs:18-20,174</code>), so moving fusion into Rust reproduces the 0.81 baseline. One subtlety
+the review caught: the <em>tie-break</em> differs (lance dedups vector-arm-first then stable-sorts;
+<code>memory::rerank</code> breaks ties by id), so the port must replicate lance's tie-break rather than
+reuse <code>memory::rerank</code> verbatim — pinned by a parity test.</li>
+<li><strong>Per-field FTS boost is supported in-version</strong> (<code>MatchQuery::with_column</code> +
+<code>with_boost</code>, composed via <code>MultiMatchQuery</code>) — with a no-API fallback (title/headings
+as a third RRF arm) if the live wiring disappoints.</li>
+<li><strong>fastembed 5.13.4 ships a full reranker API</strong> (<code>TextRerank</code>,
+<code>RerankerModel::BGERerankerBase</code> and friends), gated on the <code>hf-hub</code> feature that is
+<em>already enabled</em> transitively — so <em>no new crate</em>. It does add operational weight: a
+~280&nbsp;MB reranker model download and a new <code>kb-embedder</code> run-mode (the sidecar loads one
+model eagerly today), so the prod cache volume must be provisioned before enabling it.</li>
+<li><strong>Chunking must be a sidecar lance table.</strong> Putting multiple chunks as rows in
+<code>artifacts</code> would break the <code>id</code>-is-unique assumption — the review enumerated
+<strong>10 sqlite tables + the lance merge key + 11 projections</strong> that key on a unique id (atlas,
+<code>get_by_id</code>, history, sessions, bookmarks, edges, …); a multi-vector column has no ANN path in
+lance. A sibling <code>artifact_chunks</code> table touches nothing else, and the doc-level embedding
+stays for atlas (<code>list_embeddings</code> → <code>compute_layout</code>).</li>
+<li><strong>Federation is mostly built.</strong> <code>routes/memory.rs::recall</code> already fans out
+across corpora with correct embed-once-per-model keying and a keyword fallback. The reusable part is the
+<em>inner per-corpus loop</em>, not recall's memory-scope filter — search must fan out over <em>all</em>
+kbs — and the merge is that machinery minus salience/decay, by rank-position RRF.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="the-options">The options</h2>
+<p>Five levers, scored on impact (relevance gain) and effort, with the dominant risk. "Impact" is judged
+against the long-form HTML research corpora kb actually serves.</p>
+<table>
+<thead><tr><th>Lever</th><th>Impact</th><th>Effort</th><th>Risk</th><th>Schema / reindex?</th></tr></thead>
+<tbody>
+<tr><td>Measurement spine + score exposure</td><td><span class="pill med">enabling</span></td><td><span class="pill hi">S</span></td><td><span class="pill hi">none</span></td><td>no</td></tr>
+<tr><td>Rust fusion: over-fetch + field weighting + filtered search</td><td><span class="pill hi">high</span></td><td><span class="pill med">M</span></td><td><span class="pill hi">low</span></td><td>no</td></tr>
+<tr><td>Long-doc recall: passage / chunk embeddings</td><td><span class="pill hi">highest</span></td><td><span class="pill lo">L</span></td><td><span class="pill med">high</span></td><td>yes + long reindex</td></tr>
+<tr><td>Federated cross-corpus search</td><td><span class="pill hi">high (utility)</span></td><td><span class="pill med">M</span></td><td><span class="pill hi">low</span></td><td>no</td></tr>
+<tr><td>Cross-encoder reranker</td><td><span class="pill hi">high (precision)</span></td><td><span class="pill med">M</span></td><td><span class="pill med">med</span></td><td>no (model dl)</td></tr>
+</tbody>
+</table>
+
+<h3 id="opt-measure">Measurement spine</h3>
+<p>Re-baseline <code>kb bench</code> on current code; expand golden sets beyond <code>kb-docs</code> to
+the <code>research</code> and <code>platform</code> corpora; implement the documented-but-missing
+<code>--baseline</code> delta column (<code>bench.rs:13-17</code>); expose a <code>score</code> (and an
+optional per-arm <code>explain</code>) on each hit. Cheap, zero relevance risk, and it makes every
+subsequent change auditable.</p>
+
+<h3 id="opt-fusion">Rust fusion + quick wins</h3>
+<p>Run both arms at a ~150 candidate pool and fuse in Rust (rank-based RRF, parity-pinned to lance), then
+cut to <code>limit</code>. That one refactor unlocks: <strong>field weighting</strong> (title/headings
+outrank body), <strong>filtered ranked search</strong> by reusing the existing
+<code>docs_query::matches()</code> so <code>tag:</code>/<code>category:</code>/<code>since:</code> finally
+work with search, and optional recency/category boosts. Highest impact-per-unit-effort.</p>
+
+<h3 id="opt-chunking">Long-doc recall (chunking)</h3>
+<p>The fix for the truncation gap: chunk the body into ~280-word passages with ~60-word overlap (safe
+under the 512-token cap), embed each into the <code>artifact_chunks</code> sidecar table, vector-search
+over chunks, and max-pool the best chunk per document. Biggest semantic-recall win for long artifacts —
+and the heaviest change, because it multiplies embedding work and needs a reindex. Opt-in per kb.</p>
+
+<h3 id="opt-federation">Federated cross-corpus search</h3>
+<p>Add <code>scope=all</code> to <code>/api/search</code>, fan out to every corpus on the daemon (reusing
+the recall machinery), and merge by cross-kb rank-RRF (scores are not comparable across corpora). One
+query over everything — high utility given 14 corpora, and the lowest-risk big feature (no schema, no
+model).</p>
+
+<h3 id="opt-reranker">Cross-encoder reranker</h3>
+<p>Rerank the fused top-50 with a bge-reranker cross-encoder running in the <code>kb-embedder</code>
+sidecar, opt-in per kb. Cross-encoders move MRR/nDCG most (they fix ordering within an already-good
+candidate set). The cost is latency, so it stays opt-in and degrades to the pre-rerank order if the
+sidecar is unavailable.</p>
+</section>
+
+<section>
+<h2 id="recommended-order">Recommended order</h2>
+<p>Measure first so nothing ships on vibes; then the low-risk no-schema wins; then the reranker (which
+depends on the fusion refactor); then the heavy chunking lever last — and finally re-bench the reranker
+with chunk texts, because chunks give the cross-encoder the right passage to score.</p>
+<table>
+<thead><tr><th>Phase</th><th>Track</th><th>Ships</th></tr></thead>
+<tbody>
+<tr><td><span class="num">0</span></td><td>this artifact</td><td>options + plan; decision checkpoint</td></tr>
+<tr><td><span class="num">1</span> (SQ1)</td><td>measure</td><td>re-baseline + expanded bench, <code>--baseline</code> delta, scores on hits</td></tr>
+<tr><td><span class="num">2</span> (SQ2)</td><td>quick wins</td><td>Rust fusion + over-fetch, field weighting, filtered search</td></tr>
+<tr><td><span class="num">3</span> (SQ3)</td><td>federation</td><td><code>scope=all</code> cross-corpus search</td></tr>
+<tr><td><span class="num">4</span> (SQ4)</td><td>reranker</td><td>fastembed cross-encoder, opt-in per kb</td></tr>
+<tr><td><span class="num">5</span> (SQ5)</td><td>chunking</td><td>passage embeddings, opt-in; then re-bench Phase 4</td></tr>
+</tbody>
+</table>
+<p>Each phase is independently shippable and independently bench-gated; none merges without a
+<code>kb bench</code> delta showing non-regression (ideally improvement) on a representative query set.
+This maps onto kb's phased-commit cadence: <code>feat(crate): summary (SQ&lt;n&gt;)</code>, each green-CI.</p>
+</section>
+
+<section>
+<h2 id="what-ive-done">What I've done so far</h2>
+<p>This artifact is the output of Phase 0 — investigation and planning. No production code has changed
+yet. Concretely, in this pass I:</p>
+<ul>
+<li>Traced the full search path and read the load-bearing files
+(<code>routes/search.rs</code>, <code>storage/lance.rs</code>, <code>embed.rs</code>,
+<code>indexer.rs</code>, <code>query.rs</code>, <code>docs_query.rs</code>, <code>bench.rs</code>).</li>
+<li>Confirmed the six de-risking findings above against the pinned <code>lancedb 0.27.2</code> and
+<code>fastembed 5.13.4</code> sources (the score auto-projection, the RRF parity, the reranker API).</li>
+<li>Pressure-tested the two hardest levers (chunking schema, reranker integration) with dedicated
+architecture passes, settling the sidecar-table and sidecar-process designs and rejecting the
+multi-row / multi-vector / in-process alternatives.</li>
+<li>Wrote the phased, bench-gated plan to
+<code>~/.claude/plans/i-want-to-step-curried-cerf.md</code> and captured the per-lever blueprints.</li>
+<li>Authored and validated this artifact for the <code>kb-docs</code> corpus, and ran a three-agent
+codebase deep-review of its claims (verdict: GO WITH FIXES — see below) before committing.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="decisions">Decisions (chosen vs. rejected)</h2>
+<table>
+<thead><tr><th>Decision</th><th>Chosen</th><th>Rejected — why</th></tr></thead>
+<tbody>
+<tr><td>Fusion location</td><td>Rust-side RRF over rank position</td><td>raw-score merge — BM25 and cosine scales differ and don't compose across corpora</td></tr>
+<tr><td>Chunk storage</td><td>sidecar <code>artifact_chunks</code> table</td><td>extra rows in <code>artifacts</code> (breaks <code>id</code> uniqueness for ~15 consumers); multi-vector column (no ANN in lance)</td></tr>
+<tr><td>Chunk aggregation</td><td>max-pool (best chunk wins)</td><td>sum-top-k — biases toward long docs, the exact failure mode of today's whole-body vector</td></tr>
+<tr><td>Reranker placement</td><td>sidecar process, opt-in per kb</td><td>in-process on HTTP threads; coupling it to the embedder's per-model sharing key</td></tr>
+<tr><td>Federation surface</td><td><code>scope=all</code> on the existing route</td><td>a new endpoint — would fork the search contract and the bench client</td></tr>
+<tr><td>Doc-level embedding</td><td>keep it even after chunking</td><td>dropping it — atlas reads it via <code>list_embeddings</code></td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li><strong>Passage prefix.</strong> BGE models expect a <code>query:</code> / <code>passage:</code>
+prefix asymmetry. Adopting it changes the doc-level vector too — bench both with and without before
+committing.</li>
+<li><strong>Recency boost default.</strong> A recency multiplier helps fast-moving corpora but
+<em>hurts</em> reference corpora; ship it config-gated and decide the default per corpus from the bench.</li>
+<li><strong>Which corpora to label.</strong> The expanded bench needs hand-labelled query sets;
+<code>research</code> and <code>platform</code> are proposed — confirm the set and budget the labelling.</li>
+<li><strong>Native FTS boost vs. rank-arm.</strong> Use lance's per-field boost if a smoke test plus a
+bench win confirm it; otherwise the title/headings rank-arm fallback.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="files-this-will-touch">Files this will touch</h2>
+<pre><code>crates/kb-core/src/storage/lance.rs    arm queries, _score/_distance, artifact_chunks table
+crates/kb-core/src/storage/schema.rs   chunk_schema(dim) + dim-validation reuse
+crates/kb-core/src/fusion.rs (new)     Rust RRF over rank, parity-pinned to lance
+crates/kb-core/src/query.rs            Category key; parse DSL from the search query
+crates/kb-core/src/docs_query.rs       reuse matches() to filter ranked search
+crates/kb-core/src/chunk.rs (new)      pure heading-split + sliding-window chunker
+crates/kb-core/src/indexer.rs          chunk production at the embed site
+crates/kb-core/src/embed.rs            SUPPORTED_RERANKERS registry + Reranker type
+crates/kb-core/src/embed_ipc.rs        Rerank request/response over the sidecar protocol
+crates/kb-embedder/src/main.rs         reranker process
+crates/kb-server/src/routes/search.rs  scores/explain, scope=all, rerank-after-merge
+crates/kb-server/src/routes/memory.rs  lift the fan-out into a shared helper
+crates/kb-cli/src/commands/bench.rs    --baseline delta column
+crates/kb-cli/src/commands/model.rs    reranker download + kb search --all
+bench/queries/*.jsonl, docs/bench/     expanded golden sets + committed baselines</code></pre>
+</section>
+
+<section>
+<h2 id="verification">Verification</h2>
+<p>Every phase runs the workspace gate — <code>cargo test --workspace --no-fail-fast</code>,
+<code>cargo clippy --workspace --all-targets -- -D warnings</code>, <code>cargo fmt --all</code>
+(the project's <code>just ci</code>) — plus the relevance gate:</p>
+<pre><code>kb bench run --kbs &lt;a,b,...&gt; --modes hybrid,semantic,keyword \
+  --k 1 --k 5 --k 10 --baseline &lt;saved&gt;</code></pre>
+<p>No Recall@1 / nDCG@10 regression versus the committed Phase-1 baseline, and improvement on the lever's
+targeted query set. For chunking specifically, the gate is built from a <em>long-document</em> query set
+whose relevant answers live past the first ~400 words — the exact case truncation breaks today.</p>
+</section>
+
+<section>
+<h2 id="independent-verification">Independent verification</h2>
+<p>Before committing, I ran <code>/deep-review</code> — three parallel Opus agents, each verifying one
+claim-cluster against the actual code and the pinned dependency sources. All three returned
+<strong>GO WITH FIXES</strong> with <strong>no critical blockers</strong>; the load-bearing claims held:</p>
+<ul>
+<li><strong>Confirmed:</strong> lance auto-projects <code>_score</code>/<code>_distance</code> on the arms
+(lance-core <code>scanner.rs</code>, defaults on); the RRF formula matches <code>memory::rerank</code>
+exactly; the 512-token truncation is real (right-side, silent, ~384 words); the <code>id</code>-uniqueness
+blast radius is 10 sqlite tables + the lance merge key + 11 projections; fastembed 5.13.4's reranker API is
+present and <code>hf-hub</code> is transitively enabled.</li>
+<li><strong>Folded-in fixes:</strong> keep the existing <code>hybrid_query</code> intact for memory recall
+and add a <em>separate</em> pooled path for search (don't perturb invariants #10/#11); replicate lance's RRF
+tie-break rather than reuse <code>memory::rerank</code>; widen the slim search projection before
+post-filtering (it lacks the cap/tag/time columns <code>docs_query::matches</code> reads);
+<code>Key::Category</code> is ~6 edit sites, not one; chunking needs an explicit <code>kb reindex</code>
+backfill (the content-hash gate skips unchanged files), its own dirty flag, and must not
+<code>bump_generation</code> (invariant #15); federation lifts only recall's inner loop; the reranker needs
+a new sidecar run-mode + model provisioning.</li>
+</ul>
+<p>These refinements are recorded in the plan file; none changes the recommended order.</p>
+</section>
+
+<section>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://plg.uwaterloo.ca/~gvcormack/cormacksigir09-rrf.pdf">Cormack, Clarke &amp; Buettcher (SIGIR 2009) — Reciprocal Rank Fusion</a> — the k=60 fusion kb (and lance) use.</li>
+<li><a href="https://huggingface.co/BAAI/bge-large-en-v1.5">BAAI/bge-large-en-v1.5 model card</a> — the daemon default; note the 512-token max sequence length.</li>
+<li><a href="https://huggingface.co/BAAI/bge-reranker-base">BAAI/bge-reranker-base</a> — the proposed cross-encoder for Phase 4.</li>
+<li><a href="https://github.com/Anush008/fastembed-rs">fastembed-rs</a> — the embedding + reranking backend kb already depends on.</li>
+<li><a href="https://lancedb.github.io/lancedb/">LanceDB docs</a> — full-text + hybrid search and the IVF-PQ vector index.</li>
+<li>Internal: the 2026-05-19 bake-off at <code>docs/research/foundation/14-embedding-bakeoff-2026-05-19.html</code> and the plan at <code>~/.claude/plans/i-want-to-step-curried-cerf.md</code>.</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

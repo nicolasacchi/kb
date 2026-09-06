@@ -1,0 +1,175 @@
+/* PRR-U8 (design-addendum-2.md §C) — the Review Room landing's Analytics
+   section (`components/reviews/AnalyticsSection.tsx`). Mirrors
+   `review-inbox.css`'s `.kbc-inbox-browse` demoted-<details> shape; the
+   stat tiles reuse `.kbc-stats` from `review-room.css` (imported by
+   `ReviewDetail.tsx` already; the landing route imports THIS file for
+   everything else). No chart library — every graphic here is a flat CSS
+   bar. */
+
+.kbc-analytics {
+  margin-top: 8px;
+}
+.kbc-analytics__summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-dim);
+  padding: 6px 0;
+}
+.kbc-analytics__stats {
+  margin: 12px 0;
+}
+.kbc-analytics__stat-caption {
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  margin-top: 3px;
+}
+
+.kbc-analytics__acceptance,
+.kbc-analytics__matrix,
+.kbc-analytics__recurrence {
+  margin: 16px 0;
+}
+.kbc-analytics__acc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule);
+  flex-wrap: wrap;
+}
+.kbc-analytics__acc-row:last-child {
+  border-bottom: 0;
+}
+.kbc-analytics__acc-rate {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  min-width: 3.5em;
+}
+.kbc-analytics__acc-detail {
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+}
+
+.kbc-analytics__matrix-row {
+  display: grid;
+  grid-template-columns: 5.5em 1fr 2.5em;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+.kbc-analytics__matrix-label {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-transform: capitalize;
+}
+.kbc-analytics__bar {
+  display: flex;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-card-hi);
+}
+.kbc-analytics__bar-seg {
+  height: 100%;
+  min-width: 0;
+}
+.kbc-analytics__bar-seg--agree {
+  background: var(--green);
+}
+.kbc-analytics__bar-seg--dispute {
+  background: var(--red);
+}
+.kbc-analytics__bar-seg--waive {
+  background: var(--warn);
+}
+.kbc-analytics__bar-seg--fix-later {
+  background: var(--blue);
+}
+.kbc-analytics__bar-seg--undecided {
+  background: var(--ink-faint);
+  opacity: 0.5;
+}
+.kbc-analytics__matrix-total {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+
+.kbc-analytics__recurrence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-analytics__recurrence-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-analytics__recurrence-list li:last-child {
+  border-bottom: 0;
+}
+.kbc-analytics__recurrence-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+}
+.kbc-analytics__recurrence-cat {
+  font-weight: 600;
+}
+.kbc-analytics__recurrence-loc {
+  color: var(--ink-mute);
+  background: var(--bg-card-hi);
+  padding: 0.05em 0.4em;
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+}
+.kbc-analytics__recurrence-count {
+  color: var(--ink-faint);
+}
+.kbc-analytics__recurrence-reviews {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.kbc-analytics__recurrence-reviews a {
+  font-size: var(--fs-sm);
+  color: var(--accent-soft);
+}
+
+/* ── mobile (PRR-U8 pass, §8 + house asSheet/scrim conventions) ─────────
+   The landing page stays a plain scrolling column on mobile (no sheet) —
+   this section just needs to stay READABLE at 860px: the 3-column stat
+   grid degrades to 1-column (matches `.kbc-stats`' own house pattern
+   elsewhere — see `reviews.css`'s `@media` block), the matrix row's fixed
+   label/total columns shrink so the bar itself keeps most of the width,
+   and recurrence review links get a touch-sized tap target. */
+@media (max-width: 860px) {
+  .kbc-analytics__stats.kbc-stats {
+    grid-template-columns: 1fr;
+  }
+  .kbc-analytics__stats.kbc-stats .cell {
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .kbc-analytics__stats.kbc-stats .cell:last-child {
+    border-bottom: 0;
+  }
+  .kbc-analytics__matrix-row {
+    grid-template-columns: 4.2em 1fr 2em;
+    gap: 6px;
+  }
+  .kbc-analytics__acc-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .kbc-analytics__recurrence-reviews a {
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+  }
+}

@@ -1,0 +1,123 @@
+# kb-lip reference provider: typescript-language-server (the standard
+# TS/JS LSP wrapper around Microsoft's own tsserver; there is no widely-used
+# alternative the way ruby has ruby-lsp/solargraph, so this is the only
+# TypeScript/JavaScript provider config kb-lip ships).
+#
+# typescript-language-server
+# (https://github.com/typescript-language-server/typescript-language-server)
+# wraps tsserver (the same engine VS Code's built-in TS support uses) behind
+# a standard LSP. This config was NOT part of the PRR-L3/L4/L5 live-smoke
+# evidence (providers/README.md) — that was ruby-lsp/Ruby. Validate against
+# your target repo before relying on it; the S2-D live smoke (providers/
+# README.md) is expected to fill this in.
+#
+# Usage:
+#   kb-lip --config providers/typescript-language-server.toml
+#
+# Then point kb-code-server at it via [[intel.providers]] in kb-code.toml —
+# see providers/README.md for the exact block and the operator steps.
+#
+# --- Prerequisites -----------------------------------------------------
+#
+# 1. Install typescript-language-server + typescript (the server needs the
+#    `typescript` package itself alongside it to load tsserver). AVOID
+#    `sudo npm install -g` — that writes into a root-owned global prefix and
+#    creates permission headaches later. Point npm's global prefix at a
+#    user-owned directory once instead:
+#
+#      npm config set prefix "$HOME/.local"
+#      export PATH="$HOME/.local/bin:$PATH"   # add this line to your shell rc
+#      npm install -g typescript-language-server typescript
+#
+#    Or, better for a specific repo, add both as dev dependencies so the
+#    version tracks the project:
+#
+#      npm install --save-dev typescript-language-server typescript
+#
+#    then point `command` below at the repo-local binary instead of a global
+#    one, e.g. `["./node_modules/.bin/typescript-language-server", "--stdio"]`.
+#
+# 2. `workspace_root` below MUST be an ABSOLUTE path to the target repo's
+#    root (where its `package.json`/`tsconfig.json` live — tsserver resolves
+#    the project from there) — it is a PLACEHOLDER; the operator edits it
+#    per deployment. kb-lip does not template/expand `~` or env vars, so
+#    write the real absolute path. For a monorepo with more than one
+#    `tsconfig.json` (this repo: `web/` vs `web-code/`), point
+#    `workspace_root` at whichever SUB-project you want intelligence for —
+#    one kb-lip instance covers one tsconfig project, not the whole repo;
+#    run a second instance on a different port for the other sub-project.
+
+lang_ids = ["typescript", "typescriptreact", "javascript", "javascriptreact"]
+
+# `typescript-language-server --stdio` is the standard entry point — see
+# `typescript-language-server --help`. Requires a global (or PATH-visible)
+# install (prerequisite #1 above).
+command = ["typescript-language-server", "--stdio"]
+
+# Alternate: no global install at all — `npx` resolves (and, on a cold
+# cache, DOWNLOADS) the package on every kb-lip start. Slower first start
+# (npx's own resolve+fetch, on top of typescript-language-server's own
+# tsserver boot) — documented here rather than made the default, since a
+# long-running provider process should not re-resolve its own dependency
+# graph every restart.
+#   command = ["npx", "--yes", "typescript-language-server", "--stdio"]
+
+# PLACEHOLDER — the operator must set this to the real repo root before
+# running kb-lip. Example: "/home/user/code/my-app/web".
+workspace_root = "/CHANGE/ME/to/the/repo/root"
+
+port = 4847
+
+# How long POST /lip/diagnostics waits for the FIRST publishDiagnostics on a
+# freshly-opened doc, in milliseconds. Hard-capped at 2000 by kb-lip
+# regardless of what's written here (config can only lower it, never raise
+# it past the ceiling) — see crates/kb-lip/src/config.rs. NOTE: this key
+# MUST stay above the `[restart_backoff]` table header below — TOML binds a
+# bare `key = value` to the LAST-OPENED table, so written after it, it would
+# silently become a (harmless but meaningless) extra field of that table
+# instead of this top-level `Config::diagnostics_wait_ms`.
+diagnostics_wait_ms = 2000
+
+# initializationOptions passed verbatim in the LSP `initialize` request.
+# typescript-language-server's own docs (docs/configuration.md in its repo)
+# document a `preferences` object that maps directly onto TypeScript's own
+# `UserPreferences` interface, plus top-level knobs like `tsserver.path`/
+# `maxTsServerMemory`/`plugins`.
+#
+# Left EMPTY here (no active keys) — sensible-minimal, same posture as
+# ruby-lsp.toml: kb-lip's lip/1 surface calls hover/definition/references/
+# diagnostics and (as of the code-actions capability — design-s2.md S2-C,
+# which REVERSES lip/1's earlier "no code actions" refusal) code-actions;
+# it still never calls rename, formatting, or workspace/executeCommand.
+# tsserver publishes diagnostics (push model, `textDocument/
+# publishDiagnostics`) for any open file with NO special initializationOptions
+# required, and hover/definition/references all work against
+# typescript-language-server's own defaults — there is no `preferences` key
+# whose non-default value this reader-only, single-file-at-a-time usage
+# needs. Uncomment and tune only if a real target project needs it, e.g.:
+#   [initialization_options]
+#   # hostInfo = "kb-lip"
+#   # preferences = { includeCompletionsForModuleExports = false }
+
+# Capped exponential backoff for restarting the typescript-language-server
+# child if it crashes. The defaults here are kb-lip's own (200ms initial,
+# 30s cap, x2 multiplier) — typescript-language-server's own tsserver boot
+# is normally fast (seconds, not minutes, unlike ruby-lsp's composed-bundle
+# bootstrap) so these are usually fine unqualified.
+[restart_backoff]
+initial_ms = 200
+max_ms = 30000
+multiplier = 2.0
+
+# --- Position encoding ---------------------------------------------------
+#
+# kb-lip never declares `general.positionEncodings` in its `initialize`
+# capabilities (see crates/kb-lip/src/lsp.rs), so per the LSP spec every
+# server MUST fall back to its mandatory default, UTF-16 code units — which
+# is exactly what kb-lip's own `position.rs` hardcodes throughout, and
+# matches tsserver's own native string-indexing model (JS/TS strings are
+# already UTF-16 internally, so this is the natural default rather than a
+# negotiated fallback). This was confirmed live for ruby-lsp (PRR-L4 §c,
+# providers/README.md); typescript-language-server has NOT yet been
+# independently re-confirmed by a live kb-lip handshake — pending the S2-D
+# smoke (providers/README.md "Live smoke evidence").

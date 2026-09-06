@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb mental model: artifacts, notes, lists, memory, sessions, and the indexing pipeline.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, concepts, architecture, non-goals">
+<title>Concepts · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="concepts.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/concepts.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html" aria-current="page">Concepts</a>
+  <a href="search.html">Search</a>
+  <a href="web.html">Web reader</a>
+  <a href="comments.html">Comments</a>
+  <a href="agent.html">Memory &amp; sessions</a>
+  <a href="organize.html">Lists &amp; notes</a>
+  <a href="operate.html">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">02 · Mental model</p>
+  <h1>Concepts</h1>
+  <p class="lede">Five nouns, one pipeline, and a short list of things kb will not become — so you can place every verb you learn later.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#nouns">Five nouns</a></li>
+    <li><a href="#daemon-kb">Daemon and kb</a></li>
+    <li><a href="#pipeline">How indexing works</a></li>
+    <li><a href="#interfaces">Interfaces</a></li>
+    <li><a href="#refusals">What kb refuses</a></li>
+  </ol>
+</nav>
+
+<section id="nouns">
+<h2>Five nouns</h2>
+<div class="table-scroll">
+<table class="nouns">
+  <thead><tr><th>Noun</th><th>What it is</th><th>Where it lives</th><th>Primary verb</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>artifact</td>
+      <td>One HTML or Markdown deliverable — the atom kb indexes and serves</td>
+      <td>A source folder (a corpus)</td>
+      <td><code>kb search</code> / <code>kb get</code></td>
+    </tr>
+    <tr>
+      <td>note</td>
+      <td>A Markdown artifact with <code>[[wikilinks]]</code> and GFM checklists</td>
+      <td>Inside a kb (<code>kb-category: note</code>)</td>
+      <td><code>kb notes</code></td>
+    </tr>
+    <tr>
+      <td>list</td>
+      <td>An ordered, section-aware reading list; read-state is <em>derived</em></td>
+      <td>Per-kb kb-list/1 document</td>
+      <td><code>kb list</code></td>
+    </tr>
+    <tr>
+      <td>memory</td>
+      <td>A curated, agent-explicit fact, recalled deterministically</td>
+      <td>A memory corpus (global or project)</td>
+      <td><code>kb remember</code> / <code>kb recall</code></td>
+    </tr>
+    <tr>
+      <td>session</td>
+      <td>An episodic agent transcript, digest-indexed, pull-only</td>
+      <td>Sessions store beside each kb</td>
+      <td><code>kb why</code> / <code>kb recollect</code></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<div class="note">
+  <strong>Memory ≠ session.</strong> Memory is what you <em>chose</em> to keep (curated). A session is what <em>happened</em> (episodic). <code>kb recall</code> answers “what do we know?”; <code>kb why</code> / <code>kb recollect</code> answer “what did we do, and can we trust it?”
+</div>
+</section>
+
+<section id="daemon-kb">
+<h2>Daemon and kb</h2>
+<p>A <strong>daemon</strong> is one running process (default <code>http://127.0.0.1:4000</code>). You can run several side-by-side on different ports. Each daemon mounts one or more <strong>kbs</strong> — a kb is simply a named folder of artifacts declared in <code>~/.config/kb/kb.toml</code> (or added with <code>kb add</code>).</p>
+<p>One process can federate search, recall, sessions, lists, and notes across every mounted kb. That is multi-kb on one daemon — not a multi-daemon proxy. Fleet tooling (<code>kb fleet status</code>, SPA Settings) watches many daemons; it does not merge their corpora into one search.</p>
+</section>
+
+<section id="pipeline">
+<h2>How indexing works</h2>
+<p>You do not run a separate “index” job for day-to-day work. The daemon watches source folders and keeps the index current.</p>
+<div class="pipeline">source folders
+   │  file watcher (~400ms debounce)
+   ▼
+parser  →  title · headings · tags · category · prompt · link edges
+   │  per-kb back-pressured ingest
+   ▼
+indexer →  storage  →  lance (vectors + body)  +  sqlite (metadata)
+   │              ▲
+   └── embedder sidecar (out-of-process) ──┘
+                 │
+   axum server ◄─┘  REST /api/*  ·  SSE events  ·  SPA  ·  artifact subdomains</div>
+<ul>
+  <li><strong>Content-hash gated</strong> — unchanged bytes are not re-parsed or re-embedded.</li>
+  <li><strong>Quarantine</strong> — unparseable files surface at the quarantine API rather than vanishing.</li>
+  <li><strong>Force paths</strong> — <code>kb reindex</code> rewalks; <code>kb reset --kb NAME</code> wipes index state (comments in <code>.review/</code> kept unless <code>--all</code>).</li>
+</ul>
+<p>Artifact ids are a stable 12-hex digest of the source-relative path. Rename changes the id; content edits do not. Prefer the relocate engine (<code>kb mv</code> / move API) over raw filesystem moves when you care about comments and history.</p>
+</section>
+
+<section id="interfaces">
+<h2>Interfaces</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Surface</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>kb</code> CLI</td><td>Every verb: search, comments, memory, sessions, share, fleet, ops. Bearer token read from <code>~/.config/kb/token</code> automatically.</td></tr>
+    <tr><td>Web SPA</td><td>Primary reading and review UI at <code>/</code>. Gallery, atlas, reader, lists, sessions, settings.</td></tr>
+    <tr><td>HTTP API</td><td>Same daemon surface the CLI uses. Event schema at <code>/api/events.schema.json</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="note warn">
+  <strong>TUI retired (v0.24).</strong> The old five-tab terminal dashboard is gone. Fleet monitoring is SPA Settings + <code>kb fleet status</code> + <code>kb events --follow</code>. It is not coming back as a product surface.
+</div>
+</section>
+
+<section id="refusals">
+<h2>What kb refuses (recorded decisions)</h2>
+<p>These are scope boundaries, not missing features:</p>
+<ul>
+  <li><strong>No in-daemon LLM</strong> — ranking and digests stay deterministic; LLM steps live in agent skills/commands.</li>
+  <li><strong>No CRDT / multiplayer editor</strong> — comments and <code>.review</code> files are the collaboration surface.</li>
+  <li><strong>Identity is attribution, not authorization</strong> — kb can name who acted (edge identity / token / loopback operator) but does not do passwords, roles, or ACLs. Every admitted identity is a co-operator.</li>
+  <li><strong>Corpus mount is the ACL</strong> — what the daemon mounts is what it serves. Cross-trust sharing is <code>kb share</code> or a dedicated public daemon.</li>
+  <li><strong>Mobile is a reader + capture slot</strong>, not an editor.</li>
+  <li><strong>No MCP server yet</strong> — the CLI is the protocol until a harness cannot shell out.</li>
+</ul>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="start.html"><span class="dir">Previous</span>Start</a>
+  <a class="next" href="search.html"><span class="dir">Next</span>Search</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

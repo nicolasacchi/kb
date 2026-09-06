@@ -1,0 +1,694 @@
+/* Phase E4 ("kb-code v2 — The Operable Reader") — reading sets: the list
+ * (`routes/Sets.tsx`), one set's detail (`routes/SetDetail.tsx`), tour mode
+ * (`routes/Tour.tsx`), the reader's "+ Set" capture menu
+ * (`components/sets/AddToSetMenu.tsx`), and SessionDiff's "Save as reading
+ * set" button (`components/sets/SaveAsSetButton.tsx`). Same token discipline
+ * as every other kb-code stylesheet (`reader.css`'s own header comment) —
+ * every color reaches for a `tokens.css` variable. `.kbc-tour__scrubber`
+ * etc. mirror `story.css`'s `.kbc-story__scrubber` rules byte-for-byte
+ * (both are rendered by the shared `components/story/StepperBar.tsx`, just
+ * with a different class prefix) rather than a single shared selector, so
+ * either page's rules can diverge later without a cross-file edit. */
+
+/* --- Sets list + detail shell (mirrors `home.css`'s page-container idiom) */
+
+.kbc-sets {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-sets__head {
+  margin-bottom: 16px;
+}
+.kbc-sets__title {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+.kbc-sets__hint {
+  color: var(--ink-mute);
+  margin: 0;
+  font-size: 13px;
+}
+
+.kbc-sets__create {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.kbc-sets__create input {
+  flex: 1 1 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.kbc-sets__create button {
+  flex: 0 0 auto;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 7px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.kbc-sets__create button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kbc-sets__create button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-sets__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-sets__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+.kbc-sets__row-name {
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-sets__row-name:hover {
+  color: var(--accent-soft);
+}
+.kbc-sets__row-desc {
+  color: var(--ink-mute);
+  font-size: 12.5px;
+}
+.kbc-sets__row-meta {
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.kbc-sets__row-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.kbc-sets__row-actions button {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.kbc-sets__row-actions button:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+
+.kbc-sets__rename-form {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+.kbc-sets__rename-form input {
+  flex: 1 1 auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.kbc-sets__rename-form button {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* --- Set detail ---------------------------------------------------------- */
+
+.kbc-sets__detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.kbc-sets__detail-head-main {
+  min-width: 0;
+}
+.kbc-sets__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.kbc-sets__rename-trigger {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.kbc-sets__rename-trigger:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-sets__desc {
+  color: var(--ink-mute);
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.kbc-sets__detail-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.kbc-sets__tour-btn {
+  display: inline-flex;
+  align-items: center;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 6px 12px;
+  text-decoration: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+.kbc-sets__tour-btn:hover {
+  border-color: var(--accent);
+}
+.kbc-sets__delete {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--red);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.kbc-sets__delete:hover {
+  border-color: var(--red);
+}
+
+/* DCB W3.C — "doc changed since" banner (`SetDetail.tsx`'s provenance
+ * check). Same `--warn` warning-color convention as `doclens.css`'s
+ * `.kbc-lens__dirty-banner`/`.kbc-lens__truncated`. */
+.kbc-sets__stale-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 8px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  color: var(--warn);
+  font-size: 12.5px;
+}
+.kbc-sets__stale-banner button {
+  flex: 0 0 auto;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.kbc-sets__stale-banner button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kbc-sets__stale-banner button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-sets__spans {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-sets__span-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.kbc-sets__span-link {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-sets__span-link:hover {
+  color: var(--accent-soft);
+}
+.kbc-sets__span-ref {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+.kbc-sets__span-note {
+  color: var(--ink-mute);
+  font-size: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-sets__span-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.kbc-sets__span-actions button {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.kbc-sets__span-actions button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-sets__span-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.kbc-sets__add-span {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+.kbc-sets__add-span-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-mute);
+}
+.kbc-sets__add-span-row {
+  display: flex;
+  gap: 8px;
+}
+.kbc-sets__add-span-row input:first-child {
+  flex: 1 1 auto;
+}
+.kbc-sets__add-span-row input:not(:first-child) {
+  flex: 0 0 70px;
+}
+.kbc-sets__add-span input {
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.kbc-sets__add-span button {
+  align-self: flex-start;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 6px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.kbc-sets__add-span button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Reader "+ Set" capture menu (mirrors `.kbc-refpicker` in reader.css) - */
+
+.kbc-addset {
+  position: relative;
+}
+.kbc-addset__trigger {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-addset__trigger:hover {
+  border-color: var(--rule-hi);
+}
+.kbc-addset__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 220px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: var(--z-popover);
+}
+.kbc-addset__hint {
+  color: var(--ink-mute);
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.kbc-addset__list {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+}
+.kbc-addset__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.kbc-addset__item:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-addset__new {
+  display: flex;
+  gap: 6px;
+  border-top: 1px solid var(--rule);
+  padding-top: 6px;
+}
+.kbc-addset__new-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.kbc-addset__create {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-addset__create:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Tour mode (mirrors `story.css`'s `.kbc-story` shell + scrubber) ----- */
+
+.kbc-tour {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.kbc-tour__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+.kbc-tour__set-name {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-tour__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kbc-tour__ref-chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+}
+.kbc-tour__exit {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.kbc-tour__exit:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+
+.kbc-tour__stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.kbc-tour__narration {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.kbc-tour__scrubber {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+}
+.kbc-tour__step-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.kbc-tour__step-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-tour__step-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.kbc-tour__dots {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  min-width: 0;
+}
+.kbc-tour__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--rule-hi);
+  cursor: pointer;
+}
+.kbc-tour__dot:hover {
+  background: var(--accent-bor);
+}
+.kbc-tour__dot.is-current {
+  background: var(--accent);
+  width: 10px;
+  height: 10px;
+}
+.kbc-tour__slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.kbc-tour__counter {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  min-width: 3.5em;
+  text-align: center;
+}
+
+/* --- SessionDiff's "Save as reading set" ---------------------------------- */
+
+.kbc-sessiondiff__save-set {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kbc-sessiondiff__save-set-repo {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.kbc-sessiondiff__save-set-btn {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.kbc-sessiondiff__save-set-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kbc-sessiondiff__save-set-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Toast link (`lib/toast.ts`'s optional `ToastLink`) ------------------- */
+
+.kbc-toast__link {
+  flex: 0 0 auto;
+  color: var(--accent-soft);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.kbc-toast__link:hover {
+  text-decoration: underline;
+}
+
+/* --- V70-A10 ("Workspaces v0") — `~workspaces` (ref-grouped list) + the
+ * "Save workspace" dialog. `.kbc-sets*`/`.confirm*` above are reused
+ * wholesale (same list-row/header/dialog shell) — only the group wrapper
+ * and the dialog's own field layout are new. */
+
+.kbc-sets__group {
+  margin-bottom: 24px;
+}
+.kbc-sets__group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.kbc-save-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kbc-save-workspace__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-save-workspace__field input,
+.kbc-save-workspace__field textarea {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.kbc-save-workspace__hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-dim);
+}

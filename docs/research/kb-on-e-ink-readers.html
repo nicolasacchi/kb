@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:research, project:kb, research, e-ink, e-reader, ebook, reading, kobo, kindle, boox, remarkable, koreader, epub, opds, hardware, typography, self-host, annotation">
+<title>kb on E-Ink: How to Read a Lot of Text on a Device That Beats a Monitor</title>
+
+<style>
+/* ── kb visual floor — keep in sync with kb/docs/authoring-artifacts.md "Visual floor" ── */
+:root{
+  --bg:#fbfbfa;--surface:#f3f3f1;--fg:#1b1b1a;--muted:#5f5f5c;
+  --rule:#d9d9d6;--accent:#3a5a9f;--accent-fg:#ffffff;
+  --warn:#8a5f00;--danger:#9a2f28;--ok:#256148;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.62;--maxw:52rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16171a;--surface:#1f2126;--fg:#e6e6e3;--muted:#a3a39e;
+    --rule:#2c2e33;--accent:#8fb0ee;--accent-fg:#11131a;
+    --warn:#e0b24d;--danger:#f08079;--ok:#6fcaa0;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+/* ── end kb visual floor ── */
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:2.6rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.22;font-weight:650;scroll-margin-top:18px;font-family:var(--sans)}
+h1{font-size:2.1rem;margin:.2em 0 .25em;letter-spacing:-.01em}
+h2{font-size:1.45rem;margin:2.6em 0 .5em;padding-top:.6em;border-top:1px solid var(--rule)}
+h3{font-size:1.12rem;margin:1.9em 0 .35em;color:var(--fg)}
+p,li{font-family:var(--serif)}
+p{margin:.7em 0}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+strong{font-weight:680}
+em{font-style:italic}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch;flex-wrap:wrap}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.22rem;line-height:1.5;margin:.5em 0 1em;color:var(--fg)}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.6rem}
+.tag{font-family:var(--mono);font-size:.74rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.84em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0}
+blockquote{margin:1em 0;padding:.2em 1em;border-left:3px solid var(--rule);color:var(--muted)}
+ul,ol{padding-left:1.4em}
+li{margin:.32em 0}
+li>ul{margin-top:.3em}
+sup.ref{font-family:var(--sans);font-size:.66em;font-weight:600;color:var(--muted);white-space:nowrap;letter-spacing:.02em}
+sup.ref a{color:var(--muted);text-decoration:none}
+sup.ref a:hover{color:var(--accent)}
+/* tables */
+.tbl{overflow-x:auto;margin:1.2em 0;border:1px solid var(--rule);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.84rem;line-height:1.4}
+th,td{border-bottom:1px solid var(--rule);border-right:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:650;position:sticky;top:0}
+tr td:last-child,tr th:last-child{border-right:none}
+tbody tr:last-child td{border-bottom:none}
+table code{font-size:.92em}
+/* callouts */
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.85em 1.05em;margin:1.3em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.4em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 8%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.callout p:first-child{margin-top:0}
+.callout p:last-child{margin-bottom:0}
+/* TOC */
+nav.toc{font-family:var(--sans);background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1.1em 1.3em;margin:1.8rem 0 2.4rem}
+nav.toc h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 .6em;padding:0;border:none}
+nav.toc ol{margin:0;padding-left:1.3em;font-size:.92rem;columns:2;column-gap:2.2rem}
+nav.toc li{margin:.28em 0;break-inside:avoid}
+nav.toc a{text-decoration:none}
+nav.toc a:hover{text-decoration:underline}
+.verdict{font-family:var(--sans);font-size:.95rem}
+hr{border:none;border-top:1px solid var(--rule);margin:2.4em 0}
+.src-group{margin:1.3em 0}
+.src-group h3{font-size:.95rem;margin:.6em 0 .3em}
+.src-group ul{font-family:var(--sans);font-size:.8rem;line-height:1.45;padding-left:1.2em}
+.src-group li{margin:.2em 0;word-break:break-word}
+.footnote{font-family:var(--sans);font-size:.82rem;color:var(--muted)}
+/* ── e-ink reading hooks: this report eats its own dog food ── */
+@media (monochrome), (prefers-contrast:more), (forced-colors:active){
+  :root{--bg:#fff;--surface:#fff;--fg:#000;--muted:#000;--rule:#000;--accent:#000;--accent-fg:#fff;--warn:#000;--danger:#000;--ok:#000;--lh:1.55}
+  html{scroll-behavior:auto}
+  a{color:#000;text-decoration:underline}
+  *{transition:none!important;animation:none!important}
+  .callout{background:#fff;border-left-width:5px}
+  .callout-label{color:#000}
+  th{background:#fff}
+  sup.ref,sup.ref a{color:#000}
+  nav.toc{background:#fff}
+}
+@media print{
+  :root{--bg:#fff;--surface:#fff;--fg:#000;--muted:#222;--rule:#000;--accent:#000}
+  body{font-size:11pt}
+  .skip-link,nav.toc{display:none}
+  h2{break-after:avoid}
+  .tbl,.callout,pre,table,tr{break-inside:avoid}
+  a{color:#000;text-decoration:underline}
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>research <span class="sep">&middot;</span> project:kb <span class="sep">&middot;</span> reading on e-ink</div>
+  <h1>kb on E-Ink: How to Read a Lot of Text on a Device That Beats a Monitor</h1>
+  <p class="lede">kb is already 80% of the way to being an excellent e-ink reading library — its content unit is a self-contained, JS-optional HTML artifact, which is exactly what e-ink browsers render best. What's missing is the <em>delivery layer</em>. This report maps the full picture: the hardware spectrum, what kb gives you today, five integration architectures, and the single best pick for the stated goal — reading a lot of text, genuinely better than a monitor or phone.</p>
+  <div class="meta-strip">
+    <span>2026-06-07</span><span class="sep">&middot;</span>
+    <span>~40 min read &middot; ~9,700 words</span><span class="sep">&middot;</span>
+    <span class="tag">e-ink</span><span class="tag">koreader</span><span class="tag">epub+opds</span><span class="tag">boox</span><span class="tag">kobo</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Table of contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#tldr">Executive summary / TL;DR</a></li>
+    <li><a href="#thesis">The reading-quality thesis</a></li>
+    <li><a href="#hardware">Hardware spectrum, by tier</a></li>
+    <li><a href="#kb-today">What kb gives you today</a></li>
+    <li><a href="#architectures">Integration architectures (A–E)</a></li>
+    <li><a href="#cross-cutting">Cross-cutting concerns</a></li>
+    <li><a href="#precedents">Precedents &amp; the gap kb fills</a></li>
+    <li><a href="#recommendations">Concrete recommendations</a></li>
+    <li><a href="#methodology">How this report was made</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="tldr">
+<h2>1. Executive summary / TL;DR</h2>
+
+<p><strong>The verdict.</strong> kb is already 80% of the way to being an excellent e-ink reading library, because its core content unit — a self-contained, inline-CSS, JS-optional HTML artifact served verbatim at a stable per-artifact URL — is exactly the payload e-ink browsers render best. What's missing is the <em>delivery layer</em>: kb has no EPUB export, no OPDS catalog, no e-ink CSS theme, and no on-device reading client (verified: no real EPUB/OPDS support in <code>crates/</code>, <code>web/</code>, <code>docs/</code> — the only matches are incidental substrings like <code>FakePublish</code> and base64 hashes in <code>package-lock.json</code>). The single biggest, lowest-risk win is a <strong>server-rendered "e-ink reading mode"</strong> (a JS-free, high-contrast, paginatable view + a static browse index) that works on <em>every</em> device including frozen-WebKit Kindles/Kobos. The single best <em>experience</em> comes from pairing kb with <strong>KOReader via an OPDS feed of on-the-fly EPUBs</strong>, which gives native pagination, dictionary, and font control on cheap hardware. The single best <em>device</em> for the stated goal — reading a lot of text, genuinely better than a monitor/phone — is a <strong>monochrome 300-PPI e-reader running KOReader</strong> (jailbroken Kindle/Kobo, or a Kobo Clara BW), reached over Tailscale or a path-bypassed OPDS endpoint.</p>
+
+<div class="callout callout--warn">
+<span class="callout-label">The honest caveats</span>
+<p><strong>(a)</strong> The "e-ink is scientifically better for your eyes" claim is <em>weaker than marketing suggests</em> — the cleanest head-to-head study (Siegenthaler 2012) found no eye-strain difference vs LCD, the two most pro-e-ink biological studies (Yuan 2021, Wang 2023) had E Ink Corporation co-authors, and blue-light-filtering glasses are refuted by the 2023 Cochrane review<sup class="ref"><a href="#sources">[V-eyes]</a></sup>. E-ink's <em>defensible</em> wins are sunlight legibility, no PWM flicker (with a DC-dimmed frontlight), not emitting strong light at bedtime by default, and single-purpose focus — not a proven comprehension or eye-health boost. <strong>(b)</strong> Color and fast-refresh remain mutually exclusive in shipping hardware (mid-2026), and kb's design-rich artifacts (syntax highlighting, charts) lose information on grayscale or 150-PPI color panels — kb's AA-locked visual floor (commit <code>9d65a5a</code>) is a <em>partial</em> hedge — it locks contrast, not hue-collapse (it has no monochrome/desaturation hooks yet; see §6). <strong>(c)</strong> kb's React SPA is a poor e-ink fit everywhere and <em>unusable</em> on frozen-WebKit readers; do not route e-ink reading through it.</p>
+</div>
+
+<h3 id="rec-matrix">Recommendation matrix</h3>
+<p>The architecture letters (A–E) are defined in <a href="#architectures">§5</a>; capsule meanings: <strong>A</strong> = point the browser at kb's existing URLs, <strong>B</strong> = a new server-rendered e-ink reading mode, <strong>C</strong> = EPUB export + OPDS feed, <strong>D</strong> = a KOReader plugin (or a cheaper Wallabag-shim variant), <strong>E</strong> = an offline static bundle.</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th>If you want…</th><th>Best device</th><th>Best architecture</th><th>kb-side effort</th></tr></thead>
+<tbody>
+<tr><td><strong>The simplest possible win, today</strong></td><td>Boox (any current model)</td><td>(A) Point browser at <code>&lt;id&gt;.artifacts.&lt;domain&gt;/</code> raw artifact URL</td><td>None (works now)</td></tr>
+<tr><td><strong>Best reading quality on cheapest hardware</strong></td><td>Kobo Clara BW / jailbroken Kindle PW + KOReader</td><td>(C) EPUB + OPDS feed → (D) KOReader plugin</td><td>High (EPUB+OPDS)</td></tr>
+<tr><td><strong>Universal device coverage incl. stock Kindle/Kobo</strong></td><td>Any e-reader</td><td>(B) Server-rendered e-ink mode (JS-free); for stock Kindle also (C) via Send-to-Kindle email</td><td>Moderate</td></tr>
+<tr><td><strong>Live search + browse on capable hardware</strong></td><td>Boox Note Air5 C / Note Max</td><td>(B) e-ink mode in Chromium, or (A) SPA with e-ink CSS</td><td>Moderate</td></tr>
+<tr><td><strong>Fully offline, privacy-first</strong></td><td>Any</td><td>(E) <code>kb share</code> static bundle + Syncthing/USB</td><td>Low</td></tr>
+<tr><td><strong>Smooth scrolling, no ghosting (mono only — kills syntax color)</strong></td><td>Daylight DC-1 (RLCD, not e-ink)</td><td>(A)/(B) in full Chromium</td><td>None–moderate</td></tr>
+<tr><td><strong>Annotations flowing back into kb-comments</strong></td><td>Boox</td><td>(A) live SPA comment UI</td><td>None</td></tr>
+</tbody>
+</table>
+</div>
+<p>The "(mono only — kills syntax color)" qualifier on the Daylight row is load-bearing: it is a monochrome panel, so it collapses syntax highlighting to gray — the single most-cited drawback in a year-long developer review<sup class="ref"><a href="#sources">[V-daylight][color-9]</a></sup>.</p>
+</section>
+
+<section id="thesis">
+<h2>2. The reading-quality thesis: why/when e-ink beats a monitor or phone</h2>
+<p>The core motivation is reading <em>a lot</em> of text on something better than a monitor or phone. The evidence supports that goal — but the <em>reasons</em> it's true are not the ones marketing pushes, so it's worth being precise, because the precise reasons drive the device and architecture picks below.</p>
+
+<h3 id="thesis-wins">Where e-ink genuinely wins (well-supported)</h3>
+<ul>
+<li><strong>Sunlight / glare — unambiguous, physics-based.</strong> E-ink reflects ambient light like paper, so it becomes <em>more</em> legible as light increases; OLED/LCD fight the sun and lose. Indoor phones run ~300–500 nits; sunlight readability needs ~2,500+ nits and even then glare washes emissive screens out<sup class="ref"><a href="#sources">[ergonomics-6]</a></sup>. For outdoor or bright-room reading, e-ink wins decisively.</li>
+<li><strong>No PWM flicker — but contingent on the frontlight.</strong> Many OLED phones (notably Samsung at ~240 Hz PWM) flicker by switching the emitter; ~10–15% of people perceive this as strain/headache, worst at low brightness<sup class="ref"><a href="#sources">[ergonomics-7]</a></sup>. E-ink's <em>panel</em> is bistable — the image holds with zero power and zero refresh, so there is no refresh flicker. But the <em>frontlight</em> is a separate matter: cheaper frontlit e-readers can use PWM dimming, so the flicker-free benefit is not guaranteed by e-ink per se — it depends on the reader using <strong>DC dimming</strong> (quality readers such as Onyx Boox do)<sup class="ref"><a href="#sources">[ergonomics-7][V-eyes]</a></sup>. Honest framing: a bistable panel with a DC-dimmed (or off) frontlight sidesteps PWM entirely; a cheap PWM-frontlit reader on low brightness does not.</li>
+<li><strong>Bedtime / sleep — real, but reframed.</strong> Chang et al. (2014/2015, PNAS) showed a <em>backlit iPad</em> before bed delayed the circadian melatonin rhythm by &gt;1 hour, suppressed melatonin, lengthened sleep onset, and cut REM vs a printed book<sup class="ref"><a href="#sources">[ergonomics-4][ergonomics-5]</a></sup>. <strong>Crucially, this indicts emissive backlit screens, not e-ink specifically</strong> — the study had no e-ink arm, ran the iPad at max brightness, and confounded device with room lighting<sup class="ref"><a href="#sources">[V-eyes]</a></sup>. The defensible takeaway: a reflective e-ink reader with the front-light off emits essentially nothing, and even a warm amber front-light is a fraction of a phone's output — so e-ink is <em>materially better than any backlit phone/LCD at night by default</em>. But a frontlit e-reader on full cool brightness is <strong>not</strong> automatically "sleep-safe."</li>
+<li><strong>Single-purpose ergonomics.</strong> Hard to RCT, but real: a dedicated reader has no notifications, tabs, or app-switching, removing the attentional cost that degrades sustained reading on a phone/laptop. Battery measured in <em>weeks</em> (Kindle Paperwhite ~10–12 weeks light use) versus hours reinforces an uninterrupted reading posture<sup class="ref"><a href="#sources">[ergonomics-8]</a></sup>.</li>
+</ul>
+
+<h3 id="thesis-weak">Where the case is weaker than claimed (be honest)</h3>
+<ul>
+<li><strong>Eye strain vs LCD — not proven.</strong> The most direct within-subjects study, Siegenthaler et al. (2012, <em>Ophthalmic &amp; Physiological Optics</em>), found reading on LCD vs e-ink is "very similar in terms of both subjective and objective measures… it is not the technology itself, but rather the <strong>image quality</strong> that seems crucial"<sup class="ref"><a href="#sources">[V-eyes]</a></sup>. That last clause is the key reinforcing point: the differentiator is image quality (contrast and PPI), which is precisely why this report's thesis is "buy a mono 300-PPI panel" — sharpness and contrast, not the e-ink chemistry, are what help. Benedetto et al. (2013, PLOS ONE) <em>did</em> find an LCD fatigue penalty — but n=12 and it compared a tablet (Kindle Fire HD) to a dedicated e-reader, confounding device class with panel type<sup class="ref"><a href="#sources">[ergonomics-1][V-eyes]</a></sup>. The two most pro-e-ink biological studies (Yuan 2021, Wang 2023) had E Ink Corporation staff as co-authors<sup class="ref"><a href="#sources">[V-eyes]</a></sup>. <strong>Net: evidence <em>suggests</em> eye-comfort benefit; it does not <em>prove</em> one.</strong> Digital eye strain is dominated by blink/accommodation/ergonomics, not panel tech — an e-ink device read at the same close distance for hours drives the same problems<sup class="ref"><a href="#sources">[V-eyes]</a></sup>.</li>
+<li><strong>Comprehension — modest and genre-dependent.</strong> The "screen inferiority effect" (Delgado et al. 2018 meta-analysis, 54 studies, g ≈ −0.21) shows paper beats <em>screens</em> for comprehension — but it concentrates in expository/time-pressured text, <strong>vanishes for narrative reading</strong>, and was measured against LCD/scrolling devices, not e-ink<sup class="ref"><a href="#sources">[ergonomics-9][V-eyes]</a></sup>. "E-ink reads like paper for comprehension" is plausible (it's paginated, reflective, paper-like) but <strong>not established</strong>.</li>
+<li><strong>Blue-light glasses — refuted.</strong> The 2023 Cochrane review (17 RCTs, &gt;600 participants) found blue-light-filtering lenses "probably make no difference to eye strain, eye health or sleep quality"<sup class="ref"><a href="#sources">[V-eyes]</a></sup>. Don't lean on blue-light framing.</li>
+</ul>
+
+<h3 id="thesis-loses">Where e-ink loses outright</h3>
+<p>Slow refresh and ghosting make it poor for anything dynamic — periodic full-screen flashes are needed to clear residue<sup class="ref"><a href="#sources">[ergonomics-6]</a></sup>. <strong>Color e-ink (Kaleido 3) is a downgrade for text</strong>: the color-filter layer makes the screen darker/grainier, halves color resolution to 150 PPI (still 300 PPI mono), and worsens ghosting<sup class="ref"><a href="#sources">[ergonomics-6][color-1]</a></sup>. Note that 300-PPI sharpness, while genuinely good, is <em>parity with print and good LCD</em> — a modern 400+ PPI phone is sharper; sharpness is not an e-ink-specific advantage, just an enabler of the image-quality that the Siegenthaler finding flags as what actually matters. For pure long-form text, <strong>monochrome 300-PPI is the right tool</strong>; color is only worth it for comics/magazines.</p>
+
+<div class="callout">
+<span class="callout-label">Thesis verdict</span>
+<p>Buy e-ink for <em>fatigue-in-bright-light, no-flicker (DC-dimmed), low-night-emission, and focus</em> — and read mostly <strong>monochrome prose</strong>. That is precisely the content profile of kb's Markdown notes and prose-heavy research artifacts. It is <em>not</em> the profile of kb's interactive, color-coded, chart-heavy artifacts — the central tension this report keeps returning to.</p>
+</div>
+</section>
+
+<section id="hardware">
+<h2>3. Hardware spectrum, by tier</h2>
+<p>The market fractures along two axes: <strong>how locked the software is</strong> (closed appliance → open Android) and <strong>what the panel does</strong> (mono Carta → CFA/pigment color → fast RLCD)<sup class="ref"><a href="#sources">[hardware]</a></sup>. The load-bearing question for kb is binary: <strong>does the device run full Android with a modern Chromium, or a frozen vendor WebKit?</strong> Everything else is a usability tax layered on top of that gate<sup class="ref"><a href="#sources">[browsers]</a></sup>.</p>
+
+<h3 id="tier1">Tier 1 — Basic locked e-readers (reading appliances)</h3>
+<p>Sealed firmware, built only to read. No real browser, no third-party apps.</p>
+<ul>
+<li><strong>Kindle Paperwhite 12th gen (2024):</strong> 7″ Carta 1300 mono, 1264×1680, 300 ppi; 16 GB; ~12-week battery; IPX8; warm frontlight; <strong>$159.99</strong> (Signature $199.99)<sup class="ref"><a href="#sources">[hardware-1][hardware-4]</a></sup>. Fastest Kindle.</li>
+<li><strong>Kobo Clara BW:</strong> 6″ Carta 1300, 1448×1072, 300 ppi; 16 GB; <strong>$129.99</strong>; iFixit-repairable — the B&amp;W value pick<sup class="ref"><a href="#sources">[hardware-1][hardware-6]</a></sup>.</li>
+<li><strong>Kobo Clara Colour:</strong> same chassis, 6″ Kaleido 3 (300 ppi mono / 150 ppi color, 4,096 colors — see Tier 4); <strong>$149.99</strong> — cheapest big-brand color reader<sup class="ref"><a href="#sources">[hardware-1]</a></sup>.</li>
+<li><strong>PocketBook Era/Verse:</strong> broadest format support (EPUB/PDF/MOBI/CBR/CBZ), TTS, no forced account.</li>
+</ul>
+<p><strong>Browser?</strong> Effectively no. The Kindle "Experimental Browser" is WebKit (KHTML), <em>not</em> Blink. Importantly, a <strong>silent Nov-2023 update (firmware v5.16.4)</strong> made the Kindle browser materially more capable on 10th-gen+ models — it now renders "HTML5, JavaScript, CSS, WebP," handles much of the modern <em>static/mobile</em> web, and no longer OOMs on complex sites<sup class="ref"><a href="#sources">[V-kindle-browser]</a></sup>. But its own first-run warning still says it's "intended for use with simple websites… Sites with animation or other complex features may load poorly," there are no tabs, no SSE, and <strong>a modern React SPA remains the explicit anti-use-case</strong><sup class="ref"><a href="#sources">[V-kindle-browser][browsers-3]</a></sup>. Kobo's beta browser saw no comparable leap — "very simple, can't do much," good for captive portals and Wikipedia<sup class="ref"><a href="#sources">[V-kindle-browser]</a></sup>.</p>
+<p><strong>How kb best reaches it:</strong> the device browser can't reach a self-hosted server meaningfully. The realistic paths are <strong>(C) EPUB via Send-to-Kindle email</strong> — the <em>only</em> push channel for a stock, un-jailbroken Kindle besides the experimental browser — or <strong>(C) OPDS after jailbreaking to run KOReader</strong> (the WinterBreak jailbreak, Jan 2025, covers essentially all Kindles from the 5th gen / 2013 onward on the firmware shipping at the time, and installs KOReader — but Amazon patches specific firmware versions over time, with successor exploits (WinterBreak2/AdBreak) for newer builds, so treat "any firmware" as point-in-time, not permanent<sup class="ref"><a href="#sources">[network-jailbreak]</a></sup>). For stock Kobo, the vendor sync-URL trick (below) can pull a self-hosted library with no KOReader at all<sup class="ref"><a href="#sources">[network-2]</a></sup>.</p>
+
+<h3 id="tier2">Tier 2 — Large-format note e-readers (closed/curated)</h3>
+<p>A4/A5 writing slabs; excellent pen, deliberately minimal software — <em>not</em> general tablets.</p>
+<ul>
+<li><strong>reMarkable Paper Pro:</strong> 11.8″ Gallery 3 color (~229 ppi), amber frontlight; 64 GB; <strong>$629</strong> (risen from $579); closed Codex OS, weak reading app<sup class="ref"><a href="#sources">[hardware-1][hardware-5]</a></sup>. <strong>reMarkable 2:</strong> 10.3″ mono, <strong>$399</strong>.</li>
+<li><strong>Supernote A5 X2 "Manta":</strong> 10.7″ mono, <strong>1920×2560, 300 ppi</strong>, no frontlight; Android-11-based; <strong>uniquely allows APK side-loading</strong>; user-replaceable battery + mainboard; <strong>$459</strong><sup class="ref"><a href="#sources">[hardware-2]</a></sup>.</li>
+<li><strong>Kindle Scribe (2024):</strong> 10.2″ mono, included pen; ~$400–500; locked. Its <strong>Active Canvas</strong> lets you write inside reflowable books, but you <strong>cannot export a sideloaded doc with annotations baked in</strong> — most closed of the four, no API<sup class="ref"><a href="#sources">[annotation-4]</a></sup>.</li>
+<li><strong>Kobo Elipsa 2E / Sage:</strong> 10.3″/8″ mono, stylus, native Libby borrowing.</li>
+</ul>
+<p><strong>Browser?</strong> reMarkable/Scribe: none at all (reMarkable's "web app" is a <em>file-management</em> portal, not a browser)<sup class="ref"><a href="#sources">[browsers-8]</a></sup>. Supernote: a PDF-hyperlink-only mini-browser.</p>
+<p><strong>How kb best reaches it:</strong> these need a <strong>PDF/EPUB side-load pipeline</strong> (kb → EPUB → reMarkable Cloud API or Send-to-Scribe). For reMarkable specifically, the cleanest transport is <strong>SSH-over-USB</strong>: rM 1/2 ship with <strong>root SSH enabled out of the box</strong> (password in Settings), so you can push files (and run Toltec/Entware → Tailscale) without the now-paid, "sluggish" reMarkable Connect cloud subscription — SSH-USB is free and faster<sup class="ref"><a href="#sources">[network][annotation-reMarkable]</a></sup>. (Caveat: the Paper Pro and newer firmware lock SSH down — don't assume it survives updates.) reMarkable also has the best programmatic story for annotation <em>extraction</em> (typed text via <code>rmscene</code>/MCP, OCR for handwriting). Supernote A5 X2's APK side-loading means <strong>KOReader can run on it</strong> — the most open of the note tier.</p>
+
+<h3 id="tier3">Tier 3 — Open Android e-ink (run anything)</h3>
+<p>The defining trait: <strong>full Android + Google Play</strong>, so any browser (Chrome/Firefox/EinkBro) and any app (incl. Tailscale, KOReader APK) installs. This is the tier that does what a normal tablet does.</p>
+<ul>
+<li><strong>Onyx Boox Note Air4 C:</strong> 10.3″ Kaleido 3; octa-core, 6 GB/64 GB; <strong>Android 13</strong> (not 15 — corrected); Wi-Fi 6; included pen; <strong>$499</strong><sup class="ref"><a href="#sources">[hardware-3][V-boox]</a></sup>. <strong>Note Air5 C</strong> (2026): Android 15, Snapdragon 690, ~$530, 3-yr support<sup class="ref"><a href="#sources">[V-boox]</a></sup>.</li>
+<li><strong>Boox Note Max:</strong> A4 <strong>13.3″ Carta 1300 mono</strong>, 300 ppi, octa-core, Android 13, included pen; <strong>~$650–689</strong> — the sharpest large monochrome substrate; "marking up blueprints or musical scores is a dream"<sup class="ref"><a href="#sources">[hardware-3][color-4]</a></sup>.</li>
+<li><strong>Boox Tab Ultra C Pro / Tab X:</strong> 10.3″/13.3″ productivity-class (Android 12).</li>
+<li><strong>Boox Go 10.3 Gen 2 (Android 15) / Go Color 7 Gen 2 (Android 13):</strong> lighter Android readers with NeoReader<sup class="ref"><a href="#sources">[V-boox]</a></sup>.</li>
+</ul>
+<p><strong>Browser?</strong> Yes — full Chromium/Firefox. <strong>A modern React SPA renders correctly here</strong> — the <em>only</em> tier where kb's SPA runs live<sup class="ref"><a href="#sources">[browsers]</a></sup>. Caveats are experiential, not capability: ghosting, no smooth scroll, manual refresh-mode switching (Normal/Regal vs A2/Speed), mid-tier SoCs, and on-screen-keyboard lag. Two corrections from verification: (1) Android version is <strong>fragmented</strong> (12→13→15) and Onyx never upgrades the OS major version post-purchase; (2) <strong>Play Integrity / certification friction</strong> is real — first-run requires registering the GSF ID, and the Note Air4 C has documented integrity-check failures that can break banking/DRM apps<sup class="ref"><a href="#sources">[V-boox]</a></sup>. The killer operational issue is <strong>aggressive Wi-Fi-after-sleep power management</strong> — the tunnel and any live connection drop the moment the screen sleeps, so <strong>treat Boox as sync-then-read-offline, not a live terminal</strong><sup class="ref"><a href="#sources">[network-5]</a></sup>.</p>
+<p><strong>How kb best reaches it:</strong> anything works. Cleanest = <strong>(A) point the browser at the raw artifact URL</strong> or <strong>(B) the e-ink mode</strong>; best round-trip annotation = <strong>live SPA comment UI</strong>.</p>
+
+<h3 id="tier4">Tier 4 — Color e-ink (two competing chemistries)</h3>
+<p>The buying decision is <strong>Kaleido 3 vs Gallery 3</strong><sup class="ref"><a href="#sources">[color][hardware-4]</a></sup>:</p>
+<ul>
+<li><strong>Kaleido 3 (CFA):</strong> RGB filter over a mono panel; <strong>4,096 colors, 150 ppi color / 300 ppi mono</strong>; fast (UI/video-capable); slightly tinted/darker background; visible filter grain. Best for <em>reading with color accents</em>. The mainstream choice (Kindle Colorsoft, Kobo Libra/Clara Colour, most Boox, Palma 2 Pro).</li>
+<li><strong>Gallery 3 (ACeP, CMYW pigment):</strong> true pigment per pixel; platform max <strong>~50,000 colors (shipping devices realize ~20,000 via dithering), 300 ppi</strong>; refresh 0.35 s B&amp;W → 1.5 s best color; <strong>no true black</strong> ("dark indigo"), weaker text contrast. Best for <em>drawing/comics/static images</em>. Flagship: reMarkable Paper Pro.</li>
+<li><strong>Spectra 6:</strong> signage only (~6 colors, ~20 s full refresh) — irrelevant for reading.</li>
+</ul>
+<p><strong>2025–2026 correction:</strong> Gallery 3 has effectively <em>failed in the consumer market</em> — E Ink's roadmap dropped it and only a handful of devices shipped it. The live color line remains <strong>Kaleido 3</strong> (Kaleido 4 was announced/anticipated — ~200 ppi color, better blacks — but had <em>not</em> reached any shipping consumer device as of mid-2026), with Spectra 6 pivoted to signage<sup class="ref"><a href="#sources">[V-color]</a></sup>. Treat "Gallery 3 vs Kaleido 3" as a slightly stale framing; Kaleido 3 is what you'll actually buy.</p>
+<p><strong>How kb best reaches it:</strong> color e-ink renders kb's color artifacts <em>technically</em> but at grainy half-resolution. <strong>kb's AA-locked visual floor (commit <code>9d65a5a</code>) helps with contrast but does <em>not</em> solve hue-collapse</strong> — it has no monochrome/desaturation hooks yet (§6 typography), so color-coded artifacts still lose their signal on grayscale; the real fix is the proposed e-ink theme, not the current floor. For pure text, color is a net negative; prefer mono.</p>
+
+<h3 id="tier5">Tier 5 — Fast-refresh / RLCD (the "smooth" outliers)</h3>
+<ul>
+<li><strong>Daylight DC-1:</strong> <strong>NOT e-ink</strong> — a 10.5″ reflective monochrome <strong>RLCD ("LivePaper")</strong>, 1600×1200, <strong>~190 ppi</strong>, hardware-capable 6–120 Hz, software-capped at <strong>60 Hz</strong>; Android 13; amber PWM-free backlight; <strong>$729</strong> (not $799 — that was a pre-launch figure)<sup class="ref"><a href="#sources">[V-daylight][hardware-7]</a></sup>. Scrolling/video are LCD-smooth with no ghosting — uniquely good for <em>reading long scrolling docs</em>. But: <strong>not bistable</strong> (tablet-like battery, not weeks), only <strong>190 ppi</strong> (vs 300 on a base Kindle, "not sharp enough" per a long-term reviewer), weaker contrast than an old Paperwhite, and <strong>monochrome only</strong> — a year-long developer report flagged losing syntax-highlighting as the killer for code<sup class="ref"><a href="#sources">[V-daylight][color-9]</a></sup>.</li>
+<li><strong>Modos Paper Monitor / Flow:</strong> true e-paper driven by an open-source <strong>Caster FPGA controller</strong>, up to <strong>75 Hz</strong> (record for real e-paper); HDMI/USB-C external monitor + the upcoming color/stylus <strong>Modos Flow</strong> (13.3″, ~$619 mono/$719 color, Crowd Supply, ~Dec 2026 delivery — <em>crowdfunding figures that may slip</em>)<sup class="ref"><a href="#sources">[V-daylight][color-8]</a></sup>. A hacker tool today; the only roadmap device promising <em>both</em> fast refresh <em>and</em> color — the architecturally correct answer for kb's rich artifacts, but unshipped.</li>
+</ul>
+<p><strong>How kb best reaches it:</strong> Daylight runs full Android → <strong>(A)/(B) in Chromium</strong>, smooth. Modos <em>is a monitor</em> → it just shows your PC's browser, so kb's SPA or e-ink mode both work but the "device" is your computer.</p>
+
+<h3 id="tier6">Tier 6 — Phone-sized e-ink</h3>
+<ul>
+<li><strong>Boox Palma 2:</strong> 6.13″ Carta 1200 mono, 300 ppi; Android 13 + Play; no cellular; <strong>$249.99</strong><sup class="ref"><a href="#sources">[hardware-9][V-boox]</a></sup>. <strong>Palma 2 Pro:</strong> 6.13″ Kaleido 3, Snapdragon 750G, Android 15, <strong>5G data only (no calls/SMS)</strong>, <strong>~$399</strong><sup class="ref"><a href="#sources">[V-boox]</a></sup>.</li>
+<li><strong>Hisense A9:</strong> a <em>true</em> 6.1″ mono e-ink <strong>smartphone</strong> (calls + SMS); Snapdragon 662, Android 11; ~$659 global<sup class="ref"><a href="#sources">[hardware-10]</a></sup>.</li>
+</ul>
+<p><strong>How kb best reaches it:</strong> full Android → anything. The Palma 2 is the pocket "Readwise-on-e-ink" form factor; kb's raw artifact URLs read well on it.</p>
+</section>
+
+<section id="kb-today">
+<h2>4. What kb gives you today — and the constraints e-ink imposes</h2>
+
+<h3 id="kb-surface">What kb gives you today</h3>
+<p><strong>Serving surface (verified against the code).</strong> kb's dispatch (<code>crates/kb-server/src/routes/dispatch.rs</code>) branches on the Host header: anything not matching <code>/api/*</code> hits a fallback that calls <code>kb_core::iframe::parse_artifact_id(host, suffix)</code>; a host parsing as <code>&lt;id&gt;&lt;suffix&gt;</code> routes to <code>routes::artifact::serve</code> (<code>artifact.rs:427</code>), otherwise to the SPA shell. The reader-relevant surfaces:</p>
+
+<div class="tbl">
+<table>
+<thead><tr><th>Route</th><th>Host</th><th>Returns</th><th>JS required?</th><th>e-ink verdict</th></tr></thead>
+<tbody>
+<tr><td><code>GET /</code> on <code>&lt;id&gt;.artifacts.&lt;domain&gt;</code></td><td>subdomain</td><td><strong>Raw artifact HTML</strong> + injected <code>&lt;script defer&gt;</code> (probe/runtime/opt. annotator)</td><td><strong>No</strong></td><td><strong>Best</strong></td></tr>
+<tr><td><code>GET /api/kb/{kb}/artifact/{id}</code> (<code>docs.rs:759</code>, <code>artifact_bytes</code>)</td><td>apex <code>/api/*</code></td><td><strong>Raw artifact HTML, zero script injection</strong></td><td><strong>No</strong></td><td><strong>Cleanest</strong> (but bearer-gated remotely)</td></tr>
+<tr><td><code>…/artifact/{id}?download=1</code></td><td>apex</td><td>same bytes + <code>Content-Disposition: attachment</code></td><td>No</td><td>offline save</td></tr>
+<tr><td><code>GET /api/kb/{kb}/download[?folder=]</code></td><td>apex</td><td><code>.zip</code> of <strong>raw, unscrubbed</strong> source bytes</td><td>No</td><td>bulk offline</td></tr>
+<tr><td><code>GET /</code>, <code>/a/{kb}/{id}</code>, <code>/settings</code></td><td>apex</td><td><strong>SPA shell</strong> → empty <code>#root</code> + <strong>~1.16 MB JS</strong> + ~153 KB CSS + Google Fonts</td><td><strong>Yes (hard)</strong></td><td><strong>Avoid</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The <strong>artifact subdomain serve injects three deferred <code>&lt;script src="/_kb/…" defer&gt;</code> tags</strong> (probe, runtime, and — only when <code>?cm=on</code> — the annotator) plus a small <em>inline</em> <code>&lt;head&gt;</code> bounce script — all progressive enhancement that <code>postMessage</code> a parent SPA frame that doesn't exist on a standalone load. <strong>The page renders fully with JS disabled or failing</strong><sup class="ref"><a href="#sources">[serve][readux]</a></sup>. A <code>&lt;head&gt;</code> "bounce" script tries to redirect a top-level load to the SPA but is <em>gated on <code>document.referrer</code> containing <code>.artifacts.</code></em> — a directly-typed/bookmarked URL has no such referrer, so <strong>it stays raw</strong><sup class="ref"><a href="#sources">[serve]</a></sup>. This is the e-ink-friendly path.</p>
+
+<p><strong>Self-contained artifacts.</strong> The authoring contract (<code>docs/authoring-artifacts.md</code>) forbids external resources: inline CSS, real <code>&lt;title&gt;</code> + <code>&lt;h1&gt;</code>/<code>&lt;h2&gt;</code> hierarchy, stable section ids, no <code>&lt;base href&gt;</code>/<code>target="_top"</code>/<code>window.parent.*</code>. On-disk sizes are tiny: canon 11–20 KB, research artifacts ~20–60 KB — an ideal e-ink payload<sup class="ref"><a href="#sources">[serve]</a></sup>. Markdown artifacts (invariant 16) render server-side to clean, <strong>JS-free</strong> HTML (<code>markdown::render_page</code>) — the closest thing kb has to an EPUB-ready chapter today<sup class="ref"><a href="#sources">[export][readux]</a></sup>.</p>
+
+<p><strong>Export / share.</strong> Two bundle exports exist: <strong><code>kb share</code></strong> (curated, <em>always</em> strips <code>&lt;template id="kb-prompt"&gt;</code> via <code>scrub_export</code>, resolves links, copies relative assets, <strong>does not inject the daemon's <code>/_kb/*</code> scripts</strong>) and <strong><code>kb download --folder</code></strong> (raw, <em>unscrubbed</em> zip — would leak generation prompts; never build an export from it naively)<sup class="ref"><a href="#sources">[export]</a></sup>. <strong><code>kb index-page</code></strong> generates a self-contained static HTML index of a kb (group-by status/category) — the closest existing artifact to an e-ink browse page<sup class="ref"><a href="#sources">[readux]</a></sup>.</p>
+
+<p><strong>Search, reading progress, comments.</strong> Hybrid BM25+vector (<code>GET /api/search</code>, RRF k=60; <code>mode=keyword</code>/<code>--offline</code> skips the embedder). Reading-progress (invariants 8/19), scroll resume, TOC heatmap, sessions, atlas/gallery, and kb-comments (invariants 6/18) — <strong>all are 100% client-JS + cross-origin <code>postMessage</code> + SSE</strong>, owned by the live React SPA<sup class="ref"><a href="#sources">[readux]</a></sup>.</p>
+
+<h3 id="kb-constraints">Constraints an e-ink device imposes (and what survives)</h3>
+<ul>
+<li><strong>Slow refresh / ghosting.</strong> Smooth scroll, transitions, <code>backdrop-filter</code>, sticky elements, and the virtualized React gallery all ghost or smear<sup class="ref"><a href="#sources">[readux][typography][color]</a></sup>. <strong>What survives:</strong> static, paint-once artifact HTML; <code>kb share</code> static export; <code>kb index-page</code>.</li>
+<li><strong>JS / SSE limits.</strong> kb's reading-progress, scroll resume, comments, atlas, and the live gallery all need JS in <em>both</em> the iframe and the parent SPA, plus a held-open <code>EventSource</code> (<code>web/src/api/sse.ts</code>). <strong>On frozen-WebKit readers the SPA won't boot at all</strong> (no <code>fetch</code>, no Flexbox/Grid, ES5 only)<sup class="ref"><a href="#sources">[browsers][readux]</a></sup>. The reading-progress feature is therefore <strong>dead on e-ink — but degrades silently</strong> (no errors, the page just renders).</li>
+<li><strong>Typing pain.</strong> Search is typing-first; e-ink keyboards make it the bottleneck — which is why a <strong>browse-first, link-only</strong> surface matters more than a search box<sup class="ref"><a href="#sources">[readux][network]</a></sup>.</li>
+<li><strong>Auth friction.</strong> kb binds <code>127.0.0.1:4000</code> by default → <strong>not reachable from any other device out of the box</strong><sup class="ref"><a href="#sources">[auth]</a></sup>. The non-loopback gate (<code>middleware.rs::is_loopback_origin</code>, invariants 3/4) fails CLOSED and can't be header-spoofed, so an e-reader always needs a bearer token <em>or</em> a proxy that injects one. The SPA's <code>fetch()</code> <strong>cannot attach <code>Authorization</code> itself</strong>, so a bare LAN-bind 401s every API call — only a proxy-injected bearer (or a VPN-via-loopback bypass) makes the SPA work<sup class="ref"><a href="#sources">[auth]</a></sup>. On prod <code>kb.example.com</code>, the heavy <strong>Authelia login SPA</strong> is the single biggest friction point on a weak e-ink browser (slow render, ghosting on the password field, cookie-eviction login loops); TOTP is off (a mercy), and <code>remember_me: 1M</code> helps<sup class="ref"><a href="#sources">[auth]</a></sup>.</li>
+</ul>
+</section>
+
+<section id="architectures">
+<h2>5. Usage models / integration architectures (A–E)</h2>
+<p>Five architectures, scored against the hardware split. The recommended path is to <strong>layer them</strong>, not pick one.</p>
+
+<h3 id="arch-a">(A) Point the device browser at kb's URLs as-is</h3>
+<p><strong>How it works.</strong> Open <code>http://&lt;id&gt;.artifacts.&lt;domain&gt;/</code> (raw artifact, e-ink-friendly) or — only on capable hardware — the SPA. Relies on kb's existing daemon.</p>
+<p><strong>Fit.</strong> Raw artifact URL: works on <em>anything that can render static HTML</em> (incl. post-2023 Kindle for simple artifacts). The SPA: <strong>Boox/Daylight/full-Android only</strong> — it will not boot on frozen WebKit<sup class="ref"><a href="#sources">[browsers]</a></sup>.</p>
+<p><strong>kb-side work.</strong> None to function; ideally an e-ink CSS layer (<a href="#cross-cutting">§6</a>).</p>
+<p><strong>Pros.</strong> Zero pipeline; live content; on Boox the SPA's search/comments/atlas all work. <strong>Cons.</strong> SPA motion fights e-ink; auth friction (bearer/Authelia); SSE battery cost; useless on the largest installed base. <strong>Reading quality:</strong> raw-artifact path = <em>good everywhere it renders</em>; SPA path = mediocre even on high-end Boox.</p>
+
+<h3 id="arch-b">(B) kb "e-ink reading mode" — server-rendered static theme, no SPA JS</h3>
+<p><strong>How it works.</strong> A new daemon route (e.g. <code>/eink/&lt;id&gt;</code> or <code>?eink=1</code>) serves the parsed artifact body in a minimal server-rendered shell: semantic markup, system fonts, <strong>pure black-on-white high-contrast CSS</strong>, server-side prev/next pagination, and a static link-only browse index built on the already-existing e-ink-perfect JSON endpoints (<code>…/docs</code>, <code>…/tags</code>, <code>…/folders</code>, <code>…/docs/by-path/{*path}</code>)<sup class="ref"><a href="#sources">[readux]</a></sup>. Search becomes a plain <code>&lt;form GET&gt;</code> → server-rendered results over the existing hybrid index. This route must strip <code>kb-prompt</code> exactly as the share/scrub path already does (invariants 5/9).</p>
+<p><strong>The hard part — how the body is split into pages.</strong> "Server-side prev/next pagination" is the single hardest engineering question in this phase, so name the mechanism rather than hand-wave it. Options, weakest-to-strongest<sup class="ref"><a href="#sources">[typography]</a></sup>:</p>
+<ul>
+<li><strong>CSS multicol</strong> (<code>column-width</code> with a fixed viewport height) — simplest, no JS, but fragile: it splits figures/tables awkwardly and gives no reliable page count. Acceptable as a degrade-to path.</li>
+<li><strong>Paged.js or a Readium-style paginator</strong> — gives real <code>@page</code>, running heads, and <code>counter(page)</code> numbering, but <code>@page</code> margin-boxes still have poor native-browser support in 2024–2026, so don't rely on margin-box headers in a device browser, and it needs JS (rules it out on frozen-WebKit).</li>
+<li><strong>Server-side splitter</strong> (recommended, universal) — split the body at top-level <code>&lt;h2&gt;</code>/section boundaries (or an estimated words-per-page budget) into N static HTML pages with prev/next links keyed on a <code>?page=</code> param. The only approach that paginates on <em>frozen-WebKit</em> readers (no client JS). <strong>Correction (per code review):</strong> this is <em>not</em> a reuse of <code>parser::extract</code> — that retains only flattened BM25 text (no body DOM, and it does not surface section ids). The splitter must be a fresh <code>lol_html</code> rewriter pass over the source bytes read from disk (mirroring the existing serve path in <code>routes/artifact.rs</code>), generating slugs or reading the artifact's authored stable ids itself.</li>
+<li><strong>Degrade to scroll</strong> when none of the above fits (e.g. a single un-sectioned artifact) — one tall static flow.</li>
+</ul>
+<p>The practical stance (revised per code review): <strong>ship the JS-free black-on-white themed page with degrade-to-scroll FIRST</strong> — it delivers ~80% of B's value with none of the splitter risk — then add the server-side splitter (the genuinely hard, higher-effort piece) once the theme is proven.</p>
+<p><strong>Fit.</strong> <strong>Everything</strong> — including stock Kindle/Kobo experimental browsers, because it degrades to static HTML with JS off (the recommended Kindle config; Good e-Reader measured a 70% performance gain from disabling JS<sup class="ref"><a href="#sources">[browsers-1]</a></sup>).</p>
+<p><strong>kb-side work.</strong> Moderate for the theme + browse index (<code>kb index-page</code> is the seed) + a <code>&lt;form GET&gt;</code> search; but the pagination splitter is a hidden <strong>High</strong> (a new HTML-rewriter pass, section-id generation the parser doesn't provide, table/figure break handling), and a live serve-time theme needs a net-new inline-<code>&lt;style&gt;</code> injector (today the daemon injects only <code>&lt;script&gt;</code>, not CSS).</p>
+<p><strong>Pros.</strong> Universal coverage; tiny payload; no motion ghosting; page-turn model suits e-ink; reuses kb's source-serve path + search index. <strong>Cons.</strong> No offline; typing on Kindle/Kobo still painful; loses SPA richness. <strong>Reading quality:</strong> good on all devices — <strong>the single most universal improvement per unit effort.</strong></p>
+
+<h3 id="arch-c">(C) kb export → EPUB + OPDS catalog feed</h3>
+<p><strong>How it works.</strong> <code>kb export --epub</code> converts each artifact (or a collection) to reflowable <strong>EPUB3</strong>; kb serves an <strong>OPDS 1.2 acquisition feed</strong> (Atom/XML — the stable, universally-supported version; OPDS 2.0 JSON is optional polish) ordered newest-first (KOReader's sync requires "sorted by new")<sup class="ref"><a href="#sources">[serving][koreader]</a></sup>. KOReader, Calibre-Web, Thorium, and any OPDS client browse and download. The conversion path is well-trodden: kb artifacts are <em>structurally close</em> to EPUB XHTML chapters (semantic headings → nav/ToC, stable ids → fragment anchors, inline CSS, <code>kb-tags</code>/<code>kb-category</code> → OPF metadata)<sup class="ref"><a href="#sources">[export][epub]</a></sup>.</p>
+<p><strong>The hard part — and the honest limits.</strong> kb has <strong>zero EPUB/OPDS support today</strong> (verified — the only matches across <code>crates/</code>, <code>web/</code>, <code>docs/</code> are incidental substrings like <code>FakePublish</code> and base64 hashes in <code>package-lock.json</code>, not real references)<sup class="ref"><a href="#sources">[export]</a></sup>. Five blockers to clean conversion:</p>
+<ol>
+<li><strong>Embedded JavaScript — the #1 blocker.</strong> Hand-authored artifacts routinely ship interactive JS, and <strong>JS will not reliably run in the e-ink EPUB targets that matter.</strong> Verification refined this: Apple Books and Thorium/Readium <em>do</em> execute EPUB JS, and Kobo's <em>mobile apps</em> do — but <strong>Kobo e-ink hardware, Kindle (EPUB→KFX strips scripting), and KOReader (CREngine, no JS) do not</strong><sup class="ref"><a href="#sources">[V-epub-js]</a></sup>. So for the e-ink targets, <strong>assume JS won't run</strong> and flatten dynamic content to static SVG/PNG before conversion. The concrete mechanism — not "pre-render" hand-waved — is a <strong>headless-browser render of the artifact</strong>: load the self-contained HTML in headless Chromium, let its JS execute, then capture the resulting computed SVG (or rasterize a canvas/widget to PNG) and inline that static result in place of the script + its target node<sup class="ref"><a href="#sources">[epub]</a></sup>. This is the single highest-leverage conversion step.</li>
+<li><strong>HTML5 not XHTML</strong> — needs a tidy pass (void-element closing, attribute quoting).</li>
+<li><strong>No package scaffolding</strong> — kb generates no <code>.opf</code>/nav/spine/cover.</li>
+<li><strong>CDN subresources</strong> dangle (the share asset-walk only copies document-relative assets).</li>
+<li>Source from <code>kb share</code>'s scrubbed output, never the raw download.</li>
+</ol>
+<p>Recommended pipeline: headless-render JS→inline static SVG/PNG, strip remaining JS + kb-prompt, HTML→XHTML tidy, <code>pandoc -t epub3</code> (most conformant, good SVG handling via the <code>inline-svg</code> class) or Calibre for fidelity, validate with EPUBCheck, <strong>declare UTF-8 explicitly</strong> (the Send-to-Kindle landmine — undeclared UTF-8 is assumed ISO-8859-1 and mangled)<sup class="ref"><a href="#sources">[epub]</a></sup>. <strong>Restrict the first cut to Markdown + JS-free HTML; flag JS-bearing artifacts as not-convertible</strong><sup class="ref"><a href="#sources">[export]</a></sup>.</p>
+<p><strong>Fit.</strong> The widest <em>reading-experience</em> tier — true native pagination, dictionary, font/margin control on cheap KOReader hardware (Kindle/Kobo/PocketBook/Android). The only option that gives native e-reader rendering on the lowest tier.</p>
+<p><strong>kb-side work.</strong> High and <em>not</em> cleanly bounded — the headless-Chromium dependency is a heavy new runtime (kb has zero browser deps today) and EPUB determinism/validation is a long tail; it's "bounded" only if scoped to JS-free/Markdown artifacts with no headless render. <strong>Correction (per code review):</strong> do <em>not</em> route this through the <code>ShareHostKind</code>/<code>ShareBackend</code> enum — those backends <em>upload to a remote host</em> (Cloudflare/GitHub Pages) and their result/teardown shape is all about remote objects, so a local EPUB builder + OPDS feed is a category mismatch. The clean seam is a new <code>kb_core::epub</code> module that <em>consumes</em> <code>kb share</code>'s already-scrubbed <code>StagedShare.files</code> (reusing the share engine's scrub/stage front-half) plus a read-only <code>routes/opds.rs</code> daemon route<sup class="ref"><a href="#sources">[export]</a></sup>.</p>
+<p><strong>Pros.</strong> Best raw reading quality on the most devices; offline once downloaded; standards-based; future-proof. <strong>Cons.</strong> Snapshot, not live; progress/comments live in the reader app unless paired with (D); complex artifacts degrade. <strong>Reading quality:</strong> best-in-class for prose.</p>
+
+<h3 id="arch-d">(D) KOReader integration — Wallabag-shim (cheap) or a custom <code>kb.koplugin</code> (rich)</h3>
+<p>This architecture has <strong>two variants, cheapest first</strong>.</p>
+<p><strong>(D-shim) Implement a Wallabag-compatible read endpoint — no KOReader code at all.</strong> KOReader ships a <strong>built-in Wallabag plugin</strong> that authenticates to a self-hosted server with <code>Authorization: Bearer</code>, downloads newest items as per-article EPUBs, runs an offline upload queue, and does two-way archive/delete. If kb exposes a <strong>Wallabag-compatible API shim</strong> (the <code>/oauth/v2/token</code> + <code>/api/entries</code> shape, returning kb artifacts as EPUBs), the <em>existing</em> built-in Wallabag plugin pulls kb content with <strong>zero custom KOReader code</strong><sup class="ref"><a href="#sources">[serving][koreader]</a></sup>. The grounding material ranks this as the single biggest reach-per-effort channel after OPDS itself — it rides clients (KOReader <em>and</em> phone Wallabag apps) that are already shipped and maintained. The cost: kb must emulate enough of the Wallabag entry/annotation API surface, and credentials are stored on-device.</p>
+<p><strong>(D-plugin) A bespoke <code>kb.koplugin</code></strong> (Lua: LuaSocket + LuaSec + rapidjson) calls kb's JSON API for search, downloads an artifact (EPUB via C, or HTML rendered by KOReader's CRE/MuPDF engine), opens it, and on close posts reading progress back to kb. The Wallabag plugin is the near-exact precedent to clone. This is the richest path (live kb <em>search</em> on-device) but the most maintenance.</p>
+<p><strong>Phasing within D:</strong> zero-code OPDS first (days, part of C) → <strong>Wallabag-shim</strong> (reuses a shipped client, days–1 week) → <code>kb.koplugin</code> (1–2 weeks) → a kosync-style progress endpoint to make kb the progress server.</p>
+<p><strong>Fit.</strong> KOReader-capable devices = <strong>essentially every e-ink device</strong> (Kindle jailbroken, Kobo/PocketBook/reMarkable native, Boox/Android via APK; latest KOReader v2026.03 "Snowflake" even added Boox Note Air5 C support)<sup class="ref"><a href="#sources">[koreader][V-koreader]</a></sup>.</p>
+<p><strong>Hard constraints (both variants):</strong> (a) KOReader's HTTP stack <strong>cannot do proxy/CONNECT tunneling</strong> — kb must be reachable <em>directly</em> with a token the daemon accepts (the <code>kb-bot</code> <code>client_credentials</code> path or a LAN/loopback instance), <strong>not</strong> via interactive Authelia<sup class="ref"><a href="#sources">[koreader][auth]</a></sup>. (b) KOSync is <em>progress-only and content-blind</em> (MD5 doc-hash matching) — kb must supply its own IDs (see the progress-identity sketch in §6). (c) <strong>Correction:</strong> KOReader has <strong>no built-in web browser</strong> — the "browser" is a third-party text-mode plugin (omer-faruq/webbrowser.koplugin); don't design around a built-in one<sup class="ref"><a href="#sources">[V-koreader]</a></sup>. (d) The third-party <strong>opds_plus.koplugin</strong> (cover grids, per-catalog sync, sync-folder selection) is proof that OPDS is "low-effort, zero-custom-code" — strengthening the "OPDS/shim first, bespoke plugin last" ordering<sup class="ref"><a href="#sources">[koreader]</a></sup>.</p>
+<p><strong>Pros.</strong> Closes the loop — kb's <em>search</em> and <em>reading-progress</em> become first-class on-device; offline + sync-back; reuses proven patterns. <strong>Cons.</strong> D-plugin is the most engineering; KOReader-only; annotation write-back is a known gap. <strong>Reading quality:</strong> best overall — native EPUB rendering + live kb search/progress.</p>
+
+<h3 id="arch-e">(E) Sync-offline bundle (kb share static export) sideloaded periodically</h3>
+<p><strong>How it works.</strong> <code>kb share</code> already produces a kb-prompt-stripped static export (invariant 9). Periodically rsync/USB/Syncthing it to the device; read via the device browser (Android) or, if exported as EPUBs (C), via the native reader. A variant worth calling out: <strong>drop the exported EPUBs into a Calibre-Web-Automated (CWA) watch folder</strong> — CWA then inherits the EPUBs into its library and gives you its <em>mature, already-shipped</em> KOReader progress-sync, native Kobo shelf-sync, and Kindle-EPUB-Fixer for free, rather than kb reimplementing any of them<sup class="ref"><a href="#sources">[market][serving]</a></sup>. That makes (E)+CWA a concrete low-effort route to native Kobo/KOReader sync without building (D). Cron/Syncthing refreshes the bundle.</p>
+<p><strong>Fit.</strong> All devices. <strong>kb-side work.</strong> Minimal — <code>kb share</code> exists; add an EPUB-bundle mode (overlaps C) + an index landing page (overlaps B).</p>
+<p><strong>Pros.</strong> Fully offline, lowest runtime complexity, no live daemon dependency, privacy-preserving — directly answers the Pocket/Omnivore data-deletion failures<sup class="ref"><a href="#sources">[market]</a></sup>. With the CWA watch-folder variant, you also get native sync for free. <strong>Cons.</strong> Stale between syncs; no progress/comment write-back (unless via CWA); needs an index page to navigate hundreds of files. <strong>Reading quality:</strong> equal to B (HTML) or C (EPUB) minus liveness.</p>
+
+<h3 id="arch-table">Comparison table</h3>
+<div class="tbl">
+<table>
+<thead><tr><th></th><th>A: SPA/raw as-is</th><th>B: e-ink mode</th><th>C: EPUB+OPDS</th><th>D: KOReader (shim/plugin)</th><th>E: offline bundle</th></tr></thead>
+<tbody>
+<tr><th>Effort (kb-side)</th><td>None</td><td>Moderate (splitter: High)</td><td>High (headless dep)</td><td>Shim: Med / Plugin: High (+C)</td><td>Low (+C)</td></tr>
+<tr><th>Device reach</th><td>Raw: all / SPA: Boox</td><td>All</td><td>All (via reader)</td><td>KOReader/Boox</td><td>All</td></tr>
+<tr><th>Stock Kindle/Kobo</th><td>Raw: yes / SPA: no</td><td>Yes</td><td>Yes (incl. Send-to-Kindle)</td><td>Yes (jailbreak)</td><td>Yes (Kobo via sync-URL/CWA)</td></tr>
+<tr><th>Live content</th><td>Yes</td><td>Yes</td><td>Snapshot</td><td>Yes</td><td>Stale</td></tr>
+<tr><th>Offline</th><td>No</td><td>No</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+<tr><th>kb search on device</th><td>Yes (SPA)</td><td>Yes (form)</td><td>Catalog only</td><td>Shim: catalog / Plugin: yes (API)</td><td>No</td></tr>
+<tr><th>Progress → kb</th><td>Yes (SPA)</td><td>Partial</td><td>No</td><td>Yes</td><td>Via CWA only</td></tr>
+<tr><th>Annotations → kb</th><td>Yes (Boox SPA)</td><td>No</td><td>No</td><td>Adapter only</td><td>No</td></tr>
+<tr><th>Reading quality</th><td>Raw: good / SPA: med</td><td>Good (all)</td><td>Best (prose)</td><td>Best</td><td>Good</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Recommended layering:</strong> ship <strong>B</strong> first (universal, biggest quality lift per effort, reuses the parser), then <strong>C</strong> (EPUB+OPDS unlocks native readers + offline + Send-to-Kindle for stock Kindles + the CWA watch-folder route), then <strong>D</strong> — starting with the <strong>Wallabag-shim</strong> (rides a shipped client) before the bespoke <code>kb.koplugin</code> + a kosync-style progress endpoint to close the search/progress loop. <strong>A</strong> needs only a CSS pass and is free on Boox; <strong>E</strong> falls out of C/B plus an index page. <strong>Lowest-risk variant (per code review):</strong> route the EPUBs through a <strong>Calibre-Web-Automated watch folder</strong> (§5-E) — CWA owns OPDS + KOReader progress-sync + native Kobo sync, sidestepping the in-daemon kosync/MD5 bridge entirely; reserve in-daemon OPDS + (D) for when you specifically want kb's hybrid <em>search</em> on-device.</p>
+</section>
+
+<section id="cross-cutting">
+<h2>6. Cross-cutting concerns</h2>
+
+<h3 id="cc-auth">Networking &amp; auth (LAN / Tailscale / Authelia / bearer)</h3>
+<p>kb's security is one binary gate: <strong>loopback vs not</strong><sup class="ref"><a href="#sources">[auth]</a></sup>. Three exposure options, best-to-worst for an e-reader:</p>
+<ol>
+<li><strong>Tailscale / VPN (recommended).</strong> Put both hosts on a tailnet; <code>tailscale serve --bg 4000</code> → identity-gated TLS, stable URL, SSE works. <strong>The wildcard catch:</strong> MagicDNS historically gave one hostname per machine; opt-in wildcard subdomain <em>resolution</em> landed in early-2026 (~v1.96), but wildcard <em>TLS certs</em> remain unsupported — so HTTPS <code>&lt;id&gt;.artifacts.&lt;host&gt;</code> iframe routing still doesn't work over a tailnet, and the framed gallery view still breaks. <strong>The escape hatch is the right primitive anyway:</strong> <code>GET /api/kb/{kb}/artifact/{id}</code> (<code>artifact_bytes</code>, <code>docs.rs:759</code>) returns one clean artifact same-origin over the apex host. Because <code>tailscale serve</code> proxies from <code>127.0.0.1</code>, a <strong>bare-metal</strong> daemon bound to host loopback sees a loopback peer and <strong>bypasses bearer auth</strong> — access then rests entirely on the tailnet (don't use Funnel for private corpora). <strong>Correction (per code review): the prod <code>kb.example.com</code> daemon is containerized and published as <code>127.0.0.1:4000:4000</code>, so requests arrive from the Docker bridge gateway, not loopback — the bypass does <em>not</em> apply there; you still need a proxy-injected bearer (or must add the gateway IP to <code>trusted_proxies</code>). For an e-reader-over-Tailscale setup, run a bare-metal loopback daemon for that corpus, or inject the bearer at the proxy.</strong><sup class="ref"><a href="#sources">[auth]</a></sup>. On full-Android Boox, install the Tailscale APK; <strong>but it won't auto-start on boot and Wi-Fi-after-sleep kills the tunnel</strong> — sync-then-offline<sup class="ref"><a href="#sources">[network-1][network-5]</a></sup>. KOReader/Kindle/Kobo firmware <strong>can't run a VPN client</strong> — the network must come to them (LAN or public HTTPS); the one exception is reMarkable 1/2, where root SSH + Toltec can install Tailscale (<code>tailscale up --ssh</code>) over userspace networking<sup class="ref"><a href="#sources">[network]</a></sup>.</li>
+<li><strong>Reverse proxy injecting the bearer (prod pattern).</strong> Traefik's <code>kb-inject-bearer</code> middleware <em>replaces</em> <code>Authorization</code> with the daemon token after the edge auth runs — the only browser-viable path for the SPA<sup class="ref"><a href="#sources">[auth]</a></sup>. On <code>kb.example.com</code> both routers chain <code>authelia@docker,kb-inject-bearer</code> (artifact subdomains are gated too — prod contradicts <code>self-host.md</code>'s "auth-free" claim). The friction is the one-time Authelia SPA login + cookie persistence on a weak browser<sup class="ref"><a href="#sources">[auth]</a></sup>.</li>
+<li><strong>Bare LAN-bind + bearer.</strong> <code>addr = "0.0.0.0:PORT"</code>; works for <code>curl</code>/scripts but the <strong>SPA 401s every API call</strong> (can't attach the header) — discouraged by the hardening checklist<sup class="ref"><a href="#sources">[auth]</a></sup>. (For stock Kobo with no KOReader at all, the vendor <strong>sync-URL trick</strong> — pasting a self-hosted sync URL into Kobo account settings, BookOrbit-style — is a separate path that pulls a library + covers + progress natively; CWA's Kobo-native shelf-sync is the polished form of this<sup class="ref"><a href="#sources">[network-2][market]</a></sup>.)</li>
+</ol>
+<p><strong>For OPDS/KOReader specifically, the clean answer is the standard recommendation: bypass forward-auth on the OPDS/API path, then protect that path with Basic Auth.</strong> Configure Authelia/Authentik to bypass forward-auth on <code>/opds</code> (and the artifact path), and let the <strong>backend's own HTTP Basic Auth</strong> guard it — KOReader speaks <strong>Basic only</strong> (no digest, no interactive SSO), so a single user/pass field then works directly<sup class="ref"><a href="#sources">[network-9][network-koreader]</a></sup>. A CIDR/tailnet bypass is the alternative when the reader is usually on home Wi-Fi or behind Tailscale. Authelia's OAuth2 bearer (<code>authelia.bearer.authz</code>, PAR+PKCE) works for a <em>custom</em> client (the <code>kb-bot</code> path) but <strong>no off-the-shelf OPDS reader speaks it</strong><sup class="ref"><a href="#sources">[network-9][auth]</a></sup>.</p>
+
+<h3 id="cc-offline">Offline vs live</h3>
+<p>Across <em>every</em> device class, flaky Wi-Fi + aggressive sleep make <strong>download-then-read-offline win decisively</strong><sup class="ref"><a href="#sources">[network]</a></sup>. KOReader OPDS <em>download</em> pulls the full file; afterward it reads with Wi-Fi off. Do not design around <strong>OPDS-PSE page-streaming</strong> — it is <strong>image-only (CBZ), not EPUB</strong>, so streaming is not an option for kb's prose EPUBs; download is mandatory<sup class="ref"><a href="#sources">[network]</a></sup>. Prefer <strong>manual</strong> progress push/pull — auto-sync can clobber newer local progress on a stale pull; books match by MD5 content hash, so download the <em>same</em> file on each device<sup class="ref"><a href="#sources">[network]</a></sup>. This argues for <strong>(C)+(E)</strong> as the durable core and <strong>(D)</strong> for the sync loop, with live SPA <strong>(A)</strong> reserved for Boox-on-home-Wi-Fi.</p>
+
+<h3 id="cc-progress">Progress identity (the kosync mismatch)</h3>
+<p>KOSync is content-blind: it keys documents by a <strong>32-char MD5 doc-hash</strong> and stores only furthest progress, no filename or content<sup class="ref"><a href="#sources">[koreader]</a></sup>. kb's history lifecycle (invariants 8/19) is path/id-based. <strong>Correction (per code review):</strong> truly byte-stable EPUB output is <em>not</em> realistically achievable — the recommended pipeline's headless-Chromium render is non-deterministic, and the EPUB/ZIP container embeds timestamps (ZIP entry mtimes, OPF <code>dcterms:modified</code>; <code>pandoc</code> stamps a fresh modified-date per run). So make the <strong>persisted hash→id map the primary mechanism</strong>: record each <code>MD5 ↔ artifact-id</code> the first time KOReader reports a hash, and reconcile from there. If you also want stable hashes, force a reproducible-zip writer (fixed mtimes, pin <code>dcterms:modified</code> to the source mtime) and restrict the hashed subset to JS-free/Markdown artifacts (no headless render). Either way, <strong>the kosync endpoint must be a NEW route that mints a synthetic visit via <code>history_record_open</code> before writing progress</strong> — kb's <code>/history/reading</code> POST requires a server-issued <code>visit_id</code> and 404s on any it didn't mint (invariants 8/19), so a bare MD5+percentage can't write to it directly.</p>
+
+<h3 id="cc-typography">Typography &amp; an e-ink reading theme</h3>
+<p>kb's visual floor (<code>docs/authoring-artifacts.md</code> §317–378) is <strong>AA-locked and reduced-motion-aware</strong> (commit <code>9d65a5a</code>) — a strong start that already half-solves e-ink. But it has <strong>no <code>@media print</code>, no <code>monochrome</code>, no <code>prefers-contrast</code>, no <code>forced-colors</code> hooks anywhere</strong>, leans on <strong>mid-gray</strong> <code>--muted</code>/<code>--rule</code>/<code>--surface</code> tokens that <em>ghost and muddy</em> on 16-level panels, uses <strong>off-white/cream</strong> backgrounds (legacy canon worse: <code>--panel #ebe1ce</code> on <code>--bg #f4ede2</code> → two near-identical grays after hue is discarded), and encodes signal in <strong>blue accents</strong> (the floor uses hex, not OKLCH — that's the SPA) that map to indistinct gray<sup class="ref"><a href="#sources">[css]</a></sup>. An e-ink theme (deliverable today as author-pasteable media blocks or a <code>kb share</code>/export-time stylesheet; a <em>live</em> serve-time CSS layer would need a new inline-<code>&lt;style&gt;</code> injector — the daemon currently injects only <code>&lt;script&gt;</code>, not CSS) must:</p>
+<ul>
+<li><strong>Force pure <code>#000</code> on <code>#fff</code></strong>; collapse the gray ramp to a few well-separated steps; replace hairline <code>--rule</code>/<code>--surface</code> fills with solid ~1px black or whitespace (kills ghosting)<sup class="ref"><a href="#sources">[css][typography]</a></sup>.</li>
+<li><strong>De-color every signal:</strong> links → always-underline; semantic <code>--warn</code>/<code>--danger</code>/<code>--ok</code> and <code>.dot</code>/<code>.stat</code> → patterns/weight/icons/labels, never hue; <code>--accent</code> → <code>#000</code><sup class="ref"><a href="#sources">[css]</a></sup>.</li>
+<li><strong>Kill all motion</strong> (<code>transition</code>, <code>scroll-behavior:smooth</code>, <code>backdrop-filter</code>, animations) — treat e-ink as <code>prefers-reduced-motion: reduce</code> unconditionally<sup class="ref"><a href="#sources">[css][typography]</a></sup>.</li>
+<li><strong>Break the fixed-height two-pane shells</strong> (<code>height:100vh; overflow:hidden</code>) into one paginatable flow; avoid <code>position:sticky</code>; add <code>break-inside: avoid</code> on callouts/figures/tables<sup class="ref"><a href="#sources">[css]</a></sup>.</li>
+<li><strong>Type:</strong> bias a screen-optimized sans with large x-height (Verdana/Arial/humanist) but a robust serif (Georgia) is fine at 300 ppi — decide by x-height/stroke uniformity, not the serif/sans label; <strong>bump body weight (~450/500)</strong> to counter grayscale-AA thinning; force <code>-webkit-/-moz-osx-font-smoothing: grayscale</code> (subpixel AA color-fringes on mono panels); <code>max-width: 60–66ch</code>; <code>line-height: 1.5</code> set on <code>body</code> and inherited (per-element line-height breaks Kobo's user setting; Kindle ignores &lt;1.2); use <code>%</code> not <code>em</code> for horizontal margins<sup class="ref"><a href="#sources">[typography]</a></sup>.</li>
+<li><strong>Default dark mode OFF</strong> — inversion turns the whole panel into a large dark region that maximally ghosts; let the device do its own (better-tuned) inversion, and use <code>currentColor</code> for borders/SVG so they track night mode<sup class="ref"><a href="#sources">[typography]</a></sup>.</li>
+<li><strong>Reconcile the dual token vocabularies — alias the legacy canon names onto the floor names at serve time.</strong> Canon uses <code>--text</code>/<code>--border</code>/<code>--panel</code>/<code>--link</code>; the floor uses <code>--fg</code>/<code>--rule</code>/<code>--surface</code>/<code>--accent</code>. The actionable fix (not just "redefine both"): in the e-ink serve-time layer, set the floor tokens to the e-ink values <em>and</em> add alias declarations so the legacy names resolve to the same values — <code>--text: var(--fg); --border: var(--rule); --panel: var(--surface); --link: var(--accent);</code> — so a single e-ink stylesheet themes <em>both</em> vocabularies without touching artifact source. (The durable fix is to unify token names in the authoring contract, but aliasing is what unblocks a serve-time theme today.) This is the single biggest portability gotcha<sup class="ref"><a href="#sources">[css]</a></sup>.</li>
+</ul>
+<p>A reusable starting stylesheet and a production gate ("render → desaturate to grayscale → confirm every distinction still reads at ~16 levels") are spelled out in the typography material<sup class="ref"><a href="#sources">[typography]</a></sup>. (This very report applies a slimmed-down version of that gate: see its <code>@media (monochrome), (prefers-contrast:more), (forced-colors:active)</code> and <code>@media print</code> blocks.)</p>
+
+<h3 id="cc-color">Color / large-format / fast-refresh for rich artifacts</h3>
+<p>No shipping device wins on all axes (mid-2026)<sup class="ref"><a href="#sources">[color]</a></sup>. The fork: <strong>color information load-bearing</strong> → reMarkable Paper Pro (Gallery 3) for static viewing, accepting slow paint + weak black; <strong>sharp + smooth-scrolling code/docs, mono OK</strong> → Daylight DC-1 (60 Hz RLCD, but kills syntax color) or Boox Note Max (13.3″ 300-ppi mono, BSR). <strong>Watch, don't buy:</strong> Modos Flow (open color e-paper at 75 Hz) — the only roadmap device promising both. <strong>kb's AA-locked visual floor is only a partial hedge</strong> — it guarantees contrast, but it has no grayscale/monochrome adaptation yet (§6 typography), so the real fix for monochrome devices is the e-ink theme proposed there, not the existing floor.</p>
+
+<h3 id="cc-annotation">Annotation two-way sync</h3>
+<p>kb-comments anchor on <em>text</em> (not coordinates), which is exactly right for reflowable artifacts<sup class="ref"><a href="#sources">[annotation]</a></sup>. Paths ranked: (1) <strong>Boox via the live SPA</strong> — round-trip with no <em>new code</em>, but it is the full SPA + sandboxed iframe + SSE + <code>?cm=on</code> annotator stack, so it inherits every caveat §4 applies to architecture A (ghosting, SSE battery cost, Wi-Fi-after-sleep dropping the connection, auth friction): "zero plumbing," not "e-ink-pleasant". (2) <strong>KOReader</strong> — export highlights as JSON (built-in Exporter), a small adapter maps <code>text</code>+<code>note</code> onto a <code>kb comments</code> CLI call; one-directional, batch, fully scriptable. (3) <strong>reMarkable</strong> — typed annotations extract cleanly via <code>rmscene</code>/MCP; handwriting needs OCR; use SSH-over-USB to avoid the paid Connect subscription. (4) <strong>Readwise bridge</strong> (any device) — highlight → Readwise → poll <code>GET /api/v2/export</code> → translate to kb comments; decouples kb from every vendor but adds a paid dependency and carries only highlight-text. (5) <strong>Kindle Scribe / Supernote</strong> — closed; on Kindle, sideloaded-doc highlights live <em>only</em> in <code>My Clippings.txt</code> (store books additionally cap at ~10% clipping), so flow-back is email-only and not realistic<sup class="ref"><a href="#sources">[annotation]</a></sup>. <strong>Anchor on text, treat handwriting as OCR-best-effort.</strong></p>
+</section>
+
+<section id="precedents">
+<h2>7. Precedents &amp; the gap kb uniquely fills</h2>
+<p>The "personal library → e-ink" space splits into two camps that rarely overlap<sup class="ref"><a href="#sources">[market]</a></sup>:</p>
+<ul>
+<li><strong>Ebook managers</strong> — <strong>Calibre-Web-Automated</strong> (the strongest precedent: watch-folder ingest, EPUB/KEPUB conversion, OPDS, native Kobo sync, built-in KOReader progress-sync), <strong>KOReader</strong>, Kavita, BookLore. They nail EPUB/PDF delivery but <strong>search is metadata/filter-only</strong> — no full-text, no semantic search, and <strong>no library-wide full-text search even in KOReader</strong> (an explicitly tracked gap; a user with 5,000 EPUBs can't search across them)<sup class="ref"><a href="#sources">[market]</a></sup>.</li>
+<li><strong>Read-it-later</strong> — <strong>Readwise Reader</strong> (best e-ink story: runs on any Play-Store e-ink device with a four-toggle E-ink Mode, ingests heterogeneous content) but is <strong>cloud-only, ~$8–10/mo, no offline, no semantic retrieval, no addressable HTML artifact</strong>; <strong>Instapaper/Matter</strong> are cloud SaaS. The surviving <em>self-hostable</em> read-it-later tools are <strong>Wallabag</strong> (open-source; its plugin/API is the basis for the (D-shim) channel above) and <strong>Karakeep</strong> (ex-Hoarder, 24k+ stars) — both name-checked as the post-shutdown survivors. <strong>The graveyard is the argument for kb:</strong> Pocket shut down 8 Jul 2025 (data purged 12 Nov 2025), Omnivore went dark 15 Nov 2024 — two flagship products vaporized in 13 months, taking libraries with them<sup class="ref"><a href="#sources">[market]</a></sup>.</li>
+</ul>
+<div class="callout callout--ok">
+<span class="callout-label">The unoccupied position kb holds</span>
+<p>A <strong>self-hosted, search-first server for LLM-generated HTML artifacts with BM25 + bge-small hybrid search.</strong> No precedent combines all four of: (1) HTML as a first-class self-contained <em>served</em> document (not extracted article text), (2) library-wide hybrid semantic search (every precedent tops out at metadata filters, per-document search, or cloud keyword search), (3) self-hosted file-on-disk durability, (4) LLM-artifact-native authoring contract<sup class="ref"><a href="#sources">[market]</a></sup>. <strong>The gap kb must <em>close</em> for parity is the e-ink delivery story</strong> — and the field has standardized the answer: <strong>OPDS + KOReader progress-sync</strong> (CWA's exact recipe). An OPDS endpoint serving on-the-fly EPUB/HTML + a KOReader-compatible sync server (or simply dropping EPUBs into a CWA watch folder to inherit its sync stack) marries the one capability the whole field lacks (semantic search) to the one delivery channel it has standardized on.</p>
+</div>
+</section>
+
+<section id="recommendations">
+<h2>8. Concrete recommendations</h2>
+
+<h3 id="rec-phases">Phased path</h3>
+<p><strong>Phase 0 — Today, zero code (validate the thesis).</strong> On a Boox (borrow/buy a Palma 2, $249.99), open <code>https://&lt;id&gt;.artifacts.kb.example.com/</code> directly, or over Tailscale hit <code>…/api/kb/&lt;kb&gt;/artifact/&lt;id&gt;</code>. Confirm the raw-artifact reading experience is what you want before building anything. This already works.</p>
+<p><strong>Phase 1 — e-ink reading mode (B) + browse index.</strong> The biggest quality lift per unit effort and the only universal one. A <code>?eink=1</code> / <code>/eink/&lt;id&gt;</code> server-rendered route with the §6 black-on-white, paginatable, motion-free theme; the <strong>server-side section/word-budget pagination splitter</strong> (§5-B), degrade-to-scroll fallback; strip kb-prompt (invariants 5/9); a <code>kb index-page</code>-derived live link-only browse surface over <code>…/docs</code>/<code>…/folders</code>/<code>…/tags</code>/<code>…/docs/by-path</code>; search as a <code>&lt;form GET&gt;</code>. Works on stock Kindle/Kobo, Boox, Daylight — everything. <em>Also</em> add <code>monochrome</code>/<code>prefers-contrast</code>/<code>forced-colors</code>/<code>print</code> hooks to the visual floor so future artifacts self-adapt, and <strong>alias the legacy token names onto the floor names</strong> (§6) so the e-ink layer themes both vocabularies.</p>
+<p><strong>Phase 2 — EPUB export + OPDS feed (C).</strong> <code>kb export --epub</code> (source from <code>kb share</code>'s scrubbed <code>StagedShare.files</code>; <strong>headless-render JS→inline static SVG/PNG</strong> (§5-C); Markdown + JS-free HTML first, flag the rest; HTML→XHTML tidy; pandoc <code>-t epub3</code>; EPUBCheck + explicit UTF-8) and an <strong>OPDS 1.2 acquisition feed sorted newest-first</strong> with auth path-bypass → Basic Auth. This unlocks native pagination/dictionary on every KOReader device and full offline reading, plus two free downstream channels: <strong>Send-to-Kindle email</strong> of the rendered EPUBs (the only push path for a stock un-jailbroken Kindle; mind the 50 MB email / 200 MB web caps and the UTF-8 landmine) and <strong>dropping EPUBs into a CWA watch folder</strong> for native Kobo/KOReader sync. Optionally expose the EPUB feed as an <strong>RSS/Atom feed of newest artifacts</strong> too — that feeds KOReader's News downloader, rsspub, and Calibre Fetch News with no extra device code<sup class="ref"><a href="#sources">[serving]</a></sup>.</p>
+<p><strong>Phase 3 — KOReader (D) + kosync-style progress.</strong> Start with the <strong>Wallabag-compatible shim</strong> so the built-in Wallabag plugin pulls kb artifacts with zero KOReader code; graduate to a bespoke <code>kb.koplugin</code> (clone the Wallabag pattern; <code>LuaSettings</code> for base URL + a directly-accepted token, no Authelia; "Search kb" → results → download → <code>showReader</code>) only if live on-device <em>search</em> is wanted. Add a kosync-style progress endpoint — a <em>new</em> route that mints its own history visit before writing progress (it can't POST to <code>/history/reading</code> as-is; §6) — using the persisted hash→id map (§6) to report reading position back to kb's history. Closes the search + progress loop on-device.</p>
+<p><strong>Annotations</strong> ride along: Boox uses the live SPA comment UI now (Phase 0); a KOReader-JSON → <code>kb comments</code> adapter lands with Phase 3.</p>
+
+<h3 id="rec-pick">The single best pick for the stated goal</h3>
+<p><strong>Goal: read a <em>lot</em> of text, genuinely better than a monitor/phone — i.e. e-ink.</strong> That goal is <em>mono prose</em>, where e-ink's real differentiators (sunlight legibility, no PWM flicker with a DC-dimmed frontlight, low night emission, single-purpose focus) all land and its real weaknesses (color, refresh) don't matter. (Note 300-PPI sharpness is <em>parity</em> with print/good LCD, not an e-ink-exclusive edge — a 400+ PPI phone is sharper — so it's an enabler of the image-quality the evidence credits, not a differentiator in its own right.)</p>
+<ul>
+<li><strong>Device:</strong> a <strong>monochrome 300-PPI e-reader running KOReader.</strong> Concretely, a <strong>Kobo Clara BW ($130 — KOReader installs without a jailbreak, via the KFMon/NickelMenu launcher path; keep it on firmware 4.x, since NickelMenu's menu needs &lt;5.0)</strong> for pocket reading, or a <strong>jailbroken Kindle Paperwhite 12th-gen</strong> if already owned. If a larger canvas for code/wide artifacts is wanted and color is dispensable, the <strong>Boox Note Max (13.3″ mono)</strong>. Avoid color e-ink for this goal — it's a text downgrade.</li>
+<li><strong>Architecture:</strong> <strong>(C) EPUB + OPDS, consumed by KOReader, reached over Tailscale (or a path-bypassed OPDS endpoint on <code>kb.example.com</code> protected by Basic Auth), read offline, with (D) progress sync back to kb.</strong> This gives native pagination + dictionary + font control (best reading quality), works on the cheapest hardware, keeps content offline against flaky Wi-Fi, and — uniquely versus every precedent — carries kb's hybrid search into the catalog.</li>
+<li><strong>Interim until C/D ship:</strong> Phase-1 <strong>e-ink mode (B)</strong> read in KOReader's (third-party) web plugin or a Boox browser, or just the <strong>raw <code>…/artifact/{id}</code> URL (A)</strong> over Tailscale. All three are usable today or near-today.</li>
+</ul>
+<p>If instead you want <em>one device that also does everything a tablet does</em> (live SPA, search, comments, the occasional color artifact), the answer flips to a <strong>Boox Note Air5 C or Palma 2</strong> over Tailscale with the SPA — accepting a laggier, ghosting-prone experience and the Wi-Fi-sleep caveat. But that's not the stated goal; the stated goal is <em>reading a lot of text</em>, and for that the mono-KOReader-EPUB path is the recommendation.</p>
+
+<h3 id="rec-risks">Open questions / risks</h3>
+<ol>
+<li><strong>EPUB conversion fidelity for interactive artifacts.</strong> The corpus's value is often the embedded JS, which dies in every e-ink EPUB reader. How much of the library is <em>prose/Markdown</em> (convertible) vs <em>interactive</em> (not)? The export must flag, not silently mangle. <strong>Risk:</strong> building EPUB export and finding half the corpus is non-convertible — even with headless-render-to-SVG, genuinely interactive widgets flatten to a single static frame.</li>
+<li><strong>Auth model for KOReader.</strong> KOReader can't do interactive SSO or proxy CONNECT. Committing to OPDS means committing to a <strong>path-bypassed Basic Auth or a directly-accepted bearer</strong> on a dedicated endpoint — a deliberate weakening of the Authelia-everywhere prod posture. Acceptable on a tailnet; think before exposing publicly.</li>
+<li><strong>Progress identity mismatch.</strong> KOSync is content-blind (MD5 hash); kb's history lifecycle (invariants 8/19) is path/id-based. The §6 sketch (deterministic per-artifact-id EPUB → stable MD5 → id mapping table) is the proposed bridge, but it's fragile to any change that perturbs exported bytes.</li>
+<li><strong>Eye-comfort expectations.</strong> The evidence does <em>not</em> guarantee an eye-strain or comprehension boost — only sunlight/flicker/night/focus wins, and even the flicker win is contingent on a DC-dimmed frontlight. Calibrate expectations: the upgrade is real but for <em>different</em> reasons than the marketing claims<sup class="ref"><a href="#sources">[V-eyes]</a></sup>.</li>
+<li><strong>Color/fast-refresh roadmap bet.</strong> Modos Flow (open color e-paper, 75 Hz) is the architecturally correct device for kb's rich artifacts but is unshipped crowdfunding (delivery ~Dec 2026, may slip) — don't build <em>for</em> it yet; the grayscale floor is the safe hedge.</li>
+<li><strong>Maintenance surface.</strong> A KOReader plugin (or Wallabag shim) + an EPUB pipeline + an OPDS feed are new long-lived surfaces against fast-moving targets (KOReader monthly CalVer; EPUB readers; Boox firmware). Start with B (no new client, all in-daemon), and prefer the Wallabag-shim and CWA-watch-folder routes over bespoke code precisely to minimize that surface until the value is proven.</li>
+</ol>
+</section>
+
+<section id="methodology">
+<h2>How this report was made</h2>
+<p class="footnote">Produced by a multi-agent research workflow (27 agents, ~1.6M tokens, ~33 min). <strong>5 grounding agents</strong> read the kb codebase (serving surface, export/share, auth/network, reading-UX features, the artifact CSS contract). <strong>12 research agents</strong> swept the web with multiple searches each across: the e-ink hardware spectrum, e-ink browser/web-app compatibility, reading ergonomics vs monitor/phone, EPUB internals + HTML→EPUB conversion, serving protocols (OPDS/Calibre/Wallabag), a KOReader deep-dive, networking/auth from an e-reader, annotation two-way sync, color/large-format/fast-refresh hardware, e-ink typography/CSS, market precedents, and candidate integration architectures. <strong>7 verification agents</strong> adversarially fact-checked the volatile claims (Daylight DC-1 display tech, Boox-runs-Android, the eye-strain literature, KOReader capabilities, EPUB3-JS support, Kindle/Kobo browser limits, color e-ink chemistries); claims marked <code>[V-*]</code> below were verified, and corrected facts replaced the originals inline. A <strong>draft → completeness-critic → final</strong> synthesis pass assembled the result. <strong>Post-publication, a 3-agent Opus deep-review</strong> (codebase-claims · architecture-feasibility · external-facts) re-verified this report against the kb source and the live web: codebase claims were 21/23 exact, the B→C→D roadmap sound, and the "single best pick" independently re-confirmed. Material corrections from that pass are folded in inline and flagged "per code review" — chiefly the Tailscale-bypass prod caveat, relabelling commit <code>9d65a5a</code> as an AA-locked (not grayscale) floor, the parser-reuse and EPUB-determinism feasibility fixes, the EPUB-as-share-backend category correction, and the Kaleido-4 / WinterBreak over-claims. Specs and prices are mid-2026 and move fast — re-verify before purchasing.</p>
+</section>
+
+<section id="sources">
+<h2>Sources</h2>
+
+<div class="src-group">
+<h3>kb codebase / deployment (grounding)</h3>
+<p class="footnote">Verified against the repo: <code>crates/kb-server/src/routes/dispatch.rs</code>, <code>artifact.rs</code> (<code>serve</code>, L427), <code>docs.rs</code> (<code>artifact_bytes</code>, L759), <code>spa.rs</code>, <code>router.rs</code>, <code>middleware.rs</code> (<code>is_loopback_origin</code>, invariants 3/4); <code>crates/kb-core/src/iframe.rs</code> (<code>parse_artifact_id</code>, <code>/_kb/*</code> injection), <code>config.rs</code> (<code>artifact_host_suffix</code>/<code>parent_origin</code>), <code>share/mod.rs</code> + <code>share/assets.rs</code> + <code>scrub.rs</code> (<code>scrub_export</code>, invariants 5/9), <code>markdown.rs</code> (<code>render_page</code>), <code>reading.rs</code>; <code>crates/kb-cli/src/commands/index_page.rs</code>; <code>docs/authoring-artifacts.md</code> (visual floor §317–408), <code>docs/self-host.md</code>, <code>docs/configuration.md</code>, <code>docs/extending.md:151</code>; <code>~/deploy/docker-compose.yml</code>, <code>~/deploy/kb/kb.toml</code>, <code>~/deploy/authelia/configuration.yml</code>; commit <code>9d65a5a</code> (AA-locked visual floor + a11y baseline — note: contrast-only, no grayscale/monochrome hooks). No real EPUB/OPDS support — the only matches across <code>crates/</code>, <code>web/</code>, <code>docs/</code> are incidental substrings (<code>FakePublish</code>, base64 in <code>package-lock.json</code>).</p>
+</div>
+
+<div class="src-group">
+<h3>Hardware landscape</h3>
+<ul>
+<li>[hardware-1] Best E Ink tablets for 2026 — Engadget — <a href="https://www.engadget.com/mobile/tablets/best-e-ink-tablet-130037939.html">link</a></li>
+<li>[hardware-2] Supernote A5 X2 Manta — Liliputing — <a href="https://liliputing.com/supernote-a5-x2-manta-10-7-inch-e-ink-writing-tablet-is-now-available-for-459/">link</a></li>
+<li>[hardware-3] Boox Note Air4 C launch specs — Notebookcheck — <a href="https://www.notebookcheck.net/Onyx-s-BOOX-Note-Air4-C-launches-with-performance-upgrades-new-software-but-same-price-tag.905864.0.html">link</a></li>
+<li>[hardware-4] E INK Gallery 3 vs Kaleido 3 — Good e-Reader — <a href="https://goodereader.com/blog/e-paper/e-ink-gallery-3-vs-e-ink-kaleido-3">link</a></li>
+<li>[hardware-5] reMarkable Paper Pro Gallery 3 vs Kaleido 3 — eReadersForum — <a href="https://www.ereadersforum.com/threads/remarkable-paper-pros-gallery-3-color-screen-vs-kaleido-3-which-color-e-ink-approach-actually-works.13395/">link</a></li>
+<li>[hardware-6] Kobo Clara BW review — TechRadar — <a href="https://www.techradar.com/tablets/ereaders/kobo-clara-bw-review-a-compact-ereader-showcasing-the-best-e-ink-display-yet">link</a></li>
+<li>[hardware-7] Daylight DC-1 LivePaper 60 Hz — Notebookcheck — <a href="https://www.notebookcheck.net/Daylight-launches-DC-1-tablet-with-LivePaper-display-that-looks-like-E-Ink-but-refreshes-at-60-Hz.841023.0.html">link</a></li>
+<li>[hardware-9] Boox Palma 2 / Palma 2 Pro — BOOX Store — <a href="https://shop.boox.com/products/palma2pro">link</a></li>
+<li>[hardware-10] Hisense A9 e-ink smartphone — TechSpot — <a href="https://www.techspot.com/news/106436-hisense-a9-e-ink-smartphone-returns-expanded-storage.html">link</a></li>
+<li>Most Capable E-Ink Tablets 2026 — eReadersForum — <a href="https://www.ereadersforum.com/blog/ranking-the-most-capable-e-ink-tablets-of-2025-a-deep-dive-comparison/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Browser / web-app capability</h3>
+<ul>
+<li>[browsers-1] Disable JavaScript on the Kindle Browser — Good e-Reader — <a href="https://goodereader.com/blog/kindle/why-do-you-need-to-disable-javascript-on-the-kindle-browser">link</a></li>
+<li>[browsers-3] Kindle Paperwhite 3 Web Browser documentation — <a href="https://thorgalle.me/notes/documentation-for-the-kindle-browser">link</a></li>
+<li>[browsers-8] reMarkable Web App / browsing — <a href="https://www.ereadersforum.com/blog/remarkable-web-app-opens-a-new-path-to-browser-based-document-access/">link</a> · <a href="https://borednbookless.com/web-browsing-on-remarkable-2/">link</a></li>
+<li>EinkBro / Chromium on e-ink — <a href="https://www.mobileread.com/forums/showthread.php?t=294732">link</a></li>
+<li>Onyx Boox specs/Android versions — Wikipedia — <a href="https://en.wikipedia.org/wiki/Onyx_Boox">link</a></li>
+<li>E-Paper refresh (full/partial/fast) — <a href="https://www.geniatech.com/solution/e-paper-refresh-technology/">link</a> · <a href="https://medium.com/boox-content-hub/how-to-optimize-ghosting-on-color-e-ink-screen-fa0b9b77a171">link</a></li>
+<li>Boox Page review (animations/scroll on e-ink) — <a href="https://www.reviewed.com/tech/content/onyx-boox-page-review">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Reading ergonomics / eye science</h3>
+<ul>
+<li>[ergonomics-1] E-Readers and Visual Fatigue (Benedetto et al., PLOS ONE) — <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC3873942/">link</a></li>
+<li>[ergonomics-4] Evening use of light-emitting eReaders affects sleep (Chang et al., PNAS 2014) — <a href="https://www.pnas.org/doi/10.1073/pnas.1418490112">link</a></li>
+<li>[ergonomics-5] Harvard/ScienceDaily on Chang et al. — <a href="https://www.sciencedaily.com/releases/2014/12/141222131348.htm">link</a></li>
+<li>[ergonomics-6] Color E-Ink / sunlight readability / refresh trade-offs — Good e-Reader — <a href="https://blog.the-ebook-reader.com/2024/04/05/color-e-ink-5-things-to-know-before-buying/">link</a></li>
+<li>[ergonomics-7] PWM dimming and alternatives — Android Central — <a href="https://www.androidcentral.com/phones/what-is-pwm-display-flicker-tips-and-tricks">link</a></li>
+<li>[ergonomics-8] Best ereaders 2026 — TechRadar — <a href="https://www.techradar.com/best/best-ereader">link</a></li>
+<li>[ergonomics-9] Reading on screen vs paper meta-analysis (Delgado et al. 2018) — <a href="https://www.researchgate.net/publication/324993558_Comparison_of_reading_performance_on_screen_and_on_paper_A_meta-analysis">link</a></li>
+<li>Is E-Ink Better for Your Eyes? literature review — eWritable — <a href="https://ewritable.net/is-e-ink-better-for-your-eyes-a-review-of-the-literature/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>EPUB internals &amp; conversion</h3>
+<ul>
+<li>EPUB 3 anatomy — EDRLab — <a href="https://www.edrlab.org/open-standards/anatomy-of-an-epub-3-file/">link</a></li>
+<li>EPUB 3 Fixed Layout (IDPF) — <a href="https://idpf.org/epub/fxl/">link</a></li>
+<li>EPUB Reading Systems 3.3/3.4 scripting — <a href="https://w3c.github.io/epub-specs/epub33/rs/">link</a> · <a href="https://www.w3.org/TR/epub-rs-34/">link</a></li>
+<li>EPUB 3 Overview (W3C) — <a href="https://www.w3.org/TR/epub-overview-33/">link</a> · EPUB 3.3 Rec — <a href="https://www.w3.org/TR/epub-33/">link</a></li>
+<li>Kobo EPUB spec (KEPUB, JS limits) — <a href="https://github.com/kobolabs/epub-spec">link</a></li>
+<li>Calibre conversion manual — <a href="https://manual.calibre-ebook.com/conversion.html">link</a> · ebook-convert — <a href="https://manual.calibre-ebook.com/generated/en/ebook-convert.html">link</a></li>
+<li>Pandoc EPUB writer — <a href="https://pandoc.org/epub.html">link</a></li>
+<li>Kindle KFX / Send-to-Kindle EPUB — <a href="https://www.epubor.com/amazon-kindle-now-officially-support-epub.html">link</a> · <a href="https://kindlepreneur.com/epub-to-kindle/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Serving channels (OPDS / Calibre / read-it-later / Send-to-Kindle / RSS)</h3>
+<ul>
+<li>OPDS — Wikipedia — <a href="https://en.wikipedia.org/wiki/Open_Publication_Distribution_System">link</a> · MobileRead OPDS — <a href="https://wiki.mobileread.com/wiki/OPDS">link</a></li>
+<li>php-opds (1.2 XML default) — <a href="https://github.com/kiwilan/php-opds">link</a></li>
+<li>KOReader OPDS support wiki — <a href="https://github.com/koreader/koreader/wiki/OPDS-support">link</a></li>
+<li>KOReader Wallabag wiki — <a href="https://github.com/koreader/koreader/wiki/Wallabag">link</a> · koplugin.wallabag module docs — <a href="https://koreader.rocks/doc/modules/koplugin.wallabag.html">link</a></li>
+<li>Calibre-Web-Automated — <a href="https://github.com/crocodilestick/Calibre-Web-Automated">link</a> · CWA v3.1.0 — <a href="https://github.com/crocodilestick/Calibre-Web-Automated/discussions/442">link</a> · CWA Kobo Integration &amp; Sync — <a href="https://github.com/crocodilestick/Calibre-Web-Automated/wiki/Kobo-Integration-&-Sync">link</a></li>
+<li>Send PDF/EPUB to Kindle (50 MB email / 200 MB web caps) — Amazon — <a href="https://www.amazon.com/gp/help/customer/display.html?nodeId=G5WYD9SAF7PGXRNA">link</a></li>
+<li>RSSPub (RSS→EPUB + OPDS) — <a href="https://github.com/harshit181/RSSPub">link</a></li>
+<li>Calibre Fetch News — <a href="https://manual.calibre-ebook.com/news.html">link</a></li>
+<li>Read-it-later post-Omnivore/Pocket (Karakeep, Wallabag) — <a href="https://danielprindii.com/blog/read-it-later-alternatives-after-omnivore-shutting-down">link</a> · <a href="https://gleamr.io/blog/pocket-shutting-down-alternatives">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>KOReader deep-dive</h3>
+<ul>
+<li>KOReader repo — <a href="https://github.com/koreader/koreader">link</a> · user guide — <a href="https://koreader.rocks/user_guide/">link</a></li>
+<li>KOReader on e-ink devices (install/jailbreak) — <a href="https://www.epubor.com/how-to-use-koreader-on-e-ink-devices.html">link</a></li>
+<li>KOReader plugin dev — <a href="https://kindlemodshelf.me/koreaderplugindev">link</a></li>
+<li>wallabag.koplugin source — <a href="https://github.com/koreader/koreader/blob/master/plugins/wallabag.koplugin/main.lua">link</a></li>
+<li>Networking libs (LuaSocket/LuaSec, no-proxy/CONNECT) — <a href="https://deepwiki.com/koreader/koreader-base/6.4-networking-and-utility-libraries">link</a></li>
+<li>KOReader v2026.03 "Snowflake" — <a href="https://github.com/koreader/koreader/releases/tag/v2026.03">link</a></li>
+<li>webbrowser.koplugin — <a href="https://github.com/omer-faruq/webbrowser.koplugin">link</a> · opds_plus.koplugin — <a href="https://github.com/greywolf1499/opds_plus.koplugin">link</a> · KOSync — <a href="https://github.com/koreader/koreader-sync-server">link</a> · kosync-rs — <a href="https://github.com/SolAstrius/kosync-rs">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Network / auth from an e-reader</h3>
+<ul>
+<li>[network-1] Tailscale on Android / Boox taming — <a href="https://tailscale.com/kb/1079/install-android">link</a> · <a href="https://gist.github.com/fardjad/97baf36de97d1c4ae3953b3d359bb918">link</a></li>
+<li>[network-2] Self-hosted Kindle/Kobo library (Kobo sync URL) — <a href="https://www.xda-developers.com/self-hosted-kindle-library-amazon-alternative/">link</a></li>
+<li>[network-5] Boox Sleep &amp; Battery / Wi-Fi after sleep — <a href="https://help.boox.com/hc/en-us/articles/8569254233620-Sleep-and-Battery">link</a></li>
+<li>[network-9] Authelia/Authentik forward-auth bypass + bearer — <a href="https://www.authelia.com/integration/openid-connect/oauth-2.0-bearer-token-usage/">link</a> · <a href="https://github.com/goauthentik/authentik/issues/3262">link</a></li>
+<li>[network-jailbreak] WinterBreak jailbreak (any Kindle/firmware) installs KOReader — <a href="https://blog.the-ebook-reader.com/2025/01/02/new-kindle-jailbreak-works-with-any-kindle-on-any-firmware/">link</a> · <a href="https://kindlemodding.org/jailbreaking/post-jailbreak/koreader.html">link</a></li>
+<li>[network-koreader] KOReader OPDS authentication (Basic only) — <a href="https://github.com/koreader/koreader/issues/4076">link</a></li>
+<li>reMarkable Toltec/Tailscale (root SSH, Dropbear→OpenSSH, userspace net) — <a href="https://remarkable.guide/tech/tailscale.html">link</a></li>
+<li>E-ink browser usability / password-typing pain — <a href="https://blog.the-ebook-reader.com/2023/11/09/are-e-ink-ereaders-still-too-slow/">link</a> · <a href="https://kadavy.net/blog/posts/boox-poke5-review/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Annotation / sync</h3>
+<ul>
+<li>[annotation-4] Kindle Scribe Active Canvas / export limits / My Clippings 10% cap — <a href="https://www.aboutamazon.com/news/devices/kindle-scribe-new-features">link</a> · <a href="https://www.kindleexport.com/blog/kindle-scribe-notes">link</a> · <a href="https://textmuncher.com/blog/export-kindle-highlights-notes">link</a></li>
+<li>[annotation-5] reMarkable programmatic access (rmapi/remarks/RCU) — <a href="https://github.com/reHackable/awesome-reMarkable">link</a> · <a href="https://github.com/lucasrla/remarks">link</a></li>
+<li>[annotation-reMarkable] MCP for reMarkable (rmscene, SSH vs paid Connect cloud, OCR) — <a href="https://sam-morrow.com/blog/building-an-mcp-server-for-remarkable">link</a></li>
+<li>KOReader highlight/annotation + Exporter — <a href="https://github.com/koreader/koreader/wiki/Highlight-export">link</a></li>
+<li>Kobo → Readwise — <a href="https://help.kobo.com/hc/en-us/articles/10789206247703">link</a></li>
+<li>Readwise v2/v3 API — <a href="https://readwise.io/api_deets">link</a></li>
+<li>Boox NeoReader export / Zotero sync — <a href="https://christiantietze.de/posts/2023/05/boox-neoreader-annotation-export-is-meh/">link</a> · <a href="https://forums.zotero.org/discussion/117191/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Color / large-format / fast-refresh</h3>
+<ul>
+<li>[color-1] Everything about Kaleido 3 — Good e-Reader — <a href="https://goodereader.com/blog/e-paper/everything-you-need-to-know-about-e-ink-kaleido-3-color-e-paper">link</a></li>
+<li>[color-4] Boox Note Max / Tab X C reviews — <a href="https://www.tomsguide.com/computing/e-readers/boox-note-max-review">link</a> · <a href="https://www.howtogeek.com/boox-tab-x-c-review/">link</a></li>
+<li>[color-8] E-Paper speed boost with Modos — IEEE Spectrum — <a href="https://spectrum.ieee.org/e-paper-display-modos">link</a> · <a href="https://www.tomshardware.com/monitors/portable-monitors/hands-on-with-modos-tech-13-3-inch-e-paper-monitors">link</a></li>
+<li>[color-9] A Year with the Daylight Computer (syntax highlighting loss) — <a href="https://wickstrom.tech/2025-10-10-programming-in-the-sun-a-year-with-the-daylight-computer.html">link</a></li>
+<li>Spectra 6 vs Kaleido 3 vs Gallery 3 — <a href="https://paperlesspaper.de/en/blog/eink-color-technologies-comparison">link</a></li>
+<li>BOOX Super Refresh (BSR) — <a href="https://shop.boox.com/blogs/news/boox-super-refresh-bsr-technology">link</a> · <a href="https://ewritable.net/guides/fast-refresh-technology/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Typography / e-ink CSS</h3>
+<ul>
+<li>[typography-1] CSS tricks for eBooks (Friends of EPUB) — <a href="https://friendsofepub.github.io/eBookTricks/">link</a></li>
+<li>[typography-2] Serif vs Sans on HD screens — NN/g — <a href="https://www.nngroup.com/articles/serif-vs-sans-serif-fonts-hd-screens/">link</a></li>
+<li>[typography-3] Optimal line length — <a href="https://www.uxpin.com/studio/blog/optimal-line-length-for-readability/">link</a> · <a href="https://baymard.com/blog/line-length-readability">link</a> · Infinite scroll — <a href="https://www.nngroup.com/articles/infinite-scrolling-tips/">link</a></li>
+<li>[typography-4] E Ink ghosting / dark mode — <a href="https://viwoods.com/blogs/paper-tablet/e-ink-ghosting-explained">link</a> · <a href="https://blog.the-ebook-reader.com/2020/06/29/best-ebook-readers-for-dark-mode-white-text-black-background/">link</a></li>
+<li>[typography-5] font-smooth — MDN / Zach Leatherman — <a href="https://developer.mozilla.org/en-US/docs/Web/CSS/font-smooth">link</a> · <a href="https://www.zachleat.com/web/font-smooth/">link</a></li>
+<li>Antialiasing 101 — web.dev — <a href="https://web.dev/articles/antialiasing-101">link</a></li>
+<li>Print stylesheets / Paged.js — MDN / DiDoesDigital — <a href="https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Media_queries/Printing">link</a> · <a href="https://didoesdigital.com/blog/print-styles/">link</a></li>
+<li>Carta 1300 / best e-readers — <a href="https://goodereader.com/blog/electronic-readers/everything-you-need-to-know-about-e-ink-carta-1300">link</a></li>
+<li>Mozilla Readability — <a href="https://github.com/mozilla/readability">link</a></li>
+<li>CSS monochrome media query — <a href="https://blog.stephaniestimac.com/posts/2024/03/css-monochrome-media-query/">link</a> · Building websites for e-ink Kindle — <a href="https://gomakethings.com/building-websites-that-work-on-an-e-ink-kindle/">link</a> · eink-css-ui-framework — <a href="https://github.com/marcomattes/eink-css-ui-framework">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Market / precedents</h3>
+<ul>
+<li>[market-CWA] Calibre-Web-Automated — <a href="https://github.com/crocodilestick/Calibre-Web-Automated">link</a></li>
+<li>Self-Hosted Ebook Management — <a href="https://blog.eldrid.ge/2025/03/12/self-hosted-ebook-management/">link</a></li>
+<li>KOReader full-text search FR — <a href="https://github.com/koreader/koreader/issues/12485">link</a></li>
+<li>Readwise Reader on e-ink — <a href="https://docs.readwise.io/reader/docs/faqs/eink">link</a> · <a href="https://kadavy.net/blog/posts/boox-poke5-review/">link</a></li>
+<li>Mozilla shutting down Pocket — <a href="https://techcrunch.com/2025/05/22/mozilla-is-shutting-down-read-it-later-app-pocket/">link</a> · <a href="https://support.mozilla.org/en-US/kb/future-of-pocket">link</a></li>
+<li>Omnivore shutdown — <a href="https://gleamr.io/blog/omnivore-shut-down-alternatives">link</a></li>
+<li>Reading blogs on Kobo via Wallabag — <a href="https://jqno.nl/post/2025/06/04/reading-blogs-on-my-kobo-ereader-via-wallabag/">link</a></li>
+<li>Onyx-Boox-Annotation-Highlight-Extractor — <a href="https://github.com/akosbalasko/Onyx-Boox-Annotation-Highlight-Extractor">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Architectures</h3>
+<ul>
+<li>Why the Kindle browser still sucks — <a href="https://blog.the-ebook-reader.com/2020/01/24/why-does-the-web-browser-still-suck-on-kindles/">link</a></li>
+<li>OPDS Specifications (1.2 stable / 2.0 draft) — <a href="https://specs.opds.io/">link</a> · OPDS 1.2 — <a href="https://specs.opds.io/opds-1.2.html">link</a></li>
+<li>pg-search-opds (FTS over OPDS) — <a href="https://github.com/zachjesus/pg-search-opds">link</a></li>
+<li>Self-hosted ebook (OPDS+KOReader+Calibre) — <a href="https://blog.rabu.me/self-hosted-library-koreader-calibre-sync-highlights-export-readwise/">link</a></li>
+<li>BookLore + KOReader — <a href="https://kuzmafesenko.com/post/ebook-system-booklore-koreader/">link</a></li>
+<li>BOOX Refresh Modes — <a href="https://help.boox.com/hc/en-us/articles/8569262708372-Refresh-Modes">link</a></li>
+<li>Boox Note Air5 C review — <a href="https://the-gadgeteer.com/2026/01/11/boox-note-air5-c-color-e-ink-android-tablet-review/">link</a></li>
+</ul>
+</div>
+
+<div class="src-group">
+<h3>Verification (adversarial fact-checks — corrected claims used above)</h3>
+<ul>
+<li>[V-daylight] Daylight DC-1 is reflective LCD not e-ink; $729; 60 Hz (6–120 Hz capable); ~190 ppi; not bistable; distinct from Modos — <a href="https://www.slashgear.com/1655111/daylight-computer-live-paper-display-vs-e-ink-explained/">SlashGear</a> · <a href="https://max.pm/posts/daylight_dc1/">max.pm</a> · <a href="https://en.wikipedia.org/wiki/Daylight_Computer_Co.">Wikipedia</a> · Modos Flow ($619 mono/$719 color, ~Dec 2026 crowdfunding) <a href="https://www.cnx-software.com/2026/05/27/modos-flow-an-fpga-based-13-3-inch-usb-c-touchscreen-color-e-paper-monitor/">cnx-software</a></li>
+<li>[V-boox] Boox runs open Android + Play, Tailscale APK works; Palma 2 = $249.99; Android version fragmented (Note Air4 C = 13 not 15); Play-integrity/certification friction — <a href="https://liliputing.com/onyx-boox-note-air4-c-is-a-10-3-inch-e-ink-color-tablet-with-6gb-ram-and-android-13/">Liliputing</a> · <a href="https://www.techradar.com/tablets/ereaders/onyx-boox-note-air5-c-review">TechRadar</a> · <a href="https://help.boox.com/hc/en-us/community/posts/34292981338260">BOOX Help (Play Protect)</a></li>
+<li>[V-eyes] Peer-reviewed e-ink vs LCD — <a href="https://pubmed.ncbi.nlm.nih.gov/22762257/">Siegenthaler 2012</a> (no difference; "image quality" is the differentiator) · <a href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0083676">Benedetto 2013</a> · <a href="https://www.pnas.org/doi/10.1073/pnas.1418490112">Chang 2015 PNAS</a> · <a href="https://www.cochranelibrary.com/cdsr/doi/10.1002/14651858.CD013244.pub2/full">Cochrane blue-light 2023</a> · <a href="https://www.sciencedirect.com/science/article/pii/S1747938X18300101">Delgado 2018</a> · <a href="https://ewritable.net/is-e-ink-better-for-your-eyes-a-review-of-the-literature/">eWritable lit review (E Ink Corp COI on Yuan 2021/Wang 2023)</a></li>
+<li>[V-koreader] KOReader device/OPDS/plugin/Wallabag/news/HTTP confirmed; <strong>no built-in web browser</strong> (third-party text plugin only) — <a href="https://github.com/koreader/koreader">README</a> · <a href="https://github.com/koreader/koreader/releases">releases</a> · <a href="https://github.com/koreader/koreader/issues/10793">FR closed</a></li>
+<li>[V-epub-js] EPUB JS executes in Apple Books + Thorium/Readium + Kobo mobile apps, but NOT Kobo e-ink / Kindle (→KFX) / KOReader — <a href="https://www.w3.org/TR/epub-rs-34/">EPUB RS 3.4</a> · <a href="https://help.apple.com/itc/booksassetguide/en.lproj/itc013b02e4a.html">Apple Books asset guide</a> · <a href="https://github.com/edrlab/thorium-reader/releases/tag/v3.3.0">Thorium v3.3.0</a> · <a href="https://github.com/kobolabs/epub-spec">Kobo epub-spec</a></li>
+<li>[V-kindle-browser] Kindle browser is WebKit (not Blink), markedly improved by silent v5.16.4 (Nov 2023) for static/mobile web but not SPAs; Kobo beta unchanged — <a href="https://liliputing.com/amazons-kindle-web-browser-is-actually-usable-now/">Liliputing</a> · <a href="https://www.androidauthority.com/amazon-kindle-web-browser-update-3383765/">Android Authority</a> · <a href="https://help.kobo.com/hc/en-us/articles/360017763733-About-Beta-Features">Kobo Beta Features</a></li>
+<li>[V-color] Kaleido 3 (CFA, 150 ppi color/4,096) vs Gallery 3 (ACeP, ~50k platform / ~20k realized / 300 ppi but consumer-failed); live successors Kaleido 4 + Spectra 6 — <a href="https://goodereader.com/blog/e-paper/e-ink-gallery-3-vs-e-ink-kaleido-3">Good e-Reader</a> · <a href="https://goodereader.com/blog/e-paper/what-happened-to-all-the-gallery-3-e-readers">What happened to Gallery 3</a> · <a href="https://isitdev.com/samsung-color-e-paper-vs-e-ink-kaleido-4-gallery-3-2025/">isitdev</a></li>
+</ul>
+</div>
+
+</section>
+
+</article>
+</main>
+</body>
+</html>

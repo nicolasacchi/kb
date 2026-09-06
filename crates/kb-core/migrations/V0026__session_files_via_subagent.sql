@@ -1,0 +1,19 @@
+-- kb-code W0.5 — mark session_files rows recovered from a SUBAGENT's own
+-- sidecar transcript (`<session-id>/subagents/agent-*.jsonl`) rather than the
+-- main thread. W0.4's `kb sessions capture` (and the W0.5
+-- `--refresh-subagents` backfill) walks each session's sidecar directory and
+-- rides the parse as an additive `<script id="kb-session-subagents">` tail
+-- block (`kb_core::sessions::render_subagents_block`); the enrich hook
+-- (`SessionCaptureHook`, `crates/kb-core/src/enrich.rs`) merges those file
+-- touches into `session_files` alongside the main-thread ones, with the
+-- main-thread row WINNING on a (path, action) collision (a file the main
+-- thread also touched is authoritative; the subagent's copy is redundant,
+-- not contradictory) — so this column is never ambiguous: a row is either
+-- main-thread (`via_subagent = 0`) or subagent-only (`via_subagent = 1`),
+-- never both.
+--
+-- Additive + DEFAULT 0, so every existing row (main-thread-only, from every
+-- capture before this migration) reads as `via_subagent = 0` unchanged. No
+-- backfill pass here — a session re-indexes (or a `--refresh-subagents` +
+-- reindex) to pick up subagent-sourced rows.
+ALTER TABLE session_files ADD COLUMN via_subagent INTEGER NOT NULL DEFAULT 0;

@@ -1,0 +1,1261 @@
+/* Mobile shell — kb mobile-experience overhaul (MB-track).
+ *
+ * Activates at ≤860px (the mobile breakpoint; this literal MUST match
+ * MOBILE_MAX_WIDTH in hooks/useIsMobile.ts — CSS custom properties can't be
+ * used inside a media-query condition). Imported LAST in main.tsx so these
+ * rules override the desktop chrome. Desktop (≥861px) is untouched: every
+ * rule lives inside `@media (max-width: 860px)` or `@media (pointer: coarse)`
+ * (plus drawer/sheet base styles that only render on mobile anyway).
+ *
+ * Layout map of the phases that fill this file:
+ *   MB2 — collapse body--with-rail, hamburger drawer, compact header
+ *   MB3 — immersive reading mode + ContextBar mobile
+ *   MB5 — touch targets (pointer: coarse) + a11y affordances
+ * (MB4 atlas touch is handled in AtlasView.tsx, not here.)
+ */
+
+/* ───────────────────────── MB2: layout + drawer ─────────────────────── */
+
+/* Hamburger button — hidden on desktop, revealed in the mobile media query
+ * below. Lives as the first child of .kb-head. */
+.kb-burger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.kb-burger:hover {
+  border-color: var(--rule-hi);
+  background: var(--bg-card-hi);
+}
+
+/* Drawer shell. Only ever mounted on mobile (open && isMobile), but the base
+ * styles live outside the media query so a slide-in is always positioned
+ * correctly when it renders. */
+.kb-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--backdrop);
+  opacity: 0;
+  transition: opacity 0.22s var(--ease);
+}
+.kb-drawer-scrim.is-open {
+  opacity: 1;
+}
+.kb-drawer {
+  position: fixed;
+  z-index: var(--z-drawer);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--drawer-w);
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+  transform: translateX(-100%);
+  transition: transform 0.24s var(--ease);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.kb-drawer.is-open {
+  transform: translateX(0);
+}
+/* D4 — `side="bottom"` variant (the "view options" sheet is its first
+ * caller): a fixed bottom sheet instead of the default left-edge slide.
+ * Overrides the `.kb-drawer` box-model above; source order (this block
+ * comes after it) is what makes the equal-specificity override win. */
+.kb-drawer--bottom {
+  top: auto;
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: none;
+  max-height: min(70vh, 420px);
+  border-right: 0;
+  border-top: 1px solid var(--rule);
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+  transform: translateY(100%);
+}
+.kb-drawer--bottom.is-open {
+  transform: translateY(0);
+}
+/* Honor reduced-motion for the sheet slide + scrim fade, like the reader
+ * tools sheet (`.kb-pinsp`/`.kb-pinsp-scrim`, below) already does. */
+@media (prefers-reduced-motion: reduce) {
+  .kb-drawer,
+  .kb-drawer-scrim {
+    transition: none;
+  }
+}
+.kb-drawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px 8px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--rule);
+}
+.kb-drawer__title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.kb-drawer__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-size: 15px;
+  cursor: pointer;
+}
+.kb-drawer__close:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kb-drawer__body {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 0 16px;
+}
+/* The filter Sidebar dropped into the drawer fills the width and drops its
+ * desktop right border + full-height sizing. */
+.kb-drawer .kb-side {
+  height: auto;
+  border-right: 0;
+  padding: 0 14px 14px;
+}
+.kb-drawer__sect,
+.kb-navlist__sect {
+  color: var(--ink-dim);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin: 14px 16px 6px;
+}
+
+/* Nav rows. */
+.kb-navlist {
+  display: flex;
+  flex-direction: column;
+}
+.kb-navlist__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.kb-navlist__row:hover {
+  background: var(--bg-card-hi);
+  text-decoration: none;
+}
+.kb-navlist__row.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.kb-navlist__glyph {
+  display: inline-flex;
+  justify-content: center;
+  width: 20px;
+  color: var(--ink-mute);
+}
+.kb-navlist__row.is-active .kb-navlist__glyph {
+  color: var(--accent-soft);
+}
+/* W3 — count badges on the drawer's Inbox / Anchors rows. Mirror the header
+ * pills' tinting (accent = comments to triage, warm-amber = corkboard) so the
+ * affordance survives the fold from pill to row. */
+.kb-navlist__badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-mute);
+}
+.kb-navlist__badge--inbox {
+  color: var(--accent);
+}
+.kb-navlist__badge--anchor {
+  color: var(--warn);
+}
+
+/* ── compact header + collapsed layout at ≤860px ─────────────────────── */
+@media (max-width: 860px) {
+  .kb-burger {
+    display: inline-flex;
+  }
+
+  /* Desktop header clusters fold into the drawer / cmdk. The compact header
+   * keeps: burger + workspace + search-mini. The anchor + inbox pills fold
+   * into the drawer NavList as badge rows (W3): the header is a fixed-height
+   * no-wrap flex in the --topbar-h track, so at 390px the two pills overflow
+   * the viewport (~48px) the moment there's anything to triage. */
+  .kb-head > .kb-viewtoggle,
+  .kb-head > .kb-saved-wrap,
+  .kb-head > .kb-iconbtn,
+  .kb-head > .kb-anchor,
+  .kb-head > .kb-inbox,
+  /* LSC-4's "N waiting" chip is a THIRD pill with the same geometry, so it
+   * overflows for the same reason the moment a session is waiting. Unlike
+   * anchor/inbox it has no drawer NavList row to fold into (there is no
+   * /sessions row), so on a phone the count lives only in the Now band at
+   * the top of /sessions. */
+  .kb-head > .kb-waiting {
+    display: none;
+  }
+
+  /* Single-column body — the in-route filter rail now lives in the drawer. */
+  .body--with-rail {
+    grid-template-columns: 1fr;
+  }
+  .body--with-rail > .kb-side {
+    display: none;
+  }
+
+  /* Reclaim the statusbar grid track on phones. */
+  .app {
+    grid-template-rows: var(--topbar-h) auto minmax(0, 1fr) 0;
+  }
+  .kb-statusbar {
+    display: none;
+  }
+
+  /* The query ribbon can carry a wide token chain; let it scroll rather
+   * than blow out the page width. */
+  .kb-qribbon {
+    overflow-x: auto;
+  }
+
+  /* D4 — the gallery's Sort/Group/Density trio no longer fits the ribbon
+   * at phone widths; hidden here (desktop DOM is untouched — ContextLine
+   * only MOUNTS the replacement button + sheet when `useIsMobile()`, so
+   * this is belt-and-suspenders CSS, not the only gate) in favour of the
+   * single "view options" button below. Scoped to the gallery ribbon so
+   * `.sort-control`/`.group-control` elsewhere (e.g. the search page) are
+   * unaffected. */
+  .kb-qribbon--gallery .sort-control,
+  .kb-qribbon--gallery .group-control,
+  .kb-qribbon--gallery .kb-qribbon__density {
+    display: none;
+  }
+  .kb-qribbon__viewopts {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--bg-panel);
+    color: var(--ink-mute);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .kb-qribbon__viewopts:hover,
+  .kb-qribbon__viewopts[aria-expanded="true"] {
+    border-color: var(--rule-hi);
+    color: var(--ink);
+  }
+}
+
+/* The sheet body stacks the reused Sort/Group/Density controls as full-width
+ * rows instead of the ribbon's inline row (D4). Base rule (not inside the
+ * 860px query) because `ViewOptionsSheet` only ever mounts on mobile. */
+.kb-viewopts-sheet {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 4px 16px 12px;
+}
+
+/* ──────────────────────── MB3: immersive reading ────────────────────── */
+
+/* Floating full-screen toggle on the detail route. Hidden on desktop;
+ * revealed ≤860px (and kept visible in immersive mode so it can toggle
+ * back). */
+.kb-immersive-toggle {
+  display: none;
+}
+
+/* Immersive mode — collapse every chrome row and hide the bars so the
+ * artifact iframe owns the whole viewport. Driven by `body.kb-immersive`
+ * (set from detail.tsx). Only the mobile-only toggle triggers it. */
+body.kb-immersive .app {
+  grid-template-rows: 0 0 minmax(0, 1fr) 0;
+}
+/* The chrome rows above are `display: none` in immersive, which removes them
+ * from the grid flow — so the routed `<main class="body">` auto-places into
+ * the now-0px FIRST track and the iframe collapses to height:0 (blank screen,
+ * the dark --bg showing through). Pin main to the 1fr track (row 3) so the
+ * artifact owns the viewport regardless of how many bars were hidden. */
+body.kb-immersive .body {
+  grid-row: 3;
+}
+body.kb-immersive .kb-head,
+body.kb-immersive .kb-qribbon,
+body.kb-immersive .kb-qribbon-placeholder,
+body.kb-immersive .kb-statusbar,
+body.kb-immersive .kb-ctxbar,
+body.kb-immersive .pages,
+body.kb-immersive .pill-container {
+  display: none;
+}
+/* W2.7 — folio's running header/colophon never fight immersive (mutually
+ * exclusive via the same `?view=` param already — this is defense-in-depth
+ * for the class-toggle itself, matching the chrome list immediately above). */
+body.kb-immersive .kb-folio-header,
+body.kb-immersive .kb-folio-colophon {
+  display: none;
+}
+
+/* v0.23 — reader-tools sheet scrim. Only mounted on mobile (gated by isMobile
+ * in detail.tsx), so the base lives outside the media query like
+ * .kb-drawer-scrim. Sits UNDER the sheet (--z-drawer) and OVER the immersive
+ * FAB (--z-float) — fixing the pre-v0.23 z-order where the sheet (then at
+ * --z-popover-hi) rendered BELOW the FAB. Tap dismisses (wired in detail.tsx). */
+.kb-pinsp-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--backdrop);
+  opacity: 0;
+  transition: opacity 0.22s var(--ease);
+  pointer-events: none;
+}
+.kb-pinsp-scrim.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Honor reduced-motion for the sheet slide-in + scrim fade. */
+@media (prefers-reduced-motion: reduce) {
+  .kb-pinsp,
+  .kb-pinsp-scrim {
+    transition: none;
+  }
+}
+
+@media (max-width: 860px) {
+  /* v0.23 — the reader dock dissolves so its single child (the .kb-pinsp sheet)
+   * promotes straight to the viewport as a fixed bottom sheet. */
+  .kb-dock {
+    display: contents;
+  }
+
+  /* Detail rails never get a side column on a phone — the iframe is the point.
+   * The inspector rail (metadata + comments + versions) is raised on demand as
+   * ONE bottom sheet instead (below). */
+  .detail--with-inspector,
+  .detail--with-panel,
+  .detail--with-versions {
+    grid-template-columns: 1fr;
+  }
+
+  /* W2.7 — folio on a phone: "kb · folder · section" collapses to ONE
+   * ellipsized line (a phone can't fit the full crumb), and the colophon
+   * stacks vertically instead of a `·`-joined row (its 2-3 items would
+   * overflow a narrow nowrap strip). The inline `·` separator only makes
+   * sense mid-row, so it's hidden once each item owns its own line. */
+  .kb-folio-header {
+    max-width: 100%;
+    padding: 6px 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .kb-folio-colophon {
+    max-width: 100%;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 14px 14px;
+  }
+  .kb-folio-colophon__sep {
+    display: none;
+  }
+
+  /* v0.23 — ONE mode-agnostic reader-tools sheet. Whatever the panelMode
+   * (inspect / comments / versions), the .kb-pinsp shell IS the bottom sheet:
+   * the FULL merged rail (sub-tabs + comments + versions icons) always rides
+   * inside it and comments/versions render as the panelSlot child below the
+   * rail (via the app.css `.kb-pinsp > .comments-panel/.versions-panel` fill
+   * rule) — so every panel switches from WITHIN one sheet, exactly like desktop.
+   * This replaces the old divergent block that dissolved the rail per-panelMode
+   * and split comments/versions into their own railless dead-end sheets.
+   * Mounted-but-inert when closed (translated offscreen + visibility:hidden so
+   * its focusables aren't tabbable behind the iframe); slides in on the
+   * .detail--inspector-open gate, mirroring the .kb-drawer. */
+  .detail--with-inspector .kb-pinsp,
+  .detail--with-panel .kb-pinsp,
+  .detail--with-versions .kb-pinsp {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: auto 0 0 0;
+    height: min(85vh, 640px);
+    /* Progressive-enhancement twin (same pattern the max-height pair above
+     * already uses): dvh tracks the visual viewport once the keyboard opens
+     * for the compose textarea inside, where vh stays pinned to the layout
+     * viewport and would leave the sheet sized as if the keyboard weren't
+     * there — cascade order means a supporting browser takes this line, a
+     * non-supporting one silently keeps the vh value just above. */
+    height: min(85dvh, 640px);
+    max-height: calc(100vh - var(--topbar-h) - 8px);
+    max-height: calc(100dvh - var(--topbar-h) - 8px);
+    z-index: var(--z-drawer);
+    border-top: 1px solid var(--rule);
+    border-left: 0;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    box-shadow: var(--shadow);
+    padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior: contain;
+    transform: translateY(100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+      transform 0.24s var(--ease),
+      visibility 0.24s var(--ease);
+  }
+  /* Open — the single ContextBar reader-tools toggle adds .detail--inspector-open
+   * on the same .detail element (in ANY panelMode). The compound selector
+   * outranks the closed rule above regardless of source order. */
+  .detail--inspector-open.detail--with-inspector .kb-pinsp,
+  .detail--inspector-open.detail--with-panel .kb-pinsp,
+  .detail--inspector-open.detail--with-versions .kb-pinsp {
+    transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  /* The phone-only sheet header (grab + label + ✕) now shows in every mode. */
+  .kb-pinsp__sheet-head {
+    display: flex;
+    position: relative;
+    padding-top: 16px;
+  }
+  /* Grab pill — centred at the sheet top so it reads as a native bottom sheet. */
+  .kb-pinsp__grab {
+    display: block;
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--rule-hi);
+  }
+
+  /* The reader-tools toggle itself is phone-only (desktop shows the docked
+   * rail, so the toggle would be redundant there). */
+  .kb-ctxbar__act--mobile {
+    display: inline-flex;
+  }
+
+  /* While the sheet is open, hide the immersive FAB so it never sits under the
+   * sheet grab area (the scrim also covers it — see .kb-pinsp-scrim). */
+  .detail--inspector-open .kb-immersive-toggle {
+    display: none;
+  }
+
+  /* SH.B2 — TocSpy used to get a bespoke opaque-panel treatment here (an
+   * earlier phase's fix for the article text bleeding through its
+   * transparent-gradient expanded state), keeping the shrunk "Topics" pill
+   * visible always. The audit found that pill itself actively harmful at
+   * 390px: pinned top-right below the header, it COVERS the article's own
+   * H1 on most artifacts (there's no reserved gutter for it the way the
+   * desktop centred column has) — a permanent overlap, not just while
+   * expanded. Per the work order: hide it outright at ≤860px rather than
+   * keep tuning its geometry; section nav on mobile lives in the reader
+   * sheet — SH.B3 gave PreviewInspector's About stack a "Topics" section
+   * fed by the same `kb:toc` relay, jumping via the `?sec=`/`?pane2=`
+   * params ArtifactPane already forwards into the live iframe. */
+  .kb-toc-spy {
+    display: none;
+  }
+
+  /* Floating immersive toggle — big, thumb-reachable. */
+  .kb-immersive-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    left: 14px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    z-index: var(--z-float);
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--rule-hi);
+    background: var(--bg-panel);
+    color: var(--ink);
+    font-size: 18px;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+  }
+  .kb-immersive-toggle.is-on {
+    background: var(--accent-bg);
+    color: var(--accent-soft);
+    border-color: var(--accent-bor);
+  }
+
+  /* SH.B2 — the FAB above floats over the iframe (fixed to the viewport,
+   * `.detail__frame` is cross-origin so its content can't be padded from
+   * out here — invariant #5). Reserve a blank strip at the bottom of
+   * `.detail__main` instead: with global `box-sizing: border-box`, adding
+   * padding-bottom shrinks the iframe's height:100% content box by that
+   * much, so the visible reader area ends `padding-bottom` above the
+   * viewport edge and `.detail`'s own background shows through beneath it
+   * — the FAB then floats over that blank shelf rather than over the
+   * article's own last lines. 48px circle + 14px bottom offset = 62px
+   * footprint; round up for a little breathing room above it. Applies
+   * whether or not immersive mode is on (the FAB stays visible in both).
+   * Scoped to `.detail`s that actually render the FAB (a `:has()` sibling
+   * check, same technique `.app:has(.kb-tabbar)` above uses) — the
+   * native-note reader path (`detail.tsx`'s `isNote` branch) renders no
+   * `.kb-immersive-toggle` at all, so it keeps its full-height editor. */
+  .detail:has(> .kb-immersive-toggle) .detail__main {
+    padding-bottom: calc(78px + env(safe-area-inset-bottom));
+  }
+
+  /* SelectionActions' mobile shape (`useIsMobile()` in the component swaps
+   * the class + drops the inline `top`/`left` — see that file's header
+   * comment for why a fixed bar beats a repositioned floater on a phone).
+   * A full-width bottom bar instead of the desktop floater's rect-anchored
+   * popover: the native iOS/Android selection callout already sits right
+   * above/below the selection, so anchoring a second toolbar there would
+   * fight it for space; pinning to the screen edge sidesteps that entirely
+   * and gives a stable, thumb-reachable target regardless of where the
+   * selection landed. Z-order: one step above the immersive FAB
+   * (`--z-float`, the highest thing normally living at the bottom edge) so
+   * it doesn't render underneath it, but still below `--z-scrim`/
+   * `--z-drawer` — an opening reader-tools sheet (or its scrim) must cover
+   * the bar, not fight it, since choosing "comment" is what raises that
+   * very sheet. `calc()` off the token rather than a literal keeps this
+   * correct if `--z-float` ever moves. */
+  .kb-selact--bar {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: calc(var(--z-float) + 1);
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-radius: 0;
+    border: 0;
+    border-top: 1px solid var(--rule);
+    background: var(--bg-panel);
+    box-shadow: var(--shadow);
+  }
+  /* AddToListButton's popover defaults to opening DOWNWARD
+   * (`.kb-atl__pop`, `top: calc(100% + 6px)`) — inside a bar pinned to the
+   * viewport bottom that would render off-screen (or get clipped by the
+   * safe-area padding). Flip it to open upward, mirroring the TocSpy
+   * leftward-open override in lists.css. */
+  .kb-selact--bar .kb-atl__pop {
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
+
+  /* R4 — CommentsPanel's pull-based "comment on selection" button, the
+   * timing-proof way into the composer when the selection bar above never
+   * appeared (or vanished under the user's finger — Gecko collapses a
+   * selection before the click that caused it). Deliberately width-gated
+   * rather than sitting in the `pointer: coarse` block below: the button is
+   * rendered by `useIsMobile()`, whose breakpoint is this exact 860px, so
+   * gating the style on anything else would let it render unstyled on a
+   * narrow non-touch window. 44px min-height per the MB5 touch-target floor
+   * — this is a single primary action, not a dense control row. */
+  .cp__sel-pull {
+    display: block;
+    width: calc(100% - 2 * var(--pad-3));
+    margin: var(--pad-2) var(--pad-3) 0;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent-bg);
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  /* ContextBar: scroll the action row horizontally instead of overflowing
+   * the page, and grow the tap targets. 8-10 40px actions in a row overflow
+   * a 390px viewport with zero affordance that there's more off-screen —
+   * hide the (already auto-hidden-by-most-browsers) scrollbar explicitly,
+   * fade the trailing edge so a cut-off action reads as "swipe for more"
+   * (same recipe as the `.settings__tabs`/`.atlas__header-actions` treatment
+   * — see those for why the fade is unconditional rather than gated on
+   * "is this actually scrollable": pure CSS can't detect that), and snap so
+   * a swipe lands on an action boundary instead of mid-button. */
+  .kb-ctxbar {
+    gap: 8px;
+    padding: 0 10px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 28px),
+      transparent
+    );
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    scroll-snap-type: x proximity;
+  }
+  .kb-ctxbar::-webkit-scrollbar {
+    display: none;
+  }
+  .kb-ctxbar__crumb {
+    min-width: 0;
+  }
+  /* Drop the folder prefix on a phone — the filename is enough. */
+  .kb-ctxbar__crumb > span:first-child,
+  .kb-ctxbar__sep {
+    display: none;
+  }
+  .kb-ctxbar__back {
+    flex: none;
+  }
+  .kb-ctxbar__act,
+  .kb-ctxbar__back,
+  .kb-ctxbar__nav-btn {
+    min-height: 40px;
+    padding: 8px 10px;
+    scroll-snap-align: start;
+  }
+  /* Icon-only on a phone — hide the word labels + keyboard hints; the glyph
+   * + the title tooltip carry the meaning. */
+  .kb-ctxbar__lbl,
+  .kb-ctxbar__key {
+    display: none;
+  }
+
+  /* link-flow — the flow chip stays LABELLED on a phone (a bare ↩ next to
+   * the ← back-to-recent arrow would be two indistinguishable glyphs), just
+   * compact: a short truncated title. Its hover popover is desktop-only —
+   * a phone has no hover, and tapping the chip is the plain back it needs. */
+  .kb-ctxbar__flow-lbl {
+    max-width: 10ch;
+  }
+  .kb-ctxbar__flow-pop {
+    display: none;
+  }
+
+  /* W3.D/S2 — /sessions mobile: the fixed two-column grid collapses to a
+   * single column (the list). The old rail-below-the-list layout (rail
+   * dropped BELOW the whole list, reachable only by scrolling past every
+   * row) is GONE — sessions.tsx no longer renders `.kb-ses__rail` at all on
+   * mobile (`{!isMobile && <aside className="kb-ses__rail">…}`); the
+   * SessionInspector instead mounts as `.kb-ses__inspector--sheet` (below),
+   * exactly the v0.23 `.kb-pinsp` bottom-sheet pattern, opened by row tap
+   * (sheet visibility IS `?focus=` present, #23 URL-truth ethos) and
+   * dismissed by ✕ / scrim tap / Esc. */
+  .kb-ses {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .kb-ses__main {
+    overflow: visible;
+  }
+  /* The header (h1 + project pill + folder facet + search + view toggle)
+   * wraps instead of overflowing on a phone. */
+  .kb-ses__head,
+  .kb-ses__head-meta {
+    flex-wrap: wrap;
+  }
+
+  /* LSC-4 — the Now band: force single-column stacking. The desktop grid's
+   * auto-fit(minmax(240px,1fr)) would otherwise still try 2 columns in the
+   * ~480-860px range, squeezing each lane too narrow to read a row —
+   * "stacked, not a squeezed three-column grid" (build brief). Drop the
+   * fixed per-lane scroll cap too: on a phone the whole page scrolls, a
+   * second nested scroll region is the wrong gesture. */
+  .kb-now {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kb-now__rows {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* The sheet itself: fixed to the viewport bottom, same rounded-top +
+   * shadow + safe-area treatment as `.kb-pinsp`'s mobile rule above. Always
+   * rendered open when mounted (React only mounts it while `selected` is
+   * set) — no separate closed/transform state to manage, unlike `.kb-pinsp`
+   * (which stays mounted-but-inert across every panelMode switch). */
+  .kb-ses__inspector--sheet {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--z-drawer);
+    height: min(85vh, 640px);
+    max-height: calc(100vh - var(--topbar-h) - 8px);
+    max-height: calc(100dvh - var(--topbar-h) - 8px);
+    border-top: 1px solid var(--rule);
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    box-shadow: var(--shadow);
+    padding-bottom: env(safe-area-inset-bottom);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--bg-panel-2);
+  }
+}
+
+/* ───────────────────── kb2: bottom tab bar + palette ────────────────── */
+
+/* Mobile bottom tab bar (Recent / Search / Memory / Lists). Only mounted
+ * on mobile + off the detail route (app.tsx), so the base styles can live
+ * outside the media query. Replaces the statusbar's role at the viewport
+ * bottom; padded for the home-indicator safe area. */
+.kb-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-bar);
+  display: flex;
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--rule);
+}
+.kb-tabbar__tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  cursor: pointer;
+}
+.kb-tabbar__tab svg {
+  width: 20px;
+  height: 20px;
+}
+.kb-tabbar__tab.is-active {
+  color: var(--accent-soft);
+}
+/* Immersive (detail-only) never mounts the bar, but hide it defensively. */
+body.kb-immersive .kb-tabbar {
+  display: none;
+}
+
+/* The bottom-right StatusPill (app.css `.pill-container`, fixed + a higher
+ * z-index than the bar) sits inside the tab bar's own footprint whenever
+ * the daemon status has something to show — covering the bar's rightmost
+ * button (surfaced by C3's e2e click on the new Capture tab). Lift the
+ * pill above the bar only while the bar is actually mounted (mobile,
+ * off the detail route — app.tsx), same `:has()` shift the detail-panel
+ * rule below in app.css uses to dodge the comments panel's Export button.
+ *
+ * SH.B2 — this used to be gated on `:has(.kb-tabbar)`, so on the detail
+ * route (which never mounts the tab bar) the pill fell back to its base
+ * `bottom: var(--pad-3)` (16px) — right at the viewport edge, where the
+ * screenshot audit found it sitting on top of the last visible line of a
+ * card/article. Anchor it at the SAME `--tabbar-h`-based height everywhere
+ * on mobile instead of only where a tab bar happens to be mounted: a
+ * consistent floating-chrome shelf, not "avoid a specific sibling". */
+@media (max-width: 860px) {
+  .pill-container {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px);
+  }
+}
+
+@media (max-width: 860px) {
+  /* Reserve scroll space so the fixed tab bar never covers the last items. */
+  .body .view {
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  }
+  /* SH.B2 — the pill above sits ~26-30px tall ABOVE that tab-bar shelf; the
+   * 12px reserved above isn't enough clearance once it's actually rendered
+   * (StatusPill.tsx mounts `.pill-container` only when there's something to
+   * report — an env warning, open errors/comments, in-flight requests, or a
+   * multi-daemon fleet), so extend the reserve specifically when it's
+   * present rather than permanently eating an extra ~40px of every list's
+   * scroll room. The open drop-up panel (`.pill-panel`) is a transient
+   * popover at `--z-hint` and is expected to float over content like any
+   * other popover — this only protects against the RESTING collapsed pill. */
+  .app:has(.pill-container) .body .view {
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 48px);
+  }
+
+  /* Full-screen command palette on a phone (the mobile prototype's hero
+   * treatment) — edge-to-edge sheet instead of a centered card. */
+  .cmdk-backdrop {
+    padding-top: 0;
+    align-items: stretch;
+  }
+  .cmdk {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100%;
+    max-height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+/* ─────────────────── W1.mobile: inbox thumb-zone rail ───────────────── */
+
+/* Fixed action rail for the /inbox route's ACTIVE comment row (tap-to-focus,
+ * mobile-only). Sits above the bottom tab bar, same footprint math as the
+ * StatusPill lift above (`--tabbar-h` + the home-indicator safe area) so it
+ * never overlaps the bar; `--z-float` matches the immersive FAB's layer —
+ * both are floating single-purpose controls, never simultaneously visible
+ * (the rail only lives on /inbox, the FAB only on the detail route).
+ * Mounted only via `useIsMobile()` in inbox.tsx (InboxActionRail returns
+ * null when there's no active target), so it needs no width media query of
+ * its own — desktop never renders the element at all. */
+.inbox-rail {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 10px);
+  z-index: var(--z-float);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--rule-hi);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow);
+}
+.inbox-rail__btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.inbox-rail__btn svg {
+  width: 18px;
+  height: 18px;
+}
+.inbox-rail__btn--resolve {
+  color: var(--green);
+}
+.inbox-rail__btn--reply {
+  color: var(--blue);
+}
+.inbox-rail__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ───────────────────────── MB4: atlas touch ─────────────────────────── */
+@media (max-width: 860px) {
+  /* The desktop `.atlas.atlas--with-insp` grid (1fr main + a fixed inspector
+   * column) has higher specificity than a single-class override, so on a
+   * phone its 1fr column collapses and the canvas is starved to 0px wide.
+   * Drop the grid entirely (compound selector to win the specificity battle)
+   * so the map takes the full width and the inspector stacks beneath it; pin
+   * a viewport height since the canvas otherwise derives height from width. */
+  .atlas.atlas--with-insp {
+    display: block;
+  }
+  .atlas__main {
+    min-width: 0;
+  }
+  .atlas__canvas {
+    width: 100%;
+    height: 70vh;
+  }
+  /* W3.M-d — the map-home shell is DESKTOP ONLY: `routes/gallery.tsx` gates
+   * it on `useIsMobile()`, so `?shell=map` degrades to the ordinary gallery
+   * below 860px and none of the `.atlas` rules above are touched. This one
+   * rule exists purely for the resize race (the matchMedia listener fires a
+   * frame after the viewport crosses the breakpoint): stack the projection
+   * panel under the map instead of squeezing a 340px column onto a phone. */
+  .map-shell {
+    grid-template-columns: 1fr;
+  }
+
+  /* SH.B2 — the cluster/layout control row (`.atlas__header-actions`:
+   * density / sessions / dim-read / size-by-links / time-lapse / my-field /
+   * loci-walk / lasso / color-mode / cameras / recluster / recompute) is
+   * `flex-wrap: wrap` on desktop (app.css) — reasonable there, but on a
+   * phone that wraps into a tall multi-row toolbar that eats the canvas.
+   * Same "scrollable strip" treatment as `.kb-ctxbar` above and
+   * `.settings__tabs` (app.css CE block): force a single row, hide the
+   * scrollbar, fade the trailing edge, and snap on the row's own children
+   * (buttons + the colormode/cameras wrapper divs) so a swipe lands
+   * cleanly. Can't share a className with `.kb-ctxbar`/`.settings__tabs`
+   * (AtlasView.tsx isn't in this unit's file ownership), so the
+   * declarations are duplicated here rather than truly shared. */
+  .atlas__header-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 28px),
+      transparent
+    );
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    scroll-snap-type: x proximity;
+  }
+  .atlas__header-actions::-webkit-scrollbar {
+    display: none;
+  }
+  .atlas__header-actions > * {
+    flex: none;
+    scroll-snap-align: start;
+  }
+}
+
+/* ───────────────────── SH.B2: gallery list-view escape ──────────────── */
+@media (max-width: 860px) {
+  /* `.list-row` (app.css) is a dense 7-col desktop grid (id · title ·
+   * folder · file · category · download · open-arrow) — at 390px the
+   * columns crush to unreadable slivers, and the view-toggle strip that
+   * would let you switch back to grid view is itself hidden on mobile
+   * (folded into the drawer), so `?view=list` was a dead end on a phone.
+   * Collapse to a usable 2-line card instead of hiding the view: title
+   * spans the full first row, folder + file share a second row, id/
+   * category/the redundant ↗ arrow (the whole row is already a tap target)
+   * are dropped as low-value, and the download button is pinned to the
+   * right (spanning both rows) and always visible — there's no hover state
+   * on touch to reveal it. */
+  .list-row {
+    grid-template-columns: 1fr 1fr auto;
+    grid-template-rows: auto auto;
+    row-gap: 2px;
+    padding: 10px var(--pad-3);
+  }
+  .list-row__title {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    font-size: 13.5px;
+  }
+  .list-row__folder {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .list-row__file {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .list-row__id,
+  .list-row__cat,
+  .list-row__open {
+    display: none;
+  }
+  .list-row__download {
+    grid-column: 3;
+    grid-row: 1 / 3;
+    align-self: center;
+    opacity: 1;
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+/* ─────────────────────── MB5: touch targets + a11y ──────────────────── */
+
+/* Coarse pointers (touch) get ≥44px hit areas on the small controls the
+ * desktop-dense chrome ships. Scoped to specific selectors so we don't bloat
+ * every button; width-independent so a touch laptop benefits too. Unknown
+ * selectors simply no-op. */
+@media (pointer: coarse) {
+  .kb-iconbtn,
+  .kb-burger,
+  .kb-ws,
+  .kb-search-mini {
+    min-height: 44px;
+  }
+  .kb-iconbtn,
+  .kb-burger {
+    min-width: 44px;
+  }
+  /* Sidebar filter rows + date segmented control. */
+  .kb-side__row,
+  .kb-side__chk {
+    min-height: 40px;
+  }
+  .kb-side__dates button {
+    min-height: 40px;
+    padding-inline: 14px;
+  }
+  /* Gallery card quick actions (peek / download). */
+  .kb-card__action {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  /* Inbox row quiet actions (resolve/reply) + the per-artifact archive
+   * button — the thumb-zone rail duplicates these at full 44px, but the
+   * inline buttons themselves still deserve a coarse-pointer bump. */
+  .inbox-comment__act,
+  .inbox-card__archive {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  /* Command-palette rows. */
+  .cmdk__row,
+  .cmdk__hit,
+  .cmdk__recent {
+    min-height: 44px;
+  }
+  /* Drawer close affordance. */
+  .kb-drawer__close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* SelectionActions' buttons — desktop-dense at 11.5px/no min-height (fine
+   * for a mouse-hovered floater), but this also fires on a tablet-width
+   * pointer:coarse device that's ABOVE the 860px `.kb-selact--bar` cutoff,
+   * i.e. still rendering the rect-anchored floater — so this rule is the
+   * only backstop those get. Bumped to 13px alongside the min-height (no
+   * neighboring font-size convention in this block to mirror; a plain
+   * min-height alone would leave the label's hit target visually tiny even
+   * though the padded button box is now 44px tall). */
+  .kb-selact__btn {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  /* Comment-composer controls the first MB5 audit missed — the MarkdownEditor
+   * toolbar (measured 26×24px) and the file-scope/reply/edit-modal action
+   * buttons (measured ~20px tall via `padding: 3-4px …` + an 11-12px font,
+   * no explicit height). All well under the 40px floor this block otherwise
+   * holds every dense control row to; bumped to that same 40px (not the
+   * 44px reserved for single primary/navigational controls like
+   * `.kb-drawer__close` above), since these are dense paired/grouped
+   * actions like `.kb-card__action`/`.inbox-comment__act`. */
+  .cme__tb-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .cp__compose-cancel,
+  .cp__compose-add,
+  .cp__reply-send,
+  .cp__modal-foot button {
+    min-height: 40px;
+  }
+}
+
+/* CE — daemon config editor on narrow screens: stack the key/value rows,
+ * stack each kb card's name/path, and bump input font-size to 16px so iOS
+ * doesn't zoom on focus. */
+@media (max-width: 860px) {
+  .cfg__kv-row {
+    grid-template-columns: 1fr;
+  }
+  .cfg__kb-summary {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .cfg__input {
+    font-size: 16px;
+  }
+
+  /* Operator-dashboard tab strip has 10 tabs; on a phone they overflow the
+   * viewport and the scrollbar is intentionally hidden — leaving no hint that
+   * Shares / Live / Admin / Config / Preferences exist off-screen. Fade the
+   * right edge so the cut-off tab reads as "swipe for more", and snap so the
+   * swipe lands cleanly on a tab boundary. */
+  .settings__tabs {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 28px),
+      transparent
+    );
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    scroll-snap-type: x proximity;
+  }
+  .settings__tab {
+    scroll-snap-align: start;
+  }
+}
+
+/* SH.B2 — iOS Safari auto-zooms the whole viewport when a focused input's
+ * computed font-size is under 16px (Safari's own zoom-prevention
+ * threshold) — hitting exactly the three surfaces mobile matters most on:
+ * the full-screen command palette (`.cmdk__input`, app.css), the capture
+ * sheet's fields (`.capture-sheet__field input/select/textarea`, app.css),
+ * and the reader's CM6 comment/reply composer (`.cme .cm-content`,
+ * editor/theme.ts sets no font-size of its own, so it inherits whatever a
+ * dense desktop ancestor specifies). Mirrors the existing `.cfg__input`
+ * fix in the CE block above (same rationale — "bump input font-size to 16px
+ * so iOS doesn't zoom on focus"); consolidated into one rule here since none
+ * of these three share a class with `.cfg__input` or with each other.
+ */
+@media (max-width: 860px) {
+  .cmdk__input,
+  .capture-sheet__field input,
+  .capture-sheet__field select,
+  .capture-sheet__field textarea,
+  .cme .cm-content {
+    font-size: 16px;
+  }
+}
+
+/* M1 — native momentum scrolling on touch devices (older WebKit; modern iOS
+ * Safari has it by default, a harmless no-op elsewhere). Applied to the panels,
+ * rails, and sheets that scroll independently of the page. */
+@media (pointer: coarse) {
+  body,
+  .body,
+  .kb-side,
+  .kb-pinsp,
+  .comments-panel,
+  .kb-toc-spy {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* W3.P-b — the two-pane split is DESKTOP-ONLY, belt-and-braces.
+ *
+ * `routes/detail.tsx` already refuses to render a second pane at ≤860px
+ * (`useIsMobile` gates it in JS, so the second iframe never mounts and never
+ * costs a request). This block exists so a viewport that shrinks WHILE a split
+ * is open — a rotate, a desktop window drag — degrades to one readable column
+ * during the frame before React re-renders, instead of to two ~190px-wide
+ * artifact iframes. The v0.23 contract is ONE button, ONE sheet: two
+ * cross-origin iframes each wanting the full viewport height do not degrade by
+ * stacking, so the mobile rule is simply "single pane, ignore ?pane2". */
+@media (max-width: 860px) {
+  .detail__panes {
+    display: block;
+  }
+  .detail__pane + .detail__pane {
+    display: none;
+  }
+  .detail__pane.is-focused::after {
+    display: none;
+  }
+}
+
+/* ── SL4 — the slate board at ≤860px ───────────────────────────────────────
+ *
+ * Rules matrix "Mobile": a reader with a capture slot. ONE column, the NOW
+ * band sticky, sections as accordions with counts, no swimlanes; the
+ * composer and the history drawer become bottom SHEETS with a scrim,
+ * dismissed by ✕, scrim tap or Esc — the `.kb-pinsp` pattern above, reused
+ * rather than re-invented (the scrim IS `.kb-pinsp-scrim`, so its z-order
+ * against the drawer and the FAB is already solved).
+ *
+ * The mobile-only affordance REMOVALS (no body editor, no refs, no subject;
+ * mark/drop/done only on a card) are done in TSX, not here — hiding a
+ * control with CSS leaves it focusable and in the aria tree, and a phone
+ * that can still tab to "pin" is not the reader this rules-matrix row
+ * describes. */
+@media (max-width: 860px) {
+  .slate-board {
+    padding: 0 12px 96px;
+  }
+  /* One column: the five regions stack as accordions (SlateColumn's
+   * `mobile` branch renders the <button aria-expanded> summary + count). */
+  .slate-board__cols {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .slate-col--acc {
+    border-bottom: 1px solid var(--border);
+  }
+  .slate-col--acc .slate-col__head {
+    margin: 0;
+  }
+  .slate-col--acc .slate-col__cards {
+    padding-bottom: 10px;
+  }
+  .slate-now {
+    margin: 0 -12px 10px;
+    padding: 8px 12px 10px;
+  }
+  .slate-now__row {
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+  .slate-now__line {
+    flex: 1 1 100%;
+  }
+
+  /* Composer + history as bottom sheets. Same geometry as `.kb-pinsp`; the
+   * `dvh` twin tracks the visual viewport once the keyboard opens for the
+   * composer's line input, where `vh` stays pinned to the layout viewport. */
+  .slate-composer,
+  .slate-hist {
+    position: fixed;
+    inset: auto 0 0 0;
+    top: auto;
+    width: auto;
+    height: min(85vh, 640px);
+    height: min(85dvh, 640px);
+    max-height: calc(100vh - var(--topbar-h) - 8px);
+    max-height: calc(100dvh - var(--topbar-h) - 8px);
+    z-index: var(--z-drawer);
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior: contain;
+  }
+  /* `hidden` already removes them; this keeps the slide-in honest for a
+   * browser that ignores `hidden` on a flex container. */
+  .slate-composer[hidden],
+  .slate-hist[hidden] {
+    display: none;
+  }
+  .slate-composer__lbl {
+    flex-basis: 52px;
+  }
+}

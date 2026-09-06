@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="report">
+<meta name="kb-session" content="289872ef-bbbd-42b9-8dac-90ac7052d433">
+<meta name="kb-tags" content="status:shipped, project:kb, project:oh-my-pi, omp, integrazione, italiano, harness, memoria, sessions, kb-code">
+<title>Integrazione profonda omp × kb — resoconto del programma (agosto 2026)</title>
+<style>
+:root {
+  --bg: #f7f6f1; --surface: #edeae0; --fg: #21241f; --muted: #57604f;
+  --rule: #d3d0c2; --accent: #3d6b2f; --accent-fg: #ffffff;
+  --warn: #7a5200; --danger: #9c2b2b; --ok: #2c6146;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181c17; --surface: #212820; --fg: #e6e8df; --muted: #a4ad99;
+    --rule: #39412f; --accent: #93c47d; --accent-fg: #181c17;
+    --warn: #d9a441; --danger: #e08585; --ok: #83c9a2;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.65 Georgia, 'Iowan Old Style', serif; }
+main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+h1, h2, h3 { font-family: system-ui, -apple-system, sans-serif; line-height: 1.25; letter-spacing: -0.01em; }
+h1 { font-size: 1.8rem; margin: 0.4rem 0 0.6rem; }
+h2 { font-size: 1.3rem; margin: 2.6rem 0 0.8rem; padding-top: 0.8rem; border-top: 2px solid var(--rule); scroll-margin-top: 1rem; }
+h3 { font-size: 1.04rem; margin: 1.7rem 0 0.5rem; scroll-margin-top: 1rem; }
+p, li { max-width: 44rem; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+code, pre { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.85em; background: var(--surface); border-radius: 4px; }
+code { padding: 0.1em 0.35em; }
+pre { padding: 0.8rem 1rem; overflow-x: auto; line-height: 1.5; }
+.kicker { font-family: system-ui, sans-serif; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.lede { font-size: 1.08rem; color: var(--muted); font-style: italic; margin-top: 0.2rem; }
+.meta-strip { font-family: system-ui, sans-serif; font-size: 0.8rem; color: var(--muted); margin: 0.8rem 0 0; }
+.meta-strip .sep { margin: 0 0.4em; }
+.tag { background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; padding: 0.1em 0.6em; }
+.callout { background: var(--surface); border-left: 4px solid var(--accent); padding: 0.7rem 1rem; margin: 1.1rem 0; border-radius: 0 6px 6px 0; }
+.callout--warn { border-left-color: var(--warn); }
+.callout--ok { border-left-color: var(--ok); }
+.callout-label { display: block; font-family: system-ui, sans-serif; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.2rem; }
+table { border-collapse: collapse; width: 100%; font-family: system-ui, sans-serif; font-size: 0.82rem; margin: 1rem 0; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.skip-link { position: absolute; left: -999px; top: 0; background: var(--accent); color: var(--accent-fg); padding: 0.5rem 1rem; z-index: 10; }
+.skip-link:focus { left: 0.5rem; top: 0.5rem; }
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">report · kb × oh-my-pi · italiano</div>
+  <h1>Integrazione profonda omp × kb — resoconto del programma (agosto 2026)</h1>
+  <p class="lede">In due giorni: un'esplorazione a 6 agenti che ha scoperto due difetti silenziosi già in produzione, poi tre livelli di integrazione costruiti, testati e pushati — estensione omp con strumenti kb nativi, fedeltà di cattura completa, e un ramo pronto per l'upstream.</p>
+  <div class="meta-strip">
+    <span>2026-08-30</span>
+    <span class="sep">·</span>
+    <span class="tag">status:shipped</span>
+    <span class="sep">·</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">·</span>
+    <span class="tag">project:oh-my-pi</span>
+  </div>
+</header>
+
+<section>
+<h2 id="il-contesto">Il contesto</h2>
+<p>omp (l'agente di coding multi-provider di Oh My Pi, <a href="https://github.com/can1357/oh-my-pi">open source</a>, <code>~/project/oh-my-pi</code>, installato v18.0.8) era già collegato a kb da un'estensione minimale: il ciclo memoria — wake, recall, cattura, nudge di distillazione, beat — usando 6 dei 45 eventi che l'API di estensione di omp offre, e nessuno dei suoi registri (strumenti, comandi, flag). L'operatore apprezza omp e ha chiesto: quali integrazioni <em>profonde</em> valgono la pena?</p>
+<p>Il metodo: prima un workflow di esplorazione (2 letture profonde Opus + 4 ricognizioni Sonnet, 1,18 M token) sui due codebase, poi una passata di verifica avversaria (3 agenti in modalità confutazione, con sonde live). Il risultato completo, con ogni citazione file:riga, è nel documento gemello in inglese: <a href="omp-kb-deep-integration-landscape-2026-08.html">the territory, three verified defects, and a tiered idea portfolio</a>. Questo resoconto racconta cosa ne è stato costruito.</p>
+</section>
+
+<section>
+<h2 id="i-due-difetti">La sorpresa: due difetti silenziosi già in produzione</h2>
+<h3 id="difetto-harness">D1 — «omp» non era nel vocabolario chiuso degli harness</h3>
+<p>Il set <code>HARNESSES</code> di kb-core conteneva cinque valori (claude, codex, opencode, grok, kimi). Le sessioni omp venivano catturate lo stesso (la colonna non è validata), ma ogni superficie che valida contro il set chiuso mentiva: <strong>ogni beat verso il cockpit live falliva con un 400</strong> inghiottito dal <code>curl</code> fire-and-forget dell'hook — da quando l'integrazione era stata attivata; il filtro <code>?harness=omp</code> restituiva silenziosamente <em>tutte</em> le sessioni invece di filtrare; <code>kb sessions status --harness omp</code> terminava con errore. Verificato con sonde live contro il daemon.</p>
+<h3 id="difetto-cattura-headless">D2 — la flotta headless non lasciava traccia</h3>
+<p>Il motore condiviso di grokclaude lanciava l'hook di cattura per tutti e quattro i backend, ma con lo script di grok cablato fisso — uno script che parla solo lo schema di grok e cerca solo in <code>~/.grok/sessions/</code>. Censimento su 695 catture: <strong>zero job headless omp/codex/kimi mai entrati nella memoria episodica</strong> (i 72 di grok funzionavano, come controprova). In più: la cattura scattava solo sui job riusciti — i falliti, spesso i più istruttivi, non lasciavano nulla su nessun backend. Riprodotto con <code>--dry-run</code> su quattro directory di job reali.</p>
+</section>
+
+<section>
+<h2 id="cosa-e-stato-costruito">Cosa è stato costruito</h2>
+<p>Sei fasi (OK1–OK6b), lavoratori Sonnet per il grosso, Opus sui due pezzi più delicati, orchestrazione e decisioni a Fable. Ogni fase: brief dettagliato, revisione del diff da parte dell'orchestratore, gate di test, commit firmato.</p>
+
+<h3 id="fase-correzioni">Le correzioni (kb <code>c4e7a687</code> · grokclaude <code>510f79e</code>)</h3>
+<ul>
+<li><code>HARNESSES</code> diventa <code>[&amp;str; 6]</code> con «omp»; il parse del filtro ora risponde <strong>400</strong> (problem-json che nomina il set accettato) su un valore esplicito ignoto, invece di degradare a non-filtrato; hint di ripresa <code>omp -r &lt;id&gt;</code>; glifo <strong>π</strong> nella SPA e nella copia lock-step della CLI. 3.529 test Rust + 1.259 vitest verdi.</li>
+<li>grokclaude smista la cattura sul backend del job: omp e kimi puntati ai loro archivi locali al job; codex resta uno <em>skip esplicito e loggato</em> (il suo archivio è condiviso per decisione di design registrata — meglio un rifiuto onesto di un glob fragile); <strong>i job falliti ora catturano</strong>, su ogni backend, dall'unico choke point <code>fail_job</code>; override per-backend <code>KB_{OMP,KIMI,CODEX}_CAPTURE_HOOK</code>. Test 278→288.</li>
+</ul>
+
+<h3 id="fase-estensione">L'estensione v2 (kb <code>f719ee11</code>, Opus)</h3>
+<p>Da 243 a 974 righe, tutto lato estensione, zero patch upstream. Il modello ora può <em>interrogare</em> kb a metà turno invece di ricevere solo testo iniettato: 9 strumenti nativi (<code>kb_context</code>, <code>kb_recall</code>, <code>kb_remember</code>, <code>kb_why</code>, <code>kb_recollect</code>, <code>kbcode_search</code>, <code>kbcode_usages</code>, <code>kbcode_why</code>, <code>kbcode_pack</code>), ognuno con <code>loadMode: "essential"</code> — senza quel flag omp smonta lo strumento dietro <code>xd://</code> e il modello non lo vede mai, la trappola più insidiosa dell'intera API, verificata su test upstream. Poi: comandi <code>/kb-context</code>, <code>/kb-desk</code>, <code>/kb-distill</code>; il flag <code>--kb-off</code> come interruttore generale; i beat blocked/unblocked dagli eventi di approvazione strumenti; il <strong>distill gate</strong> — al termine della sessione, se c'è un nudge, una continuation visibile al modello (funziona anche headless, dove <code>ui.notify</code> è un no-op) gli chiede di scrivere la memoria prima di chiudere; il contesto kb dentro il prompt di compattazione, così comprimere non fa dimenticare ciò che kb sa; il ledger strutturale <code>kb.recall</code> via <code>appendEntry</code>.</p>
+<div class="callout callout--ok"><span class="callout-label">Bonus inatteso</span>L'agente ha scoperto e corretto un bug <em>preesistente</em>: <code>run()</code> attendeva la chiusura delle pipe dei processi nipoti, superava il timeout di 30 s di omp e l'iniezione di recall veniva scartata in silenzio. La v1 perdeva recall senza che nessuno se ne accorgesse.</div>
+
+<h3 id="fase-cattura">La fedeltà di cattura (kb <code>0f48ad67</code>)</h3>
+<p>La sessione omp è un albero ricco che l'adapter riduceva ai soli messaggi. Ora la cattura conserva: i <strong>subagenti</strong> (ogni task scrive un JSONL completo che prima era invisibile — ~9 MB in una sola sessione locale; ora vengono tradotti e messi in scena nel layout che il motore Rust già sa leggere, accendendo gratis i blocchi digest ed evidenza esistenti); l'<strong><code>intent</code></strong> di ogni chiamata strumento — la motivazione in linguaggio naturale, 1.342 solo su questa macchina, prima scartate al 100% — agganciata al risultato come riga <code>[intent]</code>; i riassunti di <strong>compattazione</strong> (la distillazione che l'agente stesso ha scritto della storia scartata); il segnale di <strong>uscita anomala</strong> (<code>kind</code> + tool call pendenti); il ledger di recall ri-sintetizzato nella forma che il parser di kb-core già consuma (il quadro della memoria episodica pull-only è in <a href="sessions-as-episodic-memory-design.html">sessions as episodic memory</a>); il <strong>titolo</strong> via <code>aiTitle</code>, un campo che kb-core legge genericamente — zero modifiche Rust. Test dell'adapter da 14 a 25 asserzioni, E2E su una sessione reale a 3 subagenti.</p>
+
+<h3 id="fase-kbcode">La provenienza kb-code dentro omp (kb <code>2235ea13</code>)</h3>
+<p>Su ogni edit/write riuscito, un footer di provenienza (chi scrisse quella riga, in quale sessione, perché) accodato al risultato dello strumento — il middleware <code>tool_result</code> è l'unica cucitura sancita, dato che <code>tool_call</code> può solo bloccare o riscrivere l'input, mai iniettare contesto. Lo script delegato mantiene da solo il gate di confidenza e i tetti per sessione. Indagine onesta a corredo: omp <strong>non esporta</strong> alcuna variabile d'ambiente con l'id di sessione nei figli bash, quindi il braccio diretto per il trailer <code>Kb-Session:</code> non è stato inventato — resta il fallback via marker file, che l'estensione alimenta a ogni prompt.</p>
+
+<h3 id="fase-tier3">La scommessa Tier 3 (oh-my-pi <code>4b20db6a91</code> · kb <code>c3a73df1</code>)</h3>
+<p>Invece di forkare omp per aggiungere «kb» al suo enum chiuso dei backend di memoria, la mossa è stata <em>upstreamare la registrabilità</em>: un ramo <code>feat/register-memory-backend</code> (worktree isolato, +678/−11, 12 test nuovi, mai pushato) aggiunge <code>pi.registerMemoryBackend(id, factory)</code> all'API di estensione e instrada gli strumenti di memoria attraverso l'interfaccia per i backend esterni. Lato kb, un'estensione <em>feature-detected</em> registra kb come backend: sul omp 18.0.8 installato è un no-op byte-silenzioso (verificato sui log di omp); il giorno in cui l'API esiste, <code>memory.backend: "kb"</code> dà agli strumenti nativi <code>recall</code>/<code>retain</code> di omp il corpus kb come archivio. Dettagli giusti: <code>clear()</code> è un no-op <em>vero</em> — il corpus è condiviso tra harness, non è proprietà del backend; il <code>source</code> libero di omp non viene inoltrato all'enum chiuso di kb, che avrebbe rifiutato quasi ogni salvataggio.</p>
+</section>
+
+<section>
+<h2 id="parcheggiati">Idee parcheggiate, con il perché</h2>
+<table>
+<thead><tr><th>Idea</th><th>Motivo del parcheggio</th></tr></thead>
+<tbody>
+<tr><td>Server MCP per kb</td><td>Il trigger registrato (ruling 2026-07-10) non è scattato: omp ha shell, config e un'API di estensione <em>superiore</em> a MCP per questo scopo; omp è peraltro solo client MCP.</td></tr>
+<tr><td>Tool-render di collab-web nelle viste sessione di kb</td><td><code>@oh-my-pi/collab-web</code> non è pubblicato su npm (404) — il blocco previsto, confermato.</td></tr>
+<tr><td>Lane RPC-host (<code>kb://</code> via <code>set_host_uri_schemes</code>)</td><td>Ha senso solo come evoluzione del driver ompclaude, ora che D2 è corretto — da rivalutare con l'uso.</td></tr>
+<tr><td>Daycard nel wake condiviso</td><td>Tocca tutti gli harness, non solo omp — fuori dal perimetro di questo programma.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="deploy">Deploy e stato operativo</h2>
+<p>Pushati: kb <code>eda11b5b..8c0fc050</code> (6 commit, ribasati sul fix docker parallelo) e grokclaude <code>510f79e</code>. Le estensioni e la CLI sono <strong>già vive</strong> sulla workstation (symlink + binari installati): strumenti, ledger e fedeltà di cattura valgono dalla prossima sessione omp. Il CI del push ha esposto due problemi <em>preesistenti</em> — i binding TypeScript del desk mai committati (drift di <code>types-check</code>, risolto in questo stesso deploy) e un flake Firefox sul relay di selezione — documentati qui per onestà di cronaca. Il deploy di kb.example.com segue <code>redeploy-kb.sh</code> (immagine con smoke test su porta separata e rollback automatico); la verifica finale è il beat omp che risponde 200 in produzione.</p>
+<div class="callout callout--warn"><span class="callout-label">Per l'operatore</span>Restano tre azioni umane: ruotare qualunque chiave provider sia mai finita in un transcript di sessione; leggere il diff del ramo oh-my-pi e riscrivere la bozza di PR (<code>/tmp/omp-mb-pr-draft.md</code>) con parole proprie — il CONTRIBUTING di oh-my-pi chiude i PR con output di agente non revisionato; ricostruire/installare i binari grokclaude sui due host secondo il flusso di release abituale.</div>
+</section>
+
+<section>
+<h2 id="come-verificare">Come verificare</h2>
+<ul>
+<li><code>curl -X POST …/api/sessions/beat</code> con <code>harness=omp</code> → <strong>200</strong> (prima: 400).</li>
+<li><code>kb sessions status --harness omp</code> → elenca le sessioni omp (prima: errore).</li>
+<li>Una sessione omp nuova: gli strumenti <code>kb_*</code> compaiono al livello superiore (non dietro <code>xd://</code>); il file di sessione contiene entry <code>kb.recall</code>; a fine sessione con commit senza <code>kb remember</code>, il modello riceve il distill gate.</li>
+<li>Un job ompclaude headless (anche fallito): a fine job compare una cattura <code>kb-capture-omp/1</code> in <code>KB_SESSIONS_DIR</code>.</li>
+<li>La cattura di una sessione con subagenti mostra i blocchi <code>kb-session-subagents</code> e <code>kb-session-sidecar-text</code> e righe <code>[intent]</code>.</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

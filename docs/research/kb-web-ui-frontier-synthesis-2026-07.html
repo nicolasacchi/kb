@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, web-ui, spa, design-review, roadmap, frontier, research-synthesis">
+<title>kb web UI frontier: what to change next (13-lens synthesis, July 2026)</title>
+
+<style>
+:root {
+  --bg:#faf7f2; --surface:#f1ece1; --fg:#232630; --muted:#575d6b;
+  --rule:#ddd5c4; --accent:#96450a; --accent-fg:#ffffff;
+  --warn:#7a5d00; --danger:#a52a21; --ok:#1d6b41;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#14161c; --surface:#1d212a; --fg:#e9e6de; --muted:#a9aca3;
+    --rule:#343a47; --accent:#eba55e; --accent-fg:#14161c;
+    --warn:#e3c565; --danger:#ff958c; --ok:#83d1a4;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.65 ui-serif, "Iowan Old Style", Georgia, serif;
+}
+main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+h1, h2, h3 { font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.25; }
+h1 { font-size: 1.85rem; margin: .3rem 0 .6rem; letter-spacing: -.015em; }
+h2 { font-size: 1.3rem; margin: 2.6rem 0 .7rem; padding-top: 1rem; border-top: 1px solid var(--rule); scroll-margin-top: 1rem; }
+h3 { font-size: 1.05rem; margin: 1.8rem 0 .5rem; scroll-margin-top: 1rem; }
+p, li { max-width: 70ch; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.kicker { font-family: ui-sans-serif, system-ui, sans-serif; font-size: .8rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: .2rem 0 1rem; }
+.meta-strip { font-family: ui-sans-serif, system-ui, sans-serif; font-size: .8rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: .5rem; border-bottom: 1px solid var(--rule); padding-bottom: 1.2rem; }
+.tag { background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; padding: .05rem .6rem; }
+table { border-collapse: collapse; width: 100%; font-family: ui-sans-serif, system-ui, sans-serif; font-size: .88rem; margin: 1rem 0; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.callout { background: var(--surface); border-left: 3px solid var(--accent); padding: .7rem 1rem; margin: 1.1rem 0; border-radius: 0 6px 6px 0; font-size: .95rem; }
+.callout--warn { border-left-color: var(--warn); }
+.callout--danger { border-left-color: var(--danger); }
+.callout--ok { border-left-color: var(--ok); }
+.callout-label { display: block; font-family: ui-sans-serif, system-ui, sans-serif; font-size: .75rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); margin-bottom: .2rem; }
+.chip { font-family: ui-sans-serif, system-ui, sans-serif; font-size: .72rem; border: 1px solid var(--rule); border-radius: 999px; padding: 0 .5rem; color: var(--muted); white-space: nowrap; }
+code { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: .86em; background: var(--surface); padding: .08em .35em; border-radius: 4px; }
+.skip-link { position: absolute; left: -9999px; top: 0; background: var(--accent); color: var(--accent-fg); padding: .5rem 1rem; }
+.skip-link:focus { left: .5rem; top: .5rem; z-index: 10; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#tldr">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">design &middot; project:kb &middot; web UI frontier</div>
+  <h1>kb web UI frontier: what to change next (13-lens synthesis, July 2026)</h1>
+  <p class="lede">Thirteen external-research lenses produced 130 ideas; this is the judgment layer — six programs, three waves, and the refusals that stand.</p>
+  <div class="meta-strip">
+    <span>2026-07-18</span><span class="tag">status:open</span><span class="tag">project:kb</span>
+    <span class="tag">companion: <a href="kb-web-ui-idea-atlas-2026-07.html">idea atlas (all 130 ideas)</a></span>
+  </div>
+</header>
+
+<section>
+<h2 id="tldr">TL;DR</h2>
+<p>Fourteen offloaded research workers (one SPA source audit + thirteen external lenses: reading apps, spatial canvases, latent-space cartography, spaced repetition, editorial design, quantified reading, power-user keyboarding, 2024&ndash;2026 web-platform capabilities, time-as-interface, human&harr;agent copresence, calm computing, museum &ldquo;generous interfaces&rdquo;, mobile ergonomics) produced <strong>130 ideas</strong>, catalogued in the <a href="kb-web-ui-idea-atlas-2026-07.html">companion idea atlas</a>. Three findings dominate:</p>
+<ul>
+<li><strong>The existing board is validated.</strong> The three veins of the July idea board (private) — search evidence, keyboard triage, atlas visual overhaul — were independently re-derived by outside lenses that had never seen it. Build them with more confidence.</li>
+<li><strong>Six new territories opened.</strong> The board mined the SPA against its own daemon; the external lenses mined forty years of other people's interfaces. What came back that the board lacks: the atlas as a <em>selection instrument</em> (Nomic/Projector patterns), a <em>generous overview-first home</em> (museum collections), <em>time as a navigable place</em> (Lifestreams/Memex over kb's unique episodic capture), a deterministic <em>editorial identity</em> (mastheads, errata slips, hash-seeded illuminations), a full <em>keyboard grammar</em> (hints, marks, registers, splits), and <em>calm ambient surfaces</em> (e-ink daycards, radiators) — all legal under the invariants.</li>
+<li><strong>Five collisions with recorded refusals.</strong> TTS, offline packs, print export, read-next footers, and daemon-side media/summaries were each re-proposed by outside lenses and are each already refused or gated. The refusals stand (<a href="#collisions-with-recorded-refusals">details</a>) — three independent re-proposals of TTS is a signal worth logging, not a verdict.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="method">Method &amp; honesty</h2>
+<p>Run 2026-07-18 via two Workflow fan-outs of grok-4.5 offload workers (<code>opencode</code>, researcher agent, variant high): 14 workers in wave one (~748K tokens, 50 min wall), 4 tightened retries (~212K tokens, 9 min) after three workers died fetch-hunting and one lost its structured output. One lens (semantic-atlas) was recovered from its on-disk <code>report.md</code> after the relay failed. Total: ~960K offloaded tokens, 130 ideas across 13 lenses, every lens grounded in named products/essays with source URLs in the catalog.</p>
+<p>Verification notes, per the offload contract:</p>
+<ul>
+<li>The SPA-audit worker's two loudest claims were <strong>refuted</strong> by grep: <code>fetchFacets</code> <em>is</em> wired (Sidebar + PreviewInspector facet chips), and a 230-line stale-anchors route exists. Its verified survivors: the zero-hit-queries endpoint has no SPA caller, and <code>inbox.tsx</code>/<code>notes.tsx</code>/<code>anchors.tsx</code> are thin (145&ndash;230 lines against 500+ for gallery/search/detail). Inventory gaps below are used as leads only where they survived checking.</li>
+<li>The timeline and ambient lenses were partially written from the model's training knowledge after their fetch budgets ran dry (marked in their source lists). Their <em>patterns</em> (Lifestreams, calm technology) are stable literature; their product details should be re-verified before citing externally.</li>
+<li>Browser-support claims in the web-platform lens were cross-checked against webstatus.dev by the worker; Speculation Rules and File System Access remain Chromium-only, View Transitions/Popover/<code>:has()</code>/container queries/text fragments are Baseline. Treat all as progressive enhancement.</li>
+<li><strong>Post-publication review pass (2026-07-18):</strong> a single Fable agent re-read all three artifacts against the invariants and spot-checked the SPA source. It confirmed one real defect (unguarded prerender fires the history open-beacon — fixed in Wave 1), caught three items double-scheduled against the prior board, two contradictions with the open-questions section, corrected two effort ratings against the catalog, promoted five catalog ideas into waves, and contributed the three standing rules. The waves below are the post-review version.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="relation-to-the-idea-board">Relation to the existing idea board</h2>
+<p>kb web UI: audit, idea board, and priorities (private) (125&nbsp;KB, 101 ideas critiqued down to 44, milestones A&ndash;C) remains the execution document for its territory. This synthesis does not re-litigate it. The division of labor:</p>
+<table>
+<tr><th>Where they agree</th><th>What this research adds on top</th></tr>
+<tr><td>Match-context snippets, zero-result recovery (board Milestone B)</td><td>Generous recovery: facet-probe chips, random sample deck, example searches — the museum lens's &ldquo;no dead ends&rdquo; doctrine</td></tr>
+<tr><td>Keyboard triage mode, roving cursor, keymap registry (board B)</td><td>The full grammar: hint-mode overlays, vim marks/registers for artifacts, split panes, i3-style workspaces, scratchpad drawer</td></tr>
+<tr><td>Atlas visual overhaul — legend, read-state dimming, degree sizing (board C)</td><td>The instrument program: deterministic c-TF-IDF labels, lasso&rarr;working set, true-neighbors rail with layout-stress honesty, semantic zoom, voids, concept axes</td></tr>
+<tr><td>Activity feed, provenance-forward gallery (board C)</td><td>Artifact biography timeline, session trails, session-replay reader — time as the organizing axis, not a feed</td></tr>
+<tr><td>Reader highlights &rarr; memory/citation (board B)</td><td>Quote deep-links via text fragments; provenance registers (<code>"p</code> yanks the passport stub)</td></tr>
+</table>
+<p>Entirely absent from the board and opened here: the editorial identity program, the ambient program, the spatial boards layer, the quantified-reading layer (calendar, growth rings, yearbook), and the platform-enabler sweep (view transitions, anchor-positioned popovers, speculation rules).</p>
+</section>
+
+<section>
+<h2 id="program-cartography">Program 1 — The atlas becomes an instrument</h2>
+<p><em>Sources: semantic-atlas, spatial-canvas, reading-experience, serendipity, editorial, discovery-museum lenses — six of thirteen converged here, the strongest signal in the run.</em></p>
+<p>Today the atlas is a beautiful toggle. The cartography literature (Nomic Atlas, TensorFlow Embedding Projector, Distill's t-SNE essay) says embedding maps earn their keep only when they expose <strong>neighborhoods, labels, and selections</strong> — and it hands kb a hard rule that fits its explainability culture perfectly: 2-D distances lie, so the UI must refuse to imply them and surface where the projection disagrees with high-dimensional truth.</p>
+<ul>
+<li><strong>Continent keywords</strong> — replace tag-frequency cluster labels with c-TF-IDF over member text: deterministic, decomposable (tf &times; idf per term on click), no LLM. The BERTopic label path without BERTopic's LLM step.</li>
+<li><strong>Lasso &rarr; working set</strong> — freehand-select dots; bottom bar offers open-as-gallery-filter, add-to-list, copy-ids-for-agent. The map stops being a picture and becomes a <em>query</em>.</li>
+<li><strong>True-neighbors rail + layout-stress badge</strong> — inspector lists cosine neighbors from the <em>original</em> embedding space with distance bars; a badge admits &ldquo;3 of 8 high-D neighbors are far in 2-D&rdquo;. Distill's lesson, taught in-product.</li>
+<li><strong>Semantic zoom</strong> — &le;6 continents at low zoom, the existing &le;12 clusters mid-zoom, c-TF-IDF bigrams + titles up close; <code>[</code>/<code>]</code> step depth. A basemap, not a scatterplot.</li>
+<li><strong>Terra incognita</strong> — invert the density layer: contours where layout is sparse <em>and</em> embeddings are isolated, labeled with the nearest continents, with a copy-to-clipboard brief so an agent (outside the daemon) can fill the gap.</li>
+<li><strong>Wild tier</strong>: bookmarkable cameras; concept axes (reproject onto an A&harr;B pole pair through the existing embed worker); temporal cartographic replay (Procrustes-aligned layout snapshots); <em>agent weather fronts</em> (isobands of agent-write mass vs human-curation mass — cartography of the collaboration itself); and the map-home shell, where typing dims non-hits in place and the gallery becomes the list projection of the current map selection.</li>
+</ul>
+<div class="callout callout--ok"><span class="callout-label">Why this program first</span>Six independent lenses, zero invariant risk anywhere in it, and it compounds: labels feed the lobby, lasso feeds lists and boards, neighbors feed the reader rail, and the map-home shell is just the composition of the earlier steps.</div>
+</section>
+
+<section>
+<h2 id="program-generous-home">Program 2 — The generous home</h2>
+<p><em>Sources: discovery-museum, editorial, dashboards, web-platform lenses.</em></p>
+<p>Whitelaw's &ldquo;Generous Interfaces&rdquo; names the sin precisely: search is <em>ungenerous</em> — it withholds the collection until you guess a query. Museums solved browsing large heterogeneous collections a decade ago: overview first, multiple representational ways in, never a dead end. kb's gallery currently opens as a filter rail waiting for intent.</p>
+<ul>
+<li><strong>Corpus lobby</strong> — the empty-query gallery shows the collection's shape: census numbers, a segmented category/status bar, a highlights strip of full cards, example searches drawn from real facet values. One click drops into the existing grid, pre-filtered.</li>
+<li><strong>Portal walls</strong> — categories / tags / folders / status as representational tiles (count + sample titles), not text links.</li>
+<li><strong>Representational cards</strong> — cards show a true sample of the body (first meaningful paragraph, heading-outline chips, structure collage) from <em>indexed</em> text, never live-loaded artifact HTML. Grid browsing becomes competitive with search for &ldquo;I don't know the words yet.&rdquo;</li>
+<li><strong>Broadsheet home</strong> (editorial lens) — a fifth gallery mode that packs the current filter set into a deterministic front page: lead story by rule (word count &times; recency &times; open-comment mass), features, briefs column, a continuing-coverage rail. Same inputs, same page.</li>
+<li><strong>Issue masthead</strong> — per-kb masthead with a deterministic <code>Vol. YYYY &middot; Issue WW</code> from the ISO week and a one-line census. Switching corpora feels like switching publications.</li>
+<li><strong>Never-empty search</strong> — on 0 hits always render: other-mode counts, fleet-scope count, nearest facet chips that <em>would</em> hit, six samples, example queries. Extends the board's zero-result recovery with the museum doctrine.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="program-time-as-place">Program 3 — Time is a place</h2>
+<p><em>Sources: timeline-episodic, agent-copresence, dashboards, reading-experience lenses.</em></p>
+<p>kb's most unusual asset is full episodic provenance — every Claude Code session captured and joined to files, commits, artifacts, decisions, comments. No commercial tool has this join. The SPA currently renders it as lists. The Lifestreams/Memex/Rewind tradition says: make time the interaction axis.</p>
+<ul>
+<li><strong>Artifact biography tab</strong> — a vertical timeline in the inspector: generating prompt &rarr; sessions that touched it &rarr; commits &rarr; comments &rarr; version diffs, each row deep-linking to the existing surface. Pure join of existing tables; the single highest-value/effort ratio in this program.</li>
+<li><strong>Temporal search scrubber</strong> — filter search results by &ldquo;read during&rdquo; a date range or session: <em>what was I researching on July 15?</em></li>
+<li><strong>Session trails</strong> — save a session's artifact path as a named, replayable, Memex-style trail; a reading list variant ordered by event time with session context inline.</li>
+<li><strong>Artifact archaeology</strong> — first-touch vs last-touch overlaid per section: stale claims (written months ago, never revisited) versus fresh work, from version history alone.</li>
+<li><strong>Wild tier</strong>: corpus time-lapse (watch the corpus grow, scrubber over <code>mtime</code>, atlas coords as stable layout); the <em>session-replay reader</em> — transcript left, artifact right, one shared playhead, the artifact highlighting what was being read at each transcript moment. Deterministic, joins already captured.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="program-publication">Program 4 — The corpus as publication</h2>
+<p><em>Sources: editorial, dashboards, ambient lenses.</em></p>
+<p>A corpus of agent-authored HTML looks like a database of identical cards. Publication design is the deterministic fix — no thumbnails, no screenshots, no model calls:</p>
+<ul>
+<li><strong>Hash-seeded illuminations</strong> — a small generative SVG ornament per artifact derived only from <code>content_hash</code> + theme tokens: identical across machines and rebuilds, recolors on theme change. Identicons grown up; cards stop being clones.</li>
+<li><strong>Folio chrome</strong> — an optional reader density: ~66ch serif measure, running header (kb &middot; folder &middot; section), colophon strip (created, hash prefix, session link). Longreads feel published, not &ldquo;opened in an iframe&rdquo;.</li>
+<li><strong>Errata slips</strong> — open comments render as a numbered translucent correction sheet pinned to the artifact's top margin; resolving tears a line off live over SSE. The review workflow, dressed in publishing's own metaphor.</li>
+<li><strong>Galley-proof versions</strong> — the diff pane re-skinned as printer's proof marks, hunks grouped by section id instead of raw lines.</li>
+<li><strong>Year-in-corpus yearbook</strong> — <code>kb yearbook --year 2025</code> emits a self-contained HTML artifact (calendar SVG, growth rings, top hubs, remarkable-days evidence, machine block with every number + query hash) that byte-matches on re-run at the same corpus head. It indexes like any artifact; next year's edition wikilinks it. An agent may narrate it afterwards — outside the daemon.</li>
+</ul>
+<div class="callout"><span class="callout-label">Note</span>The quire-binding idea (reading lists laid out as printable signatures) is catalogued at wildness 5 but collides with the recorded print-export refusal — see <a href="#collisions-with-recorded-refusals">collisions</a>.</div>
+</section>
+
+<section>
+<h2 id="program-speed-grammar">Program 5 — The keyboard gets a grammar</h2>
+<p><em>Sources: keyboard-power, reading-experience, mobile-touch, web-platform lenses.</em></p>
+<p>The board already commits to a keymap registry, roving cursor, and triage mode. The external lenses say: don't stop at shortcuts — steal the <em>grammar</em> that makes editors addressable:</p>
+<ul>
+<li><strong>Hint mode</strong> — <code>f</code> overlays one/two-key hints on every actionable target on any surface (cards, chips, atlas dots, rail rows); <code>F</code> peeks instead of navigating. Vimium's muscle memory over the whole SPA.</li>
+<li><strong>Marks &amp; registers</strong> — <code>m</code>a sets a mark on any artifact/position, backtick jumps; registers yank artifact ids/permalinks/passport stubs (<code>"p</code> = provenance register) and paste them as wikilinks or comment citations. Citation becomes as fast as text editing.</li>
+<li><strong>Peek everywhere</strong> — Alt-hover peek cards for wikilinks, backlinks, session files, memory ids; Shift+F12-style &ldquo;references&rdquo; peek listing backlinks + session touches + comment mentions. VS Code's nav model over the knowledge graph, resolved from existing indices.</li>
+<li><strong>Split panes &amp; workspaces</strong> — 2&ndash;4 tiling panes (compare two RFCs, artifact + backlinks + session); numbered i3-style workspaces (<code>1:inbox 2:read 3:atlas</code>) with per-workspace layout, filters, and scroll state.</li>
+<li><strong>Scratchpad drawer</strong> — one persistent floating buffer over any view; <code>Cmd+Enter</code> routes contents to note / capture / comment-on-current. Compose without leaving triage.</li>
+<li><strong>Mobile is the same program</strong> — swipe triage on inbox/comments (resolve / defer / reply), a fixed thumb-zone action rail, capture-to-draft queue with deferred tagging. Gestures are the phone's hint mode.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="program-calm-surfaces">Program 6 — Calm surfaces</h2>
+<p><em>Sources: ambient, serendipity, dashboards lenses.</em></p>
+<p>kb refuses push, streaks, and badges. Calm computing (Weiser/Brown) is the design tradition built for exactly that refusal: information as weather — present, glanceable, never demanding.</p>
+<ul>
+<li><strong>Review mode on resurface</strong> — card-at-a-time pull session over the existing queue, showing the reason arithmetic; acting clears (resolve the comment, finish the read) — no &ldquo;mark done&rdquo; storage.</li>
+<li><strong>Antilibrary shelf</strong> — a first-class &ldquo;never opened / zero backlinks&rdquo; gallery mode framed as research reserve, not backlog; explicitly excluded from debt scoring so it never becomes guilt.</li>
+<li><strong>On-this-day + session echoes</strong> — a date-join facet (created / last-read / worked-on this day &plusmn;N years) and compressed past-session beats as resurface cards; bridges episodic memory into the same pull strip.</li>
+<li><strong>Half-life dial</strong> — one slider scaling all decay half-lives, previewed closed-form (&ldquo;at 90%: ~N items&rdquo;). FSRS's single-knob lesson without ML fitting.</li>
+<li><strong>Desk radiator + e-ink daycard</strong> — a chromeless <code>/ambient</code> route (large title, one-line thesis, 90&ndash;180s crossfade, click opens reader) and <code>kb ambient render --format eink</code> emitting a sparse 1-bit daily card a panel polls on its own schedule. Pull-only by construction.</li>
+<li><strong>Vital-signs strip</strong> — one quiet clickable rollup line (artifacts &middot; median time-to-first-read &middot; open threads); each number deep-links to the surface that defines it.</li>
+<li><strong>Wild tier</strong>: screensaver of unfinished threads (night hours bias to recently-resolved — gentle closure, not open-loop anxiety); corpus weather (hash-of-index-stats &rarr; deterministic SVG scene, three plain sentences beneath); walk-by provenance filmstrip of <code>kb why</code> energy.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="program-agent-copresence">Cross-cutting — agent copresence, kept honest</h2>
+<p><em>Sources: agent-copresence, spatial-canvas, timeline-episodic lenses.</em></p>
+<p>The strongest legal ideas make the human&harr;agent loop reviewable without giving the daemon a brain:</p>
+<ul>
+<li><strong>Three-state review verdicts</strong> — end a review pass with comment / approve / request-changes as artifact metadata; a readiness panel lists must-fix threads. GitHub's grammar over kb-comments/1.</li>
+<li><strong>Tribal-knowledge proposal inbox</strong> — post-session memory candidates land in a reviewable queue (approve &rarr; <code>kb remember</code> with provenance) instead of silent writes. Upgrades the existing distill flow; the human gate is the invariant.</li>
+<li><strong>Organized knowledge-diff</strong> — agent batch edits presented grouped by section and claim type with before/after rendered views, not raw HTML dumps.</li>
+<li><strong>Agent-proposed layouts</strong> — agents emit layout-proposal sidecars (computed outside the daemon); the SPA renders them as a translucent ghost layer the operator accepts, trims, or drags over. Geometry stays operator-owned.</li>
+<li><strong>Reshaped to stay legal</strong>: &ldquo;CODEOWNERS for domains&rdquo; becomes routing metadata for agent skills (no identities); &ldquo;fleet of specialist agents&rdquo; is agent-layer orchestration whose outputs land as ordinary artifacts/comments; suggest-edit patches must apply via the CLI/agent layer since <code>reanchor</code> stays the only anchor rewrite (invariant #6).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="platform-enablers">Platform enablers (2024&ndash;2026 web)</h2>
+<p>Not a program — a toolbox the programs draw from, all progressive enhancement:</p>
+<table>
+<tr><th>Capability</th><th>kb use</th><th>Support</th></tr>
+<tr><td>View Transitions</td><td>Card&rarr;reader morph; facet reflow continuity</td><td>Baseline</td></tr>
+<tr><td>Scroll-driven animations</td><td>Reading-progress hairline + section ticks off-main-thread, mirroring the stored read-state</td><td>Baseline newly</td></tr>
+<tr><td>Anchor positioning + Popover</td><td><strong>Scorechip popovers</strong>: every score chip opens a decomposed-terms stacked bar (resurface terms, BM25 + cosine, recall rank math). Explainability made tactile — the signature move of this whole document.</td><td>Chromium + Safari 26; fallback = fixed tooltip</td></tr>
+<tr><td>Text fragments</td><td>Quote deep-links: comments/search/citations mint <code>#:~:text=</code> + section-id links; opening highlights the exact span</td><td>Baseline</td></tr>
+<tr><td>Speculation Rules</td><td>Cold permalink entries only — the SPA routes client-side, so in-app navigation never fires speculation rules (use query prefetch there); any prerendered shell must gate its history open-beacon on <code>document.prerendering</code> or phantom rows pollute the append-only history + reading-progress seeds (#8/#19)</td><td>Chromium only</td></tr>
+<tr><td>Container queries + <code>:has()</code></td><td>Density-reactive shell: cards restyle on their own state (unresolved comments thicken the border) with zero JS observers</td><td>Baseline</td></tr>
+<tr><td>OPFS / FS Access</td><td>Offline reading packs — <strong>gated</strong>, see collisions</td><td>Chromium only</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="pre-implementation-delta-2026-07-20">Pre-implementation delta check (2026-07-20)</h2>
+<p>Between first publication (2026-07-18) and implementation kickoff, the repo shipped the entire kb-code program (41d65321..479710e8: a sibling read-first code daemon + its own web-code SPA). <code>web/src</code> was untouched and kb-core/kb-server absorbed only ~141 side-effect lines. Every wave assumption was re-run at HEAD (two grok workers + inline verification after one relay failure):</p>
+<ul>
+<li><strong>Wave 1 assumptions: 9 of 10 hold, with file:line evidence.</strong> The resurface wire already carries <code>comment_term</code>/<code>read_term</code>/<code>reasons</code> (ResurfaceItem.ts) so scorechips are pure UI; DocResponse still has no read-state (the envelope change is confirmed necessary); the zero-hit endpoint still has no SPA caller; detail.tsx:175 still fires the open beacon and <code>prerendering</code> appears nowhere in web/src; the queryClient is exported for prefetch; <code>excludeArtifact()</code> exists for the mobile archive swipe. <em>One correction:</em> history search accepts only <code>query</code> (HistorySearchBody) — the temporal scrubber needs a date-range/session parameter added server-side. Nuance: the atlas has had a <em>sessions</em> legend since v0.14; it is the <em>cluster</em> legend that is missing, and AtlasInspector.tsx:18 still marks nearest-neighbors as a follow-up.</li>
+<li><strong>Wave 2 substrate: all seven checks hold.</strong> Newest-capture scoping is enforced in every session read path (sqlite.rs, pinned by the invariant-#11 test); the gallery grammar lock-step names its four touch points for a new filter atom; resurface constants are centralized (resurface.rs:17-33); lists can back boards with zero daemon change; the verdict and capture-draft storage shapes are legal as planned.</li>
+<li><strong>Two board-status discoveries:</strong> the board's headline TOC-overlay defect is <em>already fixed</em> at HEAD (mobile.css:383-401), so Wave 1 is unblocked sooner than the sequencing text assumed; and the keymap registry + roving-focus cursor <em>still do not exist</em> in web/src — the keyboard-grammar gate is real, but web-code shipped a production-proven Omnibox + paletteReducer keyboard state machine on the identical React/Vite/TS stack, now the designated lift.</li>
+<li><strong>kb-code reuse map:</strong> session-replay reader → REUSE the session-diff/1 schema + web-code's SessionDiff.tsx/useSessionDiff as the shipped narrative half; highlights → REUSE the annotations.rs pattern (anchor_for_line + kb-core fuzzy_resolve + an AnnotationRow storage template — proof the anchor machinery needs nothing new); keyboard → REUSE Omnibox/paletteReducer; folio/galley/biography chrome → REUSE the WhyPanel/InspectorRail/blame-dot patterns; scorechips → UNCHANGED (kb-code exposes no score decomposition; this stays kb's own design space).</li>
+<li><strong>Federation ruling — link-only:</strong> kb-code→kb federation is asymmetric bearer auth (<code>[kb_daemon] token_file</code>). The biography tab therefore uses kb's <em>own</em> sessions/session_commits tables + by-commit endpoints (shipped W0.6) and borrows kb-code's Attribution confidence/via taxonomy for its chips; commit rows may deep-<em>link</em> to kbc.example.com why/file views behind an optional <code>code_daemon_url</code> setting — hyperlinks only, no cross-daemon fetch, no bilateral auth.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="roadmap">Roadmap — three waves</h2>
+<p>Sequenced after the existing board's Milestone A/B (fix the TOC-overlay defect and the wire-don't-build items first — nothing here disputes that ordering; <em>delta check 2026-07-20: the TOC defect is already fixed at HEAD, so only the wiring items remain ahead of Wave 1</em>). Board <strong>Milestone C</strong> is adjudicated here too: its atlas/orientation territory is <em>absorbed</em> into the wave items below (named where absorbed), so C stops being a separate backlog. Where a wave item overlaps a board commitment, the board owns the core and the wave item claims only the delta.</p>
+
+<h3 id="wave-1-wire-and-win">Wave 1 — wire &amp; win (S/M items, ~a milestone)</h3>
+<table>
+<tr><th>Item</th><th>Lens</th><th>Effort</th></tr>
+<tr><td>Scorechip popovers (resurface, search, recall — decomposed on click; the resurface wire already carries the terms)</td><td>web-platform</td><td>M</td></tr>
+<tr><td>Atlas quick pack — <em>absorbs board C's visual overhaul</em> (legend, read-state dimming, degree sizing) and adds c-TF-IDF continent keywords + bookmarkable cameras. Cameras save pan/zoom/color-mode only; cluster-depth and selection presets arrive with Wave 2 (preset schema forward-compatible)</td><td>semantic-atlas + board C</td><td>M</td></tr>
+<tr><td>Never-empty search, <em>the museum delta over board B's zero-result recovery</em> (board owns the other-mode + fleet probes): would-hit facet chips, sample deck, example searches; plus the corpus-lobby strip on the empty gallery</td><td>discovery-museum</td><td>M</td></tr>
+<tr><td>Quote deep-links (text fragments + section ids) from comments/search</td><td>web-platform</td><td>M</td></tr>
+<tr><td>Card-morph view transitions; instant-feel via query prefetch on the keyboard-focused row. Speculation-rules prerender is reserved for <em>cold permalink shells only</em>, with the history open-beacon gated on <code>document.prerendering</code> — unguarded prerender inserts phantom rows into the append-only history table and seeds reading progress (invariants #8/#19; verified against detail.tsx's open-on-mount)</td><td>web-platform</td><td>S</td></tr>
+<tr><td>Read-state joins the docs-list envelope (kb-core + kb-server change), then three consumers ride it as one package: last-read / never-read / updated-since-read card badges, the antilibrary shelf, and a never-opened gallery filter. Per-card fetches are the N+1 the board already refused for provenance chips</td><td>timeline-episodic + serendipity</td><td>M</td></tr>
+<tr><td>Review mode on resurface (act-to-clear, reason arithmetic shown)</td><td>serendipity</td><td>S</td></tr>
+<tr><td>Temporal search scrubber — filter results to artifacts read during a date range or session. One server touch (verified 2026-07-20): history search today accepts only <code>query</code> — add date-range/session params; the join itself stays a pure history-timestamp filter</td><td>timeline-episodic</td><td>S</td></tr>
+<tr><td>Vital-signs strip (clickable corpus rollups)</td><td>dashboards</td><td>S</td></tr>
+<tr><td>Mobile thumb-zone rail + swipe triage on inbox; &ldquo;archive&rdquo; maps to the existing per-file exclusion API (v0.24), never a new state</td><td>mobile-touch</td><td>M</td></tr>
+</table>
+
+<h3 id="wave-2-structural-bets">Wave 2 — structural bets (M/L)</h3>
+<p>Ordering inside the wave (what unlocks what): biography tab first (standalone; unlocks session echoes and the mobile session strip, and de-risks Wave 3's replay reader) → on-this-day/echoes → atlas selection <em>before</em> Boards v1 (board-from-selection consumes the lasso) → broadsheet/masthead any time (independent) → keyboard grammar once board B's keymap registry + roving cursor have landed → illuminations after the board's per-kb color source exists → editorial re-skins last → verdicts/proposal-inbox once their storage shape is pinned → radiator only on its condition.</p>
+<table>
+<tr><th>Item</th><th>Lens</th><th>Effort</th></tr>
+<tr><td>Artifact biography tab (prompt&rarr;sessions&rarr;commits&rarr;comments timeline). Every per-artifact session read scopes to the NEWEST capture or it double-counts one long session per Stop (invariant #11). Data is kb-<em>own</em> (sessions/session_commits + by-commit, shipped W0.6); borrow kb-code's Attribution confidence/via taxonomy for the chips; commit rows deep-<em>link</em> to kbc why/file views via optional <code>code_daemon_url</code> — links only, no cross-daemon fetch</td><td>timeline-episodic</td><td>M</td></tr>
+<tr><td>Atlas selection program: lasso&rarr;working set, true-neighbors rail + stress badge, click-to-filter clusters, semantic zoom. The expensive part is grammar, not canvas: an id-set filter enters the SPA↔wire↔server lock-step via <code>galleryUrl</code> + <code>docs_query</code> (#35) and the selection joins the row-set memo key (#15)</td><td>semantic-atlas</td><td>L</td></tr>
+<tr><td>Boards v1: board-from-selection, artifact multi-placement, JSON Canvas import/export. Storage <em>resolved in review</em>: geometry lives as <code>.canvas</code> sidecars in the corpus — daemon stays lean, versioning is free, and interop is the storage format rather than an exporter</td><td>spatial-canvas</td><td>L</td></tr>
+<tr><td>Keyboard grammar phase 1: hint mode + marks + <em>the peek delta over board B's hover-previews</em> (session-file and memory-id peeks, references-peek listing backlinks + session touches + comment mentions). Gate check 2026-07-20: the keymap registry + roving cursor still don't exist in web/src — build them first by lifting web-code's production-proven Omnibox + paletteReducer state machine (same stack)</td><td>keyboard-power</td><td>L</td></tr>
+<tr><td>Broadsheet home + issue masthead (editorial gallery mode)</td><td>editorial</td><td>M</td></tr>
+<tr><td>Highlight&rarr;cite/list — carries the board's amendment: the save-as-memory hook stays behind a provenance decision (no SPA memory-write path exists; a human highlight is a new provenance class under invariant #10). Anchors reuse <code>review::Anchor</code> — de-risked 2026-07-20: kb-code's annotations.rs already proves the exact pattern (anchor_for_line + kb-core fuzzy_resolve + an AnnotationRow storage template)</td><td>reading-experience</td><td>L</td></tr>
+<tr><td>Frequency tuning (weights, not streaks) beside review mode — constants already named in <code>kb_core::resurface</code>, every multiplier visible in <code>--explain</code></td><td>serendipity</td><td>M</td></tr>
+<tr><td>On-this-day facet + session-echo resurface cards</td><td>serendipity</td><td>M</td></tr>
+<tr><td>Corpus activity calendar + brushable shape timeline (density only — no streak affordances)</td><td>dashboards</td><td>M</td></tr>
+<tr><td>Prompt as first-class content: browse/diff/reuse the stored kb-prompt genome; local-render only (public serve strips the template)</td><td>agent-copresence</td><td>M</td></tr>
+<tr><td>Capture-to-draft queue with deferred tagging — the missing half of the recorded v0.25 one-way-capture stance. Verified zero daemon change: stamp <code>kb-status:draft</code> at capture + the existing exclude-statuses gallery filter</td><td>mobile-touch</td><td>S</td></tr>
+<tr><td>Reader folio chrome — the cheapest proof of the publication program</td><td>editorial</td><td>S</td></tr>
+<tr><td>Hash-seeded illuminations (deterministic per-artifact ornament system; catalog-honest effort)</td><td>editorial</td><td>L</td></tr>
+<tr><td>Errata-slip layer as a <em>skin of the comments dock</em> — one home per action (#30); never a parallel comments surface</td><td>editorial</td><td>L</td></tr>
+<tr><td>Galley-proof versions re-skin</td><td>editorial</td><td>L</td></tr>
+<tr><td>Tribal-knowledge proposal inbox + three-state review verdicts. Legal home RESOLVED (2026-07-20): a review-file field under <code>review_lock</code> (#6) is canonical — verdict metadata rides the comment JSON sidecar; a <code>status:*</code> tag remains the legal display shortcut; never a widened meta splice. The board's critics rated both halves &plusmn;2; scheduled anyway because the human-gate-on-memory-writes is the piece that changed</td><td>agent-copresence</td><td>L</td></tr>
+<tr><td>Desk radiator (<code>/ambient</code>) + e-ink daycard — <em>conditional: build only if the operator confirms a spare display</em>. The daycard serves deterministic HTML/SVG that the panel rasterizes; no daemon bitmap pipeline</td><td>ambient</td><td>M</td></tr>
+</table>
+
+<h3 id="wave-3-moonshots">Wave 3 — moonshots (XL, each a milestone)</h3>
+<p>The yearbook leaves this wave — the catalog rates it L, not XL; schedule it as a December 2026 item regardless of moonshot choice. <strong>Default next-quarter moonshot: the session-replay reader</strong> — the only item here no competitor can copy (the transcript↔artifact join is kb-exclusive), deterministic and pull-only, and Wave 2's biography tab builds the same joins first. The map-home shell is the conditional alternative: near-free once the Wave 1–2 atlas program lands, promoted on <em>observed</em> atlas usage (standing rule 3), not appetite.</p>
+<ul>
+<li><strong>Session-replay reader</strong> (default candidate) — transcript and artifact under one playhead; the cognitive-flow view no other tool can build because no other tool has the join. No longer from zero (2026-07-20): kb-code's session-diff/1 schema + web-code's SessionDiff.tsx/useSessionDiff are the shipped template for the narrative half — the playhead + artifact-highlight layer is the new work.</li>
+<li><strong>Map-home shell</strong> (conditional on atlas usage) — atlas as the default navigation surface; search dims dots in place; the gallery becomes the list projection of the map selection.</li>
+<li><strong>Dual-field atlas + memory-palace walks</strong> — machine similarity field and operator-placed islands, onion-skinned; ordered loci tours as pure navigation (no streaks).</li>
+<li><strong>Temporal cartographic replay + corpus time-lapse</strong> — Procrustes-stabilized layout history; watch continents form.</li>
+<li><strong>Split-pane workspaces + provenance registers</strong> — the full editor-grade grammar.</li>
+<li><strong>Multi-facet reflection canvas</strong> — four synchronized time tracks (creation, reading, sessions, comments) with a shared brush; saved brushes as named scenes.</li>
+</ul>
+
+<h3 id="standing-rules">Standing rules (added in review)</h3>
+<ul>
+<li><strong>CLI parity for every new noun.</strong> The CLI is the protocol and agents are co-users: boards, marks, cameras, trails, working sets and verdicts each ship with a CLI verb or a recorded exemption, so the agent side of the human↔agent loop can read and write the operator's curatorial layer. The board's &ldquo;an endpoint isn't done until something calls it&rdquo;, mirrored from the other direction.</li>
+<li><strong>One container primitive.</strong> kb has exactly one durable collection type — kb-list/1, with import/export, SSE, and a golden-pinned grammar. Every new collection-shaped noun (trail, set, board, clip pack, working set) either <em>is</em> a reading list (plus at most a sidecar, e.g. board geometry) or records why not. No third store.</li>
+<li><strong>Evidence-gated promotion.</strong> Wave 2→3 decisions (map-home vs replay, ambient yes/no) are made from observed behavior: surface the already-stored zero-hit queries (endpoint exists, SPA-unused — verified 2026-07-18) and add a local-only, pull-only feature census (atlas opens, resurface clicks, camera recalls) shown in Settings and never leaving the machine. The explainability culture, applied to the roadmap itself.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="collisions-with-recorded-refusals">Collisions with recorded refusals</h2>
+<p>Five idea families re-proposed things the board or the non-goals already refused. Recording the collision is the value — the next ideation pass shouldn't pay to rediscover either side:</p>
+<table>
+<tr><th>Re-proposal (lens)</th><th>Standing ruling</th><th>Disposition</th></tr>
+<tr><td>TTS / read-aloud (reading-experience, web-platform, mobile-touch — three independent lenses)</td><td>Do-not-build: parity-driven, no demonstrated operator need</td><td><strong>Refusal stands.</strong> Three independent re-proposals is logged as a genuine signal: if the operator ever wants commute audio, the legal shape is client-side Web Speech over indexed text — never a daemon media pipeline.</td></tr>
+<tr><td>Offline reading packs via OPFS/FS Access (web-platform)</td><td>PWA/offline is deferred-with-trigger (Authelia retry story unresolved)</td><td>Stays gated; revisit only when the trigger fires.</td></tr>
+<tr><td>Neighborhood footer / read-next rails (discovery-museum)</td><td>Rejected — where-to-go-next already exists three ways in the inspector</td><td>Skip. The museum &ldquo;no dead ends&rdquo; doctrine is instead applied where a real dead end exists: empty search and empty gallery.</td></tr>
+<tr><td>Print/pamphlet output; quire binding (editorial)</td><td>Rejected — bare mode + Ctrl+P already yields clean paginated PDF</td><td>Clean-print stays rejected. Quire binding is catalogued as a wildness-5 art project, not roadmap.</td></tr>
+<tr><td>Daemon-side media/summaries: WAV sidecars, top-3-sentence section summaries, LLM-narrated wrapped decks (mobile-touch, dashboards)</td><td>No in-daemon LLM; daemon stays deterministic and media-free</td><td>Reshaped: stats/evidence in-daemon, narration in the agent layer, audio client-side if ever.</td></tr>
+</table>
+<p>Also upheld everywhere without exception: no streaks/badges/push (every ambient and dashboard idea above is pull-only, density-not-goals), no accounts/identities (agent &ldquo;owners&rdquo; became routing metadata), no CRDT (boards are single-writer), mobile stays reader + triage + capture.</p>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li><strong>c-TF-IDF placement</strong> — kb-core at atlas recompute (stored, deterministic, versioned) vs SPA-derived (zero storage, recomputed per load)? Recompute-side fits the atlas determinism invariant better.</li>
+<li><strong>Ambient condition</strong> — Wave 2's radiator/daycard slot is conditional on the operator confirming a spare display or e-ink panel; the question stands until answered.</li>
+<li><strong>Moonshot confirmation</strong> — the session-replay reader is the named default; the atlas-usage census (standing rule 3) decides whether the map-home shell replaces it.</li>
+</ul>
+<p><strong>Resolved during review (2026-07-18):</strong> boards storage = JSON Canvas <code>.canvas</code> sidecars in the corpus — consistent with the lean-daemon reasoning already recorded, versioning comes free from the source tree, and interop stops being an exporter because it <em>is</em> the storage format.</p>
+</section>
+
+<section>
+<h2 id="files-this-will-touch">Files this will touch (Wave 1)</h2>
+<ul>
+<li><code>web/src/components/AtlasView.tsx</code>, <code>AtlasInspector.tsx</code> — legend, labels, cameras</li>
+<li><code>web/src/components/search/*</code>, <code>routes/search.tsx</code> — recovery probes, match-passage cards</li>
+<li><code>web/src/components/ResurfaceStrip.tsx</code> — review mode + reason popover</li>
+<li><code>web/src/routes/gallery.tsx</code>, <code>GallerySection.tsx</code>, <code>Card.tsx</code> — lobby strip, badges, view-transition names</li>
+<li><code>web/src/routes/detail.tsx</code>, <code>PreviewInspector.tsx</code> — scorechips, quote deep-links</li>
+<li><code>crates/kb-core/src/atlas.rs</code> — c-TF-IDF terms at recompute (deterministic, seeded)</li>
+<li><code>crates/kb-core</code> + <code>kb-server</code> docs-list envelope — read-state joins the list response (the badges/antilibrary/never-opened package rides it; per-card fetch is the N+1 the board refused)</li>
+<li><code>crates/kb-server/src/routes.rs</code> — surface zero-hit queries (endpoint exists, SPA-unused — verified 2026-07-18)</li>
+</ul>
+</section>
+
+<section>
+<h2 id="sources">Sources &amp; related</h2>
+<ul>
+<li><a href="kb-web-ui-idea-atlas-2026-07.html">kb web UI idea atlas</a> — all 130 ideas with pitches, inspirations, wildness/effort/risk, and per-lens source URLs.</li>
+<li>kb web UI: audit, idea board, and priorities (July 2026) (private) — the in-repo companion; its Milestone A/B precede this document's waves.</li>
+<li>Method: 2 Workflow runs, 18 grok-4.5 offload workers total (14 + 4 retries), ~960K offloaded tokens, 2026-07-18. Failures disclosed in <a href="#method">Method</a>.</li>
+<li>Headline external sources: <a href="https://www.digitalhumanities.org/dhq/vol/9/1/000205/000205.html">Whitelaw, <em>Generous Interfaces for Digital Cultural Collections</em> (DHQ 9.1)</a>; <a href="https://distill.pub/2016/misread-tsne/">Distill, <em>How to Use t-SNE Effectively</em></a>; <a href="https://docs.nomic.ai/">Nomic Atlas docs</a>; <a href="https://projector.tensorflow.org/">TensorFlow Embedding Projector</a>; <a href="https://maartengr.github.io/BERTopic/algorithm/algorithm.html">BERTopic c-TF-IDF</a>; <a href="https://github.com/open-spaced-repetition/awesome-fsrs/wiki/ABC-of-FSRS">FSRS</a>; <a href="https://wiki.heptabase.com/">Heptabase wiki</a>; <a href="https://jsoncanvas.org">JSON Canvas 1.0</a>; <a href="https://developer.chrome.com/docs/web-platform/view-transitions">Chrome View Transitions</a> / <a href="https://developer.chrome.com/docs/web-platform/prerender-pages">Speculation Rules</a> / <a href="https://developer.chrome.com/blog/anchor-positioning-api">anchor positioning</a>; Weiser &amp; Brown, <em>The Coming Age of Calm Technology</em> (Xerox PARC); <a href="https://ianli.com/publications/2010-ianli-chi-stage-based-model.pdf">Li, Dey &amp; Forlizzi (CHI 2010)</a>. Full per-lens URL lists in the catalog.</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

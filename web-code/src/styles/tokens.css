@@ -1,0 +1,763 @@
+/* Design tokens — trimmed subset of kb's own `web/src/styles/tokens.css`
+ * (same variable NAMES + values, so kb-code's reader reads as part of the
+ * same design language kb's CLAUDE.md calls for) — only the tokens the
+ * reader chrome actually uses (surfaces, ink, rules, accent, fonts, a
+ * couple of semantic colors). No density/card-glow tokens — kb-code has no
+ * gallery cards, no comments panel stack to layer. V4.U1 added the 9-rung
+ * `--z-*` ladder (same names + values as web), per-theme `--shadow*`, a
+ * static type/spacing ramp, and self-hosted Inter Tight + JetBrains Mono.
+ *
+ * V4.U1 — new-CSS conventions for this milestone (tokens.css is the
+ * source of truth; later phases convert existing files only when a
+ * rule is already being edited — never a repo-wide rewrite):
+ *
+ *   • tokens only — raw hex/rgba forbidden except `color-mix` on tokens
+ *   • use the `--fs-*` ramp (xs / sm / md / lg / title / hero)
+ *   • `--z-*` ladder for app-level stacking; component-local 1–11
+ *     literals stay literal
+ *   • `--shadow*` only (no ad hoc box-shadows)
+ *   • `--radius-lg` for sheets/modals
+ *   • transitions use `--ease` at 0.2–0.24s, with a
+ *     `prefers-reduced-motion` override
+ *   • 44px targets under `pointer: coarse`
+ *   • ONE 860px breakpoint, synced with `useIsMobile.ts`
+ *
+ * V70-A7 — kbc-theme/1. Two more conventions, and one contract:
+ *
+ *   • a THEME is declared in `crates/kb-code-server/themes/registry.json`
+ *     and generated into `src/themes/themes.gen.css` — NEVER as a new
+ *     hand-written block in this file. This file owns the built-in
+ *     `kb-code` palette (the default) and the invariant contract below;
+ *     everything else is data.
+ *   • a new SEMANTIC token is a new ROLE: add it here with a default that
+ *     resolves to an existing token (so the built-in themes keep painting
+ *     byte-identically), then let the registry override it per theme.
+ *     ADD, never rename — the 58 tokens that predate kbc-theme/1 are the
+ *     compatibility surface.
+ *   • the LANE BUDGET (src/themes/LANE-BUDGET.md) assigns each semantic
+ *     lane exactly one visual channel. A theme may recolour a lane; it may
+ *     never reassign one. `npm run lint:themes` is the executable gate.
+ */
+
+/* V4.U1 — self-hosted (no Google Fonts CDN round-trip; the SPA must load
+ * offline-ish, same reasoning as kb's own web/ A-w4/X1). Two disjoint
+ * `unicode-range` subsets per face/weight — latin-ext (Latin Extended-A/B +
+ * assorted punctuation) and latin (basic Latin) — so the browser only
+ * fetches the subset a given page's characters actually need; order between
+ * the two doesn't affect the cascade (ranges don't overlap), kept latin-ext-
+ * then-latin only because that's what the source tool emitted. Files live in
+ * web-code/public/fonts/, served at /fonts/<name>.woff2 (see
+ * web-code/public/fonts/README.md for the license + upstream sources).
+ * Inter Tight 300 and Source Serif 4 are omitted — zero consumers here.
+ */
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/InterTight-400-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/InterTight-400-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/InterTight-500-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/InterTight-500-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/InterTight-600-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/InterTight-600-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/InterTight-700-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/InterTight-700-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-400-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-400-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-500-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-500-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-600-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-600-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  --accent: #8a7fff;
+  --accent-soft: #aaa2ff;
+  --accent-bg: #1a1830;
+  --accent-bor: #3a3870;
+  --accent-fg: #ffffff;
+
+  --font-sans:
+    "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
+    Menlo, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Type ramp — static px (do NOT port web's `--density` machinery). */
+  --fs-xs: 10px;
+  --fs-sm: 11px;
+  --fs-md: 12px;
+  --fs-lg: 13px;
+  --fs-title: 18px;
+  --fs-hero: 24px;
+
+  /* Spacing — static, matching web's undensified pad steps. */
+  --pad-1: 4px;
+  --pad-2: 8px;
+  --pad-3: 16px;
+  --pad-4: 24px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* z-index layers — APP-LEVEL stacking only, one ordered scale:
+   * bars < popovers < raised popovers / mobile panel < floating
+   * buttons < drawer scrim < drawer < overlay hints/pills < modal <
+   * always-on-top. Values match web's 9-rung ladder verbatim so the
+   * two SPAs share one stacking language. Component-LOCAL z-index
+   * (1–11 inside a card/cell/editor) deliberately stays literal —
+   * those order siblings within one stacking context, not app layers.
+   * Existing files keep their literals until a later phase remaps them. */
+  --z-bar: 5; /* sticky chrome bars */
+  --z-popover: 20; /* anchored popovers: .kbc-repopopover, .kbc-refpicker__menu (reader.css) */
+  --z-popover-hi: 30; /* popovers above popovers */
+  --z-float: 35; /* floating buttons above panels */
+  --z-scrim: 40; /* mobile drawer/sheet scrim (mobile.css) */
+  --z-drawer: 41; /* mobile drawer (mobile.css, above its scrim) */
+  --z-hint: 50; /* transient overlays */
+  --z-modal: 100; /* modal layer: omnibox backdrop (search.css), skip-link */
+  --z-top: 1000; /* always-on-top */
+
+  --topbar-h: 44px;
+  /* F5 — the tree drawer's width (mirrors kb's own `--drawer-w`). */
+  --drawer-w: min(86vw, 320px);
+  /* F5 — the age-heatmap overlay's per-bucket tint alpha (`history.css`'s
+   * `.kbc-age-line--N`). Dark's near-black backdrop already makes an 8% tint
+   * visibly perceptible; light overrides this higher (see below) so the
+   * warm→cold gradient doesn't wash out to near-invisible on a near-white
+   * canvas. A CSS custom property (not a literal in the component rule) is
+   * what lets ONE selector serve both themes — never fork `.kbc-age-line--N`
+   * per theme. */
+  --age-tint: 8%;
+
+  /* D5 — web/'s alias block, silently dropped when this crate's tokens.css
+   * was trimmed from web/'s. reviews.css reaches for `--ok`/`--danger`
+   * (not `--green`/`--red`); without these aliases its fallback hexes were
+   * rendering permanently untinted (dead cascade, never the token). Aliases
+   * resolve against the active theme scope automatically. */
+  --ok: var(--green);
+  --danger: var(--red);
+}
+
+:root,
+:root[data-theme="dark"] {
+  --bg: #0e0e10;
+  --bg-panel: #141417;
+  --bg-panel-2: #0c0c0e;
+  --bg-card: #151518;
+  --bg-card-hi: #1a1a1f;
+
+  --ink: #e8e6df;
+  --ink-mute: #8a857d;
+  /* SH.C1 — contrast bump (parity with web/'s parallel unit, one design
+   * language): the old #5a554f measured under AA even for large/label text
+   * against `--bg`. */
+  --ink-dim: #726c65;
+  /* SH.C1 — the OLD `--ink-dim` value, kept for callers that only ever
+   * needed decorative contrast. Decorative rules/disabled glyphs only,
+   * never running text. */
+  --ink-faint: #5a554f;
+
+  --rule: #23232a;
+  --rule-hi: #2c2c36;
+  /* V70-A7 — the third Rosé-Pine highlight level (`--hl-low`/`--hl-med`
+   * alias `--rule`/`--rule-hi` below; this one had no pre-existing token). */
+  --hl-high: #3a3a46;
+
+  --warn: #d8a04b;
+  --green: #7eb98f;
+  --red: #d77a6a;
+  --blue: #7aa9ff;
+
+  /* flag-for-agent chip fill/foreground (provenance.css). --red is tuned
+   * as a TEXT color per theme, so a solid chip needs its own fg pair:
+   * dark's light red carries near-black ink (~8:1); light's darkened red
+   * carries white (6.8:1, F5-measured). Fixes the F5 audit residual
+   * (white-on-dark-red was 3.05:1). */
+  --intent-flag-bg: var(--red);
+  --intent-flag-fg: #201512;
+
+  /* F5 — modal/drawer/sheet scrim (mirrors kb's own `--backdrop`, same
+   * per-theme alpha split: dark needs a heavier scrim to read as "dimmed"
+   * against an already-dark UI). Replaces the omnibox/confirm-dialog/kbdhelp
+   * overlays' previous ad hoc `rgba(0,0,0,0.45)` literals (and the kbdhelp
+   * scrim's outright-broken `color-mix(var(--bg) 62%, transparent)`, which
+   * mixed toward a near-WHITE `--bg` in light theme — see mobile.css's F5
+   * header for the full audit note). */
+  --backdrop: rgba(8, 8, 10, 0.6);
+
+  --shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card-hover:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 14px 30px rgba(0, 0, 0, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  /* kb-code-only lift (heavier than --shadow-card-hover; sheets / peek). */
+  --shadow-lift: 0 18px 50px rgb(0 0 0 / 0.45);
+  /* R1 — was a DEAD CASCADE: `reviews.css:1465` reached for `--shadow-md`,
+   * which nothing defined, so that popover permanently rendered its inline
+   * fallback and never a themed shadow. Same bug class as D5's
+   * `--ok`/`--danger` and the `--amber`/`--bg-raised` incident. */
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* R8 — the LIGHT palette, defined ONCE.
+ *
+ * Until V70-A7 these 26 declarations plus four shadows existed TWICE, byte
+ * for byte: in `:root[data-theme="light"]` and again inside the
+ * `prefers-color-scheme: light` block that serves `data-theme="system"`,
+ * with nothing pinning the copies together. CSS cannot put a media query
+ * and a plain selector in one rule, so the dedupe is at the VALUE layer:
+ * the hexes live here, in one place, and both scopes alias them. Editing a
+ * light value is now one edit, and the two scopes cannot drift.
+ *
+ * These `--lt-*` constants are theme-INVARIANT (they sit on the bare
+ * `:root`) and are never consumed directly by a component — only by the two
+ * light scopes below. */
+:root {
+  --lt-bg: #f3f1ec;
+  --lt-bg-panel: #ffffff;
+  --lt-bg-panel-2: #ecebe5;
+  --lt-bg-card: #ffffff;
+  --lt-bg-card-hi: #faf9f6;
+
+  --lt-ink: #1c1b19;
+  --lt-ink-mute: #6d685f;
+  /* SH.C1 — contrast bump (parity with web/'s parallel unit). */
+  --lt-ink-dim: #8a8376;
+  /* SH.C1 — the OLD `--ink-dim` value. Decorative rules/disabled glyphs
+   * only, never running text. */
+  --lt-ink-faint: #a39d92;
+
+  --lt-rule: #e4e1da;
+  --lt-rule-hi: #d6d2c9;
+  --lt-hl-high: #c9c4b9;
+
+  --lt-accent: #6657f5;
+  --lt-accent-soft: #5546e0;
+  --lt-accent-bg: rgba(102, 87, 245, 0.1);
+  --lt-accent-bor: rgba(102, 87, 245, 0.28);
+
+  /* F5 light-theme parity audit — darkened from the values these replaced
+   * (#b9822f/#4f9468/#c2543f/#4f7fd8, still kb's own light-theme values):
+   * those pass fine as prose text, but this crate ALSO uses `--warn`/
+   * `--green`/`--red`/`--blue` as the CM6 syntax-highlight foreground
+   * (`reader.css`'s `.kbc-hl-*`, now via the `--syn-*` roles) and as text
+   * painted directly on a same-hue tinted badge/chip background (intent
+   * chips, stale/resolved annotation badges, watcher-state pills, the peek
+   * panel's `local` badge) — both read plainly on a near-black dark canvas
+   * at the OLD values, but measured under 3.5:1 against light's near-white
+   * surfaces (WCAG AA text needs 4.5:1). These four are darkened just
+   * enough to clear 4.5:1 against `--bg` AND against every `color-mix(in
+   * srgb, var(--warn) N%, transparent)` badge tint already in use (audited
+   * up to 25%) — verified via the relative-luminance formula, not
+   * eyeballed. Only theme-scoped values change; every consuming selector is
+   * unchanged (never fork component CSS per theme). */
+  --lt-warn: #78541f;
+  --lt-green: #366547;
+  --lt-red: #954131;
+  --lt-blue: #385a9a;
+
+  --lt-intent-flag-fg: #ffffff;
+
+  /* F5 — see the dark block's own doc; lighter alpha than dark's scrim
+   * (kb's own light-theme rationale: a white UI already reads "dimmed" at a
+   * lower backdrop opacity than a dark one does). */
+  --lt-backdrop: rgba(20, 20, 22, 0.4);
+  /* F5 — the age-heatmap's tint alpha, doubled for light (see the base
+   * `:root`'s own doc on this token). */
+  --lt-age-tint: 16%;
+
+  --lt-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 8px 24px rgba(0, 0, 0, 0.06);
+  --lt-shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(0, 0, 0, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.03);
+  --lt-shadow-card-hover:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 12px 28px rgba(0, 0, 0, 0.1),
+    0 2px 6px rgba(0, 0, 0, 0.05);
+  /* kb-code-only lift (heavier than --shadow-card-hover; sheets / peek). */
+  --lt-shadow-lift: 0 18px 50px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --lt-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="light"] {
+  --bg: var(--lt-bg);
+  --bg-panel: var(--lt-bg-panel);
+  --bg-panel-2: var(--lt-bg-panel-2);
+  --bg-card: var(--lt-bg-card);
+  --bg-card-hi: var(--lt-bg-card-hi);
+
+  --ink: var(--lt-ink);
+  --ink-mute: var(--lt-ink-mute);
+  --ink-dim: var(--lt-ink-dim);
+  --ink-faint: var(--lt-ink-faint);
+
+  --rule: var(--lt-rule);
+  --rule-hi: var(--lt-rule-hi);
+  --hl-high: var(--lt-hl-high);
+
+  --accent: var(--lt-accent);
+  --accent-soft: var(--lt-accent-soft);
+  --accent-bg: var(--lt-accent-bg);
+  --accent-bor: var(--lt-accent-bor);
+
+  --warn: var(--lt-warn);
+  --green: var(--lt-green);
+  --red: var(--lt-red);
+  --blue: var(--lt-blue);
+
+  --intent-flag-bg: var(--red);
+  --intent-flag-fg: var(--lt-intent-flag-fg);
+
+  --backdrop: var(--lt-backdrop);
+  --age-tint: var(--lt-age-tint);
+
+  --shadow: var(--lt-shadow);
+  --shadow-card: var(--lt-shadow-card);
+  --shadow-card-hover: var(--lt-shadow-card-hover);
+  --shadow-lift: var(--lt-shadow-lift);
+  --shadow-md: var(--lt-shadow-md);
+}
+
+@media (prefers-color-scheme: light) {
+  /* R8 — the SAME single source as the explicit light scope above; this
+   * block only re-points the roles for `data-theme="system"`. */
+  :root[data-theme="system"] {
+    --bg: var(--lt-bg);
+    --bg-panel: var(--lt-bg-panel);
+    --bg-panel-2: var(--lt-bg-panel-2);
+    --bg-card: var(--lt-bg-card);
+    --bg-card-hi: var(--lt-bg-card-hi);
+
+    --ink: var(--lt-ink);
+    --ink-mute: var(--lt-ink-mute);
+    --ink-dim: var(--lt-ink-dim);
+    --ink-faint: var(--lt-ink-faint);
+
+    --rule: var(--lt-rule);
+    --rule-hi: var(--lt-rule-hi);
+    --hl-high: var(--lt-hl-high);
+
+    --accent: var(--lt-accent);
+    --accent-soft: var(--lt-accent-soft);
+    --accent-bg: var(--lt-accent-bg);
+    --accent-bor: var(--lt-accent-bor);
+
+    --warn: var(--lt-warn);
+    --green: var(--lt-green);
+    --red: var(--lt-red);
+    --blue: var(--lt-blue);
+
+    --intent-flag-bg: var(--red);
+    --intent-flag-fg: var(--lt-intent-flag-fg);
+
+    --backdrop: var(--lt-backdrop);
+    --age-tint: var(--lt-age-tint);
+
+    --shadow: var(--lt-shadow);
+    --shadow-card: var(--lt-shadow-card);
+    --shadow-card-hover: var(--lt-shadow-card-hover);
+    --shadow-lift: var(--lt-shadow-lift);
+    --shadow-md: var(--lt-shadow-md);
+  }
+}
+
+/* ======================================================================
+ * kbc-theme/1 role contract (V70-A7)
+ *
+ * Every role below is a NEW name with a default that resolves to a token
+ * this app already ships, so the built-in `kb-code` palette renders
+ * byte-identically to pre-V70-A7. A registry theme overrides these per
+ * `[data-kbc-theme]` in `src/themes/themes.gen.css`; the aliases here are
+ * what the built-in (attribute-absent) default resolves to.
+ *
+ * `var()` aliases on the bare `:root` resolve against the ACTIVE theme
+ * scope, so one alias serves dark, light and system without forking.
+ * ====================================================================== */
+:root {
+  /* --- chrome aliases, the kbc-theme/1 role names for surfaces already
+   * carrying kb-era names. ADD, never rename (recon R6's lesson: a rename
+   * revives every stale `var(--x, #hex)` fallback with the wrong colour). */
+  --bg-elev: var(--bg-panel);
+  --bg-overlay: var(--bg-card-hi);
+  --ink-muted: var(--ink-mute);
+  --ink-subtle: var(--ink-dim);
+  --rule-strong: var(--rule-hi);
+  /* R1 — the other dead cascade: `reader.css:2084` reached for `--font-ui`,
+   * which nothing defined, so the code-lens chips silently rendered
+   * `system-ui` instead of the app font. */
+  --font-ui: var(--font-sans);
+
+  /* --- Rosé-Pine highlight levels (selection / occurrence / search) ---- */
+  --hl-low: var(--rule);
+  --hl-med: var(--rule-hi);
+
+  /* --- syntax: the 15 `.kbc-hl-*` classes get their OWN role family -----
+   * Until now the code colours WERE the chrome semantics: `.kbc-hl-number`
+   * was literally `--red`, the same `--red` as error dots and deletion
+   * tints, so a theme could not change one without changing the other.
+   * These fifteen defaults reproduce that mapping EXACTLY (the rendering is
+   * byte-identical), but a theme can now recolour code without touching
+   * chrome. The class set is frozen at `HighlightClass`'s fixed fifteen
+   * (`crates/kb-code-server/src/highlight.rs`) — widening it needs the
+   * shared-`salt` split, which is v7.2's job, not this unit's. */
+  --syn-keyword: var(--accent-soft);
+  --syn-string: var(--green);
+  --syn-comment: var(--ink-mute);
+  --syn-function: var(--blue);
+  --syn-type: var(--warn);
+  --syn-number: var(--red);
+  --syn-variable: var(--ink);
+  --syn-constant: var(--red);
+  --syn-operator: var(--ink-mute);
+  --syn-punctuation: var(--ink-mute);
+  --syn-property: var(--blue);
+  --syn-attribute: var(--warn);
+  --syn-label: var(--warn);
+  --syn-escape: var(--accent-soft);
+  --syn-other: var(--ink-mute);
+
+  /* --- diff (Lane Budget: line background tint + a permanent sign column)
+   * The `-bg` defaults reproduce the exact `color-mix(in srgb, … 12%,
+   * transparent)` expressions the diff renderers already used, so swapping
+   * the component rules onto these roles paints the same pixels. Registry
+   * themes replace them with opaque OKLCH mixes over `--bg`. */
+  --diff-add: var(--green);
+  --diff-del: var(--red);
+  --diff-mod: var(--blue);
+  --diff-add-bg: color-mix(in srgb, var(--green) 12%, transparent);
+  --diff-del-bg: color-mix(in srgb, var(--red) 12%, transparent);
+  --diff-mod-bg: color-mix(in srgb, var(--blue) 12%, transparent);
+  --diff-add-bg-strong: color-mix(in srgb, var(--green) 26%, transparent);
+  --diff-del-bg-strong: color-mix(in srgb, var(--red) 26%, transparent);
+  --diff-mod-bg-strong: color-mix(in srgb, var(--blue) 26%, transparent);
+  --diff-add-gutter: color-mix(in srgb, var(--green) 38%, transparent);
+  --diff-del-gutter: color-mix(in srgb, var(--red) 38%, transparent);
+  --diff-mod-gutter: color-mix(in srgb, var(--blue) 38%, transparent);
+  --diff-add-fg: var(--green);
+  --diff-del-fg: var(--red);
+  --diff-mod-fg: var(--blue);
+
+  /* --- Lane Budget: blame/age, ten quantized bands ---------------------
+   * ONE hue, lightness-ramped — a single-hue ramp degrades gracefully under
+   * every colour-vision deficiency, which a warm→cool hue ramp does not.
+   * Band 0 is NEWEST. The ramp is legend-mandatory: GitLens (warmer =
+   * newer), GitLab (darker = newer) and JetBrains (rank, not time) all
+   * disagree, so it cannot be self-explanatory.
+   *
+   * NOTE: no consumer yet. `history.css`'s five-bucket `.kbc-age-line--N`
+   * line overlay is the pre-Lane-Budget implementation and is deliberately
+   * untouched by this unit — these are the tokens a later unit moves it to,
+   * on GUTTER A where the Lane Budget puts it. */
+  --age-band-0: color-mix(in oklch, var(--blue) 20%, var(--bg));
+  --age-band-1: color-mix(in oklch, var(--blue) 18.4%, var(--bg));
+  --age-band-2: color-mix(in oklch, var(--blue) 16.8%, var(--bg));
+  --age-band-3: color-mix(in oklch, var(--blue) 15.2%, var(--bg));
+  --age-band-4: color-mix(in oklch, var(--blue) 13.6%, var(--bg));
+  --age-band-5: color-mix(in oklch, var(--blue) 12%, var(--bg));
+  --age-band-6: color-mix(in oklch, var(--blue) 10.4%, var(--bg));
+  --age-band-7: color-mix(in oklch, var(--blue) 8.8%, var(--bg));
+  --age-band-8: color-mix(in oklch, var(--blue) 7.2%, var(--bg));
+  --age-band-9: color-mix(in oklch, var(--blue) 5.6%, var(--bg));
+
+  /* --- Lane Budget: provenance, eight stable session hues --------------
+   * A 2px rail in gutter A. Registry themes spread these by maximal
+   * pairwise Oklab distance across their own accent wheel; the built-in
+   * palette has only four semantic hues plus the accent pair, so the two
+   * remaining slots are explicit mixes rather than invented colours. */
+  --prov-hue-0: var(--blue);
+  --prov-hue-1: var(--warn);
+  --prov-hue-2: var(--green);
+  --prov-hue-3: var(--red);
+  --prov-hue-4: var(--accent);
+  --prov-hue-5: var(--accent-soft);
+  --prov-hue-6: color-mix(in oklch, var(--blue) 50%, var(--green));
+  --prov-hue-7: color-mix(in oklch, var(--red) 50%, var(--warn));
+
+  /* --- Lane Budget: trust is LINE STYLE in ONE hue --------------------- */
+  --trust-hue: var(--accent);
+
+  /* --- the reading contract (D16) --------------------------------------
+   * Defined, not yet imposed: `--measure` applies only where a container
+   * opts in, and `data-density` defaults to `comfortable`, which is exactly
+   * today's spacing. No surface changes width or padding in this unit. */
+  --measure: 100ch;
+  --lh-code: 1.5;
+  --density-pad: var(--pad-2);
+  --density-row: 24px;
+}
+
+:root[data-density="compact"] {
+  --density-pad: var(--pad-1);
+  --density-row: 20px;
+}
+
+/* The reading contract's OPT-IN. `--measure` is deliberately not imposed on
+ * any existing container — the reader's width is unchanged by this unit —
+ * so it needs one explicit way to be adopted, rather than a bare token
+ * nothing references. A surface that wants a bounded line box adds the
+ * class; nothing today does. */
+.kbc-measure {
+  max-width: var(--measure);
+}
+
+/* --- Lane Budget: the trust vocabulary as LINE STYLE ---------------------
+ * `exact` solid · `likely` dashed · `candidate` dotted · `observed` dotted
+ * PLUS a glyph (it is a different KIND of evidence — runtime-observed — not
+ * merely a weaker one). All four in ONE hue, so the distinction survives any
+ * theme, any contrast slider and every colour-vision deficiency. This is the
+ * project's hardest invariant (a wrong `exact` is a release blocker) and it
+ * is the one classification that must never be hue-only.
+ *
+ * `--kbc-trust-style` is the shared channel: a consumer picks it up as a
+ * border-style, an underline style, or an outline, whichever its box needs. */
+.kbc-trust-exact {
+  --kbc-trust-style: solid;
+  --kbc-trust-color: var(--trust-hue);
+}
+.kbc-trust-likely {
+  --kbc-trust-style: dashed;
+  --kbc-trust-color: var(--trust-hue);
+}
+.kbc-trust-candidate {
+  --kbc-trust-style: dotted;
+  --kbc-trust-color: var(--trust-hue);
+}
+.kbc-trust-observed {
+  --kbc-trust-style: dotted;
+  --kbc-trust-color: var(--trust-hue);
+}
+.kbc-trust-observed::after {
+  /* The redundant non-colour, non-style cue for the one class whose
+   * evidence comes from somewhere else entirely. */
+  content: "\2022";
+  margin-left: 3px;
+  opacity: 0.75;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 8px 12px;
+  z-index: var(--z-modal);
+}
+.skip-link:focus {
+  left: 8px;
+  top: 8px;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font: inherit;
+}
+
+/* V4.U4 — screen-reader-only: keep a literal glyph in the a11y/text tree
+ * when a spec (or AT) still matches on it after the visible mark became
+ * an Icon. Never used as a visual stand-in. */
+.kbc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* V4.U4 — single-icon twisty. Icon.Chevron points right (closed); .is-open
+ * rotates 90deg to read as down (open). */
+.kbc-twisty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.kbc-twisty.is-open {
+  transform: rotate(90deg);
+}
+
+/* SH.C1 — one skeleton language. Promoted from search.css's shimmer (the
+ * only place it existed); home.css's static card placeholder used a flat
+ * `--bg-card-hi` fill and gets the same treatment here. Consumers own their
+ * own box model (height/margin/width) in their own files and share this
+ * paint + motion via a selector list — `.kbc-skeleton` is available directly
+ * for any future consumer that can add the class in markup. Per V4.U1: a
+ * `prefers-reduced-motion` override is mandatory on any animation. */
+.kbc-skeleton,
+.kbc-search__skeleton::after,
+.kbc-home-card__skeleton-line {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 25%,
+    var(--bg-card-hi) 50%,
+    var(--bg-card) 75%
+  );
+  background-size: 200% 100%;
+  animation: kbc-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes kbc-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kbc-skeleton,
+  .kbc-search__skeleton::after,
+  .kbc-home-card__skeleton-line {
+    animation: none;
+  }
+}
+
+/* V4.U1 — global focus ring (port of web/src/styles/app.css, widened
+ * to inputs / selects / tabindex so every interactive control matches). */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

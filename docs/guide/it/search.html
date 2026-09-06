@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Ricerca ibrida, keyword e semantic in kb; embedding e misurazione della qualità.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, search, embeddings, hybrid, BM25">
+<title>Ricerca · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../search.html">EN</a><span class="sep">·</span><a href="search.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html" aria-current="page">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">03 · Trovare le cose</p>
+  <h1>Ricerca</h1>
+  <p class="lede">La ricerca ibrida keyword-plus-vector è il default. Un verbo CLI, un’API, gli stessi modi nella command palette del web.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#modes">Tre modi</a></li>
+    <li><a href="#cli">CLI e API</a></li>
+    <li><a href="#filters">Ambito e filtri</a></li>
+    <li><a href="#models">Embedding e modelli</a></li>
+    <li><a href="#bench">Misurare la qualità</a></li>
+  </ol>
+</nav>
+
+<section id="modes">
+<h2>Tre modi</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Modo</th><th>Cosa fa</th><th>Serve un modello?</th></tr></thead>
+  <tbody>
+    <tr><td><code>hybrid</code></td><td>BM25 + vettore fusi con Reciprocal Rank Fusion (k=60). <strong>Default.</strong></td><td>Sì</td></tr>
+    <tr><td><code>keyword</code></td><td>Match lessicale puro BM25 — termini esatti, path, token di codice.</td><td>No</td></tr>
+    <tr><td><code>semantic</code></td><td>Similarità vettoriale pura — il significato conta più della formulazione.</td><td>Sì</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Se si richiede hybrid o semantic senza un modello di embedding, il daemon risponde con un problem+json <code>400</code>. Un reranker opzionale può raffinare i risultati hybrid quando è configurato sul daemon.</p>
+<div class="note ok">
+  <strong>In dubbio, restare su hybrid.</strong> Solo keyword perde le parafrasi; solo semantic perde gli identificatori esatti. Hybrid è il default quotidiano per un motivo.
+</div>
+</section>
+
+<section id="cli">
+<h2>CLI e API</h2>
+<pre><code>kb search "borrow checker" --kb canon
+kb search "borrow checker" --kb canon --mode keyword
+kb search "borrow checker" --kb canon --mode semantic
+kb search "borrow checker" --kb canon --json
+kb search "borrow checker" --offline          # keyword-only, no daemon
+
+# HTTP (loopback needs no token)
+curl -s 'http://127.0.0.1:4000/api/search?q=borrow&amp;kb=canon&amp;mode=hybrid'</code></pre>
+<p><code>kb find &lt;path-or-name&gt;</code> risolve l’id a 12 hex e i path quando si sa già all’incirca quale file. <code>kb get</code> / <code>kb cat</code> recuperano metadati o HTML una volta che si ha un id; <code>kb read</code> apre il permalink SPA (o il file locale) nel browser, non scarica il contenuto su stdout.</p>
+</section>
+
+<section id="filters">
+<h2>Ambito e filtri</h2>
+<ul>
+  <li><strong>Per-kb</strong> — passare <code>--kb NAME</code> sulla CLI, oppure <code>kb=</code> sull’API. La CLI non ha flag <code>--scope</code>: omettere <code>--kb</code> auto-seleziona solo se il daemon ha esattamente un corpus; altrimenti la chiamata fallisce.</li>
+  <li><strong>Federata (API / SPA)</strong> — la ricerca cross-kb usa <code>scope=all</code> (la ricerca senza scope della SPA). L’ambito di default è un solo kb. Il fan-out multi-kb avviene su un singolo daemon, non su un proxy multi-daemon.</li>
+  <li><strong>Categoria</strong> — <code>--category</code> / <code>?category=</code> filtra su <code>kb-category</code>. I transcript delle sessioni sono esclusi dalla ricerca di default di proposito (regola R0); passare <code>--category memory-session</code> oppure usare gli strumenti per le sessioni.</li>
+  <li><strong>Filtri della galleria</strong> — tag, cartella, finestra mtime, stato di lettura, insiemi espliciti di id — vivono sulla lista docs e sui deep-link dal reader; vedi <a href="web.html">Reader web</a>.</li>
+</ul>
+</section>
+
+<section id="models">
+<h2>Embedding e modelli</h2>
+<p>Gli embedding girano nel sidecar <strong>fuori-processo</strong> <code>kb-embedder</code> (ONNX Runtime, collegato staticamente). Il daemon non linka mai ORT in sé.</p>
+<p>Ordine di risoluzione del modello all’avvio (vince il più alto):</p>
+<ol>
+  <li><code>embedding_model</code> per-kb in <code>kb.toml</code></li>
+  <li><code>[defaults].embedding_model</code> a livello daemon</li>
+  <li>Default del registry <code>bge-small-en-v1.5</code></li>
+</ol>
+<pre><code>kb model list
+kb model set bge-large-en-v1.5 --kb research
+kb model set bge-small-en-v1.5 --kb research --in-place   # same-dim swap</code></pre>
+<div class="note warn">
+  <strong>I cambi di dimensione falliscono in chiusura (fail closed).</strong> Al boot si confronta la dim lance su disco con il modello. In caso di mismatch di dim: fermare il daemon, rimuovere <code>&lt;state&gt;/&lt;kb&gt;/lance/</code>, riavviare così l’indexer ricostruisce. Gli swap a stessa dim possono usare <code>--in-place</code>.
+</div>
+<p>Se il subprocess embedder muore, un probe di liveness lo respawna; se non può, la ricerca semantic degrada a solo keyword e segnala lo stato degradato nella SPA e in <code>kb metrics</code>.</p>
+</section>
+
+<section id="bench">
+<h2>Misurare la qualità</h2>
+<p><code>kb bench</code> trasforma il retrieval in numeri: scaffold delle query, scoperta degli id rilevanti, poi report di Recall@k, MRR, nDCG e latenza a caldo per modo. Usarlo quando si cambiano modelli, chunking o reranker — non come gara da classifica.</p>
+<pre><code>kb bench init
+kb bench discover
+kb bench run</code></pre>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="concepts.html"><span class="dir">Precedente</span>Concetti</a>
+  <a class="next" href="web.html"><span class="dir">Successivo</span>Reader web</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

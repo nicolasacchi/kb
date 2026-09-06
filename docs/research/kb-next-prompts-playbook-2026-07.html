@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>The next-prompt playbook — what to run on kb next, in order, and the research recipes to reuse anywhere (2026-07)</title>
+<meta name="kb-category" content="plan">
+<meta name="kb-tags" content="status:partial, project:kb, playbook, prompts, roadmap, next-actions, research-recipes, ultracode, fable">
+<!-- kb-audit 2026-07-10: status:open->partial -- verified against main@381486a8 (kb-audit pilot, GC-D4). Shipped since authoring: F1 (already marked, db7ce381); R1 "land the cascade working tree" landed as the v0.24 Track R (2ff019da, 4e6357fd, b714d4af, 381486a8); R4 "rescue the perf branch" landed (PS1-PS5 26619b54..420de4ad, embed-IPC timeout 749c051c, query-priority lane f3392694, phase-3 disposition 0973243d: fix1+2 shipped, fix3 superseded); F2 cross-harness evaluated+prototyped (kb-capture-codex.sh, MCP deferral re-ruled 2026-07-10 per README); F4 graph intelligence shipped (graph_boost + kb graph report, 0f722cb4); F6 second-operator ruling landed (9eb48ac3, README Non-goals). Left OPEN, confirmed still absent from the tree: R0 (no single consolidated ruling artifact found — the roadmap-burndown tooling in the GC-A* series covers similar ground differently, ambiguous, needs human ruling), R2/R3 (no default redaction floor; session_scrub.rs stays opt-in), M2 (no session_workflows/kb workflows), most of gauntlet. M1 is AMBIGUOUS (some S-phase mechanisms exist under different phase labels -- CorpusMount path-aliasing, kb-created-style timestamp fallbacks -- but S3/S4/S5's specific asks were not confirmed 1:1); left unflipped, needs human ruling. F5 is AHEAD, not CONFIRMED-open: a resurfacing thin slice was designed+built but on an unmerged worktree/branch (feat/resurface-thin-slice), not on main -- "never explored" stays literally true for this tree. F3's design shipped as a separate research artifact but no query verb landed -- tag left as-is. -->
+
+<meta name="kb-summary" content="A sequenced queue of paste-ready session prompts for kb — triage first, then land the working tree, protect the public bind, ship the truthful-sessions milestone — plus a frontier section of never/half-explored territory (episodic distillation, cross-harness memory, temporal queries, graph intelligence, resurfacing, second-operator story), five parameterized research recipes reusable on any project, and the prompt-craft principles extracted from what measurably worked.">
+
+<style>
+:root{
+  --bg:#f8f9fb; --surface:#edeff5; --fg:#191c22; --muted:#535966;
+  --rule:#d4d8e2; --accent:#31509b; --accent-fg:#ffffff;
+  --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:47rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#12151d; --surface:#1a1e29; --fg:#e4e6ec; --muted:#a2a7b5;
+    --rule:#2b3040; --accent:#94b4f2; --accent-fg:#0c1526;
+    --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
+  font-size:var(--fs-body);line-height:var(--lh)}
+main{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 5rem}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+h1{font-family:var(--sans);font-size:1.85rem;line-height:1.25;letter-spacing:-.01em;margin:.2em 0 .3em}
+h2{font-family:var(--sans);font-size:1.3rem;margin:2.4em 0 .5em;padding-top:.6em;
+  border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-family:var(--sans);font-size:1.02rem;margin:1.6em 0 .35em;scroll-margin-top:1rem}
+p{margin:.7em 0}
+.kicker{font:600 .78rem/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.meta-line{color:var(--muted);font-family:var(--sans);font-size:var(--fs-small);margin-bottom:2rem}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.85rem 1rem;overflow:auto;font-size:.82rem;line-height:1.55;white-space:pre-wrap}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.87rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.slot{border:1px solid var(--rule);border-radius:var(--radius);padding:.9rem 1.05rem;margin:1.1rem 0;background:var(--surface)}
+.slot h3{margin:.1em 0 .4em}
+.slot p{font-size:.95rem;margin:.45em 0}
+.tag{display:inline-block;font:700 .66rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;
+  border-radius:999px;padding:.26em .6em;margin-right:.45em;vertical-align:middle;
+  background:var(--accent);color:var(--accent-fg)}
+.tag--urgent{background:var(--danger);color:var(--bg)}
+.tag--milestone{background:var(--ok);color:var(--bg)}
+.tag--recipe{background:var(--warn);color:var(--bg)}
+.tag--done{background:var(--ok);color:var(--bg)}
+.prompt-label{font:600 .72rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  display:block;margin:.6em 0 .25em}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+ul,ol{padding-left:1.3em}
+li{margin:.32em 0}
+.small{font-size:var(--fs-small);color:var(--muted);font-family:var(--sans)}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<p class="kicker">Playbook · execution queue</p>
+<h1>The next-prompt playbook — what to run on kb next, in order, and the research recipes to reuse anywhere (2026-07)</h1>
+<p class="meta-line">2026-07-06 · synthesized from the <a href="/a/kb-docs/research/kb-review-coverage-gaps-2026-07.html">coverage-gap analysis</a> (20 verified gaps), the <a href="/a/kb-docs/research/session-memory-deep-review-2026-07.html">session-memory deep review</a> (36 defects, ranked portfolio), and the live working-tree state · companion: <a href="/a/kb-docs/research/workflow-sessions-in-kb-design-2026-07.html">workflow-sessions design</a></p>
+
+<section id="rules">
+<h2 id="rules-h">Three standing rules before any prompt</h2>
+<ol>
+<li><strong>No new review sessions until R0 (triage) has run.</strong> Five July reviews already sit untriaged; review throughput is ~10:1 ahead of implementation. Every additional review before triage makes the pile-up worse — the coverage-gap analysis measured this loop happening.</li>
+<li><strong>Every session ends in commits or recorded refusals.</strong> "Research-only" is a valid outcome only when the artifact itself IS the deliverable. A session that produces recommendations must either schedule them (plan file), implement a slice, or decline them with rationale in the artifact — otherwise it feeds the untriaged pile.</li>
+<li><strong>One prompt, one session, its own acceptance test.</strong> Each queue entry below carries explicit acceptance criteria inside the prompt. If a session can't meet them, it should say so plainly rather than declaring victory — the deep review found several "shipped" features that no client ever rendered.</li>
+</ol>
+</section>
+
+<section id="queue">
+<h2 id="queue-h">The queue — run these in order</h2>
+<p>Ordering logic: R0 converts stored review findings into decisions (unblocks everything, prevents re-derivation). R1 protects the working tree (uncommitted engine, highest data-risk). R3 protects the public bind (live exposure). R4 restores cadence. Then the two milestones. Each prompt is self-contained — paste it as the session opener.</p>
+
+<div class="slot" id="r0-triage">
+<h3 id="r0-triage-h"><span class="tag tag--urgent">R0 · first</span>Triage the July reviews into rulings</h3>
+<p>The single highest-leverage session available. Everything else inherits a clean backlog from it.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Convert the July 2026 review pile-up into rulings. Read these (all in docs/research/): kb-improvement-portfolio-2026-07.html (22 verified proposals), agent-experience-review-2026-07.html, kb-code-craft-review-2026-07.html (10 fix-now defects) — plus the two 2026-07-06 artifacts: session-memory-deep-review (P1–P5 repair portfolio) and kb-review-coverage-gaps (20 gaps). (An architecture review and a web-UI audit from the same wave exist too, if your fork of this backlog still has them.)
+
+For EVERY recommendation across all documents: rule accept / defer(with trigger) / reject(with rationale). Dedupe across documents first — the same fix appears in multiple reviews under different names. Output: (1) ONE consolidated ruling table as a new HTML artifact in docs/research/ with a stable id per ruling; (2) the accepted items folded into the milestone plan file as ordered phases with PhaseIDs; (3) each rejected item annotated into its source artifact's kb-comments so it never resurfaces. Acceptance: zero recommendations left unruled; the plan file names the next TWO milestones with phases; a count summary (accepted/deferred/rejected) I can sanity-check. Do NOT implement anything in this session — rulings only.</pre>
+</div>
+
+<div class="slot" id="r1-cascade">
+<h3 id="r1-cascade-h"><span class="tag tag--done">R1 · shipped 2026-07-10</span>Review and land the delete-cascade working tree</h3>
+<p>~900 uncommitted lines including a new cross-store atomicity engine, sitting outside CI. Highest data-risk item in the repo. <strong>Shipped</strong> as the v0.24 Track R: <code>2ff019da</code> (actor supervision), <code>4e6357fd</code> (cascade + orphan sweep), <code>b714d4af</code> (retention), <code>381486a8</code> (zip caps) — verified 2026-07-10, all four are ancestors of main.</p>
+<span class="prompt-label">Prompt</span>
+<pre>The v0.24 delete-cascade engine is uncommitted in my working tree (crates/kb-core/src/cascade.rs new, ~600 changed lines in storage/sqlite.rs adding cascade_delete_doc/CASCADE_STEPS, plus indexer.rs/storage/actor.rs/metrics.rs/kb-server/lib.rs dirty). Deep-review the cross-store atomicity claims across lance + sqlite + .review + .attachments: prove crash-mid-cascade and partial-failure recovery, Full vs KeepUserData correctness, and no orphan-row leaks. Add failure-path tests (kill mid-step, re-run, assert convergence). Then split the bundle into phased green-CI commits per our cadence (just ci between each). Acceptance: working tree clean, every commit green, a failure-injection test exists for at least the lance-deleted-sqlite-not case, and any decision you had to make about semantics is recorded in the commit body.</pre>
+</div>
+
+<div class="slot" id="r3-pii">
+<h3 id="r3-pii-h"><span class="tag tag--urgent">R3</span>Transcript PII/secret-leak audit → default redaction floor</h3>
+<span class="prompt-label">Prompt</span>
+<pre>Audit whether captured Claude Code session transcripts leak secrets into kb's searchable surfaces. Trace end-to-end: kb-capture.sh → session_scrub.rs (currently opt-in) → the R1 digest → lance/BM25 index → recollect/search output → the public kb.example.com bind. Then grep the LIVE sessions corpus for real leaks: API-key patterns (sk-, ghp_, AKIA, bearer tokens), .env fragments, password= assignments, password-manager export content — across all ~138 capture files AND their multi-MB raw transcript &lt;pre&gt; payloads. Report what is actually exposed and where (digest vs raw vs excerpt). Then implement a DEFAULT deterministic redaction floor (not opt-in) applied at capture time, with tests pinning each pattern class, and document in docs/ what the digest is guaranteed never to surface. Re-scrub or re-capture affected existing artifacts. Acceptance: the grep sweep returns zero live hits post-fix; redaction is on by default with an explicit opt-out; a doc section states the guarantee.</pre>
+</div>
+
+<div class="slot" id="r4-perf">
+<h3 id="r4-perf-h"><span class="tag tag--done">R4 · shipped 2026-07-10</span>Rescue the perf branch, finish Phase 3</h3>
+<p><strong>Shipped:</strong> PS1–PS5 landed (<code>26619b54</code>..<code>420de4ad</code>), no <code>perf/*</code> branch remains; Phase-3 disposition recorded in <code>0973243d</code> — fix 1 (embed-IPC timeout, <code>749c051c</code>) and fix 2 (query-priority lane, <code>f3392694</code>) shipped, fix 3 (read-path actor bypass) superseded by the earlier PS1 compaction fix, so deferred as unnecessary rather than built.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Restore the no-long-lived-branch cadence for perf work: rebase perf/sweep-2026-07 (PS1–PS5, 5 commits) onto main and land each phase green-CI. Then implement the daemon-tail-latency Phase-3 plan from docs/research/daemon-tail-latency-phase3-plan.html: read-path actor bypass, embed-IPC timeout, query-priority lanes. Every phase ships with before/after p50/p95/p99 from kb bench (warm cache, both quality and speed axes) in the commit body. Acceptance: git branch -a shows no perf/* branch; main carries PS1–PS5 + Phase-3; bench deltas are recorded numbers, not adjectives; kb.example.com redeployed and spot-checked.</pre>
+</div>
+
+<div class="slot" id="m1-truthful">
+<h3 id="m1-truthful-h"><span class="tag tag--milestone">M1 · milestone</span>"Truthful sessions" — the P1–P5 repair milestone</h3>
+<p>The five now-tier programs from the deep review as one phased milestone. Small-to-medium effort, every phase independently valuable.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Plan and ship the "truthful sessions" milestone from docs/research/session-memory-deep-review-2026-07.html (read its defect census + portfolio sections first; the file:line evidence is in the workflow journal wf_1c23d6c7). Five phases, each green-CI:
+
+S1 (P1, small): per-kb host_path/path_aliases in [kb.*] config, pushed as extra CorpusMounts deriving the same ArtifactId; set aliases in the daemon's kb.toml; kb reindex sessions. Accept: session_files.in_corpus &gt; 0 on fresh prod captures; the funnel's commented stage can fire.
+
+S2 (P2, small): started_at/ended_at from MIN/MAX transcript event timestamps in parse_session_activity (sessions.rs:534-538 loop); flag-don't-zero inversions; active_duration beside wall span; deterministic end_reason from tail markers; register capture on SessionEnd so background-workflow endings recapture. Accept: zero rows with ended_at &lt; started_at after reindex; the ~50h CI session shows its real span.
+
+S3 (P3, medium): deterministic outcome field (final substantive assistant tail, ~1-2KB) indexed into the digest; exact/near-exact lexical arm over display_name+first_user_prompt fused into recollect's RRF (invariant #28 submission order); kb recollect --explain [--expect &lt;sid&gt;]; normalize the trailing-dash kb-session metas at index time. Accept: all 12 July sessions hit rank 1 for their own exact titles; --explain shows per-arm ranks.
+
+S4 (P4 layer 1, small): parse task-notification &lt;usage&gt; blocks into a subagents digest section (agent_count, subagent_tokens, tool_uses, failures, workflow name) + additive sqlite columns, shown in show/resume. Accept: e1b3277a-class sessions stop reporting 12 tool calls for 140-agent work. (Layer 2+ is the separate workflow-sessions milestone — see docs/research/workflow-sessions-in-kb-design-2026-07.html.)
+
+S5 (P5, medium): commit truth — emit rows only for mutating git commands with success results, scan all [branch sha] output lines, resolve subjects via git -C &lt;cwd&gt; show -s --format=%s, dedupe (kind,sha), stop classifying read-only git tag as writes, record repo/branch, ingest pr-link events as deliverable rows, link in-session kb remember ids to the session. Accept: zero rows with subject "commit" or "$(cat" after reindex; the 4-PR CI session shows 4 PR rows.
+
+Final acceptance for the milestone: re-run the 12-session fidelity harness from the deep review's kb-prompt (12 newest sessions, digest vs raw transcript, same rubric) and require mean usefulness ≥ 4/5 with zero fabricated provenance. Tag the milestone with the harness numbers in the tag message.</pre>
+</div>
+
+<div class="slot" id="m2-workflows">
+<h3 id="m2-workflows-h"><span class="tag tag--milestone">M2 · milestone</span>Workflow sessions become first-class</h3>
+<p>The full design is the companion artifact — collection ladder, data model, CLI, SPA visualization, search. Run after M1 (it builds on S4).</p>
+<span class="prompt-label">Prompt</span>
+<pre>Implement the workflow-sessions milestone from docs/research/workflow-sessions-in-kb-design-2026-07.html. Read the whole design first — it is grounded in the real on-disk structures (journal.jsonl, agent-*.jsonl sidechains, .meta.json, persisted scripts) and in invariant #11. Ship phases W2→W5 in order (W1 landed with M1/S4): W2 journal+script capture into session_workflows/session_workflow_agents tables + kb workflows show; W3 sidechain tool-line extraction with via_agent attribution feeding kb why; W4 the SPA workflow card + drill-down (respect invariants #23/#30, mobile stays a reader); W5 retrieval integration (workflow names/labels into the digest text, recollect badges). Each phase has acceptance criteria in the design doc — quote them in the phase commit and prove them. Do not index raw sidechain transcripts into lance (the design's D3 ruling); the &lt;template&gt; bulk-payload trick keeps them enrichment-visible but embedding-invisible.</pre>
+</div>
+
+<div class="slot" id="gauntlet">
+<h3 id="gauntlet-h"><span class="tag">then</span>The pre-OSS gauntlet</h3>
+<p>After M1/M2, work through the nine pre-open-sourcing gaps in the <a href="/a/kb-docs/research/kb-review-coverage-gaps-2026-07.html">coverage-gap artifact</a>, which carries a paste-ready prompt for each. Recommended order: backup/restore drill (only data-loss defense, never exercised) → schema-migration framework (the cascade engine just added tables) → release.yml rehearsal (Release Zero blocker) → CI --test-threads root-cause → observability runbook → a11y audit → licenses-check CI → clean-VM onboarding → chaos harness.</p>
+</div>
+</section>
+
+<section id="recipes">
+<h2 id="recipes-h">Five research recipes that generalize — use on any project</h2>
+<p>These are the patterns that measurably worked in the July program (38 candidate defects → 36 confirmed by adversarial verification; 45 ideas → 5 convergent programs). Each is a parameterized prompt — replace the <code>{PLACEHOLDERS}</code> and paste. All assume the ultracode keyword when you want multi-agent scale.</p>
+
+<div class="slot" id="recipe-coverage">
+<h3 id="recipe-coverage-h"><span class="tag tag--recipe">T1</span>Coverage-gap meta-review — "what have all my sessions never covered?"</h3>
+<p><em>When:</em> a project has accumulated 20+ sessions and you suspect blind spots. <em>Why it works:</em> classifying sessions into covered-tags vs a repo-derived universe makes absence provable instead of vibes; requiring cited evidence-of-absence killed a third of candidate gaps here.</p>
+<span class="prompt-label">Template</span>
+<pre>Map what all my past sessions on {PROJECT_PATH} covered, then find what is MISSING. ultracode it: (1) classify every captured session (kb sessions list --folder {PROJECT_PATH} --json; enrich big ones with kb sessions show) into covered-topic tags + outcome (shipped/research-only/ops/abandoned) + explicitly-unfinished items; (2) enumerate the reviewable universe from the repo itself (docs, crate/module layout, CI, quality dimensions any serious product needs: security, perf, a11y, durability drills, migrations, licenses, onboarding, observability, scalability, chaos); (3) census existing research/review deliverables; (4) gap analysts across three frames — subsystem, quality-dimension, follow-through (started-but-never-finished) — every gap needs cited evidence of absence; (5) a critic dedupes, spot-checks against the repo, and ranks into run-this-month / before-{MILESTONE} / nice-to-have with a paste-ready session prompt per gap. Output one HTML research artifact in {RESEARCH_DIR}.</pre>
+</div>
+
+<div class="slot" id="recipe-fidelity">
+<h3 id="recipe-fidelity-h"><span class="tag tag--recipe">T2</span>Fidelity harness — "does the record match reality?"</h3>
+<p><em>When:</em> any system that summarizes/records something (logs, digests, dashboards, ETL, backups) whose consumers trust it blindly. <em>Why it works:</em> per-item ground-truth comparison with a numeric rubric turns "seems fine" into a 2.6/5 you can re-measure after fixes — it becomes the acceptance test.</p>
+<span class="prompt-label">Template</span>
+<pre>Evaluate how faithfully {RECORDING_SYSTEM} represents reality. ultracode: one reader agent per {ITEM} (take the {N} most recent): pull the stored record, then independently reconstruct ground truth from {RAW_SOURCE} (sample with jq/grep — never read multi-MB files whole) and {CORROBORATING_SOURCE} (e.g. git log for the same window). For each item: what the record captured, what it missed or fabricated (concrete, quantified — "records 12, reality 2,215"), and a 1–5 usefulness score: would a future consumer acting on this record alone avoid re-deriving the work? Then verify every claimed defect adversarially in the code (file:line or reproduction). Output: per-item fidelity table, defect census grouped by pipeline layer, and the harness itself written into the artifact's kb-prompt so it can be re-run as the acceptance test after fixes.</pre>
+</div>
+
+<div class="slot" id="recipe-lenses">
+<h3 id="recipe-lenses-h"><span class="tag tag--recipe">T3</span>Multi-lens ideation + judge panel — "improve X without vanity features"</h3>
+<p><em>When:</em> you want an improvement portfolio, not a wishlist. <em>Why it works:</em> lens diversity finds different idea classes (the retrieval and product lenses independently converged on the same two fixes here — convergence is signal); the feasibility judge inspecting the actual codebase catches understated effort; the strategy judge rewards deletions.</p>
+<span class="prompt-label">Template</span>
+<pre>Generate and rank improvements for {SUBSYSTEM}. ultracode: 4–5 ideation lenses in parallel — {CONSUMER}-experience, data-quality/fidelity, {CORE_QUALITY e.g. retrieval/performance}, product-workflow, and first-principles (question the mechanism itself; argue for deletions where usage evidence is absent). Every idea must cite the evidence motivating it and state why it doesn't violate {CONSTRAINTS/NON-GOALS}. Feed all lenses the same evidence pack. Then a 3-judge panel scores each idea 0–10: value-to-{CONSUMER}, feasibility-in-THIS-codebase (judge may inspect the repo; penalize understated effort), strategic fit (reward leverage and deletions). Average scores, median tier (now/next/later/reject), cluster convergent ideas into programs. Output the ranked portfolio as an HTML artifact with per-program acceptance criteria.</pre>
+</div>
+
+<div class="slot" id="recipe-adversarial">
+<h3 id="recipe-adversarial-h"><span class="tag tag--recipe">T4</span>Adversarial verification sweep — "which of these claims are real?"</h3>
+<p><em>When:</em> any list of suspected defects/claims before acting on them. <em>Why it works:</em> instructing verifiers to REFUTE (not confirm) with file:line or live reproduction is what makes a 36/38 confirmation rate meaningful — and the 2 refutations prevented two wrong fixes. Always publish the refuted column; it's the credibility of the confirmed one.</p>
+<span class="prompt-label">Template</span>
+<pre>Adversarially verify these {N} claims about {TARGET}: {CLAIM_LIST or artifact link}. One independent skeptic per claim, instructed: default to refuted; confirm only with a file:line mechanism or a reproduction you ran yourself; if the behavior is intended per {DESIGN_DOCS}, say so — "not-a-bug" with the design rationale is a valid verdict. Each verdict: confirmed/refuted, corrected one-sentence summary (claims are usually right in direction and wrong in detail), severity, minimal fix sketch. Output both columns — confirmed AND refuted/intended — grouped by {LAYER}.</pre>
+</div>
+
+<div class="slot" id="recipe-loop">
+<h3 id="recipe-loop-h"><span class="tag tag--recipe">T5</span>The review→triage→land loop — the discipline that makes T1–T4 compound</h3>
+<p><em>When:</em> always. <em>Why:</em> the coverage-gap analysis measured what happens without it — five reviews in four days, one slice landed, and the memory system re-deriving its own findings. The loop: (1) review produces an artifact with stable per-finding ids; (2) a triage session rules accept/defer/reject on every finding and updates the plan file; (3) implementation sessions reference ruling ids in commits; (4) re-run the review's own harness as the acceptance test. A finding without a ruling is debt; a ruling without a commit or a recorded refusal is theater.</p>
+</div>
+</section>
+
+<section id="frontier">
+<h2 id="frontier-h">The frontier — never explored, or explored only halfway</h2>
+<p>Everything above fixes or finishes known work. This section is the other axis: territory no session has entered, or entered and abandoned. Sourced from the deferred-items ledger (R6, timeline view, MCP-trigger), the non-goals list (which records <em>triggers</em>, not just refusals), and the capability surface that exists but has never been composed. Each entry states its current state honestly; the strongest carry full exploration prompts. Refusal-protected territory is marked — those prompts evaluate the trigger, they don't bulldoze the ruling.</p>
+
+<div class="slot" id="f1-distill">
+<h3 id="f1-distill-h"><span class="tag tag--done">F1 · shipped 2026-07-06</span>Episodic→semantic distillation (/kb-distill — R6's successor)</h3>
+<p><strong>State:</strong> SHIPPED 2026-07-06, commit <code>db7ce381</code> — <code>plugins/kb-memory/skills/kb-distill/SKILL.md</code> (per-session distiller: quality gate = outcome + why + citation + cold-agent test; ADD/SUPERSEDE-only write vocabulary, MERGE defers to /kb-reflect; --dry-run; --session-id stamps as the idempotency key) plus a second Stop hook <code>kb-distill-nudge.sh</code> that suggests it when a session committed code but never ran kb remember. Acceptance over the July sessions: 3 memories stand, a second run wrote zero. The run's sharpest lesson is baked into the skill: <em>kb recall alone (even --no-floor) is salience-ranked and buried two verbatim pre-existing duplicates</em> — the dedup oracle is therefore dual-arm, kb recall PLUS corpus-direct kb search on the memory corpus. Original prompt kept below for the record.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Design and build /kb-distill as a Claude Code skill (agent layer — the kb daemon stays LLM-free per the recorded non-goal). Input: one session id or --since window; the skill pulls kb sessions show --json + the digest + (post-M2) workflow results, and writes back 1–3 kb remember memories: what was decided, what shipped, what failed and why — each linked to the session id and scoped with --link to the relevant kbs. Design questions to resolve: dedup against existing memories (kb recall first, --supersedes when overlapping); a quality gate so it never writes vague memories (require a decision/outcome/citation in each); when it should run (manual, or suggested by the Stop hook when a session had commits but produced 0 memories — 9 of the 12 July sessions match that pattern). Ship the skill + a dry-run mode + docs. Acceptance: run it over the 12 July sessions; it produces memories a cold agent would actually recall usefully, and running it twice produces zero duplicates.</pre>
+</div>
+
+<div class="slot" id="f2-cross-harness">
+<h3 id="f2-cross-harness-h"><span class="tag tag--done">F2 · evaluated 2026-07-06</span>Cross-harness episodic memory + the MCP trigger evaluation</h3>
+<p><strong>State:</strong> the AX review (8585d697) analyzed kb from a generic LLM-agent perspective, but capture is Claude-Code-only (a Stop-hook + JSONL parser). "No MCP server yet" is recorded as deferred-with-trigger — and the trigger ("another harness needs the protocol") has never been formally tested. If codex/opencode sessions on this machine can't reach kb, half the episodic record is missing by construction. <strong>Update 2026-07-10:</strong> both halves of this prompt shipped — a Codex capture adapter (<code>plugins/kb-memory/hooks/kb-capture-codex.sh</code>) and a re-specified MCP-deferral trigger (<code>841fb738</code>), with the ruling re-confirmed and dated in README's Non-goals as recently as today.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Evaluate kb as memory for non-Claude harnesses. (1) Inventory what codex / opencode / gemini-cli actually emit on this machine: transcript formats, hook points, session ids — can a capture adapter produce kb's capture-HTML contract for each? Prototype ONE adapter for the harness I use most after Claude Code. (2) Formally evaluate the recorded MCP trigger: list the concrete kb verbs a foreign harness needs (search, recall, remember, why, recollect), whether its CLI already suffices via shell (the "CLI is the protocol" ruling), and what ONLY an MCP server would unlock. Output a research artifact with a ruling recommendation: keep the deferral (with sharpened trigger) or build the minimal read-only MCP surface. Do not build the server in this session — trigger evaluation first, per the non-goals discipline.</pre>
+</div>
+
+<div class="slot" id="f3-temporal">
+<h3 id="f3-temporal-h"><span class="tag tag--recipe">F3 · capability exists, never composed</span>Temporal knowledge — "what did this corpus know in June?"</h3>
+<p><strong>State:</strong> the pieces all exist — versions/diff façade (invariant #14: git + index snapshots + working tree), append-only history (#8), session timestamps, memory supersede chains — but no query composes them. You cannot ask "show me this artifact as it stood before the July rewrite," "which memories were live when I made that decision," or "what changed in this kb between the two reviews." For a system whose thesis is remembering, time is oddly second-class.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Research a temporal query surface for kb, composing what already exists (versions façade #14, append-only history #8, memory supersede chains, session timestamps) — deterministic, no new storage if avoidable. Candidate queries to design against: kb cat &lt;id&gt; --as-of &lt;date&gt;; kb diff &lt;id&gt; --between &lt;date&gt; &lt;date&gt;; kb recall "&lt;q&gt;" --as-of &lt;date&gt; (which memories were live then, honoring supersedes); a "corpus changelog" view (what appeared/changed/died in a window — the week-in-review idea's deterministic core). Assess per query: which existing source answers it (git? snapshots? history table?), gaps, cost. Output a design artifact with a thin-slice recommendation — the ONE temporal verb with the best value/effort — and explicitly reject the rest with rationale so this doesn't become a time-travel epic.</pre>
+</div>
+
+<div class="slot" id="f4-graph">
+<h3 id="f4-graph-h"><span class="tag tag--done">F4 · shipped 2026-07-10</span>Graph intelligence over the edges that already exist</h3>
+<p><strong>State:</strong> wikilinks/backlinks (#29), cross-artifact links, session touches, memory links, and list membership all live in the edges/side tables — but the graph is only ever <em>displayed</em> (atlas lines, backlink counts), never <em>used</em>: no centrality signal in ranking, no "hub artifact" surfacing, no orphan detection, no link-rot report. All deterministic, all LLM-free — squarely inside the non-goals. <strong>Update 2026-07-10:</strong> shipped — <code>graph_boost</code> ranking flag (bench-measured, off by default) + <code>kb graph report</code> verb, commit <code>0f722cb4</code>, an ancestor of main@<code>381486a8</code>.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Make kb's existing graph earn its keep — deterministically. Over the edges table + session touches + memory links: (1) compute per-artifact degree/centrality and evaluate it as a small additive ranking signal in search/related (behind a flag, measured with kb bench before/after — no regression, or it stays off); (2) a kb graph report: hubs, orphans (never linked, never read), dangling wikilinks, link-rot across kbs; (3) surface "connective tissue" in the SPA inspector (this artifact bridges clusters X and Y) using data the atlas already computes. Constraints: no new heavy deps, corpus-local per invariant #29, everything reproducible. Output: research artifact with measured bench deltas + the report implemented as a CLI verb if the numbers justify it.</pre>
+</div>
+
+<div class="slot" id="f5-resurfacing">
+<h3 id="f5-resurfacing-h"><span class="tag tag--recipe">F5 · never explored</span>Attention-based resurfacing — the read-it-again queue</h3>
+<p><strong>State:</strong> kb knows exactly what you read, skimmed, and abandoned (reading progress #19, derived read-state #25, dwell signals) and never acts on any of it. No "you never finished the three artifacts you commented on," no decay-aware resurfacing of high-salience memories, no stale-research flags ("this review is 3 milestones old and its subject rewrote"). Deterministic scoring over existing signals — the same shape as recall's rank×salience×decay, applied to reading instead.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Design a deterministic resurfacing queue for kb: score = f(reading progress, comment/list membership, memory salience+decay, artifact age vs its subject's git activity) — no LLM, reproducible, explainable (--explain like recollect's). Surfaces: a kb resurface CLI verb + a small SPA card (respect #23/#30; NOT a notification system — pull, like everything else in kb). Include the anti-feature analysis: what makes resurfacing queues universally annoying (streak mechanics, guilt UX) and how a pull-only, explainable one avoids it. Thin slice first: "commented but never resolved + unfinished reads" is probably 80% of the value. Output design artifact + the thin slice implemented.</pre>
+</div>
+
+<div class="slot" id="f6-stranger">
+<h3 id="f6-stranger-h"><span class="tag tag--done">F6 · ruled 2026-07-06</span>The second-operator story</h3>
+<p><strong>State:</strong> every design decision assumes the author is the operator. Open-sourcing (Release Zero) makes strangers operators — and nobody has ever asked what breaks: auth is a single bearer token (no roles), memories/sessions are one person's by construction, the "personal infra" framing hides multi-tenant questions kb legitimately refuses (no CRDT/multiplayer is recorded) but single-host-two-humans (a partner reading the corpus, a public read-only mirror) is unruled territory in between. <strong>Update 2026-07-10:</strong> ruled — commit <code>9eb48ac3</code>, README's Non-goals now states "one daemon, one operator — no second identity" (dated 2026-07-06) covering exactly this territory map.</p>
+<span class="prompt-label">Prompt</span>
+<pre>Map kb's second-operator territory WITHOUT violating the no-CRDT/multiplayer refusal. Three concrete scenarios: (a) a stranger self-hosts for themselves (covered by the onboarding gap — reference it, don't redo it); (b) one host, a second read-only human (partner/colleague reads the corpus, maybe comments — do comments/review files survive two authors? does the SPA leak operator-only surfaces like memory/sessions?); (c) a public read-only mirror of selected kbs (the share/export engine half-answers this — what's missing for a live public subset vs a static export?). For each: what works today, what breaks, what's a ruling-vs-a-feature. Output a research artifact whose end state is RULINGS added to the non-goals ledger (even if every answer is "static export is the answer, refuse the rest") — the point is to make the boundary recorded instead of accidental.</pre>
+</div>
+
+<h3 id="frontier-ledger">Half-explored ledger (deferred-with-trigger — re-evaluate, don't relitigate)</h3>
+<table>
+<tr><th>Territory</th><th>State + trigger</th></tr>
+<tr><td>Sessions timeline view</td><td>Deferred at the sessions-UI redesign (f7ab49ec, 2026-06-26). Trigger: M2's workflow drill-down adds the first real per-agent time data — revisit <em>after</em> W4, where a timeline finally has something dense to show.</td></tr>
+<tr><td>Multi-detent mobile sheet drag</td><td>Deferred in v0.23 (#30). Trigger: any mobile-reader session actually complaining; otherwise stays deferred — mobile is a reader.</td></tr>
+<tr><td>Multilingual embedding quality</td><td>Half-explored: the corpus-b corpus (Italian) is in the bench set, but bge-small is English-first and no session ever measured Italian retrieval specifically. Fold into the schema-migration gap's model-upgrade story (a multilingual model swap needs the dim-migration path anyway).</td></tr>
+<tr><td>Internal memory-quality harness</td><td>The 12-session fidelity harness (T2) IS this, run once. Institutionalizing it as <code>kb bench --memory</code> is fine; chasing external benchmark leaderboards is the recorded refusal. Keep the distinction explicit.</td></tr>
+<tr><td>Import ecosystems beyond claude-history</td><td><code>kb import claude-history</code> shipped (Z5). Obsidian/Notion/bookmark importers are classic scope-creep magnets — require a real personal need before any session touches this; record the refusal otherwise.</td></tr>
+<tr><td>Fleet beyond one host</td><td>Multi-daemon is local-only today (daemons.toml, mdns off). Remote fleet members raise auth/sync questions adjacent to refusals. No trigger yet; leave until a second host actually exists.</td></tr>
+</table>
+</section>
+
+<section id="prompt-craft">
+<h2 id="prompt-craft-h">Prompt-craft principles (extracted from what worked)</h2>
+<table>
+<tr><th>Principle</th><th>Evidence from this program</th></tr>
+<tr><td><strong>Demand evidence, not opinion</strong> — "every finding needs file:line or a reproduction"</td><td>The clause is why 36/38 candidates survived independent refutation; review agents without it produce plausible-sounding noise</td></tr>
+<tr><td><strong>Ask for refutation, not confirmation</strong></td><td>Two wrong fixes avoided (stale-duplicates claim; "digest has no outcomes" reclassified intended-by-design → additive feature, not bug fix)</td></tr>
+<tr><td><strong>Put the acceptance test in the prompt</strong></td><td>M1's "re-run the fidelity harness, require ≥4/5" makes done mean measured, not asserted — the deep review found multiple "shipped" features no client rendered</td></tr>
+<tr><td><strong>Name the constraints/non-goals explicitly</strong></td><td>Feeding kb's recorded refusals (no in-daemon LLM, pull-only) to every ideation lens meant zero ideas violated them; the panel could score "revisit pull-only" as a proposal instead of an accident</td></tr>
+<tr><td><strong>Scope with concrete ids and paths</strong></td><td>Passing the 12 session ids + transcript paths let readers start in seconds; "look at recent sessions" would have burned tokens on discovery</td></tr>
+<tr><td><strong>Dogfood before delegating</strong></td><td>15 of the 38 candidates came from 10 minutes of inline CLI probing — the cheapest, highest-precision evidence in the whole program; it also wrote the verifiers' repro instructions</td></tr>
+<tr><td><strong>Require paste-ready outputs</strong></td><td>The gap artifact's per-gap session prompts are why this playbook could be assembled in one pass — outputs designed to be inputs</td></tr>
+<tr><td><strong>Route deliverables explicitly</strong> — "output one or more HTML research files in docs/research/"</td><td>Ambiguous routing is how deliverables end up as chat messages that evaporate; the artifact IS the memory</td></tr>
+<tr><td><strong>Sample big files, never read whole</strong> — say it in the prompt</td><td>Fidelity readers handled 1,500-message multi-MB JSONLs via jq sampling; without the instruction, agents drown their context and return thin results</td></tr>
+</table>
+<div class="callout"><span class="callout-label">Meta</span>
+The queue above is itself disposable — R0 (triage) may reorder everything after it, and that is the point: rulings, not reviews, steer. Re-derive this playbook whenever the coverage-gap artifact is re-run; keep completed entries struck-through with their commit ranges so the queue doubles as a ledger.</div>
+</section>
+</main>
+</body>
+</html>

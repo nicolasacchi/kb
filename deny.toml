@@ -1,0 +1,117 @@
+# cargo-deny configuration — supply-chain gate for the kb workspace.
+# Schema: cargo-deny v2 ([advisories]/[licenses] version = 2). Requires
+# cargo-deny >= 0.16 (the EmbarkStudios/cargo-deny-action default is current).
+# The v1 `unlicensed`/`copyleft`/`allow-osi-fsf-free`/severity-threshold fields
+# are GONE in v2 — do not reintroduce them.
+#
+# The [licenses].allow list is derived from the ACTUAL dependency graph (790
+# crates as of Cargo.lock @ 2026-06): every distinct SPDX identifier that
+# appears, after decomposing OR/AND/WITH/slash expressions, is listed. The
+# graph contains ZERO GPL/AGPL/SSPL/proprietary (the only LGPL is OR-satisfied
+# via MIT in r-efi), so this gate passes today. Re-run `just licenses-graph`
+# after a big dep bump and add any new SPDX id here BEFORE it lands, or this
+# job fails the PR.
+
+[graph]
+# Evaluate the full graph including all features. The `local-embedder` /
+# fastembed+ORT path adds NO new license ids (ort/ort-sys are MIT OR Apache-2.0),
+# but enable it so the supply-chain gate covers the embedder's deps too.
+all-features = true
+
+[advisories]
+version = 2
+# RustSec advisory DB gate. With version = 2 the default behaviour is:
+#   vulnerability  -> deny      (any unpatched RUSTSEC vuln fails CI)
+#   unmaintained   -> warn (workspace scope)  — see `unmaintained` below
+#   yanked         -> warn   (overridden to DENY below — see `yanked =`)
+#   notice/unsound -> warn
+# `ignore` is the escape hatch for a vetted, un-actionable advisory: add the
+# RUSTSEC id with a one-line justification. Keep this list EMPTY until
+# something fires — an empty list documents "clean today".
+unmaintained = "workspace"
+# Override the v2 default (warn): a yanked crate in Cargo.lock fails CI. A yank
+# usually signals a withdrawn/compromised release, so it should block. cargo-deny
+# reports 0 yanked crates today (verified), so this only catches NEW yanks.
+yanked = "deny"
+ignore = [
+    # { id = "RUSTSEC-XXXX-NNNN", reason = "transitive via lance; no fix; not on an exploitable path" },
+]
+
+[licenses]
+version = 2
+# `confidence-threshold` governs the text-matcher for license-FILE-only crates;
+# 0.8 is the cargo-deny default. The graph has no license-file-only crates
+# (every crate carries an SPDX `license` field — verified).
+confidence-threshold = 0.8
+
+# ── The allow-list ──────────────────────────────────────────────────────────
+# Every SPDX id below was observed in the graph (or is required by an AND-clause).
+# SPDX evaluation is per-crate: an `A OR B` crate passes if EITHER is allowed;
+# an `A AND B` crate needs BOTH (the Unicode + BSD ids are AND-required, not
+# optional).
+allow = [
+    # Permissive — the bulk of the graph (~1190 of the per-term counts).
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",  # rustix, linux-raw-sys, wasm-*, wit-bindgen
+    "BSD-2-Clause",
+    "BSD-3-Clause",                    # AND-required by some `(Apache/MIT) AND BSD-3-Clause`
+    "ISC",
+    "0BSD",                            # adler2 (as OR alt), mock_instant
+    "Zlib",                            # miniz_oxide etc.
+    "BSL-1.0",                         # xxhash-rust (BSL-only); ryu (as OR alt)
+    "Unlicense",                       # several crates as `Unlicense OR MIT`
+    "MIT-0",                           # constant_time_eq (as OR alt)
+    "WTFPL",                           # terminfo 0.9 (single-license)
+    "zlib-acknowledgement",            # fastdivide (as OR alt; tantivy/lance path)
+
+    # Public-domain-equivalent.
+    "CC0-1.0",                         # notify, tiny-keccak, ...
+
+    # Unicode data licenses — AND-required by icu_* / finl_unicode / wezterm-bidi.
+    "Unicode-3.0",                     # icu_* 2.x, zerovec, yoke, tinystr, litemap, ...
+    "Unicode-DFS-2016",                # finl_unicode, wezterm-bidi (AND-clause)
+
+    # Data-license — webpki-roots 1.x ships the Mozilla CA set under CDLA.
+    "CDLA-Permissive-2.0",
+
+    # Weak (file-level) copyleft. MPL-2.0 obligations are per-file and we link,
+    # don't modify, these crates. Several are MPL-ONLY (no OR) so this MUST be
+    # allowed: cssparser/cssparser-macros, selectors, dtoa-short (scraper/servo
+    # html stack), option-ext (via `directories`), and — as of kb-code Wave 1
+    # (W1.1) — nucleo (kb-code-server's fuzzy file/symbol matcher; deliberately
+    # allowlisted, MPL-ONLY, no OR alternative).
+    "MPL-2.0",
+]
+# NOTE deliberately NOT allowed:
+#   LGPL-2.1-or-later — appears ONLY in r-efi as `MIT OR Apache-2.0 OR
+#     LGPL-2.1-or-later`; SPDX OR-evaluation satisfies it via MIT, so the LGPL
+#     term is never accepted. Leaving it out keeps a real strong-copyleft
+#     license from silently becoming acceptable elsewhere.
+#   GPL/AGPL/SSPL — none in the graph; absence here makes any future
+#     introduction fail CI loudly. Do not add them.
+
+exceptions = [
+    # { allow = ["OpenSSL"], crate = "some-crate" },
+]
+
+[bans]
+# Multiple-version policy. The graph LEGITIMATELY carries duplicate majors
+# (rustix 0.38 + 1.x, linux-raw-sys 0.4 + 0.12, wit-bindgen, cssparser/selectors
+# from the scraper-vs-lol_html html stacks). `deny` would red CI on day one for
+# dupes we don't control — keep `warn` (visible, non-blocking) and tighten later
+# if a dedup effort lands.
+multiple-versions = "warn"
+wildcards = "allow"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# Only crates.io (+ workspace path deps) are allowed: an unknown registry or a
+# git dependency fails CI — a guard against a typo-squat registry or an unvetted
+# git fork sneaking in.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

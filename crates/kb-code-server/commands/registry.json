@@ -1,0 +1,5454 @@
+{
+  "schema": "kbc-cmd/1",
+  "leader": "Space",
+  "note": "kbc-cmd/1 — the ONE declaration home for kb-code's keyboard and command surface (v7 §P2). A binding that is not in this file does not exist: the `?` sheet, the command palette, the which-key overlay and the printable cheatsheet are all GENERATED from these rows, and `kb-code commands doctor` is the CI gate. Presets are three explicit COLUMNS, never inheritance — an empty array means 'unbound in that preset, reachable from the palette'.",
+  "presets": [
+    {
+      "id": "vim",
+      "title": "vim",
+      "default": true,
+      "note": "The shipped keymap: modal motions in the buffer, `g`/`z`/`[`/`]`/`m`/`'` prefixes, Space as the ONLY leader."
+    },
+    {
+      "id": "plain",
+      "title": "plain",
+      "default": false,
+      "note": "No bare letters: arrows, F-keys and modifier chords in the VS Code idiom. A command with an empty column is palette-only, never silently inherited from vim."
+    },
+    {
+      "id": "helix",
+      "title": "helix-ish",
+      "default": false,
+      "note": "vim plus helix's selection-first goto family (`ge`, `gs`, `ga`, `gn`/`gp`). Helix's `gh`/`gl` line motions are deliberately NOT adopted — `gh` is line history here."
+    }
+  ],
+  "reserved_chords": {
+    "note": "Chords the browser owns, written in the CANONICAL TOKEN FORM the dispatcher produces: modifiers in the fixed order Ctrl, Alt, Shift, Meta, and a SHIFTED PRINTABLE folded into the character (`Ctrl-T` is Ctrl+Shift+t; `Shift-` survives only on named keys like `Shift-Enter`, which have no shifted character to fold into). `hard` can never be claimed by any entry — `kb-code commands doctor` fails the build. `passthrough` may be claimed only by an entry that declares `browser_passthrough: true` (it WANTS the browser behaviour) or acknowledges the risk in `browser_reserved`. `Ctrl-w` is on the hard list and is nonetheless claimed as a PREFIX by the reader's pane chords, which is why those rows carry a `browser_reserved` acknowledgement naming the caveat the old cheat sheet omitted.",
+    "hard": [
+      "Ctrl-t",
+      "Ctrl-n",
+      "Ctrl-w",
+      "Ctrl-l",
+      "Ctrl-r",
+      "Ctrl-q",
+      "Ctrl-Tab",
+      "Ctrl-T",
+      "Ctrl-N",
+      "Ctrl-W",
+      "Ctrl-Shift-Tab",
+      "Alt-Left",
+      "Alt-Right",
+      "F5",
+      "Meta-t",
+      "Meta-n",
+      "Meta-w",
+      "Meta-q",
+      "Meta-T",
+      "Meta-N",
+      "Meta-W"
+    ],
+    "passthrough": [
+      "F11",
+      "Ctrl-p",
+      "Ctrl-s"
+    ]
+  },
+  "context_keys": [
+    {
+      "key": "mode",
+      "values": [
+        "normal",
+        "visual",
+        "visual-line"
+      ],
+      "note": "the reader buffer's vim mode"
+    },
+    {
+      "key": "pane",
+      "values": [
+        "1",
+        "2"
+      ],
+      "note": "which pane holds focus"
+    },
+    {
+      "key": "buffer",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "focus is inside a CodeView"
+    },
+    {
+      "key": "board",
+      "values": [
+        "browser",
+        "canvas",
+        "player",
+        "lens"
+      ],
+      "note": "which board surface is mounted"
+    },
+    {
+      "key": "help.open",
+      "values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "key": "palette.open",
+      "values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "key": "palette.popover",
+      "values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "key": "overlay.open",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "a result panel (peek/hierarchy/impact/ego/dag) is up"
+    },
+    {
+      "key": "sheet.open",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "a mobile sheet is up"
+    },
+    {
+      "key": "mode.active",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "a tour / resize submode / canvas selection is active"
+    },
+    {
+      "key": "diff.menu",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "the disposition menu is open"
+    },
+    {
+      "key": "diff.tour",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "a guided tour is running"
+    },
+    {
+      "key": "review.open",
+      "values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "key": "tree.focused",
+      "values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "key": "mobile",
+      "values": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "key": "peek.inline",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "an inline peek (a CM6 block widget under the caret line) is open in the focused pane (V70-A6)"
+    },
+    {
+      "key": "trail.linked",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "this tab was opened trail-linked (`?trail=&step=`) and knows its origin (V70-A6)"
+    },
+    {
+      "key": "ramp.row",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "a Ramp-participating result list has a focused row (V70-A6)"
+    },
+    {
+      "key": "pane.provisional",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "the focused pane is provisional (peek→pane promotion, not yet pinned) (V70-A6)"
+    }
+  ],
+  "scopes": [
+    {
+      "id": "global",
+      "title": "Everywhere",
+      "depth": 0,
+      "covers": "app-wide chrome: the palette, help, the Space leader, go-to-page, theme",
+      "coactive_with": [
+        "reader",
+        "tree",
+        "diff",
+        "review",
+        "branches",
+        "board",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "tree",
+      "title": "File tree + chrome",
+      "depth": 10,
+      "covers": "the dock's file tree and the reader chrome outside the code buffer",
+      "coactive_with": [
+        "global",
+        "reader",
+        "diff",
+        "review",
+        "branches",
+        "board",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "reader",
+      "title": "Code buffer",
+      "depth": 20,
+      "covers": "focus inside a CodeView (`.kbc-codeview`) — the CM6 vim layer",
+      "coactive_with": [
+        "global",
+        "tree",
+        "diff",
+        "review",
+        "branches",
+        "board",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "diff",
+      "title": "Diff",
+      "depth": 20,
+      "covers": "the review diff, session diff, commit and compare diff surfaces",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "review",
+        "branches",
+        "board",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "review",
+      "title": "Review cockpit",
+      "depth": 20,
+      "covers": "`~reviews` (the inbox list) and `~reviews/:id` (the Room cockpit)",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "diff",
+        "branches",
+        "board",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "branches",
+      "title": "Branches",
+      "depth": 20,
+      "covers": "`~branches`, the smart landing and its ranked rows",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "diff",
+        "review",
+        "board",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "board",
+      "title": "Board + players",
+      "depth": 20,
+      "covers": "the non-text centre modes: `~canvas`, `~browser`, and the tour/story players",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "diff",
+        "review",
+        "branches",
+        "rail",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "rail",
+      "title": "Inspector rail",
+      "depth": 30,
+      "covers": "the right rail and its tabs, plus the mobile sheets that host it",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "diff",
+        "review",
+        "branches",
+        "board",
+        "drawer",
+        "palette"
+      ]
+    },
+    {
+      "id": "drawer",
+      "title": "Drawer + results",
+      "depth": 40,
+      "covers": "the bottom drawer's result-set tabs and the panels it hosts (peek, hierarchy, impact, ego-graph, usages)",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "diff",
+        "review",
+        "branches",
+        "board",
+        "rail",
+        "palette"
+      ]
+    },
+    {
+      "id": "palette",
+      "title": "Palette + pickers",
+      "depth": 50,
+      "covers": "the omnibox and the transient pick-one-from-a-list overlays (structure, recent locations, mnemonics, line history, ref typeahead)",
+      "coactive_with": [
+        "global",
+        "tree",
+        "reader",
+        "diff",
+        "review",
+        "branches",
+        "board",
+        "rail",
+        "drawer"
+      ]
+    }
+  ],
+  "conflict_policy": "A CONFLICT is one key sequence bound to two different commands in two COACTIVE scopes at the SAME modal depth (or in one scope under `when` predicates that are not provably disjoint). Those rows must appear in both entries' `ratified_conflicts` or `kb-code commands doctor` fails. A key bound in a DEEPER scope shadows the shallower one by design (that is what a modal stack is) and is reported as `shadowed`, not gated. A `scope: global` key re-declared in a narrower scope is the internal SHADOWING LINT, with three structural exemptions: `Escape` (the dismiss stack is a scope ladder, gated instead on a distinct `dismiss_order`), a row carrying a `vim_kind` (its executor is the CM6 layer, which stops the event at `Prec.highest` before the window host sees it — `:` is the live case, go-to-line in the buffer and the palette everywhere else), and an explicitly ratified pair. The ratification list is a SNAPSHOT of decisions taken when it was written, never a computed identity: a collision introduced later will not be in it, and the gate stays red until a human moves the key or writes down why it stays.",
+  "commands": [
+    {
+      "id": "cmd.palette.search",
+      "title": "Search everywhere",
+      "aka": [
+        "omnibox",
+        "find anything",
+        "⌘K"
+      ],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Ctrl-k",
+          "Meta-k"
+        ],
+        "plain": [
+          "Ctrl-k",
+          "Meta-k"
+        ],
+        "helix": [
+          "Ctrl-k",
+          "Meta-k"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code search",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "cmd.palette.search",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "The box opens in SEARCH mode; type `>` to switch to command mode."
+    },
+    {
+      "id": "cmd.palette.commands",
+      "title": "Run a command…",
+      "aka": [
+        "command palette",
+        "action",
+        "run"
+      ],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          ":",
+          "Space :"
+        ],
+        "plain": [
+          "Ctrl-P"
+        ],
+        "helix": [
+          ":",
+          "Space :"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code commands manifest",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Opens the same box already in command mode (the `>` prefix, pre-filled)."
+    },
+    {
+      "id": "help.keys",
+      "title": "Keyboard help for this surface",
+      "aka": [
+        "cheatsheet",
+        "shortcuts",
+        "keys"
+      ],
+      "group": "Help",
+      "keys": {
+        "vim": [
+          "?",
+          "Space ?"
+        ],
+        "plain": [
+          "F1"
+        ],
+        "helix": [
+          "?",
+          "Space ?"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code commands cheatsheet",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "vim_kind": "cb-show-help"
+    },
+    {
+      "id": "help.which-key",
+      "title": "Show the pending-chord hints",
+      "aka": [
+        "which-key"
+      ],
+      "group": "Help",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "global",
+      "cli": "none:passive overlay, never dispatched",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "Automatic: any pending prefix raises it after 400 ms. Listed so the sheet can name it."
+    },
+    {
+      "id": "nav.back",
+      "title": "Back up the reading flow",
+      "aka": [
+        "back",
+        "up",
+        "return"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "u"
+        ],
+        "plain": [
+          "Alt-BracketLeft"
+        ],
+        "helix": [
+          "u"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser history",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "vim_kind": "cb-nav-back",
+      "note": "Replaces the review diff's and the tour's old Esc-navigates behaviour (Esc only dismisses). V70-A6: in a TRAIL-LINKED tab (`?trail=&step=`) whose origin is not already behind us in this tab's history, `u` PUSHES the origin instead — the destination stays exactly one Back away — and it never tries to focus another tab. Everywhere else it is still plain browser Back; there is no second stack. `vim_kind` exists because `u` is a BARE key: `CommandRoot`'s guard 2 gives the buffer every bare key, and A3's \"focus follows the file\" lands DOM focus there the instant a trail-linked tab's destination renders — exactly when this needs to fire. `vimReader.ts`'s `cb-nav-back` arm forwards to this SAME handler by id (`bus.run`), never a second copy of the trail-origin decision."
+    },
+    {
+      "id": "nav.forward",
+      "title": "Forward again",
+      "aka": [
+        "forward"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "U"
+        ],
+        "plain": [
+          "Alt-BracketRight"
+        ],
+        "helix": [
+          "U"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser history",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "ramp.open-tab",
+      "title": "Open in a new browser tab (trail-linked)",
+      "aka": [
+        "new tab",
+        "open elsewhere"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Ctrl-Enter",
+          "o"
+        ],
+        "plain": [
+          "Ctrl-Enter"
+        ],
+        "helix": [
+          "Ctrl-Enter",
+          "o"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:a browser tab is browser-local, and so is the trail id it carries (v7.0 trails are per-tab sessionStorage)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "ramp.open-tab",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "The Ramp's third rung (§P7). Declared `global` because the Ramp is the SAME gesture on every result surface (search rows, peek rows, hierarchy/impact rows, tree rows, drawer rows, Recent Locations, review threads) — but it is `dispatch: surface`, so it only fires where a list actually registered a handler for its focused row; anywhere else the key falls through to the browser untouched (`CommandRoot`'s no-handler rule). The new tab is trail-linked: `codeUrl` appends `trail=`/`step=`/`via=` so the destination renders the origin chip and `u` can walk back.",
+      "ratified_conflicts": [
+        "diff.overlay-cycle"
+      ]
+    },
+    {
+      "id": "ramp.open-pane2",
+      "title": "Open in the other pane",
+      "aka": [
+        "other pane",
+        "split open"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Shift-Enter"
+        ],
+        "plain": [
+          "Shift-Enter"
+        ],
+        "helix": [
+          "Shift-Enter"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:the two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "ramp.open-pane2",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "The Ramp's second rung (§P7): open the focused row in the OTHER pane, creating pane 2 through the existing `?pane2=` grammar (root CLAUDE.md #30 — pane location stays URL-derived). `tree.open-pane2` keeps the tree's own row: a designed, ratified pair — same gesture, one surface that had it first.",
+      "ratified_conflicts": [
+        "tree.open-pane2"
+      ]
+    },
+    {
+      "id": "ramp.open-window",
+      "title": "Open in a new browser window",
+      "aka": [
+        "new window",
+        "pop out"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "O"
+        ],
+        "plain": [],
+        "helix": [
+          "O"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:a browser window is browser-local, like the tab `ramp.open-tab` opens",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "ramp.open-window",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "The Ramp's top rung (§P7) — `window.open(url, '_blank', 'noopener')`, carrying the same `trail=`/`step=`/`via=` params the new-tab rung does. `noopener` is deliberate: the cross-tab story is BroadcastChannel plus the trail in the URL, never a `WindowProxy` handle, which can silently no-op under `noopener`, tab discarding or an OS focus policy."
+    },
+    {
+      "id": "nav.home",
+      "title": "Go to Home",
+      "aka": [
+        "home",
+        "/"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g h"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g h"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code repos",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.inbox",
+      "title": "Go to Inbox",
+      "aka": [
+        "inbox",
+        "~inbox"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g i"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g i"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code inbox",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.reviews",
+      "title": "Go to Reviews",
+      "aka": [
+        "reviews",
+        "~reviews"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g r"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g r"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code review list",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.branches",
+      "title": "Go to Branches",
+      "aka": [
+        "branches",
+        "~branches"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g b"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g b"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code branches",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.todos",
+      "title": "Go to TODOs",
+      "aka": [
+        "todos",
+        "~todos"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g t"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g t"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code todos",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.sets",
+      "title": "Go to Reading sets",
+      "aka": [
+        "reading sets",
+        "~sets"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g s"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g s"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code set list",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.prs",
+      "title": "Go to Pull requests",
+      "aka": [
+        "pull requests",
+        "~prs"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g p"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g p"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code pr list",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.canvas",
+      "title": "Go to Canvas",
+      "aka": [
+        "canvas",
+        "~canvas"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g c"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g c"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code canvas list",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.browser",
+      "title": "Go to Symbol browser",
+      "aka": [
+        "symbol browser",
+        "~browser"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g x"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g x"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "none:no CLI twin — the browser is a spatial view over `kb-code symbols`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.hotspots",
+      "title": "Go to Hotspots",
+      "aka": [
+        "hotspots",
+        "~hotspots"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g o"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g o"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code hotspots",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.recipes",
+      "title": "Go to Recipes",
+      "aka": [
+        "recipes",
+        "~recipes"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g e"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g e"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code recipes",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.stacks",
+      "title": "Go to Stacks",
+      "aka": [
+        "stacks",
+        "~stacks"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g k"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g k"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code stacks",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "nav.search-page",
+      "title": "Go to the full search page",
+      "aka": [
+        "search page"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g /"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g /"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code search",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "view.theme-cycle",
+      "title": "Cycle the theme (dark / light / system)",
+      "aka": [
+        "theme",
+        "dark mode",
+        "light mode"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Space t"
+        ],
+        "plain": [],
+        "helix": [
+          "Space t"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local preference (D16 — kbc-theme/1 is never a daemon write)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "view.keys-preset",
+      "title": "Switch the key preset (vim / plain / helix)",
+      "aka": [
+        "keymap",
+        "preset",
+        "rebind"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "global",
+      "cli": "kb-code commands cheatsheet",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "Chosen from the `?` sheet's preset select; persisted browser-local in `kbc:prefs`."
+    },
+    {
+      "id": "desk.preset.read",
+      "title": "Desk preset: Read",
+      "aka": [
+        "read preset",
+        "layout"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Space P r"
+        ],
+        "plain": [],
+        "helix": [
+          "Space P r"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry (DeskState is per-repo localStorage)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.preset",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "desk.preset.review",
+      "title": "Desk preset: Review",
+      "aka": [
+        "review preset",
+        "layout"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Space P v"
+        ],
+        "plain": [],
+        "helix": [
+          "Space P v"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry (DeskState is per-repo localStorage)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.preset",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "desk.preset.explore",
+      "title": "Desk preset: Explore",
+      "aka": [
+        "explore preset",
+        "layout"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Space P e"
+        ],
+        "plain": [],
+        "helix": [
+          "Space P e"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry (DeskState is per-repo localStorage)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.preset",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "desk.preset.present",
+      "title": "Desk preset: Present",
+      "aka": [
+        "present preset",
+        "layout"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Space P p"
+        ],
+        "plain": [],
+        "helix": [
+          "Space P p"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry (DeskState is per-repo localStorage)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.preset",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "desk.resize",
+      "title": "Keyboard resize submode",
+      "aka": [
+        "resize",
+        "panel size"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Ctrl-w r"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w r"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.resize",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-resize-mode",
+      "browser_reserved": "Ctrl-w is the browser's close-tab on every desktop engine; kb-code claims it as a PREFIX only (`vimReader.ts`'s ALLOWED_CTRL_KEYS), and the second key is typed with Ctrl released. Chrome may still eat the prefix — the honest caveat R7 found missing from the old cheat sheet."
+    },
+    {
+      "id": "desk.zoom",
+      "title": "Zoom the focused region",
+      "aka": [
+        "maximise",
+        "fullscreen region"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "Ctrl-w m"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w m"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-zoom-region",
+      "browser_reserved": "see `desk.resize` — same Ctrl-w prefix caveat."
+    },
+    {
+      "id": "desk.toggle.drawer",
+      "title": "Toggle the bottom drawer",
+      "aka": [
+        "drawer",
+        "results",
+        "bottom panel"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Space d"
+        ],
+        "plain": [],
+        "helix": [
+          "Space d"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.toggle.drawer",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "drawer.tab",
+      "title": "Jump to drawer tab N",
+      "aka": [
+        "result set",
+        "tab"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Space {1-9}"
+        ],
+        "plain": [],
+        "helix": [
+          "Space {1-9}"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "drawer.tab-next",
+      "title": "Next drawer tab",
+      "aka": [
+        "next set"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "] d"
+        ],
+        "plain": [],
+        "helix": [
+          "] d"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "drawer.tab-prev",
+      "title": "Previous drawer tab",
+      "aka": [
+        "previous set"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "[ d"
+        ],
+        "plain": [],
+        "helix": [
+          "[ d"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "drawer.reopen",
+      "title": "Reopen the last evicted result set",
+      "aka": [
+        "undo close",
+        "restore tab"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Space u"
+        ],
+        "plain": [],
+        "helix": [
+          "Space u"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "drawer.close",
+      "title": "Close the focused result set",
+      "aka": [
+        "close tab"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Space x"
+        ],
+        "plain": [],
+        "helix": [
+          "Space x"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "drawer.close",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "A VIEW operation — eviction never deletes data (§P1)."
+    },
+    {
+      "id": "drawer.pin",
+      "title": "Pin the focused result set (never evicted)",
+      "aka": [
+        "pin tab"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Space D"
+        ],
+        "plain": [],
+        "helix": [
+          "Space D"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "drawer.pin",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "drawer.keep",
+      "title": "Keep this peek result as a drawer tab",
+      "aka": [
+        "keep",
+        "promote to drawer"
+      ],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Space K"
+        ],
+        "plain": [],
+        "helix": [
+          "Space K"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "drawer.keep",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "desk.toggle.dock",
+      "title": "Toggle the left dock (file tree)",
+      "aka": [
+        "file tree",
+        "sidebar",
+        "explorer"
+      ],
+      "group": "Desk",
+      "keys": {
+        "vim": [
+          "b"
+        ],
+        "plain": [],
+        "helix": [
+          "b"
+        ]
+      },
+      "scope": "tree",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "desk.toggle.dock",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "rail.pin",
+      "title": "Pin the inspector rail open",
+      "aka": [
+        "pin rail",
+        "inspector"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space p"
+        ],
+        "plain": [],
+        "helix": [
+          "Space p"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "rail.pin",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "rail.tab.all",
+      "title": "Rail tab: All",
+      "aka": [
+        "all rail"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R a"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R a"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "rail.tab.understand",
+      "title": "Rail tab: Understand",
+      "aka": [
+        "understand rail"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R u"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R u"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "rail.tab.history",
+      "title": "Rail tab: History",
+      "aka": [
+        "history rail"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R h"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R h"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "rail.tab.notes",
+      "title": "Rail tab: Notes",
+      "aka": [
+        "notes rail"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R n"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R n"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "rail.tab.review",
+      "title": "Rail tab: Review",
+      "aka": [
+        "review rail"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R v"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R v"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "action.panel",
+      "title": "Action panel for what's under the cursor",
+      "aka": [
+        "actions",
+        "context menu",
+        "quick actions"
+      ],
+      "group": "Act",
+      "keys": {
+        "vim": [
+          "."
+        ],
+        "plain": [],
+        "helix": [
+          "."
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code code-actions",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "central",
+      "note": "D2: vim's `.` (repeat) has no meaning in a read-only instrument, so `.` becomes the action panel. Execution lands in the selection-actions unit."
+    },
+    {
+      "id": "hint.jump",
+      "title": "Hint-jump to anything on screen",
+      "aka": [
+        "hints",
+        "easymotion",
+        "link hints"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "f"
+        ],
+        "plain": [],
+        "helix": [
+          "f"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local viewport addressing",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "central",
+      "note": "D2 departure: `f` (find-char) is a text-editing motion with no read-only value.",
+      "ratified_conflicts": [
+        "diff.disposition.fix-later"
+      ]
+    },
+    {
+      "id": "hint.act",
+      "title": "Hint-jump and act on the target",
+      "aka": [
+        "hints act"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "F"
+        ],
+        "plain": [],
+        "helix": [
+          "F"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local viewport addressing",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "central",
+      "note": "D2: `F` is `f`'s act-on-target twin."
+    },
+    {
+      "id": "scope.edit",
+      "title": "Edit the active scope",
+      "aka": [
+        "scope",
+        "filter",
+        "narrow"
+      ],
+      "group": "Scope",
+      "keys": {
+        "vim": [
+          "s"
+        ],
+        "plain": [],
+        "helix": [
+          "s"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:kbc-scope/1 lands in the P3 unit",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "central",
+      "note": "D2 departure: `s` (substitute) is an edit verb. Ships with kbc-scope/1."
+    },
+    {
+      "id": "scope.clear",
+      "title": "Clear the active scope",
+      "aka": [
+        "clear scope",
+        "unscope"
+      ],
+      "group": "Scope",
+      "keys": {
+        "vim": [
+          "S"
+        ],
+        "plain": [],
+        "helix": [
+          "S"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:kbc-scope/1 lands in the P3 unit",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "central"
+    },
+    {
+      "id": "learn.rehearsal",
+      "title": "Rehearsal overlay — hold the leader to see the keys",
+      "aka": [
+        "rehearse",
+        "hold space"
+      ],
+      "group": "Help",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "global",
+      "cli": "none:passive overlay",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "Hold `Space` for 250 ms: every element carrying an `affordance_anchor` renders its key."
+    },
+    {
+      "id": "dismiss.peek",
+      "title": "Close the inline peek",
+      "aka": [
+        "close peek"
+      ],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "reader",
+      "when": "peek.inline",
+      "cli": "none:a dismissal has no CLI twin",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 0,
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "Order 0 — the innermost dismissal there is: an inline peek nests INSIDE the buffer, so it closes before `mode.normal` (8) drops visual mode and long before anything leaves the page. Closing restores the exact prior scroll offset (§P7)."
+    },
+    {
+      "id": "dismiss.help",
+      "title": "Close the keyboard sheet",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "global",
+      "when": "help.open",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 2,
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "dismiss.mode",
+      "title": "Leave the current mode (tour, resize, selection)",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "global",
+      "when": "mode.active",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 7,
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Esc NEVER navigates (P2). Leaving a mode is a dismissal; going back is `u`."
+    },
+    {
+      "id": "tree.focus-next",
+      "title": "Move the tree cursor down",
+      "aka": [],
+      "group": "Tree",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "tree",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code tree",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "tree.focus-prev",
+      "title": "Move the tree cursor up",
+      "aka": [],
+      "group": "Tree",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "tree",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code tree",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "tree.open",
+      "title": "Open the focused file",
+      "aka": [],
+      "group": "Tree",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "tree",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code cat",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "tree.open-pane2",
+      "title": "Open the focused file into pane 2",
+      "aka": [
+        "split open"
+      ],
+      "group": "Tree",
+      "keys": {
+        "vim": [
+          "Shift-Enter"
+        ],
+        "plain": [
+          "Shift-Enter"
+        ],
+        "helix": [
+          "Shift-Enter"
+        ]
+      },
+      "scope": "tree",
+      "targets": [
+        "file"
+      ],
+      "cli": "none:two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V70-A6: `Shift-Enter` is now ALSO declared globally as the Ramp's other-pane rung (`ramp.open-pane2`). Ratified on both rows — same gesture, and the tree's row keeps the tree's own placement rules.",
+      "ratified_conflicts": [
+        "ramp.open-pane2"
+      ]
+    },
+    {
+      "id": "tree.filter",
+      "title": "Filter the file tree",
+      "aka": [
+        "find file",
+        "filter"
+      ],
+      "group": "Tree",
+      "keys": {
+        "vim": [
+          "/"
+        ],
+        "plain": [
+          "Ctrl-f"
+        ],
+        "helix": [
+          "/"
+        ]
+      },
+      "scope": "tree",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code search --files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "move.left",
+      "title": "Left one character",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "h"
+        ],
+        "plain": [
+          "ArrowLeft"
+        ],
+        "helix": [
+          "h"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "board.pane-prev"
+      ]
+    },
+    {
+      "id": "move.right",
+      "title": "Right one character",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "l"
+        ],
+        "plain": [
+          "ArrowRight"
+        ],
+        "helix": [
+          "l"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "board.pane-next"
+      ]
+    },
+    {
+      "id": "move.down",
+      "title": "Down one line",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "board.row-next",
+        "branches.next",
+        "diff.hunk-next",
+        "lens.row-next",
+        "review.next"
+      ]
+    },
+    {
+      "id": "move.up",
+      "title": "Up one line",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "board.row-prev",
+        "branches.prev",
+        "diff.hunk-prev",
+        "lens.row-prev",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "move.word-next",
+      "title": "Forward one word",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "w"
+        ],
+        "plain": [
+          "Ctrl-ArrowRight"
+        ],
+        "helix": [
+          "w"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "diff.disposition.waive"
+      ]
+    },
+    {
+      "id": "move.word-prev",
+      "title": "Back one word",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "b"
+        ],
+        "plain": [
+          "Ctrl-ArrowLeft"
+        ],
+        "helix": [
+          "b"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.word-end",
+      "title": "To the end of the word",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "e"
+        ],
+        "plain": [],
+        "helix": [
+          "e"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.line-start",
+      "title": "To the start of the line",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "0"
+        ],
+        "plain": [
+          "Home"
+        ],
+        "helix": [
+          "0"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.first-non-blank",
+      "title": "To the first non-blank",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "^"
+        ],
+        "plain": [],
+        "helix": [
+          "g s"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.line-end",
+      "title": "To the end of the line",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "$"
+        ],
+        "plain": [
+          "End"
+        ],
+        "helix": [
+          "$"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.para-prev",
+      "title": "Back one paragraph",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "{"
+        ],
+        "plain": [
+          "Ctrl-ArrowUp"
+        ],
+        "helix": [
+          "{"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.para-next",
+      "title": "Forward one paragraph",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "}"
+        ],
+        "plain": [
+          "Ctrl-ArrowDown"
+        ],
+        "helix": [
+          "}"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.half-down",
+      "title": "Half a page down",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "Ctrl-d"
+        ],
+        "plain": [
+          "PageDown"
+        ],
+        "helix": [
+          "Ctrl-d"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.half-up",
+      "title": "Half a page up",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "Ctrl-u"
+        ],
+        "plain": [
+          "PageUp"
+        ],
+        "helix": [
+          "Ctrl-u"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.page-down",
+      "title": "A full page down",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "Ctrl-f"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-f"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.page-up",
+      "title": "A full page up",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "Ctrl-b"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-b"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "move.doc-start",
+      "title": "To the top of the file",
+      "aka": [
+        "top"
+      ],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "g g"
+        ],
+        "plain": [
+          "Ctrl-Home"
+        ],
+        "helix": [
+          "g g"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "diff.file-first"
+      ]
+    },
+    {
+      "id": "move.doc-end",
+      "title": "To the bottom of the file",
+      "aka": [
+        "bottom",
+        "end of file"
+      ],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "G"
+        ],
+        "plain": [
+          "Ctrl-End"
+        ],
+        "helix": [
+          "G",
+          "g e"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move",
+      "ratified_conflicts": [
+        "diff.file-last"
+      ]
+    },
+    {
+      "id": "move.goto-line-count",
+      "title": "To line N (type the number, then G)",
+      "aka": [
+        "line number"
+      ],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "{1-9} G"
+        ],
+        "plain": [],
+        "helix": [
+          "{1-9} G"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "scroll.center",
+      "title": "Scroll the cursor line to the centre",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "z z"
+        ],
+        "plain": [],
+        "helix": [
+          "z z"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:viewport scroll inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "scroll.top",
+      "title": "Scroll the cursor line to the top",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "z t"
+        ],
+        "plain": [],
+        "helix": [
+          "z t"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:viewport scroll inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "scroll.bottom",
+      "title": "Scroll the cursor line to the bottom",
+      "aka": [],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          "z b"
+        ],
+        "plain": [],
+        "helix": [
+          "z b"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:viewport scroll inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "move"
+    },
+    {
+      "id": "jump.back",
+      "title": "Jump list: back",
+      "aka": [
+        "previous location"
+      ],
+      "group": "Marks + jumps",
+      "keys": {
+        "vim": [
+          "Ctrl-o"
+        ],
+        "plain": [
+          "Ctrl-Alt-o"
+        ],
+        "helix": [
+          "Ctrl-o"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local jump list (`kbc:navHistory`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-jump-back",
+      "note": "V70-A6 widened the scope from `reader` to `global`: the jump list is the app's reading memory, not the buffer's, and it was unreachable from the tree, a list page or an overlay (recon G5). The CM6 layer still executes it inside the buffer (`vim_kind`); outside it the window host does, behind the typing guard."
+    },
+    {
+      "id": "jump.forward",
+      "title": "Jump list: forward",
+      "aka": [
+        "next location"
+      ],
+      "group": "Marks + jumps",
+      "keys": {
+        "vim": [
+          "Ctrl-i"
+        ],
+        "plain": [
+          "Ctrl-Alt-i"
+        ],
+        "helix": [
+          "Ctrl-i"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local jump list (`kbc:navHistory`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-jump-forward",
+      "note": "V70-A6 widened the scope from `reader` to `global` — see `jump.back`."
+    },
+    {
+      "id": "mark.set",
+      "title": "Set a mark (then a–z)",
+      "aka": [],
+      "group": "Marks + jumps",
+      "keys": {
+        "vim": [
+          "m {a-z}"
+        ],
+        "plain": [],
+        "helix": [
+          "m {a-z}"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:marks are per-EditorView and die on file switch (`vimReader.ts`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "mark-set"
+    },
+    {
+      "id": "mark.jump",
+      "title": "Jump to a mark (then a–z)",
+      "aka": [],
+      "group": "Marks + jumps",
+      "keys": {
+        "vim": [
+          "' {a-z}"
+        ],
+        "plain": [],
+        "helix": [
+          "' {a-z}"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:marks are per-EditorView and die on file switch (`vimReader.ts`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "mark-jump"
+    },
+    {
+      "id": "select.visual",
+      "title": "Visual select",
+      "aka": [],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "v"
+        ],
+        "plain": [],
+        "helix": [
+          "v"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:selection lives in the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "mode-set"
+    },
+    {
+      "id": "select.visual-line",
+      "title": "Visual-line select",
+      "aka": [],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "V"
+        ],
+        "plain": [],
+        "helix": [
+          "V"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:selection lives in the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "mode-set"
+    },
+    {
+      "id": "yank.selection",
+      "title": "Copy the selection",
+      "aka": [],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "y"
+        ],
+        "plain": [
+          "Ctrl-c"
+        ],
+        "helix": [
+          "y"
+        ]
+      },
+      "scope": "reader",
+      "when": "mode != normal",
+      "cli": "none:clipboard",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "yank-selection"
+    },
+    {
+      "id": "yank.line",
+      "title": "Copy the cursor line",
+      "aka": [],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "y y"
+        ],
+        "plain": [],
+        "helix": [
+          "y y"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:clipboard",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "yank-line"
+    },
+    {
+      "id": "mode.normal",
+      "title": "Back to normal mode",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "reader",
+      "when": "mode != normal",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 8,
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "mode-set"
+    },
+    {
+      "id": "find.in-file",
+      "title": "Search in this file",
+      "aka": [
+        "find in file"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "/"
+        ],
+        "plain": [
+          "Ctrl-f"
+        ],
+        "helix": [
+          "/"
+        ]
+      },
+      "scope": "reader",
+      "cli": "kb-code search --text",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "search-open"
+    },
+    {
+      "id": "find.next",
+      "title": "Next match",
+      "aka": [],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "n"
+        ],
+        "plain": [
+          "F3"
+        ],
+        "helix": [
+          "n"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:in-buffer search step",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "search-step"
+    },
+    {
+      "id": "find.prev",
+      "title": "Previous match",
+      "aka": [],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "N"
+        ],
+        "plain": [
+          "Shift-F3"
+        ],
+        "helix": [
+          "N"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:in-buffer search step",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "search-step"
+    },
+    {
+      "id": "find.word-next",
+      "title": "Search the word under the cursor, forward",
+      "aka": [],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "*"
+        ],
+        "plain": [],
+        "helix": [
+          "*"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:in-buffer search step",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "search-word"
+    },
+    {
+      "id": "find.word-prev",
+      "title": "Search the word under the cursor, backward",
+      "aka": [],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "#"
+        ],
+        "plain": [],
+        "helix": [
+          "#"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:in-buffer search step",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "search-word"
+    },
+    {
+      "id": "goto.line",
+      "title": "Go to line…",
+      "aka": [
+        "line number"
+      ],
+      "group": "Move",
+      "keys": {
+        "vim": [
+          ":"
+        ],
+        "plain": [
+          "Ctrl-g"
+        ],
+        "helix": [
+          ":"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:cursor motion inside the browser's buffer",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "goto-line-open",
+      "note": "Inside the buffer `:` opens the go-to-line panel; outside it, `:` opens the command palette (`cmd.palette.commands`)."
+    },
+    {
+      "id": "reader.goto-definition",
+      "title": "Go to definition",
+      "aka": [
+        "definition",
+        "jump to declaration"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g d"
+        ],
+        "plain": [
+          "F12"
+        ],
+        "helix": [
+          "g d"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code resolve-symbol",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-goto-def"
+    },
+    {
+      "id": "reader.find-references",
+      "title": "Find references",
+      "aka": [
+        "references",
+        "usages",
+        "who calls this"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g r"
+        ],
+        "plain": [
+          "Shift-F12"
+        ],
+        "helix": [
+          "g r"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code usages",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-find-refs"
+    },
+    {
+      "id": "peek.hover",
+      "title": "Peek: quick info + provenance",
+      "aka": [
+        "hover",
+        "quick info",
+        "peek"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "K"
+        ],
+        "plain": [
+          "Ctrl-k Ctrl-i"
+        ],
+        "helix": [
+          "K"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code hover",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-hover",
+      "note": "D2 rules `K` peek EVERYWHERE. V70-A6 delivers that: the scope is `global`, the buffer still executes it through the CM6 layer (`vim_kind`), and every Ramp result surface registers its own handler so `K` peeks the FOCUSED ROW there."
+    },
+    {
+      "id": "peek.context-more",
+      "title": "Inline peek: more context",
+      "aka": [
+        "expand peek",
+        "more lines"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "+"
+        ],
+        "plain": [],
+        "helix": [
+          "+"
+        ]
+      },
+      "scope": "reader",
+      "when": "peek.inline",
+      "cli": "none:the inline peek is a browser-local CM6 block widget",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "peek.context-more",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "The context dial on the inline peek (§P7's inline expansion): 12 to 30 lines in steps. Executed by the widget itself, which holds real DOM focus while open (the `PeekPanel` precedent) — `when: peek.inline` keeps the key unbound everywhere else."
+    },
+    {
+      "id": "peek.context-less",
+      "title": "Inline peek: less context",
+      "aka": [
+        "shrink peek",
+        "fewer lines"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "-"
+        ],
+        "plain": [],
+        "helix": [
+          "-"
+        ]
+      },
+      "scope": "reader",
+      "when": "peek.inline",
+      "cli": "none:the inline peek is a browser-local CM6 block widget",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "peek.context-less",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "See `peek.context-more`."
+    },
+    {
+      "id": "hierarchy.callers",
+      "title": "Call hierarchy — callers",
+      "aka": [
+        "callers",
+        "incoming calls"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g c"
+        ],
+        "plain": [],
+        "helix": [
+          "g c"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code callers",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-hierarchy-callers"
+    },
+    {
+      "id": "hierarchy.callees",
+      "title": "Call hierarchy — callees",
+      "aka": [
+        "callees",
+        "outgoing calls"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g C"
+        ],
+        "plain": [],
+        "helix": [
+          "g C"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code callees",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-hierarchy-callees"
+    },
+    {
+      "id": "hierarchy.types",
+      "title": "Type hierarchy",
+      "aka": [
+        "subtypes",
+        "implementors"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g t"
+        ],
+        "plain": [],
+        "helix": [
+          "g t"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code implementors",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-hierarchy-types"
+    },
+    {
+      "id": "impact.open",
+      "title": "Impact analysis",
+      "aka": [
+        "blast radius",
+        "impact"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g i"
+        ],
+        "plain": [],
+        "helix": [
+          "g i"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "kb-code impact",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-impact"
+    },
+    {
+      "id": "graph.ego",
+      "title": "Ego-graph (callers + callees)",
+      "aka": [
+        "graph",
+        "neighbourhood"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g G"
+        ],
+        "plain": [],
+        "helix": [
+          "g G"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "symbol"
+      ],
+      "cli": "none:the ego-graph is a spatial view over `kb-code callers`/`callees`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-ego-graph"
+    },
+    {
+      "id": "history.line",
+      "title": "History for this line or selection",
+      "aka": [
+        "line history",
+        "blame timeline"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g h"
+        ],
+        "plain": [],
+        "helix": [
+          "g h"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "line"
+      ],
+      "cli": "kb-code timeline",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-line-history"
+    },
+    {
+      "id": "structure.open",
+      "title": "File structure",
+      "aka": [
+        "outline",
+        "symbols in file",
+        "structure"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "g O"
+        ],
+        "plain": [
+          "Ctrl-O"
+        ],
+        "helix": [
+          "g O"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code symbols",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-structure-popup"
+    },
+    {
+      "id": "bookmark.toggle",
+      "title": "Toggle a bookmark on this line",
+      "aka": [
+        "bookmark",
+        "mark line"
+      ],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "g m"
+        ],
+        "plain": [],
+        "helix": [
+          "g m"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "line"
+      ],
+      "cli": "kb-code bookmark",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-toggle-bookmark"
+    },
+    {
+      "id": "bookmark.mnemonics",
+      "title": "Jump to a bookmark mnemonic",
+      "aka": [
+        "bookmarks",
+        "mnemonic"
+      ],
+      "group": "Marks + jumps",
+      "keys": {
+        "vim": [
+          "g M"
+        ],
+        "plain": [],
+        "helix": [
+          "g M"
+        ]
+      },
+      "scope": "reader",
+      "cli": "kb-code bookmarks",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-mnemonic-popup"
+    },
+    {
+      "id": "nav.recent",
+      "title": "Recent locations",
+      "aka": [
+        "recent files",
+        "last locations"
+      ],
+      "group": "Marks + jumps",
+      "keys": {
+        "vim": [
+          "g ."
+        ],
+        "plain": [
+          "Ctrl-e"
+        ],
+        "helix": [
+          "g .",
+          "g a"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:browser-local jump list (`kbc:navHistory`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-recent-locations",
+      "note": "V70-A6 renders each entry as CODE (the cursor line's own text) with a breadcrumb and a typed `via` chip, filterable by via kind — the JetBrains Recent Locations shape, backed by the SAME store `Ctrl-o` walks."
+    },
+    {
+      "id": "annotate.line",
+      "title": "Annotate this line or selection",
+      "aka": [
+        "comment",
+        "note",
+        "ask"
+      ],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "a"
+        ],
+        "plain": [
+          "Ctrl-Alt-a"
+        ],
+        "helix": [
+          "a"
+        ]
+      },
+      "scope": "reader",
+      "when": "buffer || pane == 1",
+      "targets": [
+        "line",
+        "selection"
+      ],
+      "cli": "kb-code annotate",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-annotate",
+      "note": "Also bound in the reader chrome (tree focus), where it annotates pane 1's cursor line.",
+      "ratified_conflicts": [
+        "diff.disposition.agree",
+        "review.ask"
+      ]
+    },
+    {
+      "id": "permalink.copy",
+      "title": "Copy a permalink to this line or range",
+      "aka": [
+        "copy link",
+        "permalink",
+        "share line"
+      ],
+      "group": "Select + act",
+      "keys": {
+        "vim": [
+          "Y"
+        ],
+        "plain": [
+          "Ctrl-Alt-c"
+        ],
+        "helix": [
+          "Y"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "line",
+        "selection"
+      ],
+      "cli": "none:clipboard",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-permalink",
+      "ratified_conflicts": [
+        "diff.permalink-copy"
+      ]
+    },
+    {
+      "id": "commit.prev",
+      "title": "Previous commit touching this file",
+      "aka": [
+        "older commit"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "[ c"
+        ],
+        "plain": [],
+        "helix": [
+          "[ c"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code timeline",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-history-step"
+    },
+    {
+      "id": "commit.next",
+      "title": "Next commit touching this file",
+      "aka": [
+        "newer commit"
+      ],
+      "group": "Find",
+      "keys": {
+        "vim": [
+          "] c"
+        ],
+        "plain": [],
+        "helix": [
+          "] c"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code timeline",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-history-step"
+    },
+    {
+      "id": "workingset.prev",
+      "title": "Previous file in the working set",
+      "aka": [
+        "previous file"
+      ],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "[ f"
+        ],
+        "plain": [],
+        "helix": [
+          "[ f",
+          "g p"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code set show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-cycle-file",
+      "ratified_conflicts": [
+        "diff.file-prev"
+      ]
+    },
+    {
+      "id": "workingset.next",
+      "title": "Next file in the working set",
+      "aka": [
+        "next file"
+      ],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "] f"
+        ],
+        "plain": [],
+        "helix": [
+          "] f",
+          "g n"
+        ]
+      },
+      "scope": "reader",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code set show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-cycle-file",
+      "ratified_conflicts": [
+        "diff.file-next"
+      ]
+    },
+    {
+      "id": "pane.focus-prev",
+      "title": "Focus the previous pane",
+      "aka": [],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "Ctrl-w h"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w h"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-pane-focus",
+      "browser_reserved": "see `desk.resize` — same Ctrl-w prefix caveat."
+    },
+    {
+      "id": "pane.focus-next",
+      "title": "Focus the next pane",
+      "aka": [],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "Ctrl-w l"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w l"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-pane-focus",
+      "browser_reserved": "see `desk.resize` — same Ctrl-w prefix caveat."
+    },
+    {
+      "id": "pane.focus-cycle",
+      "title": "Cycle pane focus",
+      "aka": [],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "Ctrl-w Ctrl-w"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w Ctrl-w"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-pane-focus",
+      "browser_reserved": "see `desk.resize` — same Ctrl-w prefix caveat."
+    },
+    {
+      "id": "pane.split",
+      "title": "Split: open this file into pane 2",
+      "aka": [
+        "split",
+        "compare side by side"
+      ],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "Ctrl-w v"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w v"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-split-self",
+      "browser_reserved": "see `desk.resize` — same Ctrl-w prefix caveat."
+    },
+    {
+      "id": "pane.close",
+      "title": "Close the focused pane",
+      "aka": [],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "Ctrl-w q"
+        ],
+        "plain": [],
+        "helix": [
+          "Ctrl-w q"
+        ]
+      },
+      "scope": "reader",
+      "cli": "none:two-pane layout is browser-local (`?pane2=`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-close-pane",
+      "browser_reserved": "see `desk.resize` — same Ctrl-w prefix caveat."
+    },
+    {
+      "id": "pane.back",
+      "title": "Pane history: back",
+      "aka": [
+        "pane back",
+        "previous location in this pane"
+      ],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "reader",
+      "cli": "none:browser-local per-pane jump list (`kbc:navHistory`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "pane.back",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "No key column of its own on purpose: `Ctrl-o`/`Ctrl-i` (`jump.back`/`jump.forward`) already walk the FOCUSED pane's history, and a second keyboard home for one action is what this registry exists to prevent. The row exists so the per-pane arrows in the pane header (`data-cmd=\"pane.back\"`, count badge plus hover preview) and mouse button 4 are DECLARED, palette-runnable and visible in the `?` sheet."
+    },
+    {
+      "id": "pane.forward",
+      "title": "Pane history: forward",
+      "aka": [
+        "pane forward",
+        "next location in this pane"
+      ],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "reader",
+      "cli": "none:browser-local per-pane jump list (`kbc:navHistory`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "pane.forward",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "See `pane.back`. Mouse button 5 acts on the pane under the POINTER, not the focused one (Pane Relief's rule)."
+    },
+    {
+      "id": "pane.pin",
+      "title": "Pin this pane (stop it being provisional)",
+      "aka": [
+        "pin pane",
+        "keep open"
+      ],
+      "group": "Panes + windows",
+      "keys": {
+        "vim": [
+          "p"
+        ],
+        "plain": [],
+        "helix": [
+          "p"
+        ]
+      },
+      "scope": "reader",
+      "when": "pane.provisional",
+      "cli": "none:pane provisionality is browser-local, like the two-pane layout it rides",
+      "mutation": "none",
+      "side_effect": "none",
+      "affordance_anchor": "pane.pin",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "vim_kind": "cb-pin-pane",
+      "note": "§P7's commitment ladder: only a peek→pane promotion creates a provisional pane, and it auto-pins on the SECOND interaction anyway. `p` is free in a reader (vim's `p` is paste, and nothing here can mutate a document). The chip on the pane says the key literally — VS Code's italic preview tab is the counter-example the research names: the signal must be loud and the promotion gesture discoverable.",
+      "ratified_conflicts": [
+        "player.autoplay"
+      ]
+    },
+    {
+      "id": "diff.hunk-next",
+      "title": "Next hunk",
+      "aka": [
+        "next change"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "hunk"
+      ],
+      "cli": "kb-code review interdiff",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.row-next",
+        "branches.next",
+        "lens.row-next",
+        "move.down",
+        "review.next"
+      ]
+    },
+    {
+      "id": "diff.hunk-prev",
+      "title": "Previous hunk",
+      "aka": [
+        "previous change"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "hunk"
+      ],
+      "cli": "kb-code review interdiff",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.row-prev",
+        "branches.prev",
+        "lens.row-prev",
+        "move.up",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "diff.file-first",
+      "title": "First file",
+      "aka": [],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "g g"
+        ],
+        "plain": [
+          "Ctrl-Home"
+        ],
+        "helix": [
+          "g g"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "move.doc-start"
+      ]
+    },
+    {
+      "id": "diff.file-last",
+      "title": "Last file",
+      "aka": [],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "G"
+        ],
+        "plain": [
+          "Ctrl-End"
+        ],
+        "helix": [
+          "G",
+          "g e"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "move.doc-end"
+      ]
+    },
+    {
+      "id": "diff.file-prev",
+      "title": "Previous file",
+      "aka": [],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "[ f"
+        ],
+        "plain": [],
+        "helix": [
+          "[ f",
+          "g p"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "workingset.prev"
+      ]
+    },
+    {
+      "id": "diff.file-next",
+      "title": "Next file",
+      "aka": [],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "] f"
+        ],
+        "plain": [],
+        "helix": [
+          "] f",
+          "g n"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "workingset.next"
+      ]
+    },
+    {
+      "id": "diff.toggle-viewed",
+      "title": "Toggle viewed on this file",
+      "aka": [
+        "viewed",
+        "seen",
+        "mark read"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space v"
+        ],
+        "plain": [],
+        "helix": [
+          "Space v"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review viewed",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "MOVED under the leader in V70-A5: bare `v` is visual mode in the reader (D2)."
+    },
+    {
+      "id": "diff.viewed-advance",
+      "title": "Mark viewed and go to the next unviewed file",
+      "aka": [
+        "viewed next"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space V"
+        ],
+        "plain": [],
+        "helix": [
+          "Space V"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code review viewed",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "MOVED under the leader in V70-A5: bare `V` is visual-line select in the reader (D2)."
+    },
+    {
+      "id": "diff.split-toggle",
+      "title": "Toggle split / unified",
+      "aka": [
+        "side by side",
+        "unified",
+        "split"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Space s"
+        ],
+        "plain": [],
+        "helix": [
+          "Space s"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:browser-local diff layout preference",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "MOVED under the leader in V70-A5: D2 ratifies bare `s` as the scope verb, globally."
+    },
+    {
+      "id": "diff.collapse",
+      "title": "Collapse / expand this file",
+      "aka": [
+        "fold",
+        "collapse"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "x"
+        ],
+        "plain": [],
+        "helix": [
+          "x"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "file"
+      ],
+      "cli": "none:browser-local diff layout",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.compose-new",
+      "title": "Comment on the cursor line (new side)",
+      "aka": [
+        "comment",
+        "reply",
+        "new comment"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "c"
+        ],
+        "plain": [],
+        "helix": [
+          "c"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "line"
+      ],
+      "cli": "kb-code review comments",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.compose-old",
+      "title": "Comment on the cursor line (old side)",
+      "aka": [
+        "comment old side"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "C"
+        ],
+        "plain": [],
+        "helix": [
+          "C"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "line"
+      ],
+      "cli": "kb-code review comments",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.thread-next",
+      "title": "Next thread or finding",
+      "aka": [
+        "next comment"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "t"
+        ],
+        "plain": [],
+        "helix": [
+          "t"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "thread",
+        "finding"
+      ],
+      "cli": "kb-code review comments",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.thread-prev",
+      "title": "Previous thread or finding",
+      "aka": [
+        "previous comment"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "T"
+        ],
+        "plain": [],
+        "helix": [
+          "T"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "thread",
+        "finding"
+      ],
+      "cli": "kb-code review comments",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.overlay-cycle",
+      "title": "Cycle the diff overlay lane",
+      "aka": [
+        "overlay",
+        "lanes",
+        "findings"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "o"
+        ],
+        "plain": [],
+        "helix": [
+          "o"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:browser-local overlay selection",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V70-A6: `o` is now ALSO the Ramp's new-tab rung at `scope: global` (`ramp.open-tab`). Ratified on both rows — the resolver prefers the scope-specific row, so on the diff surface `o` keeps cycling overlay lanes and the Ramp key there is `Ctrl-Enter`.",
+      "ratified_conflicts": [
+        "ramp.open-tab"
+      ]
+    },
+    {
+      "id": "diff.disposition",
+      "title": "Disposition menu for the focused finding",
+      "aka": [
+        "disposition",
+        "triage"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "d"
+        ],
+        "plain": [],
+        "helix": [
+          "d"
+        ]
+      },
+      "scope": "diff",
+      "when": "!diff.menu",
+      "targets": [
+        "finding"
+      ],
+      "cli": "kb-code review disposition",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.disposition.agree",
+      "title": "Disposition: Agree",
+      "aka": [
+        "agree"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "a"
+        ],
+        "plain": [],
+        "helix": [
+          "a"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.menu",
+      "targets": [
+        "finding"
+      ],
+      "cli": "kb-code review disposition",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "annotate.line",
+        "review.ask"
+      ]
+    },
+    {
+      "id": "diff.disposition.dispute",
+      "title": "Disposition: Dispute",
+      "aka": [
+        "dispute"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "d"
+        ],
+        "plain": [],
+        "helix": [
+          "d"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.menu",
+      "targets": [
+        "finding"
+      ],
+      "cli": "kb-code review disposition",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "diff.disposition.waive",
+      "title": "Disposition: Waive",
+      "aka": [
+        "waive"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "w"
+        ],
+        "plain": [],
+        "helix": [
+          "w"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.menu",
+      "targets": [
+        "finding"
+      ],
+      "cli": "kb-code review disposition",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "move.word-next"
+      ]
+    },
+    {
+      "id": "diff.disposition.fix-later",
+      "title": "Disposition: Fix later",
+      "aka": [
+        "fix later"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "f"
+        ],
+        "plain": [],
+        "helix": [
+          "f"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.menu",
+      "targets": [
+        "finding"
+      ],
+      "cli": "kb-code review disposition",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "hint.jump"
+      ]
+    },
+    {
+      "id": "diff.permalink-copy",
+      "title": "Copy the focused finding's permalink",
+      "aka": [
+        "copy finding link"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "Y"
+        ],
+        "plain": [
+          "Ctrl-Alt-c"
+        ],
+        "helix": [
+          "Y"
+        ]
+      },
+      "scope": "diff",
+      "targets": [
+        "finding"
+      ],
+      "cli": "none:clipboard",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "HARMONISED in V70-A5: was bare `y` (yank in the reader); `Y` is already the reader's copy-permalink verb.",
+      "ratified_conflicts": [
+        "permalink.copy"
+      ]
+    },
+    {
+      "id": "diff.tour-next",
+      "title": "Next tour stop",
+      "aka": [
+        "tour next"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "] t"
+        ],
+        "plain": [],
+        "helix": [
+          "] t"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.tour",
+      "cli": "none:the guided tour is a browser-local reading order",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "MOVED in V70-A5: `n`/`p` silently changed meaning when a tour was running (recon R5) — the tour now has its own keys."
+    },
+    {
+      "id": "diff.tour-prev",
+      "title": "Previous tour stop",
+      "aka": [
+        "tour back"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "[ t"
+        ],
+        "plain": [],
+        "helix": [
+          "[ t"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.tour",
+      "cli": "none:the guided tour is a browser-local reading order",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "dismiss.menu",
+      "title": "Close the disposition menu",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "diff",
+      "when": "diff.menu",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 3,
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "review.tab.report",
+      "title": "Cockpit tab: Report",
+      "aka": [
+        "report"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "1"
+        ],
+        "plain": [],
+        "helix": [
+          "1"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface"
+    },
+    {
+      "id": "review.tab.files",
+      "title": "Cockpit tab: Files",
+      "aka": [
+        "files"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "2"
+        ],
+        "plain": [],
+        "helix": [
+          "2"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface"
+    },
+    {
+      "id": "review.tab.map",
+      "title": "Cockpit tab: Map",
+      "aka": [
+        "map"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "3"
+        ],
+        "plain": [],
+        "helix": [
+          "3"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface"
+    },
+    {
+      "id": "review.tab.order",
+      "title": "Cockpit tab: Order",
+      "aka": [
+        "order"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "4"
+        ],
+        "plain": [],
+        "helix": [
+          "4"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface"
+    },
+    {
+      "id": "review.tab.timeline",
+      "title": "Cockpit tab: Timeline",
+      "aka": [
+        "timeline"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "5"
+        ],
+        "plain": [],
+        "helix": [
+          "5"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface"
+    },
+    {
+      "id": "review.ask",
+      "title": "Focus the ask-the-agent box",
+      "aka": [
+        "ask",
+        "question"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "a"
+        ],
+        "plain": [],
+        "helix": [
+          "a"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review report",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "annotate.line",
+        "diff.disposition.agree"
+      ]
+    },
+    {
+      "id": "review.open-diff",
+      "title": "Open the review diff",
+      "aka": [
+        "diff"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review files",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.drill",
+        "branches.compare"
+      ]
+    },
+    {
+      "id": "review.next",
+      "title": "Next review in the inbox",
+      "aka": [],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review inbox",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.row-next",
+        "branches.next",
+        "diff.hunk-next",
+        "lens.row-next",
+        "move.down"
+      ]
+    },
+    {
+      "id": "review.prev",
+      "title": "Previous review in the inbox",
+      "aka": [],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review inbox",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.row-prev",
+        "branches.prev",
+        "diff.hunk-prev",
+        "lens.row-prev",
+        "move.up"
+      ]
+    },
+    {
+      "id": "branches.next",
+      "title": "Next branch",
+      "aka": [],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code branches",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.row-next",
+        "diff.hunk-next",
+        "lens.row-next",
+        "move.down",
+        "review.next"
+      ]
+    },
+    {
+      "id": "branches.prev",
+      "title": "Previous branch",
+      "aka": [],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code branches",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.row-prev",
+        "diff.hunk-prev",
+        "lens.row-prev",
+        "move.up",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "branches.compare",
+      "title": "Compare the focused branch",
+      "aka": [],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code compare",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "board.drill",
+        "review.open-diff"
+      ]
+    },
+    {
+      "id": "branches.start-review",
+      "title": "Start a review on the focused branch",
+      "aka": [
+        "review this branch"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "r"
+        ],
+        "plain": [],
+        "helix": [
+          "r"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code review start",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "planned",
+      "dispatch": "surface"
+    },
+    {
+      "id": "board.pane-prev",
+      "title": "Focus the pane to the left",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "h"
+        ],
+        "plain": [
+          "ArrowLeft"
+        ],
+        "helix": [
+          "h"
+        ]
+      },
+      "scope": "board",
+      "when": "board == browser",
+      "cli": "none:browser-local pane focus",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "move.left"
+      ]
+    },
+    {
+      "id": "board.pane-next",
+      "title": "Focus the pane to the right",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "l"
+        ],
+        "plain": [
+          "ArrowRight"
+        ],
+        "helix": [
+          "l"
+        ]
+      },
+      "scope": "board",
+      "when": "board == browser",
+      "cli": "none:browser-local pane focus",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "move.right"
+      ]
+    },
+    {
+      "id": "board.row-next",
+      "title": "Next row in the focused pane",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "board",
+      "when": "board == browser",
+      "cli": "kb-code symbols",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.next",
+        "diff.hunk-next",
+        "move.down",
+        "review.next"
+      ]
+    },
+    {
+      "id": "board.row-prev",
+      "title": "Previous row in the focused pane",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "board",
+      "when": "board == browser",
+      "cli": "kb-code symbols",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.prev",
+        "diff.hunk-prev",
+        "move.up",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "board.drill",
+      "title": "Drill into the focused row",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "board",
+      "when": "board == browser",
+      "cli": "kb-code symbols",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.compare",
+        "review.open-diff"
+      ]
+    },
+    {
+      "id": "board.pan",
+      "title": "Hold to pan the canvas",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Alt"
+        ],
+        "plain": [
+          "Alt"
+        ],
+        "helix": [
+          "Alt"
+        ]
+      },
+      "scope": "board",
+      "when": "board == canvas",
+      "cli": "none:browser-local viewport",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "MOVED in V70-A5: the pan modifier was `Space`, and D2 makes `Space` the leader and ONLY the leader."
+    },
+    {
+      "id": "player.next",
+      "title": "Next step",
+      "aka": [
+        "next stop",
+        "forward"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Right"
+        ],
+        "plain": [
+          "Right"
+        ],
+        "helix": [
+          "Right"
+        ]
+      },
+      "scope": "board",
+      "when": "board == player",
+      "targets": [
+        "step"
+      ],
+      "cli": "kb-code set show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "player.prev",
+      "title": "Previous step",
+      "aka": [
+        "previous stop",
+        "back"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Left"
+        ],
+        "plain": [
+          "Left"
+        ],
+        "helix": [
+          "Left"
+        ]
+      },
+      "scope": "board",
+      "when": "board == player",
+      "targets": [
+        "step"
+      ],
+      "cli": "kb-code set show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "player.autoplay",
+      "title": "Play / pause the story",
+      "aka": [
+        "play",
+        "pause",
+        "autoplay"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "p"
+        ],
+        "plain": [],
+        "helix": [
+          "p"
+        ]
+      },
+      "scope": "board",
+      "when": "board == player",
+      "cli": "kb-code story",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "MOVED in V70-A5: autoplay was `Space`, and D2 makes `Space` the leader and ONLY the leader. V70-A6: `p` is also `pane.pin` in the reader scope (a provisional pane's own chip names the key). Ratified on both rows — the tour player and the code buffer are never the same surface, but the gate cannot prove that from two `when` predicates, and a ratification is the right instrument for exactly that.",
+      "ratified_conflicts": [
+        "pane.pin"
+      ]
+    },
+    {
+      "id": "lens.row-next",
+      "title": "Next reference row",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "board",
+      "when": "board == lens",
+      "targets": [
+        "reference"
+      ],
+      "cli": "kb-code doclens show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.next",
+        "diff.hunk-next",
+        "move.down",
+        "review.next"
+      ]
+    },
+    {
+      "id": "lens.row-prev",
+      "title": "Previous reference row",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "board",
+      "when": "board == lens",
+      "targets": [
+        "reference"
+      ],
+      "cli": "kb-code doclens show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.prev",
+        "diff.hunk-prev",
+        "move.up",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "lens.group-next",
+      "title": "Next reference group",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          ")"
+        ],
+        "plain": [],
+        "helix": [
+          ")"
+        ]
+      },
+      "scope": "board",
+      "when": "board == lens",
+      "targets": [
+        "reference"
+      ],
+      "cli": "kb-code doclens show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "lens.group-prev",
+      "title": "Previous reference group",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "("
+        ],
+        "plain": [],
+        "helix": [
+          "("
+        ]
+      },
+      "scope": "board",
+      "when": "board == lens",
+      "targets": [
+        "reference"
+      ],
+      "cli": "kb-code doclens show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "dismiss.sheet",
+      "title": "Close the mobile sheet",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "rail",
+      "when": "sheet.open",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 6,
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "drawer.row-next",
+      "title": "Next result",
+      "aka": [],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "drawer",
+      "when": "overlay.open",
+      "targets": [
+        "result"
+      ],
+      "cli": "kb-code usages",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "drawer.row-prev",
+      "title": "Previous result",
+      "aka": [],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "drawer",
+      "when": "overlay.open",
+      "targets": [
+        "result"
+      ],
+      "cli": "kb-code usages",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "drawer.activate",
+      "title": "Open the focused result",
+      "aka": [],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "drawer",
+      "when": "overlay.open",
+      "targets": [
+        "result"
+      ],
+      "cli": "kb-code cat",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "drawer.collapse",
+      "title": "Collapse the focused node",
+      "aka": [],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "h"
+        ],
+        "plain": [
+          "ArrowLeft"
+        ],
+        "helix": [
+          "h"
+        ]
+      },
+      "scope": "drawer",
+      "when": "overlay.open",
+      "cli": "none:browser-local tree state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "drawer.expand",
+      "title": "Expand the focused node",
+      "aka": [],
+      "group": "Drawer",
+      "keys": {
+        "vim": [
+          "l"
+        ],
+        "plain": [
+          "ArrowRight"
+        ],
+        "helix": [
+          "l"
+        ]
+      },
+      "scope": "drawer",
+      "when": "overlay.open",
+      "cli": "none:browser-local tree state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "dismiss.overlay",
+      "title": "Close the focused result panel",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "drawer",
+      "when": "overlay.open",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 4,
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "One entry for the whole panel class — peek, hierarchy, impact, ego-graph, layered DAG. Each panel owns execution; the dismiss ORDER is declared once, here."
+    },
+    {
+      "id": "palette.row-next",
+      "title": "Next row",
+      "aka": [],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Down",
+          "j"
+        ],
+        "plain": [
+          "Down"
+        ],
+        "helix": [
+          "Down",
+          "j"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open",
+      "cli": "none:palette cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "`j`/`k` move the cursor only while the filter box is EMPTY (the StructurePopup/RecentLocations carve-out)."
+    },
+    {
+      "id": "palette.row-prev",
+      "title": "Previous row",
+      "aka": [],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Up",
+          "k"
+        ],
+        "plain": [
+          "Up"
+        ],
+        "helix": [
+          "Up",
+          "k"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open",
+      "cli": "none:palette cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "palette.section-next",
+      "title": "Next section",
+      "aka": [],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Tab"
+        ],
+        "plain": [
+          "Tab"
+        ],
+        "helix": [
+          "Tab"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open",
+      "cli": "none:palette cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "palette.section-prev",
+      "title": "Previous section",
+      "aka": [],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Shift-Tab"
+        ],
+        "plain": [
+          "Shift-Tab"
+        ],
+        "helix": [
+          "Shift-Tab"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open",
+      "cli": "none:palette cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "palette.activate",
+      "title": "Open / run the focused row",
+      "aka": [],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open",
+      "cli": "none:palette cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "palette.show-unavailable",
+      "title": "Show the rows that aren't available here — and why",
+      "aka": [
+        "unavailable",
+        "why not"
+      ],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Ctrl-H"
+        ],
+        "plain": [
+          "Ctrl-H"
+        ],
+        "helix": [
+          "Ctrl-H"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open",
+      "cli": "kb-code commands explain",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "dismiss.popover",
+      "title": "Close the row popover",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.popover",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 1,
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "dismiss.palette",
+      "title": "Close the palette",
+      "aka": [],
+      "group": "Dismiss",
+      "keys": {
+        "vim": [
+          "Escape"
+        ],
+        "plain": [
+          "Escape"
+        ],
+        "helix": [
+          "Escape"
+        ]
+      },
+      "scope": "palette",
+      "when": "palette.open && !palette.popover",
+      "cli": "none:dismiss",
+      "mutation": "none",
+      "side_effect": "none",
+      "dismiss_order": 5,
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    }
+  ]
+}

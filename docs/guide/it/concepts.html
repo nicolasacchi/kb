@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Modello mentale di kb: artefatti, note, liste, memoria, sessioni e la pipeline di indicizzazione.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, concepts, architecture, non-goals">
+<title>Concetti · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../concepts.html">EN</a><span class="sep">·</span><a href="concepts.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html" aria-current="page">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">02 · Modello mentale</p>
+  <h1>Concetti</h1>
+  <p class="lede">Cinque sostantivi, una pipeline e un elenco breve di cose che kb non diventerà — così ogni verbo che si impara dopo ha un posto chiaro.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#nouns">Cinque sostantivi</a></li>
+    <li><a href="#daemon-kb">Daemon e kb</a></li>
+    <li><a href="#pipeline">Come funziona l'indicizzazione</a></li>
+    <li><a href="#interfaces">Interfacce</a></li>
+    <li><a href="#refusals">Cosa kb rifiuta</a></li>
+  </ol>
+</nav>
+
+<section id="nouns">
+<h2>Cinque sostantivi</h2>
+<div class="table-scroll">
+<table class="nouns">
+  <thead><tr><th>Sostantivo</th><th>Cos'è</th><th>Dove vive</th><th>Verbo principale</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>artefatto (artifact)</td>
+      <td>Un deliverable HTML o Markdown — l'atomo che kb indicizza e serve</td>
+      <td>Una cartella sorgente (un corpus)</td>
+      <td><code>kb search</code> / <code>kb get</code></td>
+    </tr>
+    <tr>
+      <td>nota (note)</td>
+      <td>Un artefatto Markdown con <code>[[wikilinks]]</code> e checklist GFM</td>
+      <td>Dentro una kb (<code>kb-category: note</code>)</td>
+      <td><code>kb notes</code></td>
+    </tr>
+    <tr>
+      <td>lista (list)</td>
+      <td>Una lista di lettura ordinata e consapevole delle sezioni; lo stato di lettura è <em>derivato</em></td>
+      <td>Documento kb-list/1 per-kb</td>
+      <td><code>kb list</code></td>
+    </tr>
+    <tr>
+      <td>memoria (memory)</td>
+      <td>Un fatto curato ed esplicito per l'agente, richiamato in modo deterministico</td>
+      <td>Un corpus di memoria (globale o di progetto)</td>
+      <td><code>kb remember</code> / <code>kb recall</code></td>
+    </tr>
+    <tr>
+      <td>sessione (session)</td>
+      <td>Un transcript episodico di un agente, indicizzato come digest, solo in pull</td>
+      <td>Store delle sessioni accanto a ogni kb</td>
+      <td><code>kb why</code> / <code>kb recollect</code></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<div class="note">
+  <strong>Memoria ≠ sessione.</strong> La memoria è ciò che si è <em>scelto</em> di conservare (curata). Una sessione è ciò che <em>è successo</em> (episodica). <code>kb recall</code> risponde a «cosa sappiamo?»; <code>kb why</code> / <code>kb recollect</code> rispondono a «cosa abbiamo fatto, e possiamo fidarci?».
+</div>
+</section>
+
+<section id="daemon-kb">
+<h2>Daemon e kb</h2>
+<p>Un <strong>daemon</strong> è un processo in esecuzione (default <code>http://127.0.0.1:4000</code>). Se ne possono far girare diversi in parallelo su porte diverse. Ogni daemon monta una o più <strong>kb</strong> — una kb è semplicemente una cartella nominata di artefatti dichiarata in <code>~/.config/kb/kb.toml</code> (o aggiunta con <code>kb add</code>).</p>
+<p>Un solo processo può federare ricerca, recall, sessioni, liste e note su ogni kb montata. È multi-kb su un daemon — non un proxy multi-daemon. Il tooling di flotta (<code>kb fleet status</code>, SPA Settings) osserva molti daemon; non unisce i loro corpus in un'unica ricerca.</p>
+</section>
+
+<section id="pipeline">
+<h2>Come funziona l'indicizzazione</h2>
+<p>Per il lavoro quotidiano non serve un job di «indice» separato. Il daemon osserva le cartelle sorgente e mantiene l'indice aggiornato.</p>
+<div class="pipeline">source folders
+   │  file watcher (~400ms debounce)
+   ▼
+parser  →  title · headings · tags · category · prompt · link edges
+   │  per-kb back-pressured ingest
+   ▼
+indexer →  storage  →  lance (vectors + body)  +  sqlite (metadata)
+   │              ▲
+   └── embedder sidecar (out-of-process) ──┘
+                 │
+   axum server ◄─┘  REST /api/*  ·  SSE events  ·  SPA  ·  artifact subdomains</div>
+<ul>
+  <li><strong>Gate su content-hash</strong> — i byte invariati non vengono riparsati né ri-embedded.</li>
+  <li><strong>Quarantena</strong> — i file non parsabili compaiono nell'API di quarantena invece di sparire.</li>
+  <li><strong>Percorsi forzati</strong> — <code>kb reindex</code> ri-percorre; <code>kb reset --kb NAME</code> azzera lo stato dell'indice (i commenti in <code>.review/</code> restano salvo con <code>--all</code>).</li>
+</ul>
+<p>Gli id degli artefatti sono un digest esadecimale stabile di 12 caratteri del path relativo alla sorgente. Rinominare cambia l'id; modificare il contenuto no. Preferire il motore di relocate (<code>kb mv</code> / API move) agli spostamenti grezzi sul filesystem quando contano commenti e history.</p>
+</section>
+
+<section id="interfaces">
+<h2>Interfacce</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Superficie</th><th>Ruolo</th></tr></thead>
+  <tbody>
+    <tr><td><code>kb</code> CLI</td><td>Ogni verbo: search, comments, memory, sessions, share, fleet, ops. Il token bearer viene letto automaticamente da <code>~/.config/kb/token</code>.</td></tr>
+    <tr><td>Web SPA</td><td>UI primaria di lettura e review su <code>/</code>. Galleria, atlante, reader, liste, sessioni, impostazioni.</td></tr>
+    <tr><td>HTTP API</td><td>La stessa superficie del daemon usata dalla CLI. Schema eventi su <code>/api/events.schema.json</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="note warn">
+  <strong>TUI ritirata (v0.24).</strong> Il vecchio dashboard a cinque tab in terminale non c'è più. Il monitoraggio della flotta è SPA Settings + <code>kb fleet status</code> + <code>kb events --follow</code>. Non tornerà come superficie di prodotto.
+</div>
+</section>
+
+<section id="refusals">
+<h2>Cosa kb rifiuta (decisioni registrate)</h2>
+<p>Questi sono confini di scope, non funzionalità mancanti:</p>
+<ul>
+  <li><strong>Niente LLM nel daemon</strong> — ranking e digest restano deterministici; i passi LLM vivono nelle skill/comandi dell'agente.</li>
+  <li><strong>Niente editor CRDT / multiplayer</strong> — commenti e file <code>.review</code> sono la superficie di collaborazione.</li>
+  <li><strong>L'identità è attribuzione, non autorizzazione</strong> — kb può nominare chi ha agito (identità dal bordo / token / operatore loopback) ma non gestisce password, ruoli o ACL. Ogni identità ammessa è un co-operatore.</li>
+  <li><strong>Il mount del corpus è l'ACL</strong> — ciò che il daemon monta è ciò che serve. La condivisione oltre un confine di trust è <code>kb share</code> oppure un daemon pubblico dedicato.</li>
+  <li><strong>Il mobile è un reader + slot di cattura</strong>, non un editor.</li>
+  <li><strong>Niente server MCP ancora</strong> — la CLI è il protocollo finché un harness non può fare shell out.</li>
+</ul>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="start.html"><span class="dir">Precedente</span>Avvio</a>
+  <a class="next" href="search.html"><span class="dir">Successivo</span>Ricerca</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

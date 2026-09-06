@@ -1,0 +1,11 @@
+en:
+  shared:
+    hello: "Hi"
+  controllers:
+    backoffice:
+      welcome:
+        title: "Welcome"
+  trade:
+    rounds:
+      backoffice_extra:
+        note: "Extra note"

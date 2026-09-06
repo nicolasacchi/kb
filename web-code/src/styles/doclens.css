@@ -1,0 +1,422 @@
+/* DCB W2.B — the doc↔code lens page (`routes/Lens.tsx` + `components/lens/
+ * {GroupRail,RefRow,Scorecard}.tsx`). Same token discipline as every other
+ * kb-code stylesheet (`reader.css`'s own header comment) — every color
+ * reaches for a `tokens.css` variable. Loading/error one-liners reuse the
+ * shared `.kbc-reader__hint` classes (`reader.css`) rather than a second
+ * copy. Three-column body (rail | refs | reader), mirroring `canvas.css`'s
+ * `minmax(...) 1fr` sidebar-plus-stage grid shape. */
+
+.kbc-lens {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 16px;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* --- scorecard (Scorecard.tsx) -------------------------------------------- */
+
+.kbc-lens__scorecard {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 12px;
+  flex: 0 0 auto;
+}
+.kbc-lens__scorecard-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kbc-lens__doc-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+a.kbc-lens__doc-title:hover {
+  text-decoration: underline;
+}
+.kbc-lens__resolved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-lens__refresh {
+  background: none;
+  border: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+}
+.kbc-lens__refresh:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+
+/* DCB W3.C — "Save as set" (`Scorecard.tsx`'s header row), same small
+ * accent-button treatment as `.kbc-sets__create button` (`sets.css`). */
+.kbc-lens__save-set-btn {
+  flex: 0 0 auto;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.kbc-lens__save-set-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kbc-lens__save-set-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-lens__repos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.kbc-lens__repo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+}
+.kbc-lens__repo:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-lens__repo:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.kbc-lens__repo.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+.kbc-lens__repo-name {
+  font-weight: 500;
+}
+.kbc-lens__repo-sha {
+  font-family: var(--font-mono);
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-lens__repo.is-selected .kbc-lens__repo-sha {
+  color: inherit;
+  opacity: 0.8;
+}
+.kbc-lens__repo-dirty {
+  color: var(--warn);
+}
+.kbc-lens__repo-state {
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-lens__repo.is-selected .kbc-lens__repo-state {
+  color: inherit;
+  opacity: 0.85;
+}
+.kbc-lens__repo-reason {
+  color: var(--red);
+  font-size: 11px;
+}
+/* DCB-W2.B.R fix 3 — `ScorecardRepoRow.partial` (a repo's OWN resolution hit
+ * the deadline before finishing) rendered as its own small tag, distinct
+ * from the dirty dot and the state text. */
+.kbc-lens__repo-partial {
+  color: var(--warn);
+  font-size: 10px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-pill);
+  padding: 0 4px;
+  line-height: 1.4;
+}
+
+.kbc-lens__dirty-banner {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+/* --- never-scanned (sibling of the body, per §4.1) ------------------------ */
+
+.kbc-lens__never-scanned {
+  flex: 0 0 auto;
+}
+
+/* DCB-W2.B.R fix 3 — `truncationCaption`'s one-line honesty banner (kb's own
+ * `.kb-pinsp__coderef-truncated` precedent, `web/src/components/
+ * CodeRefsSection.tsx`), gated on `lens.truncated || lens.partial`. */
+.kbc-lens__truncated {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--warn);
+}
+
+/* --- body: rail | refs | reader ------------------------------------------- */
+
+.kbc-lens__hint-row {
+  /* DCB-W2.B.R fix 2 — this is the FIRST of 4 children inside
+   * `.kbc-lens__body`'s grid (rail | refs | reader), so without an explicit
+   * placement, auto-placement gives it column 1 of row 1, shoving GroupRail
+   * into column 2, refs into column 3, and wrapping the reader pane down
+   * into row 2's column 1 — the narrow 160-220px rail track. Span the full
+   * width instead, so the remaining 3 children auto-place into their
+   * intended columns starting on row 2. */
+  grid-column: 1 / -1;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.kbc-lens__body {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(240px, 360px) 1fr;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .kbc-lens__body {
+    grid-template-columns: 1fr;
+    /* DCB-W2.B.R fix 2 — a leading `auto` row for the (now full-span) hint
+     * row, so the 3 REAL rows below it (rail/refs/reader) line up with
+     * this template again — without it, the hint row consumes the first
+     * `auto` slot meant for the rail, refs falls into the `minmax(240px,
+     * 1fr)` slot meant for the reader, and the reader itself overflows
+     * into an unsized implicit row. */
+    grid-template-rows: auto auto auto minmax(240px, 1fr);
+  }
+}
+
+/* --- group rail (GroupRail.tsx) -------------------------------------------- */
+
+.kbc-lens__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  border-right: 1px solid var(--rule);
+  padding-right: 8px;
+}
+.kbc-lens__rail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.kbc-lens__rail-row:hover {
+  background: var(--bg-card-hi);
+  color: var(--ink);
+}
+.kbc-lens__rail-row.is-selected {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent-bor);
+}
+.kbc-lens__rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-lens__rail-count {
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+.kbc-lens__rail-row--ungrouped {
+  border-top: 1px solid var(--rule);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+/* --- ref rows (RefRow.tsx) -------------------------------------------------- */
+
+.kbc-lens__refs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.kbc-lens__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 13px;
+}
+.kbc-lens__row.is-selected {
+  background: var(--bg-card-hi);
+  border-color: var(--accent-bor);
+}
+.kbc-lens__row--absent,
+.kbc-lens__row--symbol-none,
+.kbc-lens__row--external {
+  color: var(--ink-mute);
+}
+.kbc-lens__row-raw {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.kbc-lens__row-link {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.kbc-lens__row-link:hover {
+  text-decoration: underline;
+}
+.kbc-lens__row-external {
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kbc-lens__row-external:hover {
+  color: var(--ink);
+}
+.kbc-lens__row-search {
+  color: var(--blue);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kbc-lens__row-note {
+  color: var(--warn);
+  font-size: 11px;
+}
+/* DCB-W2.B.R fix 6 — the external (vendor/gem) tier's OWN tag, parity with
+ * kb's `.kb-pinsp__coderef-external-tag` (`web/src/components/
+ * CodeRefsSection.tsx`'s is-external treatment): "didn't resolve" is a lie
+ * for a deliberate vendor citation, so this gets its own visual class, not
+ * a fold into the absent tier's styling. */
+.kbc-lens__row-external-tag {
+  color: var(--ink-mute);
+  font-size: 10px;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+.kbc-lens__declared {
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.kbc-lens__candidates {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-basis: 100%;
+}
+.kbc-lens__candidates a {
+  color: var(--blue);
+  text-decoration: none;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.kbc-lens__candidates a:hover {
+  text-decoration: underline;
+}
+
+/* line/symbol badges — visually PRIMARY, never a footnote (the base plan's
+ * own risk note). */
+.kbc-lens__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+.kbc-lens__badge--confirmed {
+  background: var(--green);
+  color: var(--accent-fg);
+}
+.kbc-lens__badge--drifted {
+  background: var(--warn);
+  color: var(--accent-fg);
+}
+.kbc-lens__badge--unverifiable {
+  border: 1px solid var(--rule-hi);
+  color: var(--ink-mute);
+  background: none;
+}
+.kbc-lens__badge[data-kbc-lens-symbol] {
+  border: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+  background: none;
+}
+
+/* CT-F2 — the "when written" era badge: deliberately SECONDARY (smaller,
+ * outlined, no fill) — it never replaces `LineBadge` above, only notes when
+ * the era-resolved verdict differs from the current-tree one. */
+.kbc-lens__badge--era {
+  font-size: 10px;
+  padding: 0 5px;
+  border: 1px solid var(--rule-hi);
+  color: var(--ink-mute);
+  background: none;
+}
+.kbc-lens__badge--era-wrong-when-written {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.kbc-lens__badge--era-rotted-since {
+  border-color: var(--ink-mute);
+}
+
+/* --- embedded reader (LensCodeView) ---------------------------------------- */
+
+.kbc-lens__reader {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.kbc-lens__reader .kbc-codeview {
+  flex: 1 1 auto;
+  min-height: 0;
+}

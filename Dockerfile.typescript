@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1.7
+#
+# REFERENCE image for kb-lip + typescript-language-server (design-lip.md's
+# "can also live in a different docker image; the end user must not have to
+# look elsewhere"). Mirrors Dockerfile.ruby's shape — see that file's own
+# top-of-file comment for the full rationale. As with Dockerfile.ruby:
+# NOTHING in CI builds this file (see justfile — no `ci-*` recipe references
+# it), so it is not covered by the pinned-digest discipline the root
+# Dockerfile documents. An operator adopting this for real should apply the
+# same digest-pinning to both FROM lines below before running it unattended.
+#
+# Build (from the repo root, so the builder stage can see the whole
+# workspace — kb-lip is a Cargo workspace member, so `cargo build -p kb-lip`
+# needs the root Cargo.toml/Cargo.lock and every crate's Cargo.toml to
+# resolve, even though only kb-lip's own source ends up in the final image):
+#
+#   docker build -f Dockerfile.typescript -t kb-lip-typescript .
+#
+# Run (mount the target TS/JS repo read-only, point workspace_root at the
+# in-container mount path — see providers/typescript-language-server.toml's
+# prerequisite #2 for the "one tsconfig project per instance" note on a
+# monorepo — publish the lip/1 port to loopback only — see providers/
+# README.md for the "how do I know it's actually protected" discussion):
+#
+#   docker run --rm \
+#     -v /path/to/my-app/web:/workspace:ro \
+#     -p 127.0.0.1:4847:4847 \
+#     kb-lip-typescript
+#
+# The container's own providers/typescript-language-server.toml (baked in
+# below, workspace_root rewritten to /workspace) is the config ENTRYPOINT
+# runs with — override by bind-mounting a different config over
+# /app/config.toml.
+
+# --- Builder: compile kb-lip -------------------------------------------
+FROM rust:1.96-trixie AS builder
+
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p kb-lip
+
+# --- Runtime: node + typescript-language-server + the compiled kb-lip ---
+FROM node:22-trixie-slim AS runtime
+
+RUN npm install -g typescript-language-server typescript \
+    && npm cache clean --force
+
+COPY --from=builder /build/target/release/kb-lip /usr/local/bin/kb-lip
+
+WORKDIR /app
+COPY providers/typescript-language-server.toml /app/config.toml
+# The baked-in config's workspace_root placeholder is meaningless outside
+# this image (it names a path on the HOST that built the image) — rewrite it
+# to the container's expected mount point, /workspace, so the shipped
+# default just works against `docker run -v <repo>:/workspace:ro`.
+RUN sed -i 's|^workspace_root = .*|workspace_root = "/workspace"|' /app/config.toml
+
+EXPOSE 4847
+
+ENTRYPOINT ["kb-lip", "--config", "/app/config.toml"]

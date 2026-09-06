@@ -1,0 +1,32 @@
+{
+  "name": "kb-plugins",
+  "owner": { "name": "kb", "url": "https://github.com/nicolasacchi/kb" },
+  "description": "Claude Code plugins for the kb daemon. The daemon stays model-free (#26); hooks and commands drive the `kb` CLI against a running daemon (default 127.0.0.1:4000). Most are mechanical; kb-reflect adds agent-driven memory consolidation (the distiller is the live session). See docs/extending.md for how these fit kb's extension model.",
+  "plugins": [
+    {
+      "name": "kb-memory",
+      "source": "./plugins/kb-memory",
+      "description": "Agent memory via the kb daemon: automatic recall each turn (UserPromptSubmit), a re-injected memory protocol at session start (SessionStart), and verbatim transcript capture when the agent finishes (Stop). Ships /kb-setup — a guided first-run bootstrap that installs/checks kb, writes a kb.toml with memory + sessions corpora, and starts the daemon."
+    },
+    {
+      "name": "kb-research",
+      "source": "./plugins/kb-research",
+      "description": "Author kb-indexed HTML research artifacts and keep them true in one flow: a kb-artifact authoring skill (the kb authoring contract), a kb-audit skill that reconciles a research corpus' status claims against repo truth (dry-run drift report; --fix flips stale markers in the source), plus a /kb-tools command that prints the live kb CLI manifest."
+    },
+    {
+      "name": "kb-comments",
+      "source": "./plugins/kb-comments",
+      "description": "Triage SPA comments (kb-comments/1) from Claude Code: list/export open comments, edit the source, then reply/resolve/reanchor — plus a live `kb comments watch` loop. The CLI is the only safe path."
+    },
+    {
+      "name": "kb-reflect",
+      "source": "./plugins/kb-reflect",
+      "description": "The memory 'dream': /kb-reflect consolidates past sessions into durable curated facts — reads session digests, dedups against existing memories (ADD/SUPERSEDE/MERGE), and after an approved dry-run writes graded, provenance-linked facts via `kb remember`. The distiller is the live agent; append-only, human-gated, recall untouched."
+    },
+    {
+      "name": "kb-code",
+      "source": "./plugins/kb-code",
+      "description": "Provenance-aware code browsing via a kb-code daemon: a PreToolUse hook (kb-code-why) that injects trailer/exact-confidence \"who wrote this and why\" context right before an Edit/Write touches an attributable line — LLM-free, fail-open, never fuzzy. `kb-code hook install|uninstall|status` prints the settings.json wiring (never edits it silently) and checks daemon reachability."
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+---
+source: crates/kb-core/tests/slate_digest.rs
+expression: "(displaced, total)"
+---
+(
+    [
+        Displaced {
+            seq: 3,
+            kind: Idea,
+            line: "the loader retries three times before it gives up — src/widget/loader.rs:60",
+            age_secs: 2400,
+        },
+        Displaced {
+            seq: 4,
+            kind: Found,
+            line: "the parser drops the last token on an odd-length input — src/widget/parser.rs:22",
+            age_secs: 2340,
+        },
+        Displaced {
+            seq: 5,
+            kind: Found,
+            line: "the gate reads its peer from the request extensions — src/widget/gate.rs:88",
+            age_secs: 2280,
+        },
+        Displaced {
+            seq: 6,
+            kind: Idea,
+            line: "open_store checks the epoch before migrations — src/store/open.rs:141",
+            age_secs: 2220,
+        },
+    ],
+    4,
+)

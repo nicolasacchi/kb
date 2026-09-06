@@ -1,0 +1,797 @@
+---
+source: crates/kb-core/tests/coderef_goldens.rs
+expression: e
+---
+Extraction {
+    refs: [
+        CodeRef {
+            ordinal: 0,
+            kind: Path,
+            raw_text: "config/importmap.rb",
+            path_hint: Some(
+                "config/importmap.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Entry point is config/importmap.rb and the dispatcher in dispatcher.rb.",
+            context_tokens: [
+                "importmap",
+            ],
+            declared: false,
+            group: None,
+        },
+        CodeRef {
+            ordinal: 1,
+            kind: Path,
+            raw_text: "dispatcher.rb",
+            path_hint: Some(
+                "dispatcher.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Entry point is config/importmap.rb and the dispatcher in dispatcher.rb.",
+            context_tokens: [
+                "dispatcher",
+            ],
+            declared: false,
+            group: None,
+        },
+        CodeRef {
+            ordinal: 2,
+            kind: Issue,
+            raw_text: "https://github.com/acme/shopfront/issues/15356",
+            path_hint: Some(
+                "acme/shopfront",
+            ),
+            line_start: Some(
+                15356,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "A1 — Token identity Deploy A · #15356",
+            context_tokens: [],
+            declared: false,
+            group: Some(
+                0,
+            ),
+        },
+        CodeRef {
+            ordinal: 3,
+            kind: Path,
+            raw_text: "shared_controller_concern.rb",
+            path_hint: Some(
+                "shared_controller_concern.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Files: shared_controller_concern.rb, current_user_controller.js, assets.js.erb",
+            context_tokens: [
+                "shared_controller_concern",
+            ],
+            declared: false,
+            group: Some(
+                0,
+            ),
+        },
+        CodeRef {
+            ordinal: 4,
+            kind: Path,
+            raw_text: "current_user_controller.js",
+            path_hint: Some(
+                "current_user_controller.js",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Files: shared_controller_concern.rb, current_user_controller.js, assets.js.erb",
+            context_tokens: [
+                "current_user_controller",
+            ],
+            declared: false,
+            group: Some(
+                0,
+            ),
+        },
+        CodeRef {
+            ordinal: 5,
+            kind: Path,
+            raw_text: "assets.js.erb",
+            path_hint: Some(
+                "assets.js.erb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Files: shared_controller_concern.rb, current_user_controller.js, assets.js.erb",
+            context_tokens: [
+                "assets",
+            ],
+            declared: false,
+            group: Some(
+                0,
+            ),
+        },
+        CodeRef {
+            ordinal: 6,
+            kind: PathLine,
+            raw_text: "checkout_controller.rb:284",
+            path_hint: Some(
+                "checkout_controller.rb",
+            ),
+            line_start: Some(
+                284,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Precedence inversion in user_token: header before the _SHOP cookie. The only live caller is checkout (checkout_controller.rb:284 → CreateOrderService → dispatcher.rb).",
+            context_tokens: [
+                "checkout_controller",
+                "user_token",
+                "_SHOP",
+                "CreateOrderService",
+            ],
+            declared: false,
+            group: Some(
+                0,
+            ),
+        },
+        CodeRef {
+            ordinal: 7,
+            kind: Path,
+            raw_text: "dispatcher.rb",
+            path_hint: Some(
+                "dispatcher.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Precedence inversion in user_token: header before the _SHOP cookie. The only live caller is checkout (checkout_controller.rb:284 → CreateOrderService → dispatcher.rb).",
+            context_tokens: [
+                "dispatcher",
+                "user_token",
+                "_SHOP",
+                "CreateOrderService",
+            ],
+            declared: false,
+            group: Some(
+                0,
+            ),
+        },
+        CodeRef {
+            ordinal: 8,
+            kind: Issue,
+            raw_text: "https://github.com/acme/shopfront/issues/15357",
+            path_hint: Some(
+                "acme/shopfront",
+            ),
+            line_start: Some(
+                15357,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "A2 — Conversion rewrite Deploy A · #15357",
+            context_tokens: [],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 9,
+            kind: Path,
+            raw_text: "dispatcher.rb",
+            path_hint: Some(
+                "dispatcher.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Files: dispatcher.rb (+ base), order_item.rb, one migration on orders",
+            context_tokens: [
+                "dispatcher",
+                "orders",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 10,
+            kind: Path,
+            raw_text: "order_item.rb",
+            path_hint: Some(
+                "order_item.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Files: dispatcher.rb (+ base), order_item.rb, one migration on orders",
+            context_tokens: [
+                "order_item",
+                "orders",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 11,
+            kind: SymbolConst,
+            raw_text: "Billing::InvoiceError",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Billing::InvoiceError",
+            ),
+            symbol_member: None,
+            context: "Typed rewrite raising Billing::InvoiceError from Dispatcher#dispatch; see also Checkout::UpdateCartService#item_attributes_for and Store::Products::Indexer#indexable?.",
+            context_tokens: [
+                "InvoiceError",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 12,
+            kind: SymbolMethod,
+            raw_text: "Dispatcher#dispatch",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Dispatcher",
+            ),
+            symbol_member: Some(
+                "dispatch",
+            ),
+            context: "Typed rewrite raising Billing::InvoiceError from Dispatcher#dispatch; see also Checkout::UpdateCartService#item_attributes_for and Store::Products::Indexer#indexable?.",
+            context_tokens: [
+                "dispatch",
+                "Dispatcher",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 13,
+            kind: SymbolMethod,
+            raw_text: "Checkout::UpdateCartService#item_attributes_for",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Checkout::UpdateCartService",
+            ),
+            symbol_member: Some(
+                "item_attributes_for",
+            ),
+            context: "Typed rewrite raising Billing::InvoiceError from Dispatcher#dispatch; see also Checkout::UpdateCartService#item_attributes_for and Store::Products::Indexer#indexable?.",
+            context_tokens: [
+                "item_attributes_for",
+                "UpdateCartService",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 14,
+            kind: SymbolMethod,
+            raw_text: "Store::Products::Indexer#indexable?",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Store::Products::Indexer",
+            ),
+            symbol_member: Some(
+                "indexable?",
+            ),
+            context: "Typed rewrite raising Billing::InvoiceError from Dispatcher#dispatch; see also Checkout::UpdateCartService#item_attributes_for and Store::Products::Indexer#indexable?.",
+            context_tokens: [
+                "indexable?",
+                "Indexer",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 15,
+            kind: PathList,
+            raw_text: "dispatcher.rb:5,19,29",
+            path_hint: Some(
+                "dispatcher.rb",
+            ),
+            line_start: Some(
+                5,
+            ),
+            line_end: None,
+            line_spans: Some(
+                "5,19,29",
+            ),
+            symbol_container: None,
+            symbol_member: None,
+            context: "Ranges and lists: dispatcher.rb:5,19,29, checkout_controller.rb:425,440, search_service.rb:41-55, assets.js.erb:30,51-65,113-119.",
+            context_tokens: [
+                "dispatcher",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 16,
+            kind: PathList,
+            raw_text: "checkout_controller.rb:425,440",
+            path_hint: Some(
+                "checkout_controller.rb",
+            ),
+            line_start: Some(
+                425,
+            ),
+            line_end: None,
+            line_spans: Some(
+                "425,440",
+            ),
+            symbol_container: None,
+            symbol_member: None,
+            context: "Ranges and lists: dispatcher.rb:5,19,29, checkout_controller.rb:425,440, search_service.rb:41-55, assets.js.erb:30,51-65,113-119.",
+            context_tokens: [
+                "checkout_controller",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 17,
+            kind: PathRange,
+            raw_text: "search_service.rb:41-55",
+            path_hint: Some(
+                "search_service.rb",
+            ),
+            line_start: Some(
+                41,
+            ),
+            line_end: Some(
+                55,
+            ),
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Ranges and lists: dispatcher.rb:5,19,29, checkout_controller.rb:425,440, search_service.rb:41-55, assets.js.erb:30,51-65,113-119.",
+            context_tokens: [
+                "search_service",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 18,
+            kind: PathList,
+            raw_text: "assets.js.erb:30,51-65,113-119",
+            path_hint: Some(
+                "assets.js.erb",
+            ),
+            line_start: Some(
+                30,
+            ),
+            line_end: None,
+            line_spans: Some(
+                "30,51-65,113-119",
+            ),
+            symbol_container: None,
+            symbol_member: None,
+            context: "Ranges and lists: dispatcher.rb:5,19,29, checkout_controller.rb:425,440, search_service.rb:41-55, assets.js.erb:30,51-65,113-119.",
+            context_tokens: [
+                "assets",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 19,
+            kind: SymbolMethod,
+            raw_text: "Order#confirm_payment!",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Order",
+            ),
+            symbol_member: Some(
+                "confirm_payment!",
+            ),
+            context: "Third caller without a guard: Order#confirm_payment! (orders_controller.rb#confirm).",
+            context_tokens: [
+                "confirm_payment!",
+                "Order",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 20,
+            kind: Path,
+            raw_text: "orders_controller.rb#confirm",
+            path_hint: Some(
+                "orders_controller.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: Some(
+                "confirm",
+            ),
+            context: "Third caller without a guard: Order#confirm_payment! (orders_controller.rb#confirm).",
+            context_tokens: [
+                "confirm",
+                "orders_controller",
+            ],
+            declared: false,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 21,
+            kind: Path,
+            raw_text: "app/models/order.rb#L120-L140",
+            path_hint: Some(
+                "app/models/order.rb",
+            ),
+            line_start: Some(
+                120,
+            ),
+            line_end: Some(
+                140,
+            ),
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Declared: the order model and a typo'd one this one is malformed.",
+            context_tokens: [
+                "order",
+            ],
+            declared: true,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 22,
+            kind: Path,
+            raw_text: "app/models/nope..rb",
+            path_hint: Some(
+                "app/models/nope..rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Declared: the order model and a typo'd one this one is malformed.",
+            context_tokens: [
+                "nope",
+            ],
+            declared: true,
+            group: Some(
+                1,
+            ),
+        },
+        CodeRef {
+            ordinal: 23,
+            kind: External,
+            raw_text: "shopclient-3.12.2/lib/shopclient/api_client.rb:120",
+            path_hint: Some(
+                "shopclient-3.12.2/lib/shopclient/api_client.rb",
+            ),
+            line_start: Some(
+                120,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Gem sources: shopclient-3.12.2/lib/shopclient/api_client.rb:120, activesupport-7.1.5.2/lib/active_support/core_ext/object/json.rb:126-138.",
+            context_tokens: [
+                "api_client",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 24,
+            kind: External,
+            raw_text: "activesupport-7.1.5.2/lib/active_support/core_ext/object/json.rb:126-138",
+            path_hint: Some(
+                "activesupport-7.1.5.2/lib/active_support/core_ext/object/json.rb",
+            ),
+            line_start: Some(
+                126,
+            ),
+            line_end: Some(
+                138,
+            ),
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Gem sources: shopclient-3.12.2/lib/shopclient/api_client.rb:120, activesupport-7.1.5.2/lib/active_support/core_ext/object/json.rb:126-138.",
+            context_tokens: [
+                "json",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 25,
+            kind: Path,
+            raw_text: "orders/indexer.rb",
+            path_hint: Some(
+                "orders/indexer.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Also orders/indexer.rb, _results.html.erb, popup_component.html.erb:36, Maintenance::Search::ReconcileIndexTask.",
+            context_tokens: [
+                "indexer",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 26,
+            kind: Path,
+            raw_text: "_results.html.erb",
+            path_hint: Some(
+                "_results.html.erb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Also orders/indexer.rb, _results.html.erb, popup_component.html.erb:36, Maintenance::Search::ReconcileIndexTask.",
+            context_tokens: [
+                "_results",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 27,
+            kind: PathLine,
+            raw_text: "popup_component.html.erb:36",
+            path_hint: Some(
+                "popup_component.html.erb",
+            ),
+            line_start: Some(
+                36,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Also orders/indexer.rb, _results.html.erb, popup_component.html.erb:36, Maintenance::Search::ReconcileIndexTask.",
+            context_tokens: [
+                "popup_component",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 28,
+            kind: SymbolConst,
+            raw_text: "Maintenance::Search::ReconcileIndexTask",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Maintenance::Search::ReconcileIndexTask",
+            ),
+            symbol_member: None,
+            context: "Also orders/indexer.rb, _results.html.erb, popup_component.html.erb:36, Maintenance::Search::ReconcileIndexTask.",
+            context_tokens: [
+                "ReconcileIndexTask",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 29,
+            kind: PathLine,
+            raw_text: "app/models/order.rb:77",
+            path_hint: Some(
+                "app/models/order.rb",
+            ),
+            line_start: Some(
+                77,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Inline markup inside a code element: widget(clickAnalytics=true) — rejected, and a second one app/models/order.rb:77 that only parses if the walker reads textContent.",
+            context_tokens: [
+                "order",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 30,
+            kind: Path,
+            raw_text: "app/services/order_dispatch/conversion.rb",
+            path_hint: Some(
+                "app/services/order_dispatch/conversion.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "# app/services/order_dispatch/conversion.rb module OrderDispatch class Conversion < Base def dispatch # see app/models/order.rb:1044 Billing::InvoiceService.new(order).call end end end",
+            context_tokens: [
+                "conversion",
+                "services",
+                "order_dispatch",
+                "module",
+                "OrderDispatch",
+                "class",
+                "Conversion",
+                "Base",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 31,
+            kind: PathLine,
+            raw_text: "app/models/order.rb:1044",
+            path_hint: Some(
+                "app/models/order.rb",
+            ),
+            line_start: Some(
+                1044,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "# app/services/order_dispatch/conversion.rb module OrderDispatch class Conversion < Base def dispatch # see app/models/order.rb:1044 Billing::InvoiceService.new(order).call end end end",
+            context_tokens: [
+                "order",
+                "module",
+                "OrderDispatch",
+                "class",
+                "Conversion",
+                "Base",
+                "dispatch",
+                "models",
+            ],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+        CodeRef {
+            ordinal: 32,
+            kind: Issue,
+            raw_text: "https://github.com/acme/shopfront/issues/15351",
+            path_hint: Some(
+                "acme/shopfront",
+            ),
+            line_start: Some(
+                15351,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "Issue seen twice, second time with a fragment: #15351 and the comment.",
+            context_tokens: [],
+            declared: false,
+            group: Some(
+                2,
+            ),
+        },
+    ],
+    groups: [
+        CodeRefGroup {
+            ordinal: 0,
+            key: "kb-h-a1-token-identity-deploy-a-15356",
+            label: "A1 — Token identity Deploy A · #15356",
+            anchor: "kb-h-a1-token-identity-deploy-a-15356",
+        },
+        CodeRefGroup {
+            ordinal: 1,
+            key: "kb-h-a2-conversion-rewrite-deploy-a-15357",
+            label: "A2 — Conversion rewrite Deploy A · #15357",
+            anchor: "kb-h-a2-conversion-rewrite-deploy-a-15357",
+        },
+        CodeRefGroup {
+            ordinal: 2,
+            key: "explicit-anchor",
+            label: "B1 — Vendor + listing",
+            anchor: "explicit-anchor",
+        },
+    ],
+    ungrouped_count: 2,
+    code_rev: Some(
+        CodeRev {
+            label: "shopfront",
+            sha: "bcd13a1d3",
+            dirty: true,
+        },
+    ),
+    truncated: false,
+}

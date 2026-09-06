@@ -1,0 +1,11 @@
+{"type":"system","content":"You are Grok 4.5, a fictional fixture system prompt used only to pin the kb-capture-grok.sh mapping test. Not real transcript content."}
+{"type":"user","content":[{"type":"text","text":"<user_info>\nOS Version: linux\nShell: /usr/bin/zsh\nWorkspace Path: /tmp/kb-grok-fixture-cwd\nToday's date: 2026-01-01\n</user_info>"}]}
+{"type":"user","content":[{"type":"text","text":"Add a --dry-run flag to the fixture export command."}]}
+{"type":"reasoning","id":"rs_fixture_1","summary":[{"type":"summary_text","text":"I will look at the CLI module first."}],"encrypted_content":"fixture-only","status":"completed"}
+{"type":"assistant","content":"Let me check the CLI module.","tool_calls":[{"id":"call-fixture-1","name":"read_file","arguments":"{\"target_file\":\"/tmp/kb-grok-fixture-cwd/src/cli.rs\",\"offset\":1,\"limit\":40}"}],"model_id":"grok-4.5-fixture","reasoning_effort":"high"}
+{"type":"tool_result","tool_call_id":"call-fixture-1","content":"pub struct Cli { pub export: ExportCmd }\n"}
+{"type":"reasoning","id":"rs_fixture_2","summary":[{"type":"summary_text","text":"The flag is missing; I will add it and re-run the tests."}],"encrypted_content":"fixture-only","status":"completed"}
+{"type":"assistant","content":"Added --dry-run to ExportCmd and wired it through the export function.","tool_calls":[{"id":"call-fixture-2","name":"search_replace","arguments":"{\"file_path\":\"/tmp/kb-grok-fixture-cwd/src/cli.rs\",\"old_string\":\"pub struct ExportCmd {}\",\"new_string\":\"pub struct ExportCmd { pub dry_run: bool }\"}"}],"model_id":"grok-4.5-fixture"}
+{"type":"tool_result","tool_call_id":"call-fixture-2","content":"applied"}
+{"type":"reasoning","id":"rs_fixture_3","summary":[{"type":"summary_text","text":"Done — summarize for the user."}],"encrypted_content":"fixture-only","status":"completed"}
+{"type":"assistant","content":"Done: --dry-run now short-circuits the export before any writes.","tool_calls":[],"model_id":"grok-4.5-fixture"}

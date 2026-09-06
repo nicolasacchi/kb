@@ -1,0 +1,649 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  # Incremental compilation is worthless on an ephemeral runner (nothing to
+  # be incremental against) and its blobs are pure bloat in the target dir
+  # the Actions cache then has to tar, upload and store against the 10 GB
+  # per-repo cap. Off for every job in this file.
+  CARGO_INCREMENTAL: "0"
+  # PF-B1 — `debug = "line-tables-only"` moved into Cargo.toml's
+  # [profile.dev] (one source of truth; the 224 GB local target/debug was
+  # the same disease as the runner-disk overflow that SIGBUS'd the linker
+  # here). No CARGO_PROFILE_DEV_DEBUG override — an env value would
+  # silently win over any future Cargo.toml change.
+
+permissions:
+  contents: read
+
+# RUNNERS — every job below runs on a GitHub-HOSTED `ubuntu-latest`
+# (4 vCPU / 16 GB / ~14 GB free disk; free and unlimited on a public repo).
+#
+# That is a security boundary, not a preference. This workflow triggers on
+# `pull_request`, so its steps run for a PR opened from any fork; a
+# self-hosted runner must therefore never appear in this file, or a fork PR
+# would execute arbitrary code on the machine hosting it. The two workflows
+# that do keep a self-hosted runner (build-image.yml, bench-nightly.yml) are
+# unreachable from a pull request by construction — see their own headers.
+#
+# CACHING — GitHub caps a repository at 10 GB of Actions cache and evicts
+# LRU, while a single lance/datafusion target dir is multi-GB. So the
+# Swatinem/rust-cache `shared-key` is per JOB FAMILY, not per job:
+# `workspace` for the ORT-free dev-profile builds (workspace, drift, code),
+# `e2e-fast` for the `--profile fast` builds (e2e, code-e2e), `embedder`
+# for the ORT surface. rust-cache prunes workspace-member artifacts before
+# saving, so what a family actually shares is the dependency graph its jobs
+# all build. Every job also saves ONLY on main (`save-if`): a cache written
+# on a PR branch is scoped to that branch, restorable by nobody else, and
+# still counts against the cap — PRs restore main's entry instead.
+jobs:
+  workspace:
+    name: workspace (fmt + clippy + test)
+    runs-on: ubuntu-latest
+    # 120 dates from the SERIAL (--test-threads=1) era (outgrew 90 on
+    # 2026-07-10's pushes). Post-flip (PF-C1, nextest process-per-test +
+    # the drift-job split) it ran ~20 min warm; the case this budget now
+    # covers is a COLD cache on a 4-vCPU hosted runner, which is a very
+    # different number. Split tests/clippy into parallel jobs instead if it
+    # ever outgrows 120.
+    timeout-minutes: 120
+    env:
+      # Widen the "seed a corpus, then poll until the watcher/indexer/census
+      # catches up" test deadlines beyond their local-dev defaults (30s/30s)
+      # — a 4-vCPU hosted runner is far slower and more contended than a dev
+      # box, and a tight deadline there is a false-red timing race, not a
+      # real failure. See docs/architecture-invariants.md's
+      # KB_TEST_INDEX_TIMEOUT_SECS pitfalls entry; test logic is untouched.
+      KB_TEST_INDEX_TIMEOUT_SECS: "120"
+      KB_TEST_HTTP_TIMEOUT_SECS: "120"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # A hosted runner starts with only ~14 GB free on /, and the
+        # lance/datafusion dependency graph plus its test-binary links can
+        # eat that (a full disk shows up as a SIGBUS'd linker, not as
+        # ENOSPC). Reclaim ~20 GB of preinstalled toolchains nothing here
+        # uses. Inline on purpose — no third-party action to pin/trust.
+        # Best-effort: missing dirs are ignored.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        # Pin to rust-toolchain.toml's version (1.96.0). `@stable` would
+        # drift past the pinned version on every new release; local
+        # builds (rustup auto-switch) and CI could disagree about
+        # clippy lints. Deep-review LOW: rust-toolchain alignment.
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep)
+        # BOTH packages: libprotobuf-dev ships the well-known-type includes
+        # (google/protobuf/empty.proto, …) that lance-encoding's build
+        # imports, while protobuf-compiler provides only the binary —
+        # alone it fails with "google/protobuf/empty.proto: File not found".
+        # Hosted runners preinstall neither. Same pair release.yml and the
+        # prod Dockerfile install.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      # `--exclude kb-embedder` keeps the `local-embedder` feature (and ONNX
+      # Runtime) OUT of the shared kb-core rlib, so this job builds/tests/clippy
+      # link ZERO onnxruntime — the real shipping shape for kb/kb-server
+      # (invariant §23). No system onnxruntime is installed here. The ORT
+      # surface is covered by the `embedder` job below. `--exclude
+      # kb-code-server --exclude kb-code-cli` is a SEPARATE, unrelated
+      # exclusion (kb-code Wave 1, W1.1): that sibling daemon has its own
+      # dependency surface (gix, tree-sitter, grep-*, nucleo) and no ORT
+      # involvement — the exclusion is pure build-time isolation (keep this
+      # sweep's compile surface stable), covered by the `code` job below.
+      # `--exclude kb-lip` (design-lip.md Track L1) joins the SAME carve-out:
+      # a kb-code-adjacent sibling crate (an opt-in LSP intelligence
+      # provider, talked to over lip/1 HTTP — never linked by kb-code-server)
+      # whose own clippy/test now live in `ci-code`/the `code` job below, so
+      # excluding it here is pure isolation, not a dependency concern, and
+      # avoids running its (tiny) test suite twice.
+      # Mirrors the justfile's `ci-workspace` + `ci-embedder`/`ci-code` split.
+      - name: cargo clippy
+        run: cargo clippy --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip --all-targets -- -D warnings
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo nextest run --profile ci
+        # PF-C1 flip (2026-09-04): replaces the serial `cargo test --
+        # --test-threads=1` sweep. That serial run existed because the
+        # parallel IN-PROCESS harness used to hang on the runner of the day
+        # (CPU-quota throttling and/or overlayfs vs. the poll watcher —
+        # never fully isolated); nextest's process-per-test isolation was
+        # the fix, adopted only after 3 consecutive green runs on main. It
+        # is kept on hosted runners for the same reason it was adopted:
+        # per-test isolation makes a hung test one failure, not a job wall.
+        # Profile: .config/nextest.toml [profile.ci] (lance-heavy overrides
+        # live there).
+        run: cargo nextest run --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
+
+      - name: cargo test --doc
+        # nextest does not run doctests; the serial sweep it replaced did.
+        # This keeps the flipped required job a coverage SUPERSET of the
+        # old one (near-free when few doctests exist).
+        run: cargo test --doc --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
+
+      - name: Invariant-test coverage (GC-C2, non-blocking)
+        # Prints the invariant:N → pinning-test coverage table (see
+        # docs/invariant-test-map.md). The script always exits 0 — this is a
+        # visibility signal for reviewers/agents, not a merge gate. No
+        # untrusted/event input involved: it only greps the checked-out tree.
+        run: scripts/check-invariants.sh
+
+  drift:
+    name: drift (TS wire bindings + API route table)
+    # PF-C1 — split out of `workspace`: `just types` recompiles kb-core +
+    # kb-server under a SECOND feature flavor (--features ts-export), which
+    # sat on the required job's 120-min critical path. Deliberately NOT
+    # unified into the workspace flavor: the shipping shape is
+    # no-ts-export, and CI must keep compiling both. Shares the `workspace`
+    # cache family (see the CACHING note at the top): rust-cache prunes
+    # workspace-member artifacts before saving, so the two flavors differ in
+    # what they compile locally, not in the dependency graph that is cached.
+    # Regenerates web/src/api/generated/ (ts-rs) and docs/api-routes.md
+    # from the Rust source; fails if either drifted from the committed
+    # output. A wire-type derive or router change landed without
+    # `just types` / `just api-docs` is caught here, not in review.
+    # Mirrors the local `just ci` gate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # Same reclaim as the `workspace` job — see its comment.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install just (drift-check recipes)
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Generated-artifact drift
+        run: just types-check api-docs-check
+
+  e2e:
+    name: e2e (Playwright iframe smoke)
+    # No `needs:` — hosted runners have no slot contention, so every job in
+    # this file starts at T0 and a red `workspace` never delays this
+    # feedback. The suite is a functional smoke (keyword search +
+    # SPA/iframe), not a perf test, so it links `--profile fast` rather than
+    # thin-LTO release.
+    runs-on: ubuntu-latest
+    # 90 -> 120: cold, 4 vCPU now covers a fast-profile kb-server + kb-cli
+    # build, the SPA bundle, and two browser downloads before a spec runs.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # Full history + tags, because this job's binaries carry a VERSION
+          # STAMP and the default shallow fetch silently corrupts it.
+          # `crates/kb-buildstamp/build.rs` (PF-B1; kb-cli links it) runs
+          # `git describe --tags --match 'v[0-9]*' --always --dirty` to fill
+          # `kb --version`; the e2e daemon (the kb-server BIN) now reports
+          # the `0.0.0-dev` fallback instead. Under checkout's default
+          # `--no-tags --depth=1` no tag is reachable from HEAD, `--always`
+          # falls back to a bare abbreviated sha, and every daemon this suite
+          # boots reports e.g. `be3b941` as its version — which the SPA
+          # renders as `vbe3b941`. That is what broke
+          # settings-dashboard.spec.ts: its badge assertion was passing or
+          # failing on whether HEAD's first hex character happened to be a
+          # digit. `code`/`code-e2e` already fetch full history (for their
+          # diff), which is why the stamp is correct there and only here.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # As `workspace`, plus: this suite builds fast-profile binaries +
+        # Chromium and spawns several kb-server daemons that each write a
+        # fresh lance/sqlite state tree, so disk/IO pressure here also shows
+        # up as a daemon missing its cold-boot spawn wait.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: e2e-fast
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      # kb-server links no ONNX Runtime (invariant §23); the e2e suite drives
+      # the SPA/iframe + keyword search and does not exercise the embedder
+      # subprocess, so no onnxruntime install is needed.
+      - name: Build kb-server + kb-cli (fast profile — e2e is a functional smoke)
+        # spa-lists-import-cli.spec.ts shells out to the fast-profile `kb`
+        # binary (target/fast/kb) for the reading-list import/export
+        # round-trip, so the CLI must be built too — mirrors the justfile
+        # `ci-e2e` recipe. Shipping stays `--release`
+        # (build-image.yml / release.yml).
+        run: cargo build --profile fast -p kb-server -p kb-cli
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Build SPA bundle
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Annotator bundle-size guard (≤ 12 KiB)
+        # Raised 10 → 12 KiB when the pull-based selection query
+        # (`cm:selection-query`/`cm:selection-pull`) and the Gecko-safe relay
+        # landed: a protocol the mobile comment path depends on outgrew the
+        # old cap, and starving it would have been the wrong trade. 12 KiB is
+        # still an order of magnitude under the SPA bundle — this guard exists
+        # to catch a stray `import` pulling a dependency graph into the
+        # in-iframe script, not to ration the protocol itself. (Comments cost
+        # nothing here: esbuild strips them.)
+        working-directory: web
+        run: |
+          set -euo pipefail
+          SIZE=$(stat -c%s dist/annotate.js)
+          echo "dist/annotate.js = ${SIZE} bytes"
+          if [ "$SIZE" -gt 12288 ]; then
+            echo "::error::annotator bundle exceeded 12 KiB budget" >&2
+            exit 1
+          fi
+
+      - name: Install Playwright deps
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Resolve Playwright version (browser-cache key)
+        id: playwright-version
+        working-directory: tests/e2e
+        run: |
+          echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Chromium + Firefox
+        # --with-deps is load-bearing: a hosted runner does not ship the
+        # browsers' system libraries, and without it they install fine and
+        # then die at launch with `error while loading shared libraries:
+        # libglib-2.0.so.0` — which reads as dozens of failing specs (every
+        # one that touches `page`) while the API-only specs keep passing and
+        # the summary still says "13 passed". Playwright prints the fix in
+        # the log ("Host system is missing dependencies to run browsers").
+        # The justfile's own ci-e2e recipe passes --with-deps too.
+        #
+        # Firefox joins the set for the `firefox` project in
+        # playwright.config.ts — a Gecko-only slice (grepped to `@selection`)
+        # that covers the selection→comment relay. Gecko's selection-event
+        # timing differs from Blink's in ways no amount of Chromium testing
+        # can catch, and that divergence is exactly what broke authoring a
+        # comment from a text selection on Firefox for Android.
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Run Playwright tests
+        working-directory: tests/e2e
+        run: npx playwright test
+
+  embedder:
+    name: embedder (ORT surface — kb-embedder + kb-core/local-embedder)
+    runs-on: ubuntu-latest
+    # 90 -> 120: this leg compiles kb-core TWICE (plain, then with
+    # `local-embedder`) and links a statically-bundled ONNX Runtime, on
+    # 4 vCPU.
+    timeout-minutes: 120
+    # No `needs: workspace` — that gate existed only to ration a scarce
+    # runner slot for the slow ORT build. Hosted runners are parallel and
+    # free; serializing only delays the answer.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # Same reclaim as the `workspace` job — see its comment.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: embedder
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      # ONNX Runtime is fetched from a CDN at build time by `ort-sys`
+      # (fastembed's `ort-download-binaries`) and statically linked — no system
+      # onnxruntime install needed, and this proves the SAME static-ORT path the
+      # Docker image ships. (Air-gapped runners: set ORT_STRATEGY=system +
+      # ORT_LIB_LOCATION=<dir>.) This is the slow path; the `workspace` job stays
+      # ORT-free and fast.
+      - name: cargo clippy (embedder + kb-core/local-embedder)
+        run: |
+          cargo clippy -p kb-embedder --all-targets -- -D warnings
+          cargo clippy -p kb-core --features local-embedder --all-targets -- -D warnings
+
+      - name: cargo test (embedder + kb-core/local-embedder)
+        run: |
+          cargo test -p kb-embedder --no-fail-fast
+          cargo test -p kb-core --features local-embedder --no-fail-fast
+
+  code:
+    name: code (kb-code Wave 1 scaffold + kb-lip — clippy + test + SPA)
+    # Runs `just ci-code` (crates/kb-code-server + crates/kb-code-cli +
+    # crates/kb-lip) and `just ci-code-spa` (web-code/, the kb-code reader
+    # SPA) — kb-code is a separate sibling daemon+SPA pair inside this
+    # workspace (design v4, "The read-first IDE" — research kb corpus);
+    # kb-lip (design-lip.md, Track L1) is its own standalone opt-in LSP
+    # intelligence adapter, added to this SAME lane because it's
+    # kb-code-adjacent (talked to over lip/1 HTTP by kb-code-server, L2 —
+    # never linked) and tiny enough not to warrant a fourth CI job.
+    # Paths-filtered: only actually builds when kb-code's own crates, kb-lip,
+    # its SPA, or something that could affect any crate's resolution/build
+    # shape (root Cargo.toml, Cargo.lock, the justfile), changed. The filter
+    # is inline `git diff` (no third-party paths-filter action to pin/trust —
+    # same reasoning as dco.yml) and gates each step via `if:`, not a
+    # job-level `if:`, so the job itself always reports success/failure (safe
+    # to mark as a required check; a job-level skip can leave a required
+    # check permanently pending).
+    runs-on: ubuntu-latest
+    # Widened 60->90 in 2026-08 after a run finished the real work — clippy
+    # + the full vitest suite + both builds — inside the wall, and then had
+    # its POST-JOB cache save (a `tar` of target/ + the cargo registry)
+    # hard-cancelled at 60m, reporting a green job as a failure. 90 -> 120
+    # here for 4 vCPU: `just ci-code` and `just ci-code-spa` both run in
+    # this one job.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # Full history so the BASE_SHA..HEAD_SHA diff below is reachable
+          # (actions/checkout's default shallow fetch only guarantees HEAD).
+          fetch-depth: 0
+
+      - name: Check for kb-code-relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            # No usable base (e.g. first push to a new branch, or the
+            # all-zero SHA on a branch's first push) — run rather than
+            # silently skip.
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
+               | grep -qE '^(crates/kb-code-(server|cli)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space (drop preinstalled SDKs)
+        if: steps.changes.outputs.run == 'true'
+        # Same reclaim as the `workspace` job — see its comment.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        if: steps.changes.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy
+
+      - name: Cache cargo + target
+        if: steps.changes.outputs.run == 'true'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep via kb-core)
+        if: steps.changes.outputs.run == 'true'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install just
+        if: steps.changes.outputs.run == 'true'
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: just ci-code
+        if: steps.changes.outputs.run == 'true'
+        run: just ci-code
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: just ci-code-spa
+        if: steps.changes.outputs.run == 'true'
+        run: just ci-code-spa
+
+      - name: Skipped (no kb-code-relevant changes)
+        if: steps.changes.outputs.run != 'true'
+        run: echo "No changes under crates/kb-code-*/, web-code/, Cargo.toml, Cargo.lock, or justfile — skipping."
+
+  code-e2e:
+    name: code-e2e (kb-code Search-Everywhere Playwright smoke)
+    # Runs `just ci-code-e2e` (a fast-profile kb-code-server build + web-code/e2e/'s
+    # own Playwright suite, driven against a fresh git fixture repo) — mirrors
+    # the root `e2e` job in shape (same runner, same disk-space/toolchain/
+    # protoc/node setup) but for kb-code's sibling daemon+SPA. It installs
+    # its own browser: `just ci-code-e2e` runs `npx playwright install
+    # chromium --with-deps` itself. Path-filtered with the SAME
+    # change-detection pattern as the `code` job above (its own comment
+    # explains why the filter gates each step via `if:` rather than a
+    # job-level `if:`).
+    runs-on: ubuntu-latest
+    # 60 -> 90 for 4 vCPU (fast-profile kb-code-server + a browser download
+    # + the suite). No `needs: workspace`, same reason as `e2e`.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # Full history so the BASE_SHA..HEAD_SHA diff below is reachable
+          # (actions/checkout's default shallow fetch only guarantees HEAD).
+          fetch-depth: 0
+
+      - name: Check for kb-code-relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            # No usable base (e.g. first push to a new branch, or the
+            # all-zero SHA on a branch's first push) — run rather than
+            # silently skip.
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
+               | grep -qE '^(crates/kb-code-(server|cli)/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space (drop preinstalled SDKs)
+        if: steps.changes.outputs.run == 'true'
+        # Same rationale as the root `e2e` job: a fast-profile binary +
+        # Chromium, and a kb-code-server daemon booting against a fresh git
+        # fixture repo.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        if: steps.changes.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        if: steps.changes.outputs.run == 'true'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: e2e-fast
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep via kb-core)
+        if: steps.changes.outputs.run == 'true'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install just
+        if: steps.changes.outputs.run == 'true'
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: just ci-code-e2e
+        if: steps.changes.outputs.run == 'true'
+        run: just ci-code-e2e
+
+      - name: Skipped (no kb-code-relevant changes)
+        if: steps.changes.outputs.run != 'true'
+        run: echo "No changes under crates/kb-code-*/, web-code/, Cargo.toml, Cargo.lock, or justfile — skipping."
+
+  web-unit:
+    name: web (vitest + typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # No `needs:` — pure-TS unit tests don't touch the Rust build, so they
+    # give fast independent feedback on the SPA's logic (config deep-merge,
+    # lib/ derivations, sort/group helpers). The e2e job covers the bundle.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Audit production deps (high+ severity)
+        working-directory: web
+        # Gate on serious PRODUCTION-dependency advisories only. Dev/build-tool
+        # vulns (e.g. vite — Windows-specific) are --omit=dev so they don't block
+        # CI; Dependabot surfaces those for a deliberate bump instead.
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Typecheck (tsc -b, includes *.test.ts)
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Unit tests (vitest, TZ-pinned)
+        working-directory: web
+        run: npm test
+
+  supply-chain:
+    name: supply-chain (cargo-deny — licenses + advisories)
+    runs-on: ubuntu-latest
+    # 30, not 20: no compile happens here, but a cold hosted runner still
+    # downloads the crates.io index and the RustSec advisory DB first.
+    timeout-minutes: 30
+    # No `needs:` — cargo-deny reads Cargo.lock + the RustSec DB; it does NOT
+    # build the workspace, so it's fast and independent of the Rust jobs. We
+    # install a pinned prebuilt cargo-deny (no source build) via
+    # taiki-e/install-action. Splitting advisories from licenses+bans+sources keeps an
+    # advisory-DB hiccup from masking a real license regression. Mirrors the
+    # local `just deny` recipe; config is deny.toml (cargo-deny v2 schema).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      # Install the prebuilt cargo-deny binary directly
+      # (taiki-e/install-action fetches a release binary) instead of the
+      # Docker-based cargo-deny-action — one less container image to pull
+      # and trust, and it works identically on any runner.
+      # cargo-deny still shells out to `cargo metadata` to resolve the dependency
+      # graph, so a toolchain must be on PATH (the old action bundled one inside
+      # its container). We only resolve Cargo.lock here — never compile.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2
+        with:
+          tool: cargo-deny
+      - name: cargo-deny (advisories)
+        run: cargo-deny check advisories
+      - name: cargo-deny (licenses + bans + sources)
+        run: cargo-deny check licenses bans sources

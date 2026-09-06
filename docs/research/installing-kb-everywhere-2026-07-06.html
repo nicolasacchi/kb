@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="landscape">
+<meta name="kb-tags" content="status:open, project:kb, distribution, packaging, install, release, homebrew, aur, nix, docker, systemd, wsl2, macos">
+<title>Installing kb everywhere — the distribution-channel landscape</title>
+<style>
+:root{
+  --bg:#faf9f7;--surface:#f1efeb;--fg:#20242b;--muted:#565e6a;
+  --rule:#dcd8cf;--accent:#0e6f68;--accent-fg:#ffffff;
+  --warn:#8a5300;--danger:#b02a26;--ok:#1e6b40;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.55;--maxw:52rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#15181e;--surface:#1e222a;--fg:#e7e5df;--muted:#a0a6b0;
+    --rule:#363c47;--accent:#53c7bc;--accent-fg:#0d1a18;
+    --warn:#e8b04a;--danger:#f2827a;--ok:#63d194;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.22;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.85rem;margin:.2em 0 .3em;letter-spacing:-.01em}
+h2{font-size:1.32rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:2px solid var(--rule)}
+h3{font-size:1.08rem;margin:1.6em 0 .4em;color:var(--accent)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.55rem;height:.55rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.17rem;margin:.4em 0 1em;color:var(--fg)}
+.meta-strip{font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.4rem}
+.tag{font-family:var(--mono);font-size:.76rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9rem 1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.86rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn)}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout--ok .callout-label{color:var(--ok)}
+.verdict-ok{color:var(--ok);font-weight:650}
+.verdict-warn{color:var(--warn);font-weight:650}
+.verdict-no{color:var(--danger);font-weight:650}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>landscape <span class="sep">&middot;</span> project:kb <span class="sep">&middot;</span> distribution</div>
+  <h1>Installing kb everywhere — the distribution-channel landscape</h1>
+  <p class="lede">Every install path for kb across Linux, macOS, and Windows (WSL2) — package managers, containers, init systems, and updaters — ranked by leverage-per-maintenance-hour, and grounded in the one constraint that shapes them all: the embedder's prebuilt ONNX Runtime.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span>companion: <a href="cross-compiling-ci-zigbuild-spike-2026-07-06.html">cross-compiling CI + zigbuild spike</a></span>
+  </div>
+</header>
+
+<section>
+<h2 id="question-and-method">The question, and how this was researched</h2>
+<p>kb ships <strong>two binaries that must land side-by-side</strong>: <code>kb</code> (CLI + daemon, links no ONNX Runtime) and <code>kb-embedder</code> (statically links a prebuilt ONNX Runtime fetched from pyke's CDN at build time — architecture invariant #26 keeps them in separate cargo invocations, and the daemon finds the embedder as a sibling of the running <code>kb</code>). The question: what is the full space of ways to install this on every OS, which are worth a solo maintainer's hours, and in what order?</p>
+<p>Method: a 26-agent research workflow (2026-07-06, run <code>wf_c511c0f9-3ea</code>) — 2 repo-grounding agents, 9 web-research agents (one per distribution dimension), an <em>empirical</em> cargo-zigbuild build spike on real hardware, and 16 adversarial fact-checkers that confirmed or refuted every decision-critical claim against primary sources. Numbers below carry their evidence inline; the cross-compilation half (spike results, CI design) lives in the companion artifact <a href="cross-compiling-ci-zigbuild-spike-2026-07-06.html">cross-compiling CI + zigbuild spike</a>.</p>
+</section>
+
+<section>
+<h2 id="what-ships-today">What ships today (Release Zero) — and its gaps</h2>
+<p>The Release Zero milestone (main, 2026-07-03) already built the distribution trunk. None of it has run end-to-end yet — the repo is private and no <code>v*</code> tag has ever fired <code>release.yml</code>.</p>
+<table>
+<thead><tr><th>Channel</th><th>What you get</th><th>Targets</th><th>Verified how</th></tr></thead>
+<tbody>
+<tr><td><code>curl | sh</code> installer (<code>scripts/install.sh</code>)</td><td>both binaries into <code>~/.local/bin</code>; glibc-floor detection with Docker/source escape hatch</td><td>linux x64/arm64 (gnu), macOS arm64</td><td>SHA-256 sidecar — <em>silently skipped</em> if the sidecar or a sha tool is missing</td></tr>
+<tr><td>GitHub Release tarballs</td><td><code>kb-VERSION-TRIPLE.tar.gz</code> + <code>.sha256</code>, INSTALL note</td><td>3 triples, native runners only</td><td>checksum only; no signing/provenance</td></tr>
+<tr><td>Homebrew tap (<code>packaging/homebrew/kb.rb</code>)</td><td>template only — sha256 fields are zero placeholders, tap repo not created</td><td>macOS arm64, linux x64/arm64</td><td>—</td></tr>
+<tr><td>Docker (<code>ghcr.io/&lt;owner&gt;/kb</code>)</td><td>the <em>only</em> full-featured channel: SPA + bge-large model baked, healthcheck, non-root</td><td><strong>single-arch amd64</strong></td><td>none (no signing)</td></tr>
+<tr><td>systemd</td><td>hand-written system unit in <code>docs/self-host.md</code>; nothing shipped as a file</td><td>—</td><td>—</td></tr>
+</tbody>
+</table>
+<p>The concrete gaps, all cheap to close within the existing hand-rolled workflow:</p>
+<ul>
+<li><strong>Tarball has no SPA</strong> — and <code>resolve_spa_dist()</code> has no next-to-binary fallback (only <code>$KB_SPA_DIST</code> or <code>./web/dist</code> relative to cwd), so a tarball or brew install serves no web UI without manual steps. A code fix (check a sibling <code>web/dist</code> / share dir next to <code>current_exe()</code>) or bundling the ~2 MB dist in the tarball closes it.</li>
+<li><strong>No update mechanism anywhere</strong> — no self-update verb, no version check; every channel is manual re-install.</li>
+<li><strong>Integrity is checksum-only</strong>, hosted beside the artifact on the same release (integrity, not authenticity), and install.sh treats a missing checksum tool as a pass.</li>
+<li><strong>No service files shipped</strong> — the systemd unit exists only as a docs snippet; no launchd plist, no brew <code>service</code> block.</li>
+<li><strong>Single-arch image</strong>, even though the same workflow already proves arm64 builds on <code>ubuntu-24.04-arm</code>.</li>
+<li><strong>The target set is hardcoded in four unsynchronized places</strong> — release.yml matrix, install.sh (two separate case-gates), the formula's <code>on_*</code> blocks, and the Dockerfile. Any new target must touch all four.</li>
+</ul>
+<div class="callout callout--ok"><span class="callout-label">Highest-value zero-code action</span>Push the already-documented throwaway <code>v0.0.0-rc1</code> tag the moment the repo is public. It exercises all three binary legs, the ghcr push, and install.sh's real GitHub path — before the real tag. <code>packaging/README.md</code> step 1 already prescribes this; it has never run.</div>
+</section>
+
+<section>
+<h2 id="the-two-floors">The two floors — who is excluded, and why it's a choice</h2>
+<p>Everything in this landscape bends around two runtime floors, both carried <em>only</em> by <code>kb-embedder</code>:</p>
+<ol>
+<li><strong>glibc ≥ 2.39 + GLIBCXX_3.4.30</strong> (measured 2026-07-03; confirmed against pyke's own platform docs). Passes: Debian 13, Ubuntu 24.04+, Fedora 40+, Arch. Fails: Debian 12, Ubuntu 22.04, RHEL 9, Alpine (musl). Root cause: pyke builds its ORT prebuilts on ubuntu-24.04 with no manylinux sysroot, baking in the C23 <code>__isoc23_strtol</code> family (versioned GLIBC_2.38) and GCC-12 libstdc++. <strong>This is pyke's build choice, not an ONNX Runtime law</strong> — Microsoft's own onnxruntime 1.24 wheels are manylinux_2_28 (glibc ≥ 2.28). Building ORT once per target in a manylinux_2_28 container and feeding <code>ORT_LIB_PATH</code> would lower the floor to 2.28 if demand ever justifies owning an ORT build.</li>
+<li><strong>x86-64-v3</strong> (AVX2/BMI2/FMA — Intel Haswell 2013+/any AMD Zen). Since ort 2.0.0-rc.11 the x86_64 prebuilt targets v3; a pre-Haswell CPU <strong>SIGILLs at first inference</strong> — with a working glibc, past every install-time check kb has today. This floor is currently undocumented in kb.</li>
+</ol>
+<p>The main <code>kb</code> binary has neither floor — the empirical spike (companion artifact) measured its intrinsic requirement at <strong>GLIBC_2.30</strong> when cross-compiled with a pinned floor, and full musl-static is one upstream lance fix away. Without a working embedder the daemon degrades to keyword-only BM25 search (<code>disable_embedder_fallback</code> governs whether that is allowed). That makes a <strong>split floor</strong> the coherent long-term story: a universal <code>kb</code> that runs anywhere, an embedder that needs 2026-era glibc — or the Docker image, which carries everything.</p>
+<div class="callout callout--warn"><span class="callout-label">Doc bug found while researching</span>kb's Cargo.toml comments, CLAUDE.md, and self-host.md all say <code>ORT_STRATEGY=system</code> + <code>ORT_LIB_LOCATION</code>. <strong><code>ORT_STRATEGY</code> does not exist in ort 2.x.</strong> The current mechanism is <code>ORT_LIB_PATH</code> (with <code>ORT_LIB_LOCATION</code> as a deprecated alias slated for removal) plus disabling the download feature (or <code>ORT_SKIP_DOWNLOAD</code>). Fix the three docs before they mislead a from-source user.</div>
+</section>
+
+<section>
+<h2 id="channel-verdicts">Channel verdicts at a glance</h2>
+<p>Ranked by value delivered per ongoing maintenance hour, for a solo maintainer. Detail sections follow.</p>
+<table>
+<thead><tr><th>Channel</th><th>Effort to create</th><th>Per-release upkeep</th><th>Update UX</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>Tarball + install.sh + Docker (canon)</td><td>done</td><td>zero (automated)</td><td>manual today</td><td class="verdict-ok">keep as source of truth; harden</td></tr>
+<tr><td>AUR <code>kb-bin</code></td><td>~30 min</td><td>~2 min (scripted pkgver+sha bump)</td><td>native <code>-Syu</code></td><td class="verdict-ok">do first</td></tr>
+<tr><td><code>.deb</code>/<code>.rpm</code> via nfpm, attached to Releases</td><td>one YAML in CI</td><td>zero</td><td>manual <code>dpkg -i</code></td><td class="verdict-ok">do — carries the systemd unit + <code>kb</code> user</td></tr>
+<tr><td>Fedora COPR (SRPM-phase repackage)</td><td>medium</td><td>low</td><td><code>dnf</code> auto-update</td><td class="verdict-ok">do after deb/rpm</td></tr>
+<tr><td>Nix flake in-repo</td><td>medium (ORT wiring)</td><td>~zero (cargoHash bumps)</td><td><code>nix run github:…</code></td><td class="verdict-ok">do — see ORT caveat below</td></tr>
+<tr><td>Homebrew tap (formula)</td><td>template exists; fill 3 sha256s + create tap</td><td>version + sha bump</td><td><code>brew upgrade</code></td><td class="verdict-ok">finish at rc1 — primary macOS channel</td></tr>
+<tr><td><code>kb self-update</code> + channel stamp</td><td>modest code</td><td>zero</td><td>one command</td><td class="verdict-ok">do — biggest UX win per line of code</td></tr>
+<tr><td>aqua registry PR (lights up aqua + <code>mise use kb</code>)</td><td>one PR</td><td>low</td><td>mise/aqua-managed</td><td class="verdict-warn">only on demand; smoke-test sibling lookup first</td></tr>
+<tr><td>ubi / eget</td><td>zero — they already work against the <code>.sha256</code>-sidecared releases</td><td>zero</td><td>two runs (one per binary)</td><td class="verdict-warn">mention in docs, maintain nothing</td></tr>
+<tr><td>Cloudsmith apt/dnf repo (free OSS: ≥50 GB storage, 200 GB/mo)</td><td>medium</td><td>low</td><td>native apt/dnf auto-update</td><td class="verdict-warn">defer until auto-update demand is real</td></tr>
+<tr><td>asdf plugin</td><td>separate repo of scripts</td><td>low</td><td>asdf/mise</td><td class="verdict-warn">only channel that natively nails the two-binary layout, but momentum is with mise/aqua — skip unless asked</td></tr>
+<tr><td>crates.io + cargo-binstall</td><td>workspace rename forced</td><td>publish per release</td><td><code>cargo binstall</code></td><td class="verdict-no">skip — see below</td></tr>
+<tr><td>snap / flatpak / AppImage / PPA / OBS / MacPorts</td><td>—</td><td>—</td><td>—</td><td class="verdict-no">skip — reasons below</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="linux">Linux</h2>
+
+<h3 id="installsh-hardening">install.sh — harden to the 2026 bar</h3>
+<p>The de-facto standard among rustup/uv/deno installers is exactly what kb has: a SHA-256 sidecar. Four upgrades close the remaining gap:</p>
+<ul>
+<li><strong>Fail closed on checksum</strong>: today both missing-sidecar and missing-sha-tool paths return success. Error instead (opt-out via <code>KB_SKIP_VERIFY=1</code>).</li>
+<li><strong>Transport hardening</strong>: add <code>--proto '=https' --tlsv1.2</code> to every curl — table stakes, uv and rustup both do it.</li>
+<li><strong>Optional attestation verify</strong>: once release.yml runs <code>actions/attest-build-provenance</code> (SLSA Build L2, keyless Sigstore), install.sh can run <code>gh attestation verify</code> <em>when <code>gh</code> is present</em> — bonus check, never a hard dependency. minisign sidecars (~200 KB verifier, no infra) are the only way to add authenticity without <code>gh</code>; optional escalation.</li>
+<li><strong>Install-time doctor</strong>: promote the tail checks into a named check that catches the silent degraders — glibc floor <em>and musl</em> up front (not a cryptic loader error), the <strong>x86-64-v3 CPU check</strong> (via <code>/proc/cpuinfo</code> avx2/bmi2/fma — today an old CPU passes install and SIGILLs at first inference), sibling <code>kb-embedder</code> runnable, PATH, port 4000 free, and the missing-SPA warning. A version short-circuit (skip download when <code>kb --version</code> already matches) makes re-runs cheap; a "restart your daemon after upgrade" note covers the replaced-inode case.</li>
+</ul>
+
+<h3 id="aur">AUR — <code>kb-bin</code> first, source PKGBUILD as community follow-up</h3>
+<p><code>kb-bin</code> repackages the release tarball: the tarball is a checksummed <code>source=</code> entry (the sanctioned offline path — network in <code>build()</code> is forbidden), and <code>package()</code> installs both binaries side-by-side into <code>/usr/bin</code>. Arch's rolling glibc makes the floor a non-issue. Per-release upkeep is a scripted <code>pkgver</code> + two-sha256 bump. A source <code>kb</code> PKGBUILD is possible <em>today</em> because Arch's <code>extra/onnxruntime</code> is 1.24.4 and ort 2.0 targets ONNX Runtime 1.24 — link the system lib via <code>ORT_LIB_PATH</code>, two cargo invocations, <code>depends=(onnxruntime)</code> — but it owns a recurring soname-bump failure mode; accept it as a community contribution rather than driving it.</p>
+
+<h3 id="deb-rpm">.deb / .rpm without ever rebuilding — nfpm</h3>
+<p>Because CI already produces finished binaries, the cheapest packages post-process them: <strong>nfpm</strong> (GoReleaser's packager) takes one YAML and emits both <code>.deb</code> and <code>.rpm</code> — the two binaries, the systemd unit, and a <code>postinstall</code> that runs <code>useradd --system kb</code>. Attach both to the GitHub Release (zero hosting). This never touches the ORT-download-in-a-sandbox problem because nothing is compiled. Only offer them for distros above the floor (Debian 13, Ubuntu 24.04+, Fedora 40+); the package should depend on <code>libgomp1</code> (ORT's OpenMP). cargo-deb/cargo-generate-rpm work too but are built around building; nfpm fits prebuilt assets best.</p>
+
+<h3 id="copr">Fedora COPR — free auto-update channel</h3>
+<p>COPR forbids network in <code>%build</code> but <em>allows it in the SRPM phase</em> — the established pattern is a wrapper SRPM that fetches the official prebuilt tarball there. Fedora users then get <code>dnf copr enable</code> + automatic updates. Free, official-adjacent, low upkeep.</p>
+
+<h3 id="nix">Nix — flake in-repo, with one carefully-scoped feature swap</h3>
+<p>The Nix sandbox has no build-time network, so <code>ort-download-binaries</code> cannot run. The community-proven recipe (the Minne project, Nov 2025) is: build with the <code>ort-load-dynamic</code> feature, add <code>pkgs.onnxruntime</code> (nixpkgs tracks 1.24, matching ort 2.0's ABI), and <code>makeWrapper</code> the embedder with <code>ORT_DYLIB_PATH</code>. <strong>Invariant #26 bans load-dynamic because dlopen deadlocks on macOS</strong> — a <em>Linux-only</em> Nix overlay is fine, but the swap must never reach the default workspace build. The alternative — a fixed-output derivation pinning pyke's exact tarball hash — keeps static linking but churns on every ort bump. Flake first; a nixpkgs submission only after the derivation is proven (no in-tree ort-consumer precedent exists yet — kb would be early).</p>
+
+<h3 id="linux-skips">What to skip on Linux, and why</h3>
+<ul>
+<li><strong>snap</strong> — the only store built for daemons, but corpus-anywhere inotify watching is exactly what strict confinement resists; classic confinement requires a manual Canonical review. The core24 base doesn't widen compatibility either (it <em>is</em> glibc-2.39-era). Defer indefinitely.</li>
+<li><strong>flatpak</strong> — upstream's own FAQ: not a good match for servers. A headless indexing daemon has no place here.</li>
+<li><strong>AppImage</strong> — bundles libraries but not glibc/the loader, so <em>the floor survives</em>; the one-binary model fights the sibling contract; FUSE friction on headless hosts. Doesn't beat the tarball at anything.</li>
+<li><strong>PPA / OBS</strong> — source-only services with no build network; Launchpad explicitly rejects prebuilt binaries. Structurally incompatible with the ORT blob.</li>
+<li><strong>Hosted apt/dnf repo</strong> — not a skip, a defer: Cloudsmith's free OSS tier (≥50 GB storage / 200 GB month, attribution required) is the turnkey option over GitHub-Pages+reprepro (1 GB file cap, GPG self-managed, racy metadata) — when deb/rpm auto-update demand materializes.</li>
+</ul>
+<div class="callout"><span class="callout-label">musl note</span>If the static-musl <code>kb</code> lane ships (companion artifact), swap the global allocator to jemalloc/mimalloc first — musl's default malloc serializes multithreaded allocation (measured up to ~7–13× futex contention), and kb's daemon is heavily concurrent. This is the standard ripgrep-pattern one-liner.</div>
+</section>
+
+<section>
+<h2 id="macos">macOS</h2>
+<h3 id="gatekeeper-reality">Gatekeeper reality: kb's current posture is already correct</h3>
+<p>Gatekeeper keys on the <code>com.apple.quarantine</code> xattr, set by the <em>downloading application</em>. The paths kb ships never set it:</p>
+<table>
+<thead><tr><th>Path</th><th>Quarantined?</th><th>Outcome for kb's ad-hoc-signed arm64 binaries</th></tr></thead>
+<tbody>
+<tr><td><code>curl | sh</code> + tar (install.sh)</td><td>no</td><td class="verdict-ok">runs cleanly — no prompt</td></tr>
+<tr><td>Homebrew <em>formula</em></td><td>no</td><td class="verdict-ok">runs cleanly — no signing needed, even under Homebrew 5.x's 2026 cask crackdown (formulae + own taps unaffected)</td></tr>
+<tr><td>Browser download, extracted in Terminal (<code>tar xzf</code>)</td><td>archive yes, CLI tar doesn't propagate</td><td class="verdict-ok">runs cleanly</td></tr>
+<tr><td>Browser download, extracted with Archive Utility</td><td>yes, propagated</td><td class="verdict-no">blocked ("developer cannot be verified"); Sequoia removed the Control-click bypass — System Settings "Open Anyway" or <code>xattr -dr com.apple.quarantine</code></td></tr>
+</tbody>
+</table>
+<p>So: keep the un-stripped, ad-hoc-signed binaries (release.yml already skips strip on macOS — strip invalidates the signature and the binary dies with "Killed: 9"), document the browser-download caveat, and treat <strong>signing + notarization as optional polish</strong>: $99/yr (Individual), Developer ID Application cert, <code>codesign --options runtime</code> → <code>notarytool submit --wait</code> in CI. A bare binary can't be stapled (no Mach-O slot) — either accept the online first-run check or wrap in a stapled <code>.pkg</code>. Only browser-download users benefit.</p>
+<h3 id="intel-macs">Intel Macs: a runner exists, but the embedder doesn't</h3>
+<p>Two facts, pulling opposite directions. (1) The adversarial verify pass <em>refuted</em> the assumption that Intel-mac CI is gone: <code>macos-15-intel</code> is GA (2025-09-19) and supported through ~Aug 2027, so a native Intel leg is one matrix row away. (2) But ort 2.0.0-rc.12 ships <strong>no <code>x86_64-apple-darwin</code> ORT prebuilt</strong> (dropped in rc.11), and the Homebrew-onnxruntime system-link path has a reported failure — so an Intel asset today would be <code>kb</code>-only (keyword-only search). macOS Tahoe 26 is the last Intel macOS; the cohort is a shrinking tail. <strong>Keep the current stance</strong> (installer refuses Intel, points at source), and revisit when ort ships the x64-mac prebuilt — its main-branch platform table already lists it, so it is coming.</p>
+<h3 id="macos-services">Service integration</h3>
+<p>Ship both, matched to channel: a <code>packaging/launchd/kb.daemon.plist</code> LaunchAgent template for tarball/curl users (<code>RunAtLoad</code>; <code>KeepAlive</code> as a dict with <code>SuccessfulExit=false</code> so a deliberate <code>kb daemon stop</code> — exit 0 — stays stopped while crashes restart; <code>StandardOutPath</code> under <code>~/Library/Logs/kb/</code>; an explicit PATH including the install dir), and a <code>service do</code> block in the formula so <code>brew services start kb</code> just works (<code>run [opt_bin/"kb", "daemon"]</code>, <code>keep_alive crashed: true</code>, <code>environment_variables PATH: std_service_path_env</code>). Every macOS doc must carry the existing dnsmasq <code>/etc/resolver/localhost</code> caveat — Safari and the system resolver don't map <code>*.localhost</code>, so artifact subdomains silently 404 outside Chrome. Skip MacPorts: source-based buildbots would have to compile ONNX Runtime for a fraction of Homebrew's reach.</p>
+</section>
+
+<section>
+<h2 id="windows-wsl2">Windows = WSL2 (and what native would cost)</h2>
+<p>The best news in the whole landscape: <strong>the Linux release is the Windows release.</strong> <code>wsl --install</code> yields Ubuntu 24.04 LTS on WSL2 (26.04 has no Store image until ~2026-08-06) — glibc 2.39, GLIBCXX_3.4.32 — which clears the embedder floor. install.sh runs unmodified. <code>127.0.0.1:4000</code> is reachable from the Windows browser out of the box (<code>localhostForwarding</code> defaults on under NAT). The docs work is one "Windows (WSL2)" quickstart block: admin-PowerShell <code>wsl --install</code>, run install.sh in the Ubuntu shell, keep corpora on ext4 (<code>~/corpus</code> — the 9P bridge to <code>/mnt/c</code> silently kills inotify and is ~10× slower; <code>watch_mode = "poll"</code> is the documented fallback), <code>systemctl --user</code> unit + <code>loginctl enable-linger</code> for persistence, with two WSL caveats: the VM stops when the last shell exits (Task Scheduler → <code>wsl -d Ubuntu</code> at logon), and WSLg can clear <code>/run/user/&lt;uid&gt;</code> (fix: <code>guiApplications=false</code>).</p>
+<p><strong>Windows-side package (winget/scoop/choco)?</strong> The verify pass refuted the claim that WSL-bootstrapper packages are unheard of — Docker Desktop's winget package provisions WSL2, Podman's declares a hard <code>Microsoft.WSL</code> dependency, and Chocolatey ships dedicated wsl packages. Prior art exists; it is still not worth kb <em>owning a Windows package channel</em> to wrap a documented one-liner. Ship the PowerShell one-liner in docs, optionally a convenience <code>.ps1</code> in the repo. For containers on Windows: any WSL2-backed runtime — Docker Desktop (licensed for orgs &gt;250 employees / &gt;$10M revenue), or free Rancher/Podman Desktop.</p>
+<p><strong>Native-port cost (recorded non-goal, kept informed):</strong> the dep graph is already Windows-clean — rustls+ring (zero openssl/aws-lc), <code>windows-sys</code> transitively present, <code>notify</code> → ReadDirectoryChangesW, <code>directories</code> → Known Folders, and pyke ships a green <code>x86_64-pc-windows-msvc</code> ORT prebuilt (VS 2022 ≥ 17.11). The actual blockers are three Unix-only <code>SignalKind::terminate()</code> sites needing cfg-gates, <code>*.localhost</code> resolution UX, the <code>script(1)</code> pty CI smoke, and a whole new msvc CI leg to validate — a scope/maintenance decision, not a technical wall.</p>
+</section>
+
+<section>
+<h2 id="containers">Containers</h2>
+<ul>
+<li><strong>Multi-arch (amd64+arm64) via the canonical native-runner pattern</strong>: each arch builds on its own runner (<code>ubuntu-24.04</code> / <code>ubuntu-24.04-arm</code> — already provisioned for the binary matrix), pushes by digest (<code>push-by-digest=true,oci-mediatypes=true</code>), and a merge job stitches the manifest list with <code>docker buildx imagetools create</code>. QEMU is rejected on measured numbers (a comparable Rust project: ~50 min emulated vs ~13 min cross — kb's 20+ min native link would land at 60–90+ min); the zigbuild-then-COPY pattern is rejected for the image because the embedder cannot be zig-linked at all (companion artifact, spike S3).</li>
+<li><strong>Fix invariant #26 inside the Dockerfile</strong> while touching it: the current single <code>cargo build -p kb-cli -p kb-embedder</code> unifies the <code>local-embedder</code> feature and links ORT into the image's <code>kb</code>. Split into two <code>RUN cargo build</code> steps.</li>
+<li><strong>Dedupe the model layer</strong>: the ~1.34 GB bge-large weights are arch-independent, but two native builds produce two distinct layers (~2.7 GB in ghcr). Fetch the model in one single-platform stage and <code>COPY --link</code> it into both runtimes so the registry stores one blob.</li>
+<li><strong>Ship a <code>:slim</code> tag</strong> (no baked model, ~350–450 MB; downloads into the cache volume on first run; degrades to keyword-only if offline) beside the full default — the <code>-slim</code> suffix convention from Docker official images: <code>X.Y.Z-slim</code>, <code>:slim</code>.</li>
+<li><strong>Base image stays <code>debian:trixie-slim</code></strong> (glibc 2.41 clears the floor). The verify pass corrected the research here: Google distroless <em>debian12</em> (glibc 2.36) fails the floor, but <strong><code>cc-debian13</code> (glibc 2.41) exists since Aug 2025 and is now the distroless default</strong> — so a distroless posture has two viable routes (distroless-debian13, chiseled Ubuntu 24.04) if ever wanted; both cost the debug shell. <code>libssl3</code> in the runtime is likely vestigial (rustls stack) — confirm with <code>ldd</code> and drop. <code>git</code> (version timelines), <code>curl</code> (healthcheck), and <code>tar</code> (backup/restore shells out to it, no code fallback) are the deliberate extras.</li>
+<li><strong>Ship <code>docker-compose.yml</code> in-repo</strong>: loopback-only publish, config/state/cache named volumes, <code>:ro</code> corpus bind, <code>/healthz</code> healthcheck, <code>restart: unless-stopped</code>, and — load-bearing, from the recorded 2026-07-02 production outage — <code>ulimits: nofile 262144</code>.</li>
+<li><strong>Ship a rootless Podman Quadlet</strong> <code>kb.container</code> (<code>AutoUpdate=registry</code> + the auto-update timer, <code>Volume=…:U</code> for userns ownership, <code>PodmanArgs=--ulimit nofile=262144:262144</code>, <code>loginctl enable-linger</code> documented). Quadlet is the current recommended path; <code>podman generate systemd</code> is deprecated.</li>
+<li><strong>Kubernetes: record the refusal.</strong> kb is single-writer, stateful, spawns a sibling subprocess, and does not horizontally scale — <code>replicas &gt; 1</code> corrupts the index. One 1-replica StatefulSet example in docs at most; no Helm chart, no operator. This mirrors the cargo-dist and MCP rulings.</li>
+<li><strong>Registry hygiene</strong>: cosign keyless-sign the <em>index digest</em> (covers all arches) + <code>cosign attest</code> an SBOM — one tool, since GHCR still lacks the OCI Referrers API that GitHub-native attestation discovery leans on. Tag policy via metadata-action: <code>X.Y.Z</code>, <code>X.Y</code>, <code>latest</code> (never on pre-releases), <code>sha-</code>; no bare major while 0.x. Annotations must go on the manifest <em>index</em>, not just per-arch labels.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="services">Running kb as a service</h2>
+<ul>
+<li><strong>systemd user unit is the documented default</strong> (personal single-operator daemon: no root, no <code>kb</code> user, real XDG paths; <code>loginctl enable-linger</code> once) — the Syncthing pattern. Keep the existing <code>User=kb</code> system unit as the shared-server recipe. Ship both as files: <code>packaging/systemd/kb-user.service</code> + <code>kb.service</code>.</li>
+<li><strong><code>LimitNOFILE=65536</code> in every unit</strong> — systemd ignores limits.conf, and production already hit fd exhaustion at the 1024 default (lance segments + inotify + sqlite + SSE + the embedder pipe).</li>
+<li><strong><code>Restart=on-failure</code>, never <code>always</code></strong> — kb exits 0 on SIGTERM, so both <code>systemctl stop</code> and <code>kb daemon stop</code> genuinely stop it while crashes restart. The pidfile is advisory; omit <code>PIDFile=</code> and <code>ExecStop=</code> (systemd tracks by cgroup; a second SIGTERM would race). <code>After=network.target</code> only — never <code>network-online.target</code> for a loopback binder.</li>
+<li><strong><code>Type=notify</code> is worth an optional Linux-only feature</strong>: "ready" for kb is listener-bound <em>and</em> embedder model loaded (seconds for the 1.34 GB model), not process-started. The <code>sd-notify</code> crate is pure-Rust, zero-dep, current — fits kb's dependency discipline behind <code>#[cfg(target_os = "linux")]</code>. <code>Type=simple</code> is correct until then. Socket activation is a recorded non-fit (two self-bound loopback sockets + a supervised sidecar).</li>
+<li><strong>No <code>kb service install</code> verb for now</strong> — Tailscale self-installs its unit, but Ollama/Caddy/Syncthing all ship unit <em>files</em> + docs, and that gets 90% of the ergonomics with none of the cross-platform verb surface. Optional middle ground: install.sh offers to drop the user unit and run <code>systemctl --user enable --now kb</code> when it detects systemd.</li>
+<li><strong>Logs stay stdout-only</strong> — journald (<code>journalctl --user -u kb</code>), launchd (<code>StandardOutPath</code>), and brew (<code>log_path</code>) each wrap stdout; a file-log mode would duplicate the init's job and invite logrotate bugs.</li>
+<li><strong>Other inits</strong> are one doc paragraph each — OpenRC/runit/dinit matter only if the musl <code>kb</code> ships; FreeBSD is rust+lance-viable but has no ORT prebuilt (keyword-only curiosity, wrap with <code>/usr/sbin/daemon</code>).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="updates-and-trust">Updates, installers, and the trust chain</h2>
+<h3 id="self-update">kb self-update — with the uv-proven channel stamp</h3>
+<p>The single biggest UX gap is updating. The recommended shape: a <code>kb self-update</code> verb that reuses install.sh's exact logic (fetch → verify → replace both siblings), gated on a <strong>build-time install-channel stamp</strong> baked into the binary (<code>source</code> | <code>release-tarball</code> | <code>docker</code> | <code>distro</code> — install.sh builds carry <code>release-tarball</code>; brew/AUR/nfpm builds carry <code>distro</code>). A package-manager-installed kb must refuse to self-update over the manager's file — uv proves this pattern works by printing the channel in <code>--version</code> and refusing with "update via your package manager". The <code>self_update</code> crate could do it in-process (rustls feature, <code>MoveAll</code> atomic multi-file replace), but reusing install.sh is less code to keep consistent, and the crate's one unique advantage — no shell dependency — matters only on native Windows, which is a non-goal.</p>
+<h3 id="crates-io">Why crates.io + cargo-binstall is a skip</h3>
+<p>Three independent blockers. (1) <code>cargo install</code>/<code>binstall</code> install <em>only the target crate's</em> binaries — never a dependency's — so a one-command install can never deliver the <code>kb</code>+<code>kb-embedder</code> sibling pair, and merging them into one crate is exactly what invariant #26 forbids (feature unification links ORT into <code>kb</code>). (2) The <code>kb-core</code> crate name is taken by an <em>actively published</em> crate (zornfeuer, May 2026), forcing a workspace-wide rename of an internal path-dep just to publish; <code>kb</code> itself is squatted by a 2020 BASIC interpreter. (3) The audience overlaps install.sh's almost entirely. The verify pass sharpened one nuance: binstall <em>can</em> work without crates.io (<code>--git --strategies crate-meta-data</code>), but that invocation is undiscoverable — it rescues nothing. Document <code>cargo install --git … kb-cli</code> + <code>… kb-embedder</code> (two runs — which happens to match invariant #26; protoc required; ~20 min cold) as a from-source footnote only.</p>
+<h3 id="generic-installers">Generic installers and version managers</h3>
+<p><strong>ubi/eget</strong> already work against kb's releases (auto-verify the <code>.sha256</code>; one binary per run → two commands) — mention, maintain nothing. <strong>mise</strong>: the <code>ubi:</code> backend is deprecated for new registry entries; the modern path is an <strong>aqua-registry PR</strong>, which lights up both <code>aqua:</code> and <code>mise use kb</code>, and aqua YAML can declare both <code>files:</code> from one asset (though the verify pass notes Homebrew does multi-binary equally natively — aqua's edge is covering aqua+mise in one PR, not exclusivity). Caveat before advertising: under mise's shim layout, confirm the daemon's sibling-embedder lookup resolves (both real binaries land in the same install dir — plausible, untested). <strong>asdf</strong> is the only channel whose <code>bin/install</code> natively nails the two-sibling layout, but it's a separate repo to maintain for a shrinking ecosystem. All of these are demand-gated, not roadmap.</p>
+<h3 id="provenance">Provenance for everything</h3>
+<p>One pinned action — <code>actions/attest-build-provenance</code> with <code>id-token: write</code> — gives every tarball and the image keyless SLSA Build L2 provenance, verifiable with <code>gh attestation verify</code> and interoperable with cosign (v2.4+). This is the highest-leverage trust upgrade available to the hand-rolled workflow, and it requires no installer changes.</p>
+</section>
+
+<section>
+<h2 id="ranked-roadmap">The ranked roadmap</h2>
+<ol>
+<li><strong>Before the public flip (code + CI, hours):</strong> fail-closed checksums + TLS flags in install.sh; <code>actions/attest-build-provenance</code> on tarballs + image; split the Dockerfile's cargo build (invariant #26); multi-arch image (digest matrix + imagetools merge + <code>COPY --link</code> model stage); ship <code>packaging/systemd/</code> units (user + system, <code>LimitNOFILE=65536</code>, <code>Restart=on-failure</code>), <code>packaging/launchd/</code> plist, compose + Quadlet files; fix the stale <code>ORT_STRATEGY</code> docs; document the x86-64-v3 floor + add the CPU check.</li>
+<li><strong>Flip day:</strong> repo public → <code>v0.0.0-rc1</code> throwaway tag → watch all legs → fill the Homebrew formula's three sha256s → create the tap → <code>brew audit/test</code> → real tag.</li>
+<li><strong>First channel wave (each ≤ a day, minutes per release after):</strong> AUR <code>kb-bin</code>; nfpm <code>.deb</code>/<code>.rpm</code> attached to Releases; WSL2 quickstart + macOS browser-download caveat in docs; <code>:slim</code> image tag.</li>
+<li><strong>Second wave:</strong> <code>kb self-update</code> + channel stamp; COPR; Nix flake (Linux-only <code>ort-load-dynamic</code> overlay); cosign sign+attest on the image; SPA-in-tarball or <code>resolve_spa_dist</code> sibling fallback.</li>
+<li><strong>Demand-gated / deferred:</strong> the musl/low-glibc <code>kb</code> lane (gated on the lance-linalg fix — see the <a href="cross-compiling-ci-zigbuild-spike-2026-07-06.html">companion artifact</a>); aqua-registry PR; minisign sidecars; macOS notarization; Cloudsmith apt/dnf repo; Intel-mac asset (gated on ort's x64-mac prebuilt); manylinux_2_28 ORT source build for Debian-12/RHEL-9 support. <strong>Recorded refusals:</strong> snap, flatpak, AppImage, PPA/OBS, MacPorts, crates.io publishing, a Windows package channel, Helm/K8s.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="when-to-revisit">When to revisit</h2>
+<ul>
+<li><strong>ort ships an <code>x86_64-apple-darwin</code> prebuilt</strong> (main's platform table already lists it) → add the Intel-mac leg on <code>macos-15-intel</code> (native runner exists through ~Aug 2027).</li>
+<li><strong>ort ships a musl prebuilt, or the lance-linalg AVX-512 defect is fixed upstream</strong> → the universal static <code>kb</code> tarball becomes a first-class asset.</li>
+<li><strong>The next ort bump</strong> (main already targets ONNX Runtime 1.27) → re-check <code>dist.txt</code> targets, the glibc floor, and the x86-64-v3 posture; pyke changes build environments between release candidates.</li>
+<li><strong>Real Debian-12 / RHEL-9 / Alpine demand</strong> → the manylinux_2_28 (glibc 2.28) ORT source build via <code>ORT_LIB_PATH</code> is the known, costed escape hatch (~30–60 min/target compile, plus owning an ORT build tree).</li>
+<li><strong>ubuntu-latest floats to 26.04</strong> (migration underway) — kb already pins <code>ubuntu-24.04</code>; keep it pinned or the floor silently rises.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="sources">Provenance and key sources</h2>
+<p>Produced by ultracode workflow <code>wf_c511c0f9-3ea</code> (26 agents, ~1.8M tokens, 96 min): repo-grounding on <code>~/project/kb</code> (Cargo.lock, release.yml, install.sh, Dockerfile, packaging/, docs/self-host.md), nine sourced web-research reports, an empirical zigbuild spike, and 16 adversarial verifications (2 pinned assumptions refuted: Intel-mac runners still exist; binstall can bypass crates.io — plus corrections on distroless-debian13 and WSL-bootstrapper prior art folded in above). Load-bearing external sources:</p>
+<ul>
+<li><a href="https://github.com/pykeio/ort/blob/main/ort-sys/build/download/dist.txt">pyke ort-sys <code>dist.txt</code></a> (authoritative prebuilt-target list) · <a href="https://ort.pyke.io/setup/platforms">ort platform docs</a> · <a href="https://github.com/pykeio/ort/releases/tag/v2.0.0-rc.11">rc.11</a>/<a href="https://github.com/pykeio/ort/releases/tag/v2.0.0-rc.12">rc.12 release notes</a> (x86-64-v3, <code>ORT_LIB_PATH</code>)</li>
+<li><a href="https://docs.github.com/en/actions/reference/runners/github-hosted-runners">GitHub-hosted runners reference</a> · <a href="https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/">arm64 GA for public repos</a> · <a href="https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down/">macos-13 retirement / <code>macos-15-intel</code></a></li>
+<li><a href="https://docs.docker.com/build/ci/github-actions/multi-platform/">Docker multi-platform CI</a> (push-by-digest + <code>imagetools</code>) · <a href="https://docs.docker.com/reference/dockerfile/#copy---link"><code>COPY --link</code></a> · <a href="https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html">Quadlet</a></li>
+<li><a href="https://brew.sh/2025/11/12/homebrew-5.0.0/">Homebrew 5.0</a> (cask Gatekeeper enforcement 2026-09-01) · <a href="https://docs.brew.sh/Formula-Cookbook">Formula Cookbook</a> (<code>service do</code>)</li>
+<li><a href="https://wiki.archlinux.org/title/Rust_package_guidelines">Arch Rust packaging</a> · <a href="https://blog.stark.pub/posts/bundling-onnxruntime-rust-nix/">fastembed+ort on Nix (Minne)</a> · <a href="https://docs.cloudsmith.com/resources/open-source-hosting-policy">Cloudsmith OSS tier</a> · <a href="https://answers.launchpad.net/launchpad/+question/126755">PPA source-only policy</a></li>
+<li><a href="https://pkgs.alpinelinux.org/package/edge/community/x86_64/onnxruntime">Alpine onnxruntime 1.24.1</a> (the musl-ORT reference) · <a href="https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance/">musl-allocator contention</a></li>
+<li><a href="https://docs.astral.sh/uv/getting-started/installation/">uv installer + self-update channel detection</a> · <a href="https://github.com/actions/attest-build-provenance">actions/attest-build-provenance</a> · <a href="https://github.com/jedisct1/minisign">minisign</a></li>
+<li><a href="https://learn.microsoft.com/en-us/windows/wsl/systemd">WSL systemd</a> · <a href="https://learn.microsoft.com/en-us/windows/wsl/networking">WSL networking (localhostForwarding)</a> · <a href="https://github.com/microsoft/WSL/issues/4197">/mnt 9P performance</a></li>
+<li><a href="https://docs.syncthing.net/users/autostart.html">Syncthing user-unit pattern</a> · <a href="https://systemd.io/NETWORK_ONLINE/">systemd network-ordering guidance</a> · <a href="https://docs.rs/sd-notify">sd-notify crate</a></li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

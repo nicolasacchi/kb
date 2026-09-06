@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:applied, project:kb, frontend, design-system, accessibility, visual-floor, kb-artifact, before-after, evaluation">
+<title>Does the floor work? A before/after test of kb's visual-floor standard</title>
+<style>
+/* ── kb visual floor — dogfooded here; canonical copy in docs/authoring-artifacts.md ── */
+:root{
+  --bg:#fbfbfa; --surface:#f3f3f1; --fg:#1b1b1a; --muted:#5f5f5c;
+  --rule:#d9d9d6; --accent:#3a5a9f; --accent-fg:#ffffff;
+  --warn:#8a5f00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:48rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#16171a; --surface:#1f2126; --fg:#e6e6e3; --muted:#a3a39e;
+    --rule:#2c2e33; --accent:#8fb0ee; --accent-fg:#11131a;
+    --warn:#e0b24d; --danger:#f08079; --ok:#6fcaa0;
+  }
+}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:var(--fs-body);line-height:var(--lh)}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.95rem;margin:.2em 0 .3em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-top:.4em;border-top:1px solid var(--rule)}
+h3{font-size:1.1rem;margin:1.6em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch;flex-wrap:wrap}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.2rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.85rem;margin:1em 0}
+caption{text-align:left;color:var(--muted);font-size:var(--fs-small);margin-bottom:.4em}
+th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.n{font-variant-numeric:tabular-nums;font-family:var(--mono);white-space:nowrap}
+.win{color:var(--ok);font-weight:700}
+.flat{color:var(--muted)}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.35em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}.callout--warn .callout-label{color:var(--warn)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}.callout--ok .callout-label{color:var(--ok)}
+.toc{font-family:var(--sans);font-size:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1em 1.25em;margin:1.5em 0}
+.toc ol{margin:.3em 0 0;padding-left:1.3em}.toc li{font-family:var(--sans);margin:.2em 0}
+.num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+main:focus{outline:none}
+/* ── end kb visual floor ── */
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main" tabindex="-1">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> kb <span class="sep">&middot;</span> evaluation</div>
+  <h1>Does the floor work? A before/after test of kb's visual-floor standard</h1>
+  <p class="lede">We built the &ldquo;visual floor&rdquo; (an AA-locked token + accessibility preamble
+  carried by the <code>kb-artifact</code> skill), then tested it: three artifacts generated
+  <strong>free</strong> vs three generated <strong>floored</strong>, same prompt, same model. The floor
+  delivers exactly where the evidence predicted &mdash; the accessibility primitives free-form never
+  ships, secondary-text contrast, and cross-artifact consistency &mdash; and, honestly, <em>not</em> on
+  primary body-text contrast, which current models already get right.</p>
+  <div class="meta-strip">
+    <span class="num">2026-06-06</span>
+    <span class="sep">&middot;</span><span class="tag">status:applied</span>
+    <span class="sep">&middot;</span><span class="tag">project:kb</span>
+    <span class="sep">&middot;</span><span class="tag">evaluation</span>
+    <span class="sep">&middot;</span>
+    <span>10 artifacts measured &middot; 6 deep-review agents &middot; 3 repos</span>
+  </div>
+</header>
+
+<section>
+<h2 id="summary">Summary &amp; verdict</h2>
+<div class="callout callout--ok"><span class="callout-label">Verdict — shipped</span>
+The floor is built and live across three repos (guidance-only, no tooling). Both <code>/deep-review</code>
+passes returned <strong>GO&nbsp;WITH&nbsp;FIXES</strong> and every fix was applied. The A/B test shows the
+floor wins decisively on the <strong>three accessibility primitives</strong> free-form never ships
+(<code>skip-link</code> / <code>:focus-visible</code> / <code>prefers-reduced-motion</code>: 0/7 &rarr;
+3/3), on <strong>secondary-text contrast</strong> (canon 1/4 AA &rarr; 3/3), and on
+<strong>consistency</strong> (4 accent hues &rarr; 1). It does <em>not</em> improve primary body-text
+contrast &mdash; free-form already passes that &mdash; and it converges the accent more than intended.</div>
+<p>This is the empirical follow-up to the decision write-up
+<em>&ldquo;Standardize or stay free?&rdquo;</em>
+(<code>standardizing-claude-generated-frontend-for-kb.html</code>, same corpus), which argued for a thin
+floor on the evidence. Here we built it and measured whether the argument held. The short answer: the
+predicted wins reproduced, the predicted non-win (aesthetics) held, and the test surfaced one new
+trade-off the decision doc only hypothesised (accent monoculture).</p>
+<div class="toc">
+<strong>On this page</strong>
+<ol>
+<li><a href="#what-we-built">What we built (the floor)</a></li>
+<li><a href="#method">How we tested it</a></li>
+<li><a href="#results">Results: before vs after</a></li>
+<li><a href="#findings">What the numbers mean</a></li>
+<li><a href="#deep-review">The deep-review bracket</a></li>
+<li><a href="#caveats">Honest caveats</a></li>
+<li><a href="#changed">What changed (files)</a></li>
+<li><a href="#recommendation">Recommendation</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ol>
+</div>
+</section>
+
+<section>
+<h2 id="what-we-built">What we built (the floor)</h2>
+<p>The floor is the model both poles of the decision doc converged on:
+<strong>&ldquo;constrained primitives, free composition.&rdquo;</strong> Standardize a thin, inlinable,
+AA-locked accessibility + token preamble; leave layout, accent hue, density, and voice free above it. It
+is <strong>guidance, not tooling</strong> &mdash; no CI gate, no validator change. Concretely:</p>
+<ul>
+<li>An AA-locked <code>:root</code> token set (light + dark), every text token verified
+&ge;4.5:1 on its background.</li>
+<li>The accessibility defaults free-form forgets: <code>prefers-reduced-motion</code>,
+<code>:focus-visible</code>, a real skip-link (markup <em>and</em> CSS), a &ge;16&nbsp;px reading size.</li>
+<li>The rule above the primitives: <strong>interactive elements are real
+<code>&lt;button&gt;</code>/<code>&lt;a&gt;</code></strong>, never a styled <code>&lt;div&gt;</code>.</li>
+<li>A <strong>scope</strong> note de-conflicting <code>kb-artifact</code> (reading documents) from the
+<code>frontend-design</code> skill (interactive apps/pages) &mdash; written as kb's own guard, not a claim
+about the other skill.</li>
+</ul>
+<p><strong>This very document uses the floor</strong> &mdash; its tokens, skip-link, focus rings, and
+reduced-motion handling are the thing under test, dogfooded.</p>
+</section>
+
+<section>
+<h2 id="method">How we tested it</h2>
+<p>A controlled A/B, plus field data, plus an adversarial bracket:</p>
+<ul>
+<li><strong>One fixed spec.</strong> Every generation got the identical task: a technical note
+(BLAKE3 vs SHA-256) that <em>must</em> contain a primary button, a warning callout, a comparison table,
+a code block, and two external links, satisfying kb's structural contract.</li>
+<li><strong>Condition A &mdash; FREE (n=3):</strong> &ldquo;style it well, your choice&rdquo; &mdash; no
+floor, genuinely free (the &ldquo;let Claude be free&rdquo; default).</li>
+<li><strong>Condition B &mdash; FLOORED (n=3):</strong> same spec, with the floor pasted in (what the
+updated skill now carries). Same model (Sonnet) held constant across A and B, so any delta is the
+floor, not the model.</li>
+<li><strong>Field data (n=4):</strong> the frozen <code>corpus/canon/*.html</code> artifacts &mdash;
+older, stronger-model, real-world divergent generations.</li>
+<li><strong>Objective measurement.</strong> A script greps the a11y primitives, counts native
+<code>&lt;button&gt;</code> vs styled controls, reads the base font size, computes WCAG contrast
+(resolving <code>var()</code>, hex, <code>rgb()</code>, and <code>oklch()</code>), and tallies accent /
+theme divergence. A separate luminance helper does the contrast math &mdash; no eyeballing.</li>
+<li><strong>Adversarial bracket.</strong> The build was wrapped in <code>/deep-review</code>: four Opus
+reviewers on the <em>plan</em> before applying, two on the applied <em>diffs</em> after.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="results">Results: before vs after</h2>
+<table>
+<caption>Per-group tallies. <span class="win">Green</span> = the floor moved it; <span class="flat">grey</span> = no change / no win. Free &amp; Floored are the controlled A/B (Sonnet, n=3 each); Canon is field data (n=4).</caption>
+<thead><tr><th scope="col">Signal</th><th scope="col">Free (n=3)</th><th scope="col">Floored (n=3)</th><th scope="col">Canon (n=4)</th></tr></thead>
+<tbody>
+<tr><th scope="row">Skip-link present</th><td class="n">0 / 3</td><td class="n win">3 / 3</td><td class="n">0 / 4</td></tr>
+<tr><th scope="row"><code>:focus-visible</code> ring</th><td class="n">0 / 3</td><td class="n win">3 / 3</td><td class="n">0 / 4</td></tr>
+<tr><th scope="row"><code>prefers-reduced-motion</code></th><td class="n">0 / 3</td><td class="n win">3 / 3</td><td class="n">0 / 4</td></tr>
+<tr><th scope="row">Light <em>and</em> dark theme</th><td class="n">0 / 3</td><td class="n win">3 / 3</td><td class="n">0 / 4</td></tr>
+<tr><th scope="row">Body font &ge;16&nbsp;px</th><td class="n">2 / 3</td><td class="n win">3 / 3</td><td class="n">&mdash;</td></tr>
+<tr><th scope="row">Primary text passes AA</th><td class="n">3 / 3</td><td class="n flat">3 / 3</td><td class="n">4 / 4</td></tr>
+<tr><th scope="row">Secondary / muted text AA</th><td class="n">1 / 1*</td><td class="n win">3 / 3</td><td class="n">1 / 4</td></tr>
+<tr><th scope="row">Interactive = native element</th><td class="n">3 + 1&nbsp;div</td><td class="n win">3 + 0</td><td class="n">10 + 0</td></tr>
+<tr><th scope="row">Distinct accent hues</th><td class="n">2</td><td class="n">1</td><td class="n">4</td></tr>
+<tr><th scope="row">kb validator <code>valid</code></th><td class="n">2 / 3</td><td class="n">3 / 3</td><td class="n">&mdash;</td></tr>
+</tbody>
+</table>
+<p class="num" style="font-size:.8rem;color:var(--muted)">* only one free artifact exposed a detectable
+<code>--muted</code> token; the other two hard-coded secondary colours the script could not isolate.
+The canon (4/4 detectable) is the stronger baseline for secondary contrast.</p>
+<p>The raw contrast numbers behind &ldquo;Secondary / muted text AA&rdquo;: the three failing canon
+artifacts compute to <span class="num">4.33:1</span>, <span class="num">3.73:1</span>, and
+<span class="num">3.73:1</span> (all below the 4.5:1 AA floor); every floored artifact lands at
+<span class="num">6.19:1</span> by construction.</p>
+</section>
+
+<section>
+<h2 id="findings">What the numbers mean</h2>
+
+<h3 id="finding-primitives">The floor's biggest win is the layer free-form never touches</h3>
+<p>Across all seven free + canon artifacts, <strong>zero</strong> shipped a skip-link, a
+<code>:focus-visible</code> ring, or <code>prefers-reduced-motion</code> &mdash; not by choice, by
+omission. The floored set ships all three in 3/3. This is the cleanest result in the test, and it is
+exactly the prediction: these primitives live in the styling layer kb leaves free, and a memoryless
+generation re-derives them from scratch every time (so, usually, not at all).</p>
+
+<h3 id="finding-contrast">Body-text contrast was never the problem; secondary text is</h3>
+<p>Every artifact in every group passed AA on its <em>primary</em> body text (free 3/3, canon 4/4).
+The &ldquo;low contrast is the #1 web failure&rdquo; literature did <strong>not</strong> reproduce on
+body text for a current model &mdash; a genuine, honest update to the decision doc's framing. Where
+free-form <em>does</em> fail is <strong>secondary / muted</strong> text: the canon passes only 1 of 4,
+and even the deliberately-curated research house style fails AA on <code>--dim</code>
+(<span class="num">3.63:1</span> light, <span class="num">2.58:1</span> dark) and <code>--warn</code>
+(<span class="num">3.65:1</span>). The floor pins all of these by construction.</p>
+
+<h3 id="finding-consistency">Consistency went up &mdash; arguably too far</h3>
+<p>Free-form produced 2 distinct accents (canon: 4); the floored set produced exactly 1 &mdash; every
+floored artifact used the default <code>--accent</code> and none overrode it, despite the floor
+explicitly leaving it free. That is the floor working (recognisable house look) <em>and</em> the
+&ldquo;monoculture&rdquo; risk the decision doc named, now observed in the wild. If per-artifact
+distinctiveness matters to you, the floor should actively prompt for an accent override rather than ship
+a sticky default.</p>
+
+<div class="callout"><span class="callout-label">The honest shape of the win</span>
+The floor buys <strong>accessibility-by-default</strong> and <strong>cheap consistency</strong> &mdash;
+precisely the two axes the evidence supported with high confidence. It buys <em>nothing</em> on
+&ldquo;better-looking,&rdquo; and it does not even buy much on body-text contrast (already handled). Its
+value is concentrated, not diffuse. That is a feature: it constrains only what reuse demonstrably
+improves, and the existing validator can't even see it &mdash; composite scores stayed flat at
+~60&ndash;63, because they measure structure, not accessibility.</div>
+</section>
+
+<section>
+<h2 id="deep-review">The deep-review bracket</h2>
+<p>The build was bracketed by <code>/deep-review</code> to &ldquo;find the perfect&rdquo; version.</p>
+<h3 id="dr-before">Before (4 Opus reviewers on the plan) &mdash; all GO WITH FIXES</h3>
+<ul>
+<li><strong>Both skill copies are concurrently active</strong> (a personal symlink <em>and</em> the
+<code>kb-research</code> marketplace plugin) &mdash; editing both is necessary, not redundant.</li>
+<li><strong>The skip-link needs markup, not just CSS.</strong> The <code>.skip-link</code> rule is inert
+without <code>&lt;a class="skip-link"&gt;</code> + <code>&lt;main id&gt;</code> &mdash; so the skeleton
+had to seed both. (The single most important catch.)</li>
+<li><strong>&ldquo;Single source of truth&rdquo; was false:</strong> the <code>~/project/research</code>
+catch-all corpus inlines its own 649-line house style the floor doesn't reach &mdash; reframed honestly
+and given a precedence rule.</li>
+<li>The scope note had to be <strong>kb's own guard</strong>, not a claim about what the
+<code>frontend-design</code> skill or Anthropic mandate; and the &ldquo;reserve for playground&rdquo;
+clause was dropped (playgrounds use system fonts too).</li>
+<li>Ship <strong>guidance-only</strong>: a contrast-check grep would false-positive on legitimate
+<code>&lt;div class="callout"&gt;</code>, and an off-token grep would fight the floor's own free
+<code>--accent</code>. Defer the validator change.</li>
+</ul>
+<h3 id="dr-after">After (2 Opus reviewers on the diffs) &mdash; all GO WITH FIXES, applied</h3>
+<ul>
+<li>Sync drift: the external-link <code>&#8599;</code> rule was in the doc block but missing from the
+skill CSS &mdash; added.</li>
+<li>An overstated figure: callout labels were claimed &ldquo;&ge;5.7:1&rdquo;; the true worst is
+<span class="num">4.83:1</span> (still AA) &mdash; corrected.</li>
+<li>A real regression: the skeleton now always emits skip-link markup, but the research build path's CSS
+had no <code>.skip-link</code> rule &rarr; a permanently-visible link. <strong>Fixed</strong> by adding
+the three palette-preserving a11y rules to the research template too.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="caveats">Honest caveats</h2>
+<ul>
+<li><strong>Small n.</strong> Three artifacts per condition; the a11y-primitive result is categorical
+(0/7 vs 3/3) so it is robust, but the contrast / divergence numbers are directional, not statistical.</li>
+<li><strong>Model.</strong> The controlled A/B used Sonnet (held constant); the canon is older
+stronger-model output. A different model could shift the &ldquo;body text already passes&rdquo; finding
+&mdash; though the missing-primitives result is unlikely to change.</li>
+<li><strong>Measurement gap.</strong> The script keys secondary contrast on a <code>--muted</code>-style
+token; two free artifacts hard-coded secondary colours it couldn't isolate, so the free
+&ldquo;muted-AA&rdquo; cell is thin. The canon (4/4 detectable) carries that finding.</li>
+<li><strong>Coverage boundary.</strong> The floor reaches the paste-a-<code>&lt;style&gt;</code> skill
+path and now the research catch-all's a11y; a <em>project</em> corpus with its own house stylesheet
+(e.g. kb's own <code>docs/research/assets/style.css</code>) keeps its style and is intentionally not
+re-floored.</li>
+<li><strong>The floor only helps future artifacts.</strong> Already-served, frozen artifacts (the canon)
+are untouched; this is a forward standard, not a migration.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="changed">What changed (files)</h2>
+<p>Guidance-only edits across three repos &mdash; no daemon, server, parser, or CI change.</p>
+<table>
+<caption>The applied floor.</caption>
+<thead><tr><th scope="col">Repo</th><th scope="col">File</th><th scope="col">Change</th></tr></thead>
+<tbody>
+<tr><th scope="row">kb</th><td><code>docs/authoring-artifacts.md</code></td><td>New <em>&ldquo;Visual floor (recommended baseline)&rdquo;</em> section (canonical token block + primitives + notes); skip-link + <code>&lt;main id&gt;</code> seeded into the minimal skeleton.</td></tr>
+<tr><th scope="row">kb</th><td><code>plugins/kb-research/&hellip;/SKILL.md</code></td><td>Visual-floor pointer + scope note (five must-knows left intact).</td></tr>
+<tr><th scope="row">skills-repo</th><td><code>&hellip;/kb-artifact/SKILL.md</code></td><td>Floor pointer in the author step + scope note.</td></tr>
+<tr><th scope="row">skills-repo</th><td><code>reference/conventions.md</code></td><td>Restraint line replaced by the explicit floor (bans retained).</td></tr>
+<tr><th scope="row">skills-repo</th><td><code>assets/style.css</code></td><td>Floor tokens + a11y primitives + <code>.btn</code>; <code>--code-bg</code>&rarr;<code>--surface</code>; muted tightened.</td></tr>
+<tr><th scope="row">skills-repo</th><td><code>assets/single-file.html</code></td><td>Skip-link as first body child + <code>&lt;main id="main"&gt;</code>.</td></tr>
+<tr><th scope="row">research</th><td><code>_template/style.css</code></td><td>Three palette-preserving a11y rules (skip-link / focus / reduced-motion) so the catch-all corpus inherits the floor's accessibility.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="recommendation">Recommendation</h2>
+<p><strong>Keep it.</strong> The floor is shipped, verified, and earns its keep on exactly the axes the
+evidence supported &mdash; the accessibility primitives, secondary-text contrast, and cheap consistency
+&mdash; while leaving the aesthetic ceiling free, which is where your &ldquo;let Claude be free&rdquo;
+instinct is correct. The one adjustment worth making: because every floored artifact defaulted to the
+same accent, if you value per-artifact distinctiveness, nudge the skill to <em>choose</em> a
+contrast-checked <code>--accent</code> per artifact rather than inherit the default. Otherwise the floor
+trades Claude's per-artifact divergence for a single house look &mdash; coherent, but a monoculture.</p>
+<p>Hold <strong>Option&nbsp;3</strong> (a validator contrast/native-element self-check) as deferred: the
+before-review showed its grep checks are low-ROI for a solo private corpus, and the highest-value
+structural gap (the skip-link) was better fixed in the skeleton than flagged after the fact.</p>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>Should the floor ship a small <strong>contrast-verified accent ramp</strong> (pick-one-of-N) to get
+distinctiveness back without re-introducing per-artifact contrast risk?</li>
+<li>Is the research house style's <code>--dim</code> / <code>--warn</code> AA failure worth fixing, or
+are those tokens only used decoratively? (Out of scope here; flagged for a separate call.)</li>
+<li>Does the &ldquo;body text already passes AA&rdquo; result hold across models, or is it
+Sonnet-specific? A larger sample (more topics, more models) would settle it.</li>
+<li>Should the kb-artifact validator eventually grow the one check the floor's wins are invisible to
+&mdash; a muted-on-bg contrast warning &mdash; once a real artifact regresses?</li>
+</ul>
+</section>
+
+<section>
+<h2 id="see-also">See also</h2>
+<p>The decision write-up this validates: <em>&ldquo;Standardize or stay free?&rdquo;</em>
+(<code>standardizing-claude-generated-frontend-for-kb.html</code>) &mdash; the evidence and options behind
+the floor. And the companion <em>&ldquo;Why the frontend-design skill opposes standardization&rdquo;</em>
+(<code>frontend-design-skill-anti-standardization-rationale.html</code>) &mdash; why the loudest
+anti-standardization voice is scoped to expressive surfaces, not kb's document corpus. The canonical
+floor definition lives in <code>docs/authoring-artifacts.md</code> &rarr; &ldquo;Visual floor.&rdquo;</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

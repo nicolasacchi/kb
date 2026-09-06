@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Server-Sent Events on axum for kb — broadcast channels, Last-Event-ID replay, schema design, vs WebSockets.">
+<title>04 · SSE in axum — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="01-lancedb.html">01 · Storage</a>
+      <a href="02-fastembed.html">02 · Embeddings</a>
+      <a href="03-notify.html">03 · Watcher</a>
+      <a href="04-sse-axum.html" class="is-current">04 · SSE</a>
+      <a href="05-ratatui.html">05 · TUI</a>
+      <a href="../surfaces/06-iframe.html">06 · Iframe</a>
+      <a href="../surfaces/07-html-effectiveness.html">07 · HTML</a>
+      <a href="../surfaces/08-prior-art.html">08 · Prior art</a>
+      <a href="../surfaces/09-comments.html">09 · Comments</a>
+      <a href="../surfaces/10-web-gallery.html">10 · Web Gallery</a>
+      <a href="../surfaces/11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 04
+    <span>·</span>
+    <span class="meta">SSE on axum</span>
+    <span>·</span>
+    <span class="meta">Confidence HIGH</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>SSE</em> over WebSockets.<br>One firehose. 30 lines of replay.</h1>
+  <p class="lede">kb is server→client only and every client speaks HTTP. axum 0.8.9 ships <code>Sse</code>/<code>Event</code>/<code>KeepAlive</code> first-class. The "6 connections per origin" objection died with HTTP/2. Last-Event-ID replay has <em>no maintained crate</em> in 2026 — write the ring buffer yourself, ~30 lines.</p>
+</section>
+
+<section class="section section-tight" id="canonical-taxonomy">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Canonical event taxonomy · 2026-05-11 (rationalized post deep-review)</span>
+    <p style="margin:0 0 .5rem;font-size:.95rem;line-height:1.55">All three SSE consumers (TUI, SPA, Claude Code via file watcher) share <strong>this canonical taxonomy</strong>. Previous drafts of topics 04 / 05 / 10 / 11 had three conflicting name sets; this section is the source of truth and all other pages defer here. The taxonomy is namespaced to keep raw-disk signals separate from pipeline-complete signals (the architectural distinction §G surfaces).</p>
+    <table class="alt-table" style="margin:.4rem 0;font-size:.86rem">
+      <thead><tr><th>Event</th><th>Payload (JSON)</th><th>Emitted by</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>index.start</code></td><td><code>{run, kb, src, total}</code></td><td>indexer</td><td>Start of an indexing run.</td></tr>
+        <tr><td><code>index.file</code></td><td><code>{run, kb, path, ms, edges, ok}</code></td><td>indexer</td><td>Per-file completion. Stream rate may peak ~1 k/s.</td></tr>
+        <tr><td><code>index.complete</code></td><td><code>{run, kb, ok_count, err_count, duration_ms}</code></td><td>indexer</td><td>End of run.</td></tr>
+        <tr><td><code>artifact.indexed</code></td><td><code>{artifact_id, kb, path, hash, mtime, change_kind}</code></td><td>indexer (pipeline-complete)</td><td>Fires after embedding + BM25 + edges land. SPA's iframe-recreate trigger.</td></tr>
+        <tr><td><code>artifact.removed</code></td><td><code>{artifact_id, kb, path}</code></td><td>indexer</td><td>Artifact deleted from kb.</td></tr>
+        <tr><td><code>watch.create</code></td><td><code>{kb, path}</code></td><td>file watcher</td><td>Raw FS signal. Topic 03 debouncer fires this before the pipeline runs.</td></tr>
+        <tr><td><code>watch.modify</code></td><td><code>{kb, path}</code></td><td>file watcher</td><td>Raw FS signal.</td></tr>
+        <tr><td><code>watch.delete</code></td><td><code>{kb, path}</code></td><td>file watcher</td><td>Raw FS signal.</td></tr>
+        <tr><td><code>query</code></td><td><code>{kb, q, hits, ms}</code></td><td>search</td><td>Logged search query.</td></tr>
+        <tr><td><code>error</code></td><td><code>{id, kind, kb, path, msg, fix?}</code></td><td>any</td><td><strong>id added cluster-4-amendment</strong> so clients can address `POST /errors/{err}/dismiss`. `kind` ∈ <code>parse|io|embed|...</code>; sub-namespaced flat (not <code>error.parse</code>).</td></tr>
+        <tr><td><code>comment.created</code></td><td><code>{id, kb, artifact_id, anchor, body, author, ts}</code></td><td>SPA POST → file watcher</td><td>New comment landed in <code>kb/{kb}/.review/{id}.json</code>.</td></tr>
+        <tr><td><code>comment.exported</code></td><td><code>{id, kb, artifact_id, format}</code></td><td>SPA</td><td>User triggered an export (Markdown / Claude prompt / kb JSON).</td></tr>
+        <tr><td><code>comment.resolved</code></td><td><code>{id, kb, artifact_id}</code></td><td>SPA or Claude</td><td>Status flipped to resolved.</td></tr>
+        <tr><td><code>comment.anchor_stale</code></td><td><code>{id, kb, artifact_id, confidence}</code></td><td>indexer (post-regen)</td><td>Fuzzy re-match dropped below threshold.</td></tr>
+        <tr><td><code>comments.updated</code></td><td><code>{kb, artifact_id, count_open, count_unread}</code></td><td>daemon (debounced)</td><td><strong>Aggregate</strong> event for SPA status-pill badge. Coalesces multiple <code>comment.*</code> events on the same artifact within a 500 ms window. SPA listens to this for the unread-comment notification; per-comment <code>comment.*</code> events drive the inline panel refresh.</td></tr>
+        <tr><td><code>atlas.recompute.start</code></td><td><code>{run, kb, artifact_count}</code></td><td>indexer</td><td>UMAP re-projection triggered (auto on +10 % artifact delta or manual via TUI <code>:atlas recompute</code> / SPA settings).</td></tr>
+        <tr><td><code>atlas.recompute.complete</code></td><td><code>{run, kb, duration_ms}</code></td><td>indexer</td><td>2-D coordinates land in lance store; SPA Atlas view re-renders.</td></tr>
+        <tr><td><code>connection</code></td><td><code>{state}</code></td><td>daemon (synthetic)</td><td><code>state</code> ∈ <code>connected|degraded|disconnected</code>. Bypasses all filters.</td></tr>
+        <tr><td><code>lag</code></td><td><code>{skipped}</code></td><td>broadcast channel (synthetic)</td><td>Slow consumer dropped events. Bypasses filters.</td></tr>
+        <tr><td><code>gap</code></td><td><code>{requested_id, oldest_available_id}</code></td><td>replay ring (synthetic)</td><td>Last-Event-ID older than ring's oldest entry. Client must resync. Bypasses filters.</td></tr>
+      </tbody>
+    </table>
+    <p style="margin:.5rem 0 0;font-size:.92rem;line-height:1.55"><strong>Filter grammar (orthogonal, AND-composed):</strong> <code>?types=&lt;glob,glob,…&gt;</code> selects event kinds (e.g. <code>?types=index.*,error</code>); <code>?filter=&lt;key:value,key:value&gt;</code> selects scope (currently <code>run:&lt;id&gt;</code>, future: <code>kb:&lt;kb&gt;</code>, <code>artifact:&lt;id&gt;</code>). Both may co-exist. Synthetic transport events (<code>connection</code>, <code>lag</code>, <code>gap</code>) bypass both filters and always reach the consumer.</p>
+    <p style="margin:.4rem 0 0;font-size:.92rem;line-height:1.55"><strong>Endpoint path:</strong> all SSE routes are <code>/api/events*</code> (see <a href="../surfaces/11-daemon-api.html#endpoints">topic 11 §B.1</a>). The <code>/events</code>-bare paths that appear elsewhere in this page's body should read <code>/api/events</code> — the body predates the cluster-2 path-prefix decision.</p>
+    <p style="margin:.4rem 0 0;font-size:.92rem;line-height:1.55"><strong>Action for v0.0.1:</strong> emit <code>events.schema.json</code> with this enum verbatim. Per-type schemas at <code>/api/events/schema/{type}/v1.json</code>.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>SSE on axum is the right transport for kb.</strong> Pattern: one <code>broadcast::Sender&lt;Arc&lt;KbEvent&gt;&gt;</code> in <code>AppState</code>, per-connection <code>BroadcastStream</code> wrapping a fresh <code>subscribe()</code>, returned via <code>Sse::new(stream).keep_alive(...)</code>. Browser <code>EventSource</code> handles reconnection; <code>VecDeque</code> ring keyed by monotonic <code>u64</code> makes <code>Last-Event-ID</code> replay work. Schema: single envelope <code>{v, id, type, ts, payload}</code>, one firehose <code>/events</code> with <code>?types=</code> filter — <strong>do not split endpoints by domain or by direction</strong> (the dual-endpoint trap MCP rolled back in 2025). WebSockets buy nothing here. <strong>§G traces the disk-change → browser-reload flow</strong> that <code>artifact.indexed</code> drives; the SPA recreates the iframe on each event using topic 06's iframe-recreate pattern.</p>
+    <div class="badges">
+      <span class="conf conf--high">Decision · HIGH</span>
+      <span class="conf conf--med">Replay impl · MED (DIY, ~30 LOC)</span>
+      <span class="conf conf--high">Reverse-proxy footgun · HIGH (documented)</span>
+      <span class="conf conf--high">Live-reload · enabled by §G</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">0. What SSE is (plain English)</div>
+    <h2>One HTTP connection that never closes — server pushes, browser listens</h2>
+  </div>
+  <div class="prose">
+    <p><strong>Server-Sent Events</strong> is a one-way pipe from the daemon to the browser. The browser opens a normal HTTP request to <code>/events</code>; the daemon never finishes the response. Instead, every time something happens that the browser should know about — a file was indexed, indexing reached 47%, a comment was added, an error occurred — the daemon writes a few more lines into the open response. The browser parses each chunk as it arrives. The connection lives as long as the browser tab is open.</p>
+
+    <h3>What the bytes look like</h3>
+    <p>The wire format is plain text. Each event is a few lines, separated by blank lines. This is exactly what curl sees if you run <code>curl -N http://localhost:4000/api/events</code>:</p>
+<pre>id: 42
+event: artifact.indexed
+data: {"artifact_id":"a-9f3...","kb":"work","path":"draft.html","hash":"a3b1...","mtime":1715...,"change_kind":"updated"}
+
+id: 43
+event: index.file
+data: {"run":"r-2c1","kb":"work","path":"draft.html","ms":188,"edges":5,"ok":true}
+
+: heartbeat                ← lines starting with ":" are comments
+                             (keepalive only; browser ignores them)
+</pre>
+    <p>That's it — no framing protocol, no handshake, no JSON envelope outside the <code>data:</code> field. The <code>id:</code> field is how reconnection / replay works (see §B); the <code>event:</code> field is how the browser dispatches to listeners.</p>
+
+    <h3>How the three pieces fit together</h3>
+<pre>kb daemon                              your browser
+─────────                              ────────────
+broadcaster.send(event)                EventSource('/events')
+         │                                      ▲
+         ▼                                      │
+SSE broadcast channel ────── HTTP stream ───────┘
+         │                  (chunked, never closes)
+         ▼
+axum Sse response → bytes on the wire
+</pre>
+    <ol>
+      <li><strong>Producer side:</strong> kb's indexer, watcher, query handler, etc. all call <code>broadcaster.send(event)</code> when something interesting happens.</li>
+      <li><strong>Broadcast channel:</strong> a single tokio <code>broadcast</code> fans the event out to every connected client (see §A). Slow clients lag; the channel drops oldest events for them and tells them they fell behind.</li>
+      <li><strong>Browser side:</strong> <code>new EventSource('/events')</code> opens the connection and dispatches each <code>event:</code> line to a listener. Built into every browser. No client library.</li>
+    </ol>
+
+    <h3>Why SSE and not WebSockets</h3>
+    <ul>
+      <li><strong>One-way is correct for kb.</strong> The daemon pushes; the browser doesn't push back. Search queries are normal REST. WebSockets give bidirectional communication kb doesn't need.</li>
+      <li><strong>Plain HTTP.</strong> Same auth as the rest of kb's API. No handshake protocol. Reverse proxies (nginx, Caddy) just work — with one footgun about buffering, called out in §D.</li>
+      <li><strong>Browser-native.</strong> <code>new EventSource(url)</code> handles reconnection, replay (<code>Last-Event-ID</code>), and parsing. No third-party JS dependency. Auto-reconnects on network drops.</li>
+    </ul>
+
+    <div class="note"><b>Reader shortcut:</b> The rest of this page is technical implementation — broadcast channels, ring buffers, reverse-proxy tuning, performance budgets. Skip to <strong>§G — Live-reload</strong> if you only want to know how "edit a file on disk, see the change in the browser" works.</div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. Axum SSE basics</div>
+    <h2>broadcast + BroadcastStream + keep_alive</h2>
+  </div>
+  <div class="prose">
+    <p>axum 0.8.9 (current 2026-05). Pin <code>axum = { version = "0.8", features = ["macros", "tokio"] }</code>. SSE under <code>axum::response::sse</code>; <code>KeepAlive</code> needs the <code>tokio</code> feature. <code>BroadcastStream</code> is in <code>tokio-stream</code>.</p>
+    <h4>Idiomatic broadcast pattern</h4>
+<pre>use std::{convert::Infallible, sync::Arc, time::Duration};
+use axum::{extract::State, response::sse::{Event, KeepAlive, Sse}, routing::get, Router};
+use futures_util::Stream;
+use tokio::sync::broadcast;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub tx: broadcast::Sender&lt;Arc&lt;KbEvent&gt;&gt;, // Arc keeps slot pointer-sized
+}
+
+pub async fn sse_handler(
+    State(state): State&lt;AppState&gt;,
+) -&gt; Sse&lt;impl Stream&lt;Item = Result&lt;Event, Infallible&gt;&gt;&gt; {
+    let rx = state.tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
+        Ok(ev) =&gt; Some(Ok(Event::default()
+            .id(ev.id.to_string())
+            .event(ev.kind.as_str())
+            .json_data(&amp;*ev).unwrap())),
+        Err(BroadcastStreamRecvError::Lagged(_n)) =&gt; {
+            // surface a synthetic event so the client knows to refetch
+            Some(Ok(Event::default().event("lag").data("reconnect-recommended")))
+        }
+    });
+    Sse::new(stream).keep_alive(
+        KeepAlive::new().interval(Duration::from_secs(15)).text(":heartbeat"),
+    )
+}</pre>
+    <p><strong><code>KeepAlive</code></strong> defaults to a 15 s <code>:</code> comment; timer resets on every real event so heartbeats only fire during idle.</p>
+    <h4>watch vs broadcast</h4>
+    <p>Use <strong>broadcast</strong> — events are discrete and every client must see every one. <code>watch</code> collapses to "latest value only" and only fits <em>current state</em> (e.g. <code>IndexerStatus</code>). kb may end up with one <code>broadcast</code> for the event log plus one <code>watch</code> for current indexer state, merged in the handler.</p>
+    <h4>Backpressure</h4>
+    <p><code>broadcast::Sender::send</code> never blocks. When full, the <strong>oldest</strong> message is dropped and slow receivers get <code>RecvError::Lagged(n)</code> on next <code>recv()</code>. Buffer rounds up to next power of two (capacity 100 actually holds 128). For kb: capacity 256, surface <code>Lagged</code> as a synthetic <code>event: lag</code> and let the client refetch state via REST. Don't treat <code>Lagged</code> as fatal — broadcast drops by design.</p>
+    <h4>Closed-connection detection</h4>
+    <p>Free: dropped HTTP connection → dropped response body → dropped stream → dropped <code>Receiver</code>. Slot reclaimed automatically. For cleanup hooks, use a Drop guard struct held inside the stream.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">B. Last-Event-ID replay</div>
+    <h2>No maintained crate. Write the ring yourself.</h2>
+  </div>
+  <div class="prose">
+    <p>Ecosystem (2026): <strong>no production-ready axum crate packages <code>Last-Event-ID</code> replay</strong>. HTML5 spec is clear (browser sets <code>Last-Event-ID</code> on reconnect, server replays <code>id:</code>-tagged events); axum doesn't ship it. Build it yourself.</p>
+    <h4>Pattern: ring buffer + monotonic id</h4>
+<pre>pub struct EventLog {
+    next_id: AtomicU64,
+    ring: Mutex&lt;VecDeque&lt;Arc&lt;KbEvent&gt;&gt;&gt;, // last N events, capped (e.g. 1024)
+    tx: broadcast::Sender&lt;Arc&lt;KbEvent&gt;&gt;,
+}
+
+impl EventLog {
+    pub fn publish(&amp;self, mut ev: KbEvent) {
+        ev.id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let arc = Arc::new(ev);
+        {
+            let mut ring = self.ring.lock().unwrap();
+            if ring.len() == ring.capacity() { ring.pop_front(); }
+            ring.push_back(arc.clone());
+        }
+        let _ = self.tx.send(arc); // ignore "no receivers"
+    }
+}
+
+async fn sse_handler(
+    State(log): State&lt;Arc&lt;EventLog&gt;&gt;,
+    headers: HeaderMap,
+) -&gt; Sse&lt;impl Stream&lt;Item = Result&lt;Event, Infallible&gt;&gt;&gt; {
+    let last_id: Option&lt;u64&gt; = headers.get("last-event-id")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse().ok());
+    let rx = log.tx.subscribe();
+    let replay: Vec&lt;Arc&lt;KbEvent&gt;&gt; = {
+        let ring = log.ring.lock().unwrap();
+        match last_id {
+            Some(id) =&gt; ring.iter().filter(|e| e.id &gt; id).cloned().collect(),
+            None =&gt; Vec::new(),
+        }
+    };
+    let replay_stream = futures_util::stream::iter(replay.into_iter().map(Ok));
+    let live = BroadcastStream::new(rx).filter_map(/* ... */);
+    let stream = replay_stream.chain(live).map(/* to sse::Event */);
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}</pre>
+    <div class="note"><b>Caveat:</b> subscribe-then-snapshot can deliver duplicates. Subscribe <em>before</em> snapshotting and filter live items with <code>id &lt;= ring.back().id</code>, or de-dup by id client-side.</div>
+    <h4>SQLite alternative</h4>
+    <p>Persist events to <code>events(id INTEGER PRIMARY KEY, ...)</code> and <code>SELECT WHERE id &gt; ?</code> on reconnect. Only worth it for replay <em>across server restart</em>; for "tab paused 30 s" cases, in-memory ring is enough.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. Reconnection semantics</div>
+    <h2>Browser auto-reconnects. Rust client picks reqwest-eventsource.</h2>
+  </div>
+  <div class="prose">
+    <p><strong>Browser <code>EventSource</code></strong> auto-reconnects with ~3 s default backoff (Chrome ~3 s, Firefox ~5 s, grows on repeated failure). Override via the SSE <code>retry:</code> field — <code>Event::default().retry(Duration::from_secs(5))</code>. <code>Event::retry</code> panics if called twice on one event.</p>
+    <h4>Rust client crates</h4>
+    <ul>
+      <li><strong><code>reqwest-eventsource</code></strong> (158k dl/mo, MIT/Apache, ~400 LOC): wrapper over <code>reqwest</code> + <code>eventsource-stream</code>. Tracks <code>Last-Event-ID</code> automatically (<code>handle_response</code> calls <code>stream.set_last_event_id(...)</code>) and retries with backoff. <strong>Best fit for kb CLI/TUI.</strong></li>
+      <li><strong><code>eventsource-client</code></strong> (302k dl/mo, Apache-2.0, hyper v1, pluggable transport): heavier, fuller protocol impl. Also handles <code>Last-Event-ID</code> and reconnect.</li>
+    </ul>
+    <h4>Edge cases</h4>
+    <p>Mid-event disconnect: SSE parser is line-based, incomplete events are discarded, <code>Last-Event-ID</code> retains the last <em>complete</em> id. Server restart: client reconnects with <code>Last-Event-ID</code>; if the ring was cleared, server returns a synthetic <code>event: gap</code> so the client knows to refetch.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. SSE vs WebSockets for kb</div>
+    <h2>One-way wins. Auth wins. Proxy is the footgun.</h2>
+  </div>
+  <div class="prose">
+    <p><strong>One-way wins.</strong> kb does not need bidirectional streaming — queries are REST. The "6 connection per origin" objection is a 2026 non-issue: HTTP/2 multiplexes ~100 streams (default <code>SETTINGS_MAX_CONCURRENT_STREAMS</code>) over one TCP connection.</p>
+    <p><strong>Auth.</strong> SSE is vanilla HTTP — <code>Authorization: Bearer</code>, cookies, mTLS all work unchanged. WebSocket auth requires URL tokens (logged), custom subprotocols, or post-upgrade handshakes. SSE wins on "same auth as the rest of the API".</p>
+    <h4>Reverse-proxy belt-and-suspenders</h4>
+    <ul>
+      <li><strong>App:</strong> set <code>X-Accel-Buffering: no</code> and <code>Cache-Control: no-cache, no-transform</code>.</li>
+      <li><strong>nginx:</strong> <code>proxy_buffering off; proxy_cache off; proxy_http_version 1.1; chunked_transfer_encoding off; proxy_read_timeout 86400s;</code> and disable gzip on the route.</li>
+      <li><strong>Caddy:</strong> no <code>X-Accel-Buffering</code> support — use <code>flush_interval -1</code> in <code>reverse_proxy</code>.</li>
+      <li><strong>Cloudflare-class CDNs:</strong> may force-close ~100 s. Use <code>retry:</code> so recovery is transparent.</li>
+    </ul>
+    <p><strong>Keepalives.</strong> 15 s <code>:</code> comment is correct. LB idle timeouts fire 60–120 s; 15 s is well under.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. Event schema design</div>
+    <h2>One envelope, one firehose, glob filter</h2>
+  </div>
+  <div class="prose">
+    <h4>Recommended envelope</h4>
+<pre>{
+  "v": 1,
+  "id": 4823,
+  "type": "index.file",
+  "ts": "2026-05-10T14:32:11.412Z",
+  "payload": { "run": "r-2c1", "kb": "work", "path": "draft.html", "ms": 188, "edges": 5, "ok": true }
+}</pre>
+    <table class="alt-table">
+      <caption>Field semantics</caption>
+      <thead><tr><th>Field</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>v</strong></td><td>Schema major version. Bump only on breaking change. Minor changes (new fields, new event types) keep <code>v=1</code>.</td></tr>
+        <tr><td><strong>id</strong></td><td>u64 monotonic. Same value goes in the SSE <code>id:</code> field, so <code>Last-Event-ID</code> replay works without parsing JSON.</td></tr>
+        <tr><td><strong>type</strong></td><td>Dotted namespaced verb. <strong>Canonical namespaces (post deep-review):</strong> <code>index.*</code> (run lifecycle), <code>artifact.*</code> (pipeline-complete), <code>watch.*</code> (raw FS signals — replaces <code>file.*</code>), <code>comment.*</code> (per-comment lifecycle), <code>comments.*</code> (aggregate debounced), <code>atlas.*</code>, flat <code>query</code> / <code>error</code> / <code>connection</code>, synthetic <code>lag</code> / <code>gap</code>. See <a href="#canonical-taxonomy">§canonical-taxonomy</a> for the full enum. Also goes in SSE <code>event:</code> field so browser EventSource can <code>addEventListener("artifact.indexed", …)</code>.</td></tr>
+        <tr><td><strong>ts</strong></td><td>ISO 8601 UTC with millisecond precision. Always UTC, never local.</td></tr>
+        <tr><td><strong>payload</strong></td><td>Type-specific, per-<code>type</code> schema. Validate with JSON Schema; publish at <code>/events/schema/{type}/v1.json</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Event types — watch.* vs artifact.*</h4>
+    <p>The taxonomy distinguishes <strong>raw disk signal</strong> from <strong>pipeline-complete signal</strong>. They fire at different times and have different consumers. <em>(Renamed post deep-review: the body previously used <code>file.*</code> + <code>index.progress</code> + <code>error.parse/io/embed</code>; the canonical taxonomy at §canonical-taxonomy supersedes those.)</em></p>
+    <ul>
+      <li><strong><code>watch.create</code></strong>, <strong><code>watch.modify</code></strong>, <strong><code>watch.delete</code></strong> — fire from the watcher (<a href="03-notify.html">topic 03</a>) the moment the debouncer settles. Payload <code>{kb, path}</code>. <em>Useful for the TUI watcher pane and debugging.</em> The browser SPA does <strong>not</strong> subscribe to these — the index is not yet consistent.</li>
+      <li><strong><code>artifact.indexed</code></strong> — fires from the indexer when the pipeline completes for a file. Payload <code>{artifact_id, kb, path, hash, mtime, change_kind: 'created' | 'updated' | 'reindexed'}</code>. <strong>This is the reload trigger for the SPA</strong> — see §G.</li>
+      <li><strong><code>artifact.removed</code></strong> — fires when an artifact leaves the index (file deleted on disk, or explicit <code>kb rm</code>). Payload <code>{artifact_id, kb, path}</code>. SPA shows a "removed from disk" placeholder if the artifact was currently being viewed.</li>
+      <li><strong><code>index.start</code></strong>, <strong><code>index.file</code></strong>, <strong><code>index.complete</code></strong> — run-level progress: start (with total file count), per-file completion, end-of-run summary. TUI shows a gauge; SPA shows a header progress bar.</li>
+      <li><strong><code>comment.created</code></strong>, <strong><code>comment.exported</code></strong>, <strong><code>comment.resolved</code></strong>, <strong><code>comment.anchor_stale</code></strong> — per-comment lifecycle (drives the inline comments panel). <strong><code>comments.updated</code></strong> — aggregate debounced summary (drives the status-pill unread badge). See <a href="../surfaces/09-comments.html">topic 09</a>.</li>
+      <li><strong><code>atlas.recompute.start</code></strong>, <strong><code>atlas.recompute.complete</code></strong> — UMAP re-projection lifecycle (auto on +10 % artifact delta or manual via TUI/SPA).</li>
+      <li><strong><code>error</code></strong> — flat event with <code>kind ∈ parse|io|embed|...</code> as a discriminator, not separate <code>error.parse</code>/<code>error.io</code>/<code>error.embed</code> namespaces. Payload <code>{id, kind, kb, path, msg, fix?}</code>; the <code>id</code> field added post deep-review so clients can address <code>POST /api/kb/{kb}/errors/{err}/dismiss</code>. TUI Errors tab.</li>
+    </ul>
+    <div class="note"><b>Why split <code>watch.*</code> from <code>artifact.*</code>?</b> The watcher signals "a file changed on disk." The indexer signals "the index now reflects that change." A browser that reloads on <code>watch.modify</code> would fetch via kb's API <em>before</em> kb's index is consistent — racing the pipeline. Reloading on <code>artifact.indexed</code> is correct because by then the pipeline has finished and a fetch from kb sees fresh content. The SPA filters for <code>artifact.*</code> via <code>GET /api/events?types=artifact.*,comment.*,comments.*,index.*</code>.</div>
+
+    <h4>ID strategy</h4>
+    <p>Monotonic <code>u64</code> per process — cheap, sortable, replay-friendly. UUIDs are wrong (unsortable, larger). If kb ever shards, prefix with process-id (<code>{pid}-{seq}</code>) à la Firehose's <code>{partition}-{offset}</code>.</p>
+    <h4>Versioning</h4>
+    <p>Treat the event log as a public API. Add fields freely (consumers ignore unknown — keep <code>#[serde(deny_unknown_fields)]</code> <em>off</em> on clients). Renames/removals bump <code>v</code>; run <code>/events?v=1</code> and <code>/events?v=2</code> side by side through a deprecation window. Publish JSON Schemas in-repo, serve from the server.</p>
+    <h4>Multiplexing — single firehose with query filter</h4>
+    <ul>
+      <li><code>GET /events</code> — all event types (default for SPA/CLI/TUI).</li>
+      <li><code>GET /events?types=index.*,error.*</code> — server-side glob filter for narrow consumers.</li>
+      <li><strong>Don't</strong> create separate hand-written endpoints (<code>/events/index</code>, <code>/events/files</code>) — they fragment the schema and complicate ring buffer ownership.</li>
+    </ul>
+    <p><strong>Anti-pattern:</strong> do not split endpoints by <em>direction</em> (the dual-endpoint trap MCP rolled back in 2025). kb's REST handles client→server; pair that with one SSE direction.</p>
+    <p><strong>Heartbeat semantics.</strong> <code>KeepAlive</code> injects bare <code>:</code> comments — invisible to listeners. Don't model heartbeats as <code>system.heartbeat</code> envelope events; pollutes the log and bloats replay buffers.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">F. Performance &amp; limits</div>
+    <h2>Wildly overprovisioned at 1–5 clients</h2>
+  </div>
+  <div class="prose">
+    <p><strong>Three rings, three sizes (post-review disambiguation).</strong></p>
+    <ul>
+      <li><strong>Broadcast channel capacity = 256</strong> — live-fanout slot count. When a slow consumer falls 256 events behind, <code>BroadcastStreamRecvError::Lagged</code> fires (handled per §A: emit synthetic <code>lag</code> event). Memory: 256 × 8 B (<code>Arc</code> pointers) = 2 KB.</li>
+      <li><strong>Replay ring = 1024</strong> — daemon-side <code>VecDeque&lt;Arc&lt;KbEvent&gt;&gt;</code> for Last-Event-ID gap-fill. With <code>Arc</code> sharing, N subscribers cost only cursor state (~64 B each), not N × ring size. Memory of events themselves (avg payload ~350-500 B post-review remeasure; <code>artifact.indexed</code> + envelope can approach 600 B; outlier <code>error</code> events with <code>fix.patch</code> can reach 1-2 KB but are rare): worst-case 1024 × 1 KB = 1 MB resident. Typical: ~400 KB. Negligible.</li>
+      <li><strong>TUI display ring = 200</strong> — client-side, lives in topic 05 §F (<code>App.activity: VecDeque&lt;Event&gt;</code>). The TUI keeps the most recent 200 events for the activity-log panel display; it does <em>not</em> mirror the daemon's full replay ring. Mis-attribution in earlier drafts of topic 05 corrected post deep-review.</li>
+    </ul>
+    <p><strong>Per-client cost.</strong> <code>BroadcastStream</code> cursor (~64 B) + <code>Notify</code> waker. Each connection adds one hyper body task and a kernel TCP send buffer (~64 KB). With <code>Arc&lt;KbEvent&gt;</code>, the replay ring is shared across subscribers — N subscribers do NOT pay N × ring memory; only the per-cursor cost. Round to <strong>~128 KB per connected client</strong>, dominated by the kernel TCP buffer. Multi-tab single-user: 4 SPA tabs + 1 TUI = 5 subscribers ≈ 640 KB.</p>
+    <p><strong>1000 concurrent clients</strong> is comfortably feasible: 128 MB resident. Tokio handles 10k+ idle SSE connections per process. For kb's actual user base (1–5 clients) this is wildly overprovisioned — design for correctness, not scale.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">G. Live-reload — disk change → browser refresh</div>
+    <h2>The end-to-end flow, traced</h2>
+  </div>
+  <div class="prose">
+    <p>The operator's question: <em>"if I save a file, can the browser refresh by itself?"</em> Yes — and the architecture for it already exists in topics 03 (file watcher), 04 (this page, SSE), and 06 (iframe-recreate). This section traces the flow end-to-end and pins down the single new event type (<code>artifact.indexed</code>, from §E) that wires it together.</p>
+
+    <h3>The step-by-step trace</h3>
+    <ol>
+      <li>Something writes a new HTML body to disk inside a watched source folder. Could be Claude Code finishing a generation, the operator hand-editing the artifact in an editor, or <code>kb regen &lt;id&gt;</code> running.</li>
+      <li><a href="03-notify.html">Topic 03</a>'s <code>notify-debouncer-full</code> settles <strong>400 ms after the last write event</strong>. This collapses tmp+rename pairs, multi-write bursts, editor save sequences — into a single logical "this file changed" event.</li>
+      <li>The indexer wakes up. It re-parses the file with <code>scraper</code>, re-extracts the <code>kb-*</code> meta tags (<a href="../surfaces/07-html-effectiveness.html">topic 07</a>'s convention), re-embeds the body chunks with bge-small (<a href="02-fastembed.html">topic 02</a>), and updates the lance + sqlite stores (<a href="01-lancedb.html">topic 01</a>).</li>
+      <li>When the pipeline completes, the indexer publishes <code>artifact.indexed</code> to the SSE broadcaster with the new payload: <code>{artifact_id, path, hash, mtime, change_kind}</code>.</li>
+      <li>The broadcast channel fans the event out to every connected client — CLI subscribers, the TUI, every open SPA tab — with no extra effort from the indexer.</li>
+      <li>In the browser SPA, a single <code>EventSource</code> connection (opened once on page load) receives the event. The <code>event:</code> field is <code>artifact.indexed</code>, so a previously-registered listener fires.</li>
+      <li>The SPA branches on which artifact changed:
+        <ul>
+          <li><strong>If it's the artifact currently being viewed</strong> → save the iframe's scroll position; recreate the iframe element (<a href="../surfaces/06-iframe.html">topic 06</a>'s §G "iframe-recreate-per-render" pattern); on the new iframe's <code>load</code> event, restore the scroll position; show a brief <code>↻ updated</code> toast.</li>
+          <li><strong>If it's in the sidebar list but not the active view</strong> → update the card's title / excerpt / mtime in place; flash an "updated" badge that fades after a few seconds.</li>
+          <li><strong>If it isn't on screen anywhere</strong> → do nothing. The next time the operator opens that artifact, kb serves fresh content from disk; the SPA has no reason to act now.</li>
+        </ul>
+      </li>
+      <li>Concurrently with step 3, kb runs the comment-anchor stability pass (<a href="../surfaces/09-comments.html">topic 09</a>'s §C). Any comments whose anchors lost confidence emit <code>comment.anchor_stale</code> events. The SPA surfaces these in the comments sidebar with a "needs review" pill — so the operator notices that the regen made some comments un-anchored.</li>
+    </ol>
+
+    <h3>Browser-side code (the listener)</h3>
+<pre>// In the kb SPA, set up once on page load:
+const es = new EventSource('/events?types=artifact.indexed,artifact.removed,comment.*');
+
+es.addEventListener('artifact.indexed', (e) =&gt; {
+  const ev = JSON.parse(e.data);
+  const id = ev.payload.artifact_id;
+
+  if (id === currentArtifactId) {
+    // Currently viewing — reload the iframe in place.
+    const scrollY = iframe.contentWindow?.scrollY ?? 0;
+    recreateIframe(id);                    // topic 06 pattern
+    iframe.addEventListener('load', () =&gt; {
+      const maxY = Math.max(0,
+        iframe.contentDocument.documentElement.scrollHeight
+          - iframe.contentWindow.innerHeight);
+      iframe.contentWindow.scrollTo(0, Math.min(scrollY, maxY));
+    }, { once: true });
+    toast('↻ updated');
+  } else if (sidebar.has(id)) {
+    // In the visible list — update the card in place.
+    sidebar.flashUpdate(id, ev.payload);
+  }
+  // Otherwise: ignore. Next open shows fresh content.
+});
+
+es.addEventListener('artifact.removed', (e) =&gt; {
+  const id = JSON.parse(e.data).payload.artifact_id;
+  if (id === currentArtifactId) showDeletedPlaceholder();
+  sidebar.remove(id);
+});
+
+es.addEventListener('comment.anchor_stale', (e) =&gt; {
+  const { id, fuzzy_score } = JSON.parse(e.data).payload;
+  commentsSidebar.flagStale(id, fuzzy_score);  // yellow border + "needs review"
+});</pre>
+
+    <h3>Why this design works</h3>
+    <p>The live-reload feature is the natural composition of three existing pieces. Nothing is being invented — only wired together with one new event type:</p>
+    <table class="alt-table">
+      <thead><tr><th>Piece</th><th>From</th><th>Role in live-reload</th></tr></thead>
+      <tbody>
+        <tr><td>File watcher + 400 ms debounce</td><td><a href="03-notify.html">Topic 03</a></td><td>Detects disk change; collapses bursts into one signal</td></tr>
+        <tr><td><code>artifact.indexed</code> SSE event</td><td>§E (new this update)</td><td>Pipeline-complete signal — fires when kb's index is consistent</td></tr>
+        <tr><td>Iframe-recreate-per-render</td><td><a href="../surfaces/06-iframe.html">Topic 06</a> §G</td><td>The actual reload mechanism — drops the old iframe, mounts a new one</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Edge cases &amp; what to handle</h3>
+    <ul>
+      <li><strong>Rapid edits.</strong> The 400 ms debouncer collapses bursts at the daemon side, so the browser sees <em>one</em> <code>artifact.indexed</code> per settled save sequence — not ten. If the daemon is somehow chatty anyway, add a 100 ms browser-side debounce on the reload action (defer to v2).</li>
+      <li><strong>Scroll restore on a shorter document.</strong> Clamp the restored <code>scrollY</code> to <code>scrollHeight − viewport</code>. Otherwise a shorter regen leaves the viewport in empty space below the new content. (Shown in the code above.)</li>
+      <li><strong>Comment popover open during reload.</strong> Dismiss the popover before recreating the iframe — its anchor in the iframe is about to disappear. The operator can re-select after the reload completes.</li>
+      <li><strong>Comment input draft.</strong> If the operator was typing a comment when the reload fired, preserve the draft in the parent SPA's state (the input lives in the parent, not the iframe) and re-render after reload. <strong>Never lose a typed draft to an auto-reload.</strong></li>
+      <li><strong>Artifact deleted.</strong> Separate <code>artifact.removed</code> event. SPA shows a "removed from disk" placeholder with an affordance to navigate away. Orphaned comments stay in kb's store; <a href="../surfaces/09-comments.html">topic 09</a>'s "orphaned" view lists them.</li>
+      <li><strong>Multi-tab.</strong> Each open SPA tab has its own <code>EventSource</code>; each reloads independently if it's viewing the changed artifact. No cross-tab coordination needed — every tab does the right thing locally.</li>
+      <li><strong>Mid-reload, another change lands.</strong> A second <code>artifact.indexed</code> arrives while the first reload is still mounting. Idempotent: just recreate again. Slightly chatty in pathological cases; usually invisible.</li>
+      <li><strong>Off-screen reload.</strong> If the artifact isn't on screen at all, the SPA does nothing — saves CPU. The next open fetches fresh from kb; no stale render.</li>
+      <li><strong>Operator preference: "pause auto-reload."</strong> A toggle in the chrome that mutes <code>artifact.indexed</code> handling for the active artifact. Useful when annotating heavily and a sudden reload would jump the page. v2 polish; not strictly required for v1.</li>
+    </ul>
+
+    <h3>The reload trigger, conceptually</h3>
+    <p>Worth stating plainly: kb does <em>not</em> push the new artifact body over SSE. The event payload is small (just an id + hash + change_kind). When the browser receives <code>artifact.indexed</code>, it knows the index is fresh; it then re-fetches the artifact via the normal iframe-recreate path (which loads from <code>https://&lt;id&gt;.artifacts.localhost/...</code> per <a href="../surfaces/06-iframe.html">topic 06</a>). The split keeps the SSE channel low-volume (fixed event sizes, not body-sized) and lets browser HTTP caching do its job on the actual artifact bytes.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions specific to live-reload</span>
+    <ul>
+      <li><strong>Pause-while-annotating mode.</strong> Should the SPA expose a per-artifact "don't auto-reload" toggle, so heavy commenting isn't interrupted? Default off (auto-reload is the feature). UX TBD.</li>
+      <li><strong>Diff highlight on reload.</strong> Could the SPA briefly highlight changed regions (line-level diff between old and new body)? Adds implementation cost; nice-to-have. Defer.</li>
+      <li><strong>Browser-side coalescing window.</strong> If the daemon ever emits multiple <code>artifact.indexed</code> for the same artifact within a few hundred ms, should the SPA coalesce to one reload? Default: yes, with a 100 ms client-side debounce. Tune in production.</li>
+      <li><strong>Scroll-restore fidelity.</strong> Pixel-perfect <code>scrollY</code> across two different documents is approximate. For large regens, scrolling to "the heading you were near" (anchor-based) would be more useful than pixel-based. Out of v1 scope.</li>
+      <li><strong>"Stale anchor — but did the regen address the comment?"</strong> See <a href="../surfaces/09-comments.html">topic 09</a>'s analogous open question. Same answer: V1 unconditional auto-resolve; V2 LLM-judge.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <h4>Verification checklist</h4>
+    <ol>
+      <li><code>cargo add axum --features tokio</code>, <code>tokio-stream --features sync</code>. Confirm <code>axum::response::sse::{Sse, Event, KeepAlive}</code> resolves.</li>
+      <li>Implement <code>EventLog</code> with <code>broadcast::channel(256)</code> + <code>VecDeque</code> ring of 1024.</li>
+      <li>Handler reads <code>last-event-id</code> header, drains ring, chains <code>BroadcastStream</code>. <code>KeepAlive::new().interval(Duration::from_secs(15))</code>.</li>
+      <li>Response headers: <code>Cache-Control: no-cache, no-transform</code>, <code>X-Accel-Buffering: no</code>.</li>
+      <li><code>curl -N http://localhost:4000/api/events</code> — verify <code>:</code> heartbeats every 15 s and live event lines (canonical path is <code>/api/events</code> per cluster 2; bare <code>/events</code> in older body examples should be read as <code>/api/events</code>).</li>
+      <li>Reconnect: <code>curl -N -H "Last-Event-ID: 5" ...</code> — only <code>id&gt;5</code> replays.</li>
+      <li>CLI: integrate <code>reqwest-eventsource</code>, confirm <code>Last-Event-ID</code> round-trips on reconnect.</li>
+      <li>Behind nginx: confirm <code>proxy_buffering off</code> applied — events arrive within ~50 ms, not batched.</li>
+    </ol>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Spec-dependent open questions</span>
+    <ul>
+      <li>The exact <code>type</code> taxonomy (<code>index.progress</code>, <code>index.complete</code>, <code>file.added</code>, <code>file.removed</code>, <code>file.renamed</code>, <code>error.parse</code>, <code>query.executed</code>, …) needs the missing <code>kb-tui-spec.md</code> / <code>kb-spa-spec.md</code> to lock in.</li>
+      <li>Per-payload JSON schemas — author once, validate on both producer (server) and consumer (TUI/SPA) sides.</li>
+      <li>Cross-version migration policy — when bumping <code>v</code>, how long to keep both endpoints alive.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="03-notify.html"><span class="dir">← Prev</span><span class="ttl">03 · File watcher</span></a>
+  <a class="next" href="05-ratatui.html"><span class="dir">Next →</span><span class="ttl">05 · Ratatui patterns</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · SSE on axum</p>
+      <p>The "6 connections per origin" objection died with HTTP/2. SSE is the right transport for one-way event streaming.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="05-ratatui.html">05 TUI</a></li>
+        <li><a href="../surfaces/06-iframe.html">06 Iframe</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://docs.rs/axum/latest/axum/response/sse/">axum SSE</a></li>
+        <li><a href="https://crates.io/crates/reqwest-eventsource">reqwest-eventsource</a></li>
+        <li><a href="https://github.com/mouton0815/axum-sse-from-channel">axum-sse-from-channel</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deterministic scores, unpinned order — a determinism audit of kb search</title>
+<meta name="kb-tags" content="fable-frontier, determinism, search, bm25, lance, reproducibility">
+<meta name="kb-category" content="research">
+<meta name="kb-summary" content="Empirical determinism audit of kb search on an isolated 14-doc corpus. Vector search + graph are bit-stable throughout; keyword/hybrid rankings are UNSTABLE in the post-index settling window (scores nudge, stale postings over-count) then converge to a state that was bit-identical across two independent rebuilds. The starting hypothesis (per-fragment BM25 stats) was REFUTED by the lance source: corpus stats are global. The real code-pinned gap is a missing tie-break in bm25_query/list_embeddings — tied-score order rides physical scan order. One-line fix. Atlas untested (SPA-only). Case study, n small.">
+
+<style>
+  :root{
+    --bg:#101210; --surface:#191d19; --fg:#e6ece3; --muted:#9db19a;
+    --rule:#28302a; --accent:#5ec98a; --accent-fg:#101210;
+    --warn:#e3b657; --danger:#ef8a78; --ok:#5ec98a;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace;
+    --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f5faf5; --surface:#e7f0e8; --fg:#14201a; --muted:#496152;
+      --rule:#cbdccd; --accent:#136c40; --accent-fg:#f5faf5;
+      --warn:#7f5600; --danger:#a52a1c; --ok:#136c40;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.03rem/1.65 var(--sans)}
+  main{max-width:50rem;margin:0 auto;padding:2.4rem 1.2rem 4rem}
+  h1{font-size:1.7rem;line-height:1.2;margin:.2em 0 .3em;letter-spacing:-.01em}
+  h2{font-size:1.16rem;margin:2.2em 0 .5em;padding-top:1.1em;border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem;margin:1.4em 0 .3em;color:var(--muted)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.6 var(--mono)}
+  .verdict{border:1px solid var(--rule);border-left:5px solid var(--accent);border-radius:10px;
+    background:var(--surface);padding:1em 1.2em;margin:1.4em 0;font-size:1.05rem}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.82rem/1.5 var(--mono);white-space:pre-wrap}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  td.num,th.num{text-align:right;font-family:var(--mono);font-size:.86rem}
+  .stable{color:var(--ok);font-weight:600}
+  .unstable{color:var(--danger);font-weight:600}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  .callout--refuted{border-left-color:var(--danger)}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#verdict">Skip to verdict</a>
+<main>
+<h1>Deterministic scores, unpinned order</h1>
+<p class="meta">a determinism audit of kb search · Fable frontier run #5 · 2026-07-07
+13:52–15:20 CEST · isolated daemon, 14-doc corpus, zero writes to any real corpus ·
+mechanism refuted + corrected under adversarial review · status: finding, no code changed</p>
+
+<div class="verdict" id="verdict">
+<strong>Verdict.</strong> kb's claim of deterministic, reproducible ranking mostly holds — with
+one real seam. <strong>Vector search and the graph are bit-stable</strong> through everything.
+<strong>Keyword and hybrid rankings are unstable in the window right after indexing</strong>:
+scores nudge and stale postings transiently over-count as the FTS index settles, then converge
+to a state that was <strong>bit-identical across two independent from-scratch rebuilds</strong>.
+The mechanism I started with — "BM25 scores differ per lance fragment" — was <strong>refuted by
+the lance source</strong>: its corpus statistics are global. The real, code-pinned gap is
+smaller and sharper: <code>bm25_query</code> and <code>list_embeddings</code> return lance's
+top-k in <em>physical scan order with no <code>ORDER BY id</code> tie-break</em>, so any
+tied-score ordering rides the physical index layout, which moves as fragments merge. A one-line
+secondary sort closes it. (Atlas layout: untested — its endpoint is SPA-only; see bounds.)
+</div>
+
+<h2 id="refuted">1 · The hypothesis the code refuted</h2>
+<div class="callout callout--refuted"><strong>Refuted.</strong> I hypothesised that BM25 scores
+depend on lance <em>fragment</em> structure — that the same 14 docs stored as 14 one-doc
+fragments (fresh index) score differently than as 1 merged fragment (post-compaction), because
+IDF/avgdl are computed per physical fragment. A verifier read the pinned
+<code>lance-index 4.0.0</code> source: <code>IndexBM25Scorer</code> aggregates
+<code>num_docs</code>, <code>total_tokens → avgdl</code>, and per-token document frequency
+<strong>globally across all inverted-index partitions</strong>
+(<code>scorer.rs:70–131</code>), and the emitted top-k scores are recomputed with that single
+global scorer (<code>index.rs:461,521,543</code>). Inverted-index "partitions" are size-driven
+(2048 MiB, <code>builder.rs:56</code>), <strong>not</strong> data fragments — a 14-doc corpus is
+one partition either way. Same documents → same IDF/avgdl → same score, fragment count
+notwithstanding. My mechanism was wrong.</div>
+<p>Foregrounding this is the point, not an aside. Across this frontier program the adversarial
+pass keeps catching the author: run #4 corrected an inflated invocation count, and here run #5
+corrected a wrong mechanism. What survives that is worth more than what's asserted without it.</p>
+
+<h2 id="observed">2 · What the isolated corpus actually showed</h2>
+<p>Rig: a private daemon (spare port, own <code>KB_HOME</code>, bge-small), 14 fixed HTML docs;
+captures = keyword/semantic/hybrid rankings+scores for 6 queries, graph for 2 ids, and the doc
+list, straight off the HTTP API. Three solid observations:</p>
+<table>
+<tr><th>Surface</th><th>Temporal (settled daemon, 5×)</th><th>Settling window (fresh index)</th><th>Across 2 rebuilds (converged)</th></tr>
+<tr><td><strong>vector (semantic)</strong></td><td class="stable">identical</td><td class="stable">identical</td><td class="stable">bit-identical</td></tr>
+<tr><td><strong>graph</strong></td><td class="stable">identical</td><td class="stable">identical</td><td class="stable">bit-identical</td></tr>
+<tr><td><strong>keyword (BM25)</strong></td><td class="stable">identical</td><td class="unstable">UNSTABLE</td><td class="stable">bit-identical</td></tr>
+<tr><td><strong>hybrid (RRF)</strong></td><td class="stable">identical</td><td class="unstable">UNSTABLE (inherits BM25)</td><td class="stable">bit-identical</td></tr>
+</table>
+<p>The settling instability is real and query-visible. For <code>"memory ranking"</code>,
+keyword top-doc <code>47320bbc</code> ("Evolving the kb Memory System") across four captures of
+the same corpus:</p>
+<pre>fresh capture A (stale postings):   10 hits   top score 3.2050
+fresh capture B (~1 min later):      8 hits   top score 2.9767   ← same daemon, changed
+after compact + convergence:         8 hits   top score 3.0253
+independent rebuild, converged:      8 hits   top score 3.0253   ← identical to above</pre>
+<p>Two effects compose here. <strong>(a) Over-counting:</strong> the 10-hit capture admits two
+extra low-scoring docs — stale postings from re-index churn not yet garbage-collected (it
+over-counts; it is not a partial/incomplete index — the doc table read 14 in every capture).
+<strong>(b) A score nudge:</strong> once membership settles at 8, seven of the eight scores are
+already bit-identical; only the highest-term-frequency doc keeps moving (2.9767 → 3.0253) until
+the version chain settles, because a small shift in the global length statistics moves the
+top-TF doc most. Then it stabilises — and a second, independent from-scratch rebuild produced
+the identical settled numbers.</p>
+
+<h2 id="seam">3 · The real seam, code-pinned</h2>
+<p>Distinct from the transient settling above, there is a <em>latent</em> determinism gap in
+kb's own code that would bite cross-machine even after everything settles: <strong>no stable
+tie-break on the ranked read paths.</strong></p>
+<ul>
+<li><code>bm25_query</code> (<code>lance.rs:636–653</code>) issues
+<code>full_text_search(…).limit(limit)</code> and returns lance's score-ordered top-k
+<em>as-is</em> — no secondary <code>ORDER BY id</code>.</li>
+<li><code>batches_to_summaries</code> (<code>lance.rs:1608</code>) folds record batches in
+physical scan order with no final sort — unlike the list/gallery decoders, which
+<em>do</em> sort (<code>lance.rs:1033, 1256</code>).</li>
+<li><code>list_embeddings</code> (<code>lance.rs:1392</code>) — the atlas input — is
+<code>select(["id","embedding"])</code> with no <code>ORDER BY</code>, pure scan order.</li>
+</ul>
+<p>Consequence: for documents whose BM25 scores are exactly (or floating-point) equal — common
+on short keyword queries over a similar corpus — <em>which</em> rows survive the <code>limit</code>
+and their rank order are decided by lance's heap plus physical row/fragment layout. Compaction
+reorders physical rows, so tied docs can swap ranks or swap in/out of the top-k. Scores are
+reproducible; <strong>order on ties is not pinned.</strong> The fix is one line each: a
+<code>.then(a.id.cmp(&amp;b.id))</code> secondary sort (kb already does exactly this in the recall
+reranker and the list decoders — it's simply absent from the search/embedding paths).</p>
+
+<h2 id="why">4 · Why this matters (beyond a tidy invariant)</h2>
+<ol>
+<li><strong>Reproducible evaluation.</strong> Anything that snapshots keyword/hybrid results —
+<code>kb bench</code>, a before/after A/B on a change that triggers reindex — can attribute a
+settling-window shift or a tie reshuffle to the change under test. My own earlier frontier runs
+captured search during unknown index states; the honest control is to compact and let the index
+settle before measuring.</li>
+<li><strong>The "verified outcomes" ethos.</strong> The whole corpus is built on deterministic,
+reproducible artifacts; a user who queries right after adding docs sees a different keyword
+ranking than a minute later, for the same corpus. That is worth documenting even though it
+self-heals.</li>
+<li><strong>The tie-break is a genuine latent bug</strong> for cross-machine reproducibility
+(invariant #10 / the atlas-determinism invariant aspire to bit-identical across machines) — and
+it's a cheap, safe fix that makes the aspiration true for the ranked paths.</li>
+</ol>
+
+<h2 id="bounds">5 · Honest bounds (what I did NOT establish)</h2>
+<ul>
+<li><strong>Rebuild reproducibility is observed, not proven.</strong> Two independent rebuilds
+gave bit-identical settled output (atlas run-ids differed, ruling out an accidental copy). But
+determinism is asymmetric — two matches don't prove it; a rarer float-reduction or hash-order
+race could still settle identically most of the time. Read it as "bit-identical across 2
+trials."</li>
+<li><strong>Atlas layout is untested.</strong> Its coordinate endpoint is SPA-only; I captured
+only the recompute run-id (a fresh random token per POST, which says nothing about layout). The
+"<code>list_embeddings</code> unsorted ⇒ atlas may be non-reproducible" point is a static-code
+hypothesis with zero empirical test here. It should be tested with a coords capture next.</li>
+<li><strong>Auto-compaction confounds the causal story.</strong> The daemon periodically
+auto-compacts on a timer (observed <code>trigger="periodic"</code> in the log), so "manual
+compact is what stabilised it" is not cleanly isolated — the daemon partly stabilises itself.
+The endpoint (settled + reproducible) stands; the attribution to the manual step does not.</li>
+<li><strong>Small scale, one machine.</strong> 14 docs, ~5 usable keyword queries (one was a
+stopword returning nothing), 2 rebuilds, single host. A case study that locates a seam, not a
+population measurement of its frequency.</li>
+<li><strong>Digest not tested.</strong> An earlier draft called the digest fragment-invariant;
+it was never captured in this rig — dropped.</li>
+</ul>
+
+<h2 id="provenance">6 · Provenance</h2>
+<p class="meta">Scheduled Fable frontier run #5 (13:52 CEST fire; all agents ran Opus 4.8 —
+Fable unavailable). Isolated rig at /tmp/det-audit (own daemon on a spare port, own KB_HOME,
+14 frozen docs); the machine's other kb daemons were never touched; zero writes to any real
+corpus. Empirical captures b1/b2/b2b/settled1/conv2 + capture.sh. Verification workflow
+wf_a18d45e8-fe5 (2 agents, 181k tokens): a mechanism agent that read pinned lance-index 4.0.0
+source and refuted the per-fragment hypothesis, and a methodology agent that dropped a corrupted
+datapoint (b1, captured during a 503 storm on a dying daemon), reframed "convergence" as FTS
+index settling (not incomplete indexing), and flagged every bound above. Code: bm25_query
+lance.rs:636, batches_to_summaries lance.rs:1608, list_embeddings lance.rs:1392, one-fragment-
+per-file actor.rs:1049 / lance.rs:708, startup+periodic compaction lib.rs:805/924/1527;
+lance-index 4.0.0 scorer.rs:70 / index.rs:461. Related: recall-salience-inversion-eval-2026-07.html
+(run #1, which validated recall determinism via exact-order replay — consistent with the
+temporal stability seen here), the four memory-subsystem runs #1–#4, README non-goal #1 +
+invariant #10.</p>
+</main>
+</body>
+</html>

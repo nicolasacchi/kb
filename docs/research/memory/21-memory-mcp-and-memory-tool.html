@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Approach B for kb-as-Claude-Code-memory: integrate through dedicated kb CLI verbs (kb remember / kb recall), not an MCP server. Makes the token + simplicity case for purpose-built verbs invoked through the Bash tool Claude already has — zero persistent context overhead, daemon-only, no extra process — sketches the verb surface and recipes, and weighs then rejects the alternatives it replaces (an MCP server, Anthropic's client-side memory tool, and buying Mem0/MemPalace).">
+<meta name="kb-tags" content="claude-code, memory, kb, cli, kb-remember, kb-recall, agent-memory, daemon, self-host, no-mcp, recall, build-vs-buy">
+<meta name="kb-category" content="research">
+<title>21 · Memory, Approach B — dedicated kb CLI verbs — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="19-kb-as-claude-code-memory.html">19 · Memory hub</a>
+      <a href="20-memory-corpus-and-protocol.html">20 · Simple</a>
+      <a href="21-memory-mcp-and-memory-tool.html" class="is-current">21 · CLI verbs</a>
+      <a href="22-memory-native-subsystem.html">22 · Native</a>
+      <a href="23-memory-implementation-spec.html">23 · Build spec</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 21 · Approach B
+    <span>·</span>
+    <span class="meta">Dedicated kb CLI verbs</span>
+    <span>·</span>
+    <span class="meta">Research · 2026-05-22</span>
+  </div>
+  <h1>The integration is a CLI verb,<br>not an MCP server.</h1>
+  <p class="lede">The right question turned out to be: <em>why add an MCP server when a CLI tool does this better?</em> Approach B is exactly that — give Claude Code memory through two purpose-built verbs, <code>kb remember</code> and <code>kb recall</code>, invoked through the <strong>Bash tool it already has</strong>. No extra process, no tool-schema tax on every session's context — just the daemon you already run. This file sketches the verbs, makes the token + simplicity case, and weighs the alternatives it replaces (an MCP server, Anthropic's memory tool, and off-the-shelf Mem0/MemPalace) so the rejection is honest, not hand-waved.</p>
+</section>
+
+<section class="section section-tight" id="tldr">
+  <div class="tldr">
+    <span class="lbl">Why CLI verbs win</span>
+    <p>An MCP server advertises typed tools the model auto-calls — but its definitions <strong>sit in the context window every session, used or not</strong> (Anthropic's own memory tool injects ~2.5k tokens of schema). Dedicated <code>kb</code> verbs ride the Bash tool that's <em>already there</em>, so they add <strong>zero persistent overhead</strong> — you pay only for the calls you make, plus a few <code>CLAUDE.md</code> lines. MCP's genuine edge is narrow (auto-fire reliability + cross-client reuse), and a tight protocol plus a recall hook closes most of it. So Approach B is two small verbs — the rung between <a href="20-memory-corpus-and-protocol.html">A</a>'s skills (no code) and <a href="22-memory-native-subsystem.html">C</a>'s native subsystem (lots).</p>
+    <div class="badges">
+      <span class="conf conf--high">daemon-only · no extra process</span>
+      <span class="conf conf--high">zero context-token tax</span>
+      <span class="conf conf--med">net-new but small (kb-cli)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="verbs">
+  <div class="section-head">
+    <div class="num">01 — The verbs</div>
+    <h2>Two commands carry the whole approach</h2>
+    <p class="deck">Purpose-built <code>kb</code> subcommands — more robust than composing <code>kb search</code> + a write in a skill, testable, and usable outside Claude too.</p>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Proposed memory verbs (net-new <code>kb-cli</code> subcommands)</caption>
+      <thead><tr><th>Verb</th><th>What it does</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><code>kb recall</code></td><td>hybrid-search the memory corpora and merge; the read path</td><td><code>kb recall "deploy prefs" --scope all --json</code></td></tr>
+        <tr><td><code>kb remember</code></td><td>write a memory artifact into the chosen scope; the watcher indexes it</td><td><code>kb remember "prefers Postgres" --scope global --category memory-user</code></td></tr>
+        <tr><td><code>kb forget</code></td><td>delete (or soft-flag) a memory by id</td><td><code>kb forget 7f3a… --kb memory</code></td></tr>
+      </tbody>
+    </table>
+    <p><strong>Scope is the one real subtlety.</strong> kb search runs against one corpus at a time, so "local + global" is two corpora — a project-local <code>[kb.memory-&lt;project&gt;]</code> and a user-wide <code>[kb.memory]</code> (the split <a href="20-memory-corpus-and-protocol.html">Approach A</a> sets up). <code>kb recall --scope all</code> queries both and merges by score; <code>--scope project</code> / <code>global</code> narrow it. <code>kb remember</code> writes to the scope you name (a user preference → global; a project decision → project). The verbs are a thin, robust layer over kb internals that already exist — <code>kb remember</code> writes the right HTML into the right corpus dir (watcher indexes within ~400 ms), <code>kb recall</code> wraps the hybrid search and stitches the per-scope result lists.</p>
+    <div class="note"><b>What's new vs. Approach A.</b> A delivers the same operations as <em>skills</em> — prompt files that tell Claude to compose <code>kb search</code> and a <code>Write</code>. B promotes them to <em>real <code>kb</code> subcommands</em>: deterministic, unit-testable, scriptable, and not dependent on the model assembling the right invocation each time. Small kb-cli code, no daemon change required — the synchronous-ingest and ranking work is <a href="22-memory-native-subsystem.html">Approach C</a>.</p></div>
+  </div>
+</section>
+
+<section class="section section-wide" id="alternatives">
+  <div class="section-head">
+    <div class="num">02 — Alternatives, weighed</div>
+    <h2>Why not an MCP server, the memory tool, or Mem0</h2>
+    <p class="deck">All three were the original draft of this approach. Here's why a CLI verb beats each — for Claude Code specifically.</p>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Rejected for Claude Code (kept here as honest context)</caption>
+      <thead><tr><th>Option</th><th>What it is</th><th>Why CLI verbs win instead</th></tr></thead>
+      <tbody>
+        <tr><td>MCP server (<code>kb mcp</code>)</td><td>a stdio server advertising <code>recall</code>/<code>remember</code> as typed tools</td><td>tool definitions cost context <em>every session</em>; it's a second process to run and supervise. Its only real edge — auto-fire — is largely recovered by a <code>CLAUDE.md</code> line + a recall hook (§04).</td></tr>
+        <tr><td>Anthropic memory tool</td><td>client-side <code>/memories</code> CRUD via the API SDK (<code>BetaAbstractMemoryTool</code>)</td><td>it's an <strong>API / Agent-SDK</strong> feature for agents <em>you</em> build — not a backend the Claude Code CLI exposes. Relevant only if you write your own agent; then kb can back it, but that's outside this CLI.</td></tr>
+        <tr><td>Buy (Mem0 / MemPalace)</td><td>off-the-shelf memory layers, themselves MCP servers</td><td>more moving parts (a server, sometimes cloud); they don't give you a browsable, comment-curated store. Use one for throwaway ambient facts if you must — and keep kb for the long-form, curated memory it's uniquely good at.</td></tr>
+      </tbody>
+    </table>
+    <div class="rec">
+      <div class="lbl">The principle</div>
+      <p>The only process that should run is the <strong>kb daemon</strong> — it already serves the artifacts and holds the memory; recall and capture are just verbs that talk to it over the CLI Claude already uses. Every alternative above adds a second moving piece to buy back convenience the daemon + a verb already provide.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="lenses">
+  <div class="section-head">
+    <div class="num">03 — The two lenses</div>
+    <h2>Useful for Claude? Useful for the user?</h2>
+  </div>
+  <div class="prose">
+    <h3>For Claude-the-agent</h3>
+    <p><strong>Reliable recall without the token tax.</strong> A registered MCP tool fires a little more readily than "remember to run a command" — but a <code>CLAUDE.md</code> protocol ("recall before you answer") plus the <code>UserPromptSubmit</code> recall hook in §04 makes recall happen <em>before</em> the model even responds, which is stronger than auto-fire and costs nothing until invoked. Every read/write stays a visible Bash tool-call: auditable, debuggable, no hidden retrieval, no schema sitting in context.</p>
+    <h3>For the end user</h3>
+    <p><strong>Nothing new to run.</strong> No MCP server to configure, supervise, or reason about — the daemon you already have answers <code>kb recall</code> and absorbs <code>kb remember</code>. You keep the whole kb cockpit (browse, atlas, comment-curation), it stays fully self-hosted, and the memory is just files you can read and edit. The cost is honest: the verbs are net-new code (a small kb-cli addition), so B isn't quite as zero-effort as A's skills — but it's far less than C.</p>
+    <div class="note"><b>Lock-in is nil.</b> The store underneath is plain kb HTML artifacts. Start with A's skills, promote to these verbs, later pull in C's subsystem — the memories never migrate; only the front door changes.</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="recipes">
+  <div class="section-head">
+    <div class="num">04 — Recipes</div>
+    <h2>The verb sketch, the protocol, the recall hook</h2>
+    <p class="deck">A thin clap surface over existing kb internals, plus the two lines that make the agent use it.</p>
+  </div>
+  <div class="prose">
+    <h3>a · the verbs <span class="meta">(kb-cli — illustrative clap surface)</span></h3>
+    <pre><code>// crates/kb-cli/src/main.rs — new subcommands
+enum MemoryCmd {
+    /// Search memory (project + global) and merge by score.
+    Recall { query: String, #[arg(long, default_value="all")] scope: Scope,
+             #[arg(long, default_value_t=5)] limit: u32, #[arg(long)] json: bool },
+    /// Write a memory artifact into the chosen scope.
+    Remember { text: String, #[arg(long, default_value="project")] scope: Scope,
+               #[arg(long)] category: Option&lt;String&gt;, #[arg(long)] tags: Vec&lt;String&gt; },
+    /// Delete (or soft-flag) a memory by id.
+    Forget { id: String },
+}
+// recall  → for each in-scope kb: GET /api/search?q=&amp;kb=… (hybrid); merge + truncate.
+// remember→ render memory HTML, write into the scope's corpus dir; watcher indexes (~400ms).
+// forget  → remove the file (or set kb-status="forgotten").</code></pre>
+
+    <h3>b · <code>CLAUDE.md</code> — the protocol (unchanged from A, minus the skill)</h3>
+    <pre><code>## Memory (kb-backed)
+RECALL before you act: `kb recall "&lt;topic&gt;" --scope all --json` — read the top hits,
+don't guess when memory might know. REMEMBER durable learnings:
+`kb remember "&lt;fact&gt;" --scope project|global --category memory-{user|feedback|project|reference}`.
+Don't store secrets or ephemeral state; search before writing to avoid duplicates.</code></pre>
+
+    <h3>c · optional — proactive recall on every prompt <span class="meta">(.claude/settings.json)</span></h3>
+    <pre><code>{ "hooks": { "UserPromptSubmit": [ { "hooks": [
+  { "type": "command",
+    "command": "kb recall \"$CLAUDE_USER_PROMPT\" --scope all --limit 5 --json" } ] } ] } }</code></pre>
+    <p>This injects the top memories <em>before</em> the model answers — true RAG, no tool call, no MCP. It's the single highest-value automation and the natural bridge to <a href="22-memory-native-subsystem.html">Approach C</a>, which makes the hook + ranking first-class.</p>
+  </div>
+</section>
+
+<section class="section" id="verdict">
+  <div class="section-head">
+    <div class="num">05 — Verdict</div>
+    <h2>Effort, risk, and where this lands</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Approach B scorecard</caption>
+      <thead><tr><th>Dimension</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td>kb-core / daemon change</td><td class="center"><span class="y">none</span></td></tr>
+        <tr><td>New code</td><td>small — <code>kb recall</code>/<code>remember</code>/<code>forget</code> in <code>kb-cli</code></td></tr>
+        <tr><td>Extra process at runtime</td><td class="center"><span class="y">none — just the daemon</span></td></tr>
+        <tr><td>Context-token overhead</td><td class="center"><span class="y">zero until called</span></td></tr>
+        <tr><td>Useful for Claude</td><td class="center"><span class="p">high (with protocol + recall hook)</span></td></tr>
+        <tr><td>Useful for the user</td><td class="center"><span class="y">high — nothing new to run</span></td></tr>
+      </tbody>
+    </table>
+    <div class="rec">
+      <div class="lbl">Recommendation</div>
+      <p><strong>This is the integrate step after <a href="20-memory-corpus-and-protocol.html">A</a>.</strong> Live on A's skills first; when the prompt-composition gets fiddly, promote them to <code>kb recall</code>/<code>kb remember</code> verbs (this file) and add the <code>UserPromptSubmit</code> recall hook. Reach for the full native subsystem — synchronous ingest, salience/decay ranking, the Memory view — only when these verbs hit their limits: that's <a href="22-memory-native-subsystem.html">Approach C</a>. No MCP server enters the picture at any rung.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="page-nav">
+    <a href="20-memory-corpus-and-protocol.html">
+      <span class="dir">← Prev</span>
+      <span class="ttl">20 · Corpus + protocol</span>
+    </a>
+    <a href="22-memory-native-subsystem.html" class="next">
+      <span class="dir">Next →</span>
+      <span class="ttl">22 · Native subsystem</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb as Claude Code memory — Approach B: dedicated <code>kb</code> CLI verbs.</p>
+      <p>Reframed per operator review: CLI verbs are the only Approach B; the MCP server, Anthropic's memory tool, and off-the-shelf Mem0/MemPalace are weighed and rejected for Claude Code (kept as honest context). Part of the memory series (19–22).</p>
+    </div>
+    <div>
+      <h5>Sections</h5>
+      <ul>
+        <li><a href="#verbs">The verbs</a></li>
+        <li><a href="#alternatives">Alternatives, weighed</a></li>
+        <li><a href="#lenses">The two lenses</a></li>
+        <li><a href="#recipes">Recipes</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Context</h5>
+      <ul>
+        <li><a href="20-memory-corpus-and-protocol.html">20 · the skills these verbs replace</a></li>
+        <li><a href="22-memory-native-subsystem.html">22 · the native subsystem</a></li>
+        <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool" target="_blank" rel="noopener">Anthropic · memory tool (the API alternative)</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('kb-theme'); if (saved) root.dataset.theme = saved; } catch (e) {}
+  var btn = document.querySelector('[data-action="toggle-theme"]');
+  if (btn) btn.addEventListener('click', function () {
+    var next = root.dataset.theme === 'ink' ? 'paper' : 'ink';
+    root.dataset.theme = next;
+    try { localStorage.setItem('kb-theme', next); } catch (e) {}
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 't' || e.key === 'T') && !/input|textarea/i.test(e.target.tagName)) { if (btn) btn.click(); }
+  });
+  var bar = document.querySelector('.reading-progress');
+  if (bar) {
+    var tick = function () {
+      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+      bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+    };
+    document.addEventListener('scroll', tick, { passive: true });
+    tick();
+  }
+})();
+</script>
+</body>
+</html>

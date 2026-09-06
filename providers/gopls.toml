@@ -1,0 +1,120 @@
+# kb-lip reference provider: gopls (the Go team's own official language
+# server; there is no widely-used alternative the way ruby has ruby-lsp/
+# solargraph, so this is the only Go provider config kb-lip ships).
+#
+# gopls (https://pkg.go.dev/golang.org/x/tools/gopls) is maintained under
+# the `golang.org/x/tools` umbrella. This config was NOT part of the
+# PRR-L3/L4/L5 live-smoke evidence (providers/README.md) — that was
+# ruby-lsp/Ruby. Validate against your target repo before relying on it; the
+# S2-D live smoke (providers/README.md) is expected to fill this in, and —
+# per that smoke's own scope — is expected to EXPLICITLY probe position
+# encoding (a multibyte-rune line hover/definition round trip) before the
+# UTF-16 note at the bottom of this file can be de-flagged.
+#
+# Usage:
+#   kb-lip --config providers/gopls.toml
+#
+# Then point kb-code-server at it via [[intel.providers]] in kb-code.toml —
+# see providers/README.md for the exact block and the operator steps.
+#
+# --- Prerequisites -----------------------------------------------------
+#
+# 1. Install gopls (no sudo needed — `go install` writes to `$GOBIN`, or
+#    `$(go env GOPATH)/bin` if `$GOBIN` is unset, both user-owned by
+#    default):
+#
+#      go install golang.org/x/tools/gopls@latest
+#
+#    Make sure that directory is on PATH (`go env GOBIN`/`go env GOPATH`).
+#    For a repo pinned to an older Go toolchain, install a matching gopls
+#    version instead of `@latest` — gopls documents a supported-version
+#    policy tied to recent Go releases.
+#
+# 2. `workspace_root` below MUST be an ABSOLUTE path to the target repo's
+#    root (where its `go.mod` lives, or the workspace root for a
+#    `go.work` multi-module setup) — it is a PLACEHOLDER; the operator
+#    edits it per deployment. kb-lip does not template/expand `~` or env
+#    vars, so write the real absolute path.
+#
+# 3. First-start cost: gopls loads and type-checks the module graph on open
+#    (`go build`-equivalent work), which can take real time on a large
+#    module with many dependencies. kb-lip's readiness gate ($/progress
+#    tracking, see ruby-lsp's PRR-L4 finding — the same mechanism,
+#    server-agnostic) refuses with `{"refused": "indexing"}` rather than
+#    returning a premature empty answer while that load is in flight.
+
+lang_ids = ["go"]
+
+# Plain `gopls` (no args) starts the server over stdio, its default mode —
+# see `gopls help serve`.
+command = ["gopls"]
+
+# PLACEHOLDER — the operator must set this to the real repo root before
+# running kb-lip. Example: "/home/user/code/my-go-app".
+workspace_root = "/CHANGE/ME/to/the/repo/root"
+
+port = 4851
+
+# How long POST /lip/diagnostics waits for the FIRST publishDiagnostics on a
+# freshly-opened doc, in milliseconds. Hard-capped at 2000 by kb-lip
+# regardless of what's written here (config can only lower it, never raise
+# it past the ceiling) — see crates/kb-lip/src/config.rs. gopls is a
+# PUSH-diagnostics server by default, so this wait is meaningful here (kb-lip
+# detects a server's pull-vs-push mode from its `initialize` capabilities
+# per-server, PRR-L5 — see providers/pyright.toml for the pull-mode case).
+# NOTE: this key MUST stay above the `[restart_backoff]`/`[initialization_
+# options]` table headers below — TOML binds a bare `key = value` to the
+# LAST-OPENED table, so written after either header it would silently
+# become a (harmless but meaningless) extra field of that table instead of
+# this top-level `Config::diagnostics_wait_ms`.
+diagnostics_wait_ms = 2000
+
+# initializationOptions passed verbatim in the LSP `initialize` request.
+# gopls's own settings (https://go.dev/gopls/settings) are a FLAT JSON
+# object at the top level of initializationOptions (unlike some editor
+# plugins' own config wrappers, which nest everything under a "gopls" key —
+# that nesting is an editor-side convention, not part of the wire shape;
+# kb-lip sends this table's contents directly as `initializationOptions`,
+# so no such wrapper key belongs here).
+#
+# Left EMPTY here (no active keys) — sensible-minimal, same posture as
+# ruby-lsp.toml: kb-lip's lip/1 surface calls hover/definition/references/
+# diagnostics and (as of the code-actions capability — design-s2.md S2-C,
+# which REVERSES lip/1's earlier "no code actions" refusal) code-actions;
+# it still never calls rename, formatting, or workspace/executeCommand, so
+# completion-oriented settings like `usePlaceholders` and non-default
+# analysis passes like `staticcheck` (both off by default) are left
+# untouched. `hoverKind` already defaults to `"FullDocumentation"`, which is
+# what a reader wants. Uncomment and tune only if a real target project
+# needs it, e.g.:
+#   [initialization_options]
+#   # staticcheck = true
+
+# Capped exponential backoff for restarting the gopls child if it crashes.
+# The defaults here are kb-lip's own (200ms initial, 30s cap, x2
+# multiplier) — raise `max_ms` if your module's cold load (prerequisite #3
+# above) is consistently slower than that.
+[restart_backoff]
+initial_ms = 200
+max_ms = 30000
+multiplier = 2.0
+
+# --- Position encoding [CONFIRMED-LIVE, 2026-08-31] -----------------------
+#
+# kb-lip never declares `general.positionEncodings` in its `initialize`
+# capabilities (see crates/kb-lip/src/lsp.rs), so per the LSP spec every
+# server MUST fall back to its mandatory default, UTF-16 code units — which
+# is exactly what kb-lip's own `position.rs` hardcodes throughout. This was
+# confirmed live for ruby-lsp (PRR-L4 §c, providers/README.md); the S2-D
+# smoke (2026-08-31, providers/README.md "Live smoke evidence (go)") has now
+# confirmed it live for gopls too, against gopls v0.23.0. The probe was
+# constructed to be DECISIVE, not merely lucky: a line with a multibyte-rune
+# string (`é`/`ö`/CJK) immediately before a `greet()` call put the target
+# identifier's BYTE offset (43) a full 10 units ahead of its UTF-16
+# code-unit offset (33) on a line only 41 UTF-16 units long — enough delta
+# that a broken byte→UTF-16 translation would land past the end of the line
+# (a guaranteed miss), not just a few characters off inside the same token.
+# Sending kb-lip the correct byte offset produced a correct
+# `/lip/hover`/`/lip/definition` answer landing exactly on `greet` both
+# times — confirming kb-lip's hardcoded UTF-16 assumption is correct against
+# gopls specifically, not just assumed from the LSP spec.

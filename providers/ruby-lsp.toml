@@ -1,0 +1,103 @@
+# kb-lip reference provider: ruby-lsp (RECOMMENDED default for Ruby/Rails)
+#
+# ruby-lsp (https://github.com/Shopify/ruby-lsp) is Shopify-maintained, ships
+# a Prism-based indexer, and is the provider this reference config was
+# smoke-tested against (see providers/README.md "Live smoke evidence").
+#
+# Usage:
+#   kb-lip --config providers/ruby-lsp.toml
+#
+# Then point kb-code-server at it via [[intel.providers]] in kb-code.toml —
+# see providers/README.md for the exact block and the operator steps.
+#
+# --- Prerequisites -----------------------------------------------------
+#
+# 1. Install ruby-lsp for the SAME Ruby the target repo uses (its
+#    .ruby-version / Gemfile `ruby "x.y.z"` line):
+#
+#      gem install ruby-lsp
+#
+#    If you manage Rubies with mise/rbenv/rvm, install the gem under the
+#    interpreter version that matches the repo, not just your default
+#    system ruby — a version mismatch makes ruby-lsp's own `bundle install`
+#    for its composed bundle (below) fail outright with
+#    `Bundler::RubyVersionMismatch`.
+#
+# 2. RECOMMENDED: add ruby-lsp (and, for a Rails app, ruby-lsp-rails) to the
+#    target repo's own Gemfile development group:
+#
+#      group :development do
+#        gem "ruby-lsp", require: false
+#        gem "ruby-lsp-rails", require: false   # Rails-aware go-to-def:
+#                                                # resolves has_many/belongs_to,
+#                                                # AR attribute methods, and
+#                                                # other macro-generated code
+#                                                # that plain Prism parsing
+#                                                # can't see through.
+#      end
+#
+#    When ruby-lsp + ruby-lsp-rails are ALREADY direct Gemfile dependencies,
+#    ruby-lsp skips its "composed bundle" dance entirely and just uses the
+#    app's own bundle — the fastest, most reliable path. Without them,
+#    ruby-lsp builds a SEPARATE shadow bundle under `<repo>/.ruby-lsp/`
+#    (gitignored, self-managed) mirroring the app's Gemfile.lock, which
+#    means `bundle install`-equivalent network/compile work on first launch
+#    (and again whenever the lockfile changes) — this is the "composed
+#    bundle" mode; expect the FIRST kb-lip start against a fresh repo to be
+#    slow (minutes, if the Gemfile.lock pulls in native extensions or
+#    private git sources) and command it must be able to reach: Ruby gems
+#    from rubygems.org and any git-sourced gems in the Gemfile.
+#
+# 3. `workspace_root` below MUST be an ABSOLUTE path to the target repo's
+#    root (where its Gemfile lives) — it is a PLACEHOLDER; the operator
+#    edits it per deployment. kb-lip does not templating/expand `~` or env
+#    vars, so write the real absolute path.
+
+lang_ids = ["ruby"]
+
+# Plain `ruby-lsp` (no args) starts the server over stdio, its default mode
+# — see `ruby-lsp --help`. If your Ruby is managed by mise/rbenv/asdf and
+# `ruby-lsp` isn't first on PATH for the repo's Ruby version, point
+# `command` at the version-pinned binary instead, e.g. for mise:
+#   command = ["mise", "exec", "ruby@3.4.8", "--", "ruby-lsp"]
+command = ["ruby-lsp"]
+
+# PLACEHOLDER — the operator must set this to the real repo root before
+# running kb-lip. Example: "/home/user/code/my-rails-app".
+workspace_root = "/CHANGE/ME/to/the/repo/root"
+
+port = 4841
+
+# initializationOptions passed verbatim in the LSP `initialize` request.
+# Kept intentionally minimal — kb-lip's lip/1 surface never calls formatting
+# endpoints (design-lip.md: "no code actions, no rename, no formatting:
+# kb-code is a reader" — SUPERSEDE NOTE, operator ratified 2026-08-28,
+# design-s2.md §S2-C: the "no code actions" half of that refusal is
+# REVERSED, kb-lip now also speaks POST /lip/code-actions; rename,
+# formatting, and workspace/executeCommand remain refused), so formatting
+# is left at ruby-lsp's own defaults rather than tuned here. `diagnostics
+# = true` is explicit because /lip/diagnostics depends on ruby-lsp
+# actually publishing `textDocument/publishDiagnostics`.
+[initialization_options]
+diagnostics = true
+# "auto" lets ruby-lsp pick up the repo's own linter config (rubocop.yml
+# etc) if present; irrelevant to lip/1 (no formatting endpoint) but harmless
+# to leave at the default.
+formatter = "auto"
+
+# Capped exponential backoff for restarting the ruby-lsp child if it
+# crashes. ruby-lsp's own composed-bundle bootstrap can be slow on a cold
+# repo (see prerequisite #2 above) — the defaults here are kb-lip's own
+# (200ms initial, 30s cap, x2 multiplier) and are usually fine unqualified;
+# raise `max_ms` if your repo's composed-bundle install is consistently
+# slower than that.
+[restart_backoff]
+initial_ms = 200
+max_ms = 30000
+multiplier = 2.0
+
+# How long POST /lip/diagnostics waits for the FIRST publishDiagnostics on a
+# freshly-opened doc, in milliseconds. Hard-capped at 2000 by kb-lip
+# regardless of what's written here (config can only lower it, never raise
+# it past the ceiling) — see crates/kb-lip/src/config.rs.
+diagnostics_wait_ms = 2000

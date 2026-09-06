@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Share, fleet, tokens, self-host, and CLI overview for kb.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, share, fleet, self-host, cli, ops">
+<title>Operate · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="operate.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/operate.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html">Concepts</a>
+  <a href="search.html">Search</a>
+  <a href="web.html">Web reader</a>
+  <a href="comments.html">Comments</a>
+  <a href="agent.html">Memory &amp; sessions</a>
+  <a href="organize.html">Lists &amp; notes</a>
+  <a href="operate.html" aria-current="page">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">08 · Day-to-day ops</p>
+  <h1>Operate</h1>
+  <p class="lede">Publish a scrubbed export, watch a fleet, hold a token, and keep the index healthy — without leaving the CLI or SPA Settings.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#share">Share and export</a></li>
+    <li><a href="#fleet">Fleet monitoring</a></li>
+    <li><a href="#tokens">Tokens and identity</a></li>
+    <li><a href="#health">Health and index lifecycle</a></li>
+    <li><a href="#cli">CLI at a glance</a></li>
+    <li><a href="#authoring">Authoring tip</a></li>
+  </ol>
+</nav>
+
+<section id="share">
+<h2>Share and export</h2>
+<p><code>kb share</code> publishes a file or folder to a static host (Cloudflare Pages + Access by default, or GitHub Pages with <code>--public</code>), or writes a self-contained offline bundle.</p>
+<pre><code>kb share path/to/doc.html --gate email:example.com
+kb share path/to/folder --public
+kb share --list "Q3 design pass" --local ./bundle.zip
+kb share path/to/doc.html --page ./out.html     # single scrubbed page
+kb share list
+kb share revoke &lt;name&gt;</code></pre>
+<div class="note warn">
+  <strong>Export always strips <code>&lt;template id="kb-prompt"&gt;</code></strong> — your private generation contract does not leave with the artifact. <code>--no-scrub</code> is a loud opt-out. <code>--with-comments</code> publishes otherwise-private review state; use deliberately.
+</div>
+<p><code>kb download</code> streams raw source or a folder/kb zip for local use without deploying.</p>
+</section>
+
+<section id="fleet">
+<h2>Fleet monitoring</h2>
+<p>The TUI is retired. Use:</p>
+<pre><code>kb fleet status              # health sweep over ~/.config/kb/daemons.toml
+kb events --follow           # live SSE tail (Last-Event-ID resume)
+kb status
+kb metrics
+kb pause / kb resume / kb reindex</code></pre>
+<p>SPA <strong>Settings</strong> carries Overview / Pipeline / Traffic / Errors / Live pages for the same signals. Multi-daemon lists live in <code>daemons.toml</code> (CLI) and browser settings (SPA).</p>
+</section>
+
+<section id="tokens">
+<h2>Tokens and identity</h2>
+<pre><code>kb token generate
+kb token rotate
+kb token show
+kb token issue alice           # per-user registry token (username positional)
+kb token revoke alice          # drop that user's registry line(s)
+kb whoami
+kb users</code></pre>
+<p>Loopback bypasses bearer checks. Non-loopback requires <code>Authorization: Bearer …</code> (or the configured header). Identity resolves once per request for attribution; it is not a permission system — see <a href="comments.html#identity">Comments → identity</a>.</p>
+</section>
+
+<section id="health">
+<h2>Health and index lifecycle</h2>
+<pre><code>kb daemon doctor
+kb backup &lt;kb&gt;
+kb restore …
+kb reindex --kb NAME
+kb reset --kb NAME
+kb compact --kb NAME
+kb exclude …                 # per-file exclusions
+kb config show | validate | edit</code></pre>
+
+<h3>Where files live</h3>
+<ul>
+  <li><strong>Config</strong> — <code>~/.config/kb/kb.toml</code>, bearer token at <code>~/.config/kb/token</code>, fleet list at <code>~/.config/kb/daemons.toml</code></li>
+  <li><strong>State</strong> — per-kb sqlite, lance vectors, and <code>.review/</code> under the XDG state dir (typically <code>~/.local/state/kb/&lt;kb&gt;/</code>)</li>
+  <li><strong>Models</strong> — embedding weights under the XDG cache dir (<code>…/kb/models/</code>)</li>
+  <li><strong>Overrides</strong> — <code>KB_HOME</code>, or <code>KB_STATE_DIR</code> / <code>KB_CONFIG_DIR</code> / <code>KB_CACHE_DIR</code></li>
+  <li><strong>Dim mismatch wipe</strong> — stop the daemon, remove <code>$STATE/&lt;kb&gt;/lance/</code>, restart</li>
+</ul>
+
+<div class="tldr">
+  <h2>Production checklist</h2>
+  <ul>
+    <li>Keep the daemon on <code>127.0.0.1</code>; put Traefik/Caddy/nginx with TLS in front</li>
+    <li>Bearer token present; never run a public bind with <code>KB_ALLOW_NO_AUTH</code> unless the proxy alone is the gate</li>
+    <li>Set <code>artifact_host_suffix</code> (wildcard cert for <code>*.artifacts.…</code>) and <code>parent_origin</code> to the SPA origin</li>
+    <li><code>trusted_proxies</code> only when the proxy reaches the daemon off-loopback (e.g. Docker bridge)</li>
+    <li>Optional per-kb outbound scrub strips <code>kb-prompt</code> + redactions for non-loopback artifact requests; <code>kb share</code> always strips the prompt on export</li>
+    <li>Back up state regularly (sqlite + lance + <code>.review</code>)</li>
+  </ul>
+</div>
+</section>
+
+<section id="cli">
+<h2>CLI at a glance</h2>
+<p>Run <code>kb tools</code> for the machine-readable full manifest. High-traffic verbs:</p>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Area</th><th>Verbs</th></tr></thead>
+  <tbody>
+    <tr><td>Lifecycle</td><td><code>daemon</code> · <code>add</code> · <code>status</code> · <code>reindex</code> · <code>reset</code> · <code>backup</code></td></tr>
+    <tr><td>Find</td><td><code>search</code> · <code>find</code> · <code>get</code> · <code>cat</code> · <code>read</code></td></tr>
+    <tr><td>Review</td><td><code>comments …</code> · <code>reading</code></td></tr>
+    <tr><td>Agent</td><td><code>remember</code> · <code>recall</code> · <code>why</code> · <code>recollect</code> · <code>sessions …</code></td></tr>
+    <tr><td>Organize</td><td><code>list …</code> · <code>notes …</code> · <code>backlinks</code></td></tr>
+    <tr><td>Map</td><td><code>atlas …</code> · <code>related</code> · <code>similar</code></td></tr>
+    <tr><td>Publish</td><td><code>share</code> · <code>download</code></td></tr>
+    <tr><td>Fleet</td><td><code>fleet</code> · <code>events</code> · <code>metrics</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Every daemon-touching verb accepts <code>--daemon URL</code> (default <code>http://127.0.0.1:4000</code>) and reads the bearer token automatically.</p>
+</section>
+
+<section id="authoring">
+<h2>Authoring must-knows</h2>
+<p>Artifacts that index and comment well share a short contract (scaffold with <code>kb new --template … --title …</code>):</p>
+<ul>
+  <li>A real, human-readable <code>&lt;title&gt;</code> matching the single <code>&lt;h1&gt;</code> — primary search field and gallery card title.</li>
+  <li>Clean <code>&lt;h2&gt;</code>/<code>&lt;h3&gt;</code> hierarchy with <strong>stable kebab <code>id</code>s</strong> (no UUIDs or timestamps) so section comment anchors survive regen.</li>
+  <li><code>&lt;meta name="kb-tags"&gt;</code> and <code>&lt;meta name="kb-category"&gt;</code> for facets.</li>
+  <li>Execution contract inside <code>&lt;template id="kb-prompt"&gt;</code>, capped at 8&nbsp;KB — indexed locally, stripped on public share/export.</li>
+  <li>Sandbox-safe: no <code>&lt;base href&gt;</code>, no <code>target="_top"</code>, no <code>window.parent</code> reach-arounds (parent SPA is cross-origin).</li>
+</ul>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="organize.html"><span class="dir">Previous</span>Lists &amp; notes</a>
+  <a class="next" href="index.html"><span class="dir">Back</span>Guide home</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a> · standalone under <code>docs/guide/</code></footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"ok4normal1","timestamp":"2026-08-24T12:00:00.000Z","cwd":"/tmp/kb-omp-fixture","title":"normal exit"}
+{"type":"message","id":"n1","parentId":null,"timestamp":"2026-08-24T12:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}
+{"type":"message","id":"n2","parentId":"n1","timestamp":"2026-08-24T12:01:01.000Z","message":{"role":"assistant","model":"openrouter/stealth/ox-alpha","content":[{"type":"text","text":"hi there"}]}}
+{"type":"custom","customType":"session_exit","id":"nexit1","parentId":"n2","timestamp":"2026-08-24T12:01:02.000Z","data":{"reason":"dispose","kind":"normal","recordedAt":"2026-08-24T12:01:02.000Z"}}

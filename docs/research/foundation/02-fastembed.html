@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Embeddings stack research for kb — fastembed-rs, candle, ort, ollama, model selection, bundling strategy.">
+<title>02 · Embeddings — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="01-lancedb.html">01 · Storage</a>
+      <a href="02-fastembed.html" class="is-current">02 · Embeddings</a>
+      <a href="03-notify.html">03 · Watcher</a>
+      <a href="04-sse-axum.html">04 · SSE</a>
+      <a href="05-ratatui.html">05 · TUI</a>
+      <a href="../surfaces/06-iframe.html">06 · Iframe</a>
+      <a href="../surfaces/07-html-effectiveness.html">07 · HTML</a>
+      <a href="../surfaces/08-prior-art.html">08 · Prior art</a>
+      <a href="../surfaces/09-comments.html">09 · Comments</a>
+      <a href="../surfaces/10-web-gallery.html">10 · Web Gallery</a>
+      <a href="../surfaces/11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 02
+    <span>·</span>
+    <span class="meta">Embeddings stack</span>
+    <span>·</span>
+    <span class="meta">Confidence MEDIUM → HIGH</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>Keep</em> fastembed-rs + bge-small.<br>Plan the dynamic-link path now.</h1>
+  <p class="lede">The proposed stack — fastembed-rs with bge-small-en-v1.5 (384-dim) — is the right default for kb's 10k–50k single-user corpus. The risks are <em>not</em> in model quality. They are in onnxruntime's ~15 MB shared-library bundle and fastembed's first-run download UX in air-gapped installs. Both are solvable today.</p>
+</section>
+
+<section class="section section-tight" id="decisions">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Decisions · 2026-05-11 (cluster 3: embeddings — amended post deep-review)</span>
+    <p style="margin:0 0 .55rem;font-size:.95rem;line-height:1.55">Open-points cluster 3 of 4 landed. Embedding stack confirmed with multi-model support shipping from v0.1. Post-review additions: dimension-migration sequence (lance bug #3136), model registry source, kb.toml schema consolidation, edge cases for the CLI.</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><strong>Default model: <code>bge-small-en-v1.5</code></strong> (384-dim, MIT). Prose-tuned, the right baseline for the canon.</li>
+      <li><strong>Multi-model from v0.1 — CLI surface:</strong>
+        <ul style="margin:.35rem 0 .35rem 1.2rem;list-style:disc">
+          <li><code>kb model list</code> — installed + downloadable from the compiled-in fastembed enum (OSS-licensed subset: bge-*, gte-*, mxbai-*, nomic-v1.5, jina-v2-base-code, MiniLM/mpnet).</li>
+          <li><code>kb model download &lt;name&gt; [--from &lt;path-or-url&gt;]</code> — fetches to XDG cache; <code>--from</code> accepts a local <code>.tar.gz</code> sidecar for air-gapped installs.</li>
+          <li><code>kb model set &lt;name&gt;</code> [<code>--kb &lt;kb&gt;</code>] — per-kb selection. Refuses if the named model is not installed unless <code>--yes</code> (then auto-downloads). Refuses if the daemon is mid-index. On dimension change, prints re-embed cost estimate (single-digit minutes per 10 k docs, scaling with chunk count × model latency) and requires explicit confirmation.</li>
+          <li><code>kb model rm &lt;name&gt;</code> — exits non-zero if any kb's <code>embedding_model</code> references it (use <code>--force</code> to break that reference; affected kbs refuse to start until reconfigured).</li>
+        </ul>
+        CLI-only in v0.1 — writes <code>~/.config/kb/kb.toml</code> directly; daemon picks up changes via file-watcher (topic 03) and either restarts the affected kb's indexer or signals reload. HTTP surfacing (read + switch via SPA Settings) deferred to v0.2.
+      </li>
+      <li><strong>Model registry source.</strong> v0.1: compiled-in via the <code>fastembed::EmbeddingModel</code> enum, filtered to the OSS-licensed subset. Custom HuggingFace models via <code>[models.custom]</code> in <code>kb.toml</code> deferred to v0.2.</li>
+      <li><strong>Documented switch candidate: <code>jina-embeddings-v2-base-code</code></strong> (768-dim, Apache 2.0). For code-heavy kbs.</li>
+      <li><strong>Dimension migration sequence (lance #3136 workaround).</strong> Changing model dimension is not a column type cast in lance; bug #3136 reports CastError when adding columns past an embedding column. Sequence: (1) refuse to start re-embed if the daemon's lance version is in the #3136 affected range; (2) build <code>chunks_v&lt;n+1&gt;</code> as a sibling table at the new dimension (avoid <code>add_columns</code> on the old table); (3) re-embed in batches, emit <code>index.file</code> events for progress; (4) atomic manifest swap to the new table; (5) drop the old table. Documented as a v0.1 deliverable when <code>kb model set</code> is invoked with a dim-changing target.</li>
+      <li><strong>XDG cache: <code>~/.cache/kb/models/&lt;model-name&gt;/&lt;hf-revision&gt;/</code></strong> (revision-keyed so two daemons pinned to different revisions coexist). <code>$KB_MODELS_DIR</code> overrides the root. Concurrent downloads use a flock'd <code>.lock</code> file; a second daemon waiting on a partial download tails it.</li>
+      <li><strong>Resumable downloads.</strong> Partial files keep a <code>.part</code> suffix; <code>kb model download --resume</code> picks up where it stopped.</li>
+      <li><strong>onnxruntime via <code>load-dynamic</code></strong>: use system <code>libonnxruntime.so</code> when present; bundled fallback.</li>
+      <li><strong>Embedding input excludes <code>&lt;template id="kb-prompt"&gt;</code>.</strong> DOM walk extraction: see <a href="../surfaces/07-html-effectiveness.html">topic 07 §D</a>. Excluded tags: <code>&lt;script&gt;</code>, <code>&lt;style&gt;</code>, <code>&lt;template&gt;</code> — the kb-prompt template falls under the last exclusion automatically. BM25 still indexes the prompt as a separate filterable field (<a href="01-lancedb.html#decisions">topic 01 Decisions</a>).</li>
+    </ul>
+    <h4 style="margin:.8rem 0 .4rem;font-size:.78rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)">Canonical kb.toml schema (this page owns it)</h4>
+    <p style="margin:0 0 .35rem;font-size:.92rem;line-height:1.55">Fragments live in topics 01 / 02 / 07 / 10 / 11; this is the consolidated view. Topic 02 is the source-of-truth because it has the most config-cluster pages.</p>
+<pre style="margin:0;font-size:.78rem">~/.config/kb/kb.toml             # per-daemon: this daemon's own config
+─────────────────────────────────────────────
+[ui]                       # SPA prefs served by THIS daemon (topics 10 §O″, 11 §B.1)
+theme       = "system"     # dark | light | system
+accent      = "#7c8cff"
+density     = "comfortable"
+
+[ui.daemons.work-laptop]   # SPA's federated-daemon registry (topic 10 §O″)
+endpoint    = "http://localhost:4000"
+# Multiple [ui.daemons.&lt;name&gt;] entries for federation.
+
+[outbound]                 # privacy scrub layer (topic 07, v0.2+)
+strip_kb_prompt = true
+redactions      = []       # list of regex strings
+
+[kb.work]                  # per-kb scalars
+embedding_model = "bge-small-en-v1.5"
+hybrid_k        = 60       # RRF k parameter (topic 01)
+
+[kb.work.ui]               # per-kb SPA prefs (last viewed, last filter)
+last_view       = "grid"
+last_tag_filter = "rust"
+─────────────────────────────────────────────
+~/.config/kb/daemons.toml         # TUI client-side daemon list (topic 05)
+─────────────────────────────────────────────
+[daemon.work-laptop]       # one section per daemon the TUI knows about
+endpoint    = "http://localhost:4000"
+
+[daemon.archive-nas]
+endpoint    = "http://nas.local:4000"
+─────────────────────────────────────────────</pre>
+    <p style="margin:.4rem 0 0;font-size:.88rem;line-height:1.55;color:var(--ink-3)"><strong>Two TOML files, two roles.</strong> <code>kb.toml</code> is read by the daemon and SPA — daemon-side config + per-kb settings + SPA preferences served via <code>/api/settings</code>. <code>daemons.toml</code> is read only by the TUI — the user's list of daemons across machines they want to switch between via <span class="kbd">D</span>. The SPA's federated-daemon registry lives in <code>kb.toml [ui.daemons.&lt;name&gt;]</code> (per topic 10 §O″) because the SPA inherits its server from the daemon hosting it; the TUI runs as a separate process and needs its own list.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>Keep fastembed-rs 5.12 + bge-small-en-v1.5 (MIT, 384-dim, 33M params).</strong> Use <code>ort</code> with <code>load-dynamic</code> so the kb binary doesn't statically link onnxruntime. Cache models in <code>~/.cache/kb/models/</code>. Add a <code>kb model download</code> subcommand for air-gapped pre-fetch. Implement BM25 + vector + RRF (k=60) hybrid from day one. Two switch candidates worth a config flag: <code>nomic-embed-text-v1.5</code> (matryoshka, 8k context) and <code>jina-embeddings-v2-base-code</code> (768, 30 languages). Avoid <code>jina-v3</code> (CC BY-NC) and <code>EmbeddingGemma</code> (Gemma Terms — non-OSI).</p>
+    <div class="badges">
+      <span class="conf conf--high">Decision · HIGH</span>
+      <span class="conf conf--med">UX risk · MED (offline path)</span>
+      <span class="conf conf--med">Quality fallback · MED (defer matryoshka)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. fastembed-rs · current state</div>
+    <h2>Healthy crate, dual backend, primary is ort</h2>
+  </div>
+
+  <div class="prose">
+    <p>fastembed-rs is maintained by Anush008. Latest stable is <strong>5.12.0 (2026-03-05)</strong>, with releases roughly every 2–4 weeks through 2025/early 2026 (5.0.0 in July 2025, 5.5.0 December 2025, 5.10.0 February 2026). Cadence is healthy and Qdrant uses it as their reference Rust embedding library, which is the closest the ecosystem has to a bus-factor signal.</p>
+
+    <h3>Backend</h3>
+    <p>Until 2024 it was a pure ONNX wrapper. In 2025 it became hybrid:</p>
+    <ul>
+      <li><strong>Primary:</strong> <code>ort = 2.0.0-rc.11</code> (pykeio/ort, the maintained ONNX Runtime Rust binding). Used for BGE, MiniLM, MPNet, GTE, MXBai, Nomic v1/v1.5, E5, Jina v2, EmbeddingGemma — i.e. everything kb is likely to consider.</li>
+      <li><strong>Optional Candle backend</strong> (feature-gated): <code>candle-core = 0.9.1</code>, used only for architectures ONNX can't faithfully export — <code>nomic-embed-text-v2-moe</code> (MoE gating layer can't be JIT-traced) and <code>Qwen3-Embedding-{0.6B, 4B}</code>. Enabled via <code>features = ["nomic-v2-moe"]</code> or <code>["qwen3"]</code>.</li>
+    </ul>
+    <p>For kb with bge-small, <strong>only ort is involved</strong>; you don't pay the Candle compile cost.</p>
+
+    <h3>CPU latency (bge-small-en-v1.5, 384-dim, ~33M params)</h3>
+    <p>The web doesn't publish a project-specific fastembed-rs M-series benchmark. Bracketing numbers from comparable setups:</p>
+    <ul>
+      <li>TEI on a 4-core CPU matches hosted-API latency for bge-base-v1.5 (Milvus 2025 benchmark).</li>
+      <li>Comparable models (e5-small, all-MiniLM-L6-v2, mpnet-base-v2) clock <strong>&lt;30 ms per embed</strong> in real-time benchmarks.</li>
+      <li>For bge-small specifically, expect <strong>~5–15 ms per embed</strong> at 512 tokens on M-series Apple silicon (CoreML EP) and <strong>~15–40 ms on modern x86 CPU</strong> (AVX2/AVX-512). Batched throughput on CPU lands near <strong>300–800 embeddings/sec</strong> for short inputs.</li>
+      <li>bge-base-v1.5 (110M) and mxbai-large (335M) are roughly 3× and 10× slower respectively.</li>
+    </ul>
+    <div class="note"><b>Action:</b> these should be re-measured with <code>criterion</code> once the daemon exists. Do not ship without a project-local benchmark — published numbers vary 2–5× by tokenizer config and runtime.</div>
+    <div class="spike-update" style="margin:.6rem 0;padding:.55rem .8rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-fastembed</code> measured bge-small-en-v1.5 on Intel i7-7700 Kaby Lake (4c/8t, no AVX-VNNI, x86_64 Arch Linux, system onnxruntime 1.24.4 via <code>ort-load-dynamic</code>): single-embed <strong>p50 = 169 ms</strong> for ~500-token input (3.4× over the 15–40 ms x86 prediction), and batched throughput collapses to <strong>~5.6 emb/sec</strong> regardless of batch size (50–100× under the 300–800 emb/sec prediction — batching gives no benefit on this hardware). Per-doc time at batch 8 (189 ms) ≈ batch 32 (177 ms) ≈ single-embed (169 ms). Batch 128 was killed at 30 min wallclock (cache-thrash). Cold-start (model cached) 3.36 s — within the 5 s ceiling. <strong>Read:</strong> the research's x86 bounds are aspirational and assume Ice Lake / Tiger Lake or newer (AVX-VNNI). On older hardware, production must plan for slow embedding: a 50k-artifact full reindex ≈ 140 min, not 1–3 min. Incremental indexing + SSE progress UI are essential. Cap production batch size at 32 max. Full context: <a href="../../spike-findings.md#spike-fastembed--2026-05-11">docs/spike-findings.md</a>.</div>
+
+    <h3>Model download / first-run UX</h3>
+    <p>fastembed downloads from HuggingFace (or a Qdrant-mirrored GCS bucket as fallback). The Rust crate stores files in a cache dir controllable via the <code>cache_dir</code> builder field; default is <code>local_cache</code> in CWD — <strong>this is bad</strong>; kb should set it to <code>~/.cache/kb/models/</code> explicitly. Known offline issues:</p>
+    <div class="spike-update" style="margin:.5rem 0;padding:.55rem .8rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-fastembed</code> confirmed the bad default in stronger terms: the actual directory name is <code>&lt;cwd&gt;/.fastembed_cache/</code> (not <code>local_cache</code> as the docs imply, and decidedly not <code>~/.cache/huggingface/hub/</code>). Models silently land wherever the daemon happens to be invoked from. <strong>Production must pass <code>InitOptions::new(...).with_cache_dir(xdg::cache_home("kb/models"))</code> at every construction site</strong> — there is no global override. Full context: <a href="../../spike-findings.md#spike-fastembed--2026-05-11">docs/spike-findings.md</a>.</div>
+    <ul>
+      <li><strong>Issue #30</strong> (still partially open): cached model is re-validated against HuggingFace on each load even when offline, blocking startup.</li>
+      <li><code>HF_HUB_OFFLINE=1</code> falls through to a GCS download attempt instead of using the local cache (qdrant/fastembed #615).</li>
+      <li><strong>Workaround:</strong> kb should pre-download via its installer/init step, then set <code>HF_HUB_OFFLINE=1</code> and point <code>cache_dir</code> directly at the snapshot folder, and accept that first-run requires network.</li>
+    </ul>
+
+    <h3>Bundled binary size impact</h3>
+    <p>ort/ONNX Runtime CPU shared lib is <strong>~10–20 MB</strong> for Release builds (Linux <code>.so</code>, macOS <code>.dylib</code>); CUDA/TensorRT EPs blow this past 100 MB but are irrelevant here. With <code>ort</code> features <code>default-features = false</code> plus <code>minimal-build</code>, you can shave further. With <code>load-dynamic</code> you skip the link dependency entirely and dlopen at runtime — recommended for kb so the binary can ship without onnxruntime and pull it from a sidecar dir.</p>
+
+    <h3>Default model and quantized variants</h3>
+    <p>Confirmed: <code>BAAI/bge-small-en-v1.5</code> is still the default. <strong>Quantized variants</strong> are available — append <code>Q</code> to the enum (<code>EmbeddingModel::BGESmallENV15Q</code>). Currently 6 models have dynamic quantization: gte-base/large-en-v1.5, mxbai-embed-large-v1, nomic-embed-text-v1.5, all-MiniLM-L12-v2, all-MiniLM-L6-v2.</p>
+    <div class="spike-update" style="margin:.5rem 0;padding:.55rem .8rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-fastembed</code> measured <code>BGESmallENV15Q</code> against <code>BGESmallENV15</code> on Intel i7-7700 Kaby Lake (no AVX-VNNI): quantised is <strong>slower</strong> — 199 ms p50 vs 169 ms p50 for the same ~500-token input. The fp32 model is 127 MB on disk; the "quantised" (<code>bge-small-en-v1.5-onnx-Q</code>) is 64 MB — closer to mixed-precision than pure int8. <strong>On pre-VNNI CPUs (anything before Ice Lake / Tiger Lake / Zen 4), quantised is a memory-footprint win only, not a latency win.</strong> Production <code>kb model {download,set}</code> CLI should default to fp32 and document the quant variant as memory-constrained-host-only. Full context: <a href="../../spike-findings.md#spike-fastembed--2026-05-11">docs/spike-findings.md</a>.</div>
+  </div>
+</section>
+
+<section class="section section-wide section-tight">
+  <div class="section-head">
+    <div class="num">B. Direct alternatives</div>
+    <h2>Three serious, two non-starters</h2>
+  </div>
+
+  <ol class="findings">
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Candle</b> · pure-rust ML</div>
+        <h3>Smaller, slower, defer</h3>
+        <p>Native Rust ML framework from HuggingFace. Loads safetensors directly, supports BERT/JinaBERT/T5 (covers BGE, MiniLM, mpnet, jina-v2, mxbai). Optimised CPU backend with optional MKL / Accelerate.</p>
+        <p><strong>Pros:</strong> pure Rust, no onnxruntime shared lib (binary stays small — Candle compiles into the crate), can use <em>any</em> HF model without ONNX export, smaller surface area. <strong>Cons:</strong> 3–5× slower than ONNX Runtime in published benchmarks; less production-hardened. The <code>sentence-transformers-rs</code> crate (jwnz) wraps it with 15+ pre-built BGE/MiniLM/mpnet models if you want a higher-level API.</p>
+        <p>For kb's "10k–50k docs, indexed once, queried daily" profile, Candle's slower indexing is acceptable. If you anticipate re-indexing churn, ort wins.</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>ort directly</b> · skip the wrapper</div>
+        <h3>Save 200 LOC, lose model registry</h3>
+        <p>Skip fastembed-rs and call <code>ort</code> yourself with a manually downloaded ONNX model. ~150–300 LOC of glue (tokenizer config parse, attention mask, mean-pool + L2 norm), and you reinvent fastembed's model registry. <code>ort 2.0.0-rc.12</code> (March 2026) is stable enough.</p>
+        <p><strong>Verdict:</strong> start with fastembed-rs; drop to <code>ort</code> only if fastembed's first-run UX or model registry becomes a constraint.</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>ollama-rs</b> · subprocess Ollama</div>
+        <h3>Decisively wrong for kb</h3>
+        <p><code>ollama-rs</code> wraps the Ollama HTTP API; you'd call <code>nomic-embed-text</code> via <code>http://localhost:11434/api/embed</code>.</p>
+        <p><strong>Pros:</strong> zero ONNX in the kb binary, model management delegated. <strong>Cons:</strong> requires the user to install and run Ollama — a heavy external dep for a "single-user app." Adds 200 MB+ of process memory always-on, 2-process architecture, network hop adds 5–15 ms per query, breaks the "self-contained daemon" pitch. <strong>Decisively worse</strong>.</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>OpenAI / Voyage / Cohere</b> · paid API</div>
+        <h3>Out of scope, with one footnote</h3>
+        <p>The brief is "self-contained, offline-friendly, single-user." Sending document text to a paid API per index/query violates the offline goal and the privacy story. <strong>Confirmed exclusion.</strong></p>
+        <p>Footnote worth keeping: Voyage's <code>voyage-code-3</code> is the current SOTA for code retrieval (beats OpenAI v3-large by ~14% on 32 code datasets). If a "cloud sync / cloud index" mode appears later, this is a strong rerank-pass option for opt-in users — but never the default offline path.</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>rust-bert</b> · old guard</div>
+        <h3>Skip</h3>
+        <p>Recent issues from April/May 2025 sit open without resolution; commit cadence is slow. Has ONNX support via the same <code>ort</code> crate. <strong>No advantage over fastembed-rs</strong>, plus a heavier/slower API.</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">C. Model selection</div>
+    <h2>The 384 vs 768 question is a quality choice, not a storage one</h2>
+    <p class="deck">For 50k docs at 5 chunks each = 250k vectors, even fp32 1024-dim only costs ~1 GB raw. With LanceDB IVF-PQ it's sub-100 MB. Pick the model on quality.</p>
+  </div>
+
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Embedding model field guide · 2026-Q2</caption>
+      <thead>
+        <tr><th>Model</th><th>Dim</th><th>Params</th><th>MTEB</th><th>Latency (rel.)</th><th>License</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>bge-small-en-v1.5</strong></td><td>384</td><td>33M</td><td>~62</td><td>1× (baseline)</td><td>MIT</td><td>Current default; English-only</td></tr>
+        <tr><td>bge-base-en-v1.5</td><td>768</td><td>110M</td><td>~64</td><td>~3×</td><td>MIT</td><td>Best ratio if 384 isn't enough</td></tr>
+        <tr><td>bge-large-en-v1.5</td><td>1024</td><td>335M</td><td>~64.2</td><td>~10×</td><td>MIT</td><td>Marginal MTEB gain over base</td></tr>
+        <tr><td>gte-base-en-v1.5</td><td>768</td><td>137M</td><td>~64.1</td><td>~3×</td><td>Apache-2.0</td><td>Alibaba; Q variant</td></tr>
+        <tr><td>gte-large-en-v1.5</td><td>1024</td><td>434M</td><td>~65.0</td><td>~12×</td><td>Apache-2.0</td><td>Q variant</td></tr>
+        <tr><td>mxbai-embed-large-v1</td><td>1024</td><td>335M</td><td>64.68</td><td>~10×</td><td>Apache-2.0</td><td>Matryoshka + binary/int8 quant</td></tr>
+        <tr><td><strong>nomic-embed-text-v1.5</strong></td><td>64–768</td><td>137M</td><td>62.28 @768<br>61.04 @256</td><td>~3×</td><td>Apache-2.0</td><td>Variable dim, 8k context</td></tr>
+        <tr><td>jina-embeddings-v3</td><td>32–1024</td><td>570M</td><td>~65 multilingual</td><td>~15×</td><td><span class="n">CC BY-NC 4.0</span></td><td>Non-commercial only — disqualifying</td></tr>
+        <tr><td><strong>jina-v2-base-code</strong></td><td>768</td><td>161M</td><td>top CodeNetSearch</td><td>~4×</td><td>Apache-2.0</td><td>8k context; 30 programming languages</td></tr>
+        <tr><td>EmbeddingGemma-300m</td><td>128–768</td><td>308M</td><td>top under 500M</td><td>~7×</td><td><span class="n">Gemma Terms</span></td><td>Non-OSI; legal review needed</td></tr>
+        <tr><td>nomic-embed-code</td><td>—</td><td>7B</td><td>SOTA code</td><td>~50×</td><td>Apache-2.0</td><td>Way too heavy for kb</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Storage impact: 384 vs 768 in lancedb</h3>
+    <p>For 50,000 documents with 5 chunks each = 250,000 vectors:</p>
+    <ul>
+      <li><strong>fp32 384-dim:</strong> 250k × 384 × 4 B = <strong>~366 MB</strong> raw vectors.</li>
+      <li><strong>fp32 768-dim:</strong> 250k × 768 × 4 B = <strong>~732 MB</strong> raw vectors.</li>
+      <li><strong>int8 PQ-compressed (16 sub-vectors):</strong> ~4 MB for 384, ~8 MB for 768.</li>
+    </ul>
+    <p>LanceDB's columnar Lance format plus IVF-PQ pushes both well under raw figures. Distance computation is O(dim) — 384 vs 768 is roughly <strong>2× faster</strong> brute-force, sub-millisecond at this scale either way. <strong>Verdict:</strong> at 10k–50k docs, storage is irrelevant (sub-GB even at 1024-dim). Pick the model on quality.</p>
+
+    <h3>Practical recommendation</h3>
+    <ol>
+      <li><strong>Default:</strong> <code>bge-small-en-v1.5</code> (384). Solid baseline, fast, English-only is fine for the common case, MIT.</li>
+      <li><strong>Config option for higher quality:</strong> <code>nomic-embed-text-v1.5</code> with matryoshka truncation. Embed at 768, store at 768 in lancedb, expose a "fast" query path that truncates to 256 with <code>F.layer_norm</code>. Apache-2.0, 8k context.</li>
+      <li><strong>Code-heavy corpora:</strong> <code>jina-embeddings-v2-base-code</code> (768, Apache-2.0, 8k context, 30 programming languages). Best open-source code-retrieval option fastembed-rs already supports.</li>
+      <li><strong>Avoid by default:</strong> jina-v3 (license), EmbeddingGemma (Gemma Terms — non-OSI), nomic-embed-code (7B is absurd for desktop), large/x-large generic models (10× cost for ~1 MTEB point).</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. Bundling strategy</div>
+    <h2>Download on first run, cache in XDG, dlopen onnxruntime</h2>
+  </div>
+
+  <div class="prose">
+    <h3>Option 1 (recommended) · download on first run</h3>
+    <ul>
+      <li>Model files in <code>$XDG_CACHE_HOME/kb/models/</code> (default <code>~/.cache/kb/models/</code>).</li>
+      <li><code>kb init</code> or <code>kb index</code> triggers download with a progress bar.</li>
+      <li>Daemon refuses to start if model missing and offline; <code>kb model download &lt;name&gt;</code> for explicit pre-fetch.</li>
+      <li>130 MB (bge-small) is fine to download — users tolerate this for <code>ollama pull</code>-style flows.</li>
+      <li><strong>Air-gapped install:</strong> ship a <code>kb-models.tar.gz</code> sidecar that extracts to the cache path; document the layout.</li>
+    </ul>
+
+    <h3>Option 2 · bundle ONNX in the binary</h3>
+    <ul>
+      <li><code>include_bytes!("model.onnx")</code> adds 130 MB (or 33 MB for int8/Q variant) to the binary.</li>
+      <li><strong>Pros:</strong> single-file install, fully offline by default. <strong>Cons:</strong> every architecture change forces re-download; users who want to swap models lose; 130 MB binary is ugly.</li>
+      <li>Acceptable only if the int8/Q variant is bundled — that's 33 MB which is tolerable.</li>
+    </ul>
+
+    <h3>Option 3 · split tier (defer to v2)</h3>
+    <p>Bundle a tiny fallback (e.g. Model2Vec static distillation of bge-base — ~30 MB, near-instant inference, slightly lower MTEB) so the daemon works immediately. First-run downloads the full model in the background, swaps in once ready. Most polished UX, most engineering work.</p>
+
+    <h3>onnxruntime distribution</h3>
+    <ul>
+      <li>Use <code>ort</code> with <code>load-dynamic</code> feature → kb binary doesn't link onnxruntime at compile time.</li>
+      <li><code>kb install-runtime</code> downloads <code>libonnxruntime.{so,dylib}</code> (15–20 MB) for the host platform from the official ONNX Runtime release tarball into <code>~/.local/share/kb/lib/</code>.</li>
+      <li>macOS arm64 + x86_64 + Linux x86_64 + Linux arm64 are the standard four. ONNX Runtime publishes signed binaries for all of them; macOS signing has been a recurring issue (microsoft/onnxruntime#16168) so verify before shipping.</li>
+      <li>Static linking is <em>possible</em> (<code>ORT_STRATEGY=system</code> + <code>ORT_LIB_PATH</code> to a from-source build with <code>--no-build_shared_lib</code>) but adds 30+ minute build times and Microsoft does not officially support it. Skip.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. Open questions</div>
+    <h2>Three live debates, three confident defaults</h2>
+  </div>
+
+  <div class="prose">
+    <h3>E.1 Is bge-small the right base for Claude-generated artifacts?</h3>
+    <p>Claude artifacts are mixed prose + code + ASCII diagrams. bge-small was trained on web text and is biased toward natural language; it'll handle prose well, treat code reasonably (BERT tokenisers don't choke on it but don't model it either), and do poorly on ASCII art (token-level meaningless). Options:</p>
+    <ul>
+      <li><strong>For the default:</strong> bge-small is fine. Code blocks are usually a minority of an artifact's volume; BM25 catches the exact-symbol queries vector search misses.</li>
+      <li><strong>For code-heavy corpora:</strong> switch to <code>jina-embeddings-v2-base-code</code>. Same family fastembed-rs already supports, just a different model enum. Apache-2.0.</li>
+      <li><strong>For mixed corpora at scale:</strong> chunk by content type (prose vs. code-block) and embed each with the appropriate model. Adds complexity; defer.</li>
+    </ul>
+
+    <h3>E.2 Is matryoshka worth using?</h3>
+    <p>Yes, for the "fast filter / accurate rerank" pattern, but only if you'd use it.</p>
+    <ul>
+      <li>nomic-embed-text-v1.5 lets you embed at 768 and query at 256 by truncating + <code>F.layer_norm</code>. MTEB drops 1.24 points. 3× distance-compute speedup for 2% quality loss.</li>
+      <li>LanceDB IVF-PQ already provides a coarse-fine pattern on a single embedding, so matryoshka's win is marginal at 50k vectors. <strong>It becomes valuable above ~500k vectors</strong> where the brute-force fallback dominates.</li>
+      <li><strong>For kb v1: don't bother.</strong> Use a single 384-dim or 768-dim embedding throughout. Revisit if the corpus grows.</li>
+    </ul>
+
+    <h3>E.3 BM25 + vector with RRF — actually better than BM25 alone?</h3>
+    <p>For prose-heavy retrieval: yes, broadly confirmed. For code/identifier-heavy retrieval: BM25 alone often wins on exact-name queries, and vector adds noise. <strong>Hybrid with RRF</strong> (Cormack et al. CIKM 2009; canonical formula <code>score = 1/(rank + k)</code>, <code>k=60</code>) is the right default because:</p>
+    <ul>
+      <li>Score-agnostic (no normalisation headaches between unbounded BM25 and bounded cosine).</li>
+      <li>Degrades gracefully when one signal is wrong: if vector retrieval surfaces noise, BM25's high-precision results dominate, and vice versa.</li>
+      <li>The 2024 ACM TIS paper <em>"An Analysis of Fusion Functions for Hybrid Retrieval"</em> (Bruch et al.) shows weighted linear combination can beat RRF with corpus-specific tuning, but RRF is the safer default.</li>
+      <li>OpenSearch shipped RRF as default hybrid scoring in 2.19 (Feb 2025); Azure AI Search uses it for hybrid + multi-vector queries. Industry-standard choice.</li>
+    </ul>
+    <p><strong>For kb:</strong> BM25 (tantivy, or LanceDB-via-tantivy) + vector (lancedb) + RRF fusion (k=60). Skip cross-encoder reranking in v1 — at 50k docs the top-20 RRF results are good enough and rerankers add another model dependency. Add <code>bge-reranker-base</code> as an optional v2 quality knob.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <p><strong>Pin <code>fastembed = "5.12"</code></strong> with <code>default-features</code>. No qwen3 / nomic-v2-moe needed.</p>
+    <p>Use <code>ort</code> with <code>load-dynamic</code> so onnxruntime is dlopened from <code>~/.local/share/kb/lib/</code> rather than statically linked. Ship <code>kb install-runtime</code> that downloads the platform-appropriate shared lib (15–20 MB).</p>
+    <p>Set <code>cache_dir = ~/.cache/kb/models/</code> explicitly — do not accept the <code>local_cache</code> default in CWD. Add <code>kb model download &lt;name&gt;</code> for pre-fetching; require it in air-gapped installs.</p>
+    <p>Expose <code>--embedding-model</code> config with at minimum <code>bge-small-en-v1.5</code> (default), <code>nomic-embed-text-v1.5</code>, <code>jina-embeddings-v2-base-code</code>. <strong>Hard-code the dimension per model; re-create the lancedb index on switch — you can't mix dimensions in one table.</strong></p>
+    <p>Implement BM25 + vector + RRF fusion (<code>k=60</code>) for hybrid query. Defer matryoshka, cross-encoder rerankers, and EmbeddingGemma/jina-v3 (license issues) to a v2 conversation.</p>
+    <p>Add <code>criterion</code> benchmarks from day one: (a) embed latency for a 500-token chunk, (b) batched throughput at <code>batch=32</code>, (c) end-to-end query p50/p95.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">What would change this recommendation</span>
+    <ul>
+      <li>If kb grows past <strong>~500k vectors</strong> → switch to nomic-embed-text-v1.5 with matryoshka, query at 256-dim and rerank top-100 at 768-dim.</li>
+      <li>If the corpus is <strong>dominated by source code</strong> → make jina-embeddings-v2-base-code the default.</li>
+      <li>If a <strong>"cloud sync / cloud index" mode</strong> appears → add Voyage voyage-code-3 as an optional backend for opt-in users.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="01-lancedb.html"><span class="dir">← Prev</span><span class="ttl">01 · Storage layer</span></a>
+  <a class="next" href="03-notify.html"><span class="dir">Next →</span><span class="ttl">03 · File watcher</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · embeddings stack</p>
+      <p>Pre-implementation discussion artefact for the kb project. Sourced from 2025/2026 docs and benchmarks. Verify with a local <code>criterion</code> bench before locking in.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="01-lancedb.html">01 Storage</a></li>
+        <li><a href="03-notify.html">03 Watcher</a></li>
+        <li><a href="04-sse-axum.html">04 SSE</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://github.com/Anush008/fastembed-rs">fastembed-rs</a></li>
+        <li><a href="https://github.com/pykeio/ort">pykeio/ort</a></li>
+        <li><a href="https://huggingface.co/BAAI/bge-small-en-v1.5">bge-small-en-v1.5</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

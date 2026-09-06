@@ -1,0 +1,82 @@
+# syntax=docker/dockerfile:1.7
+#
+# REFERENCE image for kb-lip + rust-analyzer (design-lip.md's "can also live
+# in a different docker image; the end user must not have to look
+# elsewhere"). Mirrors Dockerfile.ruby's shape — see that file's own
+# top-of-file comment for the full rationale. As with Dockerfile.ruby:
+# NOTHING in CI builds this file (see justfile — no `ci-*` recipe references
+# it), so it is not covered by the pinned-digest discipline the root
+# Dockerfile documents. An operator adopting this for real should apply the
+# same digest-pinning to both FROM lines below before running it unattended,
+# and should re-check `RUST_ANALYZER_VERSION` below against
+# https://github.com/rust-lang/rust-analyzer/releases (date-tagged
+# releases; the value here was current when this file was written and WILL
+# go stale).
+#
+# Build (from the repo root, so the builder stage can see the whole
+# workspace — kb-lip is a Cargo workspace member, so `cargo build -p kb-lip`
+# needs the root Cargo.toml/Cargo.lock and every crate's Cargo.toml to
+# resolve, even though only kb-lip's own source ends up in the final image):
+#
+#   docker build -f Dockerfile.rust -t kb-lip-rust .
+#
+# Run (mount the target Rust repo read-only, point workspace_root at the
+# in-container mount path, publish the lip/1 port to loopback only — see
+# providers/README.md for the "how do I know it's actually protected"
+# discussion):
+#
+#   docker run --rm \
+#     -v /path/to/my-rust-app:/workspace:ro \
+#     -p 127.0.0.1:4845:4845 \
+#     kb-lip-rust
+#
+# The container's own providers/rust-analyzer.toml (baked in below,
+# workspace_root rewritten to /workspace) is the config ENTRYPOINT runs
+# with — override by bind-mounting a different config over /app/config.toml.
+
+# --- Builder: compile kb-lip -------------------------------------------
+FROM rust:1.96-trixie AS builder
+
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p kb-lip
+
+# --- Runtime: rust-analyzer (standalone binary) + the compiled kb-lip ---
+#
+# Smallest-honest path: rather than basing runtime on a full `rust:...`
+# image (which drags in rustc/cargo/the whole toolchain just to run ONE
+# already-compiled LSP binary), install rust-analyzer's own prebuilt
+# standalone release binary — it has no runtime deps beyond glibc, the same
+# reason kb-lip itself ships as a static-ish Rust binary. `rustup component
+# add rust-analyzer` (providers/rust-analyzer.toml's prerequisite #1) is the
+# right call on a real dev box that already has rustup; inside a
+# single-purpose container it would mean shipping the entire rustup+cargo
+# toolchain for nothing.
+FROM debian:trixie-slim AS runtime
+
+ARG RUST_ANALYZER_VERSION=2026-08-25
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && curl -fsSL -o /tmp/rust-analyzer.gz \
+        "https://github.com/rust-lang/rust-analyzer/releases/download/${RUST_ANALYZER_VERSION}/rust-analyzer-x86_64-unknown-linux-gnu.gz" \
+    && gunzip -c /tmp/rust-analyzer.gz > /usr/local/bin/rust-analyzer \
+    && chmod +x /usr/local/bin/rust-analyzer \
+    && rm -f /tmp/rust-analyzer.gz \
+    && apt-get purge -y curl && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/kb-lip /usr/local/bin/kb-lip
+
+WORKDIR /app
+COPY providers/rust-analyzer.toml /app/config.toml
+# The baked-in config's workspace_root placeholder is meaningless outside
+# this image (it names a path on the HOST that built the image) — rewrite it
+# to the container's expected mount point, /workspace, so the shipped
+# default just works against `docker run -v <repo>:/workspace:ro`.
+RUN sed -i 's|^workspace_root = .*|workspace_root = "/workspace"|' /app/config.toml
+
+EXPOSE 4845
+
+ENTRYPOINT ["kb-lip", "--config", "/app/config.toml"]

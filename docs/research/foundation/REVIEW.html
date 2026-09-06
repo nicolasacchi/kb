@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Audit of the foundation research cluster (storage, embeddings, watcher, SSE, TUI, bake-off) against the kb codebase at HEAD.">
+<meta name="kb-category" content="review">
+<meta name="kb-tags" content="review, foundation, audit">
+<title>Foundation — review · kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .status-shipped     { color: #1f6f3a; border-bottom: 2px solid #1f6f3a; padding-bottom: 1px; letter-spacing: .08em; font-size: .82em; text-transform: uppercase; }
+  .status-partial     { color: #8a5a00; border-bottom: 2px solid #8a5a00; padding-bottom: 1px; letter-spacing: .08em; font-size: .82em; text-transform: uppercase; }
+  .status-superseded  { color: #5d3a8c; border-bottom: 2px solid #5d3a8c; padding-bottom: 1px; letter-spacing: .08em; font-size: .82em; text-transform: uppercase; }
+  .status-not-shipped { color: #a32626; border-bottom: 2px solid #a32626; padding-bottom: 1px; letter-spacing: .08em; font-size: .82em; text-transform: uppercase; }
+  @media (prefers-color-scheme: dark) {
+    .status-shipped     { color: #6fd49a; border-bottom-color: #6fd49a; }
+    .status-partial     { color: #e2b157; border-bottom-color: #e2b157; }
+    .status-superseded  { color: #c6a3ff; border-bottom-color: #c6a3ff; }
+    .status-not-shipped { color: #ff8a8a; border-bottom-color: #ff8a8a; }
+  }
+  .doc-block { margin: 2rem 0; padding-top: .25rem; border-top: 1px solid var(--line, #d8d8d2); }
+  .verdict { font-size: 1.02em; line-height: 1.55; }
+  ul.evidence { margin: .6rem 0 .2rem; padding-left: 1.3rem; }
+  ul.evidence li { margin: .25rem 0; font-size: .95em; line-height: 1.5; }
+  ul.evidence code { font-size: .9em; }
+  .summary-table { width: 100%; border-collapse: collapse; margin: 1rem 0 2rem; font-size: .92em; }
+  .summary-table th, .summary-table td { padding: .4rem .6rem; border-bottom: 1px solid var(--line, #d8d8d2); text-align: left; vertical-align: top; }
+  .summary-table th { font-weight: 600; text-transform: uppercase; letter-spacing: .08em; font-size: .78em; }
+  .nav-back { display: inline-block; margin-bottom: 1rem; font-size: .92em; }
+</style>
+</head>
+<body>
+
+
+
+<main id="main" style="max-width: 72ch; margin: 2.5rem auto; padding: 0 1.25rem 4rem;">
+
+  <a class="nav-back" href="../index.html">← Index</a>
+
+  <header>
+    <p style="color: var(--ink-3, #5a5a55); font-size: .82em; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 .3rem;">docs/research/foundation/</p>
+    <h1 style="margin: 0 0 .4rem;">Foundation — review</h1>
+    <p class="lede" style="color: var(--ink-2, #333); font-size: 1.05em; line-height: 1.55;">
+      Audit of the six foundation docs (storage, embeddings, watcher, SSE, TUI, bake-off)
+      against the kb codebase at <code>HEAD</code> (post-v0.9, agent-memory cluster landed).
+      The big calls — lance+sqlite split, RRF k=60, fastembed via load-dynamic ORT,
+      <code>notify</code>+debouncer-full @ 400 ms, single firehose SSE — all shipped.
+      Two surprises: the TUI shipped a fundamentally different 5-tab fleet-monitor
+      (Eclipse Deep dark palette), not the spec'd 6-tab Solarized Light dashboard;
+      and the bake-off recommended bge-large but production still defaults to bge-small.
+    </p>
+  </header>
+
+  <section id="summary">
+    <h2>Summary</h2>
+    <table class="summary-table">
+      <thead>
+        <tr><th>Doc</th><th>Status</th><th>Headline</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a href="#doc-01-lancedb">01 · Storage</a></td>
+          <td><strong class="status-shipped">shipped</strong></td>
+          <td>lance + sqlite split, RRF k=60, 5-field FTS — all in <code>storage/lance.rs</code>.</td>
+        </tr>
+        <tr>
+          <td><a href="#doc-02-fastembed">02 · Embeddings</a></td>
+          <td><strong class="status-partial">partial</strong></td>
+          <td>Registry + load-dynamic shipped; in-process fastembed superseded by <code>kb-embedder</code> subprocess (I1).</td>
+        </tr>
+        <tr>
+          <td><a href="#doc-03-notify">03 · Watcher</a></td>
+          <td><strong class="status-shipped">shipped</strong></td>
+          <td>notify 8 + debouncer-full 0.7, 400 ms window, ENOSPC fallback, initial walk + reconciler.</td>
+        </tr>
+        <tr>
+          <td><a href="#doc-04-sse-axum">04 · SSE</a></td>
+          <td><strong class="status-shipped">shipped</strong></td>
+          <td>Single firehose <code>/api/events?types=</code> with Last-Event-ID replay + gap synthesis.</td>
+        </tr>
+        <tr>
+          <td><a href="#doc-05-ratatui">05 · TUI</a></td>
+          <td><strong class="status-superseded">superseded</strong></td>
+          <td>Spec'd 6-tab Solarized-Light dashboard; shipped 5-tab fleet-monitor on Eclipse Deep dark.</td>
+        </tr>
+        <tr>
+          <td><a href="#doc-14-bakeoff">14 · Bake-off</a></td>
+          <td><strong class="status-partial">partial</strong></td>
+          <td>Multi-model infra shipped, but bge-large recommendation not adopted as default.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="doc-block" id="doc-01-lancedb">
+    <h2>01 · Storage (lancedb + sqlite)</h2>
+    <p><strong class="status-shipped">shipped</strong></p>
+    <p class="verdict">
+      The full cluster-3 decision is in code. The on-disk split is exactly as written:
+      lance holds docs/vectors with a 5-field BM25 FTS (<code>title</code>, <code>body</code>,
+      <code>headings</code>, <code>code</code>, <code>prompt</code>) and sqlite holds the
+      relational tables (sources, errors, runs, edges, migrations). Hybrid search routes
+      through lance's native RRF with the k=60 default. The doc's spec'd
+      <code>BEGIN IMMEDIATE</code> + <code>wal_checkpoint(TRUNCATE)</code> + manifest-tar
+      backup plan was replaced by a simpler <code>VACUUM INTO</code> in B1 — pragmatic
+      simplification, not a regression. The configurable <code>hybrid_k</code> knob in
+      <code>kb.toml</code> didn't ship as a per-kb setting (the doc spec'd it; current
+      <code>config.rs</code> has no field for it), but the k=60 default it controls is hard-coded.
+    </p>
+    <ul class="evidence">
+      <li><code>crates/kb-core/src/storage/lance.rs:26</code> — <code>FTS_COLUMNS = &amp;["title","body","headings","code","prompt"]</code>.</li>
+      <li><code>crates/kb-core/src/storage/lance.rs:397</code> — comment "fused via lance's RRF (k=60 default per topic 01 §Decisions)".</li>
+      <li><code>crates/kb-core/src/storage/backup.rs:32</code> — backup is <code>VACUUM INTO</code>, not the spec'd tar+manifest dance.</li>
+    </ul>
+  </section>
+
+  <section class="doc-block" id="doc-02-fastembed">
+    <h2>02 · Embeddings (fastembed via ORT)</h2>
+    <p><strong class="status-partial">partial</strong></p>
+    <p class="verdict">
+      The model registry, the <code>kb model {list,download,set,rm}</code> CLI surface,
+      the XDG cache, and the <code>ort-load-dynamic</code> feature flag all shipped on plan.
+      <em>However</em>, the doc's mental model of "construct <code>fastembed::TextEmbedding</code>
+      once per kb and call <code>embed()</code> in-process" was superseded by the I1 milestone:
+      embedding now runs in a separate <code>kb-embedder</code> subprocess (one per kb) over a
+      stdin/stdout JSON IPC, so ONNX runs at low CPU priority and a crashing model can be
+      respawned without killing the daemon. The doc's per-kb <code>embedding_model</code>
+      config field is honoured; the multi-model story is real (bge-small default,
+      bge-base, bge-large, jina-v2-base-code all in the static registry).
+    </p>
+    <ul class="evidence">
+      <li><code>crates/kb-core/src/embed.rs:67-99</code> — <code>SUPPORTED_MODELS</code> registry with the four planned models, <code>default_model()</code> returns bge-small-en-v1.5.</li>
+      <li><code>Cargo.toml:50-53</code> — <code>fastembed = "5"</code> with <code>ort-load-dynamic</code> + <code>hf-hub-native-tls</code> features, as spec'd.</li>
+      <li><code>crates/kb-core/src/embed_ipc.rs</code> + <code>crates/kb-embedder/</code> — I1 subprocess transport; the doc's in-process <code>Embedder</code> stays in <code>embed.rs</code> but is no longer the production path.</li>
+    </ul>
+  </section>
+
+  <section class="doc-block" id="doc-03-notify">
+    <h2>03 · Watcher (notify + debouncer)</h2>
+    <p><strong class="status-shipped">shipped</strong></p>
+    <p class="verdict">
+      Verbatim adoption. <code>notify = "8"</code> + <code>notify-debouncer-full = "0.7"</code>
+      pinned at the workspace level. The 400 ms debounce, the
+      <code>KB_DEBOUNCE_MS</code> override, the explicit initial walk, the ENOSPC fallback
+      message — all in <code>watcher.rs</code>. The reconciler the doc spec'd as the
+      self-healing layer is in <code>indexer.rs</code> and is explicitly invoked in
+      CLAUDE.md as the "W1 invariant".
+    </p>
+    <ul class="evidence">
+      <li><code>crates/kb-core/src/watcher.rs:31</code> — <code>pub const DEFAULT_DEBOUNCE_MS: u64 = 400</code>; <code>watcher.rs:1-7</code> module doc cites topic 03 §Decisions by name.</li>
+      <li><code>crates/kb-core/src/watcher.rs:150,295,350,391</code> — <code>initial_walk()</code> + reconciler recovery paths; <code>Cargo.toml:66-67</code> for the pinned crate versions.</li>
+    </ul>
+  </section>
+
+  <section class="doc-block" id="doc-04-sse-axum">
+    <h2>04 · SSE on axum</h2>
+    <p><strong class="status-shipped">shipped</strong></p>
+    <p class="verdict">
+      Exactly the pattern the doc prescribed. One <code>broadcast::Sender&lt;Envelope&gt;</code>
+      in the bus, a <code>VecDeque</code> ring keyed by monotonic <code>u64</code> for replay,
+      single firehose at <code>GET /api/events</code> with <code>?types=</code> glob
+      filtering — no per-domain endpoints, no dual-direction split. The doc's
+      <code>{v, id, type, ts, payload}</code> envelope shape and the Last-Event-ID
+      resume contract are in <code>events.rs</code>, and the synthetic <code>event: gap</code>
+      frame the doc called out as a hardening detail is present too. <code>Sse::new(...)</code>
+      + <code>keep_alive(...)</code> in <code>routes/events.rs</code>.
+    </p>
+    <ul class="evidence">
+      <li><code>crates/kb-core/src/events.rs:1-51</code> — module doc "Lifted from spike-sse (the broadcast + VecDeque ring + Last-Event-ID dedup pattern)"; <code>broadcast::channel(live_capacity)</code> + <code>ring: Mutex&lt;VecDeque&lt;Envelope&gt;&gt;</code>.</li>
+      <li><code>crates/kb-server/src/routes/events.rs:1-3,53,87</code> — single <code>/api/events</code> route with <code>?types=</code> filtering, monotonic global id space, <code>Sse::new(...).keep_alive(...)</code>.</li>
+    </ul>
+  </section>
+
+  <section class="doc-block" id="doc-05-ratatui">
+    <h2>05 · TUI</h2>
+    <p><strong class="status-superseded">superseded</strong></p>
+    <p class="verdict">
+      The library set (ratatui 0.30 + crossterm 0.29 + tui-input + unicode-width) shipped
+      as spec'd, but the <em>design</em> the doc reproduced — six tabs
+      (HOME · SOURCES · DETAIL · STATS · ERRORS · SEARCH) over a single
+      Solarized-Light palette, mode pills per view — was replaced wholesale in the v0.6
+      "fleet-monitor" redesign. The shipped TUI is a five-tab dashboard
+      (OVERVIEW · PIPELINE · TRAFFIC · ERRORS · EVENTS) on the "Eclipse Deep"
+      dark palette (Tokyo-Night-inspired), with persistent fleet-aware chrome
+      (multiple daemons, not one). The 3 → 5 tab evolution + the palette swap are
+      load-bearing enough that the doc's screen-by-screen spec no longer maps cleanly
+      to the code. The doc remains a useful artifact for "what the v0.1 design called
+      for"; CLAUDE.md's "Where to find things" table is now the authoritative TUI map.
+    </p>
+    <ul class="evidence">
+      <li><code>crates/kb-tui/src/app.rs:17-31</code> — <code>pub enum Tab { Overview, Pipeline, Traffic, Errors, Events }</code> — not the spec'd six.</li>
+      <li><code>crates/kb-tui/src/ui/theme.rs:1,17</code> — <code>//! "Eclipse Deep" — Tokyo-Night-inspired dark palette</code>; the doc's Solarized Light was rejected.</li>
+      <li>CLAUDE.md "TUI dirty snapshot" invariant #4 and the v0.6 fleet-monitor entries in the "Where to find things" table document the redesign.</li>
+    </ul>
+  </section>
+
+  <section class="doc-block" id="doc-14-bakeoff">
+    <h2>14 · Embedding bake-off (2026-05-19)</h2>
+    <p><strong class="status-partial">partial</strong></p>
+    <p class="verdict">
+      The infrastructure the bake-off depended on (three parallel kbs on one daemon,
+      per-kb model selection, RRF hybrid mode) all works, and the per-kb-section
+      <code>embedding_model</code> config field referenced in CLAUDE.md is honoured.
+      The bake-off's <em>recommendation</em>, however — "skip directly to bge-large
+      or stay on bge-small; bge-base is not the answer" — was not adopted as a default
+      change: <code>default_model()</code> still returns bge-small-en-v1.5, and the
+      "follow-up sweep on larger corpora" the doc proposed as the natural next step
+      hasn't landed in code as a tracked benchmark. The doc remains valid as
+      operator guidance ("if you have the disk, switch this kb to bge-large"), and
+      bge-large is in the registry ready to be selected per-kb. The decision to
+      keep bge-small as the global default is consistent with the bake-off's own
+      "if bandwidth- or memory-constrained, stay on bge-small" caveat.
+    </p>
+    <ul class="evidence">
+      <li><code>crates/kb-core/src/embed.rs:107-109</code> — <code>default_model()</code> returns bge-small-en-v1.5; <code>embed.rs:84-91</code> shows bge-large in the registry but not promoted.</li>
+      <li>CLAUDE.md "Architecture invariant 12" — "Embedding dim is per-kb, captured at Storage::open time" — the bake-off's three-way-on-one-daemon setup is now a load-bearing invariant in the code.</li>
+    </ul>
+  </section>
+
+  <section class="doc-block" id="meta">
+    <h2>Meta · audit notes</h2>
+    <p class="verdict">
+      Hit rate is high — five of six docs are either shipped clean or only modulated
+      by a later, intentional decision. The two divergences worth noting:
+    </p>
+    <ul class="evidence">
+      <li><strong>TUI redesign (doc 05).</strong> The v0.6 fleet-monitor was a deliberate scope shift; the original doc isn't "wrong", it's been superseded. Reading the doc today, the diff matters: phasing (v0.1 ships HOME+SOURCES+ERRORS) and Solarized Light were both abandoned.</li>
+      <li><strong>Bake-off (doc 14) recommendation didn't land as a default change.</strong> The infra to act on it (per-kb model selection) shipped; the policy choice (promote bge-large) didn't. Worth re-running on larger corpora before any default change.</li>
+      <li><strong>Minor: <code>hybrid_k</code> not user-tunable.</strong> Doc 01 promised it as a per-kb <code>kb.toml</code> field; current <code>config.rs</code> has no such field, k=60 is hard-coded. Cheap follow-up if anyone actually wants to tune it.</li>
+    </ul>
+  </section>
+
+</main>
+
+</body>
+</html>

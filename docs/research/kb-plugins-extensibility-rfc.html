@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A plugin / extensibility architecture for the kb daemon (RFC)</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="rust, plugins, architecture, extensibility, rfc, kb, mcp">
+
+<style>
+  :root{
+    --ink:#1a1c20; --muted:#5b6270; --faint:#8b93a3; --line:#e2e5ea;
+    --bg:#fbfcfd; --panel:#f4f6f9; --code-bg:#f0f2f6; --accent:#3257d0;
+    --adopt:#1f7a4d; --adopt-bg:#e7f4ec; --defer:#9a6a12; --defer-bg:#fbf1dc;
+    --reject:#b23b3b; --reject-bg:#fbe9e9; --note-bg:#eef3ff; --note-line:#3257d0;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,"Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:54rem; margin:0 auto; padding:3.2rem 1.4rem 6rem}
+  header.doc{border-bottom:2px solid var(--ink); padding-bottom:1.4rem; margin-bottom:1.6rem}
+  .eyebrow{font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700; margin:0 0 .5rem}
+  h1{font-size:2.05rem; line-height:1.18; margin:.2rem 0 .6rem; letter-spacing:-.012em}
+  .lede{font-size:1.06rem; color:var(--muted); margin:.4rem 0 0}
+  .meta-row{margin-top:1rem; font-size:.82rem; color:var(--faint)}
+  .meta-row strong{color:var(--muted); font-weight:600}
+  h2{font-size:1.42rem; margin:2.8rem 0 .4rem; padding-top:.6rem; letter-spacing:-.01em; border-top:1px solid var(--line)}
+  h2 .num{color:var(--faint); font-weight:600; font-size:1.05rem; margin-right:.5rem}
+  h3{font-size:1.08rem; margin:1.7rem 0 .3rem}
+  h4{font-size:.96rem; margin:1.2rem 0 .2rem; color:var(--muted)}
+  p{margin:.7rem 0}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; font-size:.86em; background:var(--code-bg); padding:.08em .36em; border-radius:4px}
+  pre{background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:1rem 1.1rem; overflow-x:auto; font-size:.83rem; line-height:1.5; margin:1rem 0}
+  pre code{background:none; padding:0; font-size:inherit}
+  ul,ol{margin:.6rem 0; padding-left:1.4rem}
+  li{margin:.3rem 0}
+  strong{font-weight:650}
+  .tldr{background:var(--note-bg); border:1px solid #cdd9f6; border-left:4px solid var(--note-line); border-radius:8px; padding:1.1rem 1.3rem; margin:1.4rem 0}
+  .tldr h2{border:0; margin:0 0 .5rem; padding:0; font-size:1.1rem}
+  .tldr ul{margin:.4rem 0}
+  .note{background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--faint); border-radius:8px; padding:.85rem 1.1rem; margin:1.1rem 0; font-size:.93rem; color:var(--muted)}
+  .note strong{color:var(--ink)}
+  table{border-collapse:collapse; width:100%; margin:1.1rem 0; font-size:.85rem}
+  caption{caption-side:top; text-align:left; color:var(--faint); font-size:.78rem; margin-bottom:.4rem}
+  th,td{border:1px solid var(--line); padding:.5rem .65rem; text-align:left; vertical-align:top}
+  th{background:var(--panel); font-weight:650; font-size:.78rem; letter-spacing:.02em}
+  tbody tr:nth-child(even){background:#fafbfd}
+  .pill{display:inline-block; font-size:.7rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; padding:.12em .5em; border-radius:999px; white-space:nowrap}
+  .adopt{color:var(--adopt); background:var(--adopt-bg)}
+  .defer{color:var(--defer); background:var(--defer-bg)}
+  .reject{color:var(--reject); background:var(--reject-bg)}
+  .eff{display:inline-block; width:1.5em; text-align:center; font-weight:700; border-radius:4px; font-size:.78rem; padding:.05em 0}
+  .s{color:var(--adopt); background:var(--adopt-bg)}
+  .m{color:var(--defer); background:var(--defer-bg)}
+  .l{color:var(--reject); background:var(--reject-bg)}
+  nav.toc{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:1rem 1.2rem; margin:1.6rem 0 0}
+  nav.toc p{margin:0 0 .5rem; font-weight:650; font-size:.8rem; letter-spacing:.04em; text-transform:uppercase; color:var(--faint)}
+  nav.toc ol{margin:0; columns:2; column-gap:2rem; font-size:.9rem}
+  nav.toc li{margin:.18rem 0}
+  blockquote{margin:1rem 0; padding:.4rem 0 .4rem 1.1rem; border-left:3px solid var(--accent); color:var(--muted); font-style:italic}
+  blockquote cite{display:block; font-style:normal; font-size:.8rem; color:var(--faint); margin-top:.3rem}
+  .cite{font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace; font-size:.8em; color:var(--muted)}
+  hr{border:0; border-top:1px solid var(--line); margin:2rem 0}
+  footer.doc{margin-top:3rem; padding-top:1.2rem; border-top:1px solid var(--line); font-size:.82rem; color:var(--faint)}
+  .verdict-key{display:flex; gap:1rem; flex-wrap:wrap; font-size:.8rem; color:var(--muted); margin:.6rem 0}
+  @media (max-width:640px){ nav.toc ol{columns:1} h1{font-size:1.7rem} .wrap{padding-top:2.2rem} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="eyebrow">Design RFC · Extensibility</p>
+  <h1>A plugin / extensibility architecture for the kb daemon</h1>
+  <p class="lede">kb already runs three working plugin mechanisms — it just never
+  named them. This RFC names the seams, recommends formalising the one in-process
+  hook worth extracting, and weighs the Claude-Code surface honestly against kb's
+  own prior design conclusion — rather than inventing a generic plugin framework
+  the daemon's correctness invariants would reject.</p>
+  <div class="meta-row">
+    <strong>Status:</strong> Proposal (research) &nbsp;·&nbsp;
+    <strong>Scope:</strong> daemon extensibility + Claude-Code packaging &nbsp;·&nbsp;
+    <strong>Audience:</strong> kb maintainers
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#context">Context &amp; question</a></li>
+    <li><a href="#current-state">How kb is extended today</a></li>
+    <li><a href="#what-plugin-means">What "plugin" means for kb</a></li>
+    <li><a href="#mechanisms">Mechanisms &amp; verdicts</a></li>
+    <li><a href="#architecture">Recommended architecture</a></li>
+    <li><a href="#extraction-candidates">Extraction candidates</a></li>
+    <li><a href="#claude-code-packaging">Claude-Code packaging</a></li>
+    <li><a href="#roadmap">Phased roadmap</a></li>
+    <li><a href="#risks">Risks &amp; invariants</a></li>
+    <li><a href="#appendix-seams">Appendix: seam map</a></li>
+  </ol>
+</nav>
+
+<div class="tldr" id="tldr">
+  <h2 id="recommendation">Recommendation in one screen</h2>
+  <p><strong>Do not build a generic plugin framework.</strong> kb is a
+  single-author / small-fleet daemon whose value rests on correctness invariants
+  (single-writer storage, deterministic atlas, fail-closed security). A generic
+  framework would fight all three. Instead:</p>
+  <ul>
+    <li><span class="pill adopt">Adopt</span> <strong>Name the three mechanisms kb
+      already runs</strong> — subprocess IPC (the embedder), event-bus subscribers
+      (SSE), and declarative <code>&lt;meta&gt;</code>/config — as <em>the</em>
+      plugin story.</li>
+    <li><span class="pill adopt">Adopt</span> <strong>Formalise the indexer's
+      post-upsert enrichment into an in-process hook registry</strong> — the
+      single highest-leverage refactor; it turns the most painful internal-feature
+      path into an additive one. This is the architectural proof-of-concept.</li>
+    <li><span class="pill adopt">Adopt</span> <strong>An outbound event-webhook
+      bridge</strong> — ~one subscribe task + a config block; near-zero risk; the
+      smallest possible proof that the event bus is a plugin substrate.</li>
+    <li><span class="pill adopt">Adopt</span> <strong>A generic
+      <code>&lt;meta name="kb-*"&gt;</code> registry</strong> — kills the most
+      repeated friction (every new facet edits the parser today).</li>
+    <li><span class="pill defer">Defer</span> <strong>WASM</strong> (no untrusted-code
+      threat model yet) and <span class="pill reject">Reject</span>
+      <strong>dynamic <code>.so</code> loading</strong> (no stable Rust ABI; the
+      pinned arrow graph makes it unsound).</li>
+    <li><span class="pill adopt">Adopt</span> <strong>Package what already works as
+      Claude-Code plugins</strong> (a <code>kb-research</code> and a
+      <code>kb-comments</code> bundle from existing skills + commands). Treat a
+      read-only <em>exploration</em> MCP server (search / related / open-comments)
+      as an <span class="pill defer">Optional</span> ergonomic upgrade — kb's own
+      <span class="cite">research/memory/21</span> rejected MCP <em>for memory</em>;
+      for exploration the token-cost trade is genuinely open. Recall stays a hook
+      either way.</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="context"><span class="num">1</span>Context &amp; question</h2>
+
+<p>kb is a tightly-integrated Rust daemon: an indexer, a hybrid (BM25 + vector)
+search store, an axum HTTP server, a CLI, a TUI, and an SPA, all in one
+workspace. It is fast and coherent precisely because nothing is abstracted for
+its own sake. The cost shows up when a <em>feature</em> is added: each one is
+threaded by hand through the same long pipeline —
+<code>parser → lance schema → migration → indexer → storage actor → routes →
+router → daemon state → CLI → SPA</code>.</p>
+
+<p>This RFC answers two operator questions:</p>
+<ol>
+  <li><strong>How and <em>if</em></strong> kb should grow a plugin /
+  extensibility architecture.</li>
+  <li><strong>What existing functionality can already be moved out as a
+  plugin</strong> with low effort.</li>
+</ol>
+
+<p>The friction is real and measurable. Three recent features, by surface area:</p>
+
+<table>
+  <caption>Cost of adding a feature today (measured across the workspace)</caption>
+  <thead><tr><th>Feature</th><th>Shape</th><th>Files touched</th><th>~LOC</th><th>Why that much</th></tr></thead>
+  <tbody>
+    <tr><td>Bookmarks</td><td>Orthogonal sqlite table</td><td>~7</td><td>400–600</td><td>migration + actor delegation + routes + CLI + SPA. The cheap baseline.</td></tr>
+    <tr><td>Sessions</td><td>parser + lance column + indexer hook</td><td>~9–10</td><td>500–800</td><td>new <code>&lt;meta&gt;</code> in parser, additive lance column, post-upsert enrichment, enrichment sqlite table, daemon-wide cache.</td></tr>
+    <tr><td>Memory-links</td><td>two migrations + boot backfill + recall filter</td><td>~10+</td><td>~1200</td><td>two migrations, a daemon-startup seeding hook, indexer seeding, and a change to recall ranking itself.</td></tr>
+  </tbody>
+</table>
+
+<p>The thesis of this document: the answer is <strong>not</strong> "build a
+plugin SDK." It is "stop hand-threading the two or three seams that actually
+repeat, and recognise the seams kb has <em>already</em> built but never
+documented."</p>
+
+<!-- ============================================================ -->
+<h2 id="current-state"><span class="num">2</span>How kb is extended today</h2>
+
+<p>kb extends itself with three idioms, none of which is a plugin system:
+<strong>closed enum dispatch</strong>, <strong>static const registries</strong>,
+and <strong>hardcoded route/CLI tables</strong>.</p>
+
+<h3 id="grain">The grain: explicit dispatch over indirection</h3>
+
+<p>The clearest example is the share engine. <code>ShareBackend</code> is an
+enum, not a trait, and the module header records the reason verbatim:</p>
+
+<blockquote>
+  "An enum (not a <code>dyn</code> trait): Rust async-fn-in-trait doesn't
+  object-dispatch cleanly, and the two hosts sequence very differently
+  (Cloudflare deploys <em>and</em> gates; GitHub only deploys)."
+  <cite>crates/kb-core/src/share/host.rs:1–6</cite>
+</blockquote>
+
+<p>Note what this is and isn't. The comment justifies the enum on
+<em>technical</em> grounds — a language constraint (async fns don't object-dispatch
+without boxing) plus genuine behavioural divergence between hosts — not as a
+stated policy against plugins. But the consequence is the grain this RFC must
+respect: adding a host is a new variant plus a match arm, in one obvious place.
+An extensibility proposal that introduces a trait object "for symmetry" fights
+both the language and that grain. The bar for a real seam is therefore high:
+<em>the same edit must repeat across many features, or the extension must
+genuinely belong out-of-process.</em></p>
+
+<h3 id="closed-enums">Closed enums &amp; static registries</h3>
+<ul>
+  <li><strong>Embedding models</strong> — a static const array,
+  <code>SUPPORTED_MODELS</code> (4 entries), looked up by name; the backend is a
+  2-variant enum <code>EmbedderBackend::{Local, Ipc}</code>.
+  <span class="cite">embed.rs:67–100, 139–142</span></li>
+  <li><strong>Search modes</strong> — BM25 / vector / hybrid are
+  <code>StorageMsg</code> variants dispatched by match, dim-locked to the kb's
+  lance column.</li>
+  <li><strong>Atlas layout</strong> — UMAP / PCA is a config enum.</li>
+  <li><strong>Storage</strong> — a single-writer-per-kb actor; every mutation is
+  a <code>StorageMsg</code> variant (<span class="cite">storage/actor.rs:1, 24, 28</span>).
+  This is a <em>correctness boundary</em>, not a candidate seam (see §9).</li>
+</ul>
+
+<h3 id="hardcoded-tables">Hardcoded tables</h3>
+<ul>
+  <li><strong>HTTP routes</strong> — assembled by hand in <code>router.rs</code>
+  (<code>.route()</code> / <code>.merge()</code>) behind a fixed tower stack
+  (count → auth → rate-limit).</li>
+  <li><strong>CLI verbs</strong> — a flat clap <code>Cmd</code> enum plus one big
+  match in <code>kb-cli/src/main.rs</code>.</li>
+  <li><strong>Parser metadata</strong> — <em>ten</em> <code>kb-*</code> metas are
+  each a field on a <code>Fields</code> struct plus a compiled CSS
+  <code>Selector</code> on <code>ParserSet</code>:
+  <code>kb-category, kb-tags, kb-status, kb-severity, kb-salience, kb-decay,
+  kb-supersedes, kb-session, kb-global, kb-linked-kbs</code>.
+  <span class="cite">parser.rs:32 (Fields), 53–104 (the meta docs), 231–240 (selectors)</span>.
+  Every new facet so far paid this tax.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="what-plugin-means"><span class="num">3</span>What "plugin" means for kb</h2>
+
+<p>Define a plugin narrowly, to match the codebase's temperament: <em>added
+behaviour that does not require the N-file pipeline surgery of §1, and ideally
+no recompile of core.</em> Under that definition there are <strong>six candidate
+seams</strong> — and three of them <strong>already exist</strong> as de-facto
+plugins that were simply never named:</p>
+
+<table>
+  <thead><tr><th>#</th><th>Seam</th><th>Status today</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Indexer post-upsert <strong>enrichment hook</strong></td><td>Hardcoded; the cleanest in-process seam to formalise.</td></tr>
+    <tr><td>2</td><td><strong>Embedder</strong></td><td><span class="pill adopt">Already a plugin</span> — a subprocess over NDJSON IPC.</td></tr>
+    <tr><td>3</td><td><strong>Event subscriber</strong></td><td><span class="pill adopt">Already a plugin pattern</span> — anything that reads <code>/api/events</code>.</td></tr>
+    <tr><td>4</td><td>Declarative <strong><code>&lt;meta&gt;</code> / config</strong></td><td><span class="pill adopt">Already userland</span> — authors extend behaviour with zero code.</td></tr>
+    <tr><td>5</td><td><strong>Share host</strong></td><td>Enum (technical reasons, §2); the codebase's reference example of explicit dispatch.</td></tr>
+    <tr><td>6</td><td><strong>Route contribution</strong></td><td>No seam — and there shouldn't be one (security stack, §9).</td></tr>
+  </tbody>
+</table>
+
+<p>So the work is mostly <em>recognition</em>, not invention. kb runs a subprocess
+plugin (the embedder), a publish/subscribe firehose (the event bus), and a no-code
+extension model (<code>&lt;meta&gt;</code>). The RFC's job is to (a) document
+those as the supported extension surface, (b) formalise the one in-process hook
+worth extracting, and (c) decline the seams that would break invariants.</p>
+
+<!-- ============================================================ -->
+<h2 id="mechanisms"><span class="num">4</span>Mechanisms &amp; verdicts</h2>
+
+<div class="verdict-key">
+  <span><span class="pill adopt">Adopt</span> use it</span>
+  <span><span class="pill defer">Defer</span> not now</span>
+  <span><span class="pill reject">Reject</span> don't</span>
+</div>
+
+<table>
+  <caption>Rust extension mechanisms against kb's constraints</caption>
+  <thead><tr><th>Mechanism</th><th>Isolation</th><th>Hot-load</th><th>Lang</th><th>Fit for kb</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td>In-process hook registry (enum / boxed-future trait)</td><td>None (shared task)</td><td>No (recompile)</td><td>Rust</td><td>In-tree enrichers, first-party</td><td><span class="pill adopt">Adopt</span></td></tr>
+    <tr><td>Subprocess IPC (NDJSON / JSON-RPC over stdio)</td><td>Process</td><td>Yes (spawn)</td><td>Any</td><td>Heavy / optional / foreign extensions</td><td><span class="pill adopt">Adopt</span></td></tr>
+    <tr><td>Event-bus / webhook subscriber</td><td>Process / network</td><td>Yes</td><td>Any</td><td>Reactive side-effects; read-only</td><td><span class="pill adopt">Adopt</span></td></tr>
+    <tr><td>Declarative <code>&lt;meta&gt;</code> / config registry</td><td>n/a</td><td>Restart</td><td>None</td><td>New facets without code</td><td><span class="pill adopt">Adopt</span></td></tr>
+    <tr><td>WASM (wasmtime / extism)</td><td>Sandbox</td><td>Yes</td><td>Many</td><td>Overkill; heavy dep on pinned graph</td><td><span class="pill defer">Defer</span></td></tr>
+    <tr><td>Dynamic native <code>.so</code> (libloading)</td><td>None (UB on mismatch)</td><td>Yes</td><td>Rust(=ver)</td><td>Unsound under arrow pin</td><td><span class="pill reject">Reject</span></td></tr>
+  </tbody>
+</table>
+
+<h3 id="m-in-process">In-process hook registry — adopt, but as kb already does dispatch</h3>
+<p>kb hit the async-fn-in-trait wall and documented it (<span class="cite">host.rs:1–6</span>).
+Don't fight it: a hook is either a closed enum, or a
+<code>Vec&lt;Box&lt;dyn EnrichmentHook&gt;&gt;</code> whose method is <em>sync or
+returns an explicitly-boxed future</em>. The natural site is the indexer's
+post-upsert phase: after <code>upsert_doc</code> lands, the indexer branches on
+<code>is_memory_session</code> / <code>is_memory_artifact</code> and runs
+best-effort enrichment in line — <code>parse_session_html → sessions_upsert</code>,
+the memory-link seed, then <code>record_edges</code> — each one logging and
+continuing on error (<span class="cite">indexer.rs:828–954</span>). Cost of a
+panic = the indexer task; mitigate by keeping hooks <code>Result</code>-returning
+and best-effort, which the current code already is.</p>
+
+<h3 id="m-subprocess">Subprocess IPC — adopt; kb already ships the reference implementation</h3>
+<p>The embedder <em>is</em> an out-of-process plugin. Its protocol is small,
+tagged, correlated, and supervised:</p>
+<pre><code>// crates/kb-core/src/embed_ipc.rs:14–28  (NDJSON, one JSON value per line)
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Request  { Embed { req_id: u64, texts: Vec&lt;String&gt; }, Shutdown }
+enum Response { Ready  { model: String, dim: u32 },            // handshake
+                EmbedOk { req_id: u64, vectors: Vec&lt;Vec&lt;f32&gt;&gt; }, // correlated
+                Error   { req_id: u64, msg: String } }</code></pre>
+<p>It declares capabilities in a <code>Ready</code> handshake, correlates by
+<code>req_id</code>, discovers its binary via
+<code>$KB_EMBEDDER_BIN → sibling-of-exe → PATH</code>, and kills the child on
+<code>Drop</code>. The documented rationale is isolation: the child runs ONNX at
+nice 20 so it can't starve the daemon's HTTP/SSE handlers, and a
+<code>dead</code>-flag + respawn contract means a crashed child can't take the
+daemon down (<span class="cite">embed.rs:122–127; embed_ipc.rs:36, 112</span>).
+That is the exact argument for any third-party plugin lane. <strong>Generalise
+this envelope and you have kb's out-of-tree plugin protocol for free.</strong></p>
+
+<h3 id="m-event-bus">Event-bus / webhook — adopt; cheapest, ships first</h3>
+<p><code>/api/events</code> is already durable, resumable, filtered pub/sub: a
+1024-entry replay ring, a 1024-deep broadcast channel, monotonic ids, and
+<code>snapshot_since(last_id)</code> + <code>events_stream</code> for
+resume-after-gap, with synthetic <code>Lag</code>/<code>Gap</code> frames
+(<span class="cite">events.rs:27–28, 83–91, 139</span>). Subscribers already
+include the TUI, SPA, <code>kb push</code>, and internal history rings. An
+external process reacting to the SSE stream is <em>already</em> a plugin. The
+only missing piece for consumers that can't hold a connection is a daemon-side
+webhook bridge — and the template already exists: the per-kb history-ring task
+(<span class="cite">lib.rs:1058–1074</span>) is exactly
+<code>bus.subscribe()</code> → filter by <code>kb</code> → act.</p>
+
+<h3 id="m-wasm-so">WASM — defer; <code>.so</code> — reject</h3>
+<p>WASM (wasmtime/extism) buys sandboxed third-party code without a separate
+process — but kb has no multi-tenant / untrusted-code threat model, and a WASM
+runtime is a heavy new dependency on top of an already-pinned, slow-to-link graph
+(<code>arrow =57.3.1</code>; cold links run 20+ minutes). Subprocess IPC gives
+~90% of the isolation for ~5% of the complexity, and kb already runs it.
+<strong>Dynamic <code>.so</code> loading is unsound here:</strong> Rust has no
+stable ABI, and the exact arrow/lance pin means a plugin built against a
+different arrow is undefined behaviour, not a load error — while keeping the
+in-process crash blast radius. Reject it on both counts.</p>
+
+<!-- ============================================================ -->
+<h2 id="architecture"><span class="num">5</span>Recommended architecture</h2>
+
+<p>A four-tier model, from no-code to out-of-process, each independently useful:</p>
+
+<h3 id="tier-0">Tier 0 — declarative meta / config registry (no code)</h3>
+<p>Collect every unrecognised <code>&lt;meta name="kb-*"&gt;</code> into a
+<code>BTreeMap&lt;String,String&gt;</code> on <code>Fields</code>, persisted as one
+JSON lance column, exposed in search filters and event payloads. New
+meta-driven facets then land with <strong>zero</strong> parser/schema/migration
+churn. Typed promotion (its own column) stays the path for facets that need BM25
+ranking. This is the closest thing to a true userland plugin — and it directly
+attacks the parser tax of §2 (ten hand-written selectors today).</p>
+
+<h3 id="tier-1">Tier 1 — in-process enrichment hook registry (in-tree)</h3>
+<p>Extract a hook trait from the three enrichers the indexer already runs
+post-commit (session parse, memory-link seed, edge recording). Keep order,
+best-effort semantics, and emitted events byte-identical.</p>
+<pre><code>/// Runs after a Doc is committed to lance. Best-effort: an Err is logged
+/// and skipped — it must never fail the index. Writes go through the
+/// StorageHandle (never lance/sqlite directly) — see §9.
+trait EnrichmentHook: Send + Sync {
+    fn interested(&amp;self, fields: &amp;Fields) -&gt; bool;          // cheap pre-filter
+    fn enrich&lt;'a&gt;(&amp;'a self, ctx: EnrichCtx&lt;'a&gt;)
+        -&gt; BoxFuture&lt;'a, anyhow::Result&lt;()&gt;&gt;;                // boxed: dodges RPITIT
+}
+// indexer holds: Vec&lt;Box&lt;dyn EnrichmentHook&gt;&gt;, run in registration order
+// after upsert_doc — today's inline is_memory_session / memory-link / edge
+// branches each become one impl. (crates/kb-core/src/indexer.rs:828–954)</code></pre>
+<p>This is the architectural unlock: the next sessions-shaped feature becomes
+<em>one new impl</em> instead of edits scattered across nine files.
+Share hosts stay an enum (the technical reason is in
+<span class="cite">host.rs:1–6</span>); if a third host is ever needed, add a
+single <code>ShareBackend::Subprocess</code> variant rather than a trait.</p>
+
+<h3 id="tier-2">Tier 2 — out-of-tree subprocess plugin protocol</h3>
+<p>Lift the <code>embed_ipc</code> envelope into a reusable <code>plugin_ipc</code>
+module: a versioned, <code>kind</code>-tagged <code>Request</code>/<code>Response</code>,
+a handshake that declares the plugin's <code>kind</code> + capabilities, and the
+generalised <code>locate_*_bin</code> discovery. A plugin is then any executable
+speaking the protocol — alternate embedders (done), alternate extractors for new
+file types (PDF/notebook → <code>Fields</code>-shaped JSON), or a subprocess
+share host. Build this only when a concrete plugin demands it.</p>
+
+<h3 id="tier-3">Tier 3 — reactive event-webhook bridge</h3>
+<p>A config section plus one <code>bus.subscribe()</code> task that POSTs selected
+envelopes to a URL — a direct clone of the history-ring task:</p>
+<pre><code># kb.toml
+[webhooks]
+url   = "http://127.0.0.1:9000/kb-hook"
+types = ["artifact.indexed", "comment.added", "session.captured"]
+# daemon: one task in lib.rs, cloned from the lib.rs:1058–1074 history-ring task:
+#   let mut rx = bus.subscribe();
+#   while let Ok(env) = rx.recv().await { if matches(env, &types) { post(url, env) } }</code></pre>
+<p>Read-only and post-emit, so it respects every security invariant (§9).
+Eventually-consistent and fire-and-forget — never for a synchronous in-request
+decision.</p>
+
+<!-- ============================================================ -->
+<h2 id="extraction-candidates"><span class="num">6</span>Extraction candidates</h2>
+
+<p>Ranked by <em>(payoff / effort) × respects-invariants</em>.
+<span class="eff s">S</span>/<span class="eff m">M</span>/<span class="eff l">L</span>
+= effort.</p>
+
+<table>
+  <caption>What can be "moved as a plugin" now</caption>
+  <thead><tr><th>#</th><th>Candidate</th><th>Current location</th><th>Becomes</th><th>Effort</th><th>Risk</th><th>Payoff</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Indexer enrichers (sessions / memory-links / edges)</td><td><span class="cite">indexer.rs:828–954</span></td><td>In-process <code>EnrichmentHook</code> registry</td><td><span class="eff s">S</span></td><td>Low</td><td><strong>High</strong> — the mechanism unlock + the PoC</td></tr>
+    <tr><td>2</td><td>Embedders</td><td><span class="cite">embed_ipc.rs</span>, <code>kb-embedder</code></td><td>Reference subprocess plugin (already is one)</td><td><span class="eff s">S</span></td><td>Low</td><td>High — mostly docs + protocol stabilise</td></tr>
+    <tr><td>3</td><td>Meta-driven facets</td><td><span class="cite">parser.rs:32, 231–240</span></td><td>Tier-0 generic meta registry</td><td><span class="eff m">M</span></td><td>Low</td><td>High — ends the parser tax</td></tr>
+    <tr><td>4</td><td>Reactive side-effects (auto-share, notify, backup)</td><td>new</td><td>Tier-3 event webhooks</td><td><span class="eff s">S</span></td><td>Low</td><td>Medium — pure new capability, zero core change</td></tr>
+    <tr><td>5</td><td>Share hosts (CF / GitHub → S3 / Netlify)</td><td><span class="cite">share/host.rs</span></td><td><code>ShareBackend::Subprocess</code> variant</td><td><span class="eff m">M</span></td><td>Med</td><td>Medium — niche until requested; live wires only spike-tested</td></tr>
+    <tr><td>6</td><td>Atlas layout (UMAP / PCA)</td><td><span class="cite">atlas.rs:26–32</span></td><td><em>Stays</em> a config enum</td><td>—</td><td>—</td><td>Low — determinism is load-bearing (§9)</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Do not extract:</strong> the storage actor (single-writer correctness
+boundary), the search modes (dim-locked to the lance column), and the security
+middleware (auth / rate-limit / origin / loopback must never sit behind a
+plugin). Bookmarks is the canonical orthogonal-sqlite feature — it's the
+<em>baseline</em> the friction table measures against, not a target.</p>
+
+<!-- ============================================================ -->
+<h2 id="claude-code-packaging"><span class="num">7</span>Claude-Code packaging</h2>
+
+<p>kb already ships as a Claude Code plugin: <code>.claude-plugin/plugin.json</code>
+declares <strong>kb-memory v0.9.0</strong> — three LLM-free hooks
+(<code>UserPromptSubmit → recall</code>, <code>SessionStart → wake</code>,
+<code>Stop → capture</code>), each just running a <code>kb</code> verb. No skills,
+no commands, no MCP server today.</p>
+
+<p>kb has already weighed an MCP server — and rejected it. But read the scope
+carefully: <a href="memory/21-memory-mcp-and-memory-tool.html"><span class="cite">memory/21-memory-mcp-and-memory-tool.html</span></a>
+("Approach B — dedicated kb CLI verbs") rejects MCP <em>as a memory front-end</em>,
+i.e. as a way to expose <code>recall</code> / <code>remember</code>:</p>
+<blockquote>
+  "MCP server (<code>kb mcp</code>): a stdio server advertising
+  <code>recall</code>/<code>remember</code> as typed tools — tool definitions cost
+  context <em>every session</em>; it's a second process to run and supervise. Its
+  only real edge — auto-fire — is largely recovered by a <code>CLAUDE.md</code>
+  line + a recall hook."
+  <cite>research/memory/21 §02 — Alternatives, weighed; verdict: "No MCP server enters the picture at any rung."</cite>
+</blockquote>
+
+<p>Two halves of that argument cut differently for our question:</p>
+<ul>
+  <li><strong>The cost objection generalises.</strong> <em>Any</em> MCP server's
+  tool schemas sit in the context window every session, used or not (doc 21 cites
+  ~2.5k tokens for Anthropic's memory tool). An exploration server pays that too.</li>
+  <li><strong>The "auto-fire is recoverable" objection does not.</strong> It only
+  holds because recall has an unconditional <code>UserPromptSubmit</code> hook
+  that injects memories <em>before</em> the model answers — strictly better than a
+  tool the model must elect to call. There is <strong>no equivalent hook</strong>
+  for "search the corpus mid-task" or "what's related to this." For those
+  <em>exploration</em> verbs, the model electing to call <em>is</em> the
+  mechanism, not a weakness — and doc 21 never evaluated them.</li>
+</ul>
+
+<h3 id="cc-plugins">(a) Bundle <code>kb-research</code> / <code>kb-comments</code> plugins — do this first</h3>
+<p><code>plugin.json</code> already supports skills + commands + MCP servers;
+kb-memory just doesn't use them yet. Two bundles made entirely of pieces that
+already work: <strong>kb-research</strong> (the existing <code>kb-artifact</code>
+authoring skill + the <code>kb tools</code> manifest, so an agent authors and
+indexes in one flow) and <strong>kb-comments</strong> (the
+<code>kb comments export | claude</code> round-trip + the
+<code>kb comments watch</code> SSE loop). The CLI surface exists today:
+<span class="cite">commands/tools.rs, push.rs, comments_watch.rs</span>. This is
+packaging, not new daemon code — zero risk, immediate leverage.</p>
+
+<h3 id="cc-mcp">(b) An exploration-only MCP server — optional, eyes open</h3>
+<p>Everything an agent needs to <em>explore</em> kb is <strong>already reachable
+today</strong> through the Bash tool + the <code>kb</code> CLI
+(<code>kb find</code> / <code>search</code> / <code>related</code> /
+<code>comments</code>) — which is precisely doc 21's principle: the daemon you
+already run, driven by the tool Claude already has, at zero persistent context
+cost. An MCP server exposing <code>search</code> / <code>get_artifact</code> /
+<code>related</code> / <code>list_open_comments</code> is therefore an
+<em>ergonomic upgrade, not a necessity</em>: it trades a per-session schema cost
+for more reliable, typed, model-elected discovery. Recommend it only if that
+trade is worth it to the operator. Two non-negotiables if built: keep
+<code>recall</code>/<code>remember</code> as hooks (doc 21's verdict stands), and
+make the server a read-only <em>client-side shim</em> over the existing HTTP API
+(<span class="cite">kb-cli/src/http.rs</span>) so the daemon stays LLM-free and
+prompt-free. A thin <code>kb mcp</code> subcommand (JSON-RPC over stdio) is the
+whole implementation.</p>
+
+<p><strong>Net:</strong> the safe, high-leverage Claude-Code move is (a) —
+package what already works. The MCP server (b) is a real option doc 21 didn't
+evaluate, but it is not the slam-dunk the daemon's own design history might
+suggest; present the token-cost trade honestly rather than overselling it.</p>
+
+<!-- ============================================================ -->
+<h2 id="roadmap"><span class="num">8</span>Phased roadmap</h2>
+
+<p>Track <strong>X</strong> (extensibility), matching the repo's lettered-phase,
+green-CI-per-commit cadence. Ordered lowest-risk-highest-value first.</p>
+
+<table>
+  <thead><tr><th>Phase</th><th>Deliverable</th><th>Why here</th></tr></thead>
+  <tbody>
+    <tr><td><strong>X1</strong></td><td>Document the three existing mechanisms as the plugin story; ship the <strong>event-webhook bridge</strong> (config + one subscribe task cloned from <span class="cite">lib.rs:1058–1074</span>).</td><td>Smallest possible proof, read-only, no invariant touched. De-risks the whole RFC.</td></tr>
+    <tr><td><strong>X2</strong></td><td>Formalise the <strong><code>EnrichmentHook</code> registry</strong> — pure refactor of the existing inline enrichers (<span class="cite">indexer.rs:828–954</span>); behaviour + events byte-identical.</td><td>The architectural PoC. Green-CI by construction (existing indexer tests pass; add a hook-ordering test).</td></tr>
+    <tr><td><strong>X3</strong></td><td>Package the <strong><code>kb-research</code> / <code>kb-comments</code> Claude-Code plugins</strong> from existing skills + commands + the <code>kb comments watch</code> loop.</td><td>Zero new daemon code; pure packaging of things that already work (§7a). Safe, immediate leverage.</td></tr>
+    <tr><td><strong>X4</strong><br>(on demand)</td><td>Generic <strong>Tier-0 meta registry</strong>; generalise the <strong>subprocess <code>plugin_ipc</code></strong> protocol; add <code>ShareBackend::Subprocess</code>; and, if the token-cost trade is judged worthwhile, the <strong>optional exploration MCP server</strong> (<code>kb mcp</code>, wraps <span class="cite">kb-cli/src/http.rs</span>; §7b).</td><td>Build each only when a concrete plugin, facet, or ergonomic need demands it — don't speculate.</td></tr>
+  </tbody>
+</table>
+
+<p><strong>The concrete first commit is X1's webhook bridge</strong> (one
+subscribe task + a config struct), immediately followed by <strong>X2 as the
+headline refactor</strong>. The exploration MCP server is deliberately last and
+optional: it is net-new code plus a protocol plus a per-session context cost
+(§7b), so it should ride on the back of the cheaper, green proofs — never lead.</p>
+
+<!-- ============================================================ -->
+<h2 id="risks"><span class="num">9</span>Risks &amp; invariants any design must respect</h2>
+
+<p>These are load-bearing. Breaking one surfaces as a subtle runtime failure, not
+a compile error.</p>
+<ul>
+  <li><strong>Single-writer-per-kb storage actor</strong>
+  (<span class="cite">storage/actor.rs:1, 24</span>). No plugin gets a second
+  writer. In-process hooks write <em>through</em> the <code>StorageHandle</code>;
+  subprocess / webhook plugins are read-only or go through the HTTP API (which
+  funnels to the actor). A plugin opening lance directly corrupts the
+  guarantee.</li>
+  <li><strong>Embedding-dim-per-kb lock.</strong> The vector column width is fixed
+  at kb open. An embedder plugin MUST declare its <code>dim</code> in the
+  <code>Ready</code> handshake (<span class="cite">embed_ipc.rs:25</span>) matching
+  the kb's column; a wrong-width row returns <code>Err</code>, never a panic, so
+  one bad plugin can't kill the actor.</li>
+  <li><strong>Fail-closed security stack.</strong> Auth / rate-limit / origin /
+  loopback bypass must never sit behind a plugin; a missing <code>ConnectInfo</code>
+  fails closed. <em>This is why route-contribution is not a seam</em> — expose
+  capability via MCP (read-only) or the event bus instead.</li>
+  <li><strong>Outbound prompt scrub.</strong> Export-bound bytes are scrubbed
+  <em>before</em> any share backend sees them, so a subprocess share host
+  physically cannot leak the <code>&lt;template id="kb-prompt"&gt;</code>. A
+  Tier-0 meta registry MUST skip <code>&lt;template&gt;</code>/<code>&lt;script&gt;</code>/<code>&lt;style&gt;</code>
+  regions — the parser already does.</li>
+  <li><strong>Atlas determinism</strong> (<span class="cite">atlas.rs:26–32</span>) —
+  bit-identical across libc, achieved with only IEEE-754 primitives. A pluggable
+  layout engine would have to re-prove that; keep layout a config enum.</li>
+  <li><strong>Bounded event bus</strong> (ring + channel = 1024). A slow
+  subscriber gets lag/gap frames, not daemon backpressure — by design. Plugins
+  must tolerate gaps and resume via <code>Last-Event-ID</code>; never assume
+  exactly-once.</li>
+  <li><strong>No hot-reload.</strong> Config and corpora are discovered at daemon
+  (re)start. Plugins load at restart too — set that expectation; don't promise
+  hot-add.</li>
+  <li><strong>Arrow / lance exact pin</strong> (<code>=57.3.1</code>) — the second
+  reason dynamic <code>.so</code> plugins are out.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="appendix-seams"><span class="num">10</span>Appendix: seam map</h2>
+
+<table>
+  <caption>Each seam → where it lives → current mechanism → recommendation</caption>
+  <thead><tr><th>Seam</th><th>File:line</th><th>Today</th><th>Recommend</th></tr></thead>
+  <tbody>
+    <tr><td>Indexer enrichment</td><td><span class="cite">indexer.rs:828–954</span></td><td>Inline <code>is_memory_*</code> branches</td><td>Tier-1 <code>EnrichmentHook</code> registry</td></tr>
+    <tr><td>Embedder</td><td><span class="cite">embed_ipc.rs:14–28; embed.rs:139</span></td><td>Subprocess IPC + enum backend</td><td>Promote to reference plugin protocol</td></tr>
+    <tr><td>Parser / metas</td><td><span class="cite">parser.rs:32, 231–240</span></td><td>10 hardcoded fields + selectors</td><td>Tier-0 generic meta map</td></tr>
+    <tr><td>Share host</td><td><span class="cite">share/host.rs:1–6, 34</span></td><td>Enum (technical, §2)</td><td>Keep enum; add <code>Subprocess</code> variant if needed</td></tr>
+    <tr><td>Event bus</td><td><span class="cite">events.rs:27–28, 60–91; lib.rs:1058–1074</span></td><td>Pub/sub SSE + internal subscribers</td><td>Tier-3 webhook bridge + documented contract</td></tr>
+    <tr><td>HTTP routes</td><td><span class="cite">router.rs</span></td><td>Hardcoded builder</td><td>No seam; expose via MCP / events</td></tr>
+    <tr><td>CLI verbs</td><td><span class="cite">kb-cli/src/main.rs</span></td><td>Flat <code>Cmd</code> enum</td><td>No seam; optional <code>kb mcp</code> verb</td></tr>
+    <tr><td>Storage actor</td><td><span class="cite">storage/actor.rs:1, 24, 28</span></td><td>Single-writer mpsc</td><td>Correctness boundary — never a seam</td></tr>
+    <tr><td>Atlas layout</td><td><span class="cite">atlas.rs:26–32</span></td><td>Config enum (UMAP/PCA)</td><td>Keep enum — determinism load-bearing</td></tr>
+    <tr><td>Claude-Code surface</td><td><span class="cite">.claude-plugin/plugin.json; hooks/hooks.json</span></td><td>kb-memory: 3 hooks</td><td>Package plugins (§7a); optional exploration MCP</td></tr>
+  </tbody>
+</table>
+
+<footer class="doc">
+  <p><strong>Method.</strong> This RFC was produced from three read-only
+  exploration passes over the workspace (extension points &amp; coupling; the
+  Claude-Code plugin surface; daemon lifecycle &amp; per-feature friction), one
+  design pass, and a verification pass in which every <span class="cite">file:line</span>
+  citation was checked against source — a step that caught and removed two
+  fabricated quotations the design pass had introduced. All claims reflect the
+  codebase at the time of writing — verify against the cited files before
+  acting. Part of the kb design corpus — see the
+  <a href="index.html">research index</a> and the
+  <a href="memory/21-memory-mcp-and-memory-tool.html">memory-MCP analysis (doc 21)</a>
+  it builds on.</p>
+  <p>Recommendation, restated: <strong>name the seams kb already has, formalise
+  the indexer enrichment hook, ship an event-webhook bridge, and package what
+  already works as Claude-Code plugins — treating an exploration MCP server as an
+  optional extra and declining the seams that would break the single-writer,
+  deterministic, fail-closed invariants the daemon is built on.</strong></p>
+</footer>
+
+</div>
+</body>
+</html>

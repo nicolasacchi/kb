@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:applied, project:kb, frontend, design-system, design-tokens, accessibility, standardization, claude, artifacts, kb-artifact">
+<title>Standardize or stay free? A constrained-primitives, free-composition house style for kb's HTML artifacts</title>
+<style>
+:root{
+  /* COLOR — AA-locked light defaults. --accent is a free per-artifact override. */
+  --bg:#fbfbfa; --surface:#f3f3f1; --fg:#1b1b1a; --muted:#5f5f5c;
+  --rule:#d9d9d6; --accent:#3a5a9f; --accent-fg:#fff;
+  --warn:#8a5f00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:48rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#16171a; --surface:#1f2126; --fg:#e6e6e3; --muted:#a3a39e;
+    --rule:#2c2e33; --accent:#8fb0ee; --accent-fg:#11131a;
+    --warn:#e0b24d; --danger:#f08079; --ok:#6fcaa0;
+  }
+}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:var(--fs-body);line-height:var(--lh)}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.95rem;margin:.2em 0 .3em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-top:.4em;border-top:1px solid var(--rule)}
+h3{font-size:1.12rem;margin:1.6em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch;flex-wrap:wrap}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.2rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.8rem;line-height:1.5}
+pre code{background:none;padding:0}
+blockquote{margin:1em 0;padding:.3em 1em;border-left:3px solid var(--accent);font-family:var(--serif)}
+blockquote cite{display:block;margin-top:.4em;font-size:.82rem;color:var(--muted);font-style:normal;font-family:var(--sans)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.85rem;margin:1em 0}
+caption{text-align:left;color:var(--muted);font-size:var(--fs-small);margin-bottom:.4em}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.35em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}.callout--warn .callout-label{color:var(--warn)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}.callout--ok .callout-label{color:var(--ok)}
+.callout--rec{border-left-color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 8%,var(--bg))}.callout--rec .callout-label{color:var(--ok)}
+.pill{font-family:var(--mono);font-size:.7rem;border-radius:4px;padding:.05em .5em;border:1px solid var(--rule);white-space:nowrap}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--rule))}
+.pill.part{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--rule))}
+.pill.rec{color:var(--ok);border-color:var(--ok);font-weight:700}
+.persp{border:1px solid var(--rule);border-radius:8px;padding:1em 1.1em;margin:1em 0;background:color-mix(in srgb,var(--fg) 2%,transparent)}
+.persp h3{margin:.1em 0 .4em;font-size:1.04rem}
+.persp .counter{font-size:.92rem;color:var(--muted);border-top:1px dashed var(--rule);margin-top:.6em;padding-top:.5em}
+.toc{font-family:var(--sans);font-size:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1em 1.25em;margin:1.5em 0}
+.toc ol{margin:.3em 0 0;padding-left:1.3em}.toc li{font-family:var(--sans);margin:.2em 0}
+.num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#summary">Skip to content</a>
+<main tabindex="-1">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> kb <span class="sep">&middot;</span> decision support</div>
+  <h1>Standardize or stay free? A constrained-primitives, free-composition house style for kb's HTML artifacts</h1>
+  <p class="lede">kb imposes a purely <em>structural</em> authoring contract and <strong>zero</strong> visual
+  standardization, so Claude styles every artifact free-form. Should we standardize frontend patterns so
+  Claude reuses known-good ones — or keep it free? The honest answer is a third option both sides converge
+  on: <strong>standardize the accessibility/consistency floor, leave the aesthetic ceiling free.</strong></p>
+  <div class="meta-strip">
+    <span class="num">2026-06-06</span>
+    <span class="sep">&middot;</span><span class="tag">status:applied</span>
+    <span class="sep">&middot;</span><span class="tag">project:kb</span>
+    <span class="sep">&middot;</span><span class="tag">design</span>
+    <span class="sep">&middot;</span>
+    <span>42 research agents &middot; 25/28 sources verified</span>
+  </div>
+</header>
+
+<section>
+<h2 id="summary">Summary &amp; recommendation</h2>
+<div class="callout callout--rec"><span class="callout-label">Recommended (you decide)</span>
+Adopt a thin, inlinable <strong>accessibility + design-token FLOOR</strong> carried by the
+<code>kb-artifact</code> skill — an AA-contrast-locked <code>:root</code> token block (light + dark),
+a handful of native-primitive snippets, and a11y defaults (reduced-motion, <code>:focus-visible</code>,
+skip-link, &ge;16&nbsp;px) — and leave the <strong>CEILING free</strong>: layout, accent hue, density,
+illustration, per-artifact voice. This captures the two wins the evidence supports with high confidence
+(<strong>consistency</strong> and <strong>accessibility</strong>, which live in exactly the layer kb
+leaves open) at near-zero maintenance. It deliberately does <em>not</em> buy
+&ldquo;better-looking&rdquo; artifacts — that axis is where your &ldquo;let Claude be free&rdquo; gut is
+genuinely well-founded, and the floor leaves it untouched.</div>
+<div class="callout callout--ok"><span class="callout-label">Ruling &mdash; 2026-07-03 (applied)</span>
+Adopted, then evolved after a month in production. The paste-a-block floor shipped in June worked as an
+a11y floor but its &ldquo;free accent override&rdquo; went unused: 13 artifacts in this corpus shipped
+<code>--accent:#3a5a9f</code> verbatim, and 101 validator score rows showed structural compliance
+essentially solved (87&times; structural=100) with the weak dimensions being <em>content</em>
+(outlinks 54&times;, specificity 46&times;) &mdash; never the visual layer. The floor is now
+<strong>&ldquo;verified outcomes, free values&rdquo;</strong>: the standard token <em>role names</em>
+(<code>--bg --surface --fg --muted --rule --accent --accent-fg</code> [+ status trio]) remain the
+interface, every value is a free per-artifact design choice, and the kb-artifact skill&rsquo;s
+<code>contrast-check.py</code> (hex/rgb/hsl/oklch) verifies every known role pair &ge;4.5:1 in both
+themes &mdash; report-only. The old token block is demoted to a worked example; shipping its palette
+verbatim is flagged. Canonical text: <code>docs/authoring-artifacts.md</code> &rarr;
+&ldquo;Visual floor (verified outcomes, free values)&rdquo;.</div>
+<p>This is the decision write-up. Its companion,
+<em>&ldquo;Why the frontend-design skill opposes standardization&rdquo;</em>
+(<code>frontend-design-skill-anti-standardization-rationale.html</code>, same corpus), explains why the
+loudest anti-standardization voice says what it says — and why that stance was never aimed at kb's
+document corpus.</p>
+<div class="toc">
+<strong>On this page</strong>
+<ol>
+<li><a href="#the-question">The question, the current state, the two-skills tension</a></li>
+<li><a href="#natural-experiment">kb's own natural experiment</a></li>
+<li><a href="#evidence">The evidence (verified)</a></li>
+<li><a href="#perspectives">Five steelmanned perspectives</a></li>
+<li><a href="#options">The options spectrum</a></li>
+<li><a href="#framework">A decision framework</a></li>
+<li><a href="#recommendation">Recommendation &amp; rationale</a></li>
+<li><a href="#proposed-standard">Appendix: the concrete proposal to adopt</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ol>
+</div>
+</section>
+
+<section>
+<h2 id="the-question">The question, the current state, the two-skills tension</h2>
+<p>kb's authoring contract is deliberately <strong>structural</strong>: a real <code>&lt;title&gt;</code>,
+a heading hierarchy with stable kebab section ids, a <code>&lt;template id="kb-prompt"&gt;</code>,
+<code>kb-tags</code>/<code>kb-category</code> meta, substance in <code>&lt;body&gt;</code>, and
+iframe-safety rules. Search, indexing, and embeddings key off <em>structure</em> — never off a button
+class or an accent hue. Styling is left entirely free-form. The question: should kb standardize the
+<em>visual/component</em> layer so Claude reuses known-good patterns, or keep generating freely?</p>
+
+<h3 id="two-skills-tension">Two installed skills already pull in opposite directions</h3>
+<p>Every kb artifact generation sits between two Claude Code skills that contradict each other:</p>
+<ul>
+<li>The <strong><code>frontend-design</code></strong> skill (Anthropic official): commit to a bold
+per-context aesthetic, <em>&ldquo;No design should be the same,&rdquo;</em> <em>&ldquo;NEVER converge on
+common choices across generations,&rdquo;</em> reject reused patterns and system fonts.</li>
+<li>The <strong><code>kb-artifact</code></strong> skill: a ~42-line reference CSS with system fonts, one
+callout component, &ldquo;no gradients / no purple-pink oversaturation,&rdquo;
+<code>prefers-color-scheme</code> dark, platform-primitives-only, single-file inline CSS, &lt;25&nbsp;KB.</li>
+</ul>
+<p>One optimises distinctiveness; the other restraint and reuse. The tension <strong>dissolves once you
+split the floor from the ceiling</strong>: standardize the boring, accessibility-sensitive primitives
+(where reuse demonstrably wins and reinvention only adds risk); leave the expressive surface free (where
+distinctiveness adds value). A decisive practical point also defangs the &ldquo;never converge&rdquo;
+mandate: <strong>each Claude session is memoryless</strong>, so it cannot deliberately diverge from prior
+artifacts it cannot see. The only thing that reliably travels between isolated sessions is what the author
+carries in — a token block, an exemplar, a skill rule — which <em>is</em> the floor.</p>
+</section>
+
+<section>
+<h2 id="natural-experiment">kb's own natural experiment</h2>
+<p>The repo already ran the experiment, and the result is verifiable in-tree:</p>
+<ul>
+<li>The <strong>4 free-form single-file canon artifacts</strong> (<code>corpus/canon/*.html</code>) each
+invent their own accent (oklch hues ≈ 30 red, 145 green, 22 red-orange, 290 purple), mix 3 light
++ 1 dark backgrounds (two of the light files even share one palette), and each invent their own button (<code>add-btn</code> vs <code>copy-btn</code> vs
+pager links) — and all four ship <strong>zero</strong> <code>prefers-reduced-motion</code>, zero
+skip-link, zero <code>focus-visible</code>.</li>
+<li>The <strong>43 docs/research + docs/review pages</strong> that link a shared stylesheet
+(33 &rarr; <code>assets/style.css</code>, 10 &rarr; docs/review's <code>_assets/review.css</code>)
+converge ~85% <em>and</em> inherit the accessibility primitives the free-form artifacts lack.</li>
+</ul>
+<div class="callout"><span class="callout-label">The decisive nuance</span>
+Shared CSS &rArr; convergence + free accessibility; free-form &rArr; divergence + unmanaged accessibility.
+But the convergence mechanism was a <strong>linked stylesheet</strong> — which kb's single-file /
+sandboxed-subdomain constraint forbids for portable standalone artifacts. So the proven recipe has to be
+re-cast as an <strong>inlinable token + snippet block carried by the skill</strong>, not copied as a
+linked asset. That re-casting is the whole proposal.</div>
+</section>
+
+<section>
+<h2 id="evidence">The evidence (verified)</h2>
+<p>Every external claim traces to a source that was fetched and adversarially checked.
+<span class="pill ok">supported</span> = verbatim/substantively confirmed;
+<span class="pill part">partial</span> = core holds, with a noted caveat (over-reaching attributions were
+trimmed to what the source actually says). Three sources failed verification and were dropped.</p>
+<table>
+<caption>Strongest verified findings and what each implies for kb.</caption>
+<thead><tr><th scope="col">Finding</th><th scope="col">Implication for kb</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><td><strong>84%</strong> (74/88) of unprompted ChatGPT-generated sites had accessibility defects; asked to fix its own output it left 82% of Perceivable / ~64% of Operable issues. <a href="https://dl.acm.org/doi/10.1145/3677846.3677854">[W4A&nbsp;2024]</a></td><td>Free-form generation — kb's current default — is the worst a11y mode, and the defects cluster in the contrast/keyboard/focus layer kb leaves 100% free.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>Low-contrast text is the <strong>#1 web failure</strong> (83.9% of the top 1,000,000 home pages); pages WITH ARIA averaged <em>more</em> errors than pages without. <a href="https://webaim.org/projects/million/">[WebAIM Million]</a></td><td>Contrast is a pure styling decision in the free layer — a contrast-locked token set eliminates it by construction. And it argues for <em>native</em> primitives over a custom ARIA widget kit.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>Native <code>&lt;button&gt;</code>/<code>&lt;a&gt;</code> give role, keyboard, focus, disabled, focus-visible for free; a <code>div+role</code> makes all of that the author's per-generation responsibility. <a href="https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA">[MDN/W3C — first rule of ARIA]</a></td><td>A one-line skill rule (&ldquo;interactive elements are real <code>&lt;button&gt;</code>/<code>&lt;a&gt;</code>&rdquo;) captures most structural a11y at zero ceiling cost.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>Claude defaults to generic &ldquo;on distribution&rdquo; output (&ldquo;AI slop&rdquo;) unless steered; the cookbook's own fix is a <em>hard</em> theme-constraint block, not gentle prose. <a href="https://platform.claude.com/cookbook/coding-prompting-for-frontend-aesthetics">[Claude Cookbook]</a></td><td>&ldquo;Let Claude be free&rdquo; yields the slop median, not distinctiveness — a deliberate standard is the only reliable way off it. (And guidance-only is a high bar.)</td><td><span class="pill part">partial</span></td></tr>
+<tr><td>700 generation trajectories over 100 iterations all converged to ~12 generic motifs (&ldquo;visual elevator music&rdquo;); authors call for anti-convergence mechanisms. <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC12827715/">[Patterns 2025]</a></td><td>Unconstrained generation homogenizes toward the trained mean — kb's 4-way divergence is per-knob noise around a generic centre, not genuine creativity.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>The homogenization fix is &ldquo;productive friction&rdquo; and &ldquo;contextual anchoring&rdquo; to brand tokens / existing designs — <em>not</em> removing standards. <a href="https://arxiv.org/abs/2603.13036">[UW + MSR, 2026 preprint]</a></td><td>A deliberate, distinctive anchor (paper/ink, no purple, contrast-locked) is itself the recommended mitigation; the failure modes are <em>no</em> anchor (drift) and a <em>lazy</em> anchor (entrenching the mean).</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>Across 2,200 essays, each extra human essay added more new ideas than each extra GPT-4 essay; the gap widened at scale and survived temperature changes. <a href="https://www.sciencedirect.com/science/article/pii/S294988212500091X">[CHB:AH 2025]</a></td><td>Cross-artifact diversity from one model is lower than intuition suggests and not recoverable by temperature — so &ldquo;free&rdquo; buys less real variety than the gut assumes.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>Tokens-only context drifted by &ldquo;screens 5–8&rdquo;; a short prose note shrank the drift because most requests aren't fully specified by the token graph. <a href="https://wavespeed.ai/blog/posts/design-md-vs-design-tokens-ai-workflows/">[WaveSpeed]</a></td><td>Tokens fix <em>values</em>, not layout — but kb artifacts are largely one-shot single files, where this drift mostly doesn't bite, so anything heavier than tokens + a short note is overkill.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>Doc-grounding helped rare APIs but a weak retriever <em>hurt</em> common APIs by 39% absolute; the fix is selective triggering — ground only where the model lacks knowledge. <a href="https://arxiv.org/abs/2407.09726">[CloudAPIBench]</a></td><td>Constraint <em>relevance</em> beats quantity: standardize the cross-artifact things Claude is inconsistent on; do NOT override Claude's strong defaults for routine markup.</td><td><span class="pill ok">supported</span></td></tr>
+<tr><td>v0 customizes at the <em>token</em> layer and warns that editing component code &ldquo;may struggle&rdquo;; Lovable scans every generation for off-scale values and auto-retries; Bolt pulls real tokens &ldquo;instead of guessing at hex.&rdquo; <a href="https://v0.app/docs/design-systems">[v0]</a> <a href="https://docs.lovable.dev/features/design-systems">[Lovable]</a> <a href="https://bolt.new/blog/introducing-design-system-agents">[Bolt]</a></td><td>The universal production lever is <strong>tokens-first, components last</strong> — validating kb's inlinable-token form, and showing that suggestion alone is weak (production tools <em>enforce</em>).</td><td><span class="pill part">partial</span></td></tr>
+<tr><td>Anthropic's Claude Design builds a token/component system from your files so &ldquo;every project after that uses your colors, typography, and components automatically.&rdquo; <a href="https://www.anthropic.com/news/claude-design-anthropic-labs">[Claude Design]</a></td><td>Even Anthropic's flagship design tooling treats a derived token set as the consistency mechanism — reinforcing tokens-first over per-output reinvention (inlined, for kb).</td><td><span class="pill part">partial</span></td></tr>
+<tr><td>The canonical design-system ROI formula was calibrated for ~10 designers + ~30 devs and &ldquo;wasn't calibrated for small teams,&rdquo; where ramp-up can go ROI-negative. <a href="https://www.smashingmagazine.com/2022/09/formula-roi-design-system/">[Smashing]</a></td><td>A solo, one-off, single-file author is far below every published breakeven — a heavyweight system is the wrong abstraction; bound any standard to the cheapest reversible unit.</td><td><span class="pill part">partial</span></td></tr>
+<tr><td>The W3C DTCG token spec reached a first stable version (2025-10) — a cross-tool JSON interchange format, with no AI mention. <a href="https://www.w3.org/community/design-tokens/2025/10/28/design-tokens-specification-reaches-first-stable-version/">[DTCG]</a></td><td>Full DTCG + build pipelines presuppose external assets kb forbids; the transferable piece is just the token <em>concept</em>, hand-authored as ~15 inline CSS custom properties, zero tooling.</td><td><span class="pill part">partial</span></td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="perspectives">Five steelmanned perspectives</h2>
+
+<div class="persp">
+<h3 id="persp-for-standard">1 &middot; FOR a thin inlinable house standard</h3>
+<p>kb should standardize — but only as a thin inlinable layer (a token preamble + a few exemplars + the
+skill guidance kb already ships), not a heavyweight system. Free-form LLM output is inaccessible exactly
+in the visual/keyboard layer kb leaves free; &ldquo;free&rdquo; buys the slop mean because each generation
+is an isolated memoryless draw; and kb's own repo already proved shared CSS &rArr; ~85% convergence + free
+a11y.</p>
+<p class="counter"><strong>Strongest counter:</strong> premature/wrong-abstraction lands hardest at solo
+scale — a thin standard is the easiest to ignore (so enforcement is uncertain) while tokens-alone
+demonstrably drift, so it may underdeliver while still trading Claude's slop for the operator's own
+monoculture.</p>
+</div>
+
+<div class="persp">
+<h3 id="persp-for-freedom">2 &middot; FOR keeping Claude FREE per-artifact</h3>
+<p>kb's value rests on a structural contract; divergence costs the product nothing functional. Per-artifact
+freedom is the documented antidote to AI slop, and imposing one house style re-converges every artifact
+onto a single look — manufacturing the very sameness the field warns against. Design-system ROI scales
+with contributors/reuse/longevity; a solo author of one-off artifacts is below every breakeven, and 4
+artifacts haven't &ldquo;screamed for abstraction&rdquo; (the Rule of Three).</p>
+<p class="counter"><strong>Strongest counter:</strong> the a11y case is not weak — free-form is the
+empirically worst mode, defects cluster in the free layer, prompts can't <em>guarantee</em> a contrast
+floor (non-deterministic even at temp 0), and &ldquo;never converge&rdquo; is unenforceable across
+memoryless sessions. A few inlinable tokens + a native-element rule add a real floor at near-zero cost, so
+&ldquo;do nothing&rdquo; is the weaker position <em>on accessibility specifically</em>.</p>
+</div>
+
+<div class="persp">
+<h3 id="persp-accessibility">3 &middot; Accessibility &amp; reading-UX lens</h3>
+<p>Free-form is a net negative for a11y precisely in kb's no-standard mode, and the defects cluster in
+Perceivable/Operable — the layer kb leaves free. kb's own canon proves it: zero reduced-motion/skip-link/
+focus-visible, and their muted text computes at <strong>4.33:1</strong> and <strong>3.73:1</strong> —
+both below the AA 4.5:1 floor: same author, same model, both failing by luck rather than design. The highest-leverage
+wins are native-HTML defaults that constrain nothing visual. Design it as a <strong>floor</strong>
+(vetted AA tokens + a contrast/native-element check), not a ceiling.</p>
+<p class="counter"><strong>Strongest counter:</strong> for a solo sole-reader there's no external/legal
+driver; &ldquo;accessibility&rdquo; collapses into ordinary readability the user can judge per-artifact,
+and a single defective shared primitive breaks <em>every</em> artifact at once. So the defensible slice is
+the narrowest non-visual defaults (native elements, reduced-motion, base font-size, contrast self-check),
+not a primitives library.</p>
+</div>
+
+<div class="persp">
+<h3 id="persp-evidence">4 &middot; LLM-behaviour / evidence lens</h3>
+<p>Graded by evidence strength: <strong>consistency</strong> across a collection is strongly supported
+(incl. kb's repo); <strong>less-broken / accessible</strong> is strongly supported for the structural
+layer; but <strong>&ldquo;better&rdquo;</strong> aesthetically is <em>not</em> supported — that is exactly
+where &ldquo;let Claude be free&rdquo; is genuinely strong. Reuse reduces output variance (few-shot gains
+plateau after ~2–5 exemplars); grounding is nuanced not a blank cheque — argue for a thin, selective
+standard on high-value/low-creativity axes.</p>
+<p class="counter"><strong>Strongest counter:</strong> a reused token preamble risks the very slop median
+it's meant to avoid — if it encodes the safe restrained look, every artifact inherits a tasteful-but-generic
+baseline, an arguable downgrade on &ldquo;better&rdquo; even as it's an upgrade on &ldquo;consistent.&rdquo;</p>
+</div>
+
+<div class="persp">
+<h3 id="persp-practical">5 &middot; kb-practical / implementability lens</h3>
+<p>Under kb's real constraints the debate collapses into build/maintenance cost: the enforcement-tier
+mechanisms that guarantee consistency in production tools (runtime import, scan-on-generation, linked
+stylesheets) are <em>not</em> buildable on kb's watch-a-folder / single-file / frame-ancestors-only path,
+and a full system never breaks even at solo scale. The viable, cheap move is an inlinable token+snippet
+preamble carried by the skill + de-conflicting the two skills, with kb-native exemplar retrieval (kb is
+itself a search engine) as a deferred second step.</p>
+<p class="counter"><strong>Strongest counter:</strong> &ldquo;guidance + inlinable tokens&rdquo; is exactly
+the mechanism class practitioners most often report as <em>insufficient</em> (tokens drift, prompts are
+non-deterministic, production tools moved to hard enforcement) — so the cheap option may not produce the
+convergence it promises, and the only mechanism that reliably reproduces the shared-CSS result is a
+build-then-inline pipeline kb deliberately lacks.</p>
+</div>
+</section>
+
+<section>
+<h2 id="options">The options spectrum</h2>
+<table>
+<caption>From do-nothing to a full design system. Effort and fit to kb's single-file/sandboxed reality.</caption>
+<thead><tr><th scope="col">Option</th><th scope="col">What it is</th><th scope="col">Effort</th><th scope="col">Verdict</th></tr></thead>
+<tbody>
+<tr><td><strong>0 &middot; Do nothing</strong></td><td>Status quo: structural contract only; styling 100% free-form; existing soft restraint prose.</td><td><span class="pill">none</span></td><td>Economically rational at solo scale, but leaves the two highest-yield, lowest-risk wins on the table.</td></tr>
+<tr><td><strong>1 &middot; Anti-slop prose</strong></td><td>Sharpen the skill's negative bans + a native-elements rule + ≥16px floor. No token block.</td><td><span class="pill">low</span></td><td>Cheapest a11y win, but prose can't <em>guarantee</em> contrast and gives no consistency.</td></tr>
+<tr><td><strong>2 &middot; Thin token + a11y FLOOR</strong></td><td>Inlinable <code>:root</code> tokens (AA, light+dark) + 3–5 native-primitive snippets + a11y block + native-elements rule, via the skill; layout/accent/voice free.</td><td><span class="pill">low</span></td><td><span class="pill rec">RECOMMENDED</span> Best fit: the inlinable form the architecture forces, targeting the layer kb leaves free.</td></tr>
+<tr><td><strong>3 &middot; Floor + soft check</strong></td><td>Option 2 + a contrast / off-token / styled-div check in the kb-artifact validator (<code>validate-kb.sh</code>; off-token + styled-<code>div</code> are greps, the contrast ratio needs a small luminance helper) — a warning, not a CI gate.</td><td><span class="pill">medium</span></td><td>Fast follow — what makes the floor actually <em>hold</em> rather than drift.</td></tr>
+<tr><td><strong>4 &middot; Floor + exemplar retrieval</strong></td><td>Option 2/3 + the skill <code>kb search</code>es for 1–2 recent high-quality exemplars as few-shot anchors.</td><td><span class="pill">medium</span></td><td>Deferred — uniquely buildable for kb (it's a retrieval engine), but the right <em>second</em> step.</td></tr>
+<tr><td><strong>5 &middot; Full design system</strong></td><td>Linked/build-inlined stylesheet + component library + CI enforcement.</td><td><span class="pill">high</span></td><td>Poor fit — contradicts single-file/inline/no-CDN/sandboxed reality; never breaks even at solo scale.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="framework">A decision framework</h2>
+<p>If you weigh these criteria differently than the recommendation does, they point you to a different
+option — that is the point of laying them side by side.</p>
+<table>
+<caption>Each criterion, and which way it pulls.</caption>
+<thead><tr><th scope="col">Criterion</th><th scope="col">Leans STANDARDIZE</th><th scope="col">Leans STAY FREE</th></tr></thead>
+<tbody>
+<tr><td>Functional impact (search/index/serve)</td><td>A floor costs the product nothing functional.</td><td>Divergence also costs nothing functional — so why impose?</td></tr>
+<tr><td>Accessibility of the free layer</td><td>Free-form is the worst a11y mode; a floor fixes contrast/focus/motion once.</td><td>Solo sole-reader: no external/legal driver; a11y collapses to per-artifact readability.</td></tr>
+<tr><td>Consistency vs distinctiveness</td><td>One repeat reader benefits from recognition on recurring chrome.</td><td>A heterogeneous report/RFC/viz collection legitimately wants per-artifact looks.</td></tr>
+<tr><td>Scale economics</td><td>A thin token block + skill edit is a near-free, reversible doc/skill change.</td><td>Every published ROI breakeven sits far above solo/one-off scale.</td></tr>
+<tr><td>Wrong-abstraction risk</td><td>Constrain only proven-recurring, low-creativity axes; leave the rest free.</td><td>4 artifacts, 4 buttons — the pattern hasn't &ldquo;screamed for abstraction&rdquo; yet.</td></tr>
+<tr><td>Fit to single-file/sandboxed</td><td>Inlinable tokens + snippets + skill guidance are exactly the allowed form.</td><td>The convergence kb proved came from a <em>linked</em> stylesheet the constraint forbids.</td></tr>
+<tr><td>Enforceability</td><td>A positive per-conversation rule is enforceable in-session; a soft check makes it hold.</td><td>&ldquo;Never converge&rdquo; is unenforceable; any thin standard is easy to ignore.</td></tr>
+<tr><td>Effect on the AI-slop median</td><td>A deliberate distinctive anchor is the recommended anti-slop mitigation.</td><td>A restrained shared baseline risks entrenching its own tasteful-but-generic mean.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="recommendation">Recommendation &amp; rationale</h2>
+<p><strong>Adopt Option 2</strong> (thin inlinable token + accessibility floor via the
+<code>kb-artifact</code> skill), with <strong>Option 3</strong>'s lightweight contrast/native-element
+self-check as a fast follow, and treat <strong>Option 4</strong> (exemplar retrieval) as a deferred
+experiment. Standardize the <strong>floor</strong>; leave the <strong>ceiling</strong> — layout, accent
+hue, density, illustration, voice — free. Resolve the two-skill tension by <strong>scope</strong>, not by
+picking a winner: <code>kb-artifact</code> is authoritative for reading documents (research / RFC /
+review); reserve <code>frontend-design</code>'s per-artifact-novelty mandate for genuine interactive /
+playground artifacts.</p>
+<p>Why this, and not a rubber-stamp of either pole:</p>
+<ol>
+<li>The two wins the evidence supports with <strong>high confidence</strong> — accessibility-by-default and
+cross-artifact consistency — live in exactly the layer kb leaves free, and the floor fixes them once for
+all future artifacts at near-zero maintenance.</li>
+<li>The win your gut cares about — <strong>&ldquo;better-looking,&rdquo; distinctive</strong> artifacts —
+is the axis where reuse evidence is thin-to-absent and homogenization risk is real, so the recommendation
+deliberately leaves accent/layout/voice free. That is why it isn't a rubber-stamp of either side.</li>
+<li>kb's natural experiment is decisive on <em>mechanism</em>: shared CSS converged and shipped free a11y;
+free-form diverged and shipped none — and the proven mechanism re-casts cleanly into the only form the
+constraint permits (inlinable tokens + snippets + skill guidance), buildable today with a handful of doc/skill edits and
+no daemon/CI change.</li>
+<li>Solo-scale economics rule out a heavyweight system but favour the cheapest reversible unit; the floor
+is exactly that, and the wrong-abstraction risk is contained because it constrains only proven-recurring,
+low-creativity axes.</li>
+<li>Enforceability honesty: prose alone can't guarantee a contrast floor and &ldquo;never converge&rdquo;
+is structurally unenforceable, so a positive, reusable token block plus a soft contrast check is what
+actually makes the floor hold — without pretending any thin standard guarantees an aesthetic outcome.</li>
+</ol>
+<div class="callout"><span class="callout-label">The honest framing</span>
+Standardize the parts that are <strong>correctness</strong> (accessibility) and <strong>cheap
+consistency</strong>; free the parts that are <strong>taste</strong>. Your &ldquo;let Claude be free&rdquo;
+instinct is right about taste and is preserved intact; it is only wrong about accessibility, which is the
+one place a floor pays for itself.</div>
+</section>
+
+<section>
+<h2 id="proposed-standard">Appendix: the concrete proposal to adopt</h2>
+<p>Model: <strong>&ldquo;constrained primitives, free composition.&rdquo;</strong> Standardize a thin,
+inlinable, accessible floor carried by the <code>kb-artifact</code> skill and pasted into each single-file
+artifact; leave layout, accent hue, density, illustration, and voice free above it. <strong>This very
+document uses the floor below</strong> — its <code>:root</code>, skip-link, focus rings, and reduced-motion
+handling are the proposal, dogfooded.</p>
+
+<h3 id="ps-tokens">1 &middot; The inlinable token + a11y preamble</h3>
+<p>~30 lines of CSS custom properties (light + dark), AA-contrast-locked, with the a11y defaults. Paste
+into each artifact's <code>&lt;style&gt;</code>. <code>--accent</code> is an explicit per-artifact override
+— swap it freely; just keep it ≥4.5:1 against <code>--bg</code> where used for text.</p>
+<pre><code>:root{
+  /* COLOR — AA-locked light defaults. --accent is a free per-artifact override. */
+  --bg:#fbfbfa; --surface:#f3f3f1; --fg:#1b1b1a; --muted:#5f5f5c;   /* --muted on --bg = 5.6:1 */
+  --rule:#d9d9d6; --accent:#3a5a9f; --accent-fg:#ffffff;            /* keep --accent &gt;=4.5:1 for text */
+  --warn:#8a5f00; --danger:#9a2f28; --ok:#256148;                  /* all &gt;=4.5:1 on --bg/--surface */
+  /* TYPE — &gt;=16px reading floor */
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.6; --maxw:46rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#16171a; --surface:#1f2126; --fg:#e6e6e3; --muted:#a3a39e; /* --muted on --bg = 6.9:1 */
+    --rule:#2c2e33; --accent:#8fb0ee; --accent-fg:#11131a;
+    --warn:#e0b24d; --danger:#f08079; --ok:#6fcaa0;                 /* lifted for dark-bg AA */
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:var(--fs-body);line-height:var(--lh)}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}</code></pre>
+
+<h3 id="ps-primitives">2 &middot; Native-primitive snippets</h3>
+<p>The rule above them all: <strong>interactive elements are real <code>&lt;button&gt;</code> /
+<code>&lt;a&gt;</code>, never styled <code>&lt;div&gt;</code>s</strong> (the first rule of ARIA). One
+canonical button replaces the canon's divergent <code>add-btn</code>/<code>copy-btn</code>/pager.</p>
+<pre><code>/* BUTTON — native element; role/keyboard/focus/disabled for free */
+.btn{font:600 var(--fs-small)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;
+  border:1px solid var(--rule);border-radius:var(--radius);background:transparent;color:var(--fg);cursor:pointer}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:focus-visible{outline:var(--focus);outline-offset:2px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.btn--primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+/* &lt;button type="button" class="btn"&gt;Copy&lt;/button&gt; */
+
+/* CALLOUT — meaning carried by the text label, never by color alone (WCAG 1.4.1) */
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);
+  border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+/* &lt;aside class="callout callout--warn"&gt;&lt;span class="callout-label"&gt;Caution&lt;/span&gt;…&lt;/aside&gt; */
+
+/* CODE — outer &lt;pre&gt; drives the gallery glyph strip; inner &lt;code&gt; is BM25-indexed */
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;padding:0}
+
+/* TABLE — real &lt;thead&gt;/&lt;th scope&gt; for screen-reader header association */
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.9rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+
+/* LINK — AA accent; visible focus ring; signal new-tab; never break out of the iframe */
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+a[target="_blank"]::after{content:" \2197";font-size:.8em}
+/* &lt;a href="https://…" target="_blank" rel="noopener"&gt;…&lt;/a&gt; */</code></pre>
+
+<h3 id="ps-skill-edits">3 &middot; The skill edits to adopt it</h3>
+<p>Edits across the canonical doc and <strong>both <code>kb-artifact</code> skill copies</strong> — the
+repo copy <code>plugins/kb-research/skills/kb-artifact/</code> is SKILL.md-only with a <code>kb find</code>
+Verify step, while the fuller copy in a separate personal skills repo carries
+<code>reference/conventions.md</code>, <code>assets/style.css</code>, and the
+<code>scripts/validate-kb.sh</code> validator + score log. No daemon, server, or CI change. (Out of scope
+for this research doc; listed so &ldquo;yes&rdquo; has a ready starting point.)</p>
+<table>
+<caption>The adopt-it changes, if you choose &ldquo;yes.&rdquo;</caption>
+<thead><tr><th scope="col">File</th><th scope="col">Change</th></tr></thead>
+<tbody>
+<tr><td><code>docs/authoring-artifacts.md</code></td><td>Add a &ldquo;Visual floor (tokens + accessible primitives)&rdquo; subsection: state the constrained-primitives / free-composition model; inline the token preamble as the recommended starting point; give the 5 primitive snippets + the native-elements rule; set a ≥16px reading floor and require a skip-link + <code>:focus-visible</code>; mark <code>--accent</code> as a free per-artifact override. Note it is the inlinable re-cast of <code>docs/research/assets/style.css</code>.</td></tr>
+<tr><td><code>plugins/kb-research/skills/kb-artifact/SKILL.md</code></td><td>(a) Add a 6th &ldquo;must-know&rdquo;: paste the token preamble + use native primitives, leave layout/accent/voice free. (b) Add a SCOPE note: this skill is authoritative for reading documents; do NOT apply <code>frontend-design</code>'s never-converge / no-system-fonts mandate here — reserve it for interactive/playground artifacts. (This copy's Verify step is just <code>kb find</code>, so the programmatic check lives in the <code>skills-repo</code> copy below.)</td></tr>
+<tr><td><code>skills/kb-artifact/reference/conventions.md</code> + <code>assets/style.css</code> (in the separate skills repo)</td><td>In the Self-containment section, replace the bare &ldquo;no gradients / no purple-pink&rdquo; line with the explicit floor; update the embedded <code>assets/style.css</code> so its tokens are the contrast-verified set above (raise <code>--muted</code> to meet 4.5:1 in both themes) and add the reduced-motion, <code>:focus-visible</code>, and skip-link rules it currently lacks.</td></tr>
+<tr><td><code>skills/kb-artifact/scripts/validate-kb.sh</code> (in the separate skills repo)</td><td>Add the a11y self-check to the existing grep-based validator + score log: the styled-<code>div</code>-interactive and hardcoded-hex-off-token checks are one-line greps; the muted-on-bg &lt;4.5:1 contrast check needs a small luminance helper (awk/python), not a grep &mdash; log all as a quality dimension.</td></tr>
+</tbody>
+</table>
+
+<h3 id="ps-reconcile">4 &middot; How this reconciles the two skills</h3>
+<p>A clean altitude split, scoped by artifact type, rather than a winner. The <strong>floor</strong>
+(a11y defaults, a closed contrast-locked token set, native primitives) is standardized — the layer where
+<code>kb-artifact</code>'s restraint+reuse posture is right and where reuse demonstrably wins, and which
+constrains nothing about hue, layout, or typeface. The <strong>ceiling</strong> (layout, the
+<code>--accent</code> override, density, illustration, voice) is left free — the layer
+<code>frontend-design</code> is genuinely good at. This dissolves the contradiction three ways:
+(1) <em>system fonts vs not</em> — the floor uses system fonts for the reading body (a deliberate,
+accessible, zero-weight choice); a showpiece may layer a display face above; (2) <em>never-converge vs
+reuse</em> — convergence is mandated only on the boring, accessibility-sensitive primitives, never on the
+expressive surface; (3) <em>restraint vs distinctiveness</em> — the floor makes restraint the free
+baseline while the per-artifact accent keeps each artifact recognizably its own (Dan Mall's 80/20:
+distinctiveness on the 20% that carries identity, coherence on the 80% that doesn't).</p>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>Do you actually want cross-artifact recognition (favouring even a thin floor), or do you read each
+artifact as a standalone object where per-artifact distinctiveness is a feature? Your &ldquo;free&rdquo;
+gut suggests the latter for the ceiling — but the floor (a11y) is orthogonal to that preference.</li>
+<li>Is the contrast self-check (Option 3) worth the added skill-engineering, or is a soft prose rule
+enough given you can eyeball-fix any contrast that bothers you in your own private corpus?</li>
+<li>Should the standard touch already-served immutable artifacts at all? Propagation can't reach them, so
+the floor only helps <em>future</em> artifacts — is retroactive re-generation of the 4 canon files in
+scope, or explicitly out?</li>
+<li>How aggressively should <code>--accent</code> be bounded? Free hue preserves distinctiveness but
+reintroduces per-artifact contrast risk — should the floor ship a small contrast-verified accent ramp
+(pick from N) rather than a fully free hue?</li>
+<li>The strongest skeptical read: guidance + inlinable tokens is the mechanism class repeatedly reported
+as <em>insufficient</em>, and the only reliably-converging mechanism (build-then-inline) isn't worth
+building at solo scale — so is accepting some divergence (closer to Option 0/1) the more honest endpoint,
+with the floor scoped strictly to the non-negotiable a11y minimum?</li>
+</ul>
+</section>
+
+<section>
+<h2 id="see-also">See also</h2>
+<p>The companion explainer: <strong>&ldquo;Why the frontend-design skill opposes standardization — and
+where that stops applying to kb&rdquo;</strong> —
+<code>docs/research/frontend-design-skill-anti-standardization-rationale.html</code> (same
+<code>kb-docs</code> corpus). It unpacks the design decision behind Anthropic's anti-standardization stance
+(a debiasing corrective against alignment-induced mode collapse), shows it is scoped to expressive app/page
+surfaces, and explains why standardizing kb's document corpus is sanctioned by Anthropic's own
+theme-lock guidance rather than in conflict with it.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

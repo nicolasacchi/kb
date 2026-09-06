@@ -1,0 +1,579 @@
+/* N-track — notes / todo-lists. The /notes view (two-column main + rail),
+   the contextual NotesPanel, the interactive NoteMarkdown checklist, and the
+   NoteEditor. Mirrors the grammar of sessions.css / versions.css and uses the
+   shared design tokens. */
+
+.kb-notes {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.kb-notes__head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  padding: var(--pad);
+  border-bottom: 1px solid var(--rule);
+}
+
+.kb-notes__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.kb-notes__filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kb-notes__chip {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+.kb-notes__chip.is-on {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--ink);
+}
+
+.kb-notes__search {
+  flex: 1 1 160px;
+  min-width: 120px;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  color: var(--ink);
+}
+
+.kb-notes__new,
+.kb-note__btn,
+.kb-notes-panel__new,
+.kb-notes-panel__start {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+.kb-notes__new:disabled,
+.kb-note__btn:disabled,
+.kb-notes-panel__new:disabled,
+.kb-notes-panel__start:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.kb-note__btn--danger {
+  border-color: color-mix(in srgb, var(--red) 50%, var(--rule));
+  background: transparent;
+  color: var(--red);
+}
+
+.kb-notes__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.kb-notes__main {
+  overflow-y: auto;
+  padding: var(--pad);
+}
+
+.kb-notes__rail {
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+  background: var(--bg-panel);
+  min-height: 0;
+}
+
+.kb-notes__empty {
+  color: var(--ink-mute);
+  padding: var(--pad);
+  font-size: 0.9rem;
+}
+
+.kb-notes__kb-head {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  margin: 12px 0 4px;
+}
+.kb-notes__scope-head {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  margin: 8px 0 2px;
+}
+.kb-notes__list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+/* a single note row (shared by /notes list + the panel) */
+.kb-note-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.kb-note-row:hover {
+  background: var(--bg-card-hi);
+  border-color: var(--rule);
+}
+.kb-note-row__title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-note-row__pin {
+  font-size: 0.7rem;
+}
+.kb-note-row__progress {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink-mute);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+}
+
+/* --- NoteEditor --- */
+.kb-note {
+  padding: var(--pad);
+}
+.kb-note__empty {
+  color: var(--ink-mute);
+  padding: var(--pad);
+}
+.kb-note__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.kb-note__title {
+  flex: 1 1 auto;
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-note__title-input {
+  flex: 1 1 auto;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-2);
+  color: var(--ink);
+}
+.kb-note__pin {
+  font-size: 0.8rem;
+}
+.kb-note__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kb-note__status {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+}
+.kb-note__comments {
+  font-size: 0.76rem;
+  color: var(--ink-mute);
+}
+.kb-note__progress {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  overflow: hidden;
+}
+.kb-note__progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--green) 40%, transparent);
+}
+.kb-note__progress-label {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink);
+}
+.kb-note__actions {
+  display: flex;
+  gap: 6px;
+}
+.kb-note__err,
+.kb-notes-panel__err {
+  color: var(--red);
+  font-size: 0.82rem;
+  margin: 4px 0;
+}
+.kb-note__add {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.kb-note__add-input,
+.kb-note__editor-input {
+  flex: 1;
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 5px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-2);
+  color: var(--ink);
+}
+.kb-note__editor-input {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+
+/* --- interactive markdown (checkboxes) --- */
+.kb-note-md {
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.kb-note-md ul {
+  padding-left: 1.2em;
+}
+.kb-note-md li.task-list-item {
+  list-style: none;
+  margin-left: -1.2em;
+}
+.kb-note-md__box {
+  margin-right: 8px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.kb-note-md__box:disabled {
+  cursor: default;
+}
+.kb-note-md pre {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.kb-note-md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* Obsidian-style callouts (rehypeCallouts turns `> [!type] …` blockquotes into
+ * <div class="kb-callout kb-callout--type">). Mirrors the server prose theme;
+ * per-type accent flows through one --cal var, unknown types fall back to the
+ * kb accent so the base style always applies. */
+.kb-note-md .kb-callout {
+  --cal: var(--accent);
+  margin: 0 0 0.9em;
+  padding: 0.55em 0.85em;
+  border-left: 3px solid var(--cal);
+  background: color-mix(in srgb, var(--cal) 12%, var(--bg-card));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.kb-note-md .kb-callout__title {
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cal);
+  margin-bottom: 0.3em;
+}
+.kb-note-md .kb-callout > :last-child {
+  margin-bottom: 0;
+}
+.kb-note-md .kb-callout--note,
+.kb-note-md .kb-callout--info,
+.kb-note-md .kb-callout--abstract,
+.kb-note-md .kb-callout--summary,
+.kb-note-md .kb-callout--tldr {
+  --cal: var(--blue);
+}
+.kb-note-md .kb-callout--tip,
+.kb-note-md .kb-callout--hint,
+.kb-note-md .kb-callout--important,
+.kb-note-md .kb-callout--success,
+.kb-note-md .kb-callout--check,
+.kb-note-md .kb-callout--done {
+  --cal: var(--green);
+}
+.kb-note-md .kb-callout--question,
+.kb-note-md .kb-callout--help,
+.kb-note-md .kb-callout--faq,
+.kb-note-md .kb-callout--warning,
+.kb-note-md .kb-callout--caution,
+.kb-note-md .kb-callout--attention {
+  --cal: var(--warn);
+}
+.kb-note-md .kb-callout--danger,
+.kb-note-md .kb-callout--error,
+.kb-note-md .kb-callout--failure,
+.kb-note-md .kb-callout--fail,
+.kb-note-md .kb-callout--bug,
+.kb-note-md .kb-callout--missing {
+  --cal: var(--red);
+}
+.kb-note-md .kb-callout--quote,
+.kb-note-md .kb-callout--cite {
+  --cal: var(--ink-dim);
+}
+
+/* --- wikilinks ([[…]]) inside a note body --- */
+.kb-note-md .kb-wikilink {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  cursor: pointer;
+}
+.kb-note-md .kb-wikilink:hover {
+  border-bottom-color: var(--accent);
+  background: var(--accent-bg);
+}
+/* Dangling / ambiguous / live-preview wikilink: muted, dashed — a "not yet
+   linked" affordance, never an alarming error colour. */
+.kb-note-md .kb-wikilink--unresolved {
+  color: var(--ink-mute);
+  border-bottom: 1px dashed var(--ink-dim);
+  background: none;
+  cursor: help;
+}
+.kb-note-md .kb-wikilink--unresolved:hover {
+  background: none;
+  border-bottom-color: var(--ink-mute);
+}
+
+/* --- backlinks ("Linked from" / "Referenced in") --- */
+.kb-backlinks {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+.kb-backlinks__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  margin: 0 0 6px;
+}
+.kb-backlinks__count {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-mute);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+}
+.kb-backlinks__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-backlinks__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.86rem;
+}
+.kb-backlinks__item:hover {
+  background: var(--bg-card-hi);
+  border-color: var(--rule);
+}
+.kb-backlinks__icon {
+  font-size: 0.8rem;
+  flex: 0 0 auto;
+}
+.kb-backlinks__title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-backlinks__folder {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-mute);
+  flex: 0 0 auto;
+}
+
+/* --- NotesPanel (contextual rail) --- */
+.kb-notes-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--pad);
+}
+.kb-notes-panel__head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.kb-notes-panel__title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+}
+.kb-notes-panel__scope {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.kb-notes-panel__empty {
+  color: var(--ink-mute);
+  font-size: 0.85rem;
+}
+.kb-notes-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kb-notes-panel__new {
+  margin-top: 4px;
+  align-self: flex-start;
+}
+
+/* --- gallery contextual rail --- */
+.gallery-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.gallery-shell .gallery {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.gallery-notes-rail {
+  flex: 0 0 320px;
+  width: 320px;
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+.gallery-notes-toggle {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.gallery-notes-toggle.is-on {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--ink);
+}
+
+/* --- native note in the Detail view --- */
+.detail__note-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--pad);
+  border-bottom: 1px solid var(--rule);
+}
+.detail__note-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-soft);
+  border: 1px solid var(--accent-bor);
+  background: var(--accent-bg);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+}
+.detail__note-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+@media (max-width: 860px) {
+  .kb-notes__body {
+    grid-template-columns: 1fr;
+  }
+  .kb-notes__rail {
+    border-left: none;
+    border-top: 1px solid var(--rule);
+  }
+  .gallery--with-notes {
+    grid-template-columns: 1fr;
+  }
+  .gallery-notes-rail {
+    border-left: none;
+    border-top: 1px solid var(--rule);
+  }
+}

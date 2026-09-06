@@ -1,0 +1,293 @@
+/* Track V — artifact version timeline + diff panel. Mirrors the
+   .comments-panel right rail (360px, border-left) so the two read as
+   siblings; uses the same --bg-alt / --border / --fg token set. */
+
+.detail--with-versions {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  height: 100%;
+}
+
+.versions-panel {
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  height: 100%;
+  background: var(--bg-alt);
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.vp__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.vp__title {
+  font-weight: 600;
+  color: var(--fg);
+}
+.vp__mode {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.vp__toggle {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+}
+.vp__toggle button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.vp__toggle button.is-on {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--bg-card);
+}
+
+/* CT-F6 — the Memento banner: what `?at=<unix>` resolved to. A quiet
+   accent strip above the timeline, not an alert; a MISS ("nothing is that
+   old") is muted rather than red — it's an honest answer, not an error. */
+.vp__memento {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  box-shadow: inset 2px 0 0 var(--accent);
+  flex: 0 0 auto;
+}
+.vp__memento--miss {
+  box-shadow: inset 2px 0 0 var(--border);
+}
+.vp__memento-lab {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.vp__memento-hit {
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+.vp__memento-rel {
+  color: var(--fg-muted);
+}
+
+.vp__timeline {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 40%;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.vp__hint {
+  padding: 8px 10px;
+  color: var(--fg-muted);
+}
+.vp__err {
+  padding: 8px 10px;
+  color: var(--red);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.vp__verbtn {
+  display: grid;
+  grid-template-columns: 1.4em auto 1fr;
+  grid-template-areas:
+    "glyph short when"
+    "glyph lbl lbl";
+  align-items: baseline;
+  gap: 0 8px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.vp__verbtn:hover:not(:disabled) {
+  background: var(--bg-card);
+}
+.vp__verbtn:disabled {
+  cursor: default;
+}
+.vp__ver.is-sel .vp__verbtn {
+  background: var(--bg-card);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* CT-F6 — the row a `?at=` coordinate landed on. Dotted (not solid) so it
+   reads as "resolved to", distinct from `is-sel`'s "currently diffing"
+   even when they are the same row. */
+.vp__ver.is-memento .vp__short {
+  border-bottom: 1px dotted var(--accent);
+}
+.vp__glyph {
+  grid-area: glyph;
+  color: var(--fg-muted);
+}
+.vp__ver--working .vp__glyph {
+  color: var(--accent);
+}
+.vp__short {
+  grid-area: short;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.vp__when {
+  grid-area: when;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  justify-self: end;
+}
+.vp__lbl {
+  grid-area: lbl;
+  color: var(--fg-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vp__diff {
+  flex: 1 1 auto;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.vp__diffhead {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  color: var(--fg-muted);
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+}
+.vp__hunkhead {
+  padding: 2px 10px;
+  color: var(--blue);
+  background: var(--bg);
+}
+.vp__line {
+  display: grid;
+  grid-template-columns: 3.2ch 3.2ch 1ch 1fr;
+  gap: 6px;
+  padding: 0 8px;
+}
+.vp__ln {
+  color: var(--fg-muted);
+  opacity: 0.7;
+  text-align: right;
+  user-select: none;
+}
+.vp__sign {
+  user-select: none;
+}
+.vp__line--insert {
+  background: color-mix(in oklab, var(--green) 16%, transparent);
+}
+.vp__line--insert .vp__sign {
+  color: var(--green);
+}
+.vp__line--delete {
+  background: color-mix(in oklab, var(--red) 16%, transparent);
+}
+.vp__line--delete .vp__sign {
+  color: var(--red);
+}
+.vp__line--equal {
+  color: var(--fg-muted);
+}
+.vp__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* W2.14 — galley proof: a third diff-mode toggle over the SAME versions
+ * dock (`text | raw | galley` in vp__toggle above — never a new rail icon,
+ * invariant #30). Sections come from the recon's honest text-mode-only
+ * join (web/src/lib/galley.ts): an ordered heading-title list pulled from
+ * the served artifact HTML, matched against DiffLine text monotonically
+ * forward; hunks before any match land in an explicit "unplaced changes"
+ * group rather than being guessed into a real section. Only insert/delete
+ * lines render — as printer's-proof marks, not a full context diff — a
+ * margin caret (stet-green) for insertions, a strike (dele-red) for
+ * deletions, reusing the SAME --green/--red color-mix tokens .vp__line
+ * above already uses. */
+.vp__galley-sec + .vp__galley-sec {
+  margin-top: 10px;
+}
+.vp__galley-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+}
+.vp__galley-rule {
+  flex: 1 1 auto;
+  height: 3px;
+  border-top: 1px solid var(--fg);
+  border-bottom: 1px solid var(--border);
+  opacity: 0.6;
+}
+.vp__galley-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.vp__galley-hunk {
+  padding: 2px 0;
+}
+.vp__proof {
+  display: grid;
+  grid-template-columns: 1.6ch 1fr;
+  gap: 6px;
+  padding: 1px 10px;
+}
+.vp__proof-mark {
+  text-align: center;
+  user-select: none;
+}
+.vp__proof-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.vp__proof--insert {
+  background: color-mix(in oklab, var(--green) 16%, transparent);
+}
+.vp__proof--insert .vp__proof-mark {
+  color: var(--green);
+}
+.vp__proof--delete {
+  background: color-mix(in oklab, var(--red) 16%, transparent);
+}
+.vp__proof--delete .vp__proof-mark {
+  color: var(--red);
+}
+.vp__proof--delete .vp__proof-text {
+  text-decoration: line-through;
+  opacity: 0.85;
+}

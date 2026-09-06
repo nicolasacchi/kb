@@ -1,0 +1,1832 @@
+/* Gallery (v0.6 refresh) — topbar + left rail + grid + hybrid card.
+ *
+ * Lifted, with minor adjustments, from
+ * docs/research/claude-design-handoff/web-gallery/project/app/styles.css.
+ * Loaded AFTER app.css so it overrides legacy gallery rules without
+ * touching unrelated views (detail/settings/comments).
+ */
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* App shell — owned by app.css (3-row grid: topbar / body / statusbar
+ * after D2; 4-row with the ribbon after D3). This file's earlier
+ * `.app { grid-template-rows: var(--topbar-h) 1fr }` clobbered the new
+ * grid because gallery.css loads after app.css. Rule retired here. */
+
+/* ═══════════════════════ TOP BAR ═══════════════════════════════════ */
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(280px, 520px) minmax(
+      180px,
+      1fr
+    );
+  align-items: center;
+  gap: 24px;
+  height: var(--topbar-h);
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 80%, transparent);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-bar);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kb-selector-wrap {
+  position: relative;
+}
+.kb-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px 5px 7px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--elev);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+}
+.kb-selector:hover {
+  border-color: var(--border-hi);
+  background: var(--elev-hi);
+}
+.kb-mark {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  border-radius: 4px;
+}
+.kb-name {
+  font-weight: 500;
+}
+
+.kb-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-popover);
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  min-width: 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.kb-popover__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.kb-popover__item:hover {
+  background: var(--elev);
+}
+.kb-popover__item.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.kb-popover__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.kb-popover__item.is-on .kb-popover__count {
+  color: inherit;
+}
+
+/* Search pill (center) */
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--elev);
+  cursor: text;
+  color: var(--muted);
+  transition: all 0.15s;
+  font: inherit;
+}
+.topbar-search:hover {
+  border-color: var(--border-hi);
+  background: var(--elev-hi);
+}
+.topbar-search-placeholder {
+  flex: 1;
+  font-size: 13px;
+  text-align: left;
+}
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+/* Right (view toggle + settings) */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--elev);
+  overflow: hidden;
+}
+.view-toggle button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.view-toggle button.is-on {
+  background: var(--elev-hi);
+  color: var(--text);
+}
+.view-toggle button:hover {
+  color: var(--text);
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.icon-btn:hover {
+  background: var(--elev-hi);
+  color: var(--text);
+  text-decoration: none;
+}
+.icon-btn.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ═══════════════════════ BODY GRID ═══════════════════════════════════ */
+.body {
+  min-height: 0;
+}
+.body--with-rail {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  min-height: calc(100vh - var(--topbar-h));
+}
+.body--full {
+  display: block;
+  height: 100%;
+}
+.view {
+  overflow: auto;
+  padding: 0;
+}
+
+/* ═══════════════════════ LEFT RAIL ═══════════════════════════════════ */
+.leftrail {
+  border-right: 1px solid var(--border);
+  padding: 24px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100vh - var(--topbar-h));
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rail-h {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  padding: 0 8px 4px;
+}
+.rail-empty {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted-2);
+  font-style: italic;
+}
+
+.rail-tags {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rail-tag {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.rail-tag:hover {
+  background: var(--elev);
+}
+.rail-tag.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.rail-tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+.rail-tag-name {
+  flex: 1;
+  text-align: left;
+}
+.rail-tag-n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.rail-tag.is-on .rail-tag-n {
+  color: inherit;
+}
+
+.rail-caps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail-cap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.rail-cap:hover {
+  background: var(--elev);
+}
+.rail-cap input {
+  accent-color: var(--accent);
+}
+
+.rail-date {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+}
+.rail-date-opt {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  color: var(--muted);
+  background: transparent;
+}
+.rail-date-opt:hover {
+  border-color: var(--border-hi);
+  color: var(--text);
+}
+.rail-date-opt input {
+  display: none;
+}
+.rail-date-opt.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rail-foot {
+  margin-top: auto;
+  padding: 10px 8px 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+}
+
+/* ═══════════════════════ GALLERY MAIN ═══════════════════════════════ */
+.gallery {
+  padding: 32px 32px 80px;
+  min-width: 0;
+}
+.gallery__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 4px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.gallery-h1 {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  margin: 0;
+}
+.gallery-h1-accent {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 18px;
+}
+/* Clickable ancestor segments in the gallery header's folder breadcrumb
+   (`recent › ideas › jira-to-github-projects`). The last segment reuses
+   .gallery-h1-accent; these are the navigable links before it. */
+.gallery-crumb {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.gallery-crumb:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.gallery-crumb-sep {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  color: var(--muted);
+}
+.gallery-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+/* "Download this folder" — shown in the gallery controls only when a
+   folder filter is active. */
+.gallery-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.gallery-download:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* F4 — rename active ?folder= (beside download). */
+.gallery-folder-rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.gallery-folder-rename:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* v0.33 Y1 — exact-folder toggle (same chrome as rename). */
+.gallery-folder-exact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.gallery-folder-exact:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.gallery-folder-exact.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+}
+/* v0.33 Y4 — compact folder note strip under the breadcrumb h1. */
+.gallery-folder-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  margin: 4px 0 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--elev);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+  min-width: 0;
+}
+.gallery-folder-note:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.gallery-folder-note__title {
+  font-weight: 500;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gallery-folder-note__excerpt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+.gallery-folder-note:hover .gallery-folder-note__excerpt {
+  color: inherit;
+}
+.gallery__error {
+  padding: var(--pad-3);
+  border: 1px solid var(--err);
+  color: var(--err);
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+}
+/* SH.D.5 — the ad-hoc .gallery__loading row is retired in favor of
+ * <Loading/> (components/Loading.tsx), which reuses .kb-empty's styling
+ * (app.css) instead. app.css still carries an identically-named legacy rule
+ * (unowned by this unit) — dead now that gallery.tsx no longer renders this
+ * class, left alone rather than touched. */
+
+/* hide legacy gallery toggle (now in topbar) */
+.gallery .gallery__views,
+.gallery .gallery__filter {
+  display: none;
+}
+
+/* ═══════════════════════ INDEX HERO (v0.7.x) ═══════════════════════
+   Featured landing-page block above the grid. One per kb when the
+   corpus contains an `index.html` (or any `isIndexPage` artifact).
+   Visually echoes the hybrid card — same accent stripe + glyph
+   vocabulary — but spans the full gallery width with a larger
+   serif title + untruncated summary, so the kb's own README acts as
+   the front page. */
+.gallery-hero {
+  position: relative;
+  display: block;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  margin-bottom: 28px;
+  overflow: hidden;
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--accent-soft);
+  transition:
+    transform 0.18s var(--ease),
+    border-color 0.18s,
+    box-shadow 0.2s;
+}
+.gallery-hero:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover), 0 0 0 1px var(--accent-soft);
+  text-decoration: none;
+}
+.gallery-hero:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-card-hover), 0 0 0 3px var(--accent-soft);
+}
+.gallery-hero__stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent-tag, var(--accent));
+}
+.gallery-hero__body {
+  position: relative;
+  padding: 28px 32px 24px 36px;
+  background:
+    radial-gradient(
+      ellipse at top right,
+      color-mix(in oklch, var(--accent-tag, var(--accent)) 12%, transparent),
+      transparent 60%
+    ),
+    var(--collage-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.gallery-hero__badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.gallery-hero__folder {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gallery-hero__title {
+  font-family: var(--font-serif);
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  font-weight: 500;
+  margin: 0;
+}
+.gallery-hero__summary {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0;
+  max-width: 72ch;
+}
+.gallery-hero__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.gallery-hero__tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.gallery-hero__stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.04em;
+  flex: none;
+}
+.gallery-hero__words,
+.gallery-hero__backlinks,
+.gallery-hero__age {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .gallery-hero__body {
+    padding: 20px 20px 18px 24px;
+  }
+  .gallery-hero__title {
+    font-size: 24px;
+  }
+}
+
+/* ═══════════════════════ CARD GRID ═══════════════════════════════ */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 1280px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Empty state — recentred for the new shell */
+.empty {
+  text-align: center;
+  padding: 80px 24px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.empty__title {
+  font-size: 18px;
+  color: var(--text);
+  font-weight: 500;
+  margin: 0;
+}
+.empty__msg {
+  margin: 0;
+}
+.empty__msg code {
+  font-family: var(--font-mono);
+  background: var(--elev);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* ═══════════════════════ HYBRID CARD ═══════════════════════════════ */
+.gallery .grid .card {
+  /* Override the legacy .card rule from app.css. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--text);
+  min-height: auto;
+  padding: 0;
+  gap: 0;
+  transition:
+    transform 0.18s var(--ease),
+    border-color 0.18s,
+    box-shadow 0.2s;
+  box-shadow: var(--shadow-card);
+}
+.gallery .grid .card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-hi);
+  box-shadow: var(--shadow-card-hover);
+  text-decoration: none;
+}
+.gallery .grid .card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-card-hover), 0 0 0 3px var(--accent-soft);
+}
+
+.card-new-dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+  z-index: 2;
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 30%, transparent);
+}
+/* Per-card download — bottom-right corner, revealed on card hover/focus.
+   A <button> (not <a>) so it can preventDefault the outer card <Link>. */
+.card-download {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+/* Reveal on hover/focus regardless of grid path — the default gallery
+   uses VirtualGrid (`.virtual-grid .card`), not the legacy `.gallery
+   .grid .card`. */
+.card:hover .card-download,
+.card:focus-within .card-download,
+.card-download:focus-visible {
+  opacity: 1;
+}
+.card-download:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.card-pages-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+/* Hand-authored index/landing pages — accent border + ring so they
+   read as section landing pages inline in the grid. */
+.gallery .grid .card--index {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--accent-soft);
+}
+.card-index-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+/* Hybrid preview block — title + glyph strip in an accented backdrop */
+.prev {
+  position: relative;
+  overflow: hidden;
+}
+.prev-hybrid {
+  position: relative;
+  background:
+    radial-gradient(
+      ellipse at top right,
+      color-mix(in oklch, var(--accent-tag, var(--accent)) 14%, transparent),
+      transparent 65%
+    ),
+    var(--collage-bg);
+  padding: 18px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 130px;
+  gap: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.prev-hybrid::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent-tag, var(--accent));
+}
+.prev-hyb-title {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  line-height: 1.18;
+  letter-spacing: -0.018em;
+  color: var(--text-strong);
+  font-weight: 500;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prev-hyb-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 18px;
+}
+.prev-hyb-glyphs {
+  display: flex;
+  gap: 6px;
+}
+.prev-hyb-glyph {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  border: 1px solid
+    color-mix(in oklch, var(--accent-tag, var(--accent)) 22%, var(--border));
+  background: color-mix(
+    in oklch,
+    var(--accent-tag, var(--accent)) 6%,
+    transparent
+  );
+  color: var(--accent-tag, var(--accent));
+}
+.prev-hyb-glyph svg {
+  width: 11px;
+  height: 11px;
+}
+.prev-hyb-n {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.prev-hyb-words {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted-2);
+  letter-spacing: 0.04em;
+}
+
+/* Card body — summary, tags, age */
+.card-body {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+.card-summary {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+}
+.card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+.card-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  background: transparent;
+}
+/* v0.22 — a clickable tag pill that deep-links into the tag-filtered gallery. */
+.tag-pill--link {
+  text-decoration: none;
+  cursor: pointer;
+}
+.tag-pill--link:hover {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.card-age {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+  flex: none;
+}
+
+/* ═══════════════════════ v0.8 G1 — FOLDERS / SORT / GROUP ═══════════ */
+
+.rail-folders {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rail-folders--nested {
+  margin-top: 1px;
+}
+.rail-folder-li {
+  display: flex;
+  flex-direction: column;
+}
+.rail-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 0;
+  border-radius: 6px;
+}
+.rail-folder:hover {
+  background: var(--elev);
+}
+.rail-folder.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.rail-folder-chev {
+  width: 16px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted-2);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  padding: 0;
+  flex: none;
+}
+.rail-folder-chev:hover {
+  color: var(--text);
+}
+.rail-folder-chev--leaf {
+  cursor: default;
+  color: var(--muted-2);
+  opacity: 0.6;
+}
+.rail-folder-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  min-width: 0;
+}
+.rail-folder-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-folder-n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+.rail-folder.is-on .rail-folder-n {
+  color: inherit;
+}
+
+/* Header bar controls (sort + group) */
+.gallery__controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.sort-control,
+.group-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sort-control__label,
+.group-control__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.sort-control__select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  height: 26px;
+}
+.sort-control__select:focus {
+  outline: 1px solid var(--accent);
+}
+.sort-control__dir {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--elev);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+}
+.sort-control__dir:hover {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.group-control__opts {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.group-control__opt {
+  background: var(--elev);
+  border: 0;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  height: 26px;
+}
+.group-control__opt + .group-control__opt {
+  border-left: 1px solid var(--border);
+}
+.group-control__opt.is-on {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.group-control__opt:hover:not(.is-on) {
+  color: var(--text);
+}
+
+/* Grouped gallery sections (v0.8 G1) */
+.gallery-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+/* S7 — load-more button for scale-mode group-by-folder rendering.
+   The virtual grid handles "load more" via scroll-near-bottom, but
+   grouped sections don't have a single scroll sentinel; an explicit
+   button keeps the pagination story predictable. */
+.gallery-load-more {
+  align-self: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 18px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  margin-top: 10px;
+}
+.gallery-load-more:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.gallery-load-more:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+.gallery-section__h {
+  margin: 0 0 10px;
+  padding: 6px 0 6px 12px;
+  border-left: 2px solid var(--accent);
+}
+.gallery-section__title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  color: var(--text-strong);
+}
+.gallery-section__title:hover .gallery-section__name {
+  color: var(--accent);
+}
+.gallery-section__name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-strong);
+  letter-spacing: 0.01em;
+}
+.gallery-section__sep {
+  color: var(--muted-2);
+}
+.gallery-section__count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Card folder breadcrumb (small muted line above title) */
+.prev-hyb-folder {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ═══════════════════════ CORPUS LOBBY (W1.gallery) ═══════════════════
+ * GalleryLobby.tsx — census line + collapse toggle, category stacked bar
+ * + legend, highlights strip (reuses .kb-card via <Card/>), example-search
+ * tag chips. Calm-computing: the census line is plain counts, never a
+ * goal/percentage — the collapsed state is JUST that line. */
+.gallery-lobby {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.gallery-lobby__census {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--muted);
+}
+.gallery-lobby__census:hover {
+  color: var(--text);
+}
+.gallery-lobby__census-line {
+  font-size: 12px;
+}
+.gallery-lobby__chev {
+  flex: none;
+  transform: rotate(0deg);
+  transition: transform 140ms var(--ease);
+}
+.gallery-lobby__chev--open {
+  transform: rotate(90deg);
+}
+.gallery-lobby__body {
+  padding: 4px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* SH.D.1 — the stacked category bar + inline legend. Slim on purpose (6-8px
+ * tall — a census read, not a chart); each segment/dot's color comes from
+ * the same deterministic tagColor() hash the tag pills already use (set
+ * inline per-category by GalleryLobby.tsx), not a positional cycle, so a
+ * category keeps its color as the corpus grows/reorders. Below two
+ * categories the bar itself is skipped entirely (see .gallery-lobby__cat-solo
+ * below) — a single 100%-width segment carries no information and read as
+ * an oversized, broken-looking rule (design audit). */
+.gallery-lobby__bar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gallery-lobby__bar {
+  display: flex;
+  height: 7px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--elev);
+}
+.gallery-lobby__seg {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-right: 1px solid var(--surface);
+}
+.gallery-lobby__seg:hover {
+  filter: brightness(1.25);
+}
+.gallery-lobby__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+.gallery-lobby__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.gallery-lobby__legend-item:hover {
+  color: var(--text);
+}
+.gallery-lobby__legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  flex: none;
+}
+.gallery-lobby__legend-ct {
+  color: var(--muted-2);
+}
+
+/* A single category: no bar (nothing to stack), just one compact chip so
+ * the census still reads as "here's the one category" instead of a rule
+ * that's 100% one color for no visible reason. */
+.gallery-lobby__cat-solo {
+  display: flex;
+}
+.gallery-lobby__legend-item--solo {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.gallery-lobby__legend-item--solo:hover {
+  border-color: var(--accent-soft);
+}
+
+.gallery-lobby__highlights {
+  /* Reuses the base .grid rules (auto-fill columns) — just a tighter gap so
+   * three "highlight" cards read as a strip, not a full section. */
+  gap: 12px;
+}
+/* SH.D.R — the shared .kb-card fixes height at 246px because VirtualGrid
+ * positions grid rows at a fixed stride (chrome.css's own doc). The lobby
+ * strip is a STATIC three-card row rendered outside the virtualiser, so
+ * that coupling doesn't apply here — and the SH.D.2 reorder (tags above a
+ * 3-line excerpt) can exceed 246px, slicing the footer mid-height
+ * (after-shot 2026-08-20). Let lobby cards size to content instead. */
+.gallery-lobby__highlights .kb-card {
+  height: auto;
+  min-height: 246px;
+}
+/* SH.D.2 — the highlight strip's picks (most-backlinked docs) can carry
+ * unusually long summaries, which hard-clipped mid-line with a tag pill
+ * sliced by the card edge (design audit). Scoped to the lobby only — the
+ * shared <Card/> shell (chrome.css) is owned by a concurrent unit, so this
+ * reinforces the contract from here instead: a clean 3-line clamp (native
+ * ellipsis) on the excerpt, and the tag row visually reordered ABOVE it via
+ * flex `order` (no DOM change) so a pill can never render half-clipped by
+ * the excerpt's cut, regardless of how long the source text is. */
+.gallery-lobby__highlights .kb-card__tags {
+  order: 1;
+  flex: none;
+}
+.gallery-lobby__highlights .kb-card__excerpt {
+  order: 2;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gallery-lobby__highlights .kb-card__foot {
+  order: 3;
+}
+
+.gallery-lobby__examples {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gallery-lobby__examples-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.gallery-lobby__example-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-decoration: none;
+}
+.gallery-lobby__example-chip:hover {
+  color: var(--accent-soft);
+  border-color: var(--accent-soft);
+}
+
+/* ═══════════════════════ ANTILIBRARY (W1.gallery) ═════════════════════
+ * A reserve, never a backlog — plain count, no percentage, no progress
+ * bar (calm-computing contract). Sits above the grid when the Sidebar's
+ * "Reading → never opened" chip is active. */
+.gallery-antilibrary-note {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 2px 12px;
+}
+
+/* ═══════════════════════ DRAFT VIEW NOTE (W2.8) ════════════════════════
+ * "drafts — captured, not yet filed" — a staging shelf, never a backlog
+ * (calm-computing contract, same framing as the antilibrary note above).
+ * Sits above the grid when the gallery is in the draft view (Sidebar's
+ * "Drafts (N)" chip, or a hand-typed `?q=tag:draft`). */
+.gallery-draft-note {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 2px 12px;
+}
+
+/* ═══════════════════════ READ-STATE CORNER MARKS (W1.gallery) ═════════
+ * Modifier-only additions to chrome.css's .kb-card__* grammar (base card
+ * rules live there — this file only adds the two new classes below).
+ * Mirrors .kb-card__new's dot (top-LEFT corner, chrome.css) on the
+ * opposite top-RIGHT corner so the two never collide; "new" = indexed
+ * recently, these are about YOUR read history — independent signals, a
+ * card can carry either, both, or neither. */
+.kb-card__readmark {
+  position: absolute;
+  top: 8px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--card-bg, var(--surface));
+}
+.kb-card__readmark--unseen {
+  background: transparent;
+  border: 1.5px solid var(--muted-2);
+}
+.kb-card__readmark--updated {
+  background: var(--accent-soft);
+}
+
+/* ═══════════════════════ ILLUMINATION ORNAMENT (W2.12) ═════════════════
+ * Modifier-only addition to chrome.css's .kb-card__* grammar (same split
+ * as the read-state corner marks above). One deterministic per-artifact
+ * SVG (Illumination.tsx / lib/illumination.ts), pinned top-LEFT — see
+ * Card.tsx's anatomy comment for the full placement rationale. z-index 0
+ * keeps it strictly BELOW the folder/title text (chrome.css z-index 1)
+ * and every top-left badge (the "new" dot, the index badge — both z-index
+ * 2): an opaque badge simply paints over it, so there's never a visual
+ * collision, only a faint backdrop where nothing else claims the corner.
+ * Always-on (no pref toggle — SPEC W2.12 item 4) but deliberately quiet:
+ * low opacity, `pointer-events: none` (purely decorative, aria-hidden). */
+.kb-illum {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 22px;
+  height: 22px;
+  z-index: 0;
+  opacity: 0.4;
+  pointer-events: none;
+  color: var(--ink-dim);
+}
+:root[data-theme="light"] .kb-illum {
+  opacity: 0.3;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] .kb-illum {
+    opacity: 0.3;
+  }
+}
+
+/* ═══════════════════════ VIEW TRANSITION (W1.gallery) ══════════════════
+ * lib/viewTransition.ts sets `view-transition-name: kb-doc-title` on the
+ * clicked card's title (JS, click-time only — see that file's doc comment
+ * for why it can't be a static CSS rule). Respect reduced-motion by
+ * disabling just that transition's animation; the navigation itself still
+ * happens instantly either way. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(kb-doc-title),
+  ::view-transition-old(kb-doc-title),
+  ::view-transition-new(kb-doc-title) {
+    animation: none !important;
+  }
+}
+
+/* ═══════════════════════ BROADSHEET (W2.5) ══════════════════════════════
+ * `?view=press` — components/Broadsheet.tsx. Newspaper grammar over kb
+ * design tokens: a serif nameplate + double-rule masthead, then a column
+ * grid (lead spans the width features occupies as 2 cols; briefs are a
+ * rule-separated single column below; continuing-coverage is a right
+ * rail). Collapses to one column ≤860px, same literal breakpoint every
+ * other per-surface stylesheet uses (notes.css/resurface.css/search.css) —
+ * kept local to this file like gallery.css's own 1280/900/600 breakpoints
+ * above, not mobile.css (that file is chrome-only). */
+.kb-broadsheet {
+  padding-bottom: 24px;
+}
+
+.kb-broadsheet__masthead {
+  text-align: center;
+  padding: 8px 0 18px;
+}
+.kb-broadsheet__title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+.kb-broadsheet__mast-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+.kb-broadsheet__vol::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 10px;
+  margin-left: 14px;
+  background: var(--rule-hi);
+  vertical-align: middle;
+}
+.kb-broadsheet__census {
+  color: var(--muted-2);
+}
+/* The "thin double rule" — two hairlines close together, the classic
+ * masthead separator (a single 4px band bordered top+bottom). */
+.kb-broadsheet__mast-rule {
+  height: 4px;
+  margin-top: 14px;
+  border-top: 1px solid var(--text-strong);
+  border-bottom: 1px solid var(--rule-hi);
+}
+
+.kb-broadsheet__page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 36px;
+  align-items: start;
+  padding-top: 24px;
+}
+.kb-broadsheet__main {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+
+/* Lead story — full width of the main column (the same total width the
+ * 2-column feature grid below occupies, i.e. a "2-col span"). */
+.kb-broadsheet__lead {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--rule);
+}
+.kb-broadsheet__lead-link {
+  display: block;
+  color: var(--text);
+  text-decoration: none;
+}
+.kb-broadsheet__kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.kb-broadsheet__lead-title {
+  margin: 0 0 10px;
+  font-family: var(--font-serif);
+  font-size: 32px;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.kb-broadsheet__lead-link:hover .kb-broadsheet__lead-title {
+  color: var(--accent);
+}
+.kb-broadsheet__lead-dek {
+  margin: 0;
+  max-width: 68ch;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.kb-broadsheet__lead-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted-2);
+}
+.kb-broadsheet__lead-chip {
+  margin-left: 4px;
+}
+
+/* Features — 2×2. */
+.kb-broadsheet__features {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px 28px;
+}
+.kb-broadsheet__feature {
+  display: block;
+  color: var(--text);
+  text-decoration: none;
+  padding-bottom: 4px;
+}
+.kb-broadsheet__feature-kicker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-bottom: 4px;
+}
+.kb-broadsheet__feature-title {
+  margin: 0 0 6px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.kb-broadsheet__feature:hover .kb-broadsheet__feature-title {
+  color: var(--accent);
+}
+.kb-broadsheet__feature-dek {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-broadsheet__feature-meta {
+  display: flex;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--muted-2);
+}
+
+/* Briefs — a rule-separated column of one-liners. */
+.kb-broadsheet__briefs {
+  list-style: none;
+  margin: 0;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+}
+.kb-broadsheet__brief {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.kb-broadsheet__brief:last-child {
+  border-bottom: 0;
+}
+.kb-broadsheet__brief-link {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-broadsheet__brief-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.kb-broadsheet__brief-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--muted-2);
+}
+
+/* Continuing coverage — a right rail (mtime-after-last-open rows). */
+.kb-broadsheet__coverage {
+  border-left: 1px solid var(--rule);
+  padding-left: 20px;
+}
+.kb-broadsheet__rail-h {
+  margin: 0 0 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.kb-broadsheet__coverage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.kb-broadsheet__coverage-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-broadsheet__coverage-item a {
+  font-size: 13px;
+  color: var(--text);
+  text-decoration: none;
+  line-height: 1.35;
+}
+.kb-broadsheet__coverage-item a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.kb-broadsheet__coverage-meta {
+  font-size: 10.5px;
+  color: var(--muted-2);
+}
+
+@media (max-width: 860px) {
+  .kb-broadsheet__title {
+    font-size: 28px;
+  }
+  .kb-broadsheet__lead-title {
+    font-size: 24px;
+  }
+  .kb-broadsheet__page {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+  .kb-broadsheet__features {
+    grid-template-columns: 1fr;
+  }
+  .kb-broadsheet__coverage {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--rule);
+    padding-top: 16px;
+  }
+}
+
+/* ═══════════════════════ ROVING CURSOR (W2.6a) ══════════════════════════
+ * `hooks/useRovingCursor.ts`, driven from `routes/gallery.tsx`. CSS-class
+ * focus only — never DOM focus theft (FileTree.tsx's model) — so these
+ * classes ride a THIN WRAPPER around Card/ListRow (both out of this
+ * phase's owned files) rather than a prop threaded into either component.
+ * Visual language borrows the legacy `.grid .card:focus-visible` ring
+ * above (border-color + soft accent halo), just keyboard- rather than
+ * focus-ring-driven. */
+.kb-card--focused {
+  outline: none;
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft);
+}
+.kb-card--focused .kb-card {
+  border-color: var(--accent);
+}
+.list-row--focused {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft);
+}

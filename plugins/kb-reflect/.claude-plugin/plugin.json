@@ -1,0 +1,6 @@
+{
+  "name": "kb-reflect",
+  "description": "The memory 'dream': /kb-reflect consolidates past Claude Code sessions into durable curated facts. Reads session digests, dedups against existing memories (ADD/SUPERSEDE/MERGE/NOOP), and — after you approve a dry-run — writes graded, provenance-linked facts via `kb remember`. The distiller is the live agent (same model, same tokens); the daemon stays model-free. Append-only, human-gated, recall untouched (#10).",
+  "version": "0.1.0",
+  "author": { "name": "kb" }
+}

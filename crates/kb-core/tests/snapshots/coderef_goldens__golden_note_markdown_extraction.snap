@@ -1,0 +1,122 @@
+---
+source: crates/kb-core/tests/coderef_goldens.rs
+expression: e
+---
+Extraction {
+    refs: [
+        CodeRef {
+            ordinal: 0,
+            kind: Path,
+            raw_text: "app/services/order_dispatch/conversion.rb",
+            path_hint: Some(
+                "app/services/order_dispatch/conversion.rb",
+            ),
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "The entry point is app/services/order_dispatch/conversion.rb and the caller is checkout_controller.rb:284. See Billing::InvoiceService#call and Order#confirm_payment!.",
+            context_tokens: [
+                "conversion",
+            ],
+            declared: false,
+            group: None,
+        },
+        CodeRef {
+            ordinal: 1,
+            kind: PathLine,
+            raw_text: "checkout_controller.rb:284",
+            path_hint: Some(
+                "checkout_controller.rb",
+            ),
+            line_start: Some(
+                284,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "The entry point is app/services/order_dispatch/conversion.rb and the caller is checkout_controller.rb:284. See Billing::InvoiceService#call and Order#confirm_payment!.",
+            context_tokens: [
+                "checkout_controller",
+            ],
+            declared: false,
+            group: None,
+        },
+        CodeRef {
+            ordinal: 2,
+            kind: SymbolMethod,
+            raw_text: "Billing::InvoiceService#call",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Billing::InvoiceService",
+            ),
+            symbol_member: Some(
+                "call",
+            ),
+            context: "The entry point is app/services/order_dispatch/conversion.rb and the caller is checkout_controller.rb:284. See Billing::InvoiceService#call and Order#confirm_payment!.",
+            context_tokens: [
+                "call",
+                "InvoiceService",
+            ],
+            declared: false,
+            group: None,
+        },
+        CodeRef {
+            ordinal: 3,
+            kind: SymbolMethod,
+            raw_text: "Order#confirm_payment!",
+            path_hint: None,
+            line_start: None,
+            line_end: None,
+            line_spans: None,
+            symbol_container: Some(
+                "Order",
+            ),
+            symbol_member: Some(
+                "confirm_payment!",
+            ),
+            context: "The entry point is app/services/order_dispatch/conversion.rb and the caller is checkout_controller.rb:284. See Billing::InvoiceService#call and Order#confirm_payment!.",
+            context_tokens: [
+                "confirm_payment!",
+                "Order",
+            ],
+            declared: false,
+            group: None,
+        },
+        CodeRef {
+            ordinal: 4,
+            kind: PathLine,
+            raw_text: "app/models/order.rb:1044",
+            path_hint: Some(
+                "app/models/order.rb",
+            ),
+            line_start: Some(
+                1044,
+            ),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "# app/models/order.rb:1044 after_commit { broadcast(:placed, self) }",
+            context_tokens: [
+                "order",
+                "models",
+                "after_commit",
+                "broadcast",
+                "placed",
+                "self",
+            ],
+            declared: false,
+            group: None,
+        },
+    ],
+    groups: [],
+    ungrouped_count: 5,
+    code_rev: None,
+    truncated: false,
+}

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="reference">
+<meta name="kb-tags" content="status:reference, project:kb, overview, features, architecture, search, embeddings, comments, agent-memory, atlas, tui, self-host, sessions, notes">
+<title>kb: a complete guide to every feature and how it works</title>
+<style>
+/* ── kb visual floor — keep in sync with kb/docs/authoring-artifacts.md "Visual floor" ── */
+:root{
+  --bg:#fbfbfa;--surface:#f3f3f1;--fg:#1b1b1a;--muted:#5f5f5c;
+  --rule:#d9d9d6;--accent:#3a5a9f;--accent-fg:#ffffff;
+  --warn:#8a5f00;--danger:#9a2f28;--ok:#256148;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:50rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16171a;--surface:#1f2126;--fg:#e6e6e3;--muted:#a3a39e;
+    --rule:#2c2e33;--accent:#8fb0ee;--accent-fg:#11131a;
+    --warn:#e0b24d;--danger:#f08079;--ok:#6fcaa0;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.btn{font:600 var(--fs-small)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;border:1px solid var(--rule);border-radius:var(--radius);background:transparent;color:var(--fg)}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:focus-visible{outline:var(--focus);outline-offset:2px}
+.btn--primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+/* ── end kb visual floor ── */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:2rem;margin:.2em 0 .3em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.08rem;margin:1.7em 0 .3em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+a[target="_blank"]::after{content:" \2197";font-size:.8em}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.2rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0}
+blockquote{margin:1em 0;padding:.2em 1em;border-left:3px solid var(--rule);color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.88rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.toc{font-family:var(--sans);font-size:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:1em 1.2em;margin:1.5em 0}
+.toc-label{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:.5em}
+.toc ol{margin:0;padding-left:1.3em;columns:2;column-gap:2em}
+.toc li{font-family:var(--sans);margin:.15em 0}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>reference <span class="sep">&middot;</span> project:kb</div>
+  <h1>kb: a complete guide to every feature and how it works</h1>
+  <p class="lede">kb is a self-hosted Rust daemon that watches folders of LLM-generated HTML &amp; Markdown, indexes them for hybrid keyword-plus-vector search, and serves them through a sandboxed web app, a terminal dashboard, and a CLI — with comments, an agent-memory store, a 2-D map, and fleet operation layered on top.</p>
+  <p class="lede" style="font-size:1rem;border-left:4px solid var(--accent);padding:.6em 1em;background:var(--surface)"><strong>Superseded for day-to-day use.</strong> The current operator-facing guide is the standalone multi-page site under <code>docs/guide/</code> (post-v0.24: TUI retired, sessions as episodic memory, reading lists, wikilinks). This page remains a frozen v0.16-era feature snapshot in research.</p>
+  <div class="meta-strip">
+    <span>2026-06-06</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:reference</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span>current as of v0.16</span>
+  </div>
+
+  <nav class="toc" aria-label="Contents">
+    <div class="toc-label">Contents</div>
+    <ol>
+      <li><a href="#overview">What kb is</a></li>
+      <li><a href="#architecture">How it works</a></li>
+      <li><a href="#indexing">Indexing your corpus</a></li>
+      <li><a href="#search">Search &amp; embeddings</a></li>
+      <li><a href="#serving">Serving &amp; reading artifacts</a></li>
+      <li><a href="#web-app">The web app</a></li>
+      <li><a href="#atlas">The 2-D atlas</a></li>
+      <li><a href="#comments">Comments &amp; review</a></li>
+      <li><a href="#memory">Agent memory</a></li>
+      <li><a href="#sessions-reading">Sessions &amp; reading progress</a></li>
+      <li><a href="#notes-bookmarks">Notes, bookmarks &amp; anchors</a></li>
+      <li><a href="#tui">The terminal dashboard</a></li>
+      <li><a href="#sharing">Sharing &amp; publishing</a></li>
+      <li><a href="#fleet-selfhost">Fleet &amp; self-hosting</a></li>
+      <li><a href="#authoring">Authoring artifacts</a></li>
+      <li><a href="#extending">Extending kb</a></li>
+      <li><a href="#cli">The CLI at a glance</a></li>
+    </ol>
+  </nav>
+</header>
+
+<section>
+<h2 id="overview">What kb is</h2>
+<p>If you generate a lot of standalone HTML documents with an LLM — research reports, design reviews, RFCs, deep dives — you end up with a pile of files that are individually good but collectively unsearchable. kb is the answer to "where did I put that, and can I find it by meaning, not just filename?" It is a long-running daemon that <strong>indexes</strong>, <strong>searches</strong>, and <strong>serves</strong> a personal collection of those artifacts.</p>
+<p>The mental model is three nouns. A <strong>daemon</strong> is one running process; you can run many side-by-side. Each daemon serves one or more <strong>kbs</strong> — a kb is simply a folder of artifacts (a "corpus"), declared in <code>~/.config/kb/kb.toml</code>. Each <strong>artifact</strong> is one self-contained HTML or Markdown file. The daemon watches the folders and keeps its index in step automatically.</p>
+<p>One daemon, three ways to use it: the <code>kb</code> command-line tool, a five-tab terminal dashboard (<code>kb tui</code>), and a single-page web app served at <code>/</code>. By the numbers, kb is roughly 93000 lines of Rust across five crates (<code>crates/kb-core</code>, <code>crates/kb-server</code>, <code>crates/kb-cli</code>, <code>crates/kb-tui</code>, <code>crates/kb-embedder</code>) plus a ~27000-line React + TypeScript SPA under <code>web/src</code>. It has shipped in tight phased milestones: the first spikes (2026-05-11), v0.1–v0.7 in a two-week sprint (2026-05-12 to 2026-05-14), the embedding bake-off and TUI build-out (2026-05-19), the agent-memory and atlas milestones (2026-05-22 to 2026-05-25), and v0.14 (2026-06-01) — with v0.15–v0.16 work (created-time sort, the query DSL, a proactive embedder liveness probe) since landed on <code>main</code>. The author's live instance runs at <code>kb.example.com</code>.</p>
+<div class="callout"><span class="callout-label">Design stance</span>Everything is local-first and LLM-free at runtime. Search ranking, atlas layout, and memory recall are all deterministic algorithms — the only neural component is the embedding model, and it runs as a supervised out-of-process subprocess. kb never phones home.</div>
+</section>
+
+<section>
+<h2 id="architecture">How it works</h2>
+<p>The whole system is a pipeline from a file on disk to a row you can search. A source folder is watched; a changed file is parsed; the parsed document flows through a back-pressured channel into the indexer; the indexer writes to storage and asks the embedder for a vector. The server reads that storage to answer queries and to serve the artifact itself.</p>
+<pre><code>source folders
+   │  (file watcher, ~400ms debounce)
+   ▼
+parser  ──►  title · headings · kb-tags · kb-category
+            kb-prompt · cross-artifact link edges
+   │  (per-kb, back-pressured mpsc ingest)
+   ▼
+indexer ──►  storage actor  ──►  lance (vectors)  +  sqlite (metadata)
+   │                    ▲
+   └──► embedder sidecar ┘  (bge-small, NDJSON over stdio)
+                 │
+   axum server ◄─┘  REST /api/*  ·  SSE /api/events  ·  SPA  ·  artifact subdomains</code></pre>
+<p><strong>Storage is split by job.</strong> Vector embeddings and the BM25-searchable body live in a <a href="https://lancedb.github.io/lancedb/" target="_blank" rel="noopener">LanceDB</a> dataset per kb (under <code>&lt;state&gt;/&lt;kb&gt;/lance/</code>); everything relational — history, errors, link edges, sessions, bookmarks, notes — lives in sqlite. All writes funnel through a single-writer <strong>storage actor</strong> so concurrent indexing and queries never race on the dataset. Because lance is built on <a href="https://arrow.apache.org/" target="_blank" rel="noopener">Apache Arrow</a>, lance and arrow are pinned to one exact version so their <code>RecordBatch</code> types unify.</p>
+<p><strong>The server is <a href="https://github.com/tokio-rs/axum" target="_blank" rel="noopener">axum</a>.</strong> It exposes a large REST surface under <code>/api/*</code>, a Server-Sent-Events firehose at <code>/api/events</code> (the authoritative event registry is served at <code>/api/events.schema.json</code>), the SPA shell, and the sandboxed per-artifact subdomains. Every live surface — the TUI, the SPA, the comment panels — stays current by subscribing to that one event bus rather than polling.</p>
+<table>
+<thead><tr><th>Crate</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>kb-core</code></td><td>Storage, indexer, embed client, watcher, ids, parser, atlas, review, iframe injection, events, config (~39K lines).</td></tr>
+<tr><td><code>kb-server</code></td><td>The axum daemon: <code>api/*</code> handlers, <code>ServeDir</code>, artifact subdomains (~28K lines).</td></tr>
+<tr><td><code>kb-cli</code></td><td>The <code>kb</code> binary — every verb, from <code>daemon</code> to <code>search</code> to <code>comments</code> (~17K lines).</td></tr>
+<tr><td><code>kb-tui</code></td><td>The 5-tab ratatui fleet monitor (~7.5K lines).</td></tr>
+<tr><td><code>kb-embedder</code></td><td>The embedding sidecar — a tiny 134-line subprocess the daemon spawns per model.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="indexing">Indexing your corpus</h2>
+<p>You point a kb at a folder — either in <code>kb.toml</code> or with <code>kb add /path/to/corpus --kb research</code>. From then on the daemon owns keeping the index correct. A file watcher fires on changes, debounced (~400ms) so a burst of edits collapses into one pass.</p>
+<h3 id="the-parser">The parser</h3>
+<p>Each HTML file is parsed for its real <code>&lt;title&gt;</code>, its heading hierarchy, its <code>kb-tags</code> and <code>kb-category</code> meta, the handoff text inside <code>&lt;template id="kb-prompt"&gt;</code>, and any cross-artifact links (which become edges in the link graph). Markdown files are first-class too: a <code>.md</code> file with <code>kb-category: note</code> is treated as a note. The indexed body deliberately excludes text inside <code>&lt;script&gt;</code>, <code>&lt;style&gt;</code>, and <code>&lt;template&gt;</code> — those are data, not prose.</p>
+<h3 id="dedup-and-quarantine">Dedup, quarantine, and re-indexing</h3>
+<p>Re-indexing is <strong>content-hash-gated</strong>: a file whose bytes are unchanged is not re-parsed or re-embedded, so a reindex over a large corpus is cheap. A file that cannot be parsed is <strong>quarantined</strong> (visible at <code>/api/kb/{kb}/quarantine</code>) rather than silently dropped. To force work, <code>kb reindex</code> re-walks and re-emits every file (bypassing the hash dedup); <code>kb reset --kb NAME</code> wipes a kb's index state (lance + sqlite) while keeping your <code>.review/</code> comments unless you pass <code>--all</code>. Ingestion is a per-kb back-pressured channel, not the shared event bus, so a slow embedder throttles its own kb without stalling the daemon.</p>
+</section>
+
+<section>
+<h2 id="search">Search &amp; embeddings</h2>
+<p>Search is the core verb. <code>kb search "borrow checker" --kb canon</code> or the search box in the web app both hit <code>GET /api/search?q=…&amp;mode=…</code>.</p>
+<h3 id="three-modes">Three modes</h3>
+<p>There are three retrieval modes. <strong>keyword</strong> is pure BM25 lexical matching. <strong>semantic</strong> is pure vector similarity over the embeddings. <strong>hybrid</strong> (the default) fuses the two with Reciprocal Rank Fusion at k=60 — it takes the best of exact-term matching and meaning-based recall, and is what you almost always want. Both <code>hybrid</code> and <code>semantic</code> need an embedding model configured; without one the daemon returns a 400 problem+json. <code>kb search --offline</code> reads the lance dataset directly for a keyword-only answer with no daemon running.</p>
+<h3 id="the-query-dsl">The query DSL</h3>
+<p>Beyond a bare phrase, queries support a small DSL: OR fan-out to union several sub-queries, NOT to exclude terms, and field filters. This makes "everything about embeddings but not the bake-off" expressible in one line, across the gallery and the CLI alike.</p>
+<h3 id="embeddings-and-models">Embeddings and the model sidecar</h3>
+<p>Embeddings come from an out-of-process <strong>embedder sidecar</strong> — the daemon spawns <code>kb-embedder</code> per model and talks NDJSON over stdio with a capability handshake. The default model is <a href="https://huggingface.co/BAAI/bge-small-en-v1.5" target="_blank" rel="noopener">bge-small-en-v1.5</a> (384-dim, ~130MB, downloaded once to <code>&lt;XDG_CACHE_HOME&gt;/kb/models/</code>), running on <a href="https://onnxruntime.ai/" target="_blank" rel="noopener">ONNX Runtime</a>. Three layers pick the model at startup — per-kb <code>embedding_model</code>, a daemon-wide <code>[defaults]</code>, then the registry default. A v0.16 liveness probe <code>try_wait</code>s each subprocess every second and respawns a dead one <em>before</em> the next query; if it can't, semantic search degrades to keyword-only and a "degraded" signal surfaces in the TUI and SPA.</p>
+<div class="callout callout--warn"><span class="callout-label">Model swaps</span>The on-disk vector dimension is checked against the model at boot; a mismatch fails loudly rather than corrupting the dataset. A same-dim swap can use <code>kb model set NAME --kb KB --in-place</code>; a dim change means stop the daemon, <code>rm -r &lt;state&gt;/&lt;kb&gt;/lance/</code>, restart. A bake-off found bge-large lifts hybrid Recall@1 by +15.6 points over bge-small; bge-base is roughly a wash on technical English.</p></div>
+<h3 id="bench">Measuring quality (kb bench)</h3>
+<p><code>kb bench {init,discover,run}</code> turns search into something measurable: scaffold a <code>queries.jsonl</code>, auto-discover relevant ids, then compute Recall@k, MRR, and nDCG per (kb × mode) — and, as of the search-quality program, warm-cache p50/p95 latency alongside quality, so you can see both axes move when you change a model or chunking. <code>kb synth</code> generates a deterministic synthetic corpus (same seed → same bytes) for stress tests.</p>
+</section>
+
+<section>
+<h2 id="serving">Serving &amp; reading artifacts</h2>
+<p>kb does not just list your files — it renders them safely. Each artifact is served on its own subdomain, <code>&lt;id&gt;.artifacts.&lt;domain&gt;</code>, where the id is <code>sha256(source-relative-path)</code> truncated to 12 hex chars (deterministic, survives edits, changes on rename). Serving each artifact from a distinct origin is what makes it safe to embed arbitrary LLM-written HTML in an iframe: the artifact's scripts are walled off from the SPA and from every other artifact by the browser's same-origin policy.</p>
+<p>Inside the SPA, the artifact loads in an iframe with a small injected runtime (<code>/_kb/runtime.js</code>) that captures and resumes scroll position, and — with <code>?cm=on</code> — the comment annotator. Because the parent SPA is a different origin, artifacts must <em>not</em> reach for it: no <code>&lt;base href&gt;</code>, no <code>target=&quot;_top&quot;</code>, no <code>window.parent.document</code> (it throws a cross-origin SecurityError). The back button is handled with a single clean history entry per artifact.</p>
+<h3 id="outbound-scrubbing">Outbound scrubbing</h3>
+<p>For a kb you expose past a reverse proxy, an optional per-kb privacy layer strips the <code>&lt;template id="kb-prompt"&gt;</code> block and applies regex redactions — but <em>only</em> when the request looks non-loopback (its <code>X-Forwarded-For</code> resolves to a non-loopback IP). Local dev is untouched and pays zero overhead. Invalid regexes are logged and skipped rather than failing daemon boot.</p>
+</section>
+
+<section>
+<h2 id="web-app">The web app</h2>
+<p>The SPA (React 18 + <a href="https://react.dev/" target="_blank" rel="noopener">React</a>, built with <a href="https://vite.dev/" target="_blank" rel="noopener">Vite</a>) is the primary reading surface. The daemon serves the built bundle from <code>web/dist</code> via <code>ServeDir</code>; permalinks live at <code>/a/{kb}/{id}</code>.</p>
+<h3 id="the-gallery">The gallery</h3>
+<p>The landing view is a faceted gallery backed by <code>GET /api/kb/{kb}/docs</code>. You can filter by tag, folder, capability, and recency (<code>since=7d|30d|all</code>); sort by recent, indexed, title, word count, or created time (the v0.15 sort key); and group by folder. Facet chips are driven by <code>/api/kb/{kb}/tags</code> and <code>/api/kb/{kb}/folders</code> rollups.</p>
+<h3 id="detail-versions-diff">Detail view, versions &amp; diff</h3>
+<p>Opening an artifact gives the iframe render plus a context bar (search-within, the annotate toggle, path pill, siblings). The same view exposes <strong>versions and diff</strong>: three sources sit behind one façade — git history (resolved relative to the git root), the index's own snapshots, and the live working tree — and <code>auto</code> picks the right one per file. <code>GET /api/kb/{kb}/artifacts/{id}/diff</code> returns rendered-prose or raw-byte hunks between any two version refs.</p>
+<h3 id="history-and-command-palette">History &amp; command palette</h3>
+<p>A history timeline (<code>/api/kb/{kb}/history</code>) records artifact opens with scroll position, searches (deduped within 5 seconds), and comments authored — newest first, enriched with titles. A <code>cmdk</code>-style command palette gives keyboard-first navigation with a recents list. The Settings page tunes theme, accent, and density, and manages the multi-daemon list (stored in <code>localStorage["kb:daemons"]</code>).</p>
+</section>
+
+<section>
+<h2 id="atlas">The 2-D atlas</h2>
+<p>The atlas (<code>/?view=atlas</code>) is a spatial map of a kb: every artifact placed as a point, colored by cluster, so related documents sit together and you can browse by neighbourhood instead of by list. It reads <code>atlas_x / atlas_y / atlas_cluster</code> off each artifact, populated by a recompute pass.</p>
+<p>Layout is computed in <code>kb_core::atlas</code>: it tries a UMAP-style projection first (brute-force KNN k=15, random init, 200 SGD iterations of attractive/repulsive forces) and falls back to PCA (power iteration with Gram-Schmidt deflation) on degenerate output. Cluster labels come from k-means (Lloyd's, up to 12 clusters, empty clusters reseeded). The whole thing is <strong>deterministic</strong> — same inputs and seed produce bit-identical coordinates across machines. Artifacts older than the last recompute fall back to a hash placement, greyed at 45% opacity so the real cluster signal stays clear. Trigger with <code>kb atlas recompute --kb NAME</code>; the faster <code>kb atlas recluster --k N</code> re-runs only k-means to retune cluster count without paying the layout cost. Per-kb <code>k</code> and <code>layout</code> overrides live in <code>kb.toml</code>.</p>
+</section>
+
+<section>
+<h2 id="comments">Comments &amp; review</h2>
+<p>kb has a full review system so you (or Claude) can annotate an artifact in place. Each artifact's thread lives at <code>&lt;state&gt;/&lt;kb&gt;/.review/&lt;id&gt;.json</code> in the kb-comments/1 schema. The daemon owns that file exclusively — you never edit it by hand.</p>
+<h3 id="the-annotator">The annotator</h3>
+<p>Click the annotate button in the detail view and the iframe reloads with <code>?cm=on</code>; the daemon injects <code>window.__KB_COMMENTS</code> and <code>/_kb/annotate.js</code>. Clicking a block picks an anchor scope by context: a text selection becomes a <strong>Selection</strong> anchor (CSS path + offset + 200-char snippet), a heading becomes a <strong>Chapter</strong>, an element with an id becomes a <strong>Section</strong>. Submitting postMessages the new comment to the parent SPA (origin-validated), which POSTs it to the daemon.</p>
+<h3 id="anchors-staleness-reanchor">Anchors, staleness &amp; reanchor</h3>
+<p>After every reindex the daemon re-resolves each open comment's anchor against the freshly-parsed HTML. If the target moved beyond tolerance (Section id missing, Chapter token Jaccard &lt; 0.5, Selection Jaro-Winkler &lt; 0.85) it emits <code>comment.anchor_stale</code> and the SPA paints a badge; when the inverse transition is detected it emits <code>comment.anchor_resolved</code> and clears it. Crucially this resolver is <em>detection-only</em> — it never rewrites the frozen original anchor, so it can't silently drift onto the wrong element. When an edit genuinely moves a target, <code>kb comments reanchor</code> re-points it with ground truth. Stale transitions persist to a <code>.anchors-stale.json</code> sidecar so the badge survives a daemon restart.</p>
+<h3 id="concurrency-and-the-claude-loop">Concurrency &amp; the Claude loop</h3>
+<p>The whole-document write was retired in favour of fine-grained mutation endpoints (add comment, resolve, reply, …); each runs load → mutate → save under a per-kb <code>review_lock</code> sharded by kb name, so targeted edits are atomic without the client juggling ETags. Comments and replies can carry file/image <strong>attachments</strong> (magic-byte sniffed, XSS-safe serve). The Claude round-trip is built in: <code>kb comments export</code> emits a Claude-prompt-formatted thread (server-rendered, streamed with a 32MB cap); Claude works through <code>kb comments reply</code> / <code>resolve</code> (never the file), which re-emit <code>comments.updated</code> so the SPA refreshes live; <code>kb comments watch</code> turns that into a realtime loop you can drive from a terminal.</p>
+</section>
+
+<section>
+<h2 id="memory">Agent memory</h2>
+<p>kb doubles as Claude Code's persistent memory backend. Memories are written as ordinary artifacts (<code>POST /api/kb/{kb}/artifacts</code>, write-only — the watcher indexes each once) and recalled at <code>GET /api/memory/recall?q=…</code>, which fans out across corpora and ranks hits by a deterministic, LLM-free formula: <strong>rank-position × salience × decay</strong>. Supersede and forget are applied at recall time, so a corrected memory drops out of results without a destructive rewrite.</p>
+<p>On top of the ranking sit operator controls: <code>pin</code> holds a memory above the decay floor, <code>promote</code> lifts a project memory to global scope, and a memory can be linked-visible into other kbs. A daemon-wide decay <code>policy</code> (strict / balanced / loose) tunes how fast unreferenced memories fade, with per-kb overrides in <code>kb.toml</code>. Because recall is just an HTTP GET with a deterministic ranker, it is fast and reproducible — the same query against the same store always returns the same order.</p>
+</section>
+
+<section>
+<h2 id="sessions-reading">Sessions &amp; reading progress</h2>
+<h3 id="sessions">Sessions</h3>
+<p>kb can capture Claude Code transcripts as session artifacts and expose them cross-kb at <code>/api/sessions</code> (cursor-paginated, newest-first). For a given session you can pull the memories it produced, the artifacts its transcript <em>referenced</em> (<code>/api/sessions/{id}/touches</code> — exact 12-hex hits vs fuzzy path substrings), and the read-counterpart, what the human actually <em>read</em> in the SPA during the session window (<code>/api/sessions/{id}/readings</code>). <code>kb sessions list</code> and <code>kb sessions show</code> drive this from the CLI.</p>
+<h3 id="reading-progress">Reading progress</h3>
+<p>As you read in the SPA, a beacon reports per-section dwell time. The daemon merges it cumulatively (a max-merge, so re-reads only ever increase coverage) into a summary you can fetch at <code>…/artifacts/{id}/reading</code> or with <code>kb reading &lt;id&gt;</code>: how far the doc was read, which sections were read vs skimmed vs unseen, where the reader stopped, and which sections held attention. It follows the history lifecycle — seeded on open, idempotent, no SSE noise. The point is editorial: before revising a long doc, Claude can consult <code>kb reading --json</code> to see what actually got read.</p>
+</section>
+
+<section>
+<h2 id="notes-bookmarks">Notes, bookmarks &amp; anchors</h2>
+<p>Three lightweight layers sit on top of the corpus for personal organisation.</p>
+<h3 id="notes">Notes &amp; checklists</h3>
+<p>A note is not a new entity — it is a Markdown artifact with <code>kb-category: note</code>, so it is searchable and commentable like anything else, but excluded from the gallery grid and the atlas. <code>kb notes new --folder D</code> makes an ad-hoc note (or the scope's canonical <code>_notepad.md</code>); GFM checklist items toggle with <code>kb notes check &lt;note&gt; --item N</code> and grow with <code>kb notes append</code>. The full CRUD also lives under <code>/api/kb/{kb}/notes</code>.</p>
+<h3 id="bookmarks-anchors-queries">Bookmarks, the anchor corkboard &amp; saved queries</h3>
+<p>Bookmarks (v0.13) store per-kb reader state — a status, a note, and labels — per artifact, with a cross-kb fan-out at <code>/api/bookmarks</code>. The anchor corkboard (v0.10) pins specific anchors across kbs at <code>/api/anchors</code> for a cross-corpus "pinned spots" board. And a daemon-wide saved-queries store (<code>/api/saved-queries</code>) persists DSL queries you reuse.</p>
+</section>
+
+<section>
+<h2 id="tui">The terminal dashboard</h2>
+<p><code>kb tui</code> is a fleet-aware daemon monitor — a dark, k9s-style ratatui app built on <a href="https://ratatui.rs/" target="_blank" rel="noopener">ratatui</a> that holds a persistent SSE connection to every daemon it knows about (from <code>~/.config/kb/daemons.toml</code>). Its header aggregates the whole fleet (<code>●N/M daemons · Σ N kbs · ⚡ N events · ◐ N indexing</code>), and each daemon gets a deterministic positional color.</p>
+<table>
+<thead><tr><th>Tab</th><th>What it shows</th></tr></thead>
+<tbody>
+<tr><td><strong>1 OVERVIEW</strong></td><td>Fleet sidebar, focused-daemon kb table, 4-row activity sparklines (ev/s · idx/s · q/s · err/s, 60s window), activity log tail.</td></tr>
+<tr><td><strong>2 PIPELINE</strong></td><td>Sources / Runs / Errors / Queries sub-tabs; pause/reindex a source; STORE + EMBED gauges showing the file being embedded.</td></tr>
+<tr><td><strong>3 TRAFFIC</strong></td><td>KPI board (docs, sources, errors, queries, in-flight, events, daemons, embed bytes) + throughput and HTTP req/sec sparklines (from the 1Hz <code>metrics.tick</code> SSE).</td></tr>
+<tr><td><strong>4 ERRORS</strong></td><td>Triage table; keys <code>r</code> retry · <code>x</code> dismiss · <code>y</code> apply-fix · <code>o</code> open in <code>$EDITOR</code>.</td></tr>
+<tr><td><strong>5 EVENTS</strong></td><td>Live SSE firehose, newest-first, with a <code>/</code> glob filter, pause, and clear.</td></tr>
+</tbody>
+</table>
+<p>Overlays: <code>?</code> help · <code>:</code> command palette · <code>D</code> daemon switcher. The palette runs verbs like <code>reindex</code>, <code>pause/resume</code>, and <code>atlas recompute</code>. When stdout is not a TTY, the TUI degrades to a <strong>line-firehose</strong> — one JSON line per SSE event, ready for <code>| grep</code> or <code>| jq</code>.</p>
+</section>
+
+<section>
+<h2 id="sharing">Sharing &amp; publishing</h2>
+<p>Reading is local; sometimes you need to hand an artifact to someone else. <code>kb share &lt;target&gt;</code> publishes a source-relative file or folder to a static host: Cloudflare Pages behind Cloudflare Access (gated) by default, or GitHub Pages with <code>--public</code>. The <code>--gate</code> rule is repeatable (<code>email:DOMAIN</code>, an explicit allow-list, <code>google</code>, or <code>github</code>). <code>kb share list</code> and <code>kb share revoke &lt;name&gt;</code> manage what's live.</p>
+<p>The publish engine runs daemon-side (the host API tokens come from the daemon's environment, never the CLI), and an export <strong>always strips the kb-prompt</strong> regardless of per-kb scrub settings — your private execution contract never leaves with the artifact. Separately, <code>kb download</code> streams a single artifact's raw source, or a folder / whole kb as a <code>.zip</code>, pipe-friendly for <code>kb download --folder x | tar</code>.</p>
+</section>
+
+<section>
+<h2 id="fleet-selfhost">Fleet &amp; self-hosting</h2>
+<h3 id="multi-daemon">Multi-daemon</h3>
+<p>kb is built to run as a fleet. The TUI reads <code>~/.config/kb/daemons.toml</code>; the SPA keeps its list in <code>localStorage</code>. The status pill aggregates max severity, in-flight count, open errors, and open comments across every daemon, and each daemon's <code>Last-Event-ID</code> is persisted so reconnects resume cleanly. <code>kb fleet replicate --kb NAME</code> diffs artifact ids across daemons and can copy the missing-anywhere ones into a local dir.</p>
+<h3 id="security">Security &amp; deployment</h3>
+<p>Bearer-token auth guards <code>/api/*</code> for non-loopback requests; loopback (<code>127.0.0.1</code>, <code>::1</code>) bypasses entirely so the local CLI/TUI/SPA just work. The token lives at <code>~/.config/kb/token</code> (mode 0600), generated with <code>kb token generate</code>. Security <strong>fails closed</strong> — a request whose client IP can't be established is rejected, not trusted — and the proxy chain is only walked when <code>trusted_proxies</code> is configured (empty by default). Four independent per-token rate-limit buckets (<code>search</code>, <code>atlas_recompute</code>, <code>review_post</code>, <code>history_post</code>) return 429 with <code>Retry-After</code>. A reverse proxy like Traefik terminates TLS for <code>*.artifacts.&lt;domain&gt;</code> with a wildcard cert and forwards <code>X-Forwarded-For</code>; optional mDNS advertises the daemon as <code>_kb._tcp.local.</code>.</p>
+<h3 id="operations">Operations</h3>
+<p>For day-to-day running: <code>kb status</code> / <code>kb daemon doctor</code> give a green/yellow/red health report, <code>kb metrics</code> prints request and pipeline timing tables, <code>kb backup &lt;kb&gt;</code> makes a consistent tar.gz (sqlite via <code>VACUUM INTO</code> + validated lance + <code>.review</code>), <code>kb restore</code> reverses it, and <code>POST /api/kb/{kb}/compact</code> forces a lance compaction. The daemon also runs periodic auto-compaction in its reconcile loop.</p>
+</section>
+
+<section>
+<h2 id="authoring">Authoring artifacts that index well</h2>
+<p>kb indexes what you feed it, so a few authoring rules make the difference between an artifact that's findable, commentable, and stable across regenerations and one that isn't. The full guide is <code>docs/authoring-artifacts.md</code>; the essentials:</p>
+<ul>
+<li>A real, human-readable <code>&lt;title&gt;</code> matching the single <code>&lt;h1&gt;</code> — it is the primary BM25 field and the gallery card title.</li>
+<li>A clean <code>&lt;h2&gt;</code>/<code>&lt;h3&gt;</code> hierarchy where every heading carries a stable kebab <code>id</code> derived from its text — comment anchors fuzz-match on these and die on uuids or timestamps.</li>
+<li>The execution contract inside <code>&lt;template id="kb-prompt"&gt;</code>, capped at 8KB — indexed locally, stripped on public serve.</li>
+<li><code>&lt;meta name="kb-tags"&gt;</code> and <code>&lt;meta name="kb-category"&gt;</code> for the facets.</li>
+<li>Self-contained and sandbox-safe: inline CSS, no external fonts or scripts; and no <code>&lt;base href&gt;</code>, <code>target=&quot;_top&quot;</code>, or <code>window.parent</code> reach-arounds (the iframe parent is cross-origin).</li>
+</ul>
+<p>An optional <strong>visual floor</strong> — an AA-contrast token preamble plus a working skip-link, <code>:focus-visible</code> ring, and <code>prefers-reduced-motion</code> — gives every artifact an accessible baseline without dictating layout. <code>kb new --template …</code> scaffolds one for you; this very document follows the contract.</p>
+</section>
+
+<section>
+<h2 id="extending">Extending kb</h2>
+<p>kb has no generic plugin SDK on purpose, but it ships three real extension seams. <strong>Subprocess IPC</strong> is the template — the embedder is itself an out-of-process plugin (NDJSON, capability handshake, supervised), the pattern for any heavy or foreign-language extension. The <strong>event bus</strong> makes anything reading <code>/api/events</code> a plugin; for connectionless consumers a <code>[webhooks]</code> bridge POSTs selected event envelopes to a URL. And <strong>declarative <code>&lt;meta name="kb-*"&gt;</code></strong> lets artifact authors extend indexing, recall, and memory behaviour with zero code.</p>
+<p>What is deliberately <em>not</em> a seam: the single-writer storage actor, the fail-closed security middleware (so no plugin-contributed routes), and the deterministic atlas. On the Claude Code side, the repo is a plugin marketplace shipping <code>kb-memory</code> (agent-memory hooks), <code>kb-research</code> (the kb-artifact authoring skill), and <code>kb-comments</code> — all LLM-free, every hook driving the <code>kb</code> CLI.</p>
+</section>
+
+<section>
+<h2 id="cli">The CLI at a glance</h2>
+<p>Every daemon-touching verb accepts <code>--daemon URL</code> (default <code>http://127.0.0.1:4000</code>) and reads the bearer token automatically. Run <code>kb tools</code> for the full machine-readable manifest. The most-used verbs:</p>
+<table>
+<thead><tr><th>Verb</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>kb daemon</code></td><td>Run / stop / health-check a daemon.</td></tr>
+<tr><td><code>kb search</code></td><td>Hybrid / keyword / semantic search; <code>--offline</code> for a daemon-less read.</td></tr>
+<tr><td><code>kb find</code> · <code>kb get</code> · <code>kb cat</code> · <code>kb read</code></td><td>Resolve an id/path/filename and fetch or open the artifact.</td></tr>
+<tr><td><code>kb tui</code></td><td>The 5-tab fleet monitor.</td></tr>
+<tr><td><code>kb comments</code></td><td>List, add, reply, resolve, reanchor, watch — the review workflow.</td></tr>
+<tr><td><code>kb atlas</code> · <code>kb related</code></td><td>Recompute the 2-D map; walk the cross-artifact link graph.</td></tr>
+<tr><td><code>kb notes</code> · <code>kb reading</code> · <code>kb sessions</code></td><td>Notes &amp; checklists; reading-progress; captured transcripts.</td></tr>
+<tr><td><code>kb share</code> · <code>kb download</code></td><td>Publish to a static host; export raw source / zips.</td></tr>
+<tr><td><code>kb model</code> · <code>kb bench</code> · <code>kb synth</code></td><td>Manage embedding models; measure retrieval quality + speed.</td></tr>
+<tr><td><code>kb backup</code> · <code>kb restore</code> · <code>kb reindex</code> · <code>kb reset</code></td><td>Index lifecycle &amp; ops.</td></tr>
+</tbody>
+</table>
+<div class="callout callout--ok"><span class="callout-label">Where to go deeper</span>This guide is the map. The territory: <code>README.md</code> (HTTP API + CLI canon), <code>docs/architecture-invariants.md</code> (the load-bearing constraints + file-by-file code map), <code>crates/kb-core/CLAUDE.md</code> (storage internals), and the per-surface guides under <code>docs/</code> — configuration, comment-workflow, tui, web-ui, authoring-artifacts, self-host, and extending.</div>
+</section>
+
+</article>
+</main>
+</body>
+</html>

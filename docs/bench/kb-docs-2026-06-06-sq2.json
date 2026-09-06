@@ -1,0 +1,222 @@
+{
+  "queries_file": "bench/queries/kb-docs.jsonl",
+  "queries_total": 20,
+  "rows": [
+    {
+      "kb": "kb-docs-small",
+      "mode": "hybrid",
+      "recall_at_k": [
+        [
+          1,
+          0.65
+        ],
+        [
+          5,
+          0.95
+        ],
+        [
+          10,
+          0.95
+        ]
+      ],
+      "mrr": 0.7708333333333333,
+      "ndcg_at_k_max": [
+        10,
+        0.8161732909393884
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-small",
+      "mode": "semantic",
+      "recall_at_k": [
+        [
+          1,
+          0.65
+        ],
+        [
+          5,
+          0.95
+        ],
+        [
+          10,
+          0.95
+        ]
+      ],
+      "mrr": 0.7725,
+      "ndcg_at_k_max": [
+        10,
+        0.8170624189796882
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-small",
+      "mode": "keyword",
+      "recall_at_k": [
+        [
+          1,
+          0.55
+        ],
+        [
+          5,
+          0.85
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "mrr": 0.6826388888888889,
+      "ndcg_at_k_max": [
+        10,
+        0.7582619062387022
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-base",
+      "mode": "hybrid",
+      "recall_at_k": [
+        [
+          1,
+          0.75
+        ],
+        [
+          5,
+          0.95
+        ],
+        [
+          10,
+          0.95
+        ]
+      ],
+      "mrr": 0.825,
+      "ndcg_at_k_max": [
+        10,
+        0.8561606311644852
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-base",
+      "mode": "semantic",
+      "recall_at_k": [
+        [
+          1,
+          0.75
+        ],
+        [
+          5,
+          0.95
+        ],
+        [
+          10,
+          0.95
+        ]
+      ],
+      "mrr": 0.85,
+      "ndcg_at_k_max": [
+        10,
+        0.8721719901717009
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-base",
+      "mode": "keyword",
+      "recall_at_k": [
+        [
+          1,
+          0.55
+        ],
+        [
+          5,
+          0.85
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "mrr": 0.6826388888888889,
+      "ndcg_at_k_max": [
+        10,
+        0.7582619062387022
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-large",
+      "mode": "hybrid",
+      "recall_at_k": [
+        [
+          1,
+          0.8
+        ],
+        [
+          5,
+          0.95
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "mrr": 0.8675,
+      "ndcg_at_k_max": [
+        10,
+        0.8990800445767098
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-large",
+      "mode": "semantic",
+      "recall_at_k": [
+        [
+          1,
+          0.75
+        ],
+        [
+          5,
+          0.95
+        ],
+        [
+          10,
+          0.95
+        ]
+      ],
+      "mrr": 0.8266666666666665,
+      "ndcg_at_k_max": [
+        10,
+        0.8534216551762823
+      ],
+      "queries": 20
+    },
+    {
+      "kb": "kb-docs-large",
+      "mode": "keyword",
+      "recall_at_k": [
+        [
+          1,
+          0.55
+        ],
+        [
+          5,
+          0.85
+        ],
+        [
+          10,
+          1.0
+        ]
+      ],
+      "mrr": 0.6826388888888889,
+      "ndcg_at_k_max": [
+        10,
+        0.7582619062387022
+      ],
+      "queries": 20
+    }
+  ]
+}

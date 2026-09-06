@@ -1,0 +1,210 @@
+/* V3.3-U1 — `/r/:repo/~stacks` dependent-branch stacks. Neutral tags only. */
+
+.kbc-stacks {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-stacks__head {
+  margin-bottom: 16px;
+}
+.kbc-stacks__title {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+.kbc-stacks__hint {
+  color: var(--ink-mute);
+  margin: 0;
+  font-size: 13px;
+  max-width: 52em;
+}
+.kbc-stacks__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.kbc-stacks__all-lab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.kbc-stacks__default {
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+}
+.kbc-stacks__banner {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-card));
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 12px;
+}
+.kbc-stacks__muted {
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+.kbc-stacks__error {
+  color: var(--red);
+  font-size: 13px;
+}
+.kbc-stacks__body {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .kbc-stacks__body {
+    grid-template-columns: 1fr;
+  }
+}
+.kbc-stacks__card {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.kbc-stacks__card-title {
+  font-size: 13px;
+  margin: 0 0 8px;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kbc-stacks__layers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-stacks__layer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.kbc-stacks__layer:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+}
+.kbc-stacks__layer--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-card));
+}
+.kbc-stacks__layer-branch {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  font-size: 13px;
+}
+.kbc-stacks__layer-base {
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+}
+.kbc-stacks__layer-ab {
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+.kbc-stacks__layer-tip {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-stacks__tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  color: var(--ink-mute);
+  background: var(--bg-card-hi);
+}
+/* Neutral — never red-as-shame for stale/unresolved. */
+.kbc-stacks__tag--stale {
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule));
+  color: var(--ink);
+}
+.kbc-stacks__tag--unresolved {
+  border-color: var(--rule);
+}
+.kbc-stacks__diff {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  padding: 14px 16px;
+  min-width: 0;
+}
+.kbc-stacks__diff-head {
+  margin-bottom: 12px;
+}
+.kbc-stacks__sub {
+  font-size: 16px;
+  margin: 0 0 4px;
+  font-family: var(--font-mono, monospace);
+}
+.kbc-stacks__diff-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-mute);
+}
+.kbc-stacks__files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Layered DAG (review map) — V70-A3S: rendered IN FLOW inside its panel,
+ * unlike the ego-graph POPOVER (`reader.css`'s `.kbc-ego--popover`). No
+ * fixed positioning: bounded by its own `overflow: auto` + a sensible
+ * `max-height` so a large dependency graph scrolls inside the panel
+ * instead of spilling over the page (THE MAP BUG fix — see reader.css's
+ * `.kbc-ego--popover` comment for the full history). */
+.kbc-layered-dag {
+  position: relative;
+  overflow: auto;
+  max-height: 480px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 8px 12px 12px;
+}
+
+/* Layered DAG legend (review map) */
+.kbc-layered-dag__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-layered-dag__leg-import,
+.kbc-layered-dag__leg-call {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--ink-mute);
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.kbc-layered-dag__leg-call {
+  border-top-style: dashed;
+}

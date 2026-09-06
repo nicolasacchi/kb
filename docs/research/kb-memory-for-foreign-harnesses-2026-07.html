@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>kb as memory for non-Claude harnesses &mdash; inventory, a codex capture adapter, and the MCP trigger ruling (2026-07)</title>
+<meta name="kb-category" content="landscape">
+<meta name="kb-tags" content="status:applied, project:kb, mcp, non-goals, rulings, codex, opencode, gemini-cli, capture-adapter, sessions, episodic-memory, cli-is-the-protocol, sandbox, hooks, fable">
+<meta name="kb-summary" content="Formal evaluation of the 2026-07-02 'no MCP server yet' deferral against the second harness it contemplated. Inventory of what codex 0.139 / opencode 1.17 / gemini-cli 0.49 emit (transcripts, session ids, hooks); a working, e2e-verified codex-rollout-to-kb capture adapter (150 lines bash+jq: 49 commits, 63 files, 18 research rows extracted; kb why/recollect answer over codex sessions); measured codex-sandbox friction for CLI verbs (loopback blocked by default, two config lines open it). Ruling recommendation: keep the deferral — the trigger fired as written but was mis-specified; replace it with three concrete conditions (no-shell surface, config-proof approval fatigue, hook regression), and if ever built, kb mcp serve is a read-only kb-cli facade over the HTTP API, never a daemon feature.">
+
+<style>
+:root {
+  --bg: #f4f4f7; --surface: #fcfcfe; --fg: #1e2130; --muted: #4a5064;
+  --rule: #d6d7e0; --accent: #4238b0; --accent-fg: #ffffff;
+  --warn: #7c5300; --danger: #98262a; --ok: #1c6248;
+  --code-bg: #e9e9f0;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171e; --surface: #1f222c; --fg: #e7e8ef; --muted: #a5aabd;
+    --rule: #3a3e4e; --accent: #a4adff; --accent-fg: #131538;
+    --warn: #e3b969; --danger: #ff9e9b; --ok: #8ad4b0;
+    --code-bg: #262a36;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.65 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+main { max-width: 48rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+h1, h2, h3 { line-height: 1.25; letter-spacing: -.01em; }
+h1 { font-size: 1.85rem; margin: .5rem 0 .4rem; }
+h2 { font-size: 1.35rem; margin: 2.7rem 0 .6rem; scroll-margin-top: 1rem;
+     border-bottom: 2px solid var(--rule); padding-bottom: .25rem; }
+h3 { font-size: 1.07rem; margin: 1.8rem 0 .4rem; scroll-margin-top: 1rem; }
+p, ul, ol { margin: .6rem 0; }
+li { margin: .25rem 0; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
+.skip-link {
+  position: absolute; left: -999px; top: 0; background: var(--accent);
+  color: var(--accent-fg); padding: .5rem .9rem; z-index: 9;
+}
+.skip-link:focus { left: .5rem; top: .5rem; }
+.kicker {
+  font-size: .78rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--muted);
+}
+.kicker .dot {
+  display: inline-block; width: .55em; height: .55em; border-radius: 50%;
+  background: var(--accent); margin-right: .45em;
+}
+.lede { font-size: 1.12rem; color: var(--muted); margin: .3rem 0 1rem; }
+.meta-strip { font-size: .82rem; color: var(--muted); }
+.meta-strip .sep { margin: 0 .4em; }
+code, pre {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .86em; background: var(--code-bg); border-radius: 4px;
+}
+code { padding: .08em .35em; }
+pre { padding: .8rem 1rem; overflow-x: auto; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+table {
+  border-collapse: collapse; width: 100%; margin: 1rem 0;
+  font-size: .87rem; line-height: 1.5;
+}
+th, td { border: 1px solid var(--rule); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+.callout {
+  background: var(--surface); border-left: 4px solid var(--accent);
+  padding: .7rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+}
+.callout-label {
+  display: block; font-size: .78rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--accent);
+}
+.callout--warn { border-left-color: var(--warn); }
+.callout--warn .callout-label { color: var(--warn); }
+.callout--ok { border-left-color: var(--ok); }
+.callout--ok .callout-label { color: var(--ok); }
+.callout--danger { border-left-color: var(--danger); }
+.callout--danger .callout-label { color: var(--danger); }
+.ruling {
+  background: var(--surface); border: 2px solid var(--accent);
+  border-radius: 8px; padding: 1rem 1.2rem; margin: 1.2rem 0;
+}
+footer { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: 1rem;
+  font-size: .82rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>landscape &middot; ruling evaluation &middot; project:kb</div>
+  <h1>kb as memory for non-Claude harnesses &mdash; inventory, a codex capture adapter, and the MCP trigger ruling</h1>
+  <p class="lede">The MCP deferral&rsquo;s trigger &mdash; &ldquo;a second agent harness enters real use here&rdquo; &mdash; fired: codex has been in real use since June. But everything the second harness actually needed was buildable without MCP, and was built and verified this session. Recommendation: keep the deferral, replace the trigger with the three gaps only an MCP server closes.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span><span class="sep">&middot;</span>
+    <span>status:applied (README non-goals re-ruled 2026-07-10; codex integration live)</span><span class="sep">&middot;</span>
+    <span>companion: <a href="cross-harness-memory-exchange-ideas-2026-07.html">cross-harness idea board</a></span>
+  </div>
+</header>
+
+<section>
+<h2 id="the-question">The question</h2>
+<p>The README non-goals ledger records, verbatim (README.md:981, ruled 2026-07-02):</p>
+<div class="callout"><span class="callout-label">The recorded ruling</span>&ldquo;<strong>No MCP server <em>yet</em>.</strong> Ruled 2026-07-02 as deferred-with-trigger: the CLI <em>is</em> the protocol &mdash; any shell-capable agent drives <code>kb</code> today &mdash; so <code>kb mcp</code> gets built when a second agent harness enters real use here, or credible inbound demand asks for it. A recorded ruling, not an oversight.&rdquo;</div>
+<p>Two questions follow, and this artifact answers both empirically rather than by taste:</p>
+<ol>
+<li><strong>Can foreign harnesses actually use kb as memory today?</strong> Inventory what codex / opencode / gemini-cli emit (transcripts, session ids, hook points), test whether a capture adapter can satisfy kb&rsquo;s capture-HTML contract, and prototype one for the most-used non-Claude harness.</li>
+<li><strong>Has the deferral trigger fired &mdash; and was it the right trigger?</strong> Enumerate the verbs a foreign harness needs, audit whether the CLI-via-shell suffices per harness, and isolate what <em>only</em> an MCP server would unlock.</li>
+</ol>
+<p>Method note: every claim tagged <em>measured</em> or <em>verified</em> below was executed on this machine on 2026-07-06 against codex-cli 0.139.0, opencode 1.17.9, and kb v0.20-50-g838eaa1e. Documentation claims are cited to official sources and were spot-verified against the local binaries where possible.</p>
+</section>
+
+<section>
+<h2 id="harness-inventory">Part 1 &mdash; what the harnesses actually emit</h2>
+
+<table>
+<tr><th></th><th>Codex CLI 0.139</th><th>opencode 1.17.9</th><th>Gemini CLI 0.49</th></tr>
+<tr><td>Installed here</td><td>yes &mdash; 30 sessions, real work</td><td>yes &mdash; 482 sessions, mostly one experiment</td><td><strong>no</strong> (no binary, no <code>~/.gemini</code>)</td></tr>
+<tr><td>Transcript</td><td><code>~/.codex/sessions/Y/M/D/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl</code>; undocumented format, up to 36&nbsp;MB here</td><td>sqlite <code>opencode.db</code> (session/message/part, JSON <code>data</code> columns) since v1.2.0</td><td><code>~/.gemini/tmp/&lt;hash&gt;/chats/session-&lt;ts&gt;-&lt;id8&gt;.jsonl</code>; <strong>30-day auto-delete</strong></td></tr>
+<tr><td>Stable session id</td><td>UUIDv7 &mdash; filename = <code>session_meta.payload.id</code> = hook <code>session_id</code></td><td><code>ses_&hellip;</code> &mdash; identical across SSE/SDK/CLI/db</td><td>UUID, survives resume; in hook stdin + <code>stream-json</code> init</td></tr>
+<tr><td>Turn/session-end hook</td><td><code>Stop</code> hook, stdin carries <code>transcript_path</code> (stable feature, on by default since v0.124)</td><td>plugin <code>event</code>: <code>session.status</code>&rarr;idle + SDK <code>client.session.messages()</code></td><td><code>AfterAgent</code> (awaited) + <code>SessionEnd</code> (not awaited), stdin carries <code>transcript_path</code></td></tr>
+<tr><td>Prompt-time injection</td><td><code>UserPromptSubmit</code> &mdash; <strong>wire-compatible with Claude Code</strong> (<code>hookSpecificOutput.additionalContext</code>)</td><td><code>chat.message</code> plugin hook mutates outgoing parts</td><td><code>BeforeAgent</code> &rarr; <code>additionalContext</code></td></tr>
+<tr><td>Shell tool for agent-initiated kb verbs</td><td>yes, sandboxed &mdash; loopback <strong>blocked by default</strong> (measured, &sect;<a href="#sandbox-friction">below</a>)</td><td>yes, permission-gated, no network sandbox</td><td>yes (<code>run_shell_command</code>, allowlisted)</td></tr>
+<tr><td>Instructions file</td><td>AGENTS.md chain (32&nbsp;KiB cap/level)</td><td>AGENTS.md; <em>also reads CLAUDE.md</em></td><td>GEMINI.md (renameable to AGENTS.md)</td></tr>
+<tr><td>MCP client</td><td>yes (stdio + streamable HTTP&nbsp;+&nbsp;OAuth)</td><td>yes (local + remote)</td><td>yes (stdio/SSE/HTTP + OAuth)</td></tr>
+</table>
+
+<h3 id="codex-is-the-second-harness">Codex is the second harness, and it is real use</h3>
+<p><em>Measured on this machine:</em> 30 rollouts (2026-06-15 &rarr; 2026-06-22, two touched 2026-07-06), sessions on several other projects, research, and the kb repo itself; <code>~/.codex/config.toml</code> pins <code>model = "gpt-5.5"</code> at <code>model_reasoning_effort = "xhigh"</code> with 21 trusted project dirs. For scale: Claude Code holds 3,895 transcripts since 2026-06-01 &mdash; codex is a distant second, but it is not a toy. Codex also ships adjacent state kb should know about: <code>memories_1.sqlite</code> (the experimental, default-off Memories feature &mdash; two-phase LLM distillation of rollouts; 0 rows here), <code>goals_1.sqlite</code>, and a Claude-Code-shaped hook system whose stdin/stdout JSON schemas match Claude&rsquo;s down to field names (<code>hook_event_name</code>, <code>transcript_path</code>, <code>additionalContext</code> &mdash; extracted from the binary and confirmed against <a href="https://developers.openai.com/codex/hooks">developers.openai.com/codex/hooks</a>).</p>
+
+<h3 id="opencode-and-gemini">opencode and gemini-cli: capturable, not urgent</h3>
+<p><em>Measured:</em> opencode&rsquo;s 482 sessions decompose as 444 in 2026-03 (a bulk orchestration experiment &mdash; titles like &ldquo;conductor&rdquo;, sessions spawning codex workers), 18 in April, 20 in June; last use 2026-06-21. Its capture surface is the richest of the three &mdash; a global JS plugin gets <code>session.status</code> idle events plus a full SDK client to fetch every message/part, and <code>opencode export &lt;id&gt;</code> / direct sqlite reads work with zero plugin &mdash; but until opencode re-enters real use, an adapter is speculative. Gemini-cli is simply absent here; its documented surface (11 hook events, <code>AfterAgent</code> with <code>transcript_path</code>, 30-day transcript retention that an adapter must outrun) makes an adapter straightforward <em>when</em> it arrives. Adapter sketches for both live on the <a href="cross-harness-memory-exchange-ideas-2026-07.html">companion idea board</a> (I7, I8).</p>
+</section>
+
+<section>
+<h2 id="kb-capture-contract">Part 2 &mdash; kb&rsquo;s side of the contract</h2>
+<p>kb&rsquo;s episodic pipeline has a narrow waist, and knowing exactly where it sits is what makes foreign capture cheap (all cites verified in-source this session):</p>
+<ul>
+<li><strong>Detection is category-driven.</strong> One predicate &mdash; <code>kb_category == "memory-session"</code> &mdash; routes an artifact into session enrichment (<code>indexer.rs:1146</code>, <code>enrich.rs:137</code>, <code>sessions.rs:32</code>). Filename and <code>kb-session</code> meta matter only for identity.</li>
+<li><strong>The id ladder repairs itself.</strong> <code>parse_session_html_full</code> (<code>sessions.rs:273-278</code>): JSONL <code>sessionId</code> &gt; <code>&lt;meta name="kb-session"&gt;</code> &gt; filename regex &gt; stem. An adapter that stamps all three is triply safe.</li>
+<li><strong>One parser feeds everything.</strong> <code>parse_session_activity</code> (<code>sessions.rs:472-672</code>) reads Claude-shaped lines &mdash; <code>message.role</code>, <code>tool_use</code> blocks (Bash commands for git commit/push/tag with SHA pairing, Write/Edit/Read for file touches, WebSearch/Task/Skill for research rows, AskUserQuestion answers for decisions), <code>file-history-snapshot</code> for the authoritative edited set, <code>message.usage</code> for tokens. Downstream &mdash; the R1 digest (<code>sessions.rs:305-387</code>), the five sqlite tables (<code>enrich.rs:141-312</code>), <code>kb why</code>, <code>kb recollect</code>, the SPA panels &mdash; reads derived rows, never raw JSONL.</li>
+<li><strong>Foreign shapes degrade gracefully, to uselessness.</strong> A verbatim-wrapped codex rollout indexes without error but yields an empty digest (guard at <code>indexer.rs:1153</code>), a bare sessions row, zero child rows &mdash; and the raw JSONL becomes the searchable body, exactly the retrieval-burying failure R1 exists to prevent. So a capture adapter must <em>translate</em>, not merely wrap.</li>
+<li><strong>Ingestion is watcher-only.</strong> No direct-index API: <code>kb add</code> registers folders, <code>POST /artifacts</code> is the memory-artifact renderer and still writes a file for the watcher. The adapter writes <code>session-&lt;ts&gt;-&lt;sid&gt;.html</code> into the sessions corpus dir via temp-file + atomic <code>mv</code>, mirroring <code>wrap_envelope</code> (<code>import.rs:317-339</code>).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="codex-adapter">Part 3 &mdash; the codex adapter, built and verified</h2>
+<p><code>plugins/kb-memory/hooks/kb-capture-codex.sh</code> &mdash; ~150 lines of bash+jq, deterministic, LLM-free, same envelope and overwrite-per-session contract as <code>kb-capture.sh</code>. Because codex&rsquo;s <code>Stop</code> hook stdin is Claude-shaped, the same script is both the codex hook <em>and</em> a CLI backfill tool (<code>kb-capture-codex.sh &lt;rollout.jsonl&gt;&hellip;</code>).</p>
+
+<h3 id="translation-mapping">Translation mapping</h3>
+<table>
+<tr><th>Codex rollout line</th><th>Claude-shaped output</th><th>What it feeds</th></tr>
+<tr><td><code>session_meta.payload.id/cwd/timestamp</code></td><td><code>sessionId</code> + <code>cwd</code> on every line; filename timestamp</td><td>id ladder rung 1; project folder; <code>started_at</code></td></tr>
+<tr><td><code>response_item message role=user</code></td><td>user text line; wrappers (<code>&lt;environment_context&gt;</code>, AGENTS.md preamble, reviewer-thread transcripts) marked <code>isMeta</code></td><td>first_user_prompt &rarr; title, digest</td></tr>
+<tr><td><code>response_item message role=assistant</code></td><td>assistant text line (+ <code>model</code> from <code>turn_context</code>)</td><td>model column</td></tr>
+<tr><td><code>function_call exec_command/shell</code></td><td><code>tool_use</code> <strong>Bash</strong> <code>{command}</code></td><td>git commit/push/tag detection + SHA pairing &rarr; <code>session_commits</code></td></tr>
+<tr><td><code>function_call_output</code></td><td><code>tool_result</code>, <code>is_error</code> from &ldquo;exited with code N&rdquo;, text capped 2,000 chars</td><td>error_count; commit-SHA pairing</td></tr>
+<tr><td><code>patch_apply_end.changes</code></td><td><code>tool_use</code> <strong>Write</strong>(add)/<strong>Edit</strong>(update) per file + one trailing <code>file-history-snapshot</code></td><td><code>session_files</code>, files_edited_count</td></tr>
+<tr><td><code>web_search_call.action.query</code></td><td><code>tool_use</code> <strong>WebSearch</strong></td><td><code>session_research</code></td></tr>
+<tr><td>last <code>token_count.total_token_usage</code></td><td>one trailing assistant <code>usage</code> line (the parser sums per-record &mdash; emitting each cumulative count would overcount)</td><td>token_total</td></tr>
+<tr><td><code>reasoning</code>, <code>agent_message</code> events, <code>turn_context</code>&hellip;</td><td>dropped</td><td>&mdash;</td></tr>
+</table>
+<p>Design decisions worth recording: <strong>translation over a parser fork</strong> (a codex branch in <code>parse_session_activity</code> would put format churn of an <em>undocumented</em> upstream format inside kb-core; the adapter keeps it in <code>plugins/</code>, and the hook-provided <code>transcript_path</code> insulates against codex&rsquo;s planned rollout compression). <strong>Lossy on purpose</strong> (outputs capped, reasoning dropped &mdash; the indexed surface is the digest; the 2026-07-03 47&nbsp;GB-lance lesson caps capture size), with provenance kept: an <code>adapter-meta</code> first line carries <code>rollout_path</code>, and <code>&lt;meta name="kb-harness" content="codex"&gt;</code> rides the envelope for future attribution.</p>
+
+<h3 id="e2e-results">End-to-end results (scratch daemon, unmodified kb)</h3>
+<p><em>All measured 2026-07-06 against a throwaway daemon on 127.0.0.1:4977 (<code>KB_HOME=/tmp</code>, one <code>[kb.codex-sessions]</code> corpus, no embedder):</em></p>
+<ul>
+<li>Three real rollouts (0.7&nbsp;MB kb-repo exec review / 1.7&nbsp;MB another-project change / 36&nbsp;MB a third-project TUI marathon) converted in <strong>2.3&nbsp;s</strong> total; the 36&nbsp;MB rollout projects to a 7.7&nbsp;MB capture of 10,697 valid JSONL lines.</li>
+<li><code>kb sessions list</code>: all three enriched &mdash; correct per-project folders derived from cwd (<code>codex-sessions/&lt;project&gt;</code>), correct start times from filenames, 63 and 57 edited files on the patch-heavy pair.</li>
+<li><code>kb sessions show 019eec2b&hellip;</code>: <strong>49 commits with SHAs and subjects</strong> (&ldquo;edb16ac Initial SimCity implementation&rdquo;&hellip;), effort line <em>4,793 tools &middot; 393&nbsp;M tok &middot; 180 errors &middot; gpt-5.5</em>, <strong>18 research rows</strong> (the session&rsquo;s actual web searches), 110 files touched.</li>
+<li><code>kb why renderer.ts</code>: answers with the codex session, its prompt, and the commit trail &mdash; episodic provenance across harnesses, the headline capability.</li>
+<li><code>kb recollect "make e2e tests for the city simulator"</code>: all three sessions ranked in 149&nbsp;ms with staleness (&ldquo;14d old&rdquo;), error and commit signals.</li>
+<li><code>kb search</code> (default): <strong>0 hits</strong> &mdash; correct; R0 keeps transcripts out of default search/recall. The invariants held without modification.</li>
+</ul>
+<div class="callout callout--ok"><span class="callout-label">Answer to question 1</span>Yes &mdash; for every harness inventoried, a capture adapter can satisfy kb&rsquo;s contract (hook &rarr; transcript_path &rarr; translate &rarr; envelope &rarr; watcher). For codex it exists and works. No kb code changed; no MCP involved.</div>
+</section>
+
+<section>
+<h2 id="mcp-evaluation">Part 4 &mdash; the MCP trigger, evaluated</h2>
+
+<h3 id="what-a-foreign-harness-needs">What a foreign harness actually needs from kb</h3>
+<table>
+<tr><th>Need</th><th>Verbs / mechanism</th><th>Transport that serves it</th></tr>
+<tr><td>Ambient memory read (every turn)</td><td><code>kb recall</code> injected as context</td><td><strong>Hooks</strong> &mdash; UserPromptSubmit / chat.message / BeforeAgent. MCP has no per-prompt injection lifecycle in any of these harnesses.</td></tr>
+<tr><td>Episodic write (capture)</td><td>adapter &rarr; sessions corpus</td><td><strong>Hooks + files</strong> &mdash; Stop / session.status / AfterAgent. Not an MCP shape.</td></tr>
+<tr><td>Agent-initiated exploration</td><td><code>search, find, get, cat, why, recollect, sessions, backlinks, related, reading</code></td><td>Shell CLI today; <em>this</em> is the slice MCP could carry.</td></tr>
+<tr><td>Deliberate semantic write</td><td><code>kb remember / forget</code>, notes, comments</td><td>Shell CLI; protocol discipline via AGENTS.md. Write-over-MCP is possible but see cost.</td></tr>
+<tr><td>Verb discovery</td><td><code>kb tools</code> manifest</td><td>AGENTS.md prompt tax: full manifest 27,971 bytes / 44 verbs / 112 sections; a trimmed memory-protocol block is ~2&nbsp;KB. MCP would make discovery free and typed.</td></tr>
+</table>
+
+<h3 id="sandbox-friction">The one measured friction: codex&rsquo;s sandbox</h3>
+<p><em>Measured, using <code>codex sandbox</code> (no LLM in the loop):</em> under the default policy, <code>kb recall</code> inside the sandbox fails (&ldquo;daemon not reachable&rdquo;; loopback curl returns <code>000</code>) while the identical command outside answers 5 memories in 320&nbsp;ms. With two config lines &mdash; <code>sandbox_mode = "workspace-write"</code> and <code>[sandbox_workspace_write]&nbsp;network_access = true</code> &mdash; loopback returns <code>200</code> and kb verbs work. Without config, each agent-initiated kb call becomes an out-of-sandbox approval escalation. So: real friction, config-sized fix, comparable in setup cost to registering an MCP server (also a config edit). Note the asymmetry that saves the memory story: <em>hooks run in the harness process, outside the sandbox</em> &mdash; recall injection and capture are untouched by this entirely; only the agent&rsquo;s own <code>kb</code> invocations feel it. opencode and gemini-cli have permission prompts but no network-blocking sandbox around shell.</p>
+
+<h3 id="what-only-mcp-unlocks">What <em>only</em> an MCP server would unlock</h3>
+<ol>
+<li><strong>No-shell surfaces.</strong> ChatGPT desktop, claude.ai remote connectors, IDE-embedded agents without a shell tool. None are in use against kb on this machine today &mdash; but this is the one structural gap the CLI can never cover.</li>
+<li><strong>Typed, prompt-tax-free discovery.</strong> Tool schemas + descriptions delivered by protocol instead of a 28&nbsp;KB manifest pasted into AGENTS.md (or a hand-trimmed 2&nbsp;KB subset that drifts as verbs evolve).</li>
+<li><strong>Codex&rsquo;s privileged MCP channel.</strong> MCP servers configured in codex run outside the sandbox as a first-class capability &mdash; no network opt-in, no per-call approval, structured results. The config-lines fix above is equivalent-cost but grants the <em>whole sandbox</em> network access rather than just kb; an operator who tightens that back down would feel the difference.</li>
+<li><strong>MCP resources/prompts primitives.</strong> Artifacts as subscribable resources, kb templates as prompts. Nice, speculative, zero demand recorded.</li>
+</ol>
+
+<h3 id="what-mcp-does-not-solve">What MCP would <em>not</em> solve</h3>
+<ul>
+<li>Ambient recall and capture &mdash; the actual memory loop &mdash; remain per-harness hook work in every scenario. The two artifacts this session produced (adapter + idea board) are unaffected by any MCP decision.</li>
+<li>The daemon still has to run, reachable, with the corpus mounts &mdash; MCP moves no operational burden.</li>
+<li>Teaching the <em>discipline</em> (recall before re-deriving, remember after decisions) is prose in an instructions file either way; schemas don&rsquo;t carry norms.</li>
+<li>A second <em>operator</em> gains nothing: the one-daemon-one-operator ruling (2026-07-06) already routes them to <code>kb share</code> or their own daemon; an MCP endpoint must not become a side door.</li>
+</ul>
+
+<h3 id="cost-of-building">Cost of building it anyway</h3>
+<p>A second protocol surface that must stay in lock-step with 44 CLI verbs (drift = the worst kind of doc rot: machine-readable and wrong); MCP spec churn (three revisions in 18 months, OAuth resource-server semantics still settling); auth plumbing decisions (stdio inherits the CLI&rsquo;s token file; HTTP transport re-opens the bearer/proxy questions the security review just closed); test surface; and &mdash; the doctrinal cost &mdash; the first standing invitation for foreign <em>writers</em> into a store whose value is that every write is deliberate and attributed.</p>
+</section>
+
+<section>
+<h2 id="the-ruling">The ruling recommendation</h2>
+<div class="ruling">
+<p><strong>Keep the deferral. Re-specify the trigger.</strong> The 2026-07-02 trigger (&ldquo;a second agent harness enters real use here&rdquo;) fired as written &mdash; codex qualifies &mdash; but this evaluation shows it was a proxy for needs that turned out to be hook- and shell-shaped, all satisfied without MCP. Proposed replacement ledger text:</p>
+<p style="border-left: 3px solid var(--rule); padding-left: .8rem;"><em>&ldquo;<strong>No MCP server yet.</strong> Re-ruled 2026-07-06 after the codex evaluation (docs/research/kb-memory-for-foreign-harnesses-2026-07.html): the CLI is the protocol &mdash; codex/opencode/gemini all drive <code>kb</code> via shell + instructions file, and ambient memory (recall injection, capture) is hook work MCP cannot carry. <code>kb mcp serve</code> gets built when one of: (1) a harness in real use here has no shell tool or no config escape from its sandbox (e.g. adopting ChatGPT desktop / claude.ai connectors as kb clients); (2) real dual-harness use shows recurring kb-call approval fatigue that config + AGENTS.md cannot fix; (3) a harness regression removes transcript_path/additionalContext hooks, leaving MCP as the only integration point. Inbound demand from a second operator is NOT a trigger (see one-daemon-one-operator). If triggered: read-only stdio facade in kb-cli (search, recall, why, recollect, get) over the existing HTTP API &mdash; extension lanes #1/#2, never in-daemon, writes stay CLI-only.&rdquo;</em></p>
+</div>
+<p>Why read-only if ever built: the read verbs are idempotent, provenance-preserving, and match what a foreign <em>reader</em> needs; <code>remember</code>/<code>forget</code> over MCP would let any connected client mutate memory without the deliberateness the CLI enforces (a human or agent choosing to run a write verb, visible in the transcript, capturable by the very sessions machinery this artifact exercised). And why kb-cli, not kb-server: the daemon&rsquo;s non-goals (no in-daemon LLM, fail-closed auth stack) stay untouched; a stdio sidecar reuses <code>kb-cli</code>&rsquo;s existing HTTP client, token loading, and federation semantics &mdash; the same doctrine that keeps the embedder out-of-process (docs/extending.md, mechanism #1).</p>
+<p>One follow-through this evaluation <em>does</em> recommend now, independent of MCP: register <code>kb-capture-codex.sh</code> as a codex <code>Stop</code> hook, add the trimmed memory-protocol block to AGENTS.md in shared projects, and set the two codex sandbox config lines &mdash; that is the entire integration, and it makes the dual-harness data that would justify (or permanently retire) trigger condition (2) accumulate by itself.</p>
+</section>
+
+<section>
+<h2 id="when-to-revisit">When to revisit</h2>
+<ul>
+<li>Any of the three re-specified trigger conditions occurring &mdash; especially adoption of a no-shell client surface against kb.</li>
+<li>Codex Memories (experimental, off, empty here) shipping in a form worth bridging &mdash; the moment codex itself consumes memory over MCP, interop pressure changes shape (idea I6 on the companion board).</li>
+<li>Six months of dual-harness capture data (post hook registration): if codex sessions accumulate and approval fatigue never materialises, consider hardening the deferral from &ldquo;yet&rdquo; to a plain non-goal.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="evidence-ledger">Evidence ledger</h2>
+<table>
+<tr><th>Claim</th><th>Evidence</th></tr>
+<tr><td>Ruling text + date</td><td>README.md:981; CLAUDE.md non-goals index</td></tr>
+<tr><td>Codex real use</td><td>30 rollouts under <code>~/.codex/sessions</code>; config.toml (gpt-5.5, xhigh, 21 trusted dirs); vs 3,895 Claude transcripts since 2026-06-01</td></tr>
+<tr><td>Codex hooks Claude-shaped, stable</td><td><code>codex features list</code> &rarr; <code>hooks stable true</code>; binary strings (<code>hook_event_name</code>, <code>transcript_path</code>, <code>user_prompt_submit</code>, <code>additionalContext</code>); <a href="https://developers.openai.com/codex/hooks">codex hooks docs</a>; stable since v0.124 (PR #19012)</td></tr>
+<tr><td>Digest contract + degradation path</td><td><code>sessions.rs:273-278, 472-672, 305-387</code>; <code>indexer.rs:1146, 1153</code>; <code>enrich.rs:137-312</code>; <code>import.rs:317-339</code></td></tr>
+<tr><td>Adapter e2e</td><td><code>plugins/kb-memory/hooks/kb-capture-codex.sh</code>; scratch daemon 127.0.0.1:4977; outputs quoted in &sect;<a href="#e2e-results">e2e results</a></td></tr>
+<tr><td>Sandbox measurements</td><td><code>codex sandbox -- kb recall</code> / <code>curl</code> matrix: default &rarr; 000/unreachable; workspace-write+network &rarr; 200; control outside &rarr; 5 memories, 320&nbsp;ms</td></tr>
+<tr><td>Prompt tax</td><td><code>kb tools | wc -c</code> = 27,971; 44 verbs (<code>kb --help</code>)</td></tr>
+<tr><td>opencode surface</td><td>local: <code>opencode.db</code> schema, <code>@opencode-ai/plugin</code> Hooks d.ts, <code>opencode export --help</code>; docs: <a href="https://opencode.ai/docs/plugins/">plugins</a>, <a href="https://opencode.ai/docs/server/">server</a></td></tr>
+<tr><td>gemini-cli surface (not installed)</td><td><a href="https://github.com/google-gemini/gemini-cli">google-gemini/gemini-cli</a> docs: hooks reference (11 events, BeforeAgent/AfterAgent, stdin <code>{session_id, transcript_path,&hellip;}</code>), session-management (30-day retention, chats JSONL)</td></tr>
+<tr><td>Extension doctrine</td><td>docs/extending.md (subprocess IPC + event-bus lanes); <a href="kb-second-operator-territory-2026-07.html">one-daemon-one-operator ruling</a></td></tr>
+</table>
+<p>Related: <a href="cross-harness-memory-exchange-ideas-2026-07.html">cross-harness memory exchange idea board</a> (companion, I1&ndash;I10) &middot; <a href="agent-experience-review-2026-07.html">agent-experience review</a> (first mapped the MCP territory) &middot; <a href="session-memory-deep-review-2026-07.html">session-memory deep review</a> (digest-fidelity caveats any adapter inherits) &middot; <a href="installing-kb-everywhere-2026-07-06.html">distribution landscape</a> (the other half of &ldquo;kb everywhere&rdquo;).</p>
+</section>
+
+<footer>
+<p>Written 2026-07-06 by Claude (Fable 5). Empirical work same-day on this machine (codex-cli 0.139.0, opencode 1.17.9, kb v0.20-50-g838eaa1e); harness documentation verified against official sources by a dedicated research pass. Applied 2026-07-10: the adapter shipped (commit 670ff011) and is registered as a live codex Stop hook alongside kb-recall.sh as UserPromptSubmit (~/.codex/hooks.json, pending one-time /hooks trust); all 30 rollouts backfilled and enriched on the prod daemon; README non-goals carries the re-specified trigger. No MCP server was built, per the non-goals discipline this artifact evaluates.</p>
+</footer>
+</article>
+</main>
+</body>
+</html>

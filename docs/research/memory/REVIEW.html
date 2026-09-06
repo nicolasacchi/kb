@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory — research review · kb research</title>
+<meta name="kb-category" content="review">
+<meta name="kb-tags" content="review, memory, agent-memory, audit, v0.9, post-tag">
+<meta name="description" content="Audit of the five memory research docs (19-23) against the v0.9 agent-memory subsystem actually shipped: M1-M8 phases on main, two post-tag follow-up fixes, and one outstanding lance.rs:777 panic on empty-corpus vector search.">
+
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .container{max-width:880px;margin:0 auto;padding:2rem 1.25rem 4rem}
+  .topnav{display:flex;justify-content:space-between;align-items:baseline;padding-bottom:1rem;border-bottom:1px solid var(--rule);margin-bottom:2rem;font-size:.9rem;color:var(--ink-3)}
+  .topnav a{text-decoration:none;color:var(--accent-ink);font-weight:600}
+  .topnav a:hover{text-decoration:underline}
+  h1{font-size:2rem;line-height:1.15;margin:.5rem 0 1.25rem}
+  h2{font-size:1.3rem;margin:2.5rem 0 .75rem;padding-top:.5rem;border-top:1px dashed var(--rule)}
+  .doc-id{display:block;font-size:.8rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem}
+  p{margin:.7rem 0}
+  ul{margin:.5rem 0 .5rem 1.4rem}
+  li{margin:.25rem 0}
+  code{font-family:ui-monospace,SF Mono,Menlo,monospace;font-size:.88em;background:var(--paper-2);padding:.06em .35em;border-radius:3px}
+  .status{display:inline-block;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;padding:.18em .55em;border-radius:3px;font-weight:700;vertical-align:.15em;margin-right:.5em}
+  .status-shipped{background:#3a6e3a;color:var(--paper)}
+  .status-partial{background:#7a5a14;color:var(--paper)}
+  .status-superseded{background:var(--ink-3);color:var(--paper)}
+  .status-not-shipped{background:var(--crit);color:var(--paper)}
+  .meta{font-size:.85rem;color:var(--ink-3);font-style:italic;margin:.25rem 0 1rem}
+  .note{background:var(--paper-2);border-left:3px solid var(--accent);padding:.75rem 1rem;margin:1rem 0;font-size:.92rem}
+  .note b{color:var(--accent-ink)}
+  .summary-grid{display:grid;grid-template-columns:auto 1fr;gap:.4rem 1rem;margin:1rem 0;font-size:.95rem}
+  .summary-grid > div:nth-child(odd){font-weight:600}
+</style>
+</head>
+<body>
+<div class="container">
+
+<nav class="topnav">
+  <a href="../index.html">← Index</a>
+  <span>memory · review</span>
+</nav>
+
+<h1>Memory research → v0.9: what shipped, what didn't</h1>
+
+<p class="meta">Audit of <code>19</code>-<code>23</code> against the live tree at <code>v0.9</code> +
+two post-tag fix commits. Read with the docs in the same folder.</p>
+
+<section id="milestone-outcome">
+  <h2>Milestone outcome</h2>
+  <p>The agent-memory track shipped as <strong>v0.9</strong>, tagged at the end of an eight-phase
+  push (<code>M1</code>-<code>M8</code>) each landing as a single green-CI commit on <code>main</code>.
+  Track M followed the build brief in <a href="23-memory-implementation-spec.html">doc 23</a>
+  end-to-end and implemented the <strong>native subsystem</strong> path argued in
+  <a href="22-memory-native-subsystem.html">doc 22</a>, not the phased
+  A → B → C path doc 19 recommended.</p>
+
+  <div class="summary-grid">
+    <div>Phase commits</div><div>
+      <code>9550c92</code> M1 metas/migration ·
+      <code>fddec88</code> M2 scope ·
+      <code>2a183e3</code> M3 recall ·
+      <code>6cb994f</code> M4 ingest ·
+      <code>8720e12</code> M5 CLI ·
+      <code>ee0877d</code> M6 SSE ·
+      <code>1d46887</code> M7 SPA ·
+      <code>3c27d4e</code> M8 hooks
+    </div>
+    <div>Post-tag follow-ups</div><div>
+      <code>b282311</code> <em>fix(hooks): honor <code>KB_DAEMON_URL</code> so hooks find non-default daemons</em> ·
+      <code>68b3b86</code> <em>docs(hooks): document local vs docker daemon + per-project recipe</em>
+    </div>
+    <div>Known post-tag bug</div><div>
+      <code>crates/kb-core/src/storage/lance.rs:777</code> — see
+      <a href="#post-tag-bug">post-tag bug</a>.
+    </div>
+  </div>
+
+  <div class="note" id="post-tag-bug">
+    <b>Post-tag bug.</b>
+    <code>vector_query</code> on an <em>empty</em> corpus panics inside
+    <code>batches_to_summaries</code> at <code>crates/kb-core/src/storage/lance.rs:777</code>:
+    the function does <code>batch.column_by_name("id").unwrap()</code>, but lance's
+    autoprojection on an empty result can omit the column, so the <code>unwrap</code>
+    kills the storage actor task for that kb. Recall fan-out (M3) is the path that hits
+    it — a freshly-configured memory corpus with zero artifacts in it panics on the
+    first <code>kb recall</code>. Found while smoke-testing the docker daemon; not
+    covered by the M3 acceptance tests because those seed each corpus before querying.
+    Fix is either projecting <code>id</code> explicitly or replacing the
+    <code>unwrap</code>s with a soft return of an empty hit list.
+  </div>
+</section>
+
+<section id="doc-19-kb-as-claude-code-memory">
+  <span class="doc-id">Doc 19</span>
+  <h2><span class="status status-partial">partial</span> <code>19-kb-as-claude-code-memory.html</code> — hub &amp; recommendation</h2>
+  <p>The framing shipped — kb <em>did</em> become Claude Code's memory cockpit, with the
+  curation, atlas-map and comment-loop arguments holding up — but the doc's
+  <strong>phased recommendation</strong> didn't: it told us to start with Approach A
+  (zero-build corpus + protocol), promote to B (CLI verbs) when shell-call friction bit,
+  and build C (native subsystem) <em>only if</em> agent memory became a kb pillar
+  (<code>19-…html:204-207</code>, the <code>#recommendation</code> ordered list).
+  In practice the project jumped straight to C, executing doc 23's M1-M8 brief on a
+  fresh branch. Approach A's deliverables (the <code>[kb.memory]</code> corpus shape,
+  the protocol prose) were absorbed into C as setup, not run as their own milestone.
+  Reading 19 as a problem-statement + landscape survey: SHIPPED. Reading it as a
+  build sequence: NOT followed.</p>
+  <ul>
+    <li>Native subsystem code present at <code>crates/kb-core/src/memory.rs</code>,
+        <code>crates/kb-server/src/routes/memory.rs</code>, <code>crates/kb-cli/src/commands/memory.rs</code> —
+        i.e. doc 22's path, not the doc-19 phased one.</li>
+    <li>The "memory cockpit" thesis (SPA view + atlas + comment curation) materialised
+        at <code>web/src/routes/memory.tsx</code> and the live <code>memory.*</code> SSE
+        wiring in <code>crates/kb-server/src/routes/artifacts.rs:120-178</code>.</li>
+  </ul>
+</section>
+
+<section id="doc-20-memory-corpus-and-protocol">
+  <span class="doc-id">Doc 20</span>
+  <h2><span class="status status-superseded">superseded</span> <code>20-memory-corpus-and-protocol.html</code> — Approach A (zero-build)</h2>
+  <p>Officially SUPERSEDED by the v0.9 decision to build the native subsystem, but a lot
+  of its DNA was kept. The four-type <code>memory-{user,feedback,project,reference}</code>
+  taxonomy as <code>kb-category</code> values stayed as the canonical authoring shape (see
+  <code>hooks/CLAUDE.memory.md</code>). What didn't ship from this doc: the
+  "Claude writes the file directly with the right meta tags and the watcher picks it up"
+  zero-build flow — v0.9 instead exposes <code>POST /api/kb/{kb}/artifacts</code> and
+  <code>kb remember</code> CLI as the canonical ingest paths
+  (<code>crates/kb-server/src/routes/artifacts.rs</code> + <code>crates/kb-cli/src/commands/memory.rs:Cmd::Remember</code>).
+  The double-index hazard doc 20 hand-waves was finally pinned down in doc 23 and
+  resolved by the "write-only" MVP route — same outcome (watcher does the embed), with
+  a real test guarding exactly-one-embed.</p>
+  <ul>
+    <li>Taxonomy lives on in <code>hooks/CLAUDE.memory.md</code> and the meta-walker in
+        <code>crates/kb-core/src/memory.rs</code> (salience/decay/supersedes triplet).</li>
+    <li>Doc 20's "session transcript dump" recipe became the <code>kb-capture.sh</code>
+        <code>Stop</code> hook into <code>[kb.sessions]</code> — see
+        <code>hooks/kb-capture.sh</code> + <code>hooks/README.md:8-10</code>.</li>
+  </ul>
+</section>
+
+<section id="doc-21-memory-mcp-and-memory-tool">
+  <span class="doc-id">Doc 21</span>
+  <h2><span class="status status-superseded">superseded</span> <code>21-memory-mcp-and-memory-tool.html</code> — Approach B (CLI verbs, no MCP)</h2>
+  <p>SUPERSEDED as a milestone of its own, but its core argument — <em>build CLI verbs,
+  don't run an MCP server</em> — became a load-bearing decision in v0.9. The
+  <code>kb remember</code> / <code>kb recall</code> / <code>kb forget</code> verb trio
+  doc 21 sketched is exactly what shipped, just folded into the C build rather than
+  staged separately. The "build-vs-buy" analysis (Mem0 / Anthropic memory tool /
+  MemPalace) directly motivates the <strong>LLM-free</strong> invariant called out in
+  CLAUDE.md's "Agent-memory subsystem (v0.9, track M)" section: kb stays
+  deterministic; the live agent does the writing.</p>
+  <ul>
+    <li>Verb subjects: <code>crates/kb-cli/src/main.rs:1034</code> (<code>Remember</code>),
+        <code>:1064</code> (<code>Recall</code>), <code>:1084</code> (<code>Forget</code>) —
+        matching the doc-21 surface 1:1.</li>
+    <li>No MCP server in the tree; the only agent-side glue is three shell hooks under
+        <code>hooks/</code> (<code>kb-recall.sh</code> / <code>kb-wake.sh</code> /
+        <code>kb-capture.sh</code>) declared in <code>.claude-plugin/plugin.json</code>.</li>
+  </ul>
+</section>
+
+<section id="doc-22-memory-native-subsystem">
+  <span class="doc-id">Doc 22</span>
+  <h2><span class="status status-shipped">shipped</span> <code>22-memory-native-subsystem.html</code> — Approach C (native)</h2>
+  <p>SHIPPED. v0.9's M-track is doc 22's blueprint. The three-meta authoring shape
+  (<code>kb-salience</code>, <code>kb-decay</code>, <code>kb-supersedes</code>) became
+  the canonical schema, parsed in M1 and rendered by <code>memory::render_artifact</code>.
+  The "lifecycle-hooks plugin so memory is automatic" beat lands as the M8 hooks +
+  <code>.claude-plugin/plugin.json</code>. Invalidation via supersede chains is live:
+  <code>list_supersede_targets</code> in the storage actor feeds the corpus-wide
+  tombstone scan inside recall (see "Architecture invariants" rule for memory in
+  <code>CLAUDE.md</code>). The atlas "mind-map of the agent's knowledge" beat is live
+  via the existing <code>AtlasView</code> reused from <code>/memory</code> — with the
+  doc-23-flagged caveat that it needs an embedder + a recompute, not a hard gate.</p>
+  <ul>
+    <li>Pure <code>rerank</code> on rank-position × salience × decay:
+        <code>crates/kb-core/src/memory.rs:73-98</code>. The doc-22 supersede-as-tombstone
+        idea is implemented at <code>crates/kb-core/src/storage/lance.rs:737</code>
+        (<code>list_supersede_targets</code>) and consumed at
+        <code>crates/kb-server/src/routes/memory.rs:178</code>.</li>
+    <li>Lifecycle plugin: <code>.claude-plugin/plugin.json</code> +
+        <code>hooks/{kb-recall,kb-wake,kb-capture}.sh</code> + <code>hooks/CLAUDE.memory.md</code>.</li>
+  </ul>
+</section>
+
+<section id="doc-23-memory-implementation-spec">
+  <span class="doc-id">Doc 23</span>
+  <h2><span class="status status-shipped">shipped</span> <code>23-memory-implementation-spec.html</code> — implementation spec (M1-M8)</h2>
+  <p>SHIPPED end-to-end. All eight phases landed as the green-CI commits listed in the
+  milestone outcome above. The four big architectural calls doc 23 locked in are all
+  honoured in the tree: <strong>(1)</strong> recall ranks on <em>rank-position</em>
+  (1/(60+rank)) not raw score, because lance projects no per-hit score — see
+  <code>memory.rs:66-91</code>; <strong>(2)</strong> the supersede/forget drop happens
+  inside the pure <code>rerank</code> from a corpus-wide tombstone scan, so an old
+  memory drops even when its superseder isn't in the retrieved window — see
+  <code>routes/memory.rs:178</code>; <strong>(3)</strong> ingest is the write-only MVP,
+  watcher indexes (the <code>Created</code> bypass of the dedup gate stays as-is, no
+  parallel writer) — guarded by an M4 e2e test; <strong>(4)</strong> memory corpora are
+  discovered at daemon (re)start, no hot-add. The "Stop (not SessionEnd)" hook contract
+  call-out also held up — see <code>hooks/README.md:10</code>.</p>
+  <ul>
+    <li>Test coverage matches the doc-23 testing matrix: pure <code>rerank</code>
+        unit tests + a recall e2e + an M4 ingest e2e (exactly one embed within ~400ms) +
+        Playwright <code>tests/e2e/spa-memory.spec.ts</code> for M7.</li>
+    <li>Post-tag gaps doc 23 didn't predict: (a) the
+        <a href="#post-tag-bug">lance.rs:777 panic on empty corpora</a>;
+        (b) <code>KB_DAEMON_URL</code> wasn't honoured by the hooks, fixed in
+        <code>b282311</code> — the spec assumed the default daemon URL, which broke for
+        docker-daemon and multi-daemon users.</li>
+  </ul>
+</section>
+
+<section id="summary">
+  <h2>Roll-up</h2>
+  <ul>
+    <li><span class="status status-shipped">shipped</span> <code>22</code>, <code>23</code> — the chosen path + its build brief, both reflected in the tree at <code>v0.9</code>.</li>
+    <li><span class="status status-superseded">superseded</span> <code>20</code>, <code>21</code> — Approaches A and B; their best ideas (taxonomy, verb shape, LLM-free posture) were folded into C.</li>
+    <li><span class="status status-partial">partial</span> <code>19</code> — framing and thesis SHIPPED; phased A→B→C recommendation NOT followed.</li>
+  </ul>
+  <p>Two known follow-ups remain: the <a href="#post-tag-bug">empty-corpus panic at <code>lance.rs:777</code></a>
+  and any further docker-daemon-vs-local-daemon hook ergonomics the
+  <code>68b3b86</code> docs commit didn't already cover.</p>
+</section>
+
+</div>
+</body>
+</html>

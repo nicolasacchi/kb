@@ -1,0 +1,257 @@
+# kb release pipeline — runs on a `v*` tag push.
+#
+# ── cargo-dist vs. hand-rolled: HAND-ROLLED (this file) ──────────────────────
+# cargo-dist is the usual "one command, whole release" tool, but it fights two
+# hard constraints here, so it was rejected in favour of this hand-rolled file:
+#
+#   1. Two binaries, one deliberately excluded from the workspace. kb ships
+#      `kb` (kb-cli) AND `kb-embedder`, and invariant #26 / docs/self-host.md
+#      require them built in SEPARATE `cargo build` invocations — a single
+#      invocation unifies kb-core's `local-embedder` feature and links ONNX
+#      Runtime into the `kb` binary too. cargo-dist models a workspace and
+#      builds its members together; steering it away from that (and keeping
+#      kb-embedder's static-ORT build isolated) is exactly the shape it makes
+#      awkward. Hand-rolled, the two `cargo build` steps below are explicit.
+#   2. SHA-pinned actions. ci.yml pins every third-party action to a 40-char
+#      commit SHA. cargo-dist GENERATES its own release workflow (via
+#      `dist generate`) using tag/floating action refs and expects to own that
+#      file — re-pinning by hand would drift on every `dist` upgrade. This file
+#      instead mirrors ci.yml's pins and, where possible, uses the preinstalled
+#      `gh` and `docker` CLIs in `run:` steps so there are NO extra actions to
+#      pin at all (only checkout / rust-toolchain / rust-cache, all from ci.yml).
+#
+# Runners: GitHub-HOSTED throughout (ubuntu-latest for the release/ghcr
+# jobs, ubuntu-24.04 + the native ubuntu-24.04-arm for the binary matrix) —
+# the same posture as ci.yml, which is hosted so a fork PR can never reach a
+# self-hosted runner (D4). Action SHA pins are copied verbatim from ci.yml.
+#
+# Injection-safety: every `${{ … }}` expression is passed through `env:` and
+# referenced as a shell variable inside `run:` — never interpolated into a
+# command body (see the GitHub Actions workflow-injection guidance).
+#
+# TODO(verify-after-public): nothing here can run until the repo is public and a
+# `v*` tag is pushed — release creation, asset upload, the ubuntu-24.04-arm
+# runner, and the ghcr push are all unverified locally. Push a throwaway
+# pre-release tag (e.g. v0.0.0-rc1) on a private-then-public repo to smoke it.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Least privilege by default; jobs widen as needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 1. Ensure a GitHub Release exists for the tag ──────────────────────────
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Ensure the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — reusing"
+          else
+            gh release create "$TAG" \
+              --title "kb $TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
+
+  # ── 2. Per-target release binaries (kb + kb-embedder) ──────────────────────
+  binaries:
+    name: binaries (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned to ubuntu-24.04 (NOT ubuntu-latest, which floats to 26.04 and
+          # would silently RAISE the floor). This is the LOWEST base kb-embedder
+          # can build on: its statically-bundled ONNX Runtime prebuilt needs
+          # GCC 12+ / libstdc++ GLIBCXX_3.4.30 to LINK and glibc >= 2.39 at RUN
+          # time (measured 2026-07-03: kb maxes at GLIBC_2.39; kb-embedder at
+          # GLIBC_2.39 + GLIBCXX_3.4.30). A ubuntu-22.04 build was VERIFIED to
+          # FAIL: kb-embedder won't link against 22.04's GCC 11 (GLIBCXX_3.4.29).
+          # DOCUMENTED FLOOR for the prebuilt bundle: glibc >= 2.39 = Debian 13+,
+          # Ubuntu 24.04+, Fedora 40+. Older (Debian 12 = 2.36, Ubuntu 22.04 =
+          # 2.35, RHEL 9 = 2.34) and musl (Alpine) users take the ghcr image
+          # (self-contained, built on trixie) or build from source. This ORT
+          # floor is the same force that moved the prod Dockerfile bookworm to
+          # trixie.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          # Native arm64 Linux runner (no QEMU cross-compile). Free ONLY for
+          # public repos.
+          # TODO(verify-after-public): (a) the org must have `ubuntu-24.04-arm`
+          # available (public-repo hosted runners); (b) kb-embedder's aarch64
+          # build needs ort-sys to find an aarch64-linux ONNX Runtime prebuilt
+          # on the CDN — if that prebuilt is absent the embedder link fails and
+          # this leg needs ORT_STRATEGY=system + ORT_LIB_LOCATION=<dir with a
+          # system libonnxruntime>. `fail-fast: false` keeps a failure here from
+          # sinking the x64 leg; drop this matrix row if it can't go
+          # green.
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # The release link (lance + datafusion, plus static ORT for the
+        # embedder) is heavy; reclaim ~20 GB so it can't run the runner dry.
+        # Mirrors ci.yml's guard. Best-effort — missing dirs are ignored.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/lib/android /usr/local/share/boost || true
+          df -h /
+
+      - name: Install protoc (Linux — lancedb transitive dep)
+        # libprotobuf-dev ships the well-known-type includes
+        # (google/protobuf/empty.proto, ...) that lance-encoding's build imports;
+        # protobuf-compiler alone provides only the binary and fails with
+        # "google/protobuf/empty.proto: File not found" (matches the prod
+        # Dockerfile, which installs both).
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install Rust toolchain
+        # Mirrors ci.yml: pinned to rust-toolchain.toml's version, NOT @stable
+        # (which would drift). This is the one action ci.yml pins by version tag
+        # rather than a 40-char SHA — kept identical here on purpose.
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      # Two SEPARATE cargo invocations — invariant #26 + docs/self-host.md.
+      # Building kb-cli and kb-embedder together unifies kb-core's
+      # `local-embedder` feature and links ONNX Runtime into `kb`. Kept apart,
+      # the `kb` binary links ZERO ORT; only `kb-embedder` bundles it (static,
+      # from the ort-sys CDN prebuilt).
+      - name: Build kb (no ORT)
+        run: cargo build --release --locked -p kb-cli --bin kb
+
+      - name: Build kb-embedder (static ORT)
+        run: cargo build --release --locked -p kb-embedder --bin kb-embedder
+
+      - name: Package archive
+        id: pkg
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="kb-${VERSION}-${TARGET}"
+          mkdir "$PKG"
+          cp target/release/kb target/release/kb-embedder "$PKG/"
+          strip "$PKG/kb" "$PKG/kb-embedder" || true
+          cat > "$PKG/INSTALL" <<EOF
+          kb ${VERSION} — ${TARGET}
+
+          Contents:
+            kb            the CLI + daemon
+            kb-embedder   the embedding / rerank sidecar (spawned by the daemon)
+
+          Install both into ONE directory — the daemon finds kb-embedder as a
+          sibling of the running kb (architecture invariant #26):
+
+            install -m 0755 kb kb-embedder ~/.local/bin/
+
+          Then:  kb daemon        # → http://127.0.0.1:4000/
+
+          The web UI is NOT bundled here. Build it once with the repo's
+          'just ci-spa' (writes web/dist, which the daemon serves), or run the
+          all-in-one container which bakes in the SPA + an embedding model:
+            docker run -p 4000:4000 ghcr.io/nicolasacchi/kb:${VERSION}
+
+          Docs: https://github.com/nicolasacchi/kb
+          EOF
+          tar -czf "${PKG}.tar.gz" "$PKG"
+          # Checksum sidecar (install.sh consumes it).
+          sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+          echo "archive=${PKG}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ARCHIVE: ${{ steps.pkg.outputs.archive }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
+
+  # ── 3. Container image → ghcr.io ───────────────────────────────────────────
+  ghcr:
+    name: ghcr image
+    runs-on: ubuntu-latest
+    # Independent of `binaries` — builds the existing repo-root Dockerfile.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # The image is ~1.7 GB (bakes in the ~1.34 GB bge-large model) on top of
+        # a full release compile — reclaim headroom before the docker build.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/lib/android /usr/local/share/boost || true
+          df -h /
+
+      - name: Log in to ghcr.io
+        # Preinstalled docker CLI + the job's GITHUB_TOKEN — no third-party
+        # login action to pin. packages:write above grants the push. Both values
+        # arrive via env (never interpolated into the command body).
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Build + push image
+        # The Dockerfile expects KB_GIT_SHA (its `.dockerignore` drops `.git`, so
+        # it can't probe the sha itself). Tags: :<version> and :latest.
+        # TODO(verify-after-public): ghcr push needs GitHub Packages enabled for
+        # the repo; the first push may create the package as PRIVATE — set it
+        # public in the repo's Packages settings if `docker pull` should be open.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          IMAGE="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          SHA="$(git rev-parse --short HEAD)"
+          docker build \
+            --build-arg KB_GIT_SHA="$SHA" \
+            -t "${IMAGE}:${VERSION}" \
+            -t "${IMAGE}:latest" \
+            .
+          docker push "${IMAGE}:${VERSION}"
+          docker push "${IMAGE}:latest"

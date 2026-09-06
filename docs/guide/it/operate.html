@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Share, flotta, token, self-host e panoramica CLI di kb.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, share, fleet, self-host, cli, ops">
+<title>Operare · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../operate.html">EN</a><span class="sep">·</span><a href="operate.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html" aria-current="page">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">08 · Operatività quotidiana</p>
+  <h1>Operare</h1>
+  <p class="lede">Pubblicare un export ripulito, monitorare una flotta, gestire un token e mantenere l’indice in salute — senza uscire dalla CLI o da Settings nella SPA.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#share">Share ed export</a></li>
+    <li><a href="#fleet">Monitoraggio della flotta</a></li>
+    <li><a href="#tokens">Token e identità</a></li>
+    <li><a href="#health">Salute e ciclo di vita dell’indice</a></li>
+    <li><a href="#cli">CLI in sintesi</a></li>
+    <li><a href="#authoring">Cose da sapere per scrivere artefatti</a></li>
+  </ol>
+</nav>
+
+<section id="share">
+<h2>Share ed export</h2>
+<p><code>kb share</code> pubblica un file o una cartella su un host statico (Cloudflare Pages + Access di default, oppure GitHub Pages con <code>--public</code>), oppure scrive un bundle offline autocontenuto.</p>
+<pre><code>kb share path/to/doc.html --gate email:example.com
+kb share path/to/folder --public
+kb share --list "Q3 design pass" --local ./bundle.zip
+kb share path/to/doc.html --page ./out.html     # single scrubbed page
+kb share list
+kb share revoke &lt;name&gt;</code></pre>
+<div class="note warn">
+  <strong>L’export rimuove sempre <code>&lt;template id="kb-prompt"&gt;</code></strong> — il contratto di generazione privato non esce con l’artefatto. <code>--no-scrub</code> è un opt-out esplicito e rumoroso. <code>--with-comments</code> pubblica lo stato di review altrimenti privato; usarlo deliberatamente.
+</div>
+<p><code>kb download</code> invia in stream il sorgente grezzo o uno zip di cartella/kb per uso locale, senza deploy.</p>
+</section>
+
+<section id="fleet">
+<h2>Monitoraggio della flotta</h2>
+<p>La TUI è ritirata. Usare:</p>
+<pre><code>kb fleet status              # health sweep over ~/.config/kb/daemons.toml
+kb events --follow           # live SSE tail (Last-Event-ID resume)
+kb status
+kb metrics
+kb pause / kb resume / kb reindex</code></pre>
+<p>Nella SPA, <strong>Settings</strong> offre le pagine Overview / Pipeline / Traffic / Errors / Live per gli stessi segnali. Le liste multi-daemon vivono in <code>daemons.toml</code> (CLI) e nelle impostazioni del browser (SPA).</p>
+</section>
+
+<section id="tokens">
+<h2>Token e identità</h2>
+<pre><code>kb token generate
+kb token rotate
+kb token show
+kb token issue alice           # per-user registry token (username positional)
+kb token revoke alice          # drop that user's registry line(s)
+kb whoami
+kb users</code></pre>
+<p>Il loopback bypassa i controlli bearer. Fuori dal loopback serve <code>Authorization: Bearer …</code> (o l’header configurato). L’identità si risolve una sola volta per richiesta, a fini di attribuzione; non è un sistema di permessi — vedi <a href="comments.html#identity">Commenti → identità</a>.</p>
+</section>
+
+<section id="health">
+<h2>Salute e ciclo di vita dell’indice</h2>
+<pre><code>kb daemon doctor
+kb backup &lt;kb&gt;
+kb restore …
+kb reindex --kb NAME
+kb reset --kb NAME
+kb compact --kb NAME
+kb exclude …                 # per-file exclusions
+kb config show | validate | edit</code></pre>
+
+<h3>Dove vivono i file</h3>
+<ul>
+  <li><strong>Configurazione</strong> — <code>~/.config/kb/kb.toml</code>, token bearer in <code>~/.config/kb/token</code>, lista flotta in <code>~/.config/kb/daemons.toml</code></li>
+  <li><strong>Stato</strong> — sqlite per-kb, vettori lance e <code>.review/</code> sotto la directory di state XDG (tipicamente <code>~/.local/state/kb/&lt;kb&gt;/</code>)</li>
+  <li><strong>Modelli</strong> — pesi di embedding nella cache XDG (<code>…/kb/models/</code>)</li>
+  <li><strong>Override di path</strong> — <code>KB_HOME</code>, oppure <code>KB_STATE_DIR</code> / <code>KB_CONFIG_DIR</code> / <code>KB_CACHE_DIR</code></li>
+  <li><strong>Pulizia per mismatch di dimensione</strong> — fermare il daemon, rimuovere <code>$STATE/&lt;kb&gt;/lance/</code>, riavviare</li>
+</ul>
+
+<div class="tldr">
+  <h2>Checklist di produzione</h2>
+  <ul>
+    <li>Tenere il daemon su <code>127.0.0.1</code>; mettere davanti Traefik/Caddy/nginx con TLS</li>
+    <li>Token bearer presente; non avviare mai un bind pubblico con <code>KB_ALLOW_NO_AUTH</code> a meno che il proxy da solo sia il gate</li>
+    <li>Impostare <code>artifact_host_suffix</code> (certificato wildcard per <code>*.artifacts.…</code>) e <code>parent_origin</code> all’origine della SPA</li>
+    <li><code>trusted_proxies</code> solo quando il proxy raggiunge il daemon fuori dal loopback (es. bridge Docker)</li>
+    <li>Lo scrub outbound opzionale per-kb rimuove <code>kb-prompt</code> e le redazioni sulle richieste di artefatto non-loopback; <code>kb share</code> rimuove sempre il prompt in export</li>
+    <li>Fare backup regolari dello state (sqlite + lance + <code>.review</code>)</li>
+  </ul>
+</div>
+</section>
+
+<section id="cli">
+<h2>CLI in sintesi</h2>
+<p>Eseguire <code>kb tools</code> per il manifesto completo leggibile da macchina. Verbi ad alto traffico:</p>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Area</th><th>Verbi</th></tr></thead>
+  <tbody>
+    <tr><td>Ciclo di vita</td><td><code>daemon</code> · <code>add</code> · <code>status</code> · <code>reindex</code> · <code>reset</code> · <code>backup</code></td></tr>
+    <tr><td>Trovare</td><td><code>search</code> · <code>find</code> · <code>get</code> · <code>cat</code> · <code>read</code></td></tr>
+    <tr><td>Review</td><td><code>comments …</code> · <code>reading</code></td></tr>
+    <tr><td>Agent</td><td><code>remember</code> · <code>recall</code> · <code>why</code> · <code>recollect</code> · <code>sessions …</code></td></tr>
+    <tr><td>Organizzare</td><td><code>list …</code> · <code>notes …</code> · <code>backlinks</code></td></tr>
+    <tr><td>Mappa</td><td><code>atlas …</code> · <code>related</code> · <code>similar</code></td></tr>
+    <tr><td>Pubblicare</td><td><code>share</code> · <code>download</code></td></tr>
+    <tr><td>Flotta</td><td><code>fleet</code> · <code>events</code> · <code>metrics</code></td></tr>
+  </tbody>
+</table>
+</div>
+<p>Ogni verbo che tocca il daemon accetta <code>--daemon URL</code> (default <code>http://127.0.0.1:4000</code>) e legge automaticamente il token bearer.</p>
+</section>
+
+<section id="authoring">
+<h2>Cose da sapere per scrivere artefatti</h2>
+<p>Gli artefatti che si indicizzano e commentano bene condividono un contratto breve (scaffold con <code>kb new --template … --title …</code>):</p>
+<ul>
+  <li>Un <code>&lt;title&gt;</code> reale e leggibile da umani, allineato all’unico <code>&lt;h1&gt;</code> — campo primario di ricerca e titolo della card in galleria.</li>
+  <li>Gerarchia pulita di <code>&lt;h2&gt;</code>/<code>&lt;h3&gt;</code> con <strong><code>id</code> kebab stabili</strong> (niente UUID o timestamp) così gli anchor di commento sulle sezioni sopravvivono alla rigenerazione.</li>
+  <li><code>&lt;meta name="kb-tags"&gt;</code> e <code>&lt;meta name="kb-category"&gt;</code> per le facet.</li>
+  <li>Contratto di esecuzione dentro <code>&lt;template id="kb-prompt"&gt;</code>, con tetto a 8&nbsp;KB — indicizzato in locale, rimosso su share/export pubblici.</li>
+  <li>Sicuro per la sandbox: niente <code>&lt;base href&gt;</code>, niente <code>target="_top"</code>, niente scorciatoie su <code>window.parent</code> (la SPA padre è cross-origin).</li>
+</ul>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="organize.html"><span class="dir">Precedente</span>Liste e note</a>
+  <a class="next" href="index.html"><span class="dir">Indietro</span>Home della guida</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a> · standalone sotto <code>docs/guide/</code></footer>
+</div>
+</body>
+</html>

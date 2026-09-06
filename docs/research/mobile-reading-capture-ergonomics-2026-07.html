@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:research, project:kb, mobile, reading, capture, ergonomics, pwa, triage, tts, commute, one-hand, ux-ideas">
+<title>Mobile Reading and Capture Ergonomics for kb — idea brief (2026-07)</title>
+
+<style>
+:root{
+  --bg:#f6f1e7;--surface:#ebe3d4;--fg:#1a1712;--muted:#6a6156;
+  --rule:#d4c9b6;--accent:#b45309;--accent-fg:#fffaf2;
+  --warn:#8a5a00;--danger:#9a2f28;--ok:#1f6b45;
+  --wild:#6b3fa0;--near:#1f6b45;
+  --fs-body:1.0625rem;--fs-small:.84rem;--lh:1.58;--maxw:48rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:"Iowan Old Style",ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:8px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#12161c;--surface:#1b222c;--fg:#ebe6dc;--muted:#a39a8c;
+    --rule:#2e3744;--accent:#e8a54b;--accent-fg:#1a1208;
+    --warn:#e0b24d;--danger:#f08079;--ok:#6fcaa0;--wild:#c4a0f0;--near:#6fcaa0;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:2.4rem 1.2rem 5.5rem}
+h1,h2,h3{line-height:1.2;font-weight:650;scroll-margin-top:1rem;font-family:var(--sans)}
+h1{font-size:1.95rem;margin:.15em 0 .35em;letter-spacing:-.02em}
+h2{font-size:1.28rem;margin:2.4em 0 .55em;padding-top:.55em;border-top:1px solid var(--rule)}
+h3{font-size:1.05rem;margin:0 0 .4em}
+p,li{font-family:var(--serif)}
+p{margin:.65em 0}
+a{color:var(--accent);text-underline-offset:2px}
+strong{font-weight:680}
+code{font-family:var(--mono);font-size:.84em;background:var(--surface);border-radius:4px;padding:.06em .32em}
+.kicker{font-family:var(--sans);font-size:.76rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch;flex-wrap:wrap}
+.kicker .dot{width:.45rem;height:.45rem;border-radius:50%;background:var(--accent)}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-size:1.14rem;line-height:1.48;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.8rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.55ch;align-items:center;margin-bottom:1.4rem}
+.tag{font-family:var(--mono);font-size:.72rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.04em .42em}
+nav.toc{font-family:var(--sans);background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:1em 1.15em;margin:1.4rem 0 2rem}
+nav.toc h2{font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 .55em;padding:0;border:none}
+nav.toc ol{margin:0;padding-left:1.2em;font-size:.9rem}
+nav.toc li{margin:.25em 0}
+nav.toc a{text-decoration:none}
+nav.toc a:hover{text-decoration:underline}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 8%,var(--bg));padding:.85em 1em;margin:1.2em 0;font-family:var(--serif)}
+.callout-label{font:650 .7rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.35em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg})}
+.callout--warn .callout-label{color:var(--warn)}
+.idea{border:1px solid var(--rule);border-radius:calc(var(--radius) + 2px);background:var(--surface);padding:1.1rem 1.15rem 1.15rem;margin:1.15rem 0;position:relative;overflow:hidden}
+.idea::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--near)}
+.idea.wild::before{background:var(--wild)}
+.idea-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem .75rem;margin-bottom:.35rem}
+.idea-num{font-family:var(--mono);font-size:.72rem;color:var(--muted);letter-spacing:.04em}
+.chips{display:flex;flex-wrap:wrap;gap:.35rem;margin:.55rem 0 .7rem}
+.chip{font-family:var(--mono);font-size:.68rem;border:1px solid var(--rule);border-radius:999px;padding:.12em .55em;background:var(--bg);color:var(--muted)}
+.chip--w{border-color:color-mix(in srgb,var(--wild) 45%,var(--rule));color:var(--wild)}
+.chip--n{border-color:color-mix(in srgb,var(--near) 45%,var(--rule));color:var(--near)}
+.chip--e{color:var(--fg)}
+.field{margin:.55em 0}
+.field-l{font:650 .72rem/1 var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:.2em}
+.field p{margin:.15em 0}
+.matrix{overflow-x:auto;margin:1.1em 0;border:1px solid var(--rule);border-radius:var(--radius)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.82rem;line-height:1.35}
+th,td{border-bottom:1px solid var(--rule);border-right:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:color-mix(in srgb,var(--surface) 70%,var(--bg));font-weight:650}
+tr td:last-child,tr th:last-child{border-right:none}
+tbody tr:last-child td{border-bottom:none}
+td a{text-decoration:none}
+.src-list{font-family:var(--sans);font-size:.84rem;padding-left:1.15em}
+.src-list li{margin:.35em 0}
+.footnote{font-family:var(--sans);font-size:.8rem;color:var(--muted)}
+ul.compact{padding-left:1.2em}
+ul.compact li{margin:.28em 0}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>research <span class="sep">·</span> project:kb <span class="sep">·</span> mobile ergonomics</div>
+  <h1>Mobile Reading and Capture Ergonomics for kb</h1>
+  <p class="lede">Idea brief through one lens: the phone as <em>reader + triage + capture</em> device — not an editor. Ideas are built from kb’s own prior research (mobile redesign, web-UI board, e-ink path, quick-capture/share-target, reading lists), not generic “make it like Notion” freelancing.</p>
+  <div class="meta-strip">
+    <span>2026-07-18</span><span class="sep">·</span>
+    <span>9 ideas · 3 near-term · 4 wild (≥4)</span><span class="sep">·</span>
+    <span class="tag">mobile</span><span class="tag">capture</span><span class="tag">lists</span><span class="tag">commute</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Table of contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#summary">Lens summary</a></li>
+    <li><a href="#ground">What kb already decided</a></li>
+    <li><a href="#ideas">Ideas</a></li>
+    <li><a href="#matrix">At-a-glance matrix</a></li>
+    <li><a href="#sources">Sources consulted</a></li>
+  </ol>
+</nav>
+
+<section id="summary">
+<h2>1. Lens summary</h2>
+<p>kb’s phone job is asymmetric: agents author long HTML artifacts on the desktop; the human mostly <strong>reads queues, triages comments, and captures scraps</strong> with one thumb on a train or couch. The SPA already has the right skeleton — immersive reader, bottom tab bar with Capture, reading lists + <code>QueueBar</code>, v0.25/v0.26 capture (paste-text + <code>share_target</code> POST <code>/capture</code>) — but several high-value mobile paths are still keyboard-only or half-wired, and the cross-origin artifact iframe (invariant #7) forbids the usual “restyle the document” reader tricks.</p>
+<p>Prior research already fixed the frame: <strong>lists are the mobile primary</strong>; edge-swipe is fragile against the sandboxed iframe; PWA <em>offline shell</em> stays trigger-gated on an Android + Authelia retry story (share-target itself has shipped); bare browser TTS was rejected as competitor-parity without a demonstrated need. This brief mines that ground for concrete next moves — three finishes you can ship without reopening non-goals, plus four wild bets that stay legal by routing around the iframe, the prompt-scrub export rule, and the memory agent-ingest boundary.</p>
+<div class="callout callout--warn">
+<span class="callout-label">Non-goals this brief respects</span>
+<p>No mobile <em>editor</em>. No restyling sandboxed HTML artifacts from the parent. No PWA offline app-shell until the Authelia-retry trigger fires (ideas that need installability name the gate). No “highlight → auto memory” that pretends human provenance is agent ingest (invariant #10). TTS only reappears as <em>pre-rendered, scrubbed, list-bound audio packs</em> — not Web Speech of the live SPA.</p>
+</div>
+</section>
+
+<section id="ground">
+<h2>2. What kb already decided (load-bearing)</h2>
+<ul class="compact">
+  <li><strong>Mobile chrome path:</strong> Phase-2 phone = FAB + bottom sheet; comments as modal sheet; iframe full-bleed; no native app (<code>surfaces/12-mobile-redesign</code>).</li>
+  <li><strong>Reader breakage:</strong> TocSpy overlay on ≤390px is the one real phone-reader break — collapse-by-default under ~860px (web-UI audit D1).</li>
+  <li><strong>Queue nav:</strong> ContextBar <code>onPrev/onNext/position/total</code> exist but are largely inert; list trail + QueueBar exist; sibling <code>[</code>/<code>]</code> and list <code>n</code>/<code>p</code> are keyboard-only on touch.</li>
+  <li><strong>Capture:</strong> <code>POST /api/kb/{kb}/capture</code> + share-target <code>POST /capture</code> + SPA <code>CaptureSheet</code> (files/drag/paste-text) shipped v0.25–v0.26. Auth cookie expiry mid-share is the documented sharp edge.</li>
+  <li><strong>E-ink sister path:</strong> server-rendered e-ink mode → EPUB/OPDS → KOReader; SPA is a poor e-ink client (<code>kb-on-e-ink-readers</code>).</li>
+  <li><strong>Recorded kills:</strong> skeleton loaders; bare TTS; offline PWA shell (trigger-gated); share-engine-as-backup (lossy under invariant #9).</li>
+</ul>
+</section>
+
+<section id="ideas">
+<h2>3. Ideas</h2>
+
+<article class="idea" id="idea-chevrons">
+  <div class="idea-head">
+    <span class="idea-num">01 · NEAR</span>
+    <h3>Thumb-zone queue chevrons (wire what’s already there)</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--n">wildness 1</span>
+    <span class="chip chip--e">effort S</span>
+    <span class="chip">reader · lists</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>On mobile detail (and immersive), float two large, safe-area-aware prev/next hit targets in the lower thumb arc — same slot language as the immersive toggle. When <code>?list=&amp;entry=</code> is present, drive them from the list trail; otherwise from folder siblings. Wire ContextBar’s dormant <code>onPrev/onNext/position/total</code> and show a slim “3 of 11 · Up next →” footer. No edge-swipe in v1.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Kindle/KOReader page chrome; Instapaper queue; web-UI audit’s kept “on-screen prev/next” (critic: chevrons first, swipe later).</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p>Reader detail + <code>QueueBar</code> / list trail + ContextBar props already declared.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>none — pure chrome wiring outside the iframe. Defer edge-swipe (fights invariant #7 pan/scroll).</p>
+  </div>
+</article>
+
+<article class="idea" id="idea-toc-shelf">
+  <div class="idea-head">
+    <span class="idea-num">02 · NEAR</span>
+    <h3>Phone-readable reader: TOC collapse + Continue shelf</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--n">wildness 1</span>
+    <span class="chip chip--e">effort S</span>
+    <span class="chip">reader · recent</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>Ship audit D1: Topics default collapsed under the mobile breakpoint and never steal the column. On the Recent tab, add a one-row “Continue” shelf: last in-progress artifact (resume % + stop heading) plus the active list’s next unread with <code>est_minutes</code> (“12 min left in Evening pack”). Tap opens immersive with list context preserved.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Pocket/Instapaper home “continue”; Apple Books reading now; kb web-UI audit mobile “Continue reading” shelf.</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p><code>TocSpy</code> + history reading progress + lists <code>est_minutes</code>/<code>remaining_minutes</code> + BottomTabBar Recent.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>none. Resume toast must not fight silent scroll-to-stop already in detail.</p>
+  </div>
+</article>
+
+<article class="idea" id="idea-share-retry">
+  <div class="idea-head">
+    <span class="idea-num">03 · NEAR</span>
+    <h3>Share-target capture that survives Authelia</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--n">wildness 2</span>
+    <span class="chip chip--e">effort M</span>
+    <span class="chip">capture · pwa-gate</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>Share-target already POSTs to <code>/capture</code> and 303s to <code>/?captured=…</code>. The real mobile failure mode (documented in self-host) is cookie expiry → login redirect eats the multipart body. Fix the gate, not the fantasy offline shell: stage the share payload in a tiny same-origin holding page (or SW form-cache) before auth, replay POST after Authelia returns, then land the existing toast. Optional: after successful install on Android, surface a one-time “Share to kb works when…” checklist in Settings.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Android Share Target + credentialed PWA patterns; Wallabag/Omnivore “save from share sheet”; kb’s own deferred trigger (“Android phone + Authelia retry story”).</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p><code>manifest.webmanifest</code> share_target, <code>routes/capture::share_target</code>, <code>capturedParam</code> toast, CaptureSheet.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>Stay on the existing auth_bearer route_layer for <code>/capture</code> (invariant #4). Do not weaken public bind. HTML from the wild stays sanitize-default-ON on this path. This is <em>not</em> full offline PWA — only retry across the login hop.</p>
+  </div>
+</article>
+
+<article class="idea" id="idea-triage-deck">
+  <div class="idea-head">
+    <span class="idea-num">04 · STRETCH</span>
+    <h3>One-hand comment triage deck</h3>
+  </div>
+  <div class="chips">
+    <span class="chip">wildness 3</span>
+    <span class="chip chip--e">effort M</span>
+    <span class="chip">comments · triage</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>A full-screen “Inbox deck” of open <code>you</code>-authored comments across the active kb: one card = artifact title + anchored excerpt + comment body. Thumb gestures on the <em>chrome</em> card (not the iframe): swipe right = mark needs-reply later (pin to a “Tonight” list), swipe left = resolve (with undo toast), tap = open artifact at anchor in immersive with composer focused. Keyboard twin keeps audit’s j/k/r/d triage mode for desktop.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Mail triage (Superhuman/Outlook focused inbox); Tinder-style card decks done tastefully; GitHub mobile review queues; kb audit “keyboard triage mode for Inbox/Comments”.</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p>Comments API + resolve/reply, Inbox/Anchors routes, lists add-entry, existing mobile inspector sheet patterns.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>Gestures only on SPA chrome cards — never over the sandboxed iframe. Resolve goes through normal comment mutations + SSE; destructive bulk still hits the one-confirm host (invariant #32).</p>
+  </div>
+</article>
+
+<article class="idea wild" id="idea-night-pack">
+  <div class="idea-head">
+    <span class="idea-num">05 · WILD</span>
+    <h3>Agent-built “commute pack” lists</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--w">wildness 4</span>
+    <span class="chip chip--e">effort M</span>
+    <span class="chip">lists · agents · sessions</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>Agents already touch artifacts and can <code>kb list add</code>. Productize a convention: a pinned list named like <code>pack/2026-07-18-commute</code> with a target budget (e.g. 25 min from <code>remaining_minutes</code>). Overnight (or end of coding session) the agent fills it from “touched today + open comments + unread longreads,” ordered for continuous read. Phone opens Lists → pack → immersive chevrons through the queue. Human never builds the queue; they only swipe/advance and optionally eject (“not tonight” → back to backlog list).</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Readwise daily review; Spotify Daily Mix; airline “gate pack”; kb sessions “recently touched by agents” discovery idea + list time estimates.</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p>Reading lists CRUD + <code>est_minutes</code>, session_files / agent activity signals, CLI list verbs agents already use, mobile Lists tab.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>none if packs are ordinary lists (no new intelligence in-daemon). Ranking stays agent-side; daemon remains deterministic storage. Don’t auto-write human memories from pack completion.</p>
+  </div>
+</article>
+
+<article class="idea wild" id="idea-audio-pack">
+  <div class="idea-head">
+    <span class="idea-num">06 · WILD</span>
+    <h3>Scrubbed audio packs (TTS reopened with a new angle)</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--w">wildness 5</span>
+    <span class="chip chip--e">effort L</span>
+    <span class="chip">lists · export · commute</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>The audit killed <em>in-SPA Web Speech of long-form artifacts</em> (no demonstrated need; competitor parity). Reopen only as: for a commute pack, a button “Render audio” runs server-side (or laptop-side agent) over <strong>share-scrubbed plain text</strong> (invariant #9: prompts already stripped), produces chaptered M4A/OGG per list entry, and attaches them as downloadable artifacts or OPDS-adjacent files. Phone plays with lock-screen controls and auto-advances the list’s audio queue — eyes-free twin of chevron reading. No live SpeechSynthesis in the reader chrome.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Speechify / NaturalReader export; podcast queues; KOReader TTS; e-ink report’s EPUB offline path (same scrubbed substrate).</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p><code>kb share</code> scrub pipeline, lists, capture folder or attachments, optional OPDS/export sibling to e-ink roadmap.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>Must use scrubbed export text only (#9). Prefer offline files over streaming model APIs in the daemon (keeps local-only posture). Don’t put TTS inside the artifact iframe. Interactive/JS-heavy artifacts flag as “not narratable” rather than mangling.</p>
+  </div>
+</article>
+
+<article class="idea wild" id="idea-tap-pages">
+  <div class="idea-head">
+    <span class="idea-num">07 · WILD</span>
+    <h3>Server-paginated “tap pages” reading mode</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--w">wildness 4</span>
+    <span class="chip chip--e">effort L</span>
+    <span class="chip">reader · e-ink · one-hand</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>Borrow Phase-1 of the e-ink report for phones: a JS-light, server-rendered <code>/read/{id}?page=N</code> (or <code>?view=pages</code>) that splits scrubbed-or-markdown-friendly bodies into word-budget pages. Left 30% tap / right 70% tap = prev/next page (classic e-reader hit zones), progress dots, no scroll fighting. SPA list chevrons hop artifacts; in-artifact taps hop pages. Works one-handed on a jostling bus; doubles as the Boox/Kobo browser client.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Kindle tap zones; KOReader; Instapaper pagination experiments; kb e-ink architecture B (server-rendered reading mode).</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p>Daemon artifact serve + index-page/browse patterns; reading progress history; lists continuous read; e-ink CSS hooks from the e-ink report.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>Pagination runs on server-owned HTML/Markdown paths — not by injecting into author JS inside the subdomain iframe. Strip <code>kb-prompt</code> on non-loopback (#5/#9). Interactive widgets degrade to “open full artifact” rather than fake pages.</p>
+  </div>
+</article>
+
+<article class="idea wild" id="idea-thumb-arc">
+  <div class="idea-head">
+    <span class="idea-num">08 · WILD</span>
+    <h3>Thumb-arc radial actions (one-hand command palette)</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--w">wildness 4</span>
+    <span class="chip chip--e">effort M</span>
+    <span class="chip">chrome · capture · search</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>Long-press the mobile Capture tab (or immersive FAB) to fan a semicircle of 4–5 actions in the thumb arc: Capture, Search (cmdk), Continue pack, New comment on current, Share sheet (<code>navigator.share</code>). Release on a wedge to fire. Short tap keeps today’s single action. Gives power-user density without a second row of tab bar icons or reaching the top of a large phone.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>iOS AssistiveTouch arcs; Firefox Continuum experiments; game console radial menus; mobile redesign FAB open decisions (position/content).</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p>BottomTabBar Capture event, Cmdk, CaptureSheet, Web Share idea (audit keep), immersive FAB slot.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>none if actions only dispatch existing SPA events. Provide a non-gesture path (long-press accessibility menu / explicit “More”) for AT. Honour <code>prefers-reduced-motion</code> with a static list sheet fallback.</p>
+  </div>
+</article>
+
+<article class="idea wild" id="idea-pocket-queue">
+  <div class="idea-head">
+    <span class="idea-num">09 · WILD</span>
+    <h3>Pocket memo queue (capture when the daemon can’t hear you)</h3>
+  </div>
+  <div class="chips">
+    <span class="chip chip--w">wildness 5</span>
+    <span class="chip chip--e">effort L</span>
+    <span class="chip">capture · offline-edge</span>
+  </div>
+  <div class="field"><span class="field-l">Pitch</span>
+    <p>A deliberately tiny standalone route <code>/pocket</code>: one textarea, optional tags, big Save. On failure (offline, 401, 5xx) append to a local IndexedDB outbox and show a badge on Capture. Next successful session drains the outbox through normal <code>POST …/capture</code> as markdown stubs (<code>from:pocket</code>). This is not a full offline reader and not a SW-cached corpus — it’s the commute parking lot for thoughts when Authelia or the tailnet is unhappy. Pairs with idea 03’s retry machinery.</p>
+  </div>
+  <div class="field"><span class="field-l">Inspiration</span>
+    <p>Drafts app / Capture One-tap notes; Google Keep offline; fresh-eyes “phone-capture kernel” inbox.md idea; shared-outbox patterns in PWAs without claiming full offline.</p>
+  </div>
+  <div class="field"><span class="field-l">kb_fit</span>
+    <p>Capture API + notes/markdown pipeline + Capture tab badge + existing toast grammar.</p>
+  </div>
+  <div class="field"><span class="field-l">invariant_risk</span>
+    <p>Do not pretend the outbox is searchable memory. Drain only via capture (provenance-stamped files), never silent memory writes (#10). Scope stays text stubs — no caching of artifact bodies (avoids the rejected offline app-shell). Clear UX that items are local until acked.</p>
+  </div>
+</article>
+</section>
+
+<section id="matrix">
+<h2>4. At-a-glance matrix</h2>
+<div class="matrix">
+<table>
+  <thead>
+    <tr><th scope="col">#</th><th scope="col">Idea</th><th scope="col">Wild</th><th scope="col">Effort</th><th scope="col">Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>01</td><td><a href="#idea-chevrons">Thumb-zone queue chevrons</a></td><td>1</td><td>S</td><td>reader / lists</td></tr>
+    <tr><td>02</td><td><a href="#idea-toc-shelf">TOC collapse + Continue shelf</a></td><td>1</td><td>S</td><td>reader / recent</td></tr>
+    <tr><td>03</td><td><a href="#idea-share-retry">Share-target Authelia retry</a></td><td>2</td><td>M</td><td>capture</td></tr>
+    <tr><td>04</td><td><a href="#idea-triage-deck">Comment triage deck</a></td><td>3</td><td>M</td><td>comments</td></tr>
+    <tr><td>05</td><td><a href="#idea-night-pack">Agent commute packs</a></td><td>4</td><td>M</td><td>lists / agents</td></tr>
+    <tr><td>06</td><td><a href="#idea-audio-pack">Scrubbed audio packs</a></td><td>5</td><td>L</td><td>lists / export</td></tr>
+    <tr><td>07</td><td><a href="#idea-tap-pages">Server tap-pages mode</a></td><td>4</td><td>L</td><td>reader / e-ink</td></tr>
+    <tr><td>08</td><td><a href="#idea-thumb-arc">Thumb-arc radial actions</a></td><td>4</td><td>M</td><td>chrome</td></tr>
+    <tr><td>09</td><td><a href="#idea-pocket-queue">Pocket memo outbox</a></td><td>5</td><td>L</td><td>capture</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="footnote">Suggested ship order if acting on this brief: <strong>02 → 01 → 03</strong> (phone becomes usable and capture sticks), then <strong>05</strong> as the agent-side convention with almost no daemon work, then pick one wild bet among 04 / 07 / 08.</p>
+</section>
+
+<section id="sources">
+<h2>5. Sources consulted</h2>
+<p>kb artifacts, memories, and code actually opened for this brief:</p>
+<ul class="src-list">
+  <li><strong>a36feb5a4707</strong> — <code>surfaces/12-mobile-redesign.html</code> (FAB/bottom-sheet phone chrome, non-goals: no native app, no swipe-vs-iframe, no artifact reflow).</li>
+  <li><strong>c1fdf09fe7f8</strong> — <code>kb-web-ui-audit-and-idea-board-2026-07.html</code> (D1 TOC overlay; mobile chevrons/share-sheet/continue shelf; do-not-build: bare TTS, offline PWA shell, skeletons).</li>
+  <li><strong>d0c693ce003c</strong> — <code>kb-on-e-ink-readers.html</code> (server e-ink mode → EPUB/OPDS → KOReader; tap/pagination substrate for idea 07).</li>
+  <li>Memories <strong>217da1a2fe2f</strong>, <strong>afc8d6daaf59</strong>, <strong>c07d84b2ed88</strong>, <strong>465fc2bd77fa</strong> — v0.25/v0.26 quick-capture design + ship + paste-text + prod notes.</li>
+  <li><code>web/public/manifest.webmanifest</code>, <code>web/src/components/{CaptureSheet,chrome/BottomTabBar}.tsx</code>, <code>crates/kb-server/src/router.rs</code> share-target trap, <code>docs/self-host.md</code> Authelia/share-target gap.</li>
+  <li><code>crates/kb-server/src/routes/lists.rs</code> — <code>est_minutes</code> / <code>remaining_minutes</code> for pack budgeting.</li>
+  <li>fresh-eyes / impl-roadmap phone-capture kernel (inbox.md) — antecedent to pocket outbox; share-target since shipped past that deferral.</li>
+  <li><code>kb recollect "mobile reading capture ergonomics"</code> — recent capture-contract sessions; no prior identical idea-brief found in corpus at authoring time.</li>
+</ul>
+<p class="footnote">External pattern names (Kindle, Instapaper, Pocket, KOReader, Wallabag, Speechify, Drafts) are cited as inspiration only; no live web sweep was required beyond what prior kb research already verified.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

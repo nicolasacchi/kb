@@ -1,0 +1,226 @@
+/* S2-A — kb-code v6.0 "One Inbox" (design-s2.md §S2-A): the top-level
+ * `/~inbox` page shell + the two lanes `review-inbox.css` doesn't already
+ * cover (working-tree questions, the kb lane). The reviews lane itself
+ * reuses `.kbc-inbox*` from `review-inbox.css` verbatim (imported
+ * alongside this file in `routes/Inbox.tsx`) — this file only adds the
+ * page container + the per-repo sub-heading + the two new row shapes.
+ * Same token discipline as every other kb-code stylesheet: tokens only,
+ * `color-mix` for washes, no raw hex. */
+
+.kbc-inboxpage {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-inboxpage__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.kbc-inboxpage__title {
+  font-size: 24px;
+  margin: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.kbc-inboxpage__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+.kbc-inboxpage__refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.kbc-inboxpage__refresh:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--accent-bor);
+}
+.kbc-inboxpage__refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── reviews lane: one `InboxList` per repo group ─────────────────────── */
+.kbc-inboxpage__repo-group {
+  margin-bottom: 14px;
+}
+.kbc-inboxpage__repo-group:last-child {
+  margin-bottom: 0;
+}
+.kbc-inboxpage__repo-label {
+  margin: 0 0 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
+
+/* ── working-tree questions lane ──────────────────────────────────────── */
+.kbc-inboxpage__ann-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.kbc-inboxpage__ann-row {
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-inboxpage__ann-row:last-child {
+  border-bottom: 0;
+}
+.kbc-inboxpage__ann-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  text-decoration: none;
+  color: inherit;
+}
+.kbc-inboxpage__ann-link:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-inboxpage__ann-intent {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-soft);
+  border: 1px solid var(--accent-bor);
+}
+.kbc-inboxpage__ann-loc {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+}
+.kbc-inboxpage__ann-excerpt {
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-inboxpage__ann-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+
+/* ── kb lane ───────────────────────────────────────────────────────────── */
+.kbc-inboxpage__kb-reason {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-md);
+}
+.kbc-inboxpage__kb-sub {
+  margin-bottom: 14px;
+}
+.kbc-inboxpage__kb-sub:last-child {
+  margin-bottom: 0;
+}
+.kbc-inboxpage__kb-sub-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.kbc-inboxpage__kb-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.kbc-inboxpage__kb-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.kbc-inboxpage__kb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kbc-inboxpage__kb-row:last-child {
+  border-bottom: 0;
+}
+.kbc-inboxpage__kb-row a {
+  color: var(--ink);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-inboxpage__kb-row a:hover {
+  color: var(--accent-soft);
+}
+.kbc-inboxpage__kb-excerpt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+.kbc-inboxpage__kb-caption {
+  margin: 6px 0 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+}

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>kb · layout explorations</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&display=swap"/>
+<style>
+  :root {
+    --bg: #f6f4ef; --ink: #1d1c19; --rule: #1d1c19; --muted: #7a766d;
+    --accent: oklch(0.55 0.18 22);
+    --serif: 'Fraunces', Georgia, serif;
+    --sans: 'Geist', -apple-system, sans-serif;
+    --mono: 'Geist Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--serif); }
+  body { padding: 64px 48px 120px; min-height: 100vh; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header.head {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 24px; align-items: end;
+    padding-bottom: 18px; border-bottom: 3px double var(--ink);
+  }
+  .lock { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  h1.master {
+    font-family: var(--serif); font-weight: 800;
+    font-size: clamp(56px, 9vw, 96px);
+    line-height: 0.92; letter-spacing: -0.04em; margin: 0;
+    font-variation-settings: 'opsz' 144;
+  }
+  .right-meta { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--muted); line-height: 1.5; letter-spacing: 0.04em; }
+  .deck {
+    margin: 24px 0 56px;
+    font-family: var(--sans);
+    font-size: 17px; line-height: 1.55;
+    color: var(--muted);
+    max-width: 640px;
+  }
+  .deck strong { color: var(--ink); font-weight: 500; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--ink); border: 1px solid var(--ink); }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--bg);
+    padding: 28px 28px 24px;
+    display: grid; grid-template-rows: auto 1fr auto auto auto;
+    gap: 16px;
+    text-decoration: none; color: var(--ink);
+    min-height: 360px;
+    position: relative;
+    transition: background 0.15s;
+  }
+  .card:hover { background: #efebe2; }
+  .card .num { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase; }
+  .card h2 {
+    font-family: var(--serif); font-weight: 600;
+    font-size: 36px; line-height: 1.0; letter-spacing: -0.02em;
+    margin: 0; font-variation-settings: 'opsz' 96;
+  }
+  .card p {
+    font-family: var(--sans);
+    font-size: 14.5px; line-height: 1.55;
+    margin: 0; color: var(--muted);
+  }
+  .card .ascii {
+    font-family: var(--mono); font-size: 9px; line-height: 1.0; color: var(--ink);
+    white-space: pre;
+    padding: 14px 0;
+    border-top: 1px dashed var(--ink); border-bottom: 1px dashed var(--ink);
+    overflow: hidden;
+  }
+  .card .meta {
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted);
+    display: flex; justify-content: space-between;
+  }
+  .card .meta .open { color: var(--accent); }
+  .card.flagship { grid-column: span 2; }
+  @media (max-width: 760px) { .card.flagship { grid-column: span 1; } }
+  .card.flagship h2 { font-size: 56px; max-width: 520px; }
+  .card.flagship .ascii { font-size: 11px; }
+
+  footer.foot {
+    margin-top: 56px; padding-top: 20px;
+    border-top: 1px solid var(--ink);
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em;
+  }
+  footer.foot a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div>
+      <div class="lock">vol. 1 — issue 6</div>
+      <div class="lock" style="margin-top: 4px">may 2026</div>
+    </div>
+    <h1 class="master">kb gallery — six approaches</h1>
+    <div class="right-meta">
+      one daemon ·<br/>
+      one set of artifacts ·<br/>
+      six readings of<br/>
+      what a gallery<br/>
+      could be.
+    </div>
+  </header>
+  <p class="deck">
+    The first build (<strong>Web Gallery</strong>) was a faithful read of the spec — cards, top bar, left rail, floating chrome. These five are <strong>parallel takes</strong>. Each commits hard to a single posture: editorial, terminal, spatial, archival, immersive. Each is a complete loop — gallery surface plus detail page — built around the same artifacts. Pick the bones you want to keep.
+  </p>
+
+  <div class="grid">
+    <a class="card flagship" href="Web Gallery.html">
+      <span class="num">00 · the spec build</span>
+      <h2>Web Gallery</h2>
+      <p>The original. Top bar, virtualized grid, hybrid title-glyph cards, four floating-chrome variants for the detail view, ⌘K palette, status pill. A faithful, polished read of the handoff doc — useful as the baseline against which the five below diverge.</p>
+      <pre class="ascii">┌────┐ ┌────┐ ┌────┐ ┌────┐
+│ ▣⚙ │ │ ▣⚙ │ │ ▣⚙ │ │ ▣⚙ │
+│Card│ │Card│ │Card│ │Card│
+└────┘ └────┘ └────┘ └────┘</pre>
+      <div class="meta"><span>baseline · react · tweakable</span><span class="open">open →</span></div>
+    </a>
+
+    <a class="card" href="layouts/01 Press.html">
+      <span class="num">01 · editorial</span>
+      <h2>The Press</h2>
+      <p>A broadsheet. Masthead, drop caps, multi-column body, marginalia for backlinks. Treats artifacts as features. Best when the kb is human-readable, not reference material.</p>
+      <pre class="ascii">═════════════════════════
+ KB · DAILY      MAY · 26
+─────────────────────────
+ ▙▟ Lead Story ████████
+    ▔▔▔▔▔▔▔▔
+ ░░░░  ░░░░░  ░░░░░
+ ░░░░  ░░░░░  ░░░░░</pre>
+      <div class="meta"><span>serif · marginalia · slow</span><span class="open">open →</span></div>
+    </a>
+
+    <a class="card" href="layouts/02 Terminal.html">
+      <span class="num">02 · terminal</span>
+      <h2>The Terminal</h2>
+      <p>Full mono, box-drawing characters, prompt-driven. Search is a command, not a field. Detail opens in the same shell. For operators who already live in tmux.</p>
+      <pre class="ascii">$ kb ls --recent
+[01] async-errors        4d  ●●●○○
+[02] borrow-checker      3h  ●●●●●
+[03] field-guide         1d  ●●●●○
+$ _</pre>
+      <div class="meta"><span>mono · keyboard-only · cli</span><span class="open">open →</span></div>
+    </a>
+
+    <a class="card" href="layouts/03 Atlas.html">
+      <span class="num">03 · spatial</span>
+      <h2>The Atlas</h2>
+      <p>Pan-and-zoom canvas. Cards float at coordinates that mean something — clusters by tag, distance by similarity. Like an Are.na board you walk through.</p>
+      <pre class="ascii">    ▢          ▢
+       ▢   ▢
+   ▢       ★    ▢
+        ▢      ▢
+   ▢      ▢
+              ▢ </pre>
+      <div class="meta"><span>canvas · drag · zoom</span><span class="open">open →</span></div>
+    </a>
+
+    <a class="card" href="layouts/04 Index.html">
+      <span class="num">04 · archival</span>
+      <h2>The Index</h2>
+      <p>A library card catalog. Dense alphabetical table, letter-jump rail, sortable everything. Three thousand artifacts? No problem. The opposite of a vibe.</p>
+      <pre class="ascii">A · async-errors · 2024 · 4.2k
+A · ahead-of-time · 2025 · 1.1k
+B · borrow-checker · 2026 · 240
+B · btreemap-tour · 2025 · 3.0k
+C · channels-101 · 2025 · 2.8k</pre>
+      <div class="meta"><span>list · sortable · scales</span><span class="open">open →</span></div>
+    </a>
+
+    <a class="card" href="layouts/05 Stack.html">
+      <span class="num">05 · immersive</span>
+      <h2>The Stack</h2>
+      <p>Each artifact is a full-viewport hero you swipe past. No grid, no thumbnails — the artifact <em>is</em> the card. For a kb you want to <em>encounter</em>, not search.</p>
+      <pre class="ascii">━━━━━━━━━━━━━━━━━━━━━━━━━
+        ▒▒▒▒▒▒▒▒▒▒
+        ▒        ▒
+        ▒  HERO  ▒  ↓ swipe
+        ▒        ▒
+        ▒▒▒▒▒▒▒▒▒▒
+━━━━━━━━━━━━━━━━━━━━━━━━━</pre>
+      <div class="meta"><span>scroll-snap · full-bleed</span><span class="open">open →</span></div>
+    </a>
+  </div>
+
+  <footer class="foot">
+    <span>kb · localhost:4000 · daemon v0.4.2</span>
+    <span>also: <a href="Card Variations.html">card variations canvas</a></span>
+  </footer>
+</div>
+</body>
+</html>

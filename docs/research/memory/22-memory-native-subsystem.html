@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Approach C for kb-as-Claude-Code-memory: the full custom build — memory as a first-class kb subsystem. A memory artifact schema with salience + recency decay and consolidation ('closets'); a synchronous ingest behind a kb remember CLI verb to kill the file-drop latency (no MCP — the daemon stays the only running piece); a Claude Code lifecycle-hooks plugin (SessionStart / UserPromptSubmit / Stop / SessionEnd); comment-driven invalidation reusing the anchor_stale / anchor_resolved machinery; and an SPA 'Memory' view with the UMAP atlas as a mind-map. Highest power, highest cost — with an honest verdict that this is only worth it if memory becomes a primary product direction for kb.">
+<meta name="kb-tags" content="claude-code, memory, kb, native, ingest-api, lifecycle-hooks, atlas, consolidation, decay, invalidation, spa, agent-memory">
+<meta name="kb-category" content="research">
+<title>22 · Memory, Approach C — native subsystem — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="19-kb-as-claude-code-memory.html">19 · Memory hub</a>
+      <a href="20-memory-corpus-and-protocol.html">20 · Simple</a>
+      <a href="21-memory-mcp-and-memory-tool.html">21 · CLI verbs</a>
+      <a href="22-memory-native-subsystem.html" class="is-current">22 · Native</a>
+      <a href="23-memory-implementation-spec.html">23 · Build spec</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 22 · Approach C
+    <span>·</span>
+    <span class="meta">Native subsystem</span>
+    <span>·</span>
+    <span class="meta">Research · 2026-05-22</span>
+  </div>
+  <h1>If memory becomes a pillar,<br>build it into kb.</h1>
+  <p class="lede">Approaches <a href="20-memory-corpus-and-protocol.html">A</a> and <a href="21-memory-mcp-and-memory-tool.html">B</a> sit <em>on top of</em> what kb already is. Approach C turns memory into a first-class kb feature: a memory-aware artifact schema with <strong>salience and decay</strong>, a synchronous <strong>ingest</strong> behind a <code>kb remember</code> verb that kills the file-drop latency, a Claude Code <strong>lifecycle-hooks plugin</strong> that captures and recalls automatically, <strong>comment-driven invalidation</strong> built on machinery kb already has, and an SPA <strong>Memory view</strong> that renders the atlas as a mind-map of everything the agent knows. It is the most powerful option and the most expensive — so the verdict, up front, is conditional.</p>
+</section>
+
+<section class="section section-tight" id="tldr">
+  <div class="tldr">
+    <span class="lbl">Read this before you fall in love with it</span>
+    <p>Everything below is a <strong>proposal</strong>, not a current kb feature. It is genuinely good — recency/decay ranking, synchronous ingest, auto-capture hooks, a forgetting mechanism, a mind-map UI — and it would make kb a real, differentiated agent-memory product. But it is a multi-crate build with ongoing maintenance, and <a href="20-memory-corpus-and-protocol.html">Approach A</a> already delivers ~80% of the user-visible value for an afternoon's work. <strong>Build C only if "agent memory" becomes a direction you want kb to own</strong> — not to scratch the first itch.</p>
+    <div class="badges">
+      <span class="conf conf--high">most capable</span>
+      <span class="conf conf--med">net-new across 4 crates</span>
+      <span class="conf conf--med">proposal, not shipped</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="schema">
+  <div class="section-head">
+    <div class="num">01 — Schema &amp; ranking</div>
+    <h2>Memories aren't documents — they age, repeat, and contradict</h2>
+    <p class="deck">A memory subsystem needs three things plain artifacts don't: salience, decay, and supersession.</p>
+  </div>
+  <div class="prose">
+    <p>Keep the four types from today's auto-memory as <code>kb-category</code> values (<code>memory-user</code>, <code>memory-feedback</code>, <code>memory-project</code>, <code>memory-reference</code>) and add three memory-specific metas the parser would learn to read:</p>
+    <pre><code>&lt;meta name="kb-salience"   content="0.8"&gt;          &lt;!-- 0..1 importance; boosts ranking --&gt;
+&lt;meta name="kb-decay"      content="slow|fast"&gt;    &lt;!-- how fast recency weight fades --&gt;
+&lt;meta name="kb-supersedes" content="&lt;old-id&gt;"&gt;     &lt;!-- this memory replaces that one --&gt;</code></pre>
+    <p><strong>Ranking = hybrid × salience × recency.</strong> kb's hybrid BM25+vector score answers "is this relevant?"; a memory layer also needs "is this still important and current?". A post-fusion re-rank multiplies the RRF score by a salience weight and a recency-decay factor (a <code>project</code> note about a sprint decays fast; a <code>user</code> preference decays slowly). The re-rank itself is just re-sorting the rows lance already returns — it doesn't touch the index; the only index-side work is surfacing <code>kb-salience</code>/<code>kb-decay</code> onto the result rows (a parser + schema add, since today's <code>DocSummary</code> carries neither).</p>
+    <div class="note"><b>Consolidation ("closets").</b> Borrow MemPalace's compression idea: a periodic job clusters memories (kb's atlas already runs k-means over the embeddings) and proposes a single summary memory per cluster — the "closet" — linking the originals as <code>kb-supersedes</code> sources. The summary becomes the hot recall target; the originals stay as the verbatim record. The agent proposes the closet; the human approves it (§04).</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="ingest">
+  <div class="section-head">
+    <div class="num">02 — Close the ingest gap</div>
+    <h2>Write a memory and recall it in the same breath</h2>
+    <p class="deck">The one architectural limitation A and B work around: there's no way to add a doc except by writing a file and waiting for the watcher.</p>
+  </div>
+  <div class="prose">
+    <p>Today the only ingest path is file-drop → watcher (~400 ms debounce); there is no body-POST endpoint (verified — the closest is <code>POST /api/kb/{kb}/reindex</code>, which takes no body). For human-paced memory that's invisible, but for an agent that writes a memory mid-task and wants to recall it moments later, the round-trip matters. <strong>Yes — make it a <code>kb</code> command</strong> (the natural answer to "can this be a CLI verb?"): <code>kb remember</code> writes the artifact and asks the daemon to index it <em>now</em>. Nothing new runs — just the daemon you already have:</p>
+    <pre><code># the interface: a CLI verb — no MCP, no extra process
+kb remember "user prefers Postgres for new services" \
+    --kb memory --scope global --category memory-user \
+    --tags db,prefs --salience 0.8 [--supersedes &lt;id&gt;]
+→ remembered 7f3a… · indexed · searchable now
+
+# daemon-side it writes the HTML artifact + indexes it synchronously;
+# the same op can also back an optional POST /api/kb/{kb}/artifacts for the SPA.</code></pre>
+    <p>Mechanically, <code>kb remember</code> writes the HTML artifact into the corpus dir (so it stays a plain file the watcher and reconciler still own) and tells the daemon to index it synchronously, returning once it's searchable. One interaction to design around: the corpus dir is under the live watcher, which fires a <code>watch.create</code> ~400 ms later — and <code>Created</code> events <em>bypass</em> the indexer's content-hash dedup gate (only <code>Modified</code> is gated), so a naïve version would embed the file twice (embedding is the ~170 ms-per-doc slow path). The verb (or the daemon op it calls) must pre-seed the content-hash cache, or suppress the watcher's next event for that path, so the follow-up is a no-op. The point of the comment that prompted this: <strong>no MCP and no second process</strong> — the daemon that already serves the artifacts does the indexing; <code>kb remember</code> is just its front door.</p>
+    <div class="note"><b>Invariant to respect:</b> the storage actor is single-writer-per-kb by design (<code>storage/actor.rs</code>, <code>CHANNEL_CAPACITY = 1024</code>). The ingest (driven by <code>kb remember</code>, or the SPA) enqueues through the same actor — no parallel writer — so this stays consistent with kb's concurrency model.</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="hooks">
+  <div class="section-head">
+    <div class="num">03 — Capture</div>
+    <h2>A lifecycle-hooks plugin so memory is automatic</h2>
+    <p class="deck">The agent shouldn't have to remember to remember. Claude Code's hooks make capture and recall ambient.</p>
+  </div>
+  <div class="prose">
+    <p>Ship a kb plugin of Claude Code lifecycle hooks — the same pattern Mem0 and claude-mem use — so the loop runs without the model deciding to. Every hook is just a <em>shell command that calls a <code>kb</code> CLI verb against the daemon</em>; nothing new runs (no MCP, no sidecar) — the daemon that serves the artifacts also holds and answers the memory. What's actually needed is a small set, and only one of them is load-bearing:</p>
+    <table class="alt-table">
+      <caption>What's really needed — the minimal hook set</caption>
+      <thead><tr><th>Hook</th><th>Need</th><th>What it does (a <code>kb</code> verb)</th></tr></thead>
+      <tbody>
+        <tr><td><code>UserPromptSubmit</code></td><td class="center"><span class="y">keystone</span></td><td><strong>proactive recall</strong> — run <code>kb recall "&lt;prompt&gt;"</code> and inject the top 3–5 re-ranked hits as context <em>before</em> the model answers. This is what makes recall reliable without MCP auto-fire: true RAG, no tool call needed. If you build one hook, build this.</td></tr>
+        <tr><td><code>SessionStart</code></td><td class="center"><span class="p">useful</span></td><td>wake-up: inject the memory protocol + a compact index (a couple of cheap <code>kb</code> reads) so the model knows the store exists and how to use it.</td></tr>
+        <tr><td><code>SessionEnd</code></td><td class="center"><span class="p">useful</span></td><td>persist what was staged this session with <code>kb remember</code>, run optional consolidation/dedup, and drop the transcript into the episodic corpus.</td></tr>
+        <tr><td><code>PostToolUse</code> / <code>Stop</code></td><td class="center"><span class="n">optional</span></td><td>per-turn candidate capture — noisy and easy to overdo; skip it until SessionEnd capture proves insufficient.</td></tr>
+      </tbody>
+    </table>
+    <p>The <code>UserPromptSubmit</code> proactive-recall step is the biggest behavioural upgrade over A/B: instead of hoping the agent calls <code>recall</code>, the relevant memories are <em>already in context</em> before it answers. It's also where token discipline matters most — inject the top 3–5 re-ranked hits, not the corpus.</p>
+    <h3 id="recall-hook">The keystone hook, concretely</h3>
+    <p>Claude Code runs a <code>UserPromptSubmit</code> hook command <em>before</em> the model sees the turn; the hook receives the turn's JSON on stdin (including the <code>prompt</code>), and whatever it writes to stdout is injected as additional context. So the whole proactive-recall loop is one small script — no MCP, no daemon change:</p>
+    <pre><code>// .claude/settings.json
+{ "hooks": { "UserPromptSubmit": [ { "hooks": [
+  { "type": "command", "command": "~/.claude/hooks/kb-recall.sh" } ] } ] } }</code></pre>
+    <pre><code>#!/usr/bin/env bash
+# ~/.claude/hooks/kb-recall.sh — inject relevant memories before Claude answers
+set -euo pipefail
+prompt=$(jq -r '.prompt // empty')                    # the turn text, from stdin
+[ -z "$prompt" ] &amp;&amp; exit 0
+hits=$(kb recall "$prompt" --scope all --limit 5 --json 2&gt;/dev/null) || exit 0
+[ "$(jq 'length' &lt;&lt;&lt;"$hits")" -eq 0 ] &amp;&amp; exit 0      # no hits → stay silent, spend nothing
+{ echo "Relevant memories (auto-recalled — pull a full body with kb get if useful):"
+  jq -r '.[] | "- [\(.kb)] \(.title) (id \(.id))"' &lt;&lt;&lt;"$hits"; }   # stdout → injected context</code></pre>
+    <p>For <code>UserPromptSubmit</code>, the hook's stdout is prepended to the turn's context (equivalently, emit <code>{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}</code> as JSON). Token discipline lives here: inject only <strong>titles + ids</strong> for the top 3–5 and let the model fetch a full body with <code>kb get</code> only when it needs one; stay silent when recall is empty so quiet turns cost nothing. The exact stdin field and the stdout-injection contract are Claude Code hook behaviour — worth a last check against the current hook docs before shipping. This is the one piece to build first; everything else in §03 is gravy.</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="trust">
+  <div class="section-head">
+    <div class="num">04 — Trust &amp; forgetting</div>
+    <h2>Invalidation, reusing machinery kb already has</h2>
+    <p class="deck">A memory you can't correct or expire becomes a liability. kb's comment system is already a correction protocol.</p>
+  </div>
+  <div class="prose">
+    <p>The hardest part of any memory system is <em>un</em>-remembering — stale facts that quietly mislead. Two mechanisms, both leaning on what kb has:</p>
+    <ul>
+      <li><strong>Staleness, reusing the anchor lifecycle's plumbing.</strong> kb's indexer already detects when a comment's anchor no longer resolves and emits <code>comment.anchor_stale</code> / <code>anchor_resolved</code>, with the SSE event, a SPA badge, and a sidecar behind it. Memory reuses that <em>plumbing</em> (the event, the badge, the down-rank-pending-review behaviour) — but the <em>trigger</em> is net-new: the anchor resolver only re-checks against the artifact's own re-parsed DOM, whereas "this <code>memory-project</code> note's referenced file/decision changed" is an external signal you'd detect yourself. Detection-only, never silently rewriting the memory (mirroring the resolver's "keep the original, flag it" rule).</li>
+      <li><strong>Correction by conversation.</strong> The comment loop <em>is</em> the consolidation/forgetting UI: comment "superseded — we moved to Postgres" on a memory; <code>kb comments watch</code> surfaces it; the agent writes the replacement with <code>kb-supersedes</code> pointing at the old one and resolves the thread. <strong>Forget</strong> = delete the file (or a soft <code>kb-status="forgotten"</code> that the re-ranker zeroes out). Quick-response <code>--choice-json</code> buttons make "keep / merge / forget" one tap.</li>
+    </ul>
+    <div class="rec">
+      <div class="lbl">Why this is kb's natural advantage</div>
+      <p>Every other memory tool has to invent a curation UI from scratch. kb's review subsystem — anchors, replies, resolve, the two-way watch loop, the SPA panels — was built for exactly "a human correcting a document a model produced". Memory correction is the same problem with the same solution.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="memory-view">
+  <div class="section-head">
+    <div class="num">05 — The Memory view</div>
+    <h2>The atlas becomes a mind-map of the agent's knowledge</h2>
+    <p class="deck">kb already draws a 2-D map of a corpus. Pointed at memory, that map is a picture of what the agent knows about you.</p>
+  </div>
+  <div class="prose">
+    <p>A dedicated SPA route (<code>/memory</code>) reusing components kb already ships:</p>
+    <ul>
+      <li><strong>Timeline</strong> — memories by <em>authorship</em> recency via the gallery's existing <code>?sort=recent</code> over <code>mtime_unix</code>/<code>indexed_at_unix</code>, weighted by <code>kb-decay</code>. (Note: kb's <code>history</code> table is a per-kb <em>activity</em> log — opens/searches/comments in the SPA — not an authorship record, so it tracks when you <em>read</em> a memory; for an agent-written corpus that signal is sparse and is the wrong basis for freshness.)</li>
+      <li><strong>Mind-map</strong> — the UMAP/k-means atlas (<code>AtlasView.tsx</code>, deterministic layout) over the memory corpus: clusters are topics, distance is relatedness. Click a cluster to see (and consolidate) its memories.</li>
+      <li><strong>Curate inline</strong> — edit, merge (apply <code>supersedes</code>), or forget a memory; stale badges from §04; the comment panel for the correction loop.</li>
+    </ul>
+    <p>This is the payoff of the whole series' thesis: memory you can <em>see and shape</em>, not a database you query blind. None of the off-the-shelf tools have it because none of them started as a visual artifact browser.</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="evaluation">
+  <div class="section-head">
+    <div class="num">06 — The two lenses</div>
+    <h2>Useful for Claude? Useful for the user?</h2>
+  </div>
+  <div class="prose">
+    <h3>For Claude-the-agent</h3>
+    <p><strong>The best possible version.</strong> Proactive recall means relevant memory is in context unprompted; synchronous ingest means write-then-recall is instant; decay + consolidation keep recall sharp as the store grows; supersession stops stale facts misleading it. This is what a memory system is supposed to feel like.</p>
+    <h3>For the end user</h3>
+    <p><strong>The richest cockpit — at a real cost.</strong> The Memory view, mind-map, and inline curation are a genuinely new capability no competitor offers. But the user now owns a subsystem: schema migrations, a re-ranker to tune, hooks to maintain, a consolidation job that can mis-merge. That's fine <em>if</em> memory is something kb means to be; it's overhead if memory is a side feature.</p>
+    <div class="open-q">
+      <div class="lbl">Open questions before committing to C</div>
+      <ul>
+        <li>Does proactive recall on every prompt cost more tokens than it saves? (Tune injection count; measure.)</li>
+        <li>Who owns consolidation correctness — can a bad auto-merge lose a memory? (Human-approve closets; keep verbatim originals.)</li>
+        <li>Is the salience/decay re-ranker worth the tuning burden vs. plain hybrid? (Start without it; add only if recall degrades at scale.)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="verdict">
+  <div class="section-head">
+    <div class="num">07 — Verdict</div>
+    <h2>Effort, risk, and where this lands</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Approach C scorecard</caption>
+      <thead><tr><th>Dimension</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td>Surface area</td><td>net-new across <code>kb-core</code> (schema, re-rank, ingest), <code>kb-server</code> (sync-ingest), <code>kb-cli</code> (<code>kb remember</code>/<code>recall</code> verbs), <code>web/</code> (Memory view), + a hooks plugin</td></tr>
+        <tr><td>Useful for Claude</td><td class="center"><span class="y">highest</span></td></tr>
+        <tr><td>Useful for the user</td><td class="center"><span class="p">highest, with maintenance</span></td></tr>
+        <tr><td>Risk</td><td>scope creep; consolidation correctness; re-ranker tuning; ongoing upkeep</td></tr>
+        <tr><td>Marginal value over A</td><td>real but incremental — proactive recall, instant ingest, forgetting, the UI</td></tr>
+        <tr><td>Reversible?</td><td class="center"><span class="p">harder</span> — it's shipped features, not just files</td></tr>
+      </tbody>
+    </table>
+    <div class="rec">
+      <div class="lbl">Recommendation</div>
+      <p><strong>Defer — but keep the design.</strong> Don't build C to get memory; build A now (and B1 if the friction warrants). Build C only after living with A/B has proven that (a) you want kb to be an agent-memory product, and (b) you've hit A/B's specific limits — write latency, missed recall, stale facts, no UI to manage it. Then pull these pieces in one at a time, cheapest-first: a <code>kb remember</code>/<code>recall</code> verb pair → the <code>UserPromptSubmit</code> proactive-recall hook → the Memory view → decay/consolidation. Each is independently useful; none requires the whole thing.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="page-nav">
+    <a href="21-memory-mcp-and-memory-tool.html">
+      <span class="dir">← Prev</span>
+      <span class="ttl">21 · dedicated CLI verbs</span>
+    </a>
+    <a href="23-memory-implementation-spec.html" class="next">
+      <span class="dir">Next →</span>
+      <span class="ttl">23 · Build spec</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb as Claude Code memory — Approach C: native subsystem (a proposal).</p>
+      <p>Built on kb facts verified in the code: no body-POST ingest today, single-writer storage actor (<code>actor.rs</code>), the <code>anchor_stale</code>/<code>anchor_resolved</code> lifecycle (<code>indexer.rs</code>), the UMAP/k-means atlas (<code>atlas.rs</code>, <code>AtlasView.tsx</code>), and the <code>history</code> timeline. Part of the memory series (19–22).</p>
+    </div>
+    <div>
+      <h5>Sections</h5>
+      <ul>
+        <li><a href="#schema">Schema &amp; ranking</a></li>
+        <li><a href="#ingest">Ingest gap</a></li>
+        <li><a href="#hooks">Capture hooks</a></li>
+        <li><a href="#trust">Trust &amp; forgetting</a></li>
+        <li><a href="#memory-view">The Memory view</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Series</h5>
+      <ul>
+        <li><a href="19-kb-as-claude-code-memory.html">19 · Hub &amp; landscape</a></li>
+        <li><a href="20-memory-corpus-and-protocol.html">20 · Corpus + protocol</a></li>
+        <li><a href="21-memory-mcp-and-memory-tool.html">21 · dedicated CLI verbs</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('kb-theme'); if (saved) root.dataset.theme = saved; } catch (e) {}
+  var btn = document.querySelector('[data-action="toggle-theme"]');
+  if (btn) btn.addEventListener('click', function () {
+    var next = root.dataset.theme === 'ink' ? 'paper' : 'ink';
+    root.dataset.theme = next;
+    try { localStorage.setItem('kb-theme', next); } catch (e) {}
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 't' || e.key === 'T') && !/input|textarea/i.test(e.target.tagName)) { if (btn) btn.click(); }
+  });
+  var bar = document.querySelector('.reading-progress');
+  if (bar) {
+    var tick = function () {
+      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+      bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+    };
+    document.addEventListener('scroll', tick, { passive: true });
+    tick();
+  }
+})();
+</script>
+</body>
+</html>

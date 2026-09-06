@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Six spike-tests for kb — walker, lance, sse, ratatui, iframe, fastembed. Goal, what to test, expected finding, success criteria, effort.">
+<title>Spikes — kb research</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="index.html">Index</a>
+      <a href="challenges.html">Challenges</a>
+      <a href="discussion.html">Discussion</a>
+      <a href="spikes.html" class="is-current">Spikes</a>
+      <a href="prompts.html">Prompts</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Cross-cuts
+    <span>·</span>
+    <span class="meta">6 throwaway spikes</span>
+    <span>·</span>
+    <span class="meta">Write to learn, then discard</span>
+  </div>
+  <h1><span class="strike">do not extend a spike</span>Six small experiments<br>in <em>spikes/&lt;name&gt;/</em>.</h1>
+  <p class="lede">Each spike is a throwaway crate. Goal: learn something concrete about a hot-spot before committing real code. Each entry below states <em>goal · what to test · expected finding · success criteria · effort</em>. Findings get written into a <code>spike-findings.md</code> document; the architecture is updated based on what was learned.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">Why spikes — and why throw them away</span>
+    <p>Spikes exist because architectural assumptions in a doc are cheap; assumptions in code are expensive. Each spike tests <strong>one</strong> assumption. None should grow into the real implementation. The pattern is: write 50–150 lines, measure or observe, update the architecture doc, delete the crate. <strong>The hardest discipline is not extending a working spike.</strong></p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <ol class="findings">
+    <li class="finding">
+      <div>
+        <div class="tag"><b>spike-walker</b> · ~50 LOC · 1 hour</div>
+        <h3>Baseline understanding of the HTML parser</h3>
+        <p><strong>Goal:</strong> walk a directory of HTML files, parse each with <code>scraper</code>, print <code>title</code> + tag list. No db, no async. Builds intuition for what the indexer's pipeline costs and what gotchas the real artifacts contain.</p>
+        <h4>What to test</h4>
+        <ul>
+          <li>Parse 100 of Thariq's reference artifacts (or a similar synthetic corpus).</li>
+          <li>Extract <code>document.title</code>, first <code>&lt;h1&gt;</code>, first <code>&lt;p&gt;</code>, count of <code>&lt;svg&gt;</code>, presence of <code>&lt;details&gt;</code>, presence of <code>&lt;script&gt;</code>.</li>
+          <li>Time per file (mean, p95).</li>
+          <li>What HTML edge cases break <code>scraper</code>? Self-closing tags, malformed nesting, embedded CDATA, comments?</li>
+        </ul>
+        <h4>Expected finding (from research)</h4>
+        <p>Topic 07's grep run shows: 20/20 artifacts have descriptive titles, 11/20 have inline SVG, 6/20 have <code>&lt;details&gt;</code>, 14/20 have <code>&lt;script&gt;</code>. <code>scraper</code> (built on <code>html5ever</code>) handles real-world HTML reliably; expect &lt; 5 ms per file. <strong>Success means:</strong> the field-extraction list in topic 07's section D matches what spike-walker actually returns.</p>
+        <h4>Success criteria</h4>
+        <ul>
+          <li>Parses 100 files without panic.</li>
+          <li>Extracts the 6 fields above for every file.</li>
+          <li>Total runtime &lt; 1 s.</li>
+          <li>Findings document updates topic 07 with corrected counts if the synthetic-vs-Thariq corpus diverges.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>spike-lance</b> · ~100 LOC · 4 hours</div>
+        <h3>API feel for lancedb's hybrid search</h3>
+        <p><strong>Goal:</strong> create a lancedb table with a few rows including a <code>FixedSizeList&lt;Float32, 384&gt;</code> column. Run keyword search (BM25), vector search (IVF-PQ), hybrid search (RRF). Confirm the API is ergonomic from Rust.</p>
+        <h4>What to test</h4>
+        <ul>
+          <li>Schema definition: <code>FixedSizeList</code> + <code>String</code> + scalar columns side-by-side.</li>
+          <li>Insert 10 rows manually with toy embeddings.</li>
+          <li>FTS index creation: <code>Index::FTS(FtsIndexBuilder { with_position: true, ... })</code>.</li>
+          <li>Vector index creation: implicit IVF-PQ on the FixedSizeList column.</li>
+          <li>Run three queries: BM25 only, vector only (cosine), hybrid (RRF reranker).</li>
+          <li>Cold-open latency: kill process, reopen, time first query.</li>
+          <li>On-disk layout: <code>tree</code> the dataset directory; identify <code>_versions/</code>, <code>_indices/</code>, <code>_transactions/</code> + fragments.</li>
+          <li>Schema evolution attempt: <code>add_columns</code>, <code>alter_columns</code>, then a row insert. Does it hit bug #3136?</li>
+        </ul>
+        <h4>Expected finding (from research)</h4>
+        <p>Topic 01 says lance's Rust crate exposes everything cleanly. Hybrid via <code>query_type="hybrid"</code> + RRF reranker is built-in. Cold-open is "tens of ms" for 10 rows. Bug #3136 may bite if schema-evolves past an embedding column. <strong>Success means:</strong> the recipe in topic 01 is achievable; you have working snippets for the real implementation.</p>
+        <h4>Success criteria</h4>
+        <ul>
+          <li>Hybrid search returns ranked results with both BM25 and vector contributing.</li>
+          <li>Cold-open &lt; 100 ms.</li>
+          <li>Schema-evolution test produces a clear "yes works" or "yes hits #3136" answer.</li>
+          <li>Findings document quotes the actual sizes of <code>_versions/</code>, <code>_indices/</code> directories.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>spike-sse</b> · minimal axum · 2 hours</div>
+        <h3>Confirm the broadcast + ring + Last-Event-ID pattern works</h3>
+        <p><strong>Goal:</strong> minimal axum server with one <code>/events</code> endpoint that broadcasts a counter every second. Test reconnection from <code>curl -N</code> and from a Node <code>EventSource</code> client. Confirm <code>Last-Event-ID</code> replay works.</p>
+        <h4>What to test</h4>
+        <ul>
+          <li><code>broadcast::channel(256)</code> + per-connection <code>BroadcastStream</code>.</li>
+          <li><code>VecDeque</code> ring buffer, capacity 1024, monotonic <code>u64</code> id.</li>
+          <li>Handler reads <code>Last-Event-ID</code> header, drains ring, chains live stream.</li>
+          <li><code>KeepAlive::new().interval(Duration::from_secs(15))</code>.</li>
+          <li><code>curl -N http://localhost:7000/events</code> → see <code>:</code> heartbeats every 15 s.</li>
+          <li><code>curl -N -H "Last-Event-ID: 5" ...</code> → only id&gt;5 replays.</li>
+          <li>Subscribe-then-snapshot vs snapshot-then-subscribe order: which avoids duplicates?</li>
+          <li>Slow client: simulate with <code>nc localhost 7000</code> + sleep; confirm <code>BroadcastStreamRecvError::Lagged</code> surfaces as a synthetic <code>event: lag</code>.</li>
+        </ul>
+        <h4>Expected finding (from research)</h4>
+        <p>Topic 04's recipe should work as-is. The duplicate-on-reconnect concern is real — subscribe before snapshot and filter live items by id. <strong>Success means:</strong> the pattern is copy-pasteable into the real <code>kb-server</code>.</p>
+        <h4>Success criteria</h4>
+        <ul>
+          <li>Reconnect with <code>Last-Event-ID</code> replays exactly the missed events, no duplicates, no skips.</li>
+          <li>Heartbeats arrive every 15 s; never within 1 s of a real event.</li>
+          <li>Lag handling: client sees <code>event: lag</code> when broadcast slot full.</li>
+          <li>Findings document confirms (or refutes) the subscribe-first ordering.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>spike-ratatui</b> · ~150 LOC · 4 hours</div>
+        <h3>Confirm thin-client pattern: SSE → ratatui</h3>
+        <p><strong>Goal:</strong> minimal ratatui app that subscribes to spike-sse's counter via <code>reqwest-eventsource</code>, renders it. Confirms the thin-client pattern works end-to-end.</p>
+        <h4>What to test</h4>
+        <ul>
+          <li>3-task pattern: input task (crossterm <code>EventStream</code>), SSE task (reqwest-eventsource), tick task (250 ms interval) — all feeding one <code>mpsc::UnboundedSender&lt;AppEvent&gt;</code>.</li>
+          <li>Render loop: <code>tokio::select!</code> with <code>render_interval</code> at 30 Hz, dirty-gated.</li>
+          <li>Header gauge showing the counter; footer connection dot via <code>throbber-widgets-tui</code>.</li>
+          <li>Component pattern: separate <code>Header</code>, <code>Body</code>, <code>Footer</code> components implementing a small <code>Component</code> trait.</li>
+          <li>Reconnect UX: kill spike-sse, watch the dot turn yellow → spinner → red. Restart spike-sse, confirm seamless reconnect with <code>Last-Event-ID</code> replay.</li>
+          <li><code>q</code> to quit, terminal restored cleanly via <code>Drop</code>.</li>
+        </ul>
+        <h4>Expected finding (from research)</h4>
+        <p>Topic 05 says no public end-to-end ratatui+SSE example exists; the plumbing is straightforward but you'll need to write it. <strong>Success means:</strong> kb-tui's file layout (topic 05 section "Concrete recommendation") is validated, and the dirty-gated render loop measurably saves CPU at idle.</p>
+        <h4>Success criteria</h4>
+        <ul>
+          <li>Counter updates appear in the gauge within ~33 ms of the SSE event.</li>
+          <li>At idle (counter steady), CPU usage &lt; 1%.</li>
+          <li>Reconnect-with-replay works; no missed counter values after reconnect.</li>
+          <li>Component pattern feels right at 3 components — would scale to 6.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>spike-iframe</b> · minimal axum + HTML · 3 hours</div>
+        <h3>Validate the sandbox + subdomain + postMessage recipe</h3>
+        <p><strong>Goal:</strong> minimal axum server hosting (a) a parent page on <code>http://localhost:7000</code> and (b) several HTML artifacts on <code>http://&lt;id&gt;.artifacts.localhost:7000</code>. Wildcard via <code>/etc/hosts</code> + a few static aliases. iframe-embed them with the recommended sandbox flags. Test postMessage parent↔iframe.</p>
+        <h4>What to test</h4>
+        <ul>
+          <li>Sandbox: <code>allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads</code>. No <code>allow-same-origin</code>.</li>
+          <li>Subdomain serving: confirm <code>localStorage.setItem</code> works inside the iframe (different origin from parent → real persistent storage).</li>
+          <li>postMessage RPC: parent sends <code>{type:'kb.init', prompt}</code>; iframe replies <code>{type:'kb.fetch', url}</code>; parent fetches with session cookie and posts back.</li>
+          <li>Inter-artifact links: artifact does <code>e.preventDefault(); parent.postMessage({type:'kb.nav', id})</code>; parent SPA navigates.</li>
+          <li>External resources: artifact loads a font from <code>fonts.gstatic.com</code> + a script from <code>cdn.jsdelivr.net</code>. Both succeed.</li>
+          <li>fetch back to kb's API directly (without postMessage): confirm CORS rejects (Origin: null doesn't match).</li>
+          <li>Sandbox-removal attack: artifact tries <code>parent.document.querySelector('iframe').removeAttribute('sandbox')</code>. Confirm subdomain ≠ parent → CORS denied access to <code>parent.document</code>.</li>
+          <li>iframe-recreate-per-render: navigate between two artifacts; confirm the first artifact's globals are gone in the second.</li>
+        </ul>
+        <h4>Expected finding (from research)</h4>
+        <p>Topic 06 recipe should work as-is. <strong>Success means:</strong> kb's sandbox model is provably safe (no cross-artifact contamination, no parent escalation) and ergonomic (storage + external assets work).</p>
+        <h4>Success criteria</h4>
+        <ul>
+          <li><code>localStorage</code> persists across iframe reloads on the same artifact.</li>
+          <li>Cross-artifact storage isolation confirmed.</li>
+          <li>External font + CDN script loads succeed.</li>
+          <li>Direct fetch to kb API blocked; postMessage RPC works.</li>
+          <li>Sandbox-removal attempt fails with a console <code>SecurityError</code>.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>spike-fastembed</b> · ~50 LOC · 1 hour</div>
+        <h3>Measure embedding latency, memory, model size on this machine</h3>
+        <p><strong>Goal:</strong> ~50 lines that takes 100 plain-text strings, embeds them with <code>fastembed</code> + <code>bge-small-en-v1.5</code>, runs a knn query (toy: in-memory cosine). Measures latency, memory, model download size.</p>
+        <h4>What to test</h4>
+        <ul>
+          <li>Cold start: time the first <code>TextEmbedding::try_new</code> call (model download + load).</li>
+          <li>Warm embed: time a single embedding for a 100-token, 500-token, 2000-token input.</li>
+          <li>Batched throughput: time <code>embed(&amp;[strings; 32])</code>.</li>
+          <li>Model file size on disk after download (<code>~/.cache/kb/models/</code>).</li>
+          <li>onnxruntime shared library size (after switching to <code>load-dynamic</code>).</li>
+          <li>RSS memory during inference.</li>
+          <li>Try <code>BGESmallENV15Q</code> (quantised) variant: same measurements, compare quality on a tiny relevance set (10 query/doc pairs from topic 07's artifacts).</li>
+        </ul>
+        <h4>Expected finding (from research)</h4>
+        <p>Topic 02 says: ~5–15 ms/embed on M-series, 15–40 ms on x86; 300–800 embeddings/sec batched. Model is ~130 MB fp32, ~33 MB int8. <strong>Success means:</strong> the project-local benchmark numbers fall within these bounds; if not, the embedding decision (or model choice) needs revisiting.</p>
+        <h4>Success criteria</h4>
+        <ul>
+          <li>p50 single embed &lt; 50 ms on this machine for 500-token input.</li>
+          <li>Batched p50 &gt; 200 embeddings/sec.</li>
+          <li>Cold start &lt; 5 s after model already cached; first-run with download &lt; 60 s.</li>
+          <li>Quantised variant within 2% MTEB on the toy set.</li>
+        </ul>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Order &amp; total effort</span>
+    <ol>
+      <li><strong>spike-walker</strong> · 1 h — fastest; builds parser intuition before anything else.</li>
+      <li><strong>spike-fastembed</strong> · 1 h — measures the slowest hot-spot (embedding); informs whether bge-small is right.</li>
+      <li><strong>spike-sse</strong> · 2 h — validates the daemon's streaming primitive.</li>
+      <li><strong>spike-iframe</strong> · 3 h — validates the SPA's rendering primitive.</li>
+      <li><strong>spike-ratatui</strong> · 4 h — validates the thin-client pattern.</li>
+      <li><strong>spike-lance</strong> · 4 h — biggest commitment; do <em>after</em> spike-walker so you have a real corpus to load.</li>
+    </ol>
+    <p><strong>Total: ~15 hours of focused work.</strong> Run sequentially, write findings as you go. <code>spike-findings.md</code> at the end captures: what worked, what surprised, what the architecture should change. Then delete the spike crates.</p>
+  </div>
+  <div class="open-q">
+    <span class="lbl">If a spike fails</span>
+    <ul>
+      <li><strong>spike-fastembed</strong> latency &gt; 100 ms p50 → revisit model choice (consider quantised default, or switching to Candle, or the matryoshka path from topic 02).</li>
+      <li><strong>spike-lance</strong> hits bug #3136 → add a test case to the kb regression suite, pin patch version, file upstream issue.</li>
+      <li><strong>spike-iframe</strong> wildcard subdomain too painful for local dev → fall back to topic 06's "single host + postMessage RPC for storage" plan; lose persistent localStorage from artifacts.</li>
+      <li><strong>spike-sse</strong> Last-Event-ID replay produces duplicates → the snapshot/subscribe ordering needs revision; update topic 04 with the correction.</li>
+      <li><strong>spike-ratatui</strong> dirty-gated render still burns CPU at idle → the architecture needs a different trigger (event-driven render only, no tick interval).</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="discussion.html"><span class="dir">← Prev</span><span class="ttl">Discussion</span></a>
+  <a class="next" href="index.html"><span class="dir">Back →</span><span class="ttl">Index</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · spikes</p>
+      <p>~15 hours of focused spikes. Then a <code>spike-findings.md</code>. Then delete the spike crates and write the real implementation against tighter assumptions.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="index.html">Index</a></li>
+        <li><a href="challenges.html">Challenges</a></li>
+        <li><a href="discussion.html">Discussion</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Related</h5>
+      <ul>
+        <li><a href="foundation/01-lancedb.html">01 Storage</a></li>
+        <li><a href="foundation/02-fastembed.html">02 Embeddings</a></li>
+        <li><a href="surfaces/06-iframe.html">06 Iframe</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

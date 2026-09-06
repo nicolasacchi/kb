@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Approach A for kb-as-Claude-Code-memory: the zero-build path. Point a [kb.memory] corpus at a directory, teach Claude a recall/remember 'memory protocol' in CLAUDE.md, and wrap recall in a small skill. Memories are HTML artifacts (kb is HTML-only), retrieved by hybrid BM25+vector search, and curated by the human through kb's own SPA + comment loop. Adds an optional episodic [kb.sessions] verbatim corpus fed by a SessionEnd hook. Copy-paste recipes for kb.toml, the CLAUDE.md protocol, the recall/remember skills, and the capture hook.">
+<meta name="kb-tags" content="claude-code, memory, kb, semantic-search, skills, hooks, claude-md, episodic-memory, self-host, zero-build, agent-memory, mempalace">
+<meta name="kb-category" content="research">
+<title>20 · Memory, Approach A — corpus + protocol (zero-build) — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="19-kb-as-claude-code-memory.html">19 · Memory hub</a>
+      <a href="20-memory-corpus-and-protocol.html" class="is-current">20 · Simple</a>
+      <a href="21-memory-mcp-and-memory-tool.html">21 · CLI verbs</a>
+      <a href="22-memory-native-subsystem.html">22 · Native</a>
+      <a href="23-memory-implementation-spec.html">23 · Build spec</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 20 · Approach A
+    <span>·</span>
+    <span class="meta">Corpus + protocol</span>
+    <span>·</span>
+    <span class="meta">Research · 2026-05-22</span>
+  </div>
+  <h1>Give Claude a memory it can search —<br>without writing a line of kb code.</h1>
+  <p class="lede">kb is already a hybrid-search engine over a watched folder, with a comment-driven review UI and a 2-D map of everything in it. So the cheapest useful memory for Claude Code is <em>convention, not code</em>: point a <code>[kb.memory]</code> corpus at a directory, write each memory as a small HTML artifact, and teach Claude — in <code>CLAUDE.md</code> — to <strong>recall before it answers</strong> and <strong>remember after it learns</strong>. The whole build is a config block, a protocol, and two tiny skills. The honest costs: memories must be HTML (kb won't index <code>.md</code>), and a freshly-written memory is searchable after a ~400 ms watcher debounce.</p>
+</section>
+
+<section class="section section-tight" id="tldr">
+  <div class="tldr">
+    <span class="lbl">The whole approach in five lines</span>
+    <p><strong>Store:</strong> a <code>[kb.memory]</code> corpus (an HTML artifact per memory). <strong>Write:</strong> Claude drops a file with the <code>Write</code> tool → the watcher indexes it. <strong>Recall:</strong> <code>kb search "&lt;topic&gt;" --kb memory --mode hybrid --json</code>. <strong>Curate:</strong> the human browses the SPA / atlas and steers via kb comments + <code>kb comments watch</code>. <strong>Behave:</strong> a <code>CLAUDE.md</code> "memory protocol" makes the loop actually fire — the single lesson every memory tool learns the hard way.</p>
+    <div class="badges">
+      <span class="conf conf--high">no kb code change</span>
+      <span class="conf conf--high">uses verbs that exist today</span>
+      <span class="conf conf--med">memories must be HTML, not .md</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="architecture">
+  <div class="section-head">
+    <div class="num">01 — How it works</div>
+    <h2>A watched corpus is already a memory store</h2>
+    <p class="deck">Writing a memory is writing a file; recalling one is a search. Everything else kb already does.</p>
+  </div>
+  <div class="prose">
+    <h3>The write path</h3>
+    <p>A memory is a single-file HTML artifact dropped into the corpus directory. kb's watcher (<code>crates/kb-core/src/watcher.rs</code>) emits a synthetic <code>watch.create</code>, the indexer parses it (title, <code>kb-tags</code>, <code>kb-category</code>, headings, body), computes a <strong>path-based id</strong> (<code>ArtifactId::from_path</code> — so <em>editing</em> a memory keeps its id; only renaming changes it), embeds the <code>&lt;body&gt;</code> text, and writes the row. Claude already writes files — so "remember this" is just a <code>Write</code> with the right <code>&lt;meta&gt;</code> tags.</p>
+    <div class="note"><b>Two facts that shape this approach (verified in the code):</b> kb indexes <strong><code>.html</code>/<code>.htm</code> only</strong> (<code>watcher.rs:184</code> <code>is_html</code>; <code>non_html_files_are_ignored</code> covers the rest), so memories are HTML — the existing <code>~/.claude/.../memory/*.md</code> store can't be pointed at kb unchanged. And there is <strong>no "POST a doc body" ingest endpoint</strong> — the path is write-file → watcher (~400 ms debounce, <code>config.rs</code> <code>DEFAULT_DEBOUNCE_MS</code>). <code>POST /api/kb/{kb}/reindex</code> forces a rescan but takes no body. For human-paced memory this latency is invisible; for tight write-then-immediately-recall loops it's worth knowing.</div>
+
+    <h3>The recall path</h3>
+    <pre><code>kb search "user's deploy preferences" --kb memory --mode hybrid --json --limit 5
+kb get &lt;id&gt; --kb memory --format html    # read a hit's full HTML (body included)</code></pre>
+    <p>Hybrid mode fuses BM25 over <code>title/body/headings</code> with bge-small vector similarity via reciprocal-rank fusion (<code>storage/lance.rs</code>, RRF k=60). That is exactly the retrieval a memory layer needs — keyword precision <em>and</em> semantic recall — and kb has shipped it since v0.1. <code>--json</code> gives Claude a clean envelope (<code>{hits:[{id,title,path,kb_category,…}], ms}</code>) to reason over.</p>
+
+    <h3>Where it lives</h3>
+    <p>Memory is personal and local, so the natural shape is a <strong>local <code>kb daemon</code></strong> on <code>127.0.0.1:4000</code> with a <code>[kb.memory]</code> corpus pointing at a host directory; the <code>kb</code> CLI talks to it with no extra flags. The already-running dockerised instance at <code>kb.example.com</code> can host it too — just bind-mount the directory to <code>/srv/memory</code> (it serves corpora from <code>/srv/&lt;name&gt;</code>) — but for an agent reading/writing on the same box, local-first is simplest and lowest-latency.</p>
+    <div class="note"><b>Hybrid recall needs the daemon running.</b> <code>kb search --mode hybrid</code> runs the embedder inside the daemon; with no daemon reachable the CLI <em>silently falls back to keyword-only</em> (BM25), losing the semantic half — and errors outright if the corpus was never indexed. Keep the local daemon up, or pass <code>--daemon http://127.0.0.1:4000</code> to force HTTP and get a hard error instead of a quiet downgrade. On the dockerised <code>kb.example.com</code> instance the host CLI also needs its bearer token, and the artifact host suffix is deployment-specific (<code>.artifacts.kb.example.com</code>).</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="for-claude">
+  <div class="section-head">
+    <div class="num">02 — Useful for Claude?</div>
+    <h2>Storage was never the problem — behaviour is</h2>
+    <p class="deck">kb gives Claude excellent recall. Whether Claude <em>uses</em> it is a prompt-engineering problem, not a storage one.</p>
+  </div>
+  <div class="prose">
+    <p><strong>Recall quality: high.</strong> Hybrid search over embedded prose beats the status quo handily. Today's file-based auto-memory is a hand-maintained <code>MEMORY.md</code> index that is loaded wholesale into context and grepped — there is <em>no semantic search</em>. Swapping that for <code>kb search</code> means Claude can ask "what did we decide about rate-limiting?" and get the right memory even if the file never used the word "rate-limiting".</p>
+    <p><strong>The catch — and it's the whole game — is the protocol.</strong> Every memory system in the wild (MemPalace, Mem0, claude-mem) reports the same lesson: <em>the tools won't fire on their own</em>. Without an instruction telling Claude to search-before-answering and to persist what it learns, memories are written rarely and read never. MemPalace bakes a "Memory Protocol" into its status tool; here the equivalent lives in <code>CLAUDE.md</code> (recipe §05). This is the single highest-leverage artifact in the whole approach.</p>
+    <div class="note"><b>Token budget &amp; transparency.</b> Recall is just-in-time: Claude pays tokens only for the hits it pulls, not for a wholesale memory dump — the right shape for long sessions. And because recall is an ordinary <code>kb search</code> shell call, every read/write is a <strong>visible tool call</strong> in the transcript: auditable, debuggable, no hidden retrieval.</p></div>
+    <div class="open-q">
+      <div class="lbl">What Claude gains vs. CLAUDE.md + auto-memory today</div>
+      <ul>
+        <li><strong>Semantic recall</strong> instead of grep over an index file.</li>
+        <li><strong>Scale</strong> — hundreds/thousands of memories without bloating the always-loaded context (only <code>MEMORY.md</code>-style indices grow with the store; kb keeps the index on disk).</li>
+        <li><strong>The diagnostic path survives</strong> — a memory artifact can hold the full "what I tried, why it failed, what worked", not just a one-line summary. That nuance is exactly what CLAUDE.md and compressed auto-memory throw away.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="for-user">
+  <div class="section-head">
+    <div class="num">03 — Useful for the user?</div>
+    <h2>You can finally <em>see</em> what the agent remembers</h2>
+    <p class="deck">This is kb's un-copied edge. No other memory tool gives the human a browsable, correctable view of the agent's mind.</p>
+  </div>
+  <div class="prose">
+    <p>Mem0, MemPalace, claude-mem all store memory in a database you never look at. kb's memory is a <strong>corpus you can open in a browser</strong>: the SPA gallery lists every memory; full-text + semantic search works from the UI; the <strong>UMAP atlas</strong> draws a 2-D map of clusters — literally a picture of what Claude knows about you and your projects. For an end user, that turns "trust the black box" into "read and edit the notebook".</p>
+    <div class="note"><b>Memories stay split from your other artifacts.</b> Point a <em>dedicated</em> <code>[kb.memory]</code> corpus at its own directory and it becomes its own gallery in the SPA — chosen from the kb dropdown, never merged into <code>kb-docs</code> / <code>research</code> / the rest (the gallery scopes to one active kb at a time). So the split the design wants is the corpus boundary itself, for free. What zero-build does <em>not</em> give you: an in-gallery facet to split memories <em>by category</em> inside one corpus, or a single bespoke "memory platform" surface — a dedicated Memory view (timeline + atlas + inline curate in one place) is the <a href="22-memory-native-subsystem.html">Approach C</a> upgrade.</div>
+    <div class="rec">
+      <div class="lbl">The curation loop (already built)</div>
+      <p>Open a memory, disagree with it, and drop a kb comment — "this is stale, we moved to Postgres". <code>kb comments watch --path &lt;memory&gt; --json</code> surfaces it to a Claude loop; Claude edits the memory artifact, <code>kb comments reply</code> + <code>resolve</code>, and your SPA tab updates live over SSE. <strong>Human-in-the-loop memory curation, by conversation</strong> — the comment system kb shipped for reviewing artifacts is exactly a memory-correction protocol. Quick-response <code>--choice-json</code> buttons even let you approve/forget a proposed memory with one tap.</p>
+    </div>
+    <p><strong>Continuity:</strong> this doesn't replace the auto-memory taxonomy you already use — it upgrades it. Keep the four types from the auto-memory taxonomy as <code>kb-category</code> values — <code>memory-user</code> / <code>memory-feedback</code> / <code>memory-project</code> / <code>memory-reference</code> (the <code>memory-</code> prefix facets them apart from other artifacts and matches the recipes below); the difference is they're now embedded, searchable, visualised, and commentable. <strong>Self-host:</strong> it's your daemon on your box — nothing leaves the machine (the same property MemPalace markets, but you already run the daemon).</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="episodic">
+  <div class="section-head">
+    <div class="num">04 — A second corpus</div>
+    <h2>Episodic memory: store the sessions verbatim</h2>
+    <p class="deck">Curated memory is the summary. A parallel <code>[kb.sessions]</code> corpus is the unabridged transcript — searchable forever.</p>
+  </div>
+  <div class="prose">
+    <p>MemPalace's strongest idea is the split between <em>closets</em> (compressed summaries) and <em>drawers</em> (verbatim originals, never deleted) — keep everything, make it findable, don't let an extraction step discard the reasoning. kb makes this a one-line addition: a second corpus, <code>[kb.sessions]</code>, into which a <strong>SessionEnd hook</strong> drops each finished conversation as an HTML artifact. Recall then spans both: curated facts from <code>memory</code>, and "what exactly did we say three weeks ago" from <code>sessions</code>.</p>
+    <ul>
+      <li><strong>memory</strong> — small, hand/agent-curated, typed, the hot path for "what do I know about X".</li>
+      <li><strong>sessions</strong> — large, append-only, verbatim; the cold archive for "find the conversation where we worked out Y". bge-small embeddings make even a big transcript pile semantically searchable.</li>
+    </ul>
+    <p>Because kb ids are path-based and the store is just files, the sessions corpus is also trivially prunable, greppable, and backup-friendly. The capture hook is in the recipes (§05).</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="recipes">
+  <div class="section-head">
+    <div class="num">05 — Recipes</div>
+    <h2>Copy-paste: stand it up today</h2>
+    <p class="deck">A config block, a protocol, two skills, one hook. Nothing here touches kb's source.</p>
+  </div>
+  <div class="prose">
+    <h3>a · <code>kb.toml</code> — the corpora</h3>
+    <pre><code># local `kb daemon` config (127.0.0.1:4000)
+
+# GLOBAL / user-wide memory — facts true across every project
+[kb.memory]
+path = "~/.claude/kb-memory"          # Claude writes HTML memories here
+embedding_model = "bge-small-en-v1.5"         # 384-dim → hybrid + semantic recall
+[kb.memory.outbound]
+strip_kb_prompt = true                        # belt-and-braces if ever served non-loopback
+
+# PROJECT-LOCAL memory — one corpus per project (the analogue of a project CLAUDE.md)
+[kb.memory-kb]
+path = "~/project/kb/.kb-memory"      # lives alongside the project it's about
+embedding_model = "bge-small-en-v1.5"
+[kb.memory-kb.outbound]
+strip_kb_prompt = true
+
+# EPISODIC — verbatim transcripts (recipe e)
+[kb.sessions]
+path = "~/.claude/kb-sessions"
+embedding_model = "bge-small-en-v1.5"
+
+# On the dockerised kb.example.com: bind-mount each dir to /srv/&lt;name&gt; in
+# ~/deploy/docker-compose.yml, then set path = "/srv/memory" etc.</code></pre>
+
+    <div class="note"><b>Memory scopes — local + global.</b> kb has no single "search everything" query (recall hits one corpus at a time; folder filters scope the gallery, not search), so model levels as <em>separate corpora</em>: a <strong>global</strong> <code>[kb.memory]</code> for user-wide facts and a <strong>project-local</strong> <code>[kb.memory-&lt;project&gt;]</code> per repo — mirroring global <code>~/.claude/CLAUDE.md</code> vs a project <code>CLAUDE.md</code>. The protocol picks the scope on write (user preference → global; a project decision → that project's corpus); recall searches <em>both</em> and merges (recipe c). A single native cross-scope memory search — one query spanning local + global, or folder-scoped recall within one corpus — is an <a href="22-memory-native-subsystem.html">Approach C</a> enhancement; zero-build, it's two searches and a merge.</div>
+
+    <h3>b · <code>CLAUDE.md</code> — the memory protocol (the part that makes it work)</h3>
+    <pre><code>## Memory (kb-backed)
+
+You have a persistent, searchable memory: the `memory` kb corpus. Treat it as
+long-term memory that survives across sessions.
+
+RECALL — before you act. At the start of a task, and before you answer anything
+about the user, this project, past decisions, or prior work, search first:
+  kb search "&lt;topic&gt;" --kb memory-&lt;project&gt; --mode hybrid --json --limit 5   # project-local
+  kb search "&lt;topic&gt;" --kb memory --mode hybrid --json --limit 5            # then global
+Read promising hits with `kb get &lt;id&gt; --kb &lt;the hit's kb&gt; --format html`. Don't guess
+when memory might know — search both scopes, then answer. (Also search `--kb sessions`
+for "what did we say about X" recall.)
+
+REMEMBER — after you learn. When you learn something durable — a user preference,
+a project decision, a corrected mistake, a useful external reference — write a
+memory — a project-specific fact in the project-local corpus dir, a user-wide one in
+the global ~/.claude/kb-memory/ — as a small HTML file &lt;kebab-slug&gt;.html with a
+real &lt;title&gt;, one &lt;h1&gt;, &lt;meta name="kb-category" content="memory-{user|feedback|
+project|reference}"&gt;, &lt;meta name="kb-tags" content="..."&gt;, and the content as
+&lt;body&gt; prose (only &lt;body&gt; is embedded). One memory per file.
+
+DON'T. Don't store secrets, ephemeral task state, or anything already in CLAUDE.md
+or the code. Search before writing — edit the existing memory instead of adding a
+near-duplicate (editing keeps its id; renaming changes it).</code></pre>
+
+    <h3>c · the <code>recall</code> skill <span class="meta">(.claude/skills/recall/SKILL.md)</span></h3>
+    <pre><code>---
+name: recall
+description: Search kb memory for relevant past context before answering or acting
+---
+Search project-local memory, then global, and merge the hits (kb has no single
+cross-corpus query, so search each scope):
+  kb search "$ARGUMENTS" --kb memory-&lt;project&gt; --mode hybrid --json --limit 5
+  kb search "$ARGUMENTS" --kb memory --mode hybrid --json --limit 5
+For promising hits, read the body: kb get &lt;id&gt; --kb &lt;that hit's kb&gt; --format html
+Report only what's relevant to the current task; cite the memory titles.</code></pre>
+
+    <h3>d · the <code>remember</code> skill <span class="meta">(.claude/skills/remember/SKILL.md)</span></h3>
+    <pre><code>---
+name: remember
+description: Persist a durable learning as a searchable HTML memory artifact
+---
+First `kb search` to avoid duplicates. Then write ONE HTML file to
+~/.claude/kb-memory/&lt;kebab-slug&gt;.html:
+  - &lt;title&gt; = one-line summary (BM25 primary field)
+  - &lt;meta name="kb-category" content="memory-{user|feedback|project|reference}"&gt;
+  - &lt;meta name="kb-tags" content="comma, separated, retrieval, keys"&gt;
+  - &lt;h1&gt; matching the title; the memory as &lt;body&gt; prose (only &lt;body&gt; is embedded)
+If a near-duplicate exists, EDIT it instead (keeps the artifact id). The watcher
+indexes the file within ~400 ms.</code></pre>
+
+    <h3>e · episodic capture <span class="meta">(settings.json + a hook script)</span></h3>
+    <pre><code>// .claude/settings.json
+{ "hooks": { "SessionEnd": [ { "hooks": [
+  { "type": "command", "command": "~/.claude/hooks/kb-capture.sh" } ] } ] } }</code></pre>
+    <pre><code>#!/usr/bin/env bash
+# ~/.claude/hooks/kb-capture.sh  — wrap the finished transcript as an HTML memory
+set -euo pipefail
+DIR=~/.claude/kb-sessions; mkdir -p "$DIR"
+payload=$(cat)                                   # hook JSON arrives on stdin
+tp=$(jq -r '.transcript_path // empty' &lt;&lt;&lt;"$payload"); [ -z "$tp" ] &amp;&amp; exit 0
+sid=$(jq -r '.session_id // "session"' &lt;&lt;&lt;"$payload"); ts=$(date +%Y-%m-%dT%H-%M-%S)
+text=$(jq -rs '[.[].message.content?] | flatten | map(strings) | join("\n\n")' "$tp" 2&gt;/dev/null | head -c 200000)
+{ printf '&lt;!doctype html&gt;&lt;html lang="en"&gt;&lt;head&gt;&lt;meta charset="utf-8"&gt;'
+  printf '&lt;title&gt;Session %s&lt;/title&gt;' "$ts"
+  printf '&lt;meta name="kb-category" content="memory-session"&gt;'
+  printf '&lt;meta name="kb-tags" content="session, transcript, episodic"&gt;'
+  printf '&lt;/head&gt;&lt;body&gt;&lt;h1&gt;Session %s&lt;/h1&gt;&lt;pre&gt;' "$ts"
+  printf '%s' "$text" | python3 -c 'import html,sys; sys.stdout.write(html.escape(sys.stdin.read()))'
+  printf '&lt;/pre&gt;&lt;/body&gt;&lt;/html&gt;'; } &gt; "$DIR/$ts-$sid.html"</code></pre>
+    <div class="note"><b>Sketch, adapt to taste.</b> The transcript is JSONL; the <code>jq</code> filter above is a pragmatic flatten — tune it to keep only user+assistant turns, or to summarise instead of storing verbatim. The SessionEnd hook payload carries <code>transcript_path</code> and <code>session_id</code> on stdin.</div>
+  </div>
+</section>
+
+<section class="section" id="verdict">
+  <div class="section-head">
+    <div class="num">06 — Verdict</div>
+    <h2>Effort, risk, and where this lands</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Approach A scorecard</caption>
+      <thead><tr><th>Dimension</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td>kb source changes</td><td class="center"><span class="y">none</span></td></tr>
+        <tr><td>Build effort</td><td>config + a CLAUDE.md block + 2 skills (+ optional hook) — an afternoon</td></tr>
+        <tr><td>Useful for Claude</td><td><span class="p">high recall</span>, gated entirely on the CLAUDE.md protocol firing</td></tr>
+        <tr><td>Useful for the user</td><td><span class="p">high</span> — the only memory you can browse, map, and correct by comment</td></tr>
+        <tr><td>Main friction</td><td>memories are HTML not <code>.md</code>; ~400 ms write→recall latency</td></tr>
+        <tr><td>Reversible?</td><td class="center"><span class="y">fully</span> — it's just files + prompts</td></tr>
+      </tbody>
+    </table>
+    <div class="rec">
+      <div class="lbl">Recommendation</div>
+      <p><strong>Start here.</strong> It captures most of the value of "kb as Claude's memory" for almost no cost, and it's the substrate the other two approaches build on — <a href="21-memory-mcp-and-memory-tool.html">Approach B</a> swaps the shell calls for first-class MCP tools; <a href="22-memory-native-subsystem.html">Approach C</a> turns the conventions here into a built-in kb feature. Adopt A, live with it for a week, and let what annoys you decide whether B or C is worth it.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="page-nav">
+    <a href="19-kb-as-claude-code-memory.html">
+      <span class="dir">← Prev</span>
+      <span class="ttl">19 · Memory hub</span>
+    </a>
+    <a href="21-memory-mcp-and-memory-tool.html" class="next">
+      <span class="dir">Next →</span>
+      <span class="ttl">21 · dedicated CLI verbs</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb as Claude Code memory — Approach A: corpus + protocol.</p>
+      <p>kb facts verified against <code>watcher.rs</code> (HTML-only ingest), <code>config.rs</code> (debounce), <code>ids.rs</code> (path-based id), <code>storage/lance.rs</code> (hybrid RRF), and the <code>kb comments</code> surface. Part of the memory series (19–22).</p>
+    </div>
+    <div>
+      <h5>Sections</h5>
+      <ul>
+        <li><a href="#architecture">How it works</a></li>
+        <li><a href="#for-claude">Useful for Claude?</a></li>
+        <li><a href="#for-user">Useful for the user?</a></li>
+        <li><a href="#episodic">Episodic corpus</a></li>
+        <li><a href="#recipes">Recipes</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Series</h5>
+      <ul>
+        <li><a href="19-kb-as-claude-code-memory.html">19 · Hub &amp; landscape</a></li>
+        <li><a href="21-memory-mcp-and-memory-tool.html">21 · dedicated CLI verbs</a></li>
+        <li><a href="22-memory-native-subsystem.html">22 · Native subsystem</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('kb-theme'); if (saved) root.dataset.theme = saved; } catch (e) {}
+  var btn = document.querySelector('[data-action="toggle-theme"]');
+  if (btn) btn.addEventListener('click', function () {
+    var next = root.dataset.theme === 'ink' ? 'paper' : 'ink';
+    root.dataset.theme = next;
+    try { localStorage.setItem('kb-theme', next); } catch (e) {}
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 't' || e.key === 'T') && !/input|textarea/i.test(e.target.tagName)) { if (btn) btn.click(); }
+  });
+  var bar = document.querySelector('.reading-progress');
+  if (bar) {
+    var tick = function () {
+      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+      bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+    };
+    document.addEventListener('scroll', tick, { passive: true });
+    tick();
+  }
+})();
+</script>
+</body>
+</html>

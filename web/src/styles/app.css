@@ -1,0 +1,4658 @@
+/* Global resets + app layout. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+/* SH.A1 — widened to inputs/selects/tabindex (mirrors web-code
+   tokens.css:448-458) so every interactive control gets a visible ring,
+   not just links/buttons. */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--bg);
+  padding: var(--pad-2) var(--pad-3);
+  z-index: var(--z-modal);
+}
+.skip-link:focus {
+  left: var(--pad-2);
+  top: var(--pad-2);
+}
+
+#root {
+  height: 100%;
+}
+
+.app {
+  display: grid;
+  /* topbar / optional ribbon (auto = collapses when null) / body / statusbar.
+   * `minmax(0, 1fr)` rather than `1fr`: a plain 1fr honours min-content,
+   * so the gallery's scrollable inner column (folder trees, tag lists)
+   * grew the body row past its allotted share and pushed the StatusBar
+   * below the viewport (v0.13.2 hotfix). minmax forces the row to its
+   * grid-track share; overflow is handled inside .body. */
+  grid-template-rows: var(--topbar-h) auto minmax(0, 1fr) var(--statusbar-h);
+  height: 100%;
+}
+
+/* Topbar */
+.topbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--pad-3);
+  padding: 0 var(--pad-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+.topbar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-2);
+  color: var(--fg);
+  font-weight: 600;
+}
+.topbar__brand:hover {
+  text-decoration: none;
+}
+.logomark {
+  color: var(--accent);
+  font-size: 18px;
+}
+.topbar__name {
+  letter-spacing: 0.04em;
+}
+.topbar__nav {
+  display: flex;
+  gap: var(--pad-3);
+}
+.topbar__nav a {
+  color: var(--fg-muted);
+  padding: var(--pad-1) var(--pad-2);
+  border-radius: var(--radius-sm);
+}
+.topbar__nav a.is-active {
+  color: var(--fg);
+  background: var(--accent-bg);
+}
+.topbar__actions .kbd {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg-muted);
+}
+
+/* Body */
+.body {
+  overflow: hidden;
+  min-height: 0;
+}
+.body--with-rail {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+}
+.body--full {
+  display: block;
+  height: 100%;
+}
+.view {
+  overflow: auto;
+  padding: var(--pad-3);
+  /* Fill the body row. In body--with-rail (grid) the cell already
+     stretches; in body--full (block) standalone routes (kb2 C2) need
+     this so the view scrolls within the viewport, not the whole page. */
+  height: 100%;
+}
+
+/* Left rail */
+.rail {
+  border-right: 1px solid var(--border);
+  background: var(--bg-alt);
+  padding: var(--pad-3);
+  overflow: auto;
+}
+.rail__title {
+  margin: 0 0 var(--pad-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.rail__error {
+  color: var(--err);
+  font-size: 12px;
+  padding: var(--pad-2);
+  border: 1px solid var(--err);
+  border-radius: var(--radius-sm);
+}
+.rail__empty {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+.rail__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rail__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: var(--row-h);
+  padding: 0 var(--pad-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.rail__item:hover {
+  background: var(--accent-bg);
+}
+.rail__name {
+  font-weight: 500;
+}
+.rail__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Status pill */
+.pill-container {
+  position: fixed;
+  bottom: var(--pad-3);
+  right: var(--pad-3);
+  z-index: var(--z-hint);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  transition: right 0.15s ease;
+}
+/* When the detail comments panel is open it occupies the rightmost
+   360px (.detail--with-panel grid). Shift the fixed StatusPill left of
+   that panel so the Idle badge stops covering the panel's Export
+   button (.cp__export-btn). */
+.app:has(.detail--with-panel) .pill-container,
+.app:has(.detail--with-versions) .pill-container {
+  right: calc(360px + var(--pad-3) * 2);
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-1) var(--pad-3);
+  border-radius: var(--radius-pill);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--fg);
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba). */
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.pill:hover {
+  background: var(--bg-card-hi);
+  border-color: var(--rule-hi);
+}
+.pill__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.pill--indexing .pill__dot {
+  background: var(--info);
+}
+.pill--degraded .pill__dot {
+  background: var(--warn);
+}
+.pill--disconnected .pill__dot {
+  background: var(--err);
+}
+/* Environment-drift marker: a ⚠ glyph + warn-tinted border on the badge.
+   The full message rides the button's native title (hover) and the panel
+   warnings block (click) — see StatusPill. */
+.pill--warn {
+  border-color: var(--warn);
+}
+.pill__warn {
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1;
+}
+.pill-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2);
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba). */
+  box-shadow: var(--shadow);
+  min-width: 240px;
+  font-size: 12px;
+}
+.pill-panel__warnings {
+  border-left: 2px solid var(--warn);
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm, 4px);
+  padding: 6px 8px;
+  margin-bottom: var(--pad-2);
+}
+.pill-panel__warnings-head {
+  color: var(--warn);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.pill-panel__warning {
+  margin: 6px 0 0;
+  color: var(--fg);
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.pill-panel__warning:first-of-type {
+  margin-top: 0;
+}
+.pill-panel__row {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: 4px 8px;
+}
+.pill-panel__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: 0 0 8px;
+}
+.pill-panel__dot--indexing {
+  background: var(--info);
+}
+.pill-panel__dot--degraded {
+  background: var(--warn);
+}
+.pill-panel__dot--disconnected {
+  background: var(--err);
+}
+.pill-panel__url {
+  flex: 1;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pill-panel__phase {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.pill-panel__errs,
+.pill-panel__flight,
+.pill-panel__comments {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.pill-panel__comments {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 6: stale-anchors TopBar badge. */
+.stale-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--warn);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: none;
+  transition:
+    background 80ms ease,
+    border-color 80ms ease;
+}
+.stale-badge:hover,
+.stale-badge.is-on {
+  background: var(--bg-alt);
+  border-color: var(--warn);
+}
+.stale-badge__count {
+  font-weight: 600;
+}
+
+/* 6: stale-anchors dashboard route. */
+.stale-anchors {
+  padding: var(--pad-3);
+  max-width: 880px;
+  margin: 0 auto;
+}
+.stale-anchors__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--pad-3);
+}
+.stale-anchors__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+.stale-anchors__count {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.stale-anchors__note {
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 60ch;
+}
+.stale-anchors__note code {
+  background: var(--bg-alt);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.stale-anchors__artifacts {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+.stale-anchors__artifact {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2);
+  background: var(--bg);
+}
+.stale-anchors__deep-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.stale-anchors__deep-link:hover {
+  text-decoration: underline;
+}
+.stale-anchors__kb {
+  color: var(--accent);
+  font-weight: 600;
+}
+.stale-anchors__sep {
+  color: var(--fg-dim);
+}
+.stale-anchors__artifact-id {
+  color: var(--fg);
+}
+.stale-anchors__badge {
+  margin-left: auto;
+  color: var(--warn);
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+}
+.stale-anchors__comments {
+  list-style: none;
+  margin: var(--pad-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stale-anchors__comment {
+  display: grid;
+  grid-template-columns: 110px 70px 60px auto;
+  gap: 12px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 4px 8px;
+}
+.stale-anchors__comment-id {
+  color: var(--fg);
+}
+.stale-anchors__kind {
+  color: var(--accent-dim, var(--fg-muted));
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.stale-anchors__score {
+  color: var(--warn);
+  text-align: right;
+}
+.stale-anchors__age {
+  color: var(--fg-dim);
+}
+
+/* P2: fleet metrics block inside the status pill panel. */
+.pill-panel__metrics {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.pill-panel__metrics.is-stale {
+  opacity: 0.55;
+}
+.pill-panel__metrics-head {
+  color: var(--fg-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px 4px;
+}
+.pill-panel__stale {
+  color: var(--warn);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.pill-panel__metrics-row {
+  display: flex;
+  gap: 12px;
+  padding: 2px 8px 6px;
+  color: var(--fg);
+}
+.pill-panel__metrics-row .is-warn {
+  color: var(--warn);
+}
+.pill-panel__metrics-row .is-err {
+  color: var(--err);
+}
+.pill-panel__routes {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 2px;
+}
+.pill-panel__routes th,
+.pill-panel__routes td {
+  text-align: left;
+  padding: 2px 8px;
+  font-weight: normal;
+}
+.pill-panel__routes th {
+  color: var(--fg-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+.pill-panel__routes td {
+  color: var(--fg);
+}
+.pill-panel__routes td.is-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+.pill-panel__routes td.is-err {
+  color: var(--err);
+  font-weight: 600;
+}
+
+/* kb2 reusable empty state (EmptyState.tsx) — icon + line + action + CLI. */
+.kb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--ink-mute);
+}
+.kb-empty--view {
+  min-height: 50vh;
+  padding: var(--pad-4);
+}
+.kb-empty--rail {
+  padding: 28px 16px;
+}
+.kb-empty--inline {
+  padding: 18px;
+}
+.kb-empty__icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+}
+.kb-empty__icon svg {
+  width: 22px;
+  height: 22px;
+}
+.kb-empty__title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  color: var(--ink);
+}
+.kb-empty--rail .kb-empty__title,
+.kb-empty--inline .kb-empty__title {
+  font-size: 15px;
+}
+.kb-empty__hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-mute);
+  max-width: 46ch;
+}
+.kb-empty__action {
+  margin-top: 2px;
+  padding: 7px 14px;
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-md);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.kb-empty__action:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.kb-empty__cli {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+}
+
+/* Empty states (legacy `.empty` — still used by a few views). */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--pad-4);
+  color: var(--fg-muted);
+  height: 100%;
+  text-align: center;
+}
+.empty__title {
+  font-size: 18px;
+  margin: 0 0 var(--pad-2);
+  color: var(--fg);
+  font-weight: 500;
+}
+.empty__msg {
+  margin: 0;
+}
+
+/* Gallery */
+.gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+}
+.gallery__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--pad-3);
+  flex-wrap: wrap;
+}
+.gallery__views {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.view-btn {
+  padding: var(--pad-1) var(--pad-3);
+  border: none;
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  text-transform: lowercase;
+}
+.view-btn:not(:first-child) {
+  border-left: 1px solid var(--border);
+}
+.view-btn.is-active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.gallery__filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-2);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.gallery__filter select {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 4px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.gallery__error {
+  padding: var(--pad-3);
+  border: 1px solid var(--err);
+  color: var(--err);
+  border-radius: var(--radius-sm);
+}
+.gallery__loading {
+  color: var(--fg-muted);
+  padding: var(--pad-3);
+}
+
+/* Card grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--pad-3);
+}
+.card {
+  /* relative so absolutely-positioned children (badges + the
+     `.card-download` button) anchor to the card in every grid path,
+     including VirtualGrid where there's no `.gallery .grid` ancestor. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  padding: var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  min-height: 140px;
+  transition: border-color 80ms ease, transform 80ms ease;
+}
+.card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+.card__title {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card__path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card__meta {
+  display: flex;
+  gap: var(--pad-2);
+  flex-wrap: wrap;
+}
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.chip--category {
+  background: var(--accent-bg);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* Detail view */
+.detail {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+.detail__main {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+/* kb desk v2 — slim "changed since last read" strip above the artifact
+   (parent chrome, never inside the iframe). Warn-tinted like the daemon-
+   down banner: a notice, not an error. */
+.kb-desk-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: color-mix(in oklab, var(--warn) 14%, var(--bg-panel));
+  border-bottom: 1px solid color-mix(in oklab, var(--warn) 45%, var(--rule));
+}
+.kb-desk-banner__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-desk-banner__prev {
+  flex: none;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kb-desk-banner__prev:hover {
+  text-decoration: underline;
+}
+.kb-desk-banner__x {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.kb-desk-banner__x:hover {
+  color: var(--ink);
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+}
+
+/* W3.E/S3 — the session identity strip (SessionContextCard), between
+   ContextBar and the iframe when the open artifact IS a session capture. One
+   collapsed line by default (~34px); expands in place for the full outcome
+   text. */
+.kb-sesctx {
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  padding: 6px 14px;
+  font-size: 12px;
+}
+.kb-sesctx__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.kb-sesctx__toggle {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 0;
+}
+.kb-sesctx__harness {
+  flex: none;
+  color: var(--ink-mute);
+}
+.kb-sesctx__name {
+  flex: none;
+  font-weight: 600;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-sesctx__outcome {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-sesctx__mark {
+  color: var(--accent);
+  font-weight: 700;
+}
+.kb-sesctx__chips {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font: 600 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute);
+}
+.kb-sesctx__superseded {
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  color: var(--ink-warn, #c44);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+/* W5/R9b/LF-1 Tier 0 — the honest "as of capture · Xm ago" staleness/
+   presence chip, beside the rest of the chip cluster. Never pulsing
+   (Tier 0 is a static, capture-derived signal — the pulse is reserved for
+   Tier 1's writer-activity evidence, W7). */
+.kb-sesctx__presence {
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  white-space: nowrap;
+}
+.kb-sesctx__presence--active {
+  color: var(--accent, #4caf50);
+}
+/* W7 (R15/LF-1) — Tier-1 evidence: same accent as active, bolder weight so
+   the "live" text itself carries the distinction (the pulsing dot lives on
+   the LIST row, invariant #30 — this strip has no separate dot glyph). */
+.kb-sesctx__presence--live {
+  color: var(--accent, #4caf50);
+  font-weight: 700;
+}
+.kb-sesctx__actions {
+  flex: none;
+  display: inline-flex;
+  gap: 10px;
+}
+.kb-sesctx__act {
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.kb-sesctx__act:hover {
+  text-decoration: underline;
+}
+/* W7 (R15/LF-2) — the follow-mode toggle chip: same act styling, an
+   `is-active` state while following (border pill instead of plain text so
+   the "currently following" state is legible without relying on color
+   alone). */
+.kb-sesctx__follow.is-active {
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.kb-sesctx__full {
+  padding: 6px 0 2px 26px;
+}
+.kb-sesctx__full-text {
+  margin: 0;
+  color: var(--ink);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.kb-sesctx__full-text--empty {
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
+/* W7 (sessions-rethink R15/LF-2) — the Tier-1 live tail panel. Reader-
+   column content (invariant #30 — no new rail icon, no new sheet): a
+   bounded-height ticker between SessionContextCard and the iframe. */
+.kb-livetail {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 4px;
+  margin: 0 12px 8px;
+  max-height: 40vh;
+  background: var(--surface-1, #161616);
+}
+.kb-livetail__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+  font: 500 11px/1.4 var(--font-mono, ui-monospace);
+  flex-wrap: wrap;
+}
+.kb-livetail__dot {
+  color: var(--accent, #4caf50);
+  font-size: 9px;
+  animation: kb-ses-presence-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kb-livetail__dot {
+    animation: none;
+  }
+}
+.kb-livetail__label {
+  color: var(--ink);
+  font-weight: 700;
+}
+.kb-livetail__count,
+.kb-livetail__activity,
+.kb-livetail__tasks {
+  color: var(--ink-mute, #999);
+}
+.kb-livetail__warn {
+  color: var(--warn, #d99a2b);
+}
+.kb-livetail__error {
+  padding: 4px 10px;
+  font: 500 11px/1.4 var(--font-mono, ui-monospace);
+  color: var(--err, #c0392b);
+}
+.kb-livetail__body {
+  overflow-y: auto;
+  padding: 4px 10px 8px;
+  min-height: 0;
+}
+.kb-livetail__empty,
+.kb-livetail__truncated {
+  color: var(--ink-mute, #999);
+  font: 500 11px/1.4 var(--font-mono, ui-monospace);
+  padding: 6px 0;
+}
+.kb-livetail__turn {
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--rule, #2a2a2a);
+}
+.kb-livetail__turn:last-child {
+  border-bottom: 0;
+}
+.kb-livetail__turn-head {
+  display: flex;
+  gap: 8px;
+  font: 700 11px/1.4 var(--font-mono, ui-monospace);
+  color: var(--ink);
+}
+.kb-livetail__turn-ts {
+  color: var(--ink-mute, #999);
+  font-weight: 500;
+}
+.kb-livetail__turn-items p {
+  margin: 2px 0;
+  font: 400 12px/1.4 var(--font-body, inherit);
+  color: var(--ink);
+  word-break: break-word;
+}
+.kb-livetail__tool-name {
+  font-weight: 700;
+}
+.kb-livetail__tool-err {
+  color: var(--err, #c0392b);
+}
+.kb-livetail__tool-unpaired {
+  color: var(--ink-mute, #999);
+}
+.kb-livetail__pin-pill {
+  position: sticky;
+  bottom: 6px;
+  align-self: center;
+  margin-top: -28px;
+  font: 700 11px/1 var(--font-mono, ui-monospace);
+  color: var(--surface-1, #161616);
+  background: var(--accent, #4caf50);
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.detail__frame {
+  border: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+  display: block;
+}
+
+/* W2.7 — folio: an optional reading density (`?view=folio`) — a centered
+   measure + a running header/colophon around the canvas. Scoped strictly
+   under `.detail--folio` so every other mode's DOM/CSS is untouched:
+   `.detail__main` is normally block flow (position:relative +
+   overflow:hidden above), which would clip a header-above / colophon-below
+   pair — this modifier turns it into a column flex so the three stack
+   without clipping. Non-folio rendering (including this same DOM tree
+   before the reader opts in) is byte-for-byte identical to before. */
+.detail--folio .detail__main {
+  display: flex;
+  flex-direction: column;
+}
+.detail--folio .detail__frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  /* ~72ch at a typical 16–18px reading font-size — an approximation, since
+     the iframe's actual body font lives cross-origin and is unreachable
+     (invariant #5); this narrows the iframe ELEMENT itself only, never the
+     artifact's bytes. The unused width outside this measure shows
+     `.detail`'s own `--bg` as the reading gutter (`.detail__main` has no
+     background of its own). */
+  max-width: 900px;
+  margin: 0 auto;
+}
+.detail--folio .kb-folio-header,
+.detail--folio .kb-folio-colophon {
+  flex: 0 0 auto;
+}
+.kb-folio-header {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 7px 20px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-align: center;
+  color: var(--ink-dim);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 3;
+}
+.kb-folio-colophon {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 10px 20px 18px;
+  display: flex;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-variant: small-caps;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  color: var(--ink-dim);
+  text-align: center;
+}
+.kb-folio-colophon__item {
+  white-space: nowrap;
+}
+.kb-folio-colophon__sep {
+  color: var(--ink-dim);
+}
+.kb-folio-colophon__short {
+  font-family: var(--font-mono);
+  font-variant: normal;
+}
+.kb-folio-colophon__session {
+  color: var(--ink-dim);
+  text-decoration: none;
+}
+.kb-folio-colophon__session:hover {
+  color: var(--accent);
+}
+
+/* Native-note path: the iframe path can't reach the artifact's interior
+   (#5), so its serif measure lives on the iframe ELEMENT above; here the
+   rendered markdown IS same-origin SPA content, so a real `ch` measure
+   applies straight to it — full "published longread" typography. */
+.detail--folio .kb-note-md {
+  max-width: 66ch;
+  margin: 0 auto;
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  line-height: 1.75;
+}
+
+.detail__error {
+  position: absolute;
+  top: var(--pad-3);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--pad-2) var(--pad-3);
+  background: var(--err);
+  color: white;
+  border-radius: var(--radius-sm);
+  z-index: 11;
+}
+
+/* W2.13 — the errata slip: a comments-dock SKIN (opt-in via .cp__errata,
+   default off — see cp__head-actions above), rendered by detail.tsx as a
+   sibling of the iframe inside .detail__main — never painted inside the
+   sandboxed iframe itself (#5). Same "component-local absolute overlay"
+   pattern as .detail__error just above; z stays below --z-float (35) so the
+   immersive FAB always wins over it. Translucent paper + serif, echoing the
+   folio colophon's quiet register (kb-folio-colophon above) rather than the
+   loud broadsheet masthead. */
+.errata-sheet {
+  position: absolute;
+  top: 0;
+  left: var(--pad-3);
+  right: var(--pad-3);
+  z-index: 12;
+  margin-top: var(--pad-3);
+  max-height: 40%;
+  overflow-y: auto;
+  background: color-mix(in oklab, var(--paper) 90%, transparent);
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--radius-sm);
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba). */
+  box-shadow: var(--shadow);
+  font-family: var(--font-serif);
+  color: var(--paper-ink);
+}
+.errata-sheet__mast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px var(--pad-3) 4px;
+}
+.errata-sheet__kicker {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+.errata-sheet__rule {
+  flex: 1 1 auto;
+  height: 3px;
+  border-top: 1px solid var(--paper-ink);
+  border-bottom: 1px solid var(--paper-rule);
+  opacity: 0.5;
+}
+.errata-sheet__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px;
+}
+.errata-sheet__line {
+  border-top: 1px solid var(--paper-rule);
+  max-height: 60px;
+  opacity: 1;
+  overflow: hidden;
+  transition:
+    max-height 0.22s var(--ease),
+    opacity 0.22s var(--ease),
+    padding 0.22s var(--ease);
+}
+.errata-sheet__line--leaving {
+  max-height: 0;
+  opacity: 0;
+}
+.errata-sheet__line--active .errata-sheet__btn {
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+}
+.errata-sheet__btn {
+  display: grid;
+  grid-template-columns: 1.8em auto 1fr auto;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 5px var(--pad-3);
+  font: inherit;
+  font-size: 12.5px;
+  color: inherit;
+}
+.errata-sheet__btn:hover {
+  background: color-mix(in oklab, var(--paper-ink) 6%, transparent);
+}
+.errata-sheet__num {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.errata-sheet__author {
+  font-weight: 600;
+  text-transform: lowercase;
+}
+.errata-sheet__excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+.errata-sheet__anchor {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+/* Honor reduced-motion for the tear-off (the repo convention — see
+   mobile.css .kb-pinsp/-scrim, chrome.css, gallery.css, editor.css,
+   resurface.css — each guards its own transitions the same way). The JS
+   side (ErrataSheet.tsx) additionally skips the "leaving" stage entirely
+   under reduced motion, so removal is instant rather than merely
+   unanimated-but-still-deferred. */
+@media (prefers-reduced-motion: reduce) {
+  .errata-sheet__line {
+    transition: none;
+  }
+}
+/* Shown in place of the iframe when the viewed artifact's file is
+   deleted from disk (live filesystem updates). */
+.detail__removed {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pad-2);
+  background: var(--bg-alt);
+  text-align: center;
+  padding: var(--pad-4);
+}
+.detail__removed-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.detail__removed-msg {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.detail__removed-link {
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+.detail__removed-link:hover {
+  text-decoration: underline;
+}
+
+
+/* G5 — reading-progress chip. Shared between gallery Card and the
+   sibling popover; `--compact` shrinks the bar for popover rows. */
+.reading-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.reading-chip__bar {
+  width: 50px;
+  height: 4px;
+  background: var(--elev, var(--border));
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  display: inline-block;
+}
+.reading-chip--compact .reading-chip__bar {
+  width: 36px;
+}
+.reading-chip__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: width 200ms ease;
+}
+.reading-chip__pct {
+  font-variant-numeric: tabular-nums;
+  min-width: 28px;
+  text-align: right;
+}
+.reading-chip--compact .reading-chip__pct {
+  min-width: 24px;
+  font-size: 10px;
+}
+.reading-chip--done {
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Pages strip (multi-file artifacts) */
+.pages {
+  position: absolute;
+  bottom: var(--pad-3);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(253, 246, 227, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  z-index: 10;
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba). */
+  box-shadow: var(--shadow);
+  max-width: 80%;
+  overflow-x: auto;
+}
+.pages__item {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pages__item:hover {
+  color: var(--fg);
+  background: var(--accent-bg);
+}
+.pages__item.is-active {
+  color: var(--bg);
+  background: var(--accent);
+}
+
+/* List view */
+.list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-alt);
+}
+.list-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 100px 1fr 120px 200px 100px 28px 24px;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: 6px var(--pad-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  text-decoration: none;
+}
+/* Stretched overlay click-target. Absolute, so it covers the whole row
+ * without consuming a grid track; the download <button> (raised via
+ * z-index below) stays clickable above it. Keeps the row a single link
+ * without nesting a <button> inside an <a>. */
+.list-row__link {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.list-row:last-child {
+  border-bottom: none;
+}
+.list-row:hover {
+  background: var(--bg-card-hi);
+  text-decoration: none;
+}
+.list-row--head {
+  background: var(--bg-alt);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.list-row__id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.list-row__title {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.list-row__folder,
+.list-row__file {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.list-row__cat {
+  font-size: 12px;
+}
+.list-row__cat--empty {
+  color: var(--fg-muted);
+}
+.list-row__open {
+  color: var(--accent);
+}
+.list-row__download {
+  /* Above the stretched overlay link so the button receives its own
+   * clicks rather than triggering navigation. */
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.list-row:hover .list-row__download,
+.list-row__download:focus-visible {
+  opacity: 1;
+}
+.list-row__download:hover {
+  color: var(--accent);
+}
+
+/* Atlas view */
+.atlas {
+  position: relative;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--pad-3);
+}
+/* W3.M-c — the dim-in-place search overlay (MapSearchOverlay). Own row
+   above the header toolbar; same pill-button family as .atlas__density /
+   .atlas-workingset__btn so it reads as part of the atlas chrome. */
+.atlas-map-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+  margin-bottom: var(--pad-2);
+}
+.atlas-map-search__input {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 160px;
+}
+.atlas-map-search__btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.atlas-map-search__btn:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+  background: var(--bg-alt);
+}
+.atlas-map-search__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.atlas-map-search__hint {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+.atlas-map-search__error {
+  color: var(--danger);
+  font-size: 11px;
+}
+/* W3.T-c — the corpus time-lapse scrubber. Sits between the header toolbar
+   and the canvas, in the same muted-note idiom as .atlas__note so the
+   honesty copy (provenance, residual, "frames start empty") reads as
+   caption text rather than as an alert. */
+.atlas-timelapse {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--pad-2);
+  padding: var(--pad-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.atlas-timelapse__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.atlas-timelapse__play {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 62px;
+}
+.atlas-timelapse__play:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+}
+.atlas-timelapse__play:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.atlas-timelapse__slider {
+  flex: 1 1 auto;
+  min-width: 120px;
+  accent-color: var(--accent);
+}
+.atlas-timelapse__pos {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.atlas-timelapse__meta {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.atlas-timelapse__prov {
+  font-weight: 600;
+  color: var(--fg);
+}
+/* `kb atlas backfill` (W3 T-d) writes these — a weaker claim than
+   'recorded', and it must read that way at a glance. The full sentence
+   lives in `.atlas-timelapse__note--reconstructed` below; this is only the
+   word. */
+.atlas-timelapse__prov--reconstructed {
+  color: var(--warn);
+  font-style: italic;
+}
+.atlas-timelapse__note--reconstructed {
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  padding-left: 8px;
+}
+.atlas-timelapse__note {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.atlas-timelapse__note--err {
+  color: var(--danger);
+}
+.atlas-timelapse__empty {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 68ch;
+}
+/* W3.F-c — the operator field's bar (the onion skin's one home) and the
+   loci-walk bar. Both borrow the time-lapse block's shape above so the
+   three atlas sub-surfaces read as one family. */
+.atlas-field,
+.atlas-tour {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--pad-2);
+  padding: var(--pad-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.atlas-field__controls,
+.atlas-tour__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  flex-wrap: wrap;
+}
+.atlas-field__btn,
+.atlas-tour__nav,
+.atlas-tour__open {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+}
+.atlas-field__btn:hover:not(:disabled),
+.atlas-tour__nav:hover:not(:disabled),
+.atlas-tour__open:hover {
+  border-color: var(--fg-muted);
+}
+.atlas-field__btn.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.atlas-tour__nav:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.atlas-field__saving {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.atlas-field__note,
+.atlas-tour__note {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  max-width: 78ch;
+}
+.atlas-field__note--err {
+  color: var(--danger);
+}
+.atlas-field__empty {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 72ch;
+}
+.atlas-field__empty code {
+  font-size: 11px;
+}
+.atlas-tour__pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.atlas-tour__lab {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.atlas-tour__pick select {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-width: 220px;
+}
+.atlas-tour__pos {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.atlas-tour__label {
+  font-size: 12px;
+  color: var(--fg);
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Derived read state — the ONLY progress signal a walk shows (#25). */
+.atlas-tour__read {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+.atlas-tour__read.is-read {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.atlas-tour__spacer {
+  flex: 1 1 auto;
+}
+.atlas-tour__exit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 2px;
+}
+.atlas-tour__exit:hover {
+  color: var(--fg);
+}
+.atlas__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--pad-2);
+  margin-bottom: var(--pad-2);
+  flex-wrap: wrap;
+}
+.atlas__note {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+.atlas__header-actions {
+  display: flex;
+  align-items: center;
+  /* W1.atlas added three toolbar controls (dim read, size by links,
+     cameras) alongside the existing four — wrap instead of overflowing on
+     a narrow viewport. */
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+}
+.atlas__error {
+  color: var(--danger);
+  font-size: 11px;
+}
+.atlas__recompute {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.atlas__recompute:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+  background: var(--bg-alt);
+}
+.atlas__recompute:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+/* 3: density toggle. Same chrome as recompute; switches background
+   to accent when active so the operator can see which mode is on
+   without reading the label. */
+.atlas__density {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background 80ms ease,
+    border-color 80ms ease,
+    color 80ms ease;
+}
+.atlas__density:hover {
+  border-color: var(--fg-muted);
+  background: var(--bg-alt);
+}
+.atlas__density.is-on {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.atlas__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+/* S6: canvas variant of the atlas renderer. Same aspect ratio as the
+   legacy SVG viewBox (600 × 360) so the layout doesn't shift. */
+.atlas__canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 600 / 360;
+  touch-action: none;
+}
+.atlas__edge {
+  fill: none;
+  stroke: var(--fg-muted);
+  opacity: 0.22;
+  pointer-events: none;
+  transition: opacity 80ms ease;
+}
+.atlas__edge--hi {
+  stroke: var(--accent);
+  opacity: 0.85;
+}
+.atlas__cluster-label {
+  /* fill is set inline from tagColor() */
+  font-weight: 600;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+.atlas__dot-label {
+  fill: var(--fg-muted);
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+.atlas__dot {
+  /* fill is set inline from the cluster palette in v0.3 */
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  cursor: pointer;
+  /* B: dot position is animated via `transform` set per render. CSS
+     transition tweens the old → new translate on every layout change
+     — primarily fires after `atlas.recompute.complete` returns
+     refreshed docs. ~600ms cubic-bezier ease-out so heavy clouds
+     don't feel sluggish but motion stays graceful. */
+  transition:
+    r 80ms ease,
+    opacity 80ms ease,
+    transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* N1 — honor the OS motion preference app-wide (was atlas-dots only): every
+     animation runs once, transitions complete instantly, smooth-scroll
+     jump-cuts. Functional animationend/transitionend still fire (immediately),
+     so nothing that waits on them stalls. Matches the kb artifact visual floor. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+.atlas__dot:hover {
+  stroke: var(--fg);
+  stroke-width: 2;
+}
+.atlas__dot--fallback {
+  /* Hash-placement dots — drawn dimmer so the eye finds the real
+     cluster signal first. v0.3 keeps these around for artifacts that
+     pre-date the most recent atlas recompute. */
+  opacity: 0.45;
+}
+.atlas__tip {
+  position: absolute;
+  bottom: var(--pad-3);
+  left: var(--pad-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--pad-1) var(--pad-2);
+  font-size: 12px;
+}
+.atlas__tip-title {
+  font-weight: 500;
+}
+.atlas__tip-meta {
+  color: var(--fg-muted);
+}
+
+/* W2.3b — the working-set bar: appears under the canvas whenever a lasso
+ * (or a future selection source) leaves a non-empty selection. Same
+ * chrome family as .atlas__density (pill buttons), laid out as its own
+ * row so it doesn't compete with the header toolbar above the canvas. */
+.atlas-workingset {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+  margin-top: var(--pad-2);
+  padding: var(--pad-2) var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.atlas-workingset__count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  margin-right: var(--pad-1);
+}
+.atlas-workingset__btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.atlas-workingset__btn:hover {
+  border-color: var(--fg-muted);
+  background: var(--bg-alt);
+}
+.atlas-workingset__btn.is-disabled,
+.atlas-workingset__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.atlas-workingset__clear {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 80ms ease, border-color 80ms ease;
+}
+.atlas-workingset__clear:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+.atlas-workingset__add {
+  position: relative;
+}
+.atlas-workingset__add-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-popover);
+  width: 220px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba). */
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.atlas-workingset__add-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.atlas-workingset__add-list button {
+  width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 6px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.atlas-workingset__add-list button:hover {
+  background: var(--bg-alt);
+  border-color: var(--border);
+}
+.atlas-workingset__add-form {
+  display: flex;
+  gap: 4px;
+}
+.atlas-workingset__add-form input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 6px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.atlas-workingset__add-form button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.atlas-workingset__add-form button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Cmd+K search modal */
+.cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Plain dim scrim — no backdrop-filter. A full-screen backdrop blur
+     is recomputed every paint and is janky on Firefox; the old 2px
+     blur added almost nothing visually. A slightly stronger dim keeps
+     the palette separated from the page (it also pops via box-shadow).
+     SH.A1 — theme-aware scrim (was a hardcoded dark-mode black that
+     over-dimmed light theme); var(--backdrop) carries its own per-theme
+     alpha split. */
+  background: var(--backdrop);
+  z-index: var(--z-modal);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 10vh;
+}
+.cmdk {
+  width: min(640px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  /* SH.A1 — theme-aware float shadow (was a hardcoded dark-mode black). */
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.cmdk__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-2) var(--pad-3);
+  border-bottom: 1px solid var(--border);
+}
+.cmdk__input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  background: transparent;
+  color: var(--fg);
+  padding: 6px 0;
+}
+/* SH.A1 — the borderless full-width palette input had NO focus indicator
+   at all (`outline: none` with nothing in its place). A boxy ring would
+   fight the design (it's not a boxed field), so this cancels the widened
+   global `input:focus-visible` ring (app.css ~29) and paints a 2px accent
+   underline instead, via an inset box-shadow so it doesn't shift layout. */
+.cmdk__input:focus-visible {
+  outline: none;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+.cmdk__input::placeholder {
+  color: var(--fg-muted);
+}
+.cmdk__mode {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: lowercase;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-alt);
+  color: var(--fg);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.cmdk__body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 80px;
+}
+.cmdk__hit {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 8px var(--pad-3);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--bg-alt);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+}
+.cmdk__hit.is-active {
+  background: var(--accent-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.cmdk__hit-title {
+  font-weight: 500;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cmdk__hit-user {
+  flex-shrink: 0;
+}
+.cmdk__hit-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmdk__hint {
+  padding: var(--pad-3);
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.cmdk__error {
+  padding: var(--pad-3);
+  color: var(--err);
+}
+.cmdk__foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px var(--pad-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.cmdk__keys kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  margin: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.kbd--button {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbd--button:hover {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+
+/* Settings — operator dashboard. The page is tabbed (S1 ships shell +
+ * Preferences; S2-S5 fill the staged panels). The outer .settings
+ * lays out the header strip + tab bar + panel area as a single
+ * column. Panels are unconstrained width so tables/event logs can
+ * breathe; .settings__section inside Preferences keeps the form-style
+ * 640px constraint via its own max-width below. */
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  max-width: 1100px;
+  /* D2 — the capped column was flush-left inside `.view`, leaving a dead
+   * gutter on wide viewports; center it like every other capped-width view. */
+  margin-left: auto;
+  margin-right: auto;
+}
+.settings__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  padding-bottom: var(--pad-3);
+  border-bottom: 1px solid var(--border);
+}
+.settings__header-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  flex-wrap: wrap;
+}
+.settings__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.settings__badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.settings__badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.settings__badge--host {
+  background: transparent;
+  color: var(--fg-muted);
+  border-style: dashed;
+}
+.settings__error {
+  font-size: 12px;
+  color: var(--err);
+}
+.settings__tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  /* Hide the scrollbar — the tabs already wrap visually and a
+   * horizontal scrollbar on a tab strip reads as a UX failure. */
+  scrollbar-width: none;
+}
+.settings__tabs::-webkit-scrollbar {
+  display: none;
+}
+.settings__tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  /* Pull the underline up so the bottom edge of the active tab
+   * sits on the border line of the tab strip. */
+  margin-bottom: -1px;
+}
+.settings__tab:hover {
+  color: var(--fg);
+}
+.settings__tab.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.settings__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+.settings__tab-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+/* SH.B2 — the ≤860px phone rule for this same overflow (mobile.css's CE
+ * block) already fades + snaps the tab strip; the audit found the strip can
+ * ALSO overflow at plain desktop widths once the container narrows below
+ * ~1100px (13 operator-dashboard tabs, not a phone-only problem). Pure CSS
+ * can't detect "is this actually scrollable", so — same call as the ≤860px
+ * rule — applied unconditionally across the whole 861-1100px band rather
+ * than gated on it; harmless (no-op fade) on a strip that already fits.
+ * Left OFF above 1100px on purpose: that's comfortably wide enough for
+ * every current tab, and a permanent fade there would be visual noise for
+ * no reason. */
+@media (max-width: 1100px) and (min-width: 861px) {
+  .settings__tabs {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 28px),
+      transparent
+    );
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    scroll-snap-type: x proximity;
+  }
+  .settings__tab {
+    scroll-snap-align: start;
+  }
+}
+.settings__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  padding-top: var(--pad-3);
+}
+.settings__panel .settings__section {
+  /* Form-style sections (Preferences) keep the original 640px feel
+   * inside the wider dashboard frame. */
+  max-width: 640px;
+}
+.settings__h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.settings__coming {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  padding: var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+.settings__coming code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* Confirm modal — type-the-name destructive-action confirmation.
+ * Native <dialog>; the form-row layout follows GitHub's repo-delete
+ * pattern. */
+.confirm {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0;
+  border-radius: var(--radius-md);
+  min-width: 360px;
+  max-width: 540px;
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba); the
+   * stronger `-card-hover` tier since a destructive-confirm dialog is the
+   * most elevated thing on screen while it's open. */
+  box-shadow: var(--shadow-card-hover);
+}
+.confirm::backdrop {
+  /* SH.A1 — theme-aware scrim (was a hardcoded dark-mode black). */
+  background: var(--backdrop);
+}
+.confirm--danger {
+  border-color: var(--err);
+}
+.confirm__title {
+  margin: 0;
+  padding: var(--pad-3) var(--pad-3) var(--pad-2);
+  font-size: 16px;
+  font-weight: 600;
+}
+.confirm__body {
+  padding: 0 var(--pad-3);
+  font-size: 13px;
+  color: var(--fg-muted);
+  line-height: 1.45;
+}
+.confirm__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--pad-3);
+}
+.confirm__hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.confirm__hint code {
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+}
+.confirm__input {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 10px;
+  background: var(--bg-alt);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.confirm__actions {
+  display: flex;
+  gap: var(--pad-2);
+  justify-content: flex-end;
+  padding: var(--pad-2) var(--pad-3) var(--pad-3);
+  border-top: 1px solid var(--border);
+}
+.confirm__cancel {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.confirm__go {
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.confirm__go.is-danger {
+  background: var(--err);
+  color: #fff;
+}
+.confirm__go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Dashboard panels — Overview, Pipeline, Traffic. Wider than the
+ * Preferences form-style sections so per-kb cards + tables breathe. */
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+}
+.dash__kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--pad-2);
+}
+.dash__kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--pad-2) var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.dash__kpi--ok {
+  border-left: 3px solid var(--ok);
+}
+.dash__kpi--warn {
+  border-left: 3px solid var(--warn);
+}
+.dash__kpi--err {
+  border-left: 3px solid var(--err);
+}
+.dash__kpi-val {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  line-height: 1.1;
+  color: var(--fg);
+}
+.dash__kpi-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.dash__kpi-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.dash__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--pad-2);
+}
+.dash__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  padding: var(--pad-2) var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.dash__card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+.dash__card-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.dash__card-err {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  /* SH.B2 — raw white-on-`--err` measured 3.05:1 in dark (fails WCAG AA's
+   * 4.5:1; light was already 6.82:1). Same `--accent-fill` color-mix
+   * pattern (tokens.css) darkens the fill so white text clears AA in BOTH
+   * themes — computed via the WCAG relative-luminance formula, not
+   * eyeballed: 72% err / 28% #141414 → dark #d77a6a → ~4.99:1, light
+   * #954131 → ~9.40:1 with white. */
+  background: color-mix(in srgb, var(--err) 72%, #141414);
+  color: #fff;
+}
+.dash__card-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: var(--pad-2);
+  row-gap: 4px;
+  margin: 0;
+  font-size: 12px;
+}
+.dash__card-grid dt {
+  color: var(--fg-muted);
+  text-transform: lowercase;
+}
+.dash__card-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+
+/* Pipeline / per-kb collapsible card. */
+.dash__kbcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  padding: var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.dash__kbcard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dash__sub {
+  border-top: 1px solid var(--border);
+  padding-top: var(--pad-2);
+}
+.dash__sub > summary {
+  cursor: pointer;
+  font-size: 12px;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  padding: 4px 0;
+}
+.dash__sub > summary:hover {
+  color: var(--fg);
+}
+.dash__sub[open] > summary {
+  color: var(--fg);
+}
+
+.dash__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin-top: var(--pad-1);
+}
+.dash__table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-transform: lowercase;
+}
+.dash__table td {
+  padding: 4px 8px;
+  border-bottom: 1px dotted var(--border);
+  vertical-align: top;
+}
+.dash__table tr:last-child td {
+  border-bottom: none;
+}
+.dash__table .is-ok {
+  color: var(--ok);
+}
+.dash__table .is-warn {
+  color: var(--warn);
+}
+.dash__table .is-err {
+  color: var(--err);
+}
+.dash__table .is-info {
+  color: var(--info);
+}
+.dash__id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.dash__path,
+.dash__q {
+  display: inline-block;
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* Traffic — sparkline + KPI variant. */
+.dash__kpi--spark {
+  gap: 6px;
+}
+.dash__kpi-max {
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.dash__spark {
+  color: var(--accent);
+  display: block;
+  margin-top: 2px;
+}
+
+/* Live tab — chrome (filter + actions) + tailing log table. */
+.live {
+  /* Two-row layout: chrome strip, then scrollable tail panel. The
+   * tail panel takes the remaining viewport so the table can grow
+   * without pushing the chrome off-screen. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-height: 0;
+}
+.live__chrome {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--pad-3);
+  align-items: start;
+}
+.live__filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.live__group {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.live__group > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.live__group > summary::-webkit-details-marker {
+  display: none;
+}
+.live__group > summary:hover {
+  background: var(--bg);
+}
+.live__group-n {
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+.live__group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+}
+.live__kind {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.live__kind code {
+  font-family: var(--font-mono);
+}
+.live__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.live__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.live__tail {
+  /* 70vh keeps the tail visible even when the chrome wraps to two
+   * rows on narrow viewports. */
+  max-height: 70vh;
+  min-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.live__table {
+  margin: 0;
+}
+.live__table th {
+  background: var(--bg-alt);
+  position: sticky;
+  top: 0;
+}
+.live__time {
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.live__payload {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  display: inline-flex;
+  flex-wrap: wrap;
+  column-gap: 8px;
+}
+.live__key {
+  color: var(--fg-muted);
+}
+.live__val {
+  color: var(--fg);
+}
+
+/* Per-row action buttons + small button variant for tables. */
+.dash__actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.dash__row-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.settings__btn--sm {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.settings__btn--sm:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.settings__btn--sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings__btn--danger {
+  border-color: var(--err);
+  color: var(--err);
+}
+.settings__btn--danger:hover:not(:disabled) {
+  /* SH.B2 — same `--accent-fill`-pattern fix as `.dash__card-err` above
+   * (see its comment for the computed contrast numbers: ~4.99:1 dark,
+   * ~9.40:1 light with white — both clear WCAG AA's 4.5:1). */
+  background: color-mix(in srgb, var(--err) 72%, #141414);
+  color: #fff;
+}
+
+.dash__count {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+/* CT-F5 — corpus-health SLO status chip (Settings → SLOs).
+ *
+ * THREE states, and `unknown` is deliberately NEUTRAL, not a third alarm
+ * colour: "we couldn't measure this" and "no target is configured" are not
+ * problems, they're absences, and colouring them like one would train the
+ * operator to ignore the surface. Only `warn` is tinted, and even that is
+ * information — nothing in the daemon acts on it. */
+.kb-slo__status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+}
+.kb-slo__status--ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.kb-slo__status--warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.dash__inlinebtn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  color: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.dash__inlinebtn:hover {
+  color: var(--accent);
+}
+
+/* Admin-tab danger banner + per-row destructive layout. */
+.settings__danger-banner {
+  padding: var(--pad-2) var(--pad-3);
+  background: color-mix(in oklch, var(--err) 12%, transparent);
+  border: 1px solid var(--err);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settings__danger-banner code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.settings__danger {
+  padding: var(--pad-2) var(--pad-3);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: 13px;
+}
+.settings__danger-row {
+  display: flex;
+  gap: var(--pad-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pad-2) var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.settings__danger-row strong {
+  color: var(--err);
+}
+
+/* Errors-tab expanded detail row. */
+.errors__detail-row td {
+  background: var(--bg);
+  padding: var(--pad-2);
+}
+.errors__detail {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg-alt);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+}
+.settings__h2 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--pad-1);
+}
+.settings__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.settings__field {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-3);
+}
+.settings__label {
+  flex: 0 0 100px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  text-transform: lowercase;
+}
+.settings__field select {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 4px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.settings__swatches {
+  display: inline-flex;
+  gap: 8px;
+}
+.settings__swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.settings__swatch.is-active {
+  border-color: var(--fg);
+}
+.settings__buttons {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.settings__btn {
+  padding: 4px 12px;
+  border: none;
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  text-transform: lowercase;
+}
+.settings__btn:not(:first-child) {
+  border-left: 1px solid var(--border);
+}
+.settings__btn.is-active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* W1.pulse — the vital-signs strip. One quiet mono line of clickable
+ * daemon-truth numbers; deliberately NOT a card/dashboard tile (calm
+ * computing: this is background data, not a metric demanding attention).
+ * Context-free — mounted at the top of Settings and (by a later phase)
+ * the gallery lobby, so it must read fine outside `.settings` too. */
+.kb-vitals {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.kb-vitals__n {
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+}
+.kb-vitals__n:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.kb-vitals__n:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.kb-vitals__hint {
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
+
+/* W1.pulse — the "Feature census — local only" + zero-hit-queries tab. */
+.kb-census__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.kb-census__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-census__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.kb-census__row:last-child {
+  border-bottom: none;
+}
+.kb-census__label {
+  flex: 1 1 auto;
+  color: var(--fg);
+}
+.kb-census__val {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+.kb-census__query {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  text-decoration: none;
+}
+.kb-census__query:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.kb-census__kb {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.kb-census__count,
+.kb-census__age {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* DaemonsManager */
+.dmgr__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dmgr__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  padding: 6px var(--pad-3);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.dmgr__url {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dmgr__remove {
+  background: transparent;
+  border: 1px solid var(--err);
+  color: var(--err);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.dmgr__add {
+  display: flex;
+  gap: var(--pad-2);
+  align-items: center;
+}
+.dmgr__input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.dmgr__add-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.dmgr__add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.dmgr__error {
+  color: var(--err);
+  font-size: 12px;
+}
+
+/* Comments panel (B2) — right-side 360px column on the detail view.
+ * Becomes a column in the detail layout when annotate mode is on
+ * (.detail--with-panel grid template). Self-contained; the rest of
+ * the app keeps working when this is unmounted. */
+.comments-panel {
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  height: 100%;
+  background: var(--bg-alt);
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  overflow: hidden;
+}
+.cp__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  padding: 6px var(--pad-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.cp__filter {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.cp__filter-btn {
+  background: var(--bg);
+  border: none;
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: lowercase;
+}
+.cp__filter-btn:not(:first-child) {
+  border-left: 1px solid var(--border);
+}
+.cp__filter-btn.is-active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.cp__annot {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg);
+}
+.cp__annot.is-active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+/* W2.13 — errata-slip toggle. Same pill grammar as .cp__annot (it sits right
+   beside it in cp__head-actions); the sheet itself lives outside this panel
+   entirely — see .errata-sheet near .detail__error below. */
+.cp__errata {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg);
+}
+.cp__errata.is-active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.cp__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.cp__banner {
+  padding: 6px var(--pad-3);
+  font-size: 12px;
+}
+.cp__banner--err {
+  background: var(--err);
+  color: var(--bg);
+}
+.cp__banner--warn {
+  background: var(--warn);
+  color: var(--bg);
+}
+.cp__hint {
+  padding: var(--pad-2) var(--pad-3);
+  color: var(--fg-muted);
+}
+.cp__file-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--pad-2) var(--pad-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.cp__file-scope-input {
+  width: 100%;
+  min-height: 48px;
+  resize: vertical;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+}
+.cp__file-scope-btn {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__file-scope-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Routed-anchor composer (E2) — shown in place of the file-scope box when
+   the user clicks inside the artifact to start a comment. Tinted so it's
+   obviously a transient "you're composing now" affordance. */
+.cp__compose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--pad-2) var(--pad-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-bg);
+}
+.cp__compose-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+.cp__compose-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.cp__compose-cancel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__compose-add {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__compose-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cp__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--pad-2);
+}
+.cp__empty {
+  text-align: center;
+  color: var(--fg-muted);
+  padding: var(--pad-3);
+  font-style: italic;
+}
+.cp__group {
+  margin-bottom: var(--pad-3);
+}
+.cp__group-h {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  padding: 0 4px;
+}
+.cp__row {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+.cp__row--resolved {
+  opacity: 0.7;
+}
+/* Track H — row whose in-page marker was just clicked. */
+.cp__row--active {
+  background: var(--accent-bg);
+  outline: 1px solid var(--accent);
+}
+.cp__row--stale {
+  /* v0.5 P4 — comment whose anchor doesn't bind to the current
+     artifact text. Soft orange tint so it's discoverable without
+     dominating the panel. */
+  border-color: var(--warn, #d99000);
+  background: color-mix(in srgb, var(--warn, #d99000) 5%, var(--bg));
+}
+.cp__row-stale {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--warn, #d99000);
+  color: var(--bg);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cp__row-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+.cp__row-author {
+  font-weight: 600;
+  color: var(--accent);
+}
+/* v0.34 W — teammate username beside the you/claude role badge. */
+.cp__row-user {
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+.cp__row-anchor {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.cp__row-body {
+  font-size: 13px;
+}
+/* Markdown-rendered body (CommentBody.tsx). Tight vertical rhythm so block
+   elements stay legible inside the 360px panel; <pre>/<code> own their
+   whitespace (the wrapper no longer forces pre-wrap). */
+.cp__md > :first-child {
+  margin-top: 0;
+}
+.cp__md > :last-child {
+  margin-bottom: 0;
+}
+.cp__md p {
+  margin: 0 0 6px;
+}
+.cp__md ul,
+.cp__md ol {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+.cp__md li {
+  margin: 1px 0;
+}
+.cp__md h1,
+.cp__md h2,
+.cp__md h3,
+.cp__md h4 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.cp__md code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.cp__md pre {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  margin: 0 0 6px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.cp__md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+.cp__md blockquote {
+  margin: 0 0 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent-soft);
+  color: var(--fg-muted);
+}
+.cp__md a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.cp__md table {
+  border-collapse: collapse;
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.cp__md th,
+.cp__md td {
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  text-align: left;
+}
+.cp__md img {
+  max-width: 100%;
+  height: auto;
+}
+.cp__row-replies {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent-soft);
+}
+.cp__reply {
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm);
+}
+.cp__reply--claude {
+  border-left: 2px solid var(--accent);
+  padding-left: 6px;
+}
+.cp__row-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.cp__row-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__row-actions button:hover {
+  background: var(--accent-bg);
+}
+.cp__row-action-danger:hover {
+  background: var(--err) !important;
+  color: var(--bg) !important;
+  border-color: var(--err) !important;
+}
+/* R3 — quick-response buttons (canned + Claude-authored choices). Pill
+   shape distinguishes them from the square row-action buttons. */
+.cp__quick {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.cp__quick-btn {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  padding: 2px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.cp__quick-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+.cp__quick-btn--resolve {
+  border-style: dashed;
+}
+.cp__modal-quick {
+  padding: 0 14px;
+}
+.cp__reply-composer {
+  margin-top: 8px;
+  padding: 6px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cp__author-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  align-self: flex-start;
+}
+.cp__author-btn {
+  background: var(--bg);
+  border: none;
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.cp__author-btn:not(:first-child) {
+  border-left: 1px solid var(--border);
+}
+.cp__author-btn.is-active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.cp__reply-input {
+  width: 100%;
+  min-height: 40px;
+  resize: vertical;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+}
+.cp__reply-send {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__reply-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cp__foot {
+  border-top: 1px solid var(--border);
+  padding: 6px var(--pad-3);
+  display: flex;
+  justify-content: flex-end;
+  background: var(--bg);
+}
+.cp__export-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.cp__export {
+  position: fixed;
+  inset: 8vh auto auto 50%;
+  transform: translateX(-50%);
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba); the
+   * stronger `-card-hover` tier — a fixed, viewport-centered export dialog
+   * reads as a modal, not a small popover. */
+  box-shadow: var(--shadow-card-hover);
+  padding: 0;
+  z-index: var(--z-top);
+}
+.cp__export-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.cp__export-h h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.cp__export-h button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+}
+.cp__export-sec {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.cp__export-sec h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.cp__export-pre {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  max-height: 180px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 0 6px;
+}
+.cp__export-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.cp__export-actions button {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__export-actions button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+/* Portable-HTML export blurb + import error banner. */
+.cp__export-note {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.cp__import-err {
+  margin: 6px 16px;
+  padding: 6px 10px;
+  border: 1px solid var(--danger, #9a2f28);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger, #9a2f28) 10%, transparent);
+  color: var(--fg);
+  font-size: 11px;
+}
+
+/* "edited" marker in a comment's meta row (R2). */
+.cp__row-edited {
+  font-size: 9px;
+  font-style: italic;
+  color: var(--fg-muted);
+}
+
+/* Expanded comment view (CommentModal.tsx, R2) — native <dialog> opened
+   with .showModal(), so the ::backdrop dims the panel + focus is trapped. */
+.cp__modal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 0;
+  width: min(640px, 92vw);
+  max-height: 85vh;
+  /* Progressive-enhancement twin (same pattern the .kb-pinsp reader-tools
+     sheet uses, mobile.css) — dvh tracks the visual viewport once the
+     mobile keyboard opens for a reply/edit textarea inside this <dialog>,
+     where vh stays pinned to the layout viewport and would let the dialog
+     overflow off-screen under the keyboard. Cascade order: a supporting
+     browser takes this line, a non-supporting one keeps the vh value above. */
+  max-height: 85dvh;
+  /* SH.B2 — theme-aware shadow (was a hardcoded dark-mode-only rgba); the
+   * stronger `-card-hover` tier to match: a native <dialog> is the most
+   * elevated element on screen while open. */
+  box-shadow: var(--shadow-card-hover);
+}
+.cp__modal::backdrop {
+  /* SH.A1 — theme-aware scrim (was a hardcoded dark-mode black). */
+  background: var(--backdrop);
+}
+.cp__modal-inner {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  /* Same dvh twin as .cp__modal above — this is the actual flex column that
+     bounds the scrollable body, so the dialog fix alone isn't enough. */
+  max-height: 85dvh;
+}
+.cp__modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.cp__modal-head .cp__row-meta {
+  margin: 0;
+}
+.cp__modal-x {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--fg-muted);
+}
+.cp__modal-body {
+  padding: 12px 14px;
+  overflow-y: auto;
+  font-size: 14px;
+}
+/* Shared Write|Preview markdown editor (MarkdownEditor.tsx), reused by the
+   edit modal, the file-scope composer, and every reply box. */
+.cp__editor {
+  display: flex;
+  flex-direction: column;
+}
+.cp__editor-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.cp__editor-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--fg-muted);
+  padding: 2px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.cp__editor-tab.is-active {
+  color: var(--fg);
+  border-color: var(--border);
+  background: var(--bg-alt);
+}
+/* Default textarea (edit modal). Reply/file-scope pass their own class. */
+.cp__editor-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 160px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+}
+.cp__editor-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--bg-alt);
+  min-height: 60px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.cp__modal-quotebar {
+  display: flex;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+.cp__modal-quotebar button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.cp__modal-quotebar button:hover {
+  background: var(--accent-bg);
+}
+.cp__modal-replies {
+  padding: 0 14px;
+  overflow-y: auto;
+}
+.cp__modal .cp__reply-composer {
+  margin: 8px 14px 0;
+}
+.cp__modal-foot {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+.cp__modal-foot button {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.cp__modal-save {
+  background: var(--accent) !important;
+  color: var(--bg) !important;
+  border-color: var(--accent) !important;
+}
+.cp__modal-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Reader dock: the right column. v0.21 — bare column chrome only; the icon rail
+ * (inspector sub-tabs + comments/versions) + body switching now live on
+ * PreviewInspector (.kb-pinsp), the persistent shell (invariant #30). The
+ * active panel — inspector sections or the CommentsPanel/VersionsPanel slot —
+ * fills below the rail. */
+.kb-dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  border-left: 1px solid var(--rule);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.kb-dock > .comments-panel,
+.kb-dock > .versions-panel,
+.kb-dock > .kb-pinsp {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-left: 0;
+}
+/* v0.21 — the merged rail: PreviewInspector is the persistent shell, so when a
+   panel is selected its CommentsPanel/VersionsPanel renders as a child of
+   .kb-pinsp (below the rail) instead of a direct .kb-dock child. Fill the body
+   area + scroll internally (no double scroll). */
+.kb-pinsp > .comments-panel,
+.kb-pinsp > .versions-panel {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-left: 0;
+}
+
+/* Detail view, with comments panel */
+.detail--with-panel {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  height: 100%;
+}
+/* v0.10 P2 — Detail view with the PreviewInspector rail. v0.21 — 360px to match
+   the comments/versions column so the merged rail doesn't reflow when you switch
+   between the inspector and a panel. */
+.detail--with-inspector {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  height: 100%;
+}
+/* v0.13.2 — when the inspector is collapsed, shrink its column to a
+ * 32px vertical strip so the iframe gets the full width back. */
+.detail--with-inspector:has(.kb-pinsp--collapsed) {
+  grid-template-columns: 1fr 32px;
+}
+
+/* W3.P-b — the two-pane artifact COMPARE split (`?pane2=`).
+ *
+ * `.detail__panes` is rendered ONLY while a split is open, so the single-pane
+ * cascade above is untouched: without it `.detail__main` stays the direct
+ * child of `.detail` (or of the `1fr` column of the two grids above) exactly
+ * as it always was. With it, this wrapper takes that slot and sub-divides it
+ * into two equal columns — the dock (`.kb-dock`) keeps its own 360px column
+ * of the OUTER grid, because there is exactly ONE inspector rail for the
+ * whole reader (invariant #30), not one per pane. */
+.detail__panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+/* Each pane is its own containing block: `.detail__error`, the errata slip
+ * and the TocSpy overlay are all absolutely positioned INSIDE a pane, so they
+ * must resolve against that pane, not against `.detail`. */
+.detail__pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.detail__pane + .detail__pane {
+  border-left: 1px solid var(--border);
+}
+/* Focus ring — which pane owns the keyboard (`[`/`]`, `o`, `b`, `y p`) and
+ * feeds the single inspector rail. An inset overlay rather than a real border
+ * so it costs no layout (a border would shift the iframe by a pixel on every
+ * focus change). Only drawn while a split is actually open. */
+.detail__pane.is-focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  opacity: 0.5;
+  z-index: 13;
+}
+/* The close-this-pane verb reads as a dismissal, not a mode toggle. */
+.kb-ctxbar__act--split-close:hover {
+  color: var(--err);
+}
+
+/* Print */
+@media print {
+  .topbar,
+  .rail,
+  .pill,
+  .pages {
+    display: none !important;
+  }
+  .view,
+  .detail {
+    padding: 0;
+  }
+}
+
+/* --- kb share modal (S9) ---------------------------------------------- */
+
+.share-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+}
+.share-modal__field {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2) var(--pad-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin: 0;
+}
+.share-modal__field legend {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+}
+.share-modal__field label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.share-modal__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.share-modal__domain {
+  margin-top: var(--pad-1);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.share-modal__error {
+  color: var(--err);
+  font-size: 13px;
+  margin: 0;
+}
+.share-modal__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+.share-modal__done {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+.share-modal__url {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.share-modal__url input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.share-modal__copy {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elev);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.share-modal__copy:hover {
+  border-color: var(--border-hi);
+}
+.share-modal__open {
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0 6px;
+  font-size: 16px;
+}
+.share-modal__warn {
+  color: var(--warn);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* --- kb capture sheet (U4) ---------------------------------------------- */
+
+.capture-sheet__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+}
+.capture-sheet__drop {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--pad-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.capture-sheet__file-input {
+  display: none;
+}
+.capture-sheet__pick {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elev);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.capture-sheet__pick:hover {
+  border-color: var(--border-hi);
+}
+.capture-sheet__hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.capture-sheet__files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.capture-sheet__file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.capture-sheet__file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.capture-sheet__file-x {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.capture-sheet__file-x:hover {
+  color: var(--err);
+}
+.capture-sheet__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.capture-sheet__field input,
+.capture-sheet__field select,
+.capture-sheet__field textarea {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-strong);
+  font-family: inherit;
+}
+.capture-sheet__field textarea {
+  resize: vertical;
+}
+.capture-sheet__paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.capture-sheet__format {
+  display: flex;
+  gap: var(--pad-3);
+}
+.capture-sheet__format-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.capture-sheet__sanitize {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* W2.8 — Sidebar's "Drafts (N)" chip (Sidebar.tsx lives in components/
+ * chrome/, but its stylesheet is chrome.css, which this phase doesn't own —
+ * a distinct class name here avoids any collision). Mirrors the existing
+ * `.kb-side__memlink` block-link treatment (chrome.css) so it sits in the
+ * rail's rhythm without a rule outside this file. */
+.kb-side__draftlink {
+  display: block;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 4px;
+}
+.kb-side__draftlink:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* === CE — daemon config editor (Settings › Config tab) === */
+.cfg {
+  position: relative;
+}
+.cfg__restart-note {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2) var(--pad-3);
+  font-size: 13px;
+  color: var(--fg);
+  margin-bottom: var(--pad-3);
+}
+.cfg__section {
+  margin-bottom: var(--pad-4);
+}
+.cfg__h3 {
+  margin: var(--pad-3) 0 var(--pad-2);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.cfg__field {
+  align-items: flex-start;
+}
+.cfg__control {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.cfg__hint {
+  font-size: 12px;
+}
+.cfg__field-error {
+  font-size: 12px;
+  color: var(--err);
+}
+.cfg__input {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: 100%;
+  box-sizing: border-box;
+}
+.cfg__input--mono {
+  font-family: var(--font-mono);
+}
+.cfg__input--num {
+  width: 9rem;
+}
+.cfg__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cfg__list-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.cfg__kv-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.cfg__list-add {
+  align-self: flex-start;
+}
+.cfg__subsection {
+  border-left: 2px solid var(--border);
+  padding-left: var(--pad-3);
+  margin: var(--pad-2) 0;
+}
+.cfg__present {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+}
+.cfg__present--set {
+  color: var(--green);
+}
+.cfg__present--unset {
+  color: var(--warn);
+}
+.cfg__kb-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-alt);
+  padding: var(--pad-2) var(--pad-3);
+  margin-bottom: var(--pad-2);
+}
+.cfg__kb-summary {
+  cursor: pointer;
+  display: flex;
+  gap: var(--pad-3);
+  align-items: baseline;
+}
+.cfg__kb-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.cfg__kb-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cfg__kb-body {
+  margin-top: var(--pad-3);
+}
+.cfg__bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--pad-2);
+  /* Left-aligned so the actions clear the global daemon-status pill,
+   * which floats fixed at the bottom-right (z-index 50) and would
+   * otherwise sit on top of a bottom-right Save button. */
+  justify-content: flex-start;
+  align-items: center;
+  padding: var(--pad-2) 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  z-index: var(--z-bar);
+}
+.cfg__bar-status {
+  order: 3;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.cfg__save {
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cfg__save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cfg__save-error {
+  margin-bottom: var(--pad-3);
+}
+/* A2 — add-a-kb card (Config tab). */
+.cfg__add-kb {
+  margin-top: 8px;
+}
+.cfg__newkb {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px dashed var(--rule-hi, var(--rule));
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-alt, var(--bg-panel));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cfg__newkb-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.cfg__newkb-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.cfg__newkb-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+.cfg__warnings {
+  background: var(--bg-alt);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2) var(--pad-3);
+  font-size: 13px;
+  margin-bottom: var(--pad-3);
+}
+.cfg__warnings ul {
+  margin: 4px 0 0;
+  padding-left: var(--pad-3);
+}
+.cfg__ok {
+  color: var(--green);
+  font-size: 13px;
+  margin-bottom: var(--pad-3);
+}
+.cfg__moved {
+  margin-bottom: var(--pad-3);
+}
+.cfg__moved a {
+  color: var(--accent);
+  font-weight: 600;
+}
+.cfg__form:disabled {
+  opacity: 0.6;
+}
+
+/* ─────────── W3.M-d: the map-home shell (`?shell=map`) ──────────────────
+ * A full-bleed atlas plus a ~340px projection panel listing whatever is
+ * selected on the map. Desktop only — `routes/gallery.tsx` gates the whole
+ * shell on `useIsMobile()`, so the <=860px `.atlas` overrides in mobile.css
+ * are deliberately untouched by everything below.
+ *
+ * The canvas is only SAFE to render at an arbitrary aspect ratio because
+ * `lib/atlasFit.ts` shipped: the draw loop and `findHit` share one uniform
+ * "contain" transform, so a non-5:3 container letterboxes instead of drawing
+ * ellipses with desynced hit-testing (the pre-atlasFit failure). */
+.view:has(.map-shell) {
+  padding: 0;
+  overflow: hidden;
+}
+.map-shell {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  height: 100%;
+  min-height: 0;
+}
+.map-shell__map {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.map-shell__map > .atlas {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.map-shell__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  padding: var(--pad-3);
+  border-left: 1px solid var(--border);
+  background: var(--bg-alt);
+  overflow: auto;
+  min-height: 0;
+}
+.map-shell__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+.map-shell__lab {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+}
+.map-shell__count {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.map-shell__hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+.map-shell__hint p {
+  margin: 0 0 var(--pad-2);
+}
+.map-shell__hint-alt {
+  font-size: 12px;
+}
+.map-shell__link {
+  color: var(--accent);
+}
+.map-shell__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  min-height: 0;
+}
+.map-shell__row-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  text-decoration: none;
+}
+.map-shell__row-link:hover {
+  background: var(--bg);
+}
+.map-shell__row-title {
+  font-size: 13px;
+  line-height: 1.3;
+}
+.map-shell__row-meta {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.map-shell__more {
+  margin: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* The atlas rendered INSIDE the shell: no card chrome, and the canvas fills
+ * the column instead of holding the 600/360 aspect ratio. Scoped to the
+ * `--bleed` modifier so `?view=atlas` stays byte-identical. */
+.atlas--bleed {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  width: 100%;
+}
+.atlas--bleed .atlas__canvas {
+  aspect-ratio: auto;
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 240px;
+}

@@ -1,0 +1,225 @@
+# Builds the two shipping container images (kb, kb-code) from a
+# fully-green main commit and pushes them to ghcr.io, so deploying no
+# longer means compiling. Before this job existed, the operator's deploy
+# script ran `docker compose build` on the deploy host — a full release compile of
+# kb + kb-embedder (static ONNX Runtime) + kb-code-server + both SPAs, on
+# that box's spinning-disk RAID5, every single deploy.
+#
+# Pushing an image is NOT deploying one: redeploy stays a deliberate,
+# manual act. This job only guarantees the artifact exists and that its
+# commit passed everything.
+#
+# SPLIT OUT of ci.yml (2026-08-15). ci.yml's workflow-level
+# `concurrency: cancel-in-progress: true` exists so a stale fmt/clippy/test
+# run gets cancelled the moment a newer commit lands on main — correct for
+# that job shape, catastrophic for a 100-180min image build sharing the
+# same workflow. On 2026-08-13 (run 31676055072) a build-image job 2h into
+# a cold compile was killed mid-build by exactly that cancellation policy —
+# 2h of compute thrown away for nothing, forced to restart from scratch.
+# This workflow runs AFTER ci.yml finishes (`workflow_run`) instead of
+# racing inside it, under its own concurrency group (queue, never kill —
+# see below).
+#
+# D4 — SELF-HOSTED, THEREFORE UNREACHABLE FROM A PULL REQUEST. This is the
+# one build that needs the deploy host's disk and registry access, so it
+# keeps `runs-on: [self-hosted, kb-self-hosted]`. A PR from a fork must never reach
+# that machine, so the job below refuses to run for anything but a push to
+# this repository's own `main` (see its `if:`); every PR lane lives in
+# ci.yml, on GitHub-hosted runners.
+name: build-image
+
+on:
+  workflow_run:
+    # Matches on ci.yml's `name:` (top of that file), NOT its filename —
+    # keep this in lockstep if that name ever changes, since a mismatch
+    # fails silently (this trigger just never fires, no error anywhere).
+    workflows: [ci]
+    types: [completed]
+    # workflow_run's `branches` filter matches the branch the COMPLETED
+    # run happened on. ci.yml runs on both `push` (branch = main) and
+    # `pull_request` (branch = the PR's own head branch) into main, so this
+    # drops most PR-triggered ci runs — but NOT all of them: a fork PR
+    # opened from a branch that happens to be named `main` matches it too.
+    # The filter is a cheap pre-cut, never the security boundary; the job's
+    # `if:` below is (D4).
+    branches: [main]
+
+concurrency:
+  group: build-image-main
+  # NEVER cancel an in-flight build — that's the entire reason this
+  # workflow was split out (see header). cancel-in-progress:false gives
+  # QUEUE semantics: if a second main push completes ci.yml while a build
+  # is running, GitHub holds at most one PENDING run (the newest) and
+  # starts it when the current one finishes; nothing already running is
+  # ever killed. Older queued runs get superseded by the newest pending
+  # one, which is exactly what we want — only the latest main commit's
+  # image is worth building once the current build is done.
+  cancel-in-progress: false
+
+jobs:
+  build-image:
+    name: build-image (kb + kb-code runtime → ghcr.io)
+    # workflow_run's own `types: [completed]` fires on EVERY conclusion
+    # (success, failure, cancelled, ...) — this `if` is what actually
+    # restricts publishing to a commit that passed every ci.yml job
+    # (workspace/embedder/code/e2e/code-e2e/web-unit/supply-chain all
+    # feed into ci.yml's own conclusion; none of them run with
+    # continue-on-error, so ci.yml only reports success if all of them
+    # did). The tag this job publishes is what a deploy will pull, so it
+    # should mean "this commit was green", full stop.
+    #
+    # The other clauses are the D4 gate, and they are what makes a
+    # self-hosted runner safe here. `workflow_run` inherits the trigger of
+    # the run it observed, so a fork PR's ci.yml run reaching this job would
+    # check out and `docker build` fork-authored code on the deploy host —
+    # the classic pwn-request. Read together they admit exactly one case: a
+    # push to THIS repository's own `main`.
+    #   repository          — a fork of the public repo never publishes.
+    #   event_name          — belt-and-braces; this workflow has no
+    #                         pull_request trigger to begin with.
+    #   workflow_run.event  — the observed run was a push, not a PR.
+    #   head_branch         — that push was to main.
+    #   head_repository     — and it landed in this repo, not in a fork.
+    if: >-
+      github.repository == 'nicolasacchi/kb'
+      && github.event_name != 'pull_request'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, kb-self-hosted]
+    # 180, not 120: as of 2026-08-14 the Dockerfile serializes cargo
+    # compilation (CARGO_BUILD_JOBS=1, the OOM fix — see that commit's
+    # history in the Dockerfile, which walks the -j4→-j2→-j1 saga) to
+    # eliminate a deterministic build-image OOM. From a cold cargo cache
+    # that needs ~160m; the prior 120m budget assumed the higher
+    # parallelism that caused the OOM in the first place, and only stayed
+    # green on 2026-08-14 because the cache was warm from the failed
+    # first attempt.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # THE TRAP: this is a `workflow_run`-triggered run, so a bare
+          # checkout (default `ref:`, resolving to this run's own
+          # GITHUB_SHA) would check out whatever commit happens to sit at
+          # the tip of main RIGHT NOW — not the commit ci.yml just tested
+          # and reported success for. Those two can differ (another push
+          # can land on main in the gap between ci.yml finishing and this
+          # job starting). The only correct commit is
+          # `github.event.workflow_run.head_sha`: the exact sha the
+          # upstream ci.yml run graded. Never substitute GITHUB_SHA here.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Log in to ghcr.io
+        # Mirrors release.yml's ghcr job: the preinstalled docker CLI plus
+        # this job's GITHUB_TOKEN, no third-party login action to pin.
+        # `packages: write` above grants the push. Both values arrive via
+        # env — never interpolated into the command body.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Build + push kb-code, then kb
+        # The docker CLI here talks to this slot's sibling rootless dind
+        # over TLS (DOCKER_HOST is set in the runner's compose
+        # environment) — there is no host docker socket on the runner, by
+        # design.
+        #
+        # ORDER: kb-code first, then kb. kb-code-runtime is the SMALL
+        # image (~116 MB compressed vs. kb's ~1.7 GB, which bakes in the
+        # bge-large model) and the one redeploys reach for most often —
+        # publishing it first means it's sitting on ghcr.io roughly an
+        # hour sooner than if the two builds ran in the old kb-then-code
+        # order, for a build this long.
+        #
+        # TAG SHAPE: main-<sha12> only — no moving `main-latest`. Dropped
+        # entirely (it existed in ci.yml's build-image job before this
+        # split): the deploy script only ever resolves
+        # `ghcr.io/nicolasacchi/kb:main-$SHA`, never `:latest` —
+        # no consumer exists. Worse, a moving tag across TWO separate
+        # images (kb, kb-code) pushed by two separate `docker push` calls
+        # is non-atomic: a reader pulling `main-latest` for both between
+        # the two pushes gets a kb/kb-code pair built from DIFFERENT
+        # commits, silently skewed. main-<sha12> alone can't skew — both
+        # images are unambiguously tied to the one commit that produced
+        # them.
+        #
+        # sha12 matches `git rev-parse --short=12`, which is what the
+        # deploy script already computes for the checkout it is
+        # deploying, so it can ask for exactly the image
+        # built from the commit it has. Deliberately distinct from
+        # release.yml's :<version>/:latest tags so continuous main builds
+        # never shadow a real versioned release.
+        #
+        # SHA SOURCE: same trap as the checkout `ref:` above — derive the
+        # tag from `github.event.workflow_run.head_sha`, NEVER from
+        # `git rev-parse` / GITHUB_SHA. In a workflow_run-triggered run
+        # those resolve against THIS workflow's own trigger point, not
+        # the commit ci.yml tested; a plain `git rev-parse` here would
+        # silently tag the image with the wrong sha whenever another push
+        # lands on main while this job is queued/running.
+        #
+        # The Dockerfile takes KB_GIT_SHA as a build arg because its
+        # .dockerignore drops .git — it cannot probe the sha itself.
+        #
+        # COST NOTE: BuildKit cache mounts on the cargo registry/git and
+        # the target dir exist in the Dockerfile as of 87cb181c
+        # (2026-08-13) — a warm dind cache reuses previously-compiled
+        # crates across pushes, so this is NOT a guaranteed cold release
+        # compile every run (the stale version of this note said cache
+        # mounts were "deliberately not bundled"; they've existed since
+        # that commit). The remaining lever if the two runner slots get
+        # crowded is CARGO_BUILD_JOBS (currently 1 — see the Dockerfile's
+        # own OOM-fix comment above `ENV CARGO_BUILD_JOBS=1`): raising it
+        # trades compile time for peak memory, which is exactly the
+        # tradeoff that forced it down to 1 in the first place.
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          SHA="${HEAD_SHA:0:12}"
+
+          docker build --target kb-code-runtime \
+            --build-arg KB_GIT_SHA="$SHA" \
+            -t "${IMAGE}-code:main-${SHA}" \
+            .
+          docker push "${IMAGE}-code:main-${SHA}"
+
+          docker build \
+            --build-arg KB_GIT_SHA="$SHA" \
+            -t "${IMAGE}:main-${SHA}" \
+            .
+          docker push "${IMAGE}:main-${SHA}"
+
+          echo "pushed ${IMAGE}-code:main-${SHA} and ${IMAGE}:main-${SHA}"
+
+      - name: Prune the dind caches + log out
+        # Bounds the nested daemon's state at the source. The dind data
+        # volume persists across the ephemeral runner container, so
+        # without this it grows without limit — the same blind spot that
+        # has left ~100 GB caches on this host's other CI stacks.
+        #   - builder cache: BuildKit's layer/mount cache (was already
+        #     pruned before the split).
+        #   - image store: the sha-tagged shipping images this step just
+        #     built (~1 GB-scale each) accumulate here too — the
+        #     host-level cron that reaps *its* docker only reaches the
+        #     HOST daemon, not this nested dind, so nothing else ever
+        #     touches this store.
+        #   - ghcr.io session: `docker login` above persists in the dind
+        #     volume across runs (unlike the ephemeral runner container
+        #     itself), so without an explicit logout the credential
+        #     otherwise sits there indefinitely.
+        if: always()
+        run: |
+          docker builder prune -af --filter until=72h
+          docker image prune -af --filter until=72h
+          docker logout ghcr.io

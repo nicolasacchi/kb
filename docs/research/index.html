@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb research index — pre-implementation discussion artefact for the kb project. 10 topics (incl. TUI + Web Gallery design handoffs), 7 challenges, 11 discussion items, 6 spikes, 5 canonical artifacts. Last integration 2026-05-11.">
+<title>kb · research index</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="#topics">Topics</a>
+      <a href="#summary">Summary</a>
+      <a href="#challenges">Challenges</a>
+      <a href="#open">Open</a>
+      <a href="#colophon">About</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Pre-implementation research
+    <span>·</span>
+    <span class="meta">2026-05-10</span>
+    <span>·</span>
+    <span class="meta">8 parallel research agents</span>
+  </div>
+  <h1><span class="strike">kb — html artifact gallery</span>Research <em>before</em> the daemon.<br>Fewer assumptions later.</h1>
+  <p class="lede">kb is a single Rust binary that indexes, searches, and serves a personal collection of LLM-generated HTML artifacts. Its design thesis comes from Thariq Shihipar's <em>Unreasonable Effectiveness of HTML</em>: when an LLM produces an artifact, HTML is a richer medium than markdown — spatial layout, inline SVG, <code>&lt;details&gt;</code>, <code>&lt;canvas&gt;</code>, real interactivity. This research sits between the briefing and any production code: <strong>eight parallel investigations</strong> + <strong>one feature design</strong> (commenting) + <strong>two design handoffs integrated</strong> (TUI · Web Gallery), seven challenges, eleven discussion topics, six spike-tests. Five canonical artifacts ship in <a href="sample-artifacts/"><code>sample-artifacts/</code></a> as the iframe sandbox and indexing-pipeline contract.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-num">11</div><div class="stat-label">Topic pages</div></div>
+    <div class="stat"><div class="stat-num">4 of 4</div><div class="stat-label">Open-points clusters resolved</div></div>
+    <div class="stat"><div class="stat-num">11</div><div class="stat-label">Discussion items</div></div>
+    <div class="stat"><div class="stat-num">6<small> · ~15h</small></div><div class="stat-label">Spike-tests</div></div>
+  </div>
+</section>
+
+<section class="section section-tight" id="subfolders">
+  <div class="section-head">
+    <div class="num">Organised reading</div>
+    <h2>Four subfolders, four reviews — what shipped, what didn't</h2>
+    <p class="deck">The 24 numbered docs that piled up between v0.0 and v0.9 are now grouped into <strong>foundation</strong> · <strong>surfaces</strong> · <strong>publishing</strong> · <strong>memory</strong>. Each subfolder carries a <code>REVIEW.html</code> auditing every doc against the codebase at HEAD — SHIPPED / partial / superseded / not-shipped, with file:line evidence. The eleven original topic cards below cover only docs 01-11; the post-v0.1 topics (12-24) live in the subfolders.</p>
+  </div>
+
+  <div class="nav-grid">
+    <a class="nav-card" href="foundation/REVIEW.html">
+      <div class="num">foundation/ · v0.0–v0.1</div>
+      <h3>Storage · Embeddings · Watcher · SSE · TUI · Bake-off</h3>
+      <p class="blurb">Docs 01, 02, 03, 04, 05, 14. The early spikes that committed kb to lance + sqlite, fastembed via ONNX, notify+debouncer, axum SSE, and a ratatui dashboard. <strong>3 SHIPPED, 2 partial, 1 superseded</strong> (05 ratatui replaced by the v0.6 fleet-monitor redesign).</p>
+      <div class="meta"><span>6 docs</span><span><a href="foundation/REVIEW.html">REVIEW →</a></span></div>
+    </a>
+    <a class="nav-card" href="surfaces/REVIEW.html">
+      <div class="num">surfaces/ · v0.1–v0.6</div>
+      <h3>Iframe · HTML · Prior art · Comments · Gallery · API · Mobile · Multi-daemon</h3>
+      <p class="blurb">Docs 06-13. The UX surfaces and HTTP contract that defined the SPA, the kb-comments/1 protocol, the daemon API, and the multi-daemon fleet model. <strong>5 SHIPPED, 1 partial, 2 not-shipped</strong> (12 mobile + 13 multi-daemon SPA largely unbuilt — only SSE-aggregation half landed).</p>
+      <div class="meta"><span>8 docs</span><span><a href="surfaces/REVIEW.html">REVIEW →</a></span></div>
+    </a>
+
+    <a class="nav-card" href="memory/REVIEW.html">
+      <div class="num">memory/ · v0.9</div>
+      <h3>kb as Claude Code memory — three approaches + the executable spec</h3>
+      <p class="blurb">Docs 19, 20, 21, 22, 23 (memory-implementation-spec). The hub picked Approach C (native subsystem), built M1-M8, tagged <strong>v0.9</strong>. <strong>2 SHIPPED, 2 superseded, 1 partial</strong>. One post-tag follow-up shipped (<code>fix(hooks): honor KB_DAEMON_URL</code>); one open bug filed (empty-corpus panic at <code>lance.rs:777</code>).</p>
+      <div class="meta"><span>5 docs</span><span><a href="memory/REVIEW.html">REVIEW →</a></span></div>
+    </a>
+  </div>
+</section>
+
+<section class="section section-tight" id="topics">
+  <div class="section-head">
+    <div class="num">Topic pages</div>
+    <h2>Eleven pages — eight investigations, two design integrations, one API contract</h2>
+    <p class="deck">Topics 01–08 follow the same skeleton: TL;DR · briefing · current docs · alternatives · recommendation · open questions. Topic 09 designed the original commenting feature; topics 05 and 10 integrate the Claude Design TUI and Web Gallery handoffs. Topic 11 is the daemon HTTP API contract that emerged from cluster 2 of the open-points discussion.</p>
+  </div>
+
+  <div class="nav-grid">
+    <a class="nav-card" href="foundation/01-lancedb.html">
+      <div class="num">01 · Storage</div>
+      <h3>lancedb + sqlite or one-file collapse?</h3>
+      <p class="blurb">Lance Rust crate state, FTS via tantivy → native, IVF-PQ, schema evolution. sqlite-vec + FTS5 as the strongest one-store challenger. Spike before committing.</p>
+      <div class="meta"><span class="conf conf--med">Confidence · MED</span><span>spike-gated</span></div>
+    </a>
+    <a class="nav-card" href="foundation/02-fastembed.html">
+      <div class="num">02 · Embeddings</div>
+      <h3>fastembed-rs + bge-small, dlopen onnxruntime</h3>
+      <p class="blurb">Healthy crate (5.12, March 2026), primary backend ort. bge-small-en-v1.5 (384, MIT) confirmed; nomic-embed-text-v1.5 + jina-v2-base-code as switch candidates. Avoid jina-v3 license, EmbeddingGemma terms.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>per-machine bench needed</span></div>
+    </a>
+    <a class="nav-card" href="foundation/03-notify.html">
+      <div class="num">03 · File watcher</div>
+      <h3>notify + debouncer-full ≥ 0.7.0, 400 ms</h3>
+      <p class="blurb">Pin debouncer-full ≥ 0.7.0 (dedup bug #711 fixed). 400 ms window. Recommended → Poll fallback on ENOSPC. Initial walk on startup is your responsibility.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>linux + macos</span></div>
+    </a>
+    <a class="nav-card" href="foundation/04-sse-axum.html">
+      <div class="num">04 · SSE on axum</div>
+      <h3>broadcast + ring buffer + Last-Event-ID</h3>
+      <p class="blurb">SSE wins over WebSockets for one-way. broadcast::Sender + BroadcastStream. Last-Event-ID replay has no maintained crate — write the ring yourself, ~30 LOC.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>schema authoring needed</span></div>
+    </a>
+    <a class="nav-card" href="foundation/05-ratatui.html">
+      <div class="num">05 · TUI spec</div>
+      <h3>Six-tab dashboard. Design handoff integrated.</h3>
+      <p class="blurb">Claude Design bundle <code>1XoWvtO0FExl3zEpJ3WqqA</code> is the spec: HOME · SOURCES · DETAIL · STATS · ERRORS · SEARCH. Solarized Light, cell-precise, command issuer. v0.1 ships 3 of 6 views; eight concerns + seven enhancements raised.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>design-handoff integrated</span></div>
+    </a>
+    <a class="nav-card" href="surfaces/06-iframe.html">
+      <div class="num">06 · Iframe sandbox</div>
+      <h3>Subdomain per artifact + tight flags</h3>
+      <p class="blurb">Proposed flags are storage-broken <em>when served same-origin</em>. Fix: serve from <code>&lt;id&gt;.artifacts.localhost</code> (RFC 6761) and <strong>keep <code>allow-same-origin</code></strong> — the CodePen / Observable pattern. Permissive baseline minus <code>allow-top-navigation*</code>. Direction-aware <code>targetOrigin</code> in postMessage. Recreate iframe per render. Serve-time injection for the annotator. Amended post deep-review 2026-05-11.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>amended post-review</span></div>
+    </a>
+    <a class="nav-card" href="surfaces/07-html-effectiveness.html">
+      <div class="num">07 · HTML thesis</div>
+      <h3>Tighter sandbox covers 100% of the canon</h3>
+      <p class="blurb">All 20 reference artifacts are 10–29 KB, zero externals, zero localStorage. <code>sandbox="allow-scripts"</code> + srcdoc covers everything. <code>&lt;template id="kb-prompt"&gt;</code> + <code>&lt;meta&gt;</code> for provenance.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>thesis confirmed</span></div>
+    </a>
+    <a class="nav-card" href="surfaces/08-prior-art.html">
+      <div class="num">08 · Prior art</div>
+      <h3>Real gap. Daemon path confirmed.</h3>
+      <p class="blurb">No tool combines daemon + thin clients + HTML-as-unit + prompt-aware + semantic search. Closest: simonw/tools (substance), Karakeep (form). Plugin / extension reframings considered and rejected — each fails on observability, agent-ingest HTTP API, headless self-host, or HTML-as-primary-unit.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>alternatives rejected</span></div>
+    </a>
+    <a class="nav-card" href="surfaces/09-comments.html">
+      <div class="num">09 · Comments</div>
+      <h3>Talk while reading. v1 → v2 superseded by topic 10.</h3>
+      <p class="blurb">Annotate selections / sections / chapters / files. Original v1 was export-only; Web Gallery handoff (topic 10) upgrades to threaded replies + Claude-as-replier + <code>kb-comments/1</code> schema + three exports. This page holds the anchor-stability analysis.</p>
+      <div class="meta"><span class="conf conf--med">Confidence · MED-HIGH</span><span>schema → topic 10</span></div>
+    </a>
+    <a class="nav-card" href="surfaces/10-web-gallery.html">
+      <div class="num">10 · Web Gallery</div>
+      <h3>SPA spec. Three views, hybrid card, claude in the comments.</h3>
+      <p class="blurb">Claude Design bundle <code>E4XcIWFBUnJJqWOWAaNBeA</code> is the spec: Grid · List · Atlas views, iframed detail with floating chrome, Cmd+K hybrid search, in-iframe annotation with threaded claude replies, status pill on the same SSE stream. Multi-file artifacts first-class. Ten concerns + nine enhancements raised. Five canonical artifacts in <code>sample-artifacts/</code>.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>design-handoff integrated</span></div>
+    </a>
+    <a class="nav-card" href="surfaces/11-daemon-api.html">
+      <div class="num">11 · Daemon API</div>
+      <h3>One contract. Three consumers. 28 endpoints.</h3>
+      <p class="blurb">Open-points cluster 2 + 4 landed 2026-05-11. <code>/api/...</code> flat for cross-kb, <code>/api/kb/{kb}/...</code> nested for scoped. Origin allowlist for CSRF. Async commands return <code>202 + {run, events}</code>. RFC 7807 errors. No version segment for v0.1. Same axum process; virtual-host routing. Cluster-4 additions: <code>GET /api/identity</code> (multi-daemon), <code>GET/PATCH /api/settings</code> (hybrid persistence), <code>POST .../atlas/recompute</code>.</p>
+      <div class="meta"><span class="conf conf--high">Confidence · HIGH</span><span>4 of 4 clusters landed</span></div>
+    </a>
+  </div>
+
+  <div class="nav-grid">
+    <a class="nav-card" href="challenges.html">
+      <div class="num">Cross-cuts · Challenges</div>
+      <h3>Seven push-back tasks with evidence</h3>
+      <p class="blurb">Iframe sandbox storage-broken (real bug). SSE schema unpublished. Plugin / extension alternatives considered and rejected. Rust still wins (vs Go). Workspace + single binary not mutually exclusive. MCP wrapper deferrable.</p>
+      <div class="meta"><span>7 challenges · 7 verdicts</span></div>
+    </a>
+    <a class="nav-card" href="discussion.html">
+      <div class="num">Cross-cuts · Discussion</div>
+      <h3>Eleven topics, eleven recommended defaults</h3>
+      <p class="blurb">Workflow, prompt embedding, multi-kb identity, schema migration, self-hosting, observability, packaging, thumbnails, SSE schema, error budget, backup model. Each with framing + tradeoffs + default.</p>
+      <div class="meta"><span>11 topics · 11 defaults</span></div>
+    </a>
+    <a class="nav-card" href="spikes.html">
+      <div class="num">Cross-cuts · Spikes</div>
+      <h3>Six throwaway crates, ~15 hours total</h3>
+      <p class="blurb">walker · fastembed · sse · iframe · ratatui · lance. Goal · what to test · expected finding · success criteria · effort. Run before committing real implementation.</p>
+      <div class="meta"><span>6 spikes · ~15 h</span></div>
+    </a>
+    <a class="nav-card" href="prompts.html">
+      <div class="num">Cross-cuts · Prompts</div>
+      <h3>Five generation prompts, ranked</h3>
+      <p class="blurb">Copy-paste recipes for Claude Code to emit kb-compatible HTML artifacts instead of markdown. Ordered best → worst by quality × adoption cost. Five kb-aware + one general-purpose baseline. Start with #1 (skill-based) or #2 (inline canonical).</p>
+      <div class="meta"><span>5 prompts + 1 baseline · ranked</span></div>
+    </a>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="summary">
+  <div class="section-head">
+    <div class="num">Recommendations summary</div>
+    <h2>What changes vs the briefing — and what stays</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>One-line summary per topic</caption>
+      <thead>
+        <tr><th>#</th><th>Topic</th><th>Briefing</th><th>Research recommends</th><th>Confidence</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>01</td><td>Storage</td><td>lancedb + sqlite</td><td><strong>Committed cluster 3</strong> — lance + sqlite split for v0.1; sqlite-vec spike downgraded to regression-test trigger if a kb crosses ~50k docs. RRF k=60 hybrid scoring</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>02</td><td>Embeddings</td><td>fastembed + bge-small (384)</td><td>Same. Add <code>load-dynamic</code> for onnxruntime; XDG cache; <code>kb model download</code></td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>03</td><td>File watcher</td><td>notify + 250 ms debounce</td><td>notify + debouncer-full ≥ 0.7.0 + <strong>400 ms</strong>; ENOSPC fallback to PollWatcher</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>04</td><td>SSE</td><td>SSE over WS, broadcast channel</td><td>Confirmed. Add <code>VecDeque</code> ring + monotonic <code>u64</code> for Last-Event-ID replay (~30 LOC)</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>05</td><td>TUI</td><td>ratatui</td><td><strong>Design handoff integrated.</strong> Six-tab dashboard (HOME · SOURCES · DETAIL · STATS · ERRORS · SEARCH), Solarized Light, command issuer. v0.1 ships 3 of 6 views. ratatui 0.30 + component pattern + 30 Hz dirty-gated render</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>06</td><td>Iframe</td><td><code>allow-scripts allow-popups</code></td><td><strong>Subdomain per artifact</strong> + tighter flag set + iframe-recreate; postMessage RPC for fetch/nav</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>07</td><td>HTML thesis</td><td>iframe sandbox</td><td>Default <code>allow-scripts</code> only (covers 100% of canon); per-artifact opt-in via <code>kb-sandbox</code> meta. <code>&lt;template&gt;</code> + <code>&lt;meta&gt;</code> for provenance</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>08</td><td>Prior art</td><td>standalone daemon</td><td><strong>Daemon path confirmed.</strong> Plugin / extension alternatives (Obsidian, Karakeep-fork, TiddlyWiki) considered and rejected — each fails on at least one of: observability, agent-ingest HTTP API, headless self-host, HTML-as-primary-unit</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>09</td><td>Comments</td><td>(new feature)</td><td><strong>Annotate artifacts</strong> (selection / section / chapter / file). Schema and export shape now in topic 10; this page retains the anchor-stability analysis and fuzzy re-match algorithm</td><td><span class="conf conf--med">MED-HIGH</span></td></tr>
+        <tr><td>10</td><td>Web Gallery</td><td>(new — design handoff)</td><td><strong>Design handoff integrated.</strong> SPA: Grid · List · Atlas views over the artifact catalog. Hybrid card / capsule chrome / Cmd+K with three search modes. Multi-file artifacts first-class. <code>kb-comments/1</code> schema with threaded Claude-replier. Status pill on canonical SSE stream. v0.1 ships Grid + capsule; List + Atlas + alt card styles defer to v0.3</td><td><span class="conf conf--high">HIGH</span></td></tr>
+        <tr><td>11</td><td>Daemon API</td><td>(new — clusters 2 + 4)</td><td><strong>HTTP contract.</strong> 28 endpoints across five groups: cross-kb reads + identity + settings (flat <code>/api/...</code>), kb-scoped reads + writes (<code>/api/kb/{kb}/...</code>) including <code>atlas/recompute</code>, SPA shell + permalink, per-artifact subdomain. Origin allowlist for CSRF; async commands return <code>202 + {run, events}</code>; RFC 7807 problem+json on errors; no version segment for v0.1</td><td><span class="conf conf--high">HIGH</span></td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:2rem">Headline pushbacks (challenges page)</h3>
+    <ol>
+      <li><strong>Iframe sandbox is storage-broken without subdomain serving.</strong> The proposed flag string fails every <code>localStorage</code> call. Adopt topic 06 recipe (subdomain + tighter flags + iframe-recreate).</li>
+      <li><strong>SSE event taxonomy needs a published JSON Schema</strong> before any client subscribes. Author <code>events.schema.json</code> in v0.0.1.</li>
+      <li><strong>Plugin / extension alternatives to the daemon — considered and rejected.</strong> Obsidian, Karakeep-fork, TiddlyWiki each fail on at least one of: observability, agent-ingest HTTP API, headless self-host, HTML-as-primary-unit. Daemon path confirmed.</li>
+      <li>Event-log architecture (one source of truth, derived views) — defer; cluster 3 committed lance + sqlite split, so the practical "one-store collapse" question is the v0.3+ regression-test trigger now.</li>
+      <li>Rust vs Go honest evaluation: Rust wins given embedding requirement; Go would win if vector search dropped.</li>
+      <li>Single binary + workspace are not mutually exclusive — do both.</li>
+      <li>MCP-wrapper is a thin shim, defer to v0.2 not forever.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight" id="open">
+  <div class="section-head">
+    <div class="num">Open questions to resolve before v0.0.1</div>
+    <h2>The seam between research and implementation</h2>
+  </div>
+  <div class="open-q">
+    <span class="lbl">High-leverage open questions</span>
+    <ul>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>SSE event taxonomy unpublished.</strong></span> <em>Resolved by both handoffs.</em> Names <code>index.start</code>, <code>index.file</code>, <code>watch.modify</code>, <code>query</code>, <code>error</code>, <code>connection</code>, <code>comments.updated</code> are canonical (see <a href="foundation/05-ratatui.html#protocol">05 · §G</a> + <a href="surfaces/10-web-gallery.html#status-pill">10 · §J</a>). Author <code>events.schema.json</code> v0.0.1 using those shapes.</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>TUI → daemon command channel.</strong> Design's <code>:reindex</code> / <code>r</code> / <code>p</code> / <code>y</code> / <code>x</code> / <code>e</code> imply RPC. Add <code>POST</code> endpoints to the v0.0.1 HTTP API.</span> <em>Resolved 2026-05-11 — see <a href="surfaces/11-daemon-api.html">topic 11</a>. All commands under <code>/api/kb/{kb}/...</code>; async returns <code>202 + {run, events}</code>; Origin allowlist for CSRF.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>SPA → daemon comments path.</strong> The <code>kb-comments/1</code> exports need to reach <code>kb/{kb}/.review/{id}.json</code> for Claude Code to read and reply.</span> <em>Resolved 2026-05-11 — <code>POST /api/kb/{kb}/review/{id}</code> with <code>GET</code> sibling for Claude-reply sync, file-watcher emits <code>comments.updated</code> SSE on disk change. See <a href="surfaces/11-daemon-api.html#endpoints">topic 11 §B</a>.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>SPA iframe sandbox</strong> — Web Gallery prototype uses storage-broken flags. Adopt topic 06's subdomain recipe; rework the annotator bridge as a serve-time injected script.</span> <em>Resolved 2026-05-11 — see <a href="surfaces/06-iframe.html">topic 06 Decisions callout</a> and <a href="surfaces/10-web-gallery.html#decisions">10 · §O′ Decisions</a>. Permissive baseline flags (topic 06 §G) minus <code>allow-same-origin</code>; serve-time injection of <code>/_kb/annotate.js</code> for the annotator; explicit <code>targetOrigin</code> on postMessage.</em></li>
+      <li><strong>Neighborhood graph endpoint.</strong> TUI V3 / V6 + SPA Atlas view need graph data. <code>GET /graph/{doc_id}?depth=1</code> returning <code>{nodes:[…], edges:[…]}</code>. See <a href="foundation/05-ratatui.html#concerns">05 · §I-4</a>. Atlas cluster centers additionally need an offline UMAP / t-SNE build step over embeddings (<a href="surfaces/10-web-gallery.html#concerns">10 · §M-6</a>).</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Wildcard subdomain DNS.</strong> Required by both topic 06 and the topic 10 sandbox resolution.</span> <em>Resolved 2026-05-11 — <code>&lt;id&gt;.artifacts.localhost</code> via RFC 6761 (Chrome (M67+, Dec 2017) and Firefox (84+, Dec 2020) auto-resolve; dnsmasq fallback for Firefox if the spike fails). Caddy + DNS-01 + wildcard cert remains the self-host path.</em> <strong>Outstanding spike:</strong> verify Firefox (ESR + stable) resolves <code>foo.artifacts.localhost</code> to 127.0.0.1 without dnsmasq.</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Storage spike outcome.</strong> sqlite-vec + FTS5 within 5% nDCG of lance? Decides one-store vs split.</span> <em>Resolved 2026-05-11 — commit to <strong>lancedb + sqlite split</strong>. sqlite-vec spike downgraded to a regression test if a kb crosses ~50k docs. See <a href="foundation/01-lancedb.html#decisions">topic 01 Decisions</a>.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Embedding model finalisation.</strong> bge-small for the prose-heavy default; explicit decision needed if the corpus skews to code (jina-v2-base-code).</span> <em>Resolved 2026-05-11 — <strong>multi-model from v0.1</strong>. bge-small default, jina-v2-base-code documented switch candidate. <code>kb model {download,set,list,rm}</code> shipped day one; per-kb selection via <code>kb.toml</code>; XDG cache at <code>~/.cache/kb/models/</code>. See <a href="foundation/02-fastembed.html#decisions">topic 02 Decisions</a>.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Privacy scrub policy.</strong> Default opt-in (scrub system prompt, redact patterns) vs opt-out (preserve everything). Privacy default favours opt-in for shared artifacts; reproducibility favours opt-out for personal.</span> <em>Resolved 2026-05-11 — <strong>path-specific four-path decomposition</strong>: embedding excludes kb-prompt, BM25 indexes it as filterable field, bytes never modified, outbound scrubbing deferred to v0.2+. See <a href="surfaces/07-html-effectiveness.html#decisions">topic 07 Decisions</a>.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>kb-tui write path.</strong> Pure observer or command issuer (POST add-source, trigger reindex)? Drives ratatui complexity.</span> <em>Resolved by design handoff: command issuer.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Mouse policy in TUI.</strong> Capture for scroll-wheel only, ignore clicks (recommended) or full click-routing (needs <code>ratatui-interact</code>).</span> <em>Resolved by design handoff: keyboard-only, mouse out of scope for v1.</em></li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="roadmap">
+  <div class="section-head">
+    <div class="num">Roadmap · what ships at each stage</div>
+    <h2>From the v0.0.1 vertical slice to v0.4 self-host</h2>
+    <p class="deck">Consolidates every commitment across the 11 topic pages and 4 cluster decisions. Each stage is independently shippable; the listed items must all land before the stage is considered done. Outstanding spikes are called out per stage.</p>
+  </div>
+  <div class="prose">
+
+    <h3 id="stage-v001">v0.0.1 · vertical slice (~1 week)</h3>
+    <p>Smallest end-to-end implementation that proves the architecture. Single user, single kb, BM25 only, no rendering, no TUI, no SPA. Validates the storage layout + event firehose + iframe sandbox recipe.</p>
+    <h4>Workspace + build</h4>
+    <ul>
+      <li><code>kb-core</code> (lib) + <code>kb-server</code> (binary) + <code>kb-cli</code> (binary) + top-level <code>kb</code> dispatcher. Rust edition 2021, MSRV 1.86.</li>
+      <li>Dependencies: <code>axum</code> 0.8 + <code>tokio</code> + <code>lancedb</code> + <code>rusqlite</code> + <code>scraper</code> + <code>notify</code> + <code>notify-debouncer-full ≥ 0.7.0</code> + <code>tracing</code> + <code>tracing-appender</code> + <code>serde</code> + <code>tower-http</code> (gzip middleware).</li>
+    </ul>
+    <h4>Storage (topic 01)</h4>
+    <ul>
+      <li>On-disk layout: <code>~/.local/state/kb/&lt;daemon-name&gt;/&lt;kb-name&gt;/lance/</code> + <code>…/&lt;kb-name&gt;/index.db</code>.</li>
+      <li>lance: vectors (empty in v0.0.1) + columnar artifact rows + native FTS for BM25.</li>
+      <li>sqlite tables: <code>sources</code>, <code>errors</code>, <code>index_runs</code>, <code>edges</code>, <code>schema_migrations</code>.</li>
+      <li>Single writer per kb via tokio actor; readers never block.</li>
+      <li><code>kb backup &lt;kb&gt;</code> with the atomic recipe (BEGIN IMMEDIATE → wal_checkpoint(TRUNCATE) → manifest read → tar fragments → COMMIT, indexer paused &lt;500 ms).</li>
+    </ul>
+    <h4>Indexer + extractor (topic 07)</h4>
+    <ul>
+      <li>Walk a single configured folder per kb. Parse HTML with <code>scraper</code>.</li>
+      <li>Extract: title, h1, first paragraph, headings (h1–h6 + details/summary), code blocks, body text (DOM walk excluding <code>&lt;script&gt;</code>/<code>&lt;style&gt;</code>/<code>&lt;template&gt;</code>).</li>
+      <li>Facets: <code>has_svg</code>, <code>svg_count</code>, <code>has_details</code>, <code>details_count</code>, <code>has_form</code>, <code>has_drag</code>, <code>has_animation</code>, <code>has_canvas</code>, <code>has_math</code>, <code>has_prompt</code>, <code>prompt_size_bytes</code>, <code>js_loc</code>, <code>css_loc</code>, <code>kb_category</code>, <code>size_kb</code>.</li>
+      <li>kb-prompt template (<code>&lt;template id="kb-prompt"&gt;</code>) preserved on disk verbatim; cap at 8k tokens in the BM25 prompt-field index.</li>
+    </ul>
+    <h4>File watcher (topic 03)</h4>
+    <ul>
+      <li><code>notify</code> + <code>notify-debouncer-full</code> ≥ 0.7.0 with 400 ms window.</li>
+      <li>ENOSPC fallback → PollWatcher.</li>
+      <li>Initial walk on startup + re-walk on arm.</li>
+    </ul>
+    <h4>Search</h4>
+    <ul>
+      <li><strong>BM25 only.</strong> Field-aware: <code>title</code>, <code>body</code>, <code>headings</code>, <code>code</code>, <code>prompt</code>. Hybrid + semantic deferred to v0.1.</li>
+      <li>CLI: <code>kb search "query"</code> returns ranked rows. <code>kb search field:prompt "claude-code"</code> filters by field.</li>
+    </ul>
+    <h4>CLI verbs (v0.0.1 minimum)</h4>
+    <ul>
+      <li><code>kb add &lt;path&gt;</code> — register a source folder.</li>
+      <li><code>kb search &lt;query&gt;</code> — BM25.</li>
+      <li><code>kb read &lt;id&gt;</code> — <code>xdg-open</code> the artifact file.</li>
+      <li><code>kb cat &lt;id&gt;</code> — dump artifact to stdout.</li>
+      <li><code>kb daemon</code> — start the HTTP+SSE server.</li>
+      <li><code>kb backup &lt;kb&gt;</code> — atomic snapshot.</li>
+    </ul>
+    <h4>HTTP API surface (subset of topic 11; see §B for full)</h4>
+    <ul>
+      <li><code>GET /api/kbs</code></li>
+      <li><code>GET /api/search?q=&amp;mode=keyword&amp;kb=</code> (only keyword/BM25 in v0.0.1)</li>
+      <li><code>GET /api/kb/{kb}/docs/{id}</code></li>
+      <li><code>GET /api/kb/{kb}/sources</code></li>
+      <li><code>GET /api/events</code> (SSE firehose, Last-Event-ID replay; 1024-event ring buffer)</li>
+      <li><code>GET /api/events.schema.json</code> + per-type schemas at <code>/api/events/schema/{type}/v1.json</code></li>
+      <li><code>POST /api/kb/{kb}/sources/{src}/reindex</code> (proves the async <code>202 + {run, events}</code> pattern)</li>
+      <li><code>GET /api/identity</code> (daemon self-description — needed for v0.1 multi-daemon clients)</li>
+    </ul>
+    <h4>SSE event taxonomy (subset of canonical 19)</h4>
+    <ul>
+      <li><code>index.start</code> / <code>index.file</code> / <code>index.complete</code></li>
+      <li><code>watch.create</code> / <code>watch.modify</code> / <code>watch.delete</code></li>
+      <li><code>artifact.indexed</code> / <code>artifact.removed</code></li>
+      <li><code>query</code> / <code>error</code> / <code>connection</code></li>
+      <li>Synthetic: <code>lag</code> / <code>gap</code></li>
+      <li><em>Deferred to v0.1:</em> <code>comment.*</code>, <code>comments.updated</code>, <code>atlas.recompute.*</code></li>
+    </ul>
+    <h4>Iframe sandbox infrastructure (topic 06)</h4>
+    <ul>
+      <li>Per-artifact subdomain serving: <code>&lt;id&gt;.artifacts.localhost:4000</code> (axum virtual-host routing on <code>Host:</code> header).</li>
+      <li>Sandbox: <code>allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads</code>.</li>
+      <li>CSRF: Origin allowlist on writes (<code>localhost:4000</code> + <code>*.artifacts.localhost:4000</code>).</li>
+      <li>RFC 7807 problem+json errors with URN <code>type</code>.</li>
+      <li>gzip via <code>tower-http</code> on responses &gt; 1 KB; disabled for SSE.</li>
+    </ul>
+    <h4>Tracing + state</h4>
+    <ul>
+      <li><code>tracing</code> structured logs → stderr + rotating file at <code>~/.local/state/kb/log</code>.</li>
+      <li>Run history: in-memory 1024-event replay ring + daily-rotated ndjson at <code>~/.local/state/kb/runs/YYYY-MM-DD.ndjson</code>.</li>
+    </ul>
+    <h4>v0.0.1 outstanding</h4>
+    <ul>
+      <li><strong>Safari <code>*.localhost</code> spike</strong> — confirm whether dnsmasq is needed on macOS Safari (the only outstanding pre-SPA blocker).</li>
+    </ul>
+
+    <h3 id="stage-v01">v0.1 · TUI + SPA + multi-daemon (cluster-4 "maximalist")</h3>
+    <p>Both clients land together. Multi-daemon from day one. Embeddings + hybrid search + Atlas-less SPA + 3 of 6 TUI views active. Two products against one daemon.</p>
+
+    <h4>Embeddings (topic 02)</h4>
+    <ul>
+      <li><strong>Default model:</strong> bge-small-en-v1.5 (384-dim, MIT).</li>
+      <li><strong>Multi-model CLI from day one:</strong> <code>kb model list</code> / <code>kb model download &lt;name&gt; [--from path]</code> / <code>kb model set &lt;name&gt; [--kb &lt;kb&gt;]</code> / <code>kb model rm &lt;name&gt;</code>.</li>
+      <li>onnxruntime via <code>load-dynamic</code>.</li>
+      <li>XDG cache: <code>~/.cache/kb/models/&lt;name&gt;/&lt;hf-revision&gt;/</code>. Concurrent-download lockfile (flock).</li>
+      <li>Documented switch candidate: <code>jina-embeddings-v2-base-code</code> (768-dim, Apache 2.0).</li>
+      <li>Dimension-migration sequence per topic 02 (sibling table, atomic swap, lance #3136 workaround).</li>
+      <li>Air-gapped: <code>kb model download --from local.tar.gz</code>.</li>
+    </ul>
+
+    <h4>Search (full hybrid)</h4>
+    <ul>
+      <li><code>GET /api/search?q=&amp;mode=hybrid|keyword|semantic</code>. Hybrid is default with <strong>RRF k=60</strong>.</li>
+      <li>Debounced 150 ms from SPA Cmd+K.</li>
+      <li>Prefix filters: <code>tag:</code>, <code>kb:</code>, <code>since:</code>, <code>mode:</code>.</li>
+    </ul>
+
+    <h4>Daemon API additions (topic 11 §B)</h4>
+    <ul>
+      <li>kb-scoped writes: <code>POST .../sources/{src}/pause</code> / <code>resume</code>, <code>POST .../errors/{err}/dismiss</code> / <code>apply-fix</code>, <code>POST .../stats/export</code>.</li>
+      <li>kb-scoped reads: <code>GET .../stats</code>, <code>GET .../sources</code>.</li>
+      <li>Cross-kb: <code>GET /api/stats</code>, <code>GET /api/events?filter=run:r-2c1</code> (run-scoped subset).</li>
+      <li>Settings: <code>GET /api/settings</code> + <code>PATCH /api/settings</code> (hybrid kb.toml + localStorage cache, 500 ms debounce).</li>
+      <li>Filter grammar: <code>?types=&lt;glob&gt;</code> + <code>?filter=&lt;key:value&gt;</code> orthogonal AND-composed.</li>
+    </ul>
+
+    <h4>TUI (topic 05) — three views active, three stubbed</h4>
+    <ul>
+      <li><strong>Active views:</strong> HOME (three-pane Block layout), SOURCES (single-table k9s discipline), ERRORS (triage with traceback + suggested fix + apply).</li>
+      <li><strong>Stubbed views (empty-state with "ships in v0.2/v0.3"):</strong> DETAIL, STATS, SEARCH.</li>
+      <li>Persistent two-row chrome (header + tab strip) + status bar. Multi-daemon header: <code>kb &lt;daemon&gt; · &lt;kb&gt;</code>.</li>
+      <li>Solarized Light palette; braille spinner @ 110 ms; <code>BorderType::Plain</code>.</li>
+      <li>Keybindings: 1-6 tabs, j/k row nav, Enter drill, Esc back, / search, : command palette, ? help, r reindex, p pause/resume, o $EDITOR, q quit, <strong>D daemon switcher</strong>.</li>
+      <li>Command palette verbs: <code>reindex</code>, <code>pause</code>, <code>resume</code>, <code>export</code>, <code>atlas recompute</code>, <code>connect &lt;daemon&gt;</code>.</li>
+      <li>Activity log: 200-event TUI display ring (renders last 4); throttling deferred.</li>
+      <li>SSE consumer: subscribes to one daemon at a time (the "active" one).</li>
+      <li>Help (<code>?</code>) + Command (<code>:</code>) modal overlays with <code>Clear</code> + centered <code>Block</code>.</li>
+      <li><strong>No-TTY fallback:</strong> <code>std::io::IsTerminal</code> detection → line-oriented event firehose.</li>
+      <li>ASCII fallback for braille spinner (<code>/ - \ |</code>).</li>
+      <li>Config: <code>~/.config/kb/daemons.toml</code> (multi-daemon list).</li>
+    </ul>
+
+    <h4>SPA (topic 10) — maximalist v0.1</h4>
+    <ul>
+      <li><strong>Stack:</strong> React 18 + Vite + TypeScript. No Babel-in-browser.</li>
+      <li><strong>Fonts:</strong> Geist sans + Geist Mono + Lora serif. Self-host the WOFF2 files.</li>
+      <li><strong>Top bar:</strong> daemon + kb selector + path label + Cmd-K search pill + view toggle (Grid/List/Atlas) + settings.</li>
+      <li><strong>Left rail (220 px):</strong> tag list, capability checkboxes (svg / interactive / longread / code-heavy), date range (7d / 30d / all). Always visible.</li>
+      <li><strong>Three views from day one:</strong> Grid (hybrid card style default), List (6-column compact rows), <strong>Atlas (UMAP-projected — but Atlas can fall back to the prototype's hash placement if UMAP cache cold)</strong>.</li>
+      <li><strong>Detail view:</strong> iframed artifact + capsule floating chrome (default; 3 other variants behind Settings later).</li>
+      <li><strong>Multi-file artifacts:</strong> <code>pages</code> array + left Pages panel + <code>pm:page</code> handshake + load-event fallback for non-cooperating artifacts.</li>
+      <li><strong>Cross-artifact backlinks:</strong> <code>postMessage({type:'open-artifact', id})</code>.</li>
+      <li><strong>Cmd+K:</strong> three modes (cycle via Tab), prefix filters, score bars, <strong>right-side result preview pane</strong> (loads matched section).</li>
+      <li><strong>Status pill (bottom-right):</strong> phases idle/indexing/degraded/disconnected, drop-up with recent events + "view errors" / "open in tui" footer.</li>
+      <li><strong>Multi-daemon SSE aggregation:</strong> one EventSource per configured daemon, per-daemon <code>lastEventId</code> in localStorage, exponential backoff, aggregation = <code>max(severity)</code> / <code>sum(in-flight)</code>. Stress-test with 3 daemons pre-ship.</li>
+      <li><strong>URL routing:</strong> <code>/?view=&amp;tag=&amp;kb=</code> for gallery, <code>/a/{kb}/{id}?page=N&amp;comments=open</code> for detail. Refresh-safe; shareable.</li>
+      <li><strong>Keyboard nav:</strong> j/k row, Enter open, Esc clear filters, / focus Cmd+K, gg / G jump.</li>
+      <li><strong>Empty / loading / error states:</strong> artifact 404, iframe load fail (retry button), daemon disconnected (banner row + last-known-state freeze).</li>
+      <li><strong>Accessibility:</strong> landmark roles (banner / complementary / main / status), skip-link, :focus-visible visible on dark theme, aria-label on every icon-only button, aria-live="polite" on status pill.</li>
+      <li><strong>Print stylesheet:</strong> hides chrome; prints empty-comments state (full comments inline in v0.2).</li>
+      <li><strong>Onboarding (empty-kb):</strong> "drop HTML into <code>kb/&lt;name&gt;/</code> or run <code>kb add &lt;path&gt;</code>" + "Show me an example" button invokes <code>kb add --demo</code> (daemon bundles <code>kitchen-sink.html</code>).</li>
+      <li><strong>Permalink:</strong> <code>/a/{kb}/{id}</code> with "copy permalink" button.</li>
+      <li><strong>Logomark:</strong> arrow sigil from the design prototype (committed).</li>
+      <li><strong>Settings page (exposed user prefs):</strong> theme (dark/light/system), accent (5 swatches), density (compact/comfy/spacious). Other tweaks remain internal.</li>
+      <li><strong>Browser bar:</strong> Chrome 111+, Firefox 121+, Safari 15.4+.</li>
+    </ul>
+
+    <h4>v0.1 outstanding</h4>
+    <ul>
+      <li>3-daemon SSE aggregation stress test (cluster 4).</li>
+      <li>Caddy + DNS-01 wildcard cert config snippet for self-host docs (when self-host lands).</li>
+    </ul>
+
+    <h3 id="stage-v02">v0.2 · comments + annotator + Claude round-trip</h3>
+    <p>The comments milestone. Brings the SPA's annotator UI online, the daemon's review-write endpoint, the postMessage protocol additions, and the Claude-Code reply loop.</p>
+
+    <h4>Comments (topics 09 + 10 §I)</h4>
+    <ul>
+      <li><code>kb-comments/1</code> JSON schema; persisted at <code>kb/{kb}/.review/{id}.json</code>.</li>
+      <li>Annotate mode: pen icon toolbar; click any block (heading / paragraph / list item / table row / code / callout) to attach. Select-first scopes to exact words.</li>
+      <li><code>data-cm-id</code> anchors on every eligible block.</li>
+      <li>Threaded replies with <code>author: "you" | "claude"</code>; reply-composer <code>you ↔ claude</code> toggle.</li>
+      <li>Icon-only actions: jump · reply · edit · resolve/reopen · delete.</li>
+      <li>Filters: open / resolved / all with counts.</li>
+      <li>Three exports: <strong>Claude prompt</strong> (instructions + JSON file path) · <strong>kb JSON</strong> (schema file) · <strong>Markdown</strong> (human-readable). Copy + download per export.</li>
+      <li>Cross-page jump on multi-file: switch page → load → <code>postMessage({type:'cm:flash', ref})</code>.</li>
+    </ul>
+
+    <h4>Daemon endpoints + serve-time injection (topic 11)</h4>
+    <ul>
+      <li><code>GET /api/kb/{kb}/review/{id}</code> + <code>POST /api/kb/{kb}/review/{id}</code> (atomic tmpfile+rename, per-id <code>tokio::Mutex</code>).</li>
+      <li><strong><code>/_kb/annotate.js</code></strong> (~3 KB) — annotator script served from artifact subdomain. Daemon serves at <code>http://&lt;id&gt;.artifacts.localhost:4000/_kb/annotate.js</code>.</li>
+      <li><strong>Response-rewriter middleware</strong> — when <code>?cm=on</code>, inject <code>&lt;script src="/_kb/annotate.js" defer&gt;&lt;/script&gt;</code> + inline <code>window.__KB_COMMENTS</code> JSON before <code>&lt;/body&gt;</code>. Use <code>lol-html</code> streaming rewriter; EOF append fallback for malformed HTML. Cache key includes <code>?cm=on</code>.</li>
+      <li>postMessage protocol: <code>cm:add</code>, <code>cm:flash</code>, <code>cm:refresh</code>, <code>cm:mode</code>. Direction-aware <code>targetOrigin</code>; parent validates <code>event.origin</code>.</li>
+      <li>HTTP surfacing of model selection: SPA Settings page can read + switch via <code>PATCH /api/settings</code>.</li>
+    </ul>
+
+    <h4>SSE additions</h4>
+    <ul>
+      <li><code>comment.created</code>, <code>comment.exported</code>, <code>comment.resolved</code>, <code>comment.anchor_stale</code> events emitted by indexer/file-watcher.</li>
+      <li>Aggregate <code>comments.updated</code> event (debounced 500 ms) → status pill comment badge.</li>
+      <li>SPA's status pill grows comment badge; click jumps to comments panel with unread filter.</li>
+    </ul>
+
+    <h4>SPA additions</h4>
+    <ul>
+      <li>Comments panel (right, 360 px) — group by file, current-file labeled "here".</li>
+      <li>Print stylesheet's "comments inline with anchors" path activates.</li>
+      <li>v2-deprecated: <code>kb comments export</code> CLI (replaced by SPA modal).</li>
+    </ul>
+
+    <h3 id="stage-v03">v0.3+ · Atlas + advanced UX + power-user features</h3>
+    <p>The "polish + scale" milestone. Atlas view ships its embeddings-derived form. The TUI's deferred views activate. Outbound scrubbing layer lands.</p>
+
+    <h4>Atlas (topic 10 §O″)</h4>
+    <ul>
+      <li><strong>UMAP via the <code>umap</code> Rust crate (Brett Hodges 0.5.x)</strong>, seeded for determinism.</li>
+      <li>Compute at index time; cache 2-D coords in lance store alongside embeddings.</li>
+      <li>Recompute on +10 % artifact delta or via <code>POST /api/kb/{kb}/atlas/recompute</code> (202 + run id).</li>
+      <li><code>atlas.recompute.start</code> / <code>atlas.recompute.complete</code> SSE events.</li>
+      <li>k-means cluster labels keyed by accent tag (≤ 12 clusters).</li>
+      <li>SPA Atlas view drops the prototype hash-fallback path.</li>
+    </ul>
+
+    <h4>TUI views activation (topic 05)</h4>
+    <ul>
+      <li><strong>DETAIL view:</strong> master/detail with Chart (latency dots) + BarChart (duration histogram) + file table. <code>g</code> opens neighborhood graph modal.</li>
+      <li><strong>STATS view:</strong> sparkline status board (KPI cells + queries/throughput sparklines + docs-by-kb bars). <code>--board</code> mode for direct entry. <code>f</code> fullscreen, <code>e</code> export snapshot.</li>
+      <li><strong>SEARCH view:</strong> tui_input query field + scoped results + ASCII neighborhood graph.</li>
+    </ul>
+
+    <h4>Graph endpoint (topic 11 §B.2)</h4>
+    <ul>
+      <li><code>GET /api/kb/{kb}/graph/{id}?depth=1</code> returning <code>{nodes, edges}</code> — backs TUI V3/V6 graph modal + SPA Atlas hover state.</li>
+    </ul>
+
+    <h4>Outbound scrubbing layer (topic 07 §Decisions)</h4>
+    <ul>
+      <li>Activates when destination is not loopback (or opt-in for loopback).</li>
+      <li><code>kb.toml [outbound]</code> block: <code>strip_kb_prompt = true</code> + <code>redactions = [regex,...]</code>.</li>
+      <li>Defaults to "strip prompt + redact common secret patterns (API keys, tokens, emails)".</li>
+    </ul>
+
+    <h4>UX polish</h4>
+    <ul>
+      <li>Other 5 card styles + 3 other floating-chrome variants exposed in Settings.</li>
+      <li>Print / export with comments rendered next to anchors.</li>
+      <li>Search result preview pane (semantic mode side-by-side).</li>
+      <li>Scrollback-into-history TUI affordance (promotes runs.log to sqlite-backed query).</li>
+      <li>Activity-log flood throttling: during active indexing run, sample 1-in-N <code>index.file</code> events.</li>
+      <li>TUI multi-daemon switcher: per-row up/down state (background <code>GET /api/identity</code> polling).</li>
+    </ul>
+
+    <h4>Comments enhancements</h4>
+    <ul>
+      <li>ETag-based optimistic concurrency for review writes.</li>
+      <li>Permalink via custom protocol: <code>kb://artifact/{kb}/{id}</code>.</li>
+    </ul>
+
+    <h4>Embeddings</h4>
+    <ul>
+      <li>Custom HuggingFace models via <code>[models.custom]</code> in <code>kb.toml</code>.</li>
+    </ul>
+
+    <h3 id="stage-v04">v0.4+ · self-host + team mode</h3>
+    <p>When the daemon binds a public IP and multiple users participate. New threat model; new auth story.</p>
+    <ul>
+      <li><strong>Caddy + DNS-01 wildcard cert</strong> for <code>*.artifacts.&lt;domain&gt;</code>.</li>
+      <li><strong>HTTPS</strong>: mkcert / self-signed for local; ACME for public.</li>
+      <li><strong>Bearer-token auth</strong>: <code>~/.config/kb/token</code>; per-kb ACLs.</li>
+      <li><strong>Rate limiting</strong>: <code>tower::limit</code> on hot endpoints.</li>
+      <li><strong>Multi-user cache key</strong> on serve-time-injected responses (<code>?cm=on</code>) to prevent comment cross-user leakage.</li>
+      <li><strong>mDNS daemon auto-discovery</strong>: <code>.local</code> service advertisement for federation.</li>
+      <li><strong>MCP wrapper</strong> (deferred from v2): Claude Desktop / external tooling integration.</li>
+      <li><strong>Real-time push</strong> to Claude Code (deferred from v3): WebSocket or SSE outbound rather than file-watcher round-trip.</li>
+    </ul>
+
+    <h3 id="effort">Effort estimates</h3>
+    <table class="alt-table" style="margin-top:.6rem">
+      <thead><tr><th>Stage</th><th>Engineering effort</th><th>Blocker spike</th></tr></thead>
+      <tbody>
+        <tr><td>v0.0.1 vertical slice</td><td>~1 week focused</td><td>Safari <code>*.localhost</code> spike (5 min if it works, +1 hr to write the dnsmasq docs if it doesn't)</td></tr>
+        <tr><td>v0.1 TUI + SPA + multi-daemon</td><td>~4–6 weeks</td><td>3-daemon SSE aggregation stress test before ship</td></tr>
+        <tr><td>v0.2 comments + annotator</td><td>~2–3 weeks</td><td>None known</td></tr>
+        <tr><td>v0.3+ Atlas + polish</td><td>~3–4 weeks</td><td>UMAP Rust-crate quality on real kb (not blocking; informs UX quality)</td></tr>
+        <tr><td>v0.4+ self-host</td><td>~2 weeks per milestone</td><td>Token rotation + per-kb ACL design</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:.6rem"><strong>v0.0.1 + v0.1 ≈ 5–7 weeks to a usable kb with TUI + SPA + multi-daemon</strong> (no comments, no Atlas). Comments add 2–3 weeks for v0.2. Self-host is purely additive.</p>
+
+  </div>
+</section>
+
+<section class="section section-tight" id="colophon">
+  <div class="section-head">
+    <div class="num">Colophon</div>
+    <h2>How this was made</h2>
+  </div>
+  <div class="prose">
+    <p>This research site was produced in a single Claude Code session by spawning <strong>eight parallel research agents</strong>, each given a tight brief covering one topic bundle. Each agent returned a markdown research document with sources; this site re-presents them in a uniform editorial format with cross-links, a shared CSS theme, and consolidated cross-cuts (challenges / discussion / spikes).</p>
+    <p>The prompt that produced this lives in the conversation that originated the research — not embedded in the artifacts themselves. (Topic 07 proposes a <code>&lt;template id="kb-prompt"&gt;</code> convention for the kb project itself; this research site predates kb's existence, so it doesn't yet follow its own advice.)</p>
+    <p>Every quantitative claim in the topic pages traces back to a 2025 or 2026 source linked in the page's footer. Where the missing <code>kb-tui-spec.md</code> and <code>kb-spa-spec.md</code> would have informed deeper conclusions, the research explicitly flags <code>[needs spec]</code>.</p>
+
+    <h3>Reading paths</h3>
+    <ul>
+      <li><strong>Architecture-first:</strong> 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → challenges → discussion → spikes (the natural order).</li>
+      <li><strong>Decision-first:</strong> challenges → discussion → 08 → 06 → 01 → spikes (the load-bearing pages).</li>
+      <li><strong>Alternatives-first:</strong> 08 → challenges (#1) → 07 (the "we considered the plugin / extension alternatives and rejected them" path).</li>
+      <li><strong>Deep-tech:</strong> 01 + 02 + 03 + 04 (the four Rust hot-spots) → spikes.</li>
+      <li><strong>UX-first:</strong> 09 (commenting feature) → 06 (iframe boundary the comments cross) → 07 (artifact convention the comments anchor to) → discussion topic 7 (regenerate flow).</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · pre-implementation research</p>
+      <p>2026-05-10. Nine topic pages (eight investigations + one feature design). Three cross-cut pages. ~15 hours of recommended spikes. The thesis is right; some assumptions in the briefing are not. Now build the right thing.</p>
+      <p>2026-05-11. Two Claude Design handoffs integrated: TUI <code>1XoWvtO0FExl3zEpJ3WqqA</code> → <a href="foundation/05-ratatui.html">topic 05</a> (eight concerns + seven enhancements); Web Gallery <code>E4XcIWFBUnJJqWOWAaNBeA</code> → <a href="surfaces/10-web-gallery.html">topic 10</a> (ten concerns + nine enhancements). Five canonical artifacts shipped to <a href="sample-artifacts/">sample-artifacts/</a>. Six open questions resolved across both handoffs; four new open questions surfaced.</p>
+      <p>2026-05-11 (later). Open-points cluster 1 of 4 landed: iframe sandbox + wildcard DNS. Decisions on <a href="surfaces/06-iframe.html">topic 06</a> and <a href="surfaces/10-web-gallery.html#decisions">topic 10 §O′</a>. <code>*.localhost</code> for per-artifact origins, permissive baseline minus <code>allow-same-origin</code>, serve-time annotator injection. Outstanding: Firefox <code>*.localhost</code> spike. Three clusters remaining (daemon HTTP API surface; storage / embeddings / privacy; UX gaps).</p>
+      <p>2026-05-11 (later still). Open-points cluster 2 of 4 landed: daemon HTTP API contract. New <a href="surfaces/11-daemon-api.html">topic 11</a> — 28 endpoints, five groups (cross-kb / kb-scoped reads / kb-scoped writes / subdomain serving). Origin allowlist for CSRF; <code>202 + run id + filter</code> for async commands; <code>/api/kb/{kb}/...</code> for scoped, flat for cross-kb; no version segment for v0.1; RFC 7807 errors. TUI command channel (concern <a href="foundation/05-ratatui.html#concerns">05 · §I-2</a>) and SPA comments write path (concern <a href="surfaces/10-web-gallery.html#concerns">10 · §M-4</a>) both resolved. Two clusters remaining (storage / embeddings / privacy; UX gaps).</p>
+      <p>2026-05-11 (even later). Open-points cluster 3 of 4 landed: storage + embeddings + privacy scrub. <strong>Storage:</strong> commit lancedb + sqlite split for v0.1; sqlite-vec spike downgraded to regression test (<a href="foundation/01-lancedb.html#decisions">01 Decisions</a>). <strong>Embeddings:</strong> multi-model from v0.1; bge-small default; <code>kb model {download,set,list,rm}</code> CLI shipped day one; jina-v2-base-code as documented switch (<a href="foundation/02-fastembed.html#decisions">02 Decisions</a>). <strong>Privacy:</strong> path-specific four-path table — embedding excludes kb-prompt, BM25 indexes as filterable field, bytes never modified, outbound scrubbing deferred to v0.2+ (<a href="surfaces/07-html-effectiveness.html#decisions">07 Decisions</a>). Raw design-handoff bundles cross-linked from topics 05 and 10 — <a href="claude-design-handoff/">claude-design-handoff/</a>. One cluster remaining (UX gaps).</p>
+      <p>2026-05-11 (latest). Open-points cluster 4 of 4 landed: UX gaps. <strong>Atlas:</strong> UMAP via the <code>umap</code> crate, computed at index time, cached per kb (<a href="surfaces/10-web-gallery.html#decisions-ux">10 §O″</a>). <strong>Settings:</strong> hybrid persistence — <code>kb.toml [ui]</code> canonical + localStorage cache, debounced <code>PATCH /api/settings</code> (<a href="surfaces/11-daemon-api.html#endpoints">11 §B.1</a> grew the endpoint). <strong>Multi-daemon from v0.1:</strong> daemons listed in <code>~/.config/kb/daemons.toml</code>; TUI/SPA grow a daemon selector; mDNS discovery defers to v0.4+ (<a href="foundation/05-ratatui.html">05</a>). <strong>Polish maximalist:</strong> j/k vim-nav on Grid+List, URL routing, empty/loading/error panels, accessibility (landmark roles, skip-link, focus-visible, aria-labels), print stylesheet, Cmd+K result preview pane, empty-kb onboarding all in v0.1. <strong>Logomark</strong> committed: design prototype's arrow sigil. <strong>All four clusters resolved.</strong></p>
+      <p>2026-05-11 (deep-review pass). Ten Opus agents reviewed every topic page. 120 issues found across the site — 8 critical, 35 high, 44 medium, 33 low. <strong>Major corrections applied:</strong>
+      <ul>
+        <li><strong>SSE event taxonomy rationalized</strong> — three incompatible name sets across topics 04 / 05 / 10 / 11 collapsed into one canonical 17-event set (<a href="foundation/04-sse-axum.html#canonical-taxonomy">topic 04</a>).</li>
+        <li><strong>Cluster-1 storage paradox reversed</strong> — original "drop <code>allow-same-origin</code>" was wrong; the correct fix is <strong>keep <code>allow-same-origin</code>, serve from a different origin</strong> (subdomain). Matches CodePen / Observable / Claude-Artifacts. Topic 06 and 10 amended.</li>
+        <li><strong>Sample artifacts un-violated</strong> — Google Fonts <code>&lt;link&gt;</code> tags stripped from 4 of 5 sample artifacts so they match topic 07's "0/20 external resources" claim.</li>
+        <li><strong>Stale pre-Decisions text fixed</strong> across topics 01 / 02 / 04 / 05 / 07 / 09 / 10 / 11 — hero/TL;DR/Recommendation/Open-Q blocks brought in line with cluster decisions.</li>
+        <li><strong>Topic 11 endpoint count fixed</strong> (28 across 5 groups, was 27 across 4); identifier shapes spec'd (<code>{src}</code> slug rule, <code>{err}</code> daemon UUID, <code>{run}</code>, <code>{id}</code> hash); filter grammar reconciled with topic 04; RFC 7807 <code>type</code> URI corrected to URN form.</li>
+        <li><strong>kb.toml schema consolidated</strong> in topic 02; <code>hybrid_alpha</code> → <code>hybrid_k</code> = 60 (RRF, not linear blend) between topics 01 and 02.</li>
+        <li><strong>Topic 08 gained a Decisions callout</strong>; topic 09 §D and §E marked superseded by the v2 schema and topic 11 API.</li>
+        <li><strong>Topic 06 amended:</strong> the Safari `*.localhost` spike is the real outstanding blocker (Firefox 84+ already auto-resolves); Chrome support since M67/2017; `csp=` iframe attribute is Chromium-only.</li>
+      </ul>
+      </p>
+    </div>
+    <div>
+      <h5>Topics</h5>
+      <ul>
+        <li><a href="foundation/01-lancedb.html">01 · Storage</a></li>
+        <li><a href="foundation/02-fastembed.html">02 · Embeddings</a></li>
+        <li><a href="foundation/03-notify.html">03 · Watcher</a></li>
+        <li><a href="foundation/04-sse-axum.html">04 · SSE</a></li>
+        <li><a href="foundation/05-ratatui.html">05 · TUI</a></li>
+        <li><a href="surfaces/06-iframe.html">06 · Iframe</a></li>
+        <li><a href="surfaces/07-html-effectiveness.html">07 · HTML</a></li>
+        <li><a href="surfaces/08-prior-art.html">08 · Prior art</a></li>
+        <li><a href="surfaces/09-comments.html">09 · Comments</a></li>
+        <li><a href="surfaces/10-web-gallery.html">10 · Web Gallery</a></li>
+        <li><a href="surfaces/11-daemon-api.html">11 · Daemon API</a></li>
+        <li><a href="sample-artifacts/">canonical artifacts</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Cross-cuts</h5>
+      <ul>
+        <li><a href="challenges.html">Challenges</a></li>
+        <li><a href="discussion.html">Discussion</a></li>
+        <li><a href="spikes.html">Spikes</a></li>
+        <li><a href="prompts.html">Prompts</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+    // Quick nav: 1-9 jump to topic pages
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= 9) {
+      const map = {
+        1: '01-lancedb.html', 2: '02-fastembed.html', 3: '03-notify.html',
+        4: '04-sse-axum.html', 5: '05-ratatui.html', 6: '06-iframe.html',
+        7: '07-html-effectiveness.html', 8: '08-prior-art.html',
+        9: '09-comments.html'
+      };
+      window.location.href = map[n];
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

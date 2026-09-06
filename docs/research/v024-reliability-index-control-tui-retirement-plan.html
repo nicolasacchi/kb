@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="plan">
+<meta name="kb-tags" content="status:done, project:kb, milestone:v0.24, plan, reliability, indexer, exclusion, extensions, tui, logging, observability">
+<title>kb v0.24 — reliability, index control, TUI retirement, daemon logging</title>
+<style>
+/* ── kb visual floor — keep in sync with kb/docs/authoring-artifacts.md "Visual floor" ── */
+:root{
+  --bg:#fbfbfa;--surface:#f3f3f1;--fg:#1b1b1a;--muted:#5f5f5c;
+  --rule:#d9d9d6;--accent:#3a5a9f;--accent-fg:#ffffff;
+  --warn:#8a5f00;--danger:#9a2f28;--ok:#256148;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:46rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16171a;--surface:#1f2126;--fg:#e6e6e3;--muted:#a3a39e;
+    --rule:#2c2e33;--accent:#8fb0ee;--accent-fg:#11131a;
+    --warn:#e0b24d;--danger:#f08079;--ok:#6fcaa0;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.btn{font:600 var(--fs-small)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;border:1px solid var(--rule);border-radius:var(--radius);background:transparent;color:var(--fg)}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:focus-visible{outline:var(--focus);outline-offset:2px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.btn--primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+/* ── end kb visual floor ── */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.9rem;margin:.2em 0 .3em}
+h2{font-size:1.35rem;margin:2.2em 0 .6em;padding-top:.4em;border-top:1px solid var(--rule)}
+h3{font-size:1.1rem;margin:1.6em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.18rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;padding:0}
+blockquote{margin:1em 0;padding:.2em 1em;border-left:3px solid var(--rule);color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.9rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>plan <span class="sep">&middot;</span> project:kb</div>
+  <h1>kb v0.24 — reliability, index control, TUI retirement, daemon logging</h1>
+  <p class="lede">Thirteen green-CI commits across four tracks: supervise the storage actor and make deletes actually cascade, make indexable extensions configurable and single files excludable from SPA + CLI, retire the kb-tui crate after closing its two real parity gaps, and turn on the file logging that was built but never wired.</p>
+  <div class="meta-strip">
+    <span>2026-07-03</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:done</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">milestone:v0.24</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">baseline: main @ 8fece1b7</span>
+  </div>
+</header>
+
+<section>
+<h2 id="context">Context</h2>
+<p>A five-agent, code-only assessment of the workspace (100,238 Rust LOC across five crates, 51,048 LOC in <code>web/</code>, ~1,700 tests) ran on 2026-07-03. It found a disciplined codebase with four residual clusters: unsupervised single points of failure on the storage hot path, a deletion/lifecycle story much weaker than the creation story, full-corpus in-memory work on gallery/atlas read paths, and several 80%-built user features. The operator then set four directives that define this milestone:</p>
+<ul>
+  <li><strong>No new file-type parsers.</strong> Do not add PDF or other formats. Instead make the indexable-extension set configurable, mapping extensions onto the two existing parse pipelines (HTML, Markdown).</li>
+  <li><strong>Per-file exclusion.</strong> A way to exclude a single file from the index, operable from both the SPA and the CLI.</li>
+  <li><strong>Remove the TUI</strong> — after verifying everything it does is covered by SPA + CLI.</li>
+  <li><strong>Better daemon logging</strong> if the code shows it is needed. It is: the rolling-file appender in <code>crates/kb-core/src/tracing_init.rs</code> is complete but dead code — no binary calls it. The daemon logs to stderr only, with zero file persistence and zero retention, while <code>paths.rs:222</code> creates an empty <code>log/</code> dir on every boot.</li>
+</ul>
+<p>Scale walls (gallery full-corpus scans, atlas memory) and the feature bundle (highlights, unread shelf, bulk ops) are deliberately out of scope — see <a href="#next-milestone-backlog">the backlog</a>.</p>
+</section>
+
+<section>
+<h2 id="status">Status</h2>
+<p><strong>COMPLETE (2026-07-12) — all four tracks landed on main, each phase a green-CI commit.</strong></p>
+<ul>
+  <li><strong>Track R (reliability): COMPLETE</strong> — R1 actor supervision <code>2ff019da</code> · R2 delete cascade + orphan sweep <code>4e6357fd</code> · R3 retention windows <code>b714d4af</code> · R4 zip caps + lance escaping <code>381486a8</code>. R2 caught + fixed a real over-delete: list entries survive artifact deletion as read-time tombstones, so <code>list_entries</code> was pulled from the cascade entirely.</li>
+  <li><strong>Track X (index control): COMPLETE</strong> — X1 extension map <code>af59dae6</code> · X2 exclusion store + ingest gate (V0023) <code>720cb779</code> · X3 exclusions API + <code>kb exclude</code> + D6 paused enforcement <code>cf221008</code> · X4 SPA surfaces + e2e <code>4e3ccbb4</code>.</li>
+  <li><strong>Track L (logging): COMPLETE</strong> — L1 ndjson file logging wired <code>8ef1f5bb</code> · L2 log retention + runtime <code>PUT /api/log-level</code> / <code>kb daemon log-level</code> <code>77c002e1</code>.</li>
+  <li><strong>Track T (TUI retirement): COMPLETE</strong> — T1 <code>kb fleet status</code> + <code>kb events --follow</code> + kb:/artifact: SSE filters <code>76827f9e</code> · T2 crate removal after the parity audit <code>d95c011b</code> · T3 doc sweep (invariant #2 retired with the slot recorded OPEN — an operator correction over this plan's original fill-the-slot intent; TUI references swept; README canon verified; <code>docs/tui.md</code> removed with daemons.toml re-homed to <code>docs/configuration.md</code>).</li>
+</ul>
+<p>Original baseline was <code>main</code> at <code>8fece1b7</code>; the resume-point/corrections-pack history this section replaces is preserved in git. The annotated <code>v0.24</code> tag lands with the milestone's Ship step after the full verification gate.</p>
+</section>
+
+<section>
+<h2 id="decisions">Decisions (operator-locked)</h2>
+<table>
+<thead><tr><th>#</th><th>Decision</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td>Extensions are configurable, parsers are not. An extension maps to <code>Html</code> or <code>Markdown</code>; unknown pipeline names are a hard config error.</td><td>Operator rejects PDF-style format sprawl; the two pipelines (<code>parser.rs:288</code>, <code>parser.rs:593</code>) already cover the artifact corpus. A <code>txt = "markdown"</code> mapping gets plain text for free.</td></tr>
+<tr><td>D2</td><td>Per-file exclusion is a sqlite table + ingest-gate check + explicit delete — not a kb.toml pattern.</td><td><code>skip_patterns</code> already covers config-time globs (see the live kb.toml stanzas). One-click exclusion from the SPA needs runtime state, no config edit, and an SSE-visible effect.</td></tr>
+<tr><td>D3</td><td>Exclusion keeps user data: the <code>.review</code> comment sidecar and reading history survive; re-include restores them.</td><td>Exclusion is reversible curation, not deletion. This forces the cascade engine (R2) to grow a <code>KeepUserData</code> mode — the tracks interlock.</td></tr>
+<tr><td>D4</td><td>kb-tui is deleted, not frozen. Two accepted losses: the watcher-activity heatmap and terminal <code>$EDITOR</code> launch. Two gaps are closed first: a fleet status table and an events follower in the CLI.</td><td>Parity audit (<a href="#tui-parity-audit">below</a>): every daemon endpoint the TUI consumes is also consumed by SPA and/or CLI; only presentation-layer extras are lost.</td></tr>
+<tr><td>D5</td><td>Daemon logging ships: wire the existing appender, add retention and a runtime log-level route. A log-tail HTTP endpoint is deferred.</td><td>File logging is currently zero. With the TUI gone, stderr-only is not an acceptable floor; <code>kb events --follow</code> plus on-disk ndjson covers the terminal-operator story.</td></tr>
+<tr><td>D6</td><td>Enforce <code>sources.paused</code> at the same ingest gate exclusion uses.</td><td>Recon found <code>paused</code> is stored and surfaced but never checked by watcher, reconciler, or indexer — pausing a source today does nothing. Fixing it is one extra condition at the seam X2 builds anyway. Documented behavior change.</td></tr>
+<tr><td>D7</td><td>(2026-07-11) The T1 events follower ships as a <strong>separate verb</strong>: <code>kb events --follow</code> wraps the same SSE tail loop <code>kb push</code> uses (<code>Last-Event-ID</code> reconnect + exponential backoff, <code>commands/push.rs</code> + <code>sse.rs</code>) — <em>not</em> an extension of <code>kb push</code>'s identity or flag surface. Server-side <code>--kb</code>/<code>--artifact</code> payload filters and the daemons.toml fleet-status fan-out remain T1 scope.</td><td><code>kb push</code>'s identity is a single-daemon, exact-match event pipe for scripts; a fleet-aware, glob-filtered follower is a different tool with a different contract. Reusing the tail loop avoids a second reconnect implementation without conflating the verbs.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="scope">Scope</h2>
+<p><strong>In:</strong> Track R (actor supervision, systematic delete cascade + orphan sweep, retention config, zip-import caps + lance escape helper) · Track X (extension map, per-file exclusion end-to-end: core, API, CLI verb, SPA surfaces) · Track L (file logging, log retention, runtime log level) · Track T (parity gap closers, crate removal, docs/invariant sync).</p>
+<p><strong>Out:</strong> new parsers (D1) · gallery/atlas scale-wall work · highlights/unread/bulk-ops feature bundle · Prometheus exposition, compression/ETag layers, federation partial-failure flag · backup/restore of derived state. All recorded in <a href="#next-milestone-backlog">the backlog</a> with the assessment as source.</p>
+</section>
+
+<section>
+<h2 id="track-r-reliability">Track R — reliability architecture</h2>
+<h3 id="r-actor-supervision">Actor supervision (R1)</h3>
+<p><code>StorageActor::run()</code> is spawned at <code>storage/actor.rs:867</code> with no panic boundary; a panic in any handler silently kills the task and every later op resolves to a dropped-oneshot error while the daemon looks healthy. Panics are reachable today: arrow decode <code>unwrap()</code>s at <code>storage/lance.rs:969, 1601-1606, 1824</code> and <code>RecordBatch::try_new(..).expect(..)</code> at <code>storage/schema.rs:298, 475</code>. Design: per-message <code>catch_unwind</code> (via <code>futures::FutureExt</code>, <code>AssertUnwindSafe</code>) that logs, replies with a storage error, and keeps consuming — the single-writer model makes each handler transactional, so surviving a panicked message is sound. The unwrap sites become typed <code>Error::Storage</code>; the 13 raw <code>.lock().unwrap()</code> sites adopt the poison-tolerant pattern already used at <code>embed_cache.rs:146</code>.</p>
+<h3 id="r-delete-cascade">Systematic delete cascade + orphan sweep (R2)</h3>
+<p><code>indexer::process_delete</code> (<code>indexer.rs:1666</code>) currently cleans the lance row, sessions, snapshots, and memory-links — but leaks edges (both directions), corkboard rows, pinned memories, reading history + sections, list entries, and the <code>.review/&lt;id&gt;.json</code> sidecar with its attachments. Design: a single cascade engine in kb-core with two modes — <code>Full</code> (true deletion) and <code>KeepUserData</code> (exclusion: keep sidecar + history) — so the cleanup set lives in one place instead of ad-hoc call sites. The reconcile pass gains an orphan sweep as a backstop (indexing has one; deletion currently has none), catching dependents left by any pre-v0.24 failed delete. Cascade mutations bump the storage index generation so the gallery memo invalidates (invariant #15).</p>
+<h3 id="r-retention">Retention (R3)</h3>
+<p><code>sqlite.rs:975</code> states retention isn't implemented; <code>history</code>, <code>reading_sections</code>, and <code>edges</code> grow unbounded. Design: an optional <code>[retention]</code> config section (per-table day windows, default <em>keep forever</em> so nothing changes silently) plus a background prune task in kb-server bring-up, following the <code>spawn_startup_compact</code> pattern (<code>lib.rs:923</code>) and registered in the <code>tasks</code> vec so <code>teardown_tasks</code> joins it on shutdown/reload. History pruning must respect invariant #8 (append-only semantics; pruning old rows is a retention exception, never an edit path).</p>
+<h3 id="r-security-bundle">Security bundle (R4)</h3>
+<p>Two small hardening items from the audit: (a) <code>kb-cli/src/commands/share.rs:263-287</code> extracts share zips with no decompression-bomb caps — add per-entry, aggregate (256 MiB, matching <code>routes/download.rs</code>), and entry-count (10k) limits; (b) lance filter strings are built by hand-rolled quote-escaping at ~14 <code>format!</code> sites — centralize into one <code>escape_literal</code> helper so a future site can't forget it.</p>
+</section>
+
+<section>
+<h2 id="track-x-index-control">Track X — index control architecture</h2>
+<h3 id="x-extension-map">Configurable extension map (X1)</h3>
+<p>The whole gate is two pure predicates: <code>is_markdown</code> (<code>indexer.rs:207</code>) and <code>is_indexable</code> (<code>indexer.rs:216</code>), consumed at four ingest sites — <code>walk_core</code> (<code>indexer.rs:311</code>), the watcher's <code>initial_walk</code> (<code>watcher.rs:286</code>) and <code>emit_for_paths</code> (<code>watcher.rs:598,604</code>) — with parse dispatch at <code>indexer.rs:1083-1090</code>. Design: an <code>ExtensionMap</code> (extension → <code>Html</code> | <code>Markdown</code>) resolved at bring-up with the existing three-layer precedence (per-kb <code>KbSection.extensions</code> → <code>[indexer].extensions</code> → built-in default of exactly today's set), validated in <code>KbConfig::validate</code> (<code>config.rs:927</code>) with a hard error for unknown pipeline names. Threading follows the established parameters: into <code>run_with_ingest</code>/<code>index_file</code> like <code>chunked</code>/<code>versions_mode</code> (<code>lib.rs:1367-1398</code>), into <code>WatcherConfig</code> via a builder (<code>watcher.rs:75</code>), and onto <code>KbContext</code> (<code>state.rs</code>) for the reindex route. A new config key is picked up automatically by the <code>PUT /api/config</code> in-process restart (invariant #13).</p>
+<div class="callout callout--warn"><span class="callout-label">Trap</span>Shrinking the map must delete, not orphan. The reconcile delete pass (<code>indexer.rs:491-517</code>) only deletes a stored doc when the file is gone from disk (<code>try_exists</code> re-check at :509). A doc whose extension leaves the map still exists on disk, so it would never be cleaned. X1 therefore adds an explicit reconcile step: stored docs whose extension is no longer mapped are routed through the Full cascade. The identical trap shapes exclusion (below).</div>
+<p>Secondary literal copies of the extension decision (share <code>mod.rs:823/829</code>, <code>routes/mod.rs:65</code>, <code>cloudflare.rs:69</code>, CLI import/synth) stay as-is in this milestone: they gate serving MIME and share packaging for already-indexed artifacts and are correct for any Html/Markdown-mapped extension; a follow-up note in the code points them at the map.</p>
+<h3 id="x-exclusion">Per-file exclusion (X2–X4)</h3>
+<p>State: a new <code>V0023__excluded_files.sql</code> table (source-relative path PK, <code>excluded_at</code>, optional note), following the <code>sources.paused</code> schema shape rather than the quarantine pattern — quarantine piggybacks on the transient <code>errors</code> table and is failure-driven, wrong for user intent. (Originally planned as V0021, but <code>V0021__session_files_basename_index.sql</code> and <code>V0022__history_source.sql</code> landed since — V0023 is the next free slot.) Actor plumbing follows the standard triple (msg variant + handle method + match arm, templates at <code>actor.rs:42/915/1668</code>).</p>
+<p>Enforcement (rewritten 2026-07-11, post-GC-B7): this plan originally named "process gates" / <code>index_file</code>, but GC-B7 (<code>6c9baa38</code>) split <code>index_file</code> into <code>prepare_doc</code> (read → parse → embed → build Doc, per file) and <code>finish_indexed_doc</code>, with <code>flush_prepared_batch</code> committing groups through one <code>upsert_docs</code> merge_insert — <code>process_one</code> no longer exists. The correct gate is therefore: <code>walk_core</code> + the watcher's emit paths (<code>initial_walk</code>/<code>emit_for_paths</code>) + a per-item exclusion check at the <em>top</em> of <code>prepare_doc</code>, returning its existing <code>Ok(None)</code> skip arm. The batch mechanics (drain-batching, merge_insert, bisect-style per-doc fallback) stay untouched, and the gate must not break the per-doc fallback-isolation contract pinned by GC-F2's test (<code>indexer.rs::poisoned_doc_in_batch_falls_back_per_doc_and_only_it_fails</code>, <code>d5c66045</code>). Per D6, <code>sources.paused</code> becomes enforced at that same seam. Excluding an artifact performs an immediate <code>KeepUserData</code> cascade and emits <code>artifact.removed</code>, because reconcile will never clean an excluded-but-present file (same trap as above). Re-including forces a reindex nudge through the ingest sink, mirroring quarantine restore (<code>quarantine.rs:203</code>); comments re-anchor from the preserved sidecar.</p>
+<p>Surfaces: server routes <code>GET/POST /api/kb/{kb}/exclusions</code> + <code>DELETE /api/kb/{kb}/exclusions/{path}</code> with new <code>artifact.excluded</code>/<code>artifact.included</code> SSE kinds registered in <code>routes/schema.rs</code>; CLI verb <code>kb exclude &lt;target&gt;</code> (with <code>--rm</code>, <code>--list</code>, <code>--json</code>) resolving via <code>http::resolve_artifact_target</code> (<code>http.rs:239</code>); SPA — a card action button (pattern at <code>Card.tsx:79-120</code>), an exclude action in the reader's inspector About tab, and a Settings → Excluded pane mirroring <code>Quarantine.tsx</code>. Gallery invalidation is nearly free: <code>artifact.removed</code> already drives the <code>docsGate</code> (<code>queryClient.ts:127</code>); the two new kinds join that list plus a <code>["exclusions", kb]</code> query key.</p>
+</section>
+
+<section>
+<h2 id="track-l-daemon-logging">Track L — daemon logging architecture</h2>
+<p>Recon headline: <code>kb_core::tracing_init::init</code> (daily-rolling ndjson JSON layer + stderr layer, returning the <code>WorkerGuard</code>) has zero call sites — the module is exported at <code>kb-core/src/lib.rs:44</code> and never used. The three live <code>init_tracing</code> implementations (<code>kb-cli/src/main.rs:3617</code>, <code>kb-server/src/main.rs:51</code>, embedder) are stderr-only with inconsistent default filters.</p>
+<p><strong>L1</strong> wires the existing appender into both daemon entry points (the in-process <code>kb daemon</code> path and the standalone <code>kb-server</code> binary), holding the guard for process lifetime. The file layer defaults to <code>info</code> (not the module's current <code>debug</code> — unbounded debug ndjson is the wrong default), overridable via <code>KB_LOG_FILE_LEVEL</code>. Files land in the already-created <code>&lt;state&gt;/log/</code> (<code>paths.rs:82,222</code>).</p>
+<p><strong>L2</strong> adds the two follow-ons: a retention sweep (<code>[server].log_retention_days</code>, default 14, pruning at boot + daily, same background-task lifecycle as R3) and a runtime log level — a <code>tracing_subscriber::reload</code> handle stashed in a <code>OnceCell</code> (the <code>install_corpus_mounts</code> process-global precedent, <code>lib.rs:1171</code>), a <code>PUT/GET /api/log-level</code> route beside <code>/config</code> (<code>router.rs:167</code>; state-changing, so <code>origin_allowlist</code> already covers CSRF), and <code>kb daemon log-level</code>. A log-tail endpoint is deferred (D5): operators have the file path, and <code>kb events --follow</code> (T1) covers live watching.</p>
+</section>
+
+<section>
+<h2 id="tui-parity-audit">TUI parity audit</h2>
+<p>The TUI consumes 7 read endpoints, 6 mutators, and the <code>/api/events</code> SSE stream (<code>kb-tui/src/client/api.rs</code>, <code>client/events.rs</code>). Every one of those is also consumed by the SPA and/or a CLI verb — removal loses viewers, not data sources. Condensed verdict per capability:</p>
+<table>
+<thead><tr><th>TUI capability</th><th>SPA / CLI coverage</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>KBS overview (docs/path/last-index)</td><td>Settings→Overview cards; <code>kb status</code></td><td>Covered</td></tr>
+<tr><td>Embedder degraded/respawn banner</td><td>StatusBar (metrics.tick); <code>kb daemon doctor</code></td><td>Covered (T1 also adds the two fields to <code>/api/metrics</code> + <code>kb metrics</code>)</td></tr>
+<tr><td>Sources pause/resume/reindex; runs; queries</td><td>Settings→Pipeline (same POSTs); <code>kb reindex</code></td><td>Covered</td></tr>
+<tr><td>Traffic KPIs, req/s, per-route p50/p95</td><td>Settings→Traffic; <code>kb metrics</code> (adds p99)</td><td>Covered</td></tr>
+<tr><td>Errors triage (dismiss/apply-fix/retry)</td><td>Settings→Errors + Quarantine (superset)</td><td>Covered</td></tr>
+<tr><td>Events firehose (multi-daemon, glob filter, pause)</td><td>Settings→Live (multi-daemon, tagged); CLI <code>kb push</code> is single-daemon exact-match</td><td>Partial → closed by <code>kb events --follow</code> (T1)</td></tr>
+<tr><td>Fleet sidebar: side-by-side daemon health / kb-count / in-flight</td><td>SPA StatusBar covers connection health only; <code>kb fleet</code> is doc-coverage only</td><td>TUI-only → closed by <code>kb fleet status</code> (T1)</td></tr>
+<tr><td>Watcher-activity heatmap (per-kb 15-min × 24 h)</td><td>Raw <code>watch.*</code> events reach Settings→Live</td><td>TUI-only → <strong>accepted loss</strong> (D4)</td></tr>
+<tr><td>Open error path in terminal <code>$EDITOR</code></td><td>SPA in-app editor; shell composition</td><td>TUI-only → <strong>accepted loss</strong> (D4)</td></tr>
+</tbody>
+</table>
+<p>Server-side note feeding T1: <code>/api/events</code> honors <code>?types=</code> globs (<code>routes/events.rs:169-200</code>) but <code>?filter=kb:</code>/<code>artifact:</code> are parsed and silently dropped (<code>parse_payload_filter</code>, <code>events.rs:207-217</code> — only <code>run:</code> is checked). T1 implements those two branches so the new CLI follower can filter server-side instead of copying the client-side workaround in <code>comments_watch.rs</code>.</p>
+</section>
+
+<section>
+<h2 id="phasing">Phasing — 13 commits</h2>
+<p>Order is dependency-driven: R2's cascade modes are a prerequisite for X2's exclusion semantics; T1's gap closers land and get verified <em>before</em> T2 deletes the crate (the operator's precondition); T3 closes the books. Each phase is one green-CI commit; exact per-phase verify commands live in the kb-prompt handoff contract embedded in this artifact.</p>
+
+<h3 id="phase-r1">R1 — <code>feat(kb-core): storage-actor panic supervision + typed arrow decode (R1)</code></h3>
+<p>Per-message <code>catch_unwind</code> in the actor loop; arrow unwraps → <code>Error::Storage</code>; poison-tolerant locks. New test proves a panicking op yields an error reply and the actor keeps serving.</p>
+
+<h3 id="phase-r2">R2 — <code>feat(kb-core): systematic artifact delete cascade + reconcile orphan sweep (R2)</code></h3>
+<p>Cascade engine with <code>Full</code>/<code>KeepUserData</code> modes; <code>process_delete</code> rewired; orphan sweep in reconcile. Golden tests enumerate the cleanup set so a future table can't be forgotten silently.</p>
+
+<h3 id="phase-r3">R3 — <code>feat(kb-core,kb-server): opt-in retention windows for history/sections/edges (R3)</code></h3>
+<p><code>[retention]</code> config + prune task with shutdown-safe lifecycle. Defaults keep everything (no silent behavior change).</p>
+
+<h3 id="phase-r4">R4 — <code>feat(kb-cli,kb-core): zip-extract caps + centralized lance filter escaping (R4)</code></h3>
+
+<h3 id="phase-x1">X1 — <code>feat(kb-core,kb-server): configurable indexable-extension map (X1)</code></h3>
+<p>ExtensionMap, config + validation, threading through indexer/watcher/KbContext, map-shrink reconcile deletion. Tests: <code>txt = "markdown"</code> ingest end-to-end; shrink deletes; invalid pipeline hard-fails validation.</p>
+
+<h3 id="phase-x2">X2 — <code>feat(kb-core): per-file exclusion store + ingest-gate enforcement (X2)</code></h3>
+<p>V0023 migration, actor plumbing, post-GC-B7 gate enforcement (<code>walk_core</code> · watcher emit paths · top of <code>prepare_doc</code> — see the enforcement paragraph above), paused-source enforcement (D6), exclude-time <code>KeepUserData</code> cascade + <code>artifact.removed</code>, include-time forced reindex.</p>
+
+<h3 id="phase-x3">X3 — <code>feat(kb-server,kb-cli): exclusions API + kb exclude verb (X3)</code></h3>
+
+<h3 id="phase-x4">X4 — <code>feat(spa): exclude/include from card, reader, and a Settings Excluded pane (X4)</code></h3>
+<p>Plus the e2e roundtrip spec: exclude from gallery → card disappears (SSE, no reload) → Settings pane lists it → re-include → doc returns with its comment intact.</p>
+
+<h3 id="phase-l1">L1 — <code>feat(kb-server,kb-cli): wire rolling ndjson file logging into both daemon paths (L1)</code></h3>
+
+<h3 id="phase-l2">L2 — <code>feat(kb-server,kb-cli): log retention sweep + runtime log-level route and verb (L2)</code></h3>
+
+<h3 id="phase-t1">T1 — <code>feat(kb-cli,kb-server): fleet status + events follower + kb/artifact SSE filters (T1)</code></h3>
+<p>The parity gap closers. After this commit the operator can verify TUI-equivalence live before anything is deleted.</p>
+<p><strong>Ruling (operator, 2026-07-11 — D7):</strong> T1 ships as a <em>separate verb</em>. <code>kb events --follow</code> wraps the same SSE tail loop <code>kb push</code> uses (<code>Last-Event-ID</code> reconnect + exponential backoff 1/2/4/8/30s, <code>commands/push.rs</code> + <code>sse.rs</code>); it is <em>not</em> an extension of <code>kb push</code>'s identity or flag surface — kb push stays a single-daemon, exact-match pipe. Server-side <code>--kb</code>/<code>--artifact</code> payload filters (the two dropped <code>parse_payload_filter</code> branches) and the daemons.toml fleet-status fan-out remain T1 scope.</p>
+
+<h3 id="phase-t2">T2 — <code>chore(kb-tui): remove the TUI crate, verb, CI job, and exclusive deps (T2)</code></h3>
+<p>Blast radius mapped in recon: workspace member (<code>Cargo.toml:7</code>), kb-cli dep + <code>commands/tui.rs</code> + verb/dispatch/init-tracing special case, <code>ci.yml</code> tui-smoke job (:129-171), workspace deps ratatui/crossterm/throbber-widgets-tui/tui-input/unicode-width/insta. <code>reqwest-eventsource</code> stays (kb-cli + kb-server use it). ~10.5k LOC and one CI job removed.</p>
+
+<h3 id="phase-t3">T3 — <code>docs: retire invariant #2, add the exclusion invariant, TUI doc sweep + v0.24 tag (T3)</code></h3>
+<p>Invariant bookkeeping under the 35-cap: slot #2 (TUI dirty snapshot) retires with the crate; its replacement is the new load-bearing constraint this milestone creates — <em>exclusion and extension-map changes must delete explicitly, because the reconcile delete pass never cleans a file that still exists on disk; exclusion uses the KeepUserData cascade; paused sources are enforced at the ingest gate</em>. Per the 35-cap rule the retirement <em>opens</em> the slot the exclusion invariant fills — record that in the invariant docs.</p>
+<p><strong>Checklist addition (2026-07-11):</strong> deleting kb-tui (T2) orphans invariant #2's <em>only</em> test pins — <code>kb-tui/src/app.rs::anim_tick_does_not_mark_dirty_when_all_connected</code> and <code>::chip_pulse_and_error_flash_stay_out_of_dirty_snapshot</code> (see <code>docs/invariant-test-map.md</code> row 2). Retire/renumber #2 in <em>all four</em> invariant surfaces: the CLAUDE.md index, <code>docs/architecture-invariants.md</code>, <code>docs/invariant-test-map.md</code> row 2, and <code>scripts/check-invariants.sh</code> expectations (TOTAL stays 35; the new #2 needs its own <code>invariant:2</code> pin or an explicit UNPINNED rationale row — otherwise the script reports a silently orphaned slot).</p>
+<p>Doc sweep: delete <code>docs/tui.md</code>; update README, <code>docs/configuration.md</code>, <code>self-host.md</code>, <code>quickstart.md</code>, <code>extending.md</code>, <code>architecture-invariants.md</code> (§2, code map, watch-heatmap mention), regenerate third-party licenses. Then the milestone verification below, then the annotated tag.</p>
+</section>
+
+<section>
+<h2 id="risks">Risks</h2>
+<table>
+<thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>Enforcing <code>paused</code> (D6) is a behavior change: sources that were "paused" but silently indexing will now genuinely stop and can go stale.</td><td>Call it out in the commit + README; <code>kb status</code> already surfaces paused state and reconcile staleness.</td></tr>
+<tr><td><code>catch_unwind</code> over async handlers: a panic mid-write could in principle leave a half-applied multi-statement op.</td><td>Audit R1: handlers that do multi-statement sqlite writes must already be in a transaction (most are); the panic boundary replies an error and the caller's retry path is unchanged. Document the AssertUnwindSafe justification at the boundary.</td></tr>
+<tr><td>Map-shrink / exclusion stale-row trap (reconcile never deletes present-on-disk files).</td><td>Designed around explicitly (X1 reconcile deletion, X2 exclude-time cascade); both have dedicated tests.</td></tr>
+<tr><td>Cascade over-deletes (e.g. list entries a user wanted as tombstones).</td><td>Golden test enumerates the set per mode; list entry removal emits <code>list.updated</code> in one tx per invariant #25.</td></tr>
+<tr><td>File logging at high-traffic <code>debug</code> fills disk before retention lands.</td><td>L1 defaults the file layer to <code>info</code>; L2 (retention) lands in the same milestone, and the sweep also bounds pre-existing empty-dir growth.</td></tr>
+<tr><td>TUI removal regret (watcher heatmap, fleet grid).</td><td>T1 lands first and is verifiable live; T2 is a single revertable commit that restores the crate wholesale.</td></tr>
+<tr><td>e2e churn from the new SPA pane/actions.</td><td>X4 ships its own spec; existing specs only gain a data-attribute-stable action button on cards.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="verification">Verification (milestone gate, before the tag)</h2>
+<ol>
+  <li><code>just ci</code> — workspace fmt + clippy + tests (excludes kb-embedder per convention) — green.</li>
+  <li><code>just ci-embedder</code> — the ORT-linking surface — green.</li>
+  <li><code>just ci-spa</code> and <code>just ci-e2e</code> — SPA build + full Playwright suite including the new exclusion spec — green.</li>
+  <li>Per-crate test counts vs. baseline: no drops except the removed kb-tui suite.</li>
+  <li>Live smoke against a local daemon: exclude a doc from the SPA card (disappears via SSE without reload) and from <code>kb exclude</code>; re-include from the Settings pane; confirm the comment sidecar survived. Change a kb's extension map via Settings→Config, confirm the restart picks it up and a <code>.txt</code> file indexes as Markdown. Confirm <code>&lt;state&gt;/log/kb.ndjson.*</code> is written, <code>PUT /api/log-level</code> flips verbosity live, and old log files are pruned. Run <code>kb fleet status</code> and <code>kb events --follow --kb &lt;name&gt;</code> against the daemon.</li>
+  <li><code>grep -ri kb-tui crates .github justfile</code> → zero hits; <code>kb --help</code> shows no tui verb.</li>
+</ol>
+<p>Deploy note for the production daemon (corrected 2026-07-11): both Rust <em>and</em> SPA changes require an image rebuild (<code>docker compose up -d --build kb</code> in the deployment compose directory) — the Dockerfile bakes <code>web/dist</code> into the image at <code>/usr/local/share/kb/web/dist</code> (<code>KB_SPA_DIST</code>); the SPA is <em>no longer</em> a live bind-mount. The V0023 migration applies automatically on first boot; the new config keys are optional so the live kb.toml needs no edit.</p>
+</section>
+
+<section>
+<h2 id="rollback">Rollback</h2>
+<p>One commit per phase, all on main: <code>git revert &lt;sha&gt;</code> per phase, in reverse order if multiple. T2's revert restores the crate wholesale. The V0023 table is additive and inert under revert (refinery is forward-only; an orphaned <code>excluded_files</code> table breaks nothing). Retention and file logging are config/env-gated with keep-forever/off-by-default semantics, so reverting their consumers leaves no data loss. The only irreversible action in the milestone is retention pruning itself — which ships disabled by default.</p>
+</section>
+
+<section>
+<h2 id="critical-files">Critical files</h2>
+<table>
+<thead><tr><th>Area</th><th>Files</th></tr></thead>
+<tbody>
+<tr><td>R1</td><td><code>crates/kb-core/src/storage/actor.rs</code> · <code>storage/lance.rs</code> · <code>storage/schema.rs</code></td></tr>
+<tr><td>R2/R3</td><td><code>crates/kb-core/src/indexer.rs</code> (process_delete, reconcile) · <code>storage/sqlite.rs</code> · <code>storage/actor.rs</code> · <code>crates/kb-core/src/config.rs</code> · <code>crates/kb-server/src/lib.rs</code> (task lifecycle)</td></tr>
+<tr><td>R4</td><td><code>crates/kb-cli/src/commands/share.rs</code> · <code>crates/kb-core/src/storage/lance.rs</code></td></tr>
+<tr><td>X1</td><td><code>crates/kb-core/src/indexer.rs</code> (:207/:216/:311/:1083) · <code>watcher.rs</code> (:75/:286/:598) · <code>config.rs</code> (:88/:393/:927) · <code>crates/kb-server/src/lib.rs</code> (:1367-1421) · <code>state.rs</code></td></tr>
+<tr><td>X2–X4</td><td><code>crates/kb-core/migrations/V0023__excluded_files.sql</code> · <code>storage/actor.rs</code>+<code>sqlite.rs</code> · <code>crates/kb-server/src/routes/exclusions.rs</code> (new) + <code>routes/schema.rs</code> + <code>router.rs</code> · <code>crates/kb-cli/src/commands/exclude.rs</code> (new) + <code>http.rs</code> · <code>web/src/components/Card.tsx</code> · <code>PreviewInspector.tsx</code> · <code>components/settings/</code> (new pane) · <code>web/src/api/queryClient.ts</code> · <code>tests/e2e/</code> (new spec)</td></tr>
+<tr><td>L</td><td><code>crates/kb-core/src/tracing_init.rs</code> · <code>crates/kb-server/src/main.rs</code> · <code>crates/kb-cli/src/main.rs</code> (init_tracing) · <code>crates/kb-server/src/routes/</code> (log-level route) · <code>router.rs</code></td></tr>
+<tr><td>T</td><td><code>crates/kb-tui/</code> (deleted) · <code>Cargo.toml</code> · <code>crates/kb-cli/</code> (tui verb out; <code>commands/events.rs</code> + fleet status in) · <code>crates/kb-server/src/routes/events.rs</code> (:207-220) · <code>routes/metrics.rs</code> (:30-45) · <code>.github/workflows/ci.yml</code> · <code>CLAUDE.md</code> + <code>docs/architecture-invariants.md</code></td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="next-milestone-backlog">Next-milestone backlog (from the 2026-07-03 assessment, deliberately deferred)</h2>
+<ul>
+  <li><strong>Feature bundle:</strong> standalone highlights (the anchor + band-painting primitives exist, gated behind comments today) · unread filter + continue-reading shelf (read state is already a server facet) · bulk operations (multi-select in gallery/search) · action commands in the command palette.</li>
+  <li><strong>API hygiene:</strong> compression + ETag layers (tower-http already a dep) · federation <code>partial/failed_kbs</code> signal · <code>/readyz</code> deep health · Prometheus exposition · pagination on the non-docs collections.</li>
+  <li><strong>Scale walls:</strong> predicate/limit pushdown for gallery/facets (today <code>list_docs(u32::MAX)</code> per request) · atlas embedding-memory ceiling.</li>
+  <li><strong>Lifecycle symmetry:</strong> <code>POST /kbs</code> + <code>kb remove</code> counterparts to <code>kb add</code>/<code>DELETE /kb</code> · review-export import · backup/restore of derived state · durable SSE cursor across restarts.</li>
+  <li><strong>CLI hygiene:</strong> shell completions (<code>clap_complete</code>) · <code>--json</code> on mutation verbs · <code>kb kbs</code> · <code>kb config get/set</code> · stdin for <code>kb remember</code> · the send_json/base-url/lookup dedup.</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

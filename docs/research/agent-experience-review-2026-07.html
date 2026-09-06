@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The agent-experience review — kb as infrastructure for coding agents (2026-07)</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:open, project:kb, agent-experience, review, ultracode, cli, retrieval, memory, sessions, cross-harness, authoring, mcp, roadmap, fable">
+
+<style>
+:root{
+  --bg:#faf8f3; --surface:#f0ece2; --fg:#201d17; --muted:#5b5548;
+  --rule:#dcd4c4; --accent:#0c6a60; --accent-fg:#ffffff;
+  --warn:#8a5800; --danger:#a12d24; --ok:#1e6742;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:47rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#15130f; --surface:#201d17; --fg:#ece7db; --muted:#a9a08d;
+    --rule:#37322a; --accent:#63cfc0; --accent-fg:#082722;
+    --warn:#e0b25c; --danger:#f18a80; --ok:#7fd3a4;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:var(--fs-body);line-height:var(--lh)}
+main{max-width:var(--maxw);margin:0 auto;padding:2rem 1.25rem 5rem}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+h1{font-family:var(--serif);font-size:2rem;line-height:1.2;margin:.5rem 0 .4rem;letter-spacing:-.01em}
+h2{font-family:var(--serif);font-size:1.45rem;line-height:1.25;margin:2.6rem 0 .6rem;
+  scroll-margin-top:2rem;border-bottom:2px solid var(--rule);padding-bottom:.3rem}
+h3{font-size:1.05rem;margin:1.8rem 0 .4rem;scroll-margin-top:2rem}
+p{margin:.65rem 0}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.9rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.85rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+ul,ol{padding-left:1.4rem}
+li{margin:.3rem 0}
+.kicker{font:600 .78rem/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.byline{color:var(--muted);font-size:var(--fs-small);margin:.2rem 0 1.4rem}
+.chip{display:inline-block;font:600 .68rem/1 var(--mono);letter-spacing:.05em;
+  text-transform:uppercase;border-radius:999px;padding:.28em .6em;white-space:nowrap}
+.chip--solid{background:var(--ok);color:var(--bg)}
+.chip--partial{background:var(--warn);color:var(--bg)}
+.chip--killed{background:var(--danger);color:var(--bg)}
+.chip--fable{background:var(--accent);color:var(--accent-fg)}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);
+  border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));
+  padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.toc{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.9rem 1.1rem;font-size:.9rem;column-count:2;column-gap:2rem}
+.toc a{display:block;padding:.12rem 0;text-decoration:none}
+.toc a:hover{text-decoration:underline}
+@media (max-width:620px){.toc{column-count:1}}
+.stat-row{display:flex;flex-wrap:wrap;gap:.6rem;margin:1rem 0}
+.stat{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.55rem .8rem;min-width:7.5rem}
+.stat b{display:block;font-size:1.25rem;font-family:var(--serif)}
+.stat span{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.sev{font:700 .68rem/1 var(--mono);text-transform:uppercase}
+.sev--h{color:var(--danger)} .sev--m{color:var(--warn)} .sev--l{color:var(--muted)}
+figure{margin:1.2em 0}
+figcaption{font-size:.8rem;color:var(--muted);margin-top:.3rem}
+.small{font-size:var(--fs-small);color:var(--muted)}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+
+<p class="kicker">kb-docs · research · ultracode review</p>
+<h1>The agent-experience review — kb as infrastructure for coding agents (2026-07)</h1>
+<p class="byline">2026-07-05 · 43-agent workflow (12 Sonnet explorers · 5 Opus lenses + 1 Fable wildcard · Opus merge · 24 adversarial verifiers) + Fable synthesis · baseline <code>main@2ff019da</code> (v0.24 mid-flight)</p>
+
+<nav class="toc" aria-label="Contents">
+<a href="#tldr">TL;DR</a>
+<a href="#method">Method</a>
+<a href="#what-already-works">What already works</a>
+<a href="#bugs-and-drift">Bugs &amp; drift found</a>
+<a href="#retrieval">Retrieval: passages, not documents</a>
+<a href="#protocol">The protocol surface</a>
+<a href="#authoring-loop">Closing the authoring loop</a>
+<a href="#memory-learning">Memory as a learning system</a>
+<a href="#sessions-cross-harness">Sessions &amp; cross-harness</a>
+<a href="#fleet">Multi-agent coordination</a>
+<a href="#ops-docs">Ops &amp; docs hygiene</a>
+<a href="#beyond">Beyond the fleet: five Fable bets</a>
+<a href="#roadmap">Prioritized roadmap</a>
+<a href="#verdicts">Verification ledger</a>
+<a href="#provenance">Provenance</a>
+</nav>
+
+<h2 id="tldr">TL;DR</h2>
+<p><strong>kb is already the most agent-native tool in its category</strong> — a runtime-derived CLI manifest (<code>kb tools</code>), fail-open memory hooks, deterministic LLM-free recall, RFC 7807 errors, a scriptable doctor, structured agent→human choice-comments, and golden-pinned grammars. The review found no architectural rot. What it found is <strong>last-mile debt in exactly the places agent pipelines break</strong>, three systemic gaps, and eleven concrete defects.</p>
+<ul>
+<li><strong>The headline gap: kb serves documents; agents need passages.</strong> Four of the five ideas that survived adversarial verification are the same theme — hybrid search already embeds, ranks, and <em>then discards</em> the winning chunk text (<code>lance.rs:952</code> projects <code>doc_id</code> only); there is no plain-text fetch (only raw HTML or a 400-char excerpt); no single-call find-and-read; no budgeted context pack. Every retrieval an agent does today costs one extra round-trip and a whole HTML document.</li>
+<li><strong>The contract is 90% there, and the missing 10% is where scripts die.</strong> Only 2 of ~20 <code>--json</code> verbs emit a JSON error envelope; axum extractor rejections bypass problem+json; a typo'd <code>/api/*</code> path returns 200 with the SPA shell; the CLI exposes a fraction of <code>/api/search</code>'s power and drops <code>score</code> from its Hit.</li>
+<li><strong>Real bugs shipped:</strong> <code>kb pull</code> flattens paths and silently mints new artifact ids (breaking invariant #27 and every cross-link); <code>kb remember --scope project</code> does not actually scope visibility (only <code>--link</code> does, and the two protocol docs contradict each other); <code>kb add &lt;file&gt;</code> fails on the recovery path its own skill prescribes; the memory protocol is <em>not</em> re-injected after compaction. Details in <a href="#bugs-and-drift">§Bugs</a>.</li>
+<li><strong>The verify pass was ruthless and that is signal:</strong> of 24 canonical proposals, 6 were killed — MCP and the cross-harness capture envelope as <em>already designed and deliberately deferred with data</em> (Codex ≈1.5% of local sessions, OpenCode abandoned 2026-04), fleet soft-locks as violating a recorded refusal. kb's habit of recording refusals with rationale did exactly its job against a 43-agent fleet.</li>
+</ul>
+<div class="stat-row">
+<div class="stat"><b>43</b><span>agents</span></div>
+<div class="stat"><b>109</b><span>raw proposals</span></div>
+<div class="stat"><b>24</b><span>verified</span></div>
+<div class="stat"><b>5</b><span>solid / standout</span></div>
+<div class="stat"><b>13</b><span>partial-exists</span></div>
+<div class="stat"><b>6</b><span>killed</span></div>
+<div class="stat"><b>~13</b><span>defects found</span></div>
+</div>
+
+<h2 id="method">Method</h2>
+<p>The premise: <em>the user of kb is an LLM coding agent</em> — Claude Code, Codex CLI, OpenCode. The agent authors the artifacts, runs the searches, writes and recalls the memories, triages the comments, and often operates the daemon. Every surface was judged on: discoverability without reading source, token cost, machine-parseable output, error recoverability, statelessness across fresh sessions, and cross-harness portability.</p>
+<p>Four phases, one workflow (<code>wf_f48b5409-3ba</code>): <strong>Explore</strong> — 12 Sonnet agents, one per subsystem (CLI, memory, sessions, HTTP API, indexing/authoring, search quality, plugins/skills, comments, docs, share/interop, ops, SPA-through-the-agent-lens), each returning evidence-cited frictions and proposals. <strong>Ideate</strong> — 5 Opus lenses (agent-protocol, memory-learning, multi-agent-fleet, authoring-loop, retrieval-context) plus one Fable wildcard, fed the explorers' digest. <strong>Merge</strong> — one Opus judge deduped 109 raw proposals into 34 canonical items across 10 themes (convergence across independent agents was scored as a quality signal). <strong>Verify</strong> — one adversarial agent per tier-1/2 item, default stance <em>refute</em>: hunt prior art in code/docs/plans, check the recorded non-goals, and be skeptical of ideas an agent would never actually invoke.</p>
+<p>Everything below the strengths section carries its verification verdict: <span class="chip chip--solid">solid</span> survived refutation, <span class="chip chip--partial">partial</span> means the mechanism half-exists and only the named delta is new, <span class="chip chip--killed">killed</span> is recorded in the <a href="#verdicts">ledger</a> so it doesn't get re-proposed. <a href="#beyond">§Beyond</a> is the Fable synthesis layer — ideas from outside the fleet's output, clearly marked.</p>
+
+<h2 id="what-already-works">What already works — the agent-native foundation</h2>
+<p>Worth stating plainly, because the median tool in this space has none of it:</p>
+<ul>
+<li><strong><code>kb tools</code> can never drift from the binary.</strong> It walks the live clap command tree at runtime (<code>tools.rs</code>) and emits a system-prompt-ready manifest of all 45 verbs — one command teaches a fresh session the whole surface.</li>
+<li><strong>Hooks fail open, deliberately.</strong> A down daemon, missing <code>jq</code>, or timeout never blocks a turn (<code>kb-recall.sh</code>, <code>kb-wake.sh</code>, <code>kb-capture.sh</code> all <code>|| exit 0</code>) — the right default for unattended loops, though see <a href="#sessions-cross-harness">§Sessions</a> for the observability cost.</li>
+<li><strong>Recall is a pure function.</strong> rank × salience × decay, tombstone/supersede drop, 21 unit tests, reproducible from its inputs with zero model involvement (invariant #10) — a search result can be <em>explained</em>.</li>
+<li><strong>Handler errors are uniform RFC 7807 problem+json</strong>, and hybrid-search-without-embedder 400s include the exact fix command (<code>search.rs:761</code>).</li>
+<li><strong>SSE is script-grade:</strong> Last-Event-ID resume via header or query param, <code>?types=</code> globs, synthetic lag/gap frames, and runtime-fetchable payload schemas (<code>/api/events.schema.json</code>).</li>
+<li><strong><code>kb daemon doctor</code></strong> is a real agent health check: six probes, OK/WARN/FAIL, <code>--json</code>, non-zero exit on Unhealthy, and a retry design that doesn't false-flag a cold model load.</li>
+<li><strong>The reverse channel exists:</strong> a Claude-authored comment can carry <code>--choice-json</code> one-tap buttons in the SPA — structured agent→human questions without a chat round-trip (<code>review.rs:154</code>).</li>
+<li><strong>Refusals are recorded with rationale</strong> (README Non-goals), which is why 6 of 24 verified proposals could be killed by citing prior rulings instead of re-litigating them.</li>
+<li><strong><code>kb find</code> has a documented exit-code contract</strong> (0 = id, 1 = ambiguous + candidates, 2 = no match) built for composition; destructive verbs take <code>--yes</code> and fail safe on EOF.</li>
+<li><strong>Portable grammars are golden-pinned:</strong> kb-comments/1, kb-list/1, the session bundle, the wikilink ladder, the gallery URL grammar — the file formats an agent round-trips are tested contracts, not conventions.</li>
+</ul>
+
+<h2 id="bugs-and-drift">Bugs &amp; drift found</h2>
+<p>Confirmed by direct code reading or live invocation during the review. Most are small; three are load-bearing.</p>
+<table>
+<thead><tr><th>Sev</th><th>Defect</th><th>Evidence</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td><span class="sev sev--h">high</span></td><td><code>kb pull</code> writes <code>&lt;id&gt;.html</code> instead of <code>row.path</code>, so re-indexing mints a NEW id (ids hash the source-relative path, invariant #27) — every cross-link, wikilink, and list entry pointing at the original id silently 404s after a pull. The in-code comment ("identity is the content hash") misstates the invariant it violates.</td><td><code>pull.rs:59</code>, <code>ids.rs:31</code></td><td>One line: write to <code>into.join(&amp;row.path)</code>, create parent dirs, fall back to <code>&lt;id&gt;.html</code> only when path is empty.</td></tr>
+<tr><td><span class="sev sev--h">high</span></td><td><code>kb remember --scope project</code> does not scope visibility — <code>payload_global = link.is_none()</code>, so visibility is controlled only by <code>--global</code>/<code>--link</code>. <code>CLAUDE.memory.md</code> tells agents to use <code>--scope</code> and never mentions <code>--link</code>; <code>kb-wake.sh</code>'s injected protocol shows <code>--link</code> and no <code>--scope</code>. Every "project fact" written per the doc leaks into every other kb's recall.</td><td><code>memory.rs</code> (remember_inner), <code>CLAUDE.memory.md:15</code> vs <code>kb-wake.sh:30</code></td><td>Default <code>payload_global=false</code> + auto-link when <code>--scope project</code> resolves a project corpus; single-source the protocol text so the two copies can't drift.</td></tr>
+<tr><td><span class="sev sev--h">high</span></td><td>CLAUDE.md's Cadence section omits DCO sign-off entirely, but CI gates on it — a fresh session's first commit fails <code>dco.yml</code>. CLAUDE.md never links CONTRIBUTING.md.</td><td>CLAUDE.md §Cadence vs <code>CONTRIBUTING.md:84</code></td><td>One sentence + link in Cadence.</td></tr>
+<tr><td><span class="sev sev--h">high</span></td><td><code>kb add &lt;file&gt;</code> errors ("source path must be a directory") on exactly the recovery path the kb-artifact skill prescribes for indexing a file.</td><td><code>SKILL.md:90</code> vs <code>add.rs:39-47</code></td><td>Accept a file (register parent dir) or fix the skill + docs — pick one contract.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td>Invariant #11's heading in the full-text doc contradicts its own body: the heading still says the <em>meta tag</em> is the canonical session id; the body (and CLAUDE.md's index copy) says the JSONL <code>sessionId</code> wins. Stale since commit <code>ab3d271f</code>.</td><td><code>architecture-invariants.md:181</code> vs <code>:185-190</code></td><td>Retitle the heading.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td>Unmatched <code>/api/*</code> paths return <strong>200 with the SPA HTML shell</strong>, not 404 — verified live. An agent probing a typo'd endpoint parses HTML as success.</td><td><code>dispatch.rs:23-35</code>, <code>router.rs:586</code></td><td>Explicit <code>.fallback</code> on the nested <code>/api</code> router → 404 problem+json.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td>Axum <code>Query</code>/<code>Json</code> extractor rejections bypass <code>error_to_problem_json</code>: a missing <code>q</code> returns text/plain 400 — the one place retry logic most needs structure.</td><td>verified live on <code>GET /api/search</code>; <code>search.rs:586</code></td><td><code>ApiQuery</code>/<code>ApiJson</code> wrappers mapping rejection → problem+json, swapped at ~a dozen call sites.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td><code>kb comments resolve --help</code> claims "uses If-Match for safe concurrent updates"; <code>set_status</code> sends no If-Match, and the comment workflow doc explicitly documents no client If-Match.</td><td><code>main.rs:1546</code> vs <code>comments.rs:1197-1243</code></td><td>Fix the clap doc comment.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td>The SessionStart matcher is <code>startup|resume|clear</code> — <code>compact</code> is excluded, so the memory protocol and recent-memory index are NOT re-injected exactly when compaction just erased them.</td><td><code>hooks.json:16</code></td><td>Add <code>compact</code> to the matcher.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td><code>authoring-artifacts.md</code> calls <code>validate-kb.sh</code>/<code>contrast-check.py</code> "canonical", but the repo's plugin copy (<code>plugins/kb-research/skills/kb-artifact</code>) ships no <code>scripts/</code> — an agent following this checkout's own guide reaches a dead end.</td><td><code>authoring-artifacts.md:451</code> vs plugin tree</td><td>Vendor the scripts into the plugin or soften the doc; better: see <a href="#authoring-loop">kb lint</a>.</td></tr>
+<tr><td><span class="sev sev--m">med</span></td><td>No <code>KB_TOKEN</code> env override — <code>read_bearer()</code> only reads <code>~/.config/kb/token</code>, so scripting a differently-tokened remote daemon means overwriting local state.</td><td><code>main.rs:3564</code></td><td>Check <code>KB_TOKEN</code> before the token file.</td></tr>
+<tr><td><span class="sev sev--l">low</span></td><td><code>kb forget</code> is recall-time-only: forgotten/superseded memory HTML still travels in any filesystem-level export (<code>kb share</code>, <code>kb download --folder</code>, <code>kb pull</code>) of a memory corpus.</td><td><code>memory.rs:172</code>, share walk</td><td>Skip forgotten/superseded memory artifacts in export walks by default.</td></tr>
+<tr><td><span class="sev sev--l">low</span></td><td><code>kb daemon doctor</code> classifies "keyword-only vs broken embedder" by string-sniffing the 400 body for "no embedding_model" — one wording change silently misclassifies every keyword-only kb.</td><td><code>daemon.rs</code> ~369-400</td><td>Structured <code>code</code> field on that 400; match on it.</td></tr>
+<tr><td><span class="sev sev--l">low</span></td><td><code>kb status</code> hardcodes <code>127.0.0.1:4000</code> and has no <code>--daemon</code> flag (unlike <code>kb metrics</code>/<code>doctor</code>) — a second daemon silently degrades it to sqlite-only output.</td><td><code>status.rs:153</code>, <code>main.rs:265</code></td><td>Add <code>--daemon</code>/<code>KB_DAEMON_URL</code> parity.</td></tr>
+</tbody>
+</table>
+
+<h2 id="retrieval">Retrieval: passages, not documents <span class="chip chip--solid">4× solid</span></h2>
+<p>The strongest convergence in the whole review. Independent explorers and ideators, from different starting points, all hit the same wall: <strong>every kb retrieval primitive returns either a doc-level stub or a whole HTML document — never the passage that matched.</strong> For a human with a browser that's fine; for an agent paying per token it's the dominant tax on every lookup.</p>
+<p>The evidence is almost comic: the SQ5 chunk arm already embeds passages, already finds the best-matching chunk per document, and then <code>chunk_vector_query</code> (<code>storage/lance.rs:952</code>) projects <code>Select::columns(&amp;["doc_id"])</code> — the one column that could answer "why did this match" is computed and thrown away. Meanwhile <code>Hit</code> (<code>routes/search.rs:426</code>) carries score, tags, and summary, but no snippet; <code>kb get --format md</code> prints four metadata lines and no body; the only content path is raw HTML with its CSS and JS.</p>
+<p>Five verified items compose into what should be <strong>v0.25's core track</strong>:</p>
+<h3 id="search-snippet">1 · Project the winning chunk as <code>Hit.snippet</code> <span class="chip chip--solid">solid</span></h3>
+<p>Add <code>snippet: Option&lt;String&gt;</code> + <code>chunk_id</code> to <code>Hit</code>, populated from the chunk arm's winner, gated behind <code>?snippet=1</code> / <code>detail=full</code> so the slim popover payload stays byte-identical. Cap ~300 chars around the match. Degrade to <code>None</code> (never error) when the kb has chunking off or BM25/doc-vector won the fusion. For unchunked kbs, a deterministic query-centered BM25-term window over <code>Doc.body</code> is the fallback.</p>
+<h3 id="plaintext-fetch">2 · A plain-text content path <span class="chip chip--solid">solid</span></h3>
+<p><code>kb get --format text</code> / <code>?text=1</code> exposing the already-parsed <code>body_text()</code> (<code>parser.rs:938</code> — the exact extraction the indexer runs). Reading an artifact stops costing HTML+CSS+JS the agent must strip. The section-anchor selector variant is deferred: there is no stable heading-id→text mapping today, so it would be new indexing, not reuse.</p>
+<h3 id="kb-ask">3 · <code>kb ask</code> — single-call find-and-read <span class="chip chip--solid">solid</span></h3>
+<p>The single most common agent pattern is search → pick top hit → fetch → locate passage. Collapse it: one call returns the top fused hit's matching passage + citation + neighbor-section ids to widen. Pure deterministic composition over existing scoring — explicitly <em>not</em> the LLM-flavored <code>/ask</code> sketched in the Obsidian-competitive roadmap doc (consider naming it <code>kb cite</code> or <code>kb snippet</code> to avoid collision with that ruled-out idea).</p>
+<h3 id="kb-context">4 · <code>kb context "task" --budget N</code> — the budgeted pack <span class="chip chip--solid">solid</span></h3>
+<p>One deterministic call assembling top section excerpts + related memories + related session digests, deduped on artifact id, greedy-filled to a token budget, each item carrying provenance and a token estimate. Replaces the 4–6 hand-chained calls (search + recall + why/recollect + sessions show) a session bootstrap costs today. Verifier's scoping: v1 is a thin dedup+fill layer over the existing recall/why/recollect scoring and invariant #28's <code>buffered_join</code> — not a new ranking engine. Once it exists, <code>kb-wake.sh</code> can call it and delete its hand-rolled jq formatting.</p>
+<h3 id="cli-parity">5 · CLI ↔ API search parity <span class="chip chip--partial">partial</span></h3>
+<p>The server already has scope/category/folder/tags/exclude-tags/since/sort params and a <code>score</code> + <code>source_relative</code> on Hit; the CLI sends only <code>q/mode/kb/limit</code> and its slim Hit drops score entirely (<code>commands/search.rs:14-27</code>). Pure wiring, high value. Separately (and gated on a re-run of the SQ4 A/B): unify the two incompatible filter grammars (<code>kb_core::query</code>'s DSL vs <code>/api/search</code>'s ad-hoc params — two different <code>since</code> vocabularies today), and feed the reranker the winning chunk's text instead of the one-line excerpt — the SQ4 bench doc itself names that as the root cause of its −0.20 R@1 regression.</p>
+<p class="small">Also in this theme, lower tier: graduated <code>detail=id|slim|snippet|section|full</code> tiers with documented token costs; an <code>anchor</code> field on <code>Hit</code>/<code>RecallHit</code> resolving to the existing <code>/a/{kb}/{path}?sec=</code> permalinks (the custom <code>kb://</code> scheme was already considered and correctly rejected in 2026 — HTTP permalinks are clickable, custom schemes are not); <code>kb facets --for-query</code> for plan-before-fetch narrowing.</p>
+
+<h2 id="protocol">The protocol surface: finish the contract <span class="chip chip--partial">partial</span></h2>
+<p>kb's machine contract is genuinely good where it exists — the problem is coverage, and coverage is exactly what an agent script can't inspect ahead of time.</p>
+<ul>
+<li><strong>One error envelope, everywhere.</strong> Three verified holes: (a) hoist <code>search.rs</code>'s <code>{"error":…}+exit(1)</code> wrapper into one <code>json_err_exit()</code> helper and apply to all ~20 <code>--json</code> verbs (today 18 of them leave stdout empty and dump anyhow chains to stderr — a jq pipeline written against <code>kb search</code>'s contract breaks against every other verb); (b) the extractor-rejection problem+json wrapper; (c) the <code>/api/*</code> 404 fallback. Each independently shippable (<a href="#bugs-and-drift">§Bugs</a> rows 6–7).</li>
+<li><strong><code>kb tools --json</code> and <code>kb tools --verb &lt;name&gt;</code>.</strong> The clap walk already exists; a serde rendering gives agents pre-flight invocation validation, and a single-verb slice cuts the 961-line manifest to a ~40-line top-up mid-task. The verifier's caution stands: skip the HTTP <code>/api/capabilities</code> twin (the CLI is the protocol), and defer the per-verb <code>output_contract</code> field until a few verbs have stable serde-derived schemas to anchor it — otherwise it hand-drifts exactly like the thing it replaces.</li>
+<li><strong>Curate <code>kb tools</code> examples for the flagship verbs.</strong> <code>remember</code>/<code>recall</code>/<code>why</code>/<code>recollect</code> — the verbs an agent calls unprompted every session — have no curated example while <code>atlas</code> and <code>token</code> do (<code>tools.rs:85-107</code>). Small change, disproportionate onboarding value, and the right place to teach <code>--link</code> vs <code>--scope</code> correctly once the visibility bug is fixed.</li>
+<li><strong><code>GET /api/bootstrap</code> / <code>kb doctor --for-agent</code>:</strong> identity + config + kbs + embedder health + inbox counts in one fail-soft call, replacing the 4–5 sequential calls a cold headless session chains today.</li>
+<li><strong>Consistency batch:</strong> <code>--json</code> on <code>kb comments show</code> (it already fetches the full JSON Value then hand-formats it); the single-kb auto-default extended from <code>kb find</code> to <code>get</code>/<code>related</code>; <code>skipped: [{kb, reason}]</code> on federated scope=all responses so a silently-dropped corpus (invariant #28's fold-and-drop) is distinguishable from a genuinely empty fleet.</li>
+</ul>
+
+<h2 id="authoring-loop">Closing the authoring loop <span class="chip chip--partial">partial</span></h2>
+<p>Agents author every artifact, yet the 506-line contract is enforced socially: the parser silently truncates an oversized kb-prompt, silently falls back title→filename, silently drops unparseable <code>kb-salience</code>, and silently discards ambiguous wikilinks from the graph (<code>parser.rs:404-419</code>, <code>indexer.rs:1301-1306</code>, <code>links.rs:186-200</code>). Nothing reaches <code>kb status</code>, <code>kb find</code>, or the bus. The skill-side validator (<code>validate-kb.sh</code>) exists but is perl-regex over raw HTML — it can drift from what html5ever actually extracts, and it isn't in this repo's plugin copy at all.</p>
+<ul>
+<li><strong><code>kb debug-fields &lt;file&gt; --json</code> → don't build a second validator.</strong> The verifier's refinement is the right call: a tiny daemon-free verb dumping <code>parser::Fields</code> + <code>links::Resolution</code> (title source, prompt bytes vs the 8 KB cap, tag slugification, salience/created parse results, ambiguous wikilinks). <code>validate-kb.sh</code> then shells out to it for parser-fidelity checks and keeps its cheap regex checks — one source of truth for "what will the indexer actually see", zero drift.</li>
+<li><strong>Ingest receipts as sugar, not a new pipeline.</strong> Everything needed exists: the single-path force nudge (<code>quarantine.rs:203</code>), the authoritative <code>artifact.indexed</code> completion event carrying id+fields (<code>indexer.rs:1634</code>), the 202+run SSE convention. <code>kb ingest &lt;file&gt;</code> = nudge + await that artifact's event with a bounded timeout, degrading to "queued — poll <code>kb find</code>". Collapses the racy write-then-poll loop into one authoritative "it is searchable, here is what was extracted, here are the warnings".</li>
+<li><strong><code>index.warning</code> SSE class</strong> — the genuinely novel piece: the indexer has ~12 <code>tracing::warn!</code> sites for soft authoring defects that today only reach the log file. Emitting them on the bus enables a standing corpus-wide authoring-quality triage loop (the <code>kb comments watch</code> pattern, pointed at slop).</li>
+<li><strong><code>kb audit</code> / <code>GET /api/kb/{kb}/quality</code>:</strong> the corpus-wide aggregation — title-fallback docs, truncated prompts, unresolved/ambiguous wikilinks — in one shot. Per-artifact fields on <code>kb find --json</code> misdiagnose which surface an agent polls for triage.</li>
+<li><strong>Embedded <code>kb new</code> presets:</strong> contract-passing skeletons (title, hierarchy, stable ids, kb-prompt, meta, visual-floor token roles) compiled into the binary, so a Codex/OpenCode agent with no skill tree gets the same authoring floor Claude Code gets. Provable by the lint verb above.</li>
+</ul>
+
+<h2 id="memory-learning">Memory as a learning system <span class="chip chip--partial">mixed</span></h2>
+<p>The memory subsystem's determinism is its moat — the verify pass defended it hard against the fleet's own enthusiasm, and the surviving shape is more interesting than the raw proposals.</p>
+<ul>
+<li><strong><code>kb why-memory &lt;id&gt;</code> <span class="chip chip--solid">solid</span> — the fact-centric provenance join.</strong> <code>kb why</code> is file→sessions→commits; nothing goes fact→origin-session→commits→files, even though <code>RecallHit</code> already carries <code>session_id</code> and the per-session routes exist. Ship it as a CLI-side aggregator over the three existing endpoints — no new server route. The verifier's honest caveat: a resolvable commit sha proves the commit exists, not that later commits didn't revert it — label it "commit still in history", not "still true", and no-op cleanly for memories without a session.</li>
+<li><strong>Write-time dedup <span class="chip chip--partial">partial</span> — this is R6.1, so build it as R6.1.</strong> The evolving-the-memory research already specs write-time reconciliation against top-k neighbors. A synchronous <code>--check-dup</code> gate is the scoped-down slice, but it must fix the idempotency race first: memory filenames derive from <code>slug-&lt;unix_secs&gt;</code>, so two concurrent agents writing near-simultaneously can both pass the check and still collide on the same-second filename.</li>
+<li><strong>Negative memory <span class="chip chip--partial">partial</span>:</strong> a <code>kb-outcome: failure</code> meta + <code>kb remember --failed</code>, with recall surfacing a <code>warns</code> flag so injection renders "X was tried and failed here" — never as a score term (the R3 invariant: outcomes are surfaced signals, not ranking inputs). The session half is mostly built: <code>error_count</code> and <code>commits</code> already exist; expose a derived <code>outcome</code> as a read-only <code>recollect --outcome</code> filter.</li>
+<li><strong>Salience health <span class="chip chip--partial">partial</span>:</strong> ~40% of live memories sit at the 0.5 default — the "0.5 monoculture" the reflect skill fights by hand is invisible to any automated surface. A per-corpus salience histogram in <code>/api/metrics</code> turns "this corpus needs regrading" into a pollable trigger for <code>/kb-reflect</code>.</li>
+<li><strong>Usage-derived salience <span class="chip chip--killed">weak</span> — the verifier was right to kill the ranking half.</strong> Writing on the recall path bends invariant #10 for a self-reported, gameable signal, and the negative case is already covered by forget/supersede. The surviving slice: a passive server-side <code>times_recalled</code> counter, exposed as a metrics diagnostic only, never folded into rank.</li>
+</ul>
+<p class="small">Also verified real: recall injection and <code>--format md</code> never surface memory <em>body</em> content — the 80-char title (hard-truncated mid-word) is all an agent sees, forcing a fetch round-trip on every recalled fact it wants to act on. Fixing <code>fetch_metadata_md</code> to include the body (or <code>kb-summary</code>) is small and compounds with <code>kb context</code>.</p>
+
+<h2 id="sessions-cross-harness">Sessions &amp; cross-harness: respect the trigger, ship the cheap half <span class="chip chip--killed">killed</span> <span class="chip chip--partial">partial</span></h2>
+<p>The fleet converged on a harness-neutral capture envelope (<code>kb-capture/1</code> + adapters for Codex/OpenCode) — and the verifier killed it with the repo's own receipts: the identical idea is item #12 of the fresh-eyes review, scored, and deliberately deferred on <em>measured data</em> (OpenCode abandoned since 2026-04; Codex at ≈1.5% of local sessions, mostly automated noise), with the rule "build the adapter the week a second harness does real work". That ruling stands. What survives:</p>
+<ul>
+<li><strong>Ship the sanctioned quick win that fresh-eyes already adopted but nobody landed:</strong> the AGENTS.md memory-protocol block. AGENTS.md declares itself the harness-neutral entry point and covers comments + search — <code>remember</code>/<code>recall</code>/<code>why</code>/<code>recollect</code> appear nowhere in it, so the memory system is undiscoverable without Claude Code hooks even though the CLI itself is fully harness-agnostic. Generate it from one source so it can't drift from <code>CLAUDE.memory.md</code>.</li>
+<li><strong>Hook resilience batch <span class="chip chip--partial">partial</span>:</strong> log every silent <code>exit 0</code> branch of <code>kb-capture.sh</code> to a rotating <code>.capture.log</code> (a broken capture pipeline is invisible today until someone notices a recollect gap); inject a fixed <code>[kb memory: daemon unreachable]</code> marker on recall failure instead of pure silence (failure ≠ "no memories"); add <code>compact</code> to the SessionStart matcher (<a href="#bugs-and-drift">§Bugs</a>).</li>
+<li><strong>Digest the final assistant text.</strong> A long exploration session with no decisions and no commits digests to title+prompt+file-basenames — nearly nothing for <code>kb recollect</code> to match. Deterministically appending the transcript's last assistant text block (the agent's own closing summary) narrows the deferred-R6 gap with zero LLM in the daemon.</li>
+<li><strong>Incremental capture <span class="chip chip--killed">weak</span>:</strong> byte-offset delta parsing was killed — hook cost is linear string ops that stay sub-second, and reindex-burst latency is already the target of the tail-latency phase-3 plan. The surviving slice is a simple debounce (skip capture unless N turns / K KB elapsed).</li>
+</ul>
+
+<h2 id="fleet">Multi-agent coordination: what kb should and shouldn't be <span class="chip chip--killed">killed</span></h2>
+<p>The fleet lens produced the boldest proposals — advisory soft-locks (<code>kb claim &lt;path&gt; --ttl</code>), live presence (<code>kb who</code>), heartbeats — motivated by a real observation: the v0.24 plan literally encodes a hand-rolled READ-ONLY-DIRTY-FILES protocol because two sessions share one tree. The verifier killed the claims registry: <code>kb-collaboration-model.html</code> already refused file-locking/vault-style coordination ("regenerate-and-reindex, not last-writer-wins on hand-edited files"), and comments+<code>.review</code> are the recorded collaboration surface.</p>
+<p><strong>A minority report, for the record:</strong> the refusal reasons about <em>artifact</em> collaboration; the claims idea is about <em>source-tree</em> coordination between coding agents, which is arguably a different domain. But the verdict lands in the same place for a better reason — kb is a knowledge daemon, not a dev-workspace daemon, and turning it into the latter is scope creep with a thin constituency of one. What survives is the kb-shaped subset:</p>
+<ul>
+<li><strong>Blackboard scratch corpus — reuse memory + retention, add nothing.</strong> Subagents in a fan-out post findings as TTL-scoped memories (<code>kb remember --ttl 4h --category blackboard</code> routed to a scratch corpus governed by an R3 retention window — the primitive v0.24 is shipping right now); the orchestrator recalls-by-category instead of ingesting walls of returned text; entries self-prune. Same shape for <code>kb post</code> (write a scratch artifact, get back a citable id/permalink). No locks, no new store, comments stay the human channel.</li>
+<li><strong><code>kb events emit</code> — the symmetric producer.</strong> T1 ships the consumer (<code>kb events --follow</code>); a namespaced <code>agent.*</code> producer over the same ring (kept out of the SPA's default subscription) turns the existing SSE bus into a deterministic subagent-completion channel with cursor/gap replay for free. Add <code>--json</code> (one object per line) to the T1 follower while it's being built — the plan currently only specs human blocks.</li>
+<li><strong><code>X-Agent-Id</code> attribution, and only attribution:</strong> an optional header threading through history rows and the rate-limit bucket so co-tenant sessions on one shared token are distinguishable in the audit trail. Build it when a second concurrent harness is real (same bar as the MCP trigger) — no locks, no presence map, no claim stream.</li>
+</ul>
+
+<h2 id="ops-docs">Ops &amp; docs hygiene <span class="chip chip--partial">partial</span></h2>
+<ul>
+<li><strong><code>kb daemon log --tail N --level info</code> — the crashed-daemon reader.</strong> v0.24's L1/L2 wires file logging; the deliberately-deferred piece was an HTTP log-tail. The verified delta is different: a <em>disk-reading</em> CLI verb (KbPaths-aware, globbing rotated <code>kb.ndjson.*</code> newest-first, JSON-lines passthrough for jq) that works precisely when the daemon is down — the case where an agent needs it most and where the HTTP endpoint by definition can't help. Skip <code>--follow</code> in v1.</li>
+<li><strong>Federated health:</strong> the <code>skipped[]</code> field on scope=all responses (also listed under <a href="#protocol">§Protocol</a>) — <code>buffered_join</code>'s drop-on-error is good availability engineering that is currently invisible to callers.</li>
+<li><strong>Docs batch, all confirmed-real:</strong> fix invariant #11's heading; add DCO to Cadence; cross-link AGENTS.md ↔ CLAUDE.md ↔ CONTRIBUTING.md (AGENTS.md is currently an undiscoverable island with zero inbound links); put the invariant index on a diet — entries range 18 to 371 words (#30 alone is ~2,500 chars of always-loaded context), defeating the two-tier split's purpose. A ~40-word cap per index entry restores it; CLAUDE.md is ~24.5 KB (~6k tokens) loaded every session, and roughly a third of that is index entries that outgrew their job.</li>
+<li><strong>Self-index the contributor docs <span class="chip chip--fable">cheap, do it</span>:</strong> a dev <code>[kb.docs]</code> stanza over README/AGENTS/CONTRIBUTING/invariants so <code>kb search "DCO sign-off"</code> answers in one call. kb's own contributor knowledge is currently the only knowledge near this repo <em>not</em> in kb.</li>
+</ul>
+
+<h2 id="beyond">Beyond the fleet: five Fable bets <span class="chip chip--fable">synthesis</span></h2>
+<p>Everything above is the fleet's output, verified. This section is mine — ideas that weren't in any agent's return, or that the merge dropped and I'm deliberately resurrecting. The common thread: <strong>kb's differentiation is that it is deterministic infrastructure for probabilistic authors</strong>. Every bet below extends that asymmetry instead of diluting it.</p>
+
+<h3 id="truth-maintenance">1 · Truth maintenance: <code>kb stale</code> and <code>kb verify</code></h3>
+<p>A corpus written by LLMs rots in two specific, <em>mechanically detectable</em> ways, and this review found live instances of both in kb's own docs: claims whose cited code moved (invariant #11's heading survived its own body's correction), and documents whose source material changed after authoring.</p>
+<ul>
+<li><strong><code>kb-derived-from</code> → <code>kb stale</code>.</strong> Artifacts already carry their prompt (<code>kb-prompt</code>); let them optionally carry their <em>inputs</em> — a meta listing the repo paths/globs the document was derived from. A deterministic <code>kb stale [--kb X]</code> then walks input mtimes/commits vs the artifact's own and reports "this doc predates 14 commits to the files it describes". The doc becomes a function of its sources, and staleness becomes a per-artifact, provenance-linked signal — categorically better than mtime recency. Surfaces in the About tab and as a search-result freshness field.</li>
+<li><strong><code>kb verify &lt;id&gt;</code> — citation integrity.</strong> kb-authored research cites <code>file:line</code> pervasively (this document included). A deterministic check that parses those citations from an artifact's code/kbd spans and confirms each path still exists (and optionally that the line still contains the cited symbol) turns citation rot from invisible decay into a triage list. Zero LLM; pure parse + stat + grep.</li>
+</ul>
+<p class="small">Why this is the right kind of ambitious: it composes the existing edge graph (invariant #29) with a new edge kind (derivation), reuses the watcher/indexer, and gives agents the one thing no other knowledge tool gives them — a machine answer to "can I still trust this document?"</p>
+
+<h3 id="decision-surfaces">2 · <code>kb-decision/1</code>: artifacts as decision surfaces</h3>
+<p>The wildcard proposed this and the merge dropped it; I'm resurrecting it because it is the highest-leverage unbuilt idea in the whole exercise. v0.24 itself ran as an unattended overnight milestone; the binding constraint on autonomous runs is <em>human decision latency</em>, and today a blocking terminal AskUserQuestion is the only channel. But the primitive already exists: comments carry structured <code>Choice</code> buttons in both directions (<code>review.rs:154</code>), the SPA renders them, SSE announces them, and the wake hook injects context at session start.</p>
+<p>Formalize it: a <code>data-kb-decision</code> block grammar in artifacts (options, default, expiry); verdicts persisted beside comments under the <code>review_lock</code> (invariant #6 — this <em>rides</em> the sanctioned collaboration surface, it doesn't compete with it); a <code>decision.recorded</code> SSE kind; <code>kb decisions --pending --json</code>; pending decisions injected at SessionStart. An overnight agent writes "I'm about to delete the TUI crate — approve / defer / modify" into its plan artifact, continues on other tracks, and picks up the verdict when the human taps a button over morning coffee — every ruling becoming a searchable, timestamped provenance record instead of a lost chat turn. This converts kb from a memory for agents into the <strong>async contract surface between agents and their humans</strong>.</p>
+
+<h3 id="kb-prime">3 · <code>kb prime</code>: generate the integration, don't port it</h3>
+<p>The cross-harness question keeps being framed as "port the hooks" (killed) or "build MCP" (deferred). There's a third shape nobody proposed: <strong>one command that emits the integration <em>content</em></strong>. <code>kb prime [--task "..."] [--format md|json]</code> outputs the complete bootstrap block — the memory protocol, a <code>kb tools</code> slice, top recalled memories with bodies, open inbox items, pending decisions — sized to a budget. Claude Code's wake hook calls it (deleting the hand-rolled jq in <code>kb-wake.sh</code> and the drift between its heredoc and <code>CLAUDE.memory.md</code> — the visibility bug in <a href="#bugs-and-drift">§Bugs</a> exists <em>because</em> there are two copies). A Codex or OpenCode user pipes it into AGENTS.md or a session preamble. One implementation, every harness, no adapters — and it subsumes <code>kb context</code>'s session-bootstrap case while remaining honest about the recorded trigger: when a second harness does become real, the integration is a one-liner, not a port.</p>
+
+<h3 id="instrument-the-trigger">4 · Instrument the MCP trigger instead of arguing about it</h3>
+<p>The MCP ruling's revisit-trigger is "a second agent harness enters real use here, or credible inbound demand". The fleet's ideators argued industry trends; the verifier correctly replied that the ruling anticipated exactly that argument. Here's the kb-flavored resolution: <strong>make the trigger measurable</strong>. An optional <code>KB_AGENT_HARNESS</code> env stamp (set by each harness's integration, recorded on history rows / a counter table) plus <code>kb fleet harnesses --since 30d</code> turns "did the trigger fire" into a query instead of a debate. Meanwhile, build the plug rather than the socket: <code>kb ask</code> and <code>kb context</code> <em>are</em> the single-shot primitives an MCP tool would wrap — with them shipped, a future <code>kb mcp</code> (already designed, read-only, in the extensibility RFC §7b) is a weekend of glue behind a trigger that has provably fired.</p>
+
+<h3 id="kb-steer">5 · <code>/kb-steer</code>: the sessions corpus as a training set for the project's own steering docs</h3>
+<p>kb already captures every session; <code>kb-reflect</code> already dreams over <em>memories</em>. The unexploited asset is dreaming over <em>sessions to improve the instructions</em>. Recurring error signatures, repeated invariant violations, instructions that sessions demonstrably ignored, pitfalls hit twice (CLAUDE.md's own rule for when a pitfall gets documented!) — all of it sits in <code>session_decisions</code>/<code>error_count</code>/digests. A periodic agent-layer skill (deterministic evidence verbs in the daemon: e.g. <code>kb sessions errors --group-by signature</code>; LLM judgment strictly in the agent layer, matching the kb-reflect precedent) proposes human-gated edits to CLAUDE.md/skills: "4 sessions this month hit the concurrent-cargo phantom E0063 despite the pitfall entry — the warning may need to move into the justfile itself." The steering documents stop being write-only and start being empirically maintained. kb-artifact-evolve already proved this loop works for one skill; generalize it to the harness.</p>
+
+<h2 id="roadmap">Prioritized roadmap</h2>
+<table>
+<thead><tr><th>Tier</th><th>Contents</th><th>Effort</th><th>Why this order</th></tr></thead>
+<tbody>
+<tr><td><strong>0 · Now</strong><br><span class="small">a day of fixes</span></td><td>The <a href="#bugs-and-drift">§Bugs</a> table: pull.rs path fix · scope/link visibility + single-sourced protocol text · kb add file contract · invariant #11 heading · DCO in Cadence · /api 404 · extractor problem+json · If-Match help text · compact matcher · KB_TOKEN · doctor code field · status --daemon. Plus: kb tools examples for remember/recall/why/recollect · --json on comments show.</td><td>small</td><td>Each is independently committable, several are one-liners, and two (pull, scope) are silent correctness bugs compounding daily.</td></tr>
+<tr><td><strong>1 · v0.25<br>"agent retrieval"</strong></td><td>Hit.snippet chunk projection · kb get --format text · CLI/search parity (thread existing Params + score) · the JSON error envelope helper across all --json verbs · kb ask · anchor field on Hit/RecallHit · recall md-format body fix.</td><td>medium</td><td>The verified-solid cluster; biggest per-call token win; all reuse existing computation (chunk table, body_text(), server Params).</td></tr>
+<tr><td><strong>2 · v0.26<br>"closed loops"</strong></td><td>kb context --budget · kb debug-fields + validate-kb.sh integration · kb ingest receipt · index.warning SSE · kb audit corpus quality · kb why-memory · kb tools --json/--verb · skipped[] on scope=all · kb daemon log · salience histogram · AGENTS.md memory block + cross-links · invariant index diet · fleet-wide comments watch + awaiting field.</td><td>medium</td><td>Feedback loops: authoring, memory provenance, ops observability, docs. Mostly composition over existing primitives.</td></tr>
+<tr><td><strong>3 · Triggered<br>/ horizon</strong></td><td>kb-decision/1 · truth maintenance (kb stale / kb verify) · kb prime · blackboard scratch corpus + kb events emit · write-time dedup as R6.1 (after the filename race fix) · negative memory + outcome facet · read-only federation · kb mcp (gated on the instrumented trigger).</td><td>large</td><td>Direction bets. Each names its trigger; none should ship without one firing. Decision surfaces and truth maintenance are the two I'd pull forward first — both ride existing invariants rather than adding new ones.</td></tr>
+</tbody>
+</table>
+<div class="callout callout--ok"><span class="callout-label">The arc</span>
+Tier 0 makes the existing contract honest. Tier 1 changes the unit of retrieval from document to passage. Tier 2 closes the loops so authoring, memory, and ops each report their own health. Tier 3 is the thesis bet: kb stops being a knowledge base agents <em>consult</em> and becomes the substrate agents <em>think and decide through</em> — with every step still deterministic, inspectable, and LLM-free inside the daemon.</div>
+
+<h2 id="verdicts">Verification ledger — all 24 canonical items</h2>
+<p class="small">Recorded so killed ideas aren't re-proposed without new evidence, in the spirit of README's Non-goals. Verdicts: <span class="chip chip--solid">solid/standout</span> · <span class="chip chip--partial">partial-exists</span> (only the named delta is new) · <span class="chip chip--killed">killed</span> (already-exists / violates-refusal / weak).</p>
+<table>
+<thead><tr><th>Item</th><th>Verdict</th><th>One-line disposition</th></tr></thead>
+<tbody>
+<tr><td>kb-ask</td><td><span class="chip chip--solid">solid</span></td><td>Novel; deterministic; rename away from the roadmap doc's LLM-flavored /ask.</td></tr>
+<tr><td>search-snippet</td><td><span class="chip chip--solid">solid</span></td><td>Premise exactly accurate (chunk text discarded at query time); degrade to None when unchunked.</td></tr>
+<tr><td>kb-context-pack</td><td><span class="chip chip--solid">solid</span></td><td>No combiner exists; v1 = thin dedup+greedy-fill over existing scoring, drop the "pending decisions" source until it exists.</td></tr>
+<tr><td>plaintext-fetch</td><td><span class="chip chip--solid">solid</span></td><td>body_text() exists and is never exposed; drop the #anchor selector from v1.</td></tr>
+<tr><td>memory-provenance</td><td><span class="chip chip--solid">solid</span></td><td>Genuine composition gap; ship CLI-side; label "commit still in history", not "still true".</td></tr>
+<tr><td>cli-json-manifest</td><td><span class="chip chip--partial">partial</span></td><td>kb tools already walks clap; delta = --json/--verb; defer output_contract.</td></tr>
+<tr><td>json-error-contract</td><td><span class="chip chip--partial">partial</span></td><td>problem+json shipped; three verified holes (CLI envelope ×18 verbs, extractors, /api 404).</td></tr>
+<tr><td>cli-search-parity</td><td><span class="chip chip--partial">partial</span></td><td>Server params fully exist; CLI wiring is the gap; DSL unification + reranker-chunk-text gated on re-benching.</td></tr>
+<tr><td>kb-citation-uris</td><td><span class="chip chip--partial">partial</span></td><td>?sec= permalinks already end-to-end; delta = anchor field on Hit/RecallHit; kb:// scheme re-rejected.</td></tr>
+<tr><td>kb-lint</td><td><span class="chip chip--partial">partial</span></td><td>validate-kb.sh exists (outside this repo); delta = kb debug-fields for parser fidelity, don't build a second validator.</td></tr>
+<tr><td>ingest-receipt</td><td><span class="chip chip--partial">partial</span></td><td>All primitives exist (nudge, artifact.indexed, 202+run convention); build as sugar with bounded timeout.</td></tr>
+<tr><td>authoring-defect-signals</td><td><span class="chip chip--partial">partial</span></td><td>Split: kb audit endpoint + index.warning SSE (novel); kb find is the wrong home.</td></tr>
+<tr><td>write-dedup</td><td><span class="chip chip--partial">partial</span></td><td>It's R6.1 from evolving-the-memory; fix the slug-unix-secs filename race first.</td></tr>
+<tr><td>negative-memory</td><td><span class="chip chip--partial">partial</span></td><td>Memory half novel (meta tag + surfaced warns, never a score term); session half mostly shipped (error_count/commits).</td></tr>
+<tr><td>daemon-log-offline</td><td><span class="chip chip--partial">partial</span></td><td>L1/L2 in-flight; delta = disk-reading kb daemon log for the crashed-daemon case; skip --follow.</td></tr>
+<tr><td>daemon-health-signals</td><td><span class="chip chip--partial">partial</span></td><td>Keep kb status --daemon + skipped[]; embedder metrics already in T1; don't soften the fail-closed dim check.</td></tr>
+<tr><td>kb-handoff-federation</td><td><span class="chip chip--partial">partial</span></td><td>Ship the pull.rs one-liner now; a unified bundle only for the artifact+.review+memories combination; drop peer federation until demanded.</td></tr>
+<tr><td>docs-onboarding-hygiene</td><td><span class="chip chip--partial">partial</span></td><td>Two real deltas (invariant #11 heading, AGENTS.md memory section + cross-links); DCO already in CONTRIBUTING; grammar already golden-pinned.</td></tr>
+<tr><td>kb-mcp-server</td><td><span class="chip chip--killed">killed</span></td><td>Already fully designed (extensibility RFC §7b) and deliberately deferred; trend arguments were anticipated by the ruling; see <a href="#instrument-the-trigger">§instrument the trigger</a>.</td></tr>
+<tr><td>harness-capture-envelope</td><td><span class="chip chip--killed">killed</span></td><td>Fresh-eyes item #12, deferred on usage data (Codex ≈1.5%, OpenCode abandoned); ship only the AGENTS.md block; gate adapters on measured non-Claude sessions.</td></tr>
+<tr><td>agent-attribution-coordination</td><td><span class="chip chip--killed">killed</span></td><td>Soft-locks refused in kb-collaboration-model.html; surviving slice = X-Agent-Id attribution only, when concurrency is real.</td></tr>
+<tr><td>usage-salience-feedback</td><td><span class="chip chip--killed">weak</span></td><td>Bends invariant #10 for a gameable self-report; negative case already covered; keep only a passive diagnostic counter.</td></tr>
+<tr><td>incremental-capture</td><td><span class="chip chip--killed">weak</span></td><td>Hook cost is linear and sub-second; burst latency already targeted by the tail-latency phase-3 plan; keep only a debounce.</td></tr>
+<tr><td>comments-inbox-wake</td><td><span class="chip chip--killed">weak</span></td><td>Global wake-hook injection = cross-project noise (kb-memory is system-wide); scope to sessions whose project maps to a corpus, or fold into kb prime/context.</td></tr>
+</tbody>
+</table>
+
+<h2 id="provenance">Provenance</h2>
+<p class="small">Run <code>wf_f48b5409-3ba</code>, 2026-07-05: 43 agents (12 Sonnet explorers, 5 Opus ideators + 1 Fable wildcard, 1 Opus merge, 24 Sonnet verifiers), 2,613,798 subagent tokens, 821 tool calls, 26.6 minutes wall clock. Synthesis and §Beyond authored by Claude Fable 5. Baseline: <code>main@2ff019da</code> (v0.24 R1 landed; R2 cascade WIP present in the working tree and left untouched). All file:line citations were produced against that baseline and will drift — which is itself the argument for <a href="#truth-maintenance">§truth maintenance</a>.</p>
+<p class="small">Related artifacts in this corpus: fresh-eyes next-iteration review (2026-07) (private) · <a href="/a/kb-docs/kb-plugins-extensibility-rfc.html">plugins &amp; extensibility RFC</a> (MCP §7b) · <a href="/a/kb-docs/evolving-the-kb-memory-system.html">evolving the kb memory system</a> (R6) · <a href="/a/kb-docs/v024-reliability-index-control-tui-retirement-plan.html">v0.24 milestone plan</a> · <a href="/a/kb-docs/search-quality-options.html">search quality options</a>.</p>
+
+</main>
+</body>
+</html>

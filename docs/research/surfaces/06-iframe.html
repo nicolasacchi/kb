@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Iframe sandbox vs Shadow DOM for kb artifact rendering — flag semantics, storage isolation, postMessage, recipe.">
+<title>06 · Iframe — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="../foundation/01-lancedb.html">01 · Storage</a>
+      <a href="../foundation/02-fastembed.html">02 · Embeddings</a>
+      <a href="../foundation/03-notify.html">03 · Watcher</a>
+      <a href="../foundation/04-sse-axum.html">04 · SSE</a>
+      <a href="../foundation/05-ratatui.html">05 · TUI</a>
+      <a href="06-iframe.html" class="is-current">06 · Iframe</a>
+      <a href="07-html-effectiveness.html">07 · HTML</a>
+      <a href="08-prior-art.html">08 · Prior art</a>
+      <a href="09-comments.html">09 · Comments</a>
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 06
+    <span>·</span>
+    <span class="meta">Iframe vs Shadow DOM</span>
+    <span>·</span>
+    <span class="meta">Confidence MEDIUM → HIGH (refines the proposal)</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>Subdomain</em> per artifact.<br>Sandbox + same-origin, served from a <em>different</em> origin.</h1>
+  <p class="lede">The proposed <code>sandbox="allow-scripts allow-popups"</code> is right in spirit but mis-located in practice. Without <code>allow-same-origin</code>, the iframe is an opaque origin — <code>localStorage</code>, IndexedDB, cookies all throw <code>SecurityError</code>. The fix is the <em>CodePen / Observable / Claude</em> pattern: keep <code>allow-same-origin</code>, but serve each artifact from a <strong>different origin</strong> (subdomain). That gives the iframe a real, isolated origin with working storage <em>and</em> denies it the parent's DOM.</p>
+</section>
+
+<section class="section section-tight">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Integration note · 2026-05-11 (amended post deep-review)</span>
+    <p style="margin:0;font-size:.95rem;line-height:1.55"><strong>The Web Gallery design handoff was almost right.</strong> Its prototype used <code>sandbox="allow-scripts allow-popups allow-forms allow-same-origin"</code> — the right flag set, but served the iframe from the parent's origin (<code>localhost:4000</code>), which is the actual storage-broken footgun §A flags. Reconciliation: <strong>keep the flag set</strong>, change the <strong>serving origin</strong>. Per-artifact subdomain (<code>&lt;id&gt;.artifacts.localhost:4000</code>) gives the iframe its own real origin; the sandbox stays intact, storage works, and the parent's DOM is cross-origin (safe). The annotator bridge (topic 10 §I) works directly because <code>allow-same-origin</code> is in — but still uses serve-time injection (topic 10 §M-10) for cache-control and per-artifact-script delivery.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>Sandbox flag string:</strong> <code>allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads</code>. <strong>Serve each artifact from <code>&lt;id&gt;.artifacts.localhost</code></strong> (wildcard DNS, Chrome since M67 / Firefox since 84 auto-resolve; Safari needs dnsmasq) — the artifact gets a real, persistent, isolated origin so <code>localStorage</code>/IndexedDB/cookies all work, and the sandbox-removal attack is neutered (different origin → can't reach <code>parent.document</code>). Bridge fetch through <code>postMessage</code> (parent SPA does the actual call). Keep <code>allow-top-navigation*</code> <em>off</em>. <strong>Use Shadow DOM only for the JS-free artifact subclass</strong>; everything else: iframe. <strong>Recreate the iframe per render</strong> (CodePen pattern) — kills runaway loops, frees memory.</p>
+    <div class="badges">
+      <span class="conf conf--high">Decision · HIGH (with subdomain)</span>
+      <span class="conf conf--crit">Storage trap · CRIT (proposal as-stated)</span>
+      <span class="conf conf--high">Precedent · HIGH (Observable, CodePen, Claude)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. Sandbox flag semantics (current spec)</div>
+    <h2>Each token re-enables one capability</h2>
+  </div>
+  <div class="prose">
+    <p><code>sandbox=""</code> applies <strong>all</strong> restrictions. Each token re-enables one capability:</p>
+    <table class="alt-table">
+      <thead><tr><th>Token</th><th>What it re-enables</th></tr></thead>
+      <tbody>
+        <tr><td><code>allow-scripts</code></td><td>JS execution (does <em>not</em> allow popups)</td></tr>
+        <tr><td><code>allow-same-origin</code></td><td><strong>Removes the opaque-origin treatment.</strong> Document keeps its real origin → cookies, storage, same-origin fetch all work</td></tr>
+        <tr><td><code>allow-forms</code></td><td>Form submission</td></tr>
+        <tr><td><code>allow-popups</code></td><td><code>window.open</code> and <code>target="_blank"</code></td></tr>
+        <tr><td><code>allow-popups-to-escape-sandbox</code></td><td>Popups don't inherit the sandbox</td></tr>
+        <tr><td><code>allow-modals</code></td><td><code>alert/confirm/prompt</code>, <code>&lt;dialog&gt;</code>, <code>BeforeUnloadEvent</code></td></tr>
+        <tr><td><code>allow-pointer-lock</code> / <code>-orientation-lock</code> / <code>-presentation</code></td><td>Niche APIs</td></tr>
+        <tr><td><code>allow-top-navigation</code></td><td><strong>The parent SPA gets blown away</strong></td></tr>
+        <tr><td><code>allow-top-navigation-by-user-activation</code></td><td>Same, but only after a user gesture</td></tr>
+        <tr><td><code>allow-downloads</code></td><td><code>&lt;a download&gt;</code> and download responses</td></tr>
+        <tr><td><code>allow-storage-access-by-user-activation</code></td><td>Storage Access API (unpartitioned cookies)</td></tr>
+        <tr><td><code>allow-same-site-none-cookies</code></td><td>New in Chrome 135 (2025) — narrow cookie use case</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><b>The footgun:</b> combining <code>allow-scripts</code> + <code>allow-same-origin</code> when the iframe is served from your own origin is equivalent to no sandbox at all — the embedded script can <code>parent.document.querySelector('iframe').removeAttribute('sandbox')</code> and reload itself. MDN, WHATWG, and the W3C HTML validator all warn. <strong>Only safe combo:</strong> those two together when the iframe is served from a <em>different</em> origin.</div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">B. Storage isolation specifics</div>
+    <h2>Without same-origin, storage throws SecurityError</h2>
+  </div>
+  <div class="prose">
+    <p>Concrete behaviour for <code>localStorage.setItem('foo','bar')</code> inside the iframe:</p>
+    <ul>
+      <li><strong>No <code>allow-same-origin</code></strong> (opaque origin): hard <code>SecurityError: localStorage is not available for opaque origins</code>. Doesn't silently fail, doesn't quietly persist — the API throws on access. Same for <code>sessionStorage</code>, <code>document.cookie</code>.</li>
+      <li><strong>With <code>allow-same-origin</code>, iframe served from kb's origin:</strong> the artifact shares localStorage with the parent SPA. Two artifacts can read each other's keys; a malicious artifact can clobber kb's state.</li>
+      <li><strong>With <code>allow-same-origin</code>, iframe served from a different origin (subdomain):</strong> each origin has its own isolated localStorage. <strong>This is the architecture every serious sandbox uses</strong> (CodePen ⇒ <code>s.codepen.io</code>; Observable ⇒ <code>&lt;user&gt;.static.observableusercontent.com</code>; Claude artifacts ⇒ <code>claudeusercontent.com</code>).</li>
+    </ul>
+    <p><strong>IndexedDB:</strong> same rules. <code>indexedDB.open()</code> throws without <code>allow-same-origin</code>.</p>
+    <p><strong>BroadcastChannel:</strong> in Chromium constructible from an opaque origin, but messages only reach contexts with <em>the same</em> opaque origin — no way to construct that match externally. Practically isolated.</p>
+    <p><strong>Cookies:</strong> blocked, unless you add <code>allow-same-site-none-cookies</code> (Chrome 135+, not yet Firefox/Safari).</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. fetch() and network behaviour</div>
+    <h2>Origin: null breaks CORS. Bridge through postMessage.</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><code>fetch('/api/...')</code> from a sandboxed iframe with <em>no</em> <code>allow-same-origin</code>: request goes out with <code>Origin: null</code>. If kb's API replies with the standard <code>Access-Control-Allow-Origin: &lt;kb-origin&gt;</code>, the response is <strong>rejected</strong>. <code>Access-Control-Allow-Origin: null</code> is widely considered a footgun.</li>
+      <li><code>&lt;script src="https://cdn.jsdelivr.net/..."&gt;</code>: sandbox does <strong>not</strong> block external script loads. Only CSP can. Use the <code>csp</code> attribute to lock down (e.g. <code>script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net</code>).</li>
+      <li><code>@font-face</code> with <code>https://fonts.gstatic.com/...</code>: works from a sandboxed iframe; fonts are CORS-checked, Google Fonts sends correct headers.</li>
+      <li>Inline <code>&lt;style&gt;</code>: always allowed, sandbox doesn't touch CSS. Inline <code>&lt;script&gt;</code> runs only with <code>allow-scripts</code>. CSP is orthogonal.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. postMessage parent ↔ iframe</div>
+    <h2>The designed escape hatch — works even with sandbox=""</h2>
+  </div>
+  <div class="prose">
+    <p><code>postMessage</code> works <strong>regardless of sandbox flags</strong> — even with <code>sandbox=""</code>, the parent can still send messages and the child can still receive them, provided the child has <code>allow-scripts</code> (it needs a listener). No flag needs to be added.</p>
+<pre>// in parent SPA, on iframe load:
+iframe.contentWindow.postMessage({ type: 'kb.init', artifactId, prompt }, '*');
+
+// in iframe artifact:
+window.addEventListener('message', (e) =&gt; {
+  if (e.source !== window.parent) return;
+  // handle e.data
+});
+
+// RPC pattern: child requests data, parent fulfils
+parent.postMessage({ type: 'kb.fetch', id: 7, url: 'kb://docs/x' }, '*');
+window.addEventListener('message', e =&gt; {
+  if (e.data.type === 'kb.fetch.reply' &amp;&amp; e.data.id === 7) /* ... */;
+});</pre>
+    <h4>Tradeoffs</h4>
+    <ul>
+      <li>Async only. No synchronous "give me my prompt".</li>
+      <li>Ordering is FIFO per channel but races easy when many messages arrive during init.</li>
+      <li><code>targetOrigin</code> should be the actual origin when sending into the parent (<code>event.origin</code> for replies). Using <code>'*'</code> going <em>into</em> an opaque iframe is fine; <em>out</em> to the parent is a leak vector if you transmit anything secret.</li>
+      <li>For heavier RPC, use <code>MessageChannel</code> with <code>transfer</code> — each conversation has its own port.</li>
+      <li>Receivers must validate <code>event.origin</code>, <code>event.source</code>, and the schema of <code>event.data</code>. Treat the iframe as hostile.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. Shadow DOM as alternative</div>
+    <h2>Not a sandbox. Useful for the JS-free artifact subclass.</h2>
+  </div>
+  <div class="prose">
+    <p>Shadow DOM gives you scoped CSS and DOM encapsulation. It does <strong>not</strong> give you:</p>
+    <ul>
+      <li><strong>Script isolation.</strong> None. An inline <code>&lt;script&gt;</code> in a shadow root runs in the host page's realm with the host page's <code>window</code>, <code>document</code>, globals.</li>
+      <li><strong>Global listener isolation.</strong> A handler on <code>document</code>/<code>window</code> from one artifact sees events from every other artifact.</li>
+      <li><strong>Library isolation.</strong> Two artifacts that both load jQuery / leaflet / three.js / d3 — they collide on <code>window.$</code>, <code>window.L</code>, <code>window.THREE</code>. First-load wins or last-load wins.</li>
+      <li><strong>Crash isolation.</strong> A <code>while(true)</code> in one artifact freezes the whole tab.</li>
+      <li><strong>Storage isolation.</strong> localStorage is keyed by origin, not by shadow root.</li>
+    </ul>
+    <p><strong>Shadow DOM is not a sandbox</strong>; it's a styling/DOM-encapsulation primitive that happens to look sandbox-shaped from a distance.</p>
+    <h4>When Shadow DOM IS the right call for kb</h4>
+    <ul>
+      <li>Static, JS-free artifacts: rendered Markdown, SVG diagrams, stylised prose, tables. Win: one DOM, one realm, instant rendering, no postMessage hop, no iframe layout reflow per artifact.</li>
+      <li>Trusted artifacts authored by kb itself (system templates, chrome).</li>
+      <li>Tiny pure-CSS interactive widgets (<code>&lt;details&gt;</code>, <code>:has</code>, <code>:checked</code> toggles): no JS to collide.</li>
+    </ul>
+    <p>A practical hybrid: classify artifacts at ingest time (look for <code>&lt;script&gt;</code> and external <code>src</code>) and route the JS-free class through a Shadow DOM renderer for performance while sending JS-bearing artifacts through the iframe path.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">F. Other alternatives, briefly</div>
+    <h2>Mostly skip</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong><code>&lt;object&gt;</code> / <code>&lt;embed&gt;</code></strong>: opaque-origin for cross-origin content, but ergonomics dated, sandbox attribute is iframe-only. Not worth it.</li>
+      <li><strong>Web Worker / Worklet</strong>: doesn't render. OffscreenCanvas + manual paint not viable for arbitrary HTML.</li>
+      <li><strong>Strip <code>&lt;script&gt;</code> at ingest</strong>: kills the whole point of html-as-medium. Don't.</li>
+      <li><strong>Closed shadow + Trusted Types + ShadowRealm</strong>: ShadowRealm (TC39 stage-3) isolates JS realms but has no DOM. Useful for plugin VMs, not artifact rendering.</li>
+      <li><strong><code>srcdoc</code></strong>: same security model as <code>src</code>. Convenient for inlining without a server route, but does <strong>not</strong> unlock any extra origin/storage trick.</li>
+      <li><strong>Credentialless iframes</strong> (<code>credentialless</code> attribute, Chrome shipping, Firefox WIP): each load gets an ephemeral storage partition tied to the top-level document's lifetime. Useful for COEP, not a sandbox substitute.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">G. Real-world precedent</div>
+    <h2>Everyone uses subdomain + sandbox + postMessage + iframe-recreate</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Sandbox precedent · convergent pattern</caption>
+      <thead><tr><th>Platform</th><th>Origin strategy</th><th>Sandbox flags</th><th>Comm</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Observable</strong></td><td>per-user subdomain on <code>observableusercontent.com</code></td><td><code>allow-scripts allow-popups allow-forms allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation</code></td><td>reactive runtime in iframe; postMessage for embeds. Cells <em>not</em> isolated within a notebook.</td></tr>
+        <tr><td><strong>CodePen</strong></td><td><code>s.codepen.io</code> (separate from <code>codepen.io</code>)</td><td><code>allow-scripts allow-same-origin allow-pointer-lock</code> + per-feature <code>allow=</code></td><td>recreates the iframe on each preview to free memory and reset globals; postMessage for console capture.</td></tr>
+        <tr><td>JSFiddle / JSBin</td><td>result subdomain</td><td>similar to CodePen</td><td>iframe-recreate pattern documented since 2014</td></tr>
+        <tr><td><strong>Claude artifacts</strong></td><td><code>claudeusercontent.com</code> (≠ <code>claude.ai</code>)</td><td>iframe sandbox + CSP; storage APIs blocked, external fetch restricted</td><td>postMessage RPC since mid-2025; React Runner inside</td></tr>
+        <tr><td>ChatGPT canvas</td><td>server-side python sandbox; HTML preview iframed</td><td>same family</td><td>n/a (mostly server-rendered)</td></tr>
+      </tbody>
+    </table>
+    <p>The convergent pattern across all these — and the one kb should match — is: <strong>separate origin (subdomain) + sandbox without <code>allow-same-origin</code> + iframe recreation per render + postMessage RPC for everything that needs to cross the boundary</strong>.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="decisions">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Decisions · 2026-05-11 (cluster 1: iframe + wildcard DNS — amended 2026-05-11 post-review)</span>
+    <p style="margin:0 0 .55rem;font-size:.95rem;line-height:1.55">After the Web Gallery handoff (<a href="10-web-gallery.html">topic 10</a>) was integrated, the open-points discussion landed the following resolutions. <strong>Amended post-review:</strong> the original "drop <code>allow-same-origin</code>" decision was reversed — it conflicted with §B's own storage analysis (opaque-origin iframes can't use localStorage regardless of where served). The CodePen / Observable / Claude-Artifacts pattern (which §G surveys) <em>keeps</em> <code>allow-same-origin</code>; what makes it safe is the iframe being served from a <em>different</em> origin than the parent. Subdomain serving is the load-bearing piece.</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><strong>DNS strategy.</strong> Per-artifact subdomain via <code>&lt;id&gt;.artifacts.localhost</code>. <strong><code>*.localhost</code> first</strong> — Chrome (since M67, Dec 2017) and Firefox (since 84, Dec 2020) auto-resolve all <code>.localhost</code> subdomains to 127.0.0.1 (RFC 6761 §6.3). <strong>Safari is the actual blocker</strong> — macOS Safari delegates to <code>mDNSResponder</code>, which does NOT implement the RFC 6761 auto-resolution. <strong>Spike Safari compatibility before v0.1 SPA ships</strong>; dnsmasq fallback (<code>address=/.localhost/127.0.0.1</code> plus <code>address=/.localhost/::1</code> for IPv6) is the documented Safari workaround. Per-port isolation rejected (breaks bookmarks, kills per-origin process budget); <code>/etc/hosts</code> rejected (no wildcard). Caddy + DNS-01 is the self-host path.
+        <div class="spike-update" style="margin:.4rem 0 .2rem;padding:.5rem .75rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-iframe</code> confirmed in Chromium (via Playwright MCP, 16/16 probes pass on 4 canon artifacts) and on the host CLI: <code>*.localhost</code> resolves out of the box on Arch Linux with glibc 2.41+ and systemd-resolved — <strong>no dnsmasq needed</strong>. <code>getent hosts s01.artifacts.localhost</code> returns <code>::1 localhost</code> and <code>curl -v</code> resolves cleanly. Production install guide should document the wildcard as working on modern Linux + Chrome + Firefox out of the box, and reserve the dnsmasq fallback (<code>address=/.localhost/127.0.0.1</code>) for Safari and older glibc only. Firefox parity verification is still pending operator review (Playwright defaulted to Chromium). Full context: <a href="../../spike-findings.md#spike-iframe--2026-05-11">docs/spike-findings.md</a>.</div>
+      </li>
+      <li><strong>Sandbox flags (amended).</strong> v0.1 baseline: <code>sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"</code>. <strong>Keep <code>allow-same-origin</code></strong> — combined with subdomain serving, the iframe gets a real, isolated origin (per-artifact localStorage / IndexedDB / cookies all work), and the sandbox-removal attack is neutered (the parent's DOM is cross-origin, unreachable from the iframe). Drop only <code>allow-top-navigation*</code> (artifact must not navigate the parent SPA away). This matches CodePen / Observable / Claude-Artifacts. Topic 07's stricter <code>allow-scripts</code>-only default is deferred — kitchen-sink uses <code>&lt;dialog&gt;.showModal()</code> (needs <code>allow-modals</code>) and future artifacts may use storage. The design prototype's mistake was not the flag set; it was serving the iframe from the parent's origin. Subdomain serving fixes both.</li>
+      <li><strong>iframe-recreate.</strong> React <code>key={artifactId + ':' + pageIdx}</code> on the <code>&lt;iframe&gt;</code>. The Web Gallery prototype already does this; keep it.</li>
+      <li><strong>postMessage (amended).</strong> Direction-aware <code>targetOrigin</code>:
+        <ul style="margin:.3rem 0 .3rem 1.2rem;list-style:disc">
+          <li>parent → iframe: <code>targetOrigin = "http://&lt;id&gt;.artifacts.localhost:4000"</code>.</li>
+          <li>iframe → parent: <code>targetOrigin = "http://localhost:4000"</code>. The iframe cannot derive the parent's origin a priori, so it hard-codes it; on receipt, the parent <strong>must</strong> validate <code>event.origin</code> matches the expected artifact subdomain before acting.</li>
+        </ul>
+        Never <code>'*'</code> from the parent. The iframe MAY use <code>'*'</code> only when bootstrapping a handshake to receive the parent's origin; production code hard-codes the parent origin instead. Three message types from cluster 1 (<code>open-artifact</code>, <code>pm:page</code>, <code>cm:add</code>) extended in v0.2 with annotator bridge messages (<code>cm:flash</code>, <code>cm:refresh</code>, <code>cm:mode</code>) — see <a href="10-web-gallery.html#decisions-ux">topic 10 §O″</a>.</li>
+      <li><strong>Annotator bridge (resolves topic 10 §M-10).</strong> Replace the prototype's parent-to-<code>contentDocument</code> injection with <strong>serve-time injection</strong>. When the SPA toggles annotate mode, it requests the artifact with <code>?cm=on</code>; the kb daemon rewrites the response to insert <code>&lt;script src="/_kb/annotate.js" defer&gt;&lt;/script&gt;</code> before <code>&lt;/body&gt;</code> (fallback: append at EOF if <code>&lt;/body&gt;</code> not found; use <code>lol-html</code> streaming rewriter to avoid matches inside <code>&lt;script&gt;</code> string literals). The injection also includes the artifact's existing comments as inline JSON (<code>window.__KB_COMMENTS = […]</code>) so left-rail marks paint on first frame. Cache key includes <code>?cm=on</code>. The script runs in the artifact's own origin, has full DOM access (we keep <code>allow-same-origin</code>), and posts to the parent with explicit <code>targetOrigin</code>.</li>
+      <li><strong>HTTPS.</strong> HTTP on localhost is fine for v0.1 — the canon uses no secure-context-only APIs. Defer mkcert / self-signed wildcard certs to self-host docs. IPv6: the daemon binds <code>127.0.0.1:4000</code> (IPv4-only); if Firefox prefers <code>::1</code>, either bind both or document the resolution preference.</li>
+      <li><strong>CSP attribute caveat.</strong> The Recipe block below shows <code>csp="..."</code> on the iframe. This attribute is <em>Chromium-only</em> (Firefox / Safari treat it as a no-op). Production CSP must come from the artifact server's HTTP response headers, not the attribute. Treat <code>csp=</code> as belt-and-suspenders for Chromium users.</li>
+      <li><strong>Multi-user cache.</strong> The <code>?cm=on</code> injected response embeds user-specific comment data. v0.1 is single-user (loopback-bound daemon), so in-process LRU cache is fine. Self-host (deferred) must either disable caching on <code>?cm=on</code> responses or key the cache on per-user identity.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recipe <span class="conf conf--high">Confidence · HIGH</span></span>
+
+    <h4>Sandbox attribute</h4>
+<pre>&lt;iframe
+  sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
+  src="http://&lt;artifact-id&gt;.artifacts.localhost:4000/index.html"
+  csp="default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:;"
+  referrerpolicy="no-referrer"
+  loading="lazy"
+  allow=""&gt;
+&lt;/iframe&gt;</pre>
+    <p style="font-size:.88rem;color:var(--ink-3)"><strong>Note on <code>csp=</code>:</strong> Chromium-only (Firefox / Safari no-op). The load-bearing CSP comes from the artifact server's response headers (below); the attribute is belt-and-suspenders for Chromium users.</p>
+
+    <h4>Justifications</h4>
+    <ul>
+      <li><code>allow-scripts</code> — artifacts run JS.</li>
+      <li><strong><code>allow-same-origin</code></strong> — combined with serving from a <em>different</em> origin (subdomain), this gives the iframe its own real, isolated origin. localStorage / IndexedDB / cookies work; the parent SPA's DOM is cross-origin and unreachable. <strong>Only safe combo</strong> per §A's footgun warning: <code>allow-scripts</code> + <code>allow-same-origin</code> + <em>different</em> serving origin.</li>
+      <li><code>allow-popups</code> — artifacts may legitimately link out.</li>
+      <li><code>allow-popups-to-escape-sandbox</code> — clicked popup behaves as a normal page, not an inheriting sandbox. An escaped popup runs at the artifact's origin without sandbox; it can read that artifact's localStorage but the per-subdomain isolation contains it.</li>
+      <li><code>allow-forms</code> — many artifacts will be small forms (calculators, configurators).</li>
+      <li><code>allow-modals</code> — <code>alert/confirm/prompt</code> + <code>&lt;dialog&gt;.showModal()</code>. Required by the kitchen-sink canonical artifact.</li>
+      <li><code>allow-downloads</code> — forward-compat for artifacts that generate CSV/image exports. No current canonical artifact uses it.</li>
+      <li><strong>NOT</strong> <code>allow-top-navigation*</code> — an artifact must not be able to navigate the parent SPA away.</li>
+    </ul>
+
+    <h4>Storage strategy</h4>
+    <p>Serve every artifact from <code>&lt;id&gt;.artifacts.localhost</code>. Wildcard DNS (RFC 6761 auto-resolution on Chrome+Firefox; dnsmasq fallback on Safari — see §decisions). Each artifact gets a unique, persistent, real origin → <code>localStorage</code>/<code>sessionStorage</code>/IndexedDB/cookies all work, full isolation, sandbox-removal attack neutered (the iframe can't reach the parent's DOM because they're cross-origin).</p>
+    <p>Fallback if subdomain serving is infeasible for a target host: serve all artifacts from <code>artifacts.localhost</code> (single shared origin) <em>without</em> <code>allow-same-origin</code> → opaque origin, no storage. kb provides storage via postMessage RPC (<code>storage.get</code>, <code>storage.set</code>, scoped to artifact id). v0.1 canon doesn't need storage so this fallback is acceptable for restricted environments.</p>
+
+    <h4>Fetch / network strategy</h4>
+    <p>Artifact fetching kb's data: bridge via <code>postMessage</code>. Artifact posts <code>{type:'kb.fetch', url}</code>; parent SPA does the actual fetch with the user's session cookie and posts the result back. <strong>Artifacts cannot exfiltrate the user's session even if they go rogue.</strong> External CDN/font/script loads work directly, optionally restricted via <code>csp=</code>.</p>
+
+    <h4>Inter-artifact links</h4>
+    <p>Recommended: <strong>postMessage-routed nav.</strong> Artifact does <code>e.preventDefault(); parent.postMessage({type:'kb.nav', id})</code>. Parent SPA owns routing entirely. Keeps sandbox tight, gives kb full control over animations, breadcrumbs, history. Matches Claude/ChatGPT artifact-frame patterns.</p>
+
+    <h4>Iframe lifecycle</h4>
+    <p><strong>Recreate the iframe element on each artifact change</strong> (CodePen pattern). Memory cleanup, kills any infinite loops, resets all globals.</p>
+
+    <h4>CSP on the artifact server</h4>
+<pre>Content-Security-Policy: default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; frame-ancestors http://localhost:4000;
+Referrer-Policy: no-referrer
+Cross-Origin-Resource-Policy: cross-origin
+Cross-Origin-Opener-Policy: same-origin</pre>
+    <p><code>frame-ancestors</code> ensures only kb embeds artifacts; an attacker can't iframe an artifact into their own page to steal its storage.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions</span>
+    <ul>
+      <li>Wildcard cert for the artifact subdomain on a personal server — Caddy auto-issuance via DNS-01 is the cleanest path. Document setup.</li>
+      <li><strong>Safari `*.localhost` spike.</strong> macOS Safari delegates to <code>mDNSResponder</code>, which does NOT implement RFC 6761 auto-resolution. <strong>Outstanding before v0.1 SPA.</strong> If it fails, dnsmasq is the documented Safari fallback (<code>address=/.localhost/127.0.0.1</code> + IPv6 line). Chrome (M67+, Dec 2017) and Firefox (84+, Dec 2020) already auto-resolve — no spike needed for them.</li>
+      <li>The classifier that routes JS-free artifacts to Shadow DOM — define the heuristic precisely (presence of any <code>&lt;script&gt;</code>? external <code>&lt;script src&gt;</code>? <code>onclick</code>/<code>onload</code> attributes?). v0.2 — every v0.1 artifact goes through the iframe path.</li>
+      <li>Whether to expose a per-artifact "loosen sandbox" flag (e.g. allow camera/mic) — declare in artifact's <code>&lt;meta name="kb-permissions"&gt;</code>. v0.2+; topic 07's <code>kb-sandbox</code> pragma is the kindred convention but not yet ratified.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="../foundation/05-ratatui.html"><span class="dir">← Prev</span><span class="ttl">05 · Ratatui</span></a>
+  <a class="next" href="07-html-effectiveness.html"><span class="dir">Next →</span><span class="ttl">07 · HTML effectiveness</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · iframe sandbox</p>
+      <p>Subdomain + sandbox without same-origin + postMessage + iframe-recreate. Observable, CodePen, and Claude all converged on this. Don't reinvent.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="07-html-effectiveness.html">07 HTML</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://html.spec.whatwg.org/multipage/iframe-embed-object.html">WHATWG iframe</a></li>
+        <li><a href="https://blog.codepen.io/2023/01/18/397-user-generated-content-saftey/">CodePen UGC safety</a></li>
+        <li><a href="https://www.reidbarber.com/blog/reverse-engineering-claude-artifacts">Claude artifacts internals</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,271 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kb-core",
+    "crates/kb-server",
+    "crates/kb-cli",
+    "crates/kb-embedder",
+    "crates/kb-code-server",
+    "crates/kb-code-cli",
+    "crates/kb-lip",
+    "crates/kb-buildstamp",
+]
+# Spikes/* are intentionally NOT workspace members — each has its own
+# Cargo.toml/Cargo.lock/target so retirement is `rm -rf spikes/<name>`.
+# Excluding here prevents cargo from auto-detecting them as members.
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.86"
+license = "MIT"
+repository = "https://github.com/nicolasacchi/kb"
+authors = ["nicolasacchi"]
+
+[workspace.dependencies]
+# Async / runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7"
+futures = "0.3"
+
+# HTTP server
+axum = { version = "0.8", features = ["macros", "tokio", "multipart"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "fs", "compression-gzip"] }
+hyper = "1"
+mime = "0.3"
+
+# Storage (exact pins — arrow MUST match lance's transitive version per
+# spike-lance findings, otherwise RecordBatch types don't unify in the dep
+# graph; CI invariant: cargo metadata shows exactly one arrow version).
+lancedb = { version = "=0.27.2", default-features = false }
+lance-index = "=4.0.0"
+arrow = "=57.3.1"
+arrow-array = "=57.3.1"
+arrow-schema = "=57.3.1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+refinery = { version = "0.8", features = ["rusqlite"] }
+
+# Embeddings — fastembed with a statically-bundled ONNX Runtime (per topic 02
+# §Decisions + spike-fastembed findings: fp32 default, model cache set
+# explicitly via InitOptions::with_cache_dir at construction).
+# Static link: the old `ort-load-dynamic` dlopen path deadlocked (macOS-era
+# finding); the static bundle also keeps the daemon ORT-free and portable.
+# `ort-download-binaries` fetches a known-good ONNX Runtime at BUILD time and
+# links it (no runtime dlopen) — the binary is self-contained (no libonnxruntime
+# at load time). rustls (not native-tls) for both the ORT binary fetch and hf-hub
+# model downloads — pure-Rust TLS. Offline/air-gapped builds:
+# set ORT_STRATEGY=system + ORT_LIB_LOCATION=<dir with libonnxruntime> to skip
+# the CDN fetch and link a local copy.
+fastembed = { version = "5", default-features = false, features = [
+    "ort-download-binaries-rustls-tls",
+    "hf-hub-rustls-tls",
+] }
+
+# HTML parsing
+scraper = "0.20"
+lol_html = "2"
+# U1 (v0.25 quick capture) — opt-in HTML sanitize at capture time (Html
+# pipeline only; the stored source IS the sanitized output). Whitelist-based,
+# strips <script>/on*= by construction rather than a denylist.
+ammonia = "4"
+
+# Markdown rendering (first-class .md artifacts). default-features off drops
+# comrak's `cli` feature (clap/binary bloat); `syntect` powers server-side
+# syntax-highlighted code blocks (static inline styles, no client JS).
+comrak = { version = "0.52", default-features = false, features = ["syntect"] }
+
+# Archive (folder download → .zip; deflate backend reuses flate2, already
+# in the graph). default-features off to skip bzip2/zstd/aes codecs we
+# don't emit.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Filesystem watcher (debouncer pinned ≥0.7 per topic 03 / dedup bug #711 fix)
+notify = "8"
+notify-debouncer-full = "0.7"
+
+# XDG paths
+directories = "5"
+
+# Proptest for property-based tests (path-traversal, KbName validator, etc.)
+proptest = "1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "multipart"] }
+reqwest-eventsource = "0.6"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# V70-A8 — kb-code-server's `GET /api/schemas` self-description surface
+# (D20's "generated from the Rust types"). Already resolved transitively in
+# Cargo.lock (serde_with's optional feature), so this adds a direct edge to
+# an already-cached version rather than a new supply-chain surface.
+# `default-features` (derive + std) is exactly what's needed: the
+# `#[derive(JsonSchema)]` macro and `schema_for!`.
+schemars = "1"
+
+# Errors / tracing
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Time + hashing + config formats
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+# Cloudflare Pages asset hash (wrangler-compatible): blake3(base64(bytes)‖ext).
+# Both already in the graph (base64 via reqwest/datafusion, blake3 via lance).
+base64 = "0.22"
+blake3 = "1"
+toml = "0.8"
+# Format-preserving TOML editor — kb-server's PATCH /api/config splices
+# individual fields without clobbering the operator's comments/ordering.
+# Matches the version toml 0.8 already pulls into the lock (0.22.x).
+toml_edit = "0.22"
+regex = "1"
+getrandom = "0.2"
+mdns-sd = "0.13"
+
+# Text diffing for the artifact version timeline (Track V) — line-level
+# grouping over extracted prose / raw source.
+similar = "2"
+
+# TypeScript bindings generated from the Rust wire types into
+# web/src/api/generated/ (the SPA's drift guard typechecks against them).
+# Optional — enabled per-crate by the `ts-export` feature; `just types`
+# regenerates. chrono-impl maps DateTime<Utc> → string.
+ts-rs = { version = "12", features = ["chrono-impl"] }
+
+# Filesystem
+walkdir = "2"
+tempfile = "3"
+
+# Test helpers
+insta = "1"
+pretty_assertions = "1"
+
+# kb-code Wave 1 scaffold (W1.1) — pinned per /tmp/kb-w0/research-deps.md
+# (grok dependency research, 2026-07-17 snapshot). Only kb-code-server
+# depends on these today (crates/kb-code-server); real usage lands
+# starting W1.2. Each is touched minimally there (languages() /
+# search_version() / git_backend_ready() / fuzzy_ready()) so the
+# supply-chain gate and Cargo.lock reflect the real dependency graph now,
+# not just at W1.2 — no dead-dep drift.
+
+# gix (gitoxide) 0.85.x — object-DB reads, worktree discovery, blame.
+# default-features = false; "blame" pulls in blob-diff/attributes/excludes/
+# index (the object-read surface) and "revision" adds rev_parse-style
+# resolution (describe/merge_base). "sha1" is NOT implied once
+# default-features is off (gix-hash hard-errors without an explicit sha1 or
+# sha256 feature) — every git repo kb-code reads is sha1 today, so pick it
+# explicitly rather than pull the (larger) sha256 surface. Deliberately NOT
+# "worktree-mutation" — kb-code's only working-tree mutation is W4's
+# checkout, a later deliberate decision (CLAUDE.md non-goal: "no editor
+# ever"); this scaffold stays read-only by construction.
+gix = { version = "0.85", default-features = false, features = ["blame", "revision", "sha1"] }
+
+# W1.6 — RustCrypto sha1, pinned at the exact version gix-hash's own
+# "sha1"-feature dependency (`sha1-checked` → `sha1` 0.10.6) already
+# resolves to, so promoting it to a direct dependency adds zero new
+# supply-chain surface (`cargo tree -i sha1` shows it's already in the
+# graph via gix). Used by `kb_code_server::ingest::git_blob_hash` to
+# compute a git-compatible blob content hash (`sha1("blob {len}\0" +
+# content)`) for bytes the live-mirror watcher observes that haven't been
+# committed yet — `gix`'s own sha1 feature only hashes objects it reads
+# FROM the object database, it has no "hash these arbitrary bytes as if
+# they were a blob" entry point.
+sha1 = "0.10.6"
+
+# tree-sitter 0.26.x core + the Wave-1 grammar set. Grammar crates pin
+# against the ABI-stable `tree-sitter-language` crate rather than
+# `tree-sitter` itself, so each version below resolves independently —
+# no arrow/lance-style unification hazard (invariant #1 is NOT in play
+# here).
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-ruby = "0.23"
+tree-sitter-bash = "0.25"
+# Alive fork (tree-sitter-grammars/tree-sitter-yaml — the tree-sitter/*
+# original is stale); published under the same crate name on crates.io.
+tree-sitter-yaml = "0.7"
+# kb-code Wave 2 next-tier languages (W2.6, operator ruling "plan for it:
+# json, go, toml"). All three MIT, pinned to the exact crates.io version
+# researched at authoring time (2026-07):
+# - tree-sitter-go 0.25.0 — official tree-sitter/tree-sitter-go grammar;
+#   bundles its own tags.scm (kb-code vendors an extended copy — see
+#   queries/go-tags.scm's header) and highlights.scm (used as-is).
+# - tree-sitter-toml-ng 0.7.0 — the ALIVE fork (crate name keeps the "-ng"
+#   suffix; upstream repo is tree-sitter-grammars/tree-sitter-toml, same
+#   "grammars org has the maintained fork" precedent as tree-sitter-yaml
+#   above). No tags.scm (ADR-7-style: TOML isn't a tags language) — kb-code's
+#   own `keypath` module walks its CST into a dotted key-path outline,
+#   mirroring `yaml.rs`.
+# - tree-sitter-json 0.24.8 — official tree-sitter/tree-sitter-json grammar.
+#   Also no tags.scm; walked by the same `keypath` module as TOML.
+tree-sitter-go = "0.25"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-json = "0.24"
+# PRR-N3 — the Rails lens (`frameworks::rails`) needs ERB tag boundaries
+# (`<% %>`/`<%= %>`/`<%#  %>` vs raw HTML `content`) to find render/partial/
+# turbo_stream call sites inside `.erb` views; each tag's `code` child is
+# then re-parsed independently as Ruby via `tree-sitter-ruby` above (per-tag
+# injection, not a whole-file Ruby reconstruction — see
+# `frameworks::rails::views`'s module doc). Standard ERB/EJS grammar,
+# MIT/Apache, same "grammar crate pins independently" note as the block
+# above.
+tree-sitter-embedded-template = "0.25"
+
+# ripgrep engine (code-search surface) — Unlicense OR MIT. grep-matcher is
+# already pulled in transitively by grep-searcher/grep-regex (see
+# Cargo.lock); promoted to an explicit pin (W2.1) because the text search
+# lane calls `Matcher::find` directly (to report a match's byte range within
+# its line, not just the whole matched line) — same "already in the graph,
+# now named" precedent as kb-code-server's own sha1/hex promotion.
+grep-searcher = "0.1.17"
+grep-regex = "0.1.14"
+grep-matcher = "0.1.9"
+
+# Fuzzy file/symbol matching (Helix's matcher — better maintained than
+# fuzzy-matcher in 2026). MPL-2.0: weak (file-level) copyleft, allowlisted
+# deliberately in deny.toml/about.toml — we link, don't modify.
+nucleo = "0.5"
+
+[profile.dev]
+opt-level = 1
+# PF-B1 — line tables only: full debuginfo made target/debug 224 GB on the
+# (disk-bound) dev box and once overflowed the CI runner disk hard enough
+# to SIGBUS the linker (ci.yml used to force this same setting via
+# CARGO_PROFILE_DEV_DEBUG, now redundant there). Backtraces keep file:line;
+# only debugger variable inspection degrades, and the workspace records no
+# debugger-dependent workflow.
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# Strip symbol tables from shipped binaries (~10-15% smaller on disk,
+# faster to load). Panic location info is compile-time macro metadata,
+# not runtime symbols, so panic messages are unaffected. The codebase
+# uses no std::backtrace / RUST_BACKTRACE-dependent paths.
+strip = "symbols"
+
+# Daily-iteration profile — same opt-level 3 as release, but skip LTO
+# and parallelize codegen so dev rebuilds finish in ~1m instead of ~4m.
+# `cargo build --release` is still the source of truth for shipping
+# (tagged builds + the kb binary the daemon runs out of ~/.local/bin/).
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

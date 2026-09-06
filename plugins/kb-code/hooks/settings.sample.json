@@ -1,0 +1,26 @@
+{
+  "//": "Manual install: copy hooks/kb-code-why.sh AND hooks/kb-code-annotations.sh to ~/.claude/hooks/ (chmod +x both), then merge this `hooks` block into ~/.claude/settings.json (or a project .claude/settings.json). For the plugin install path instead, `/plugin install kb-code@kb-plugins` — this file exists only so `kb-code hook install` has something to print/verify against outside the plugin path.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/kb-code-why.sh", "timeout": 8 },
+          { "type": "command", "command": "~/.claude/hooks/kb-code-annotations.sh", "timeout": 8 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/kb-code-annotations.sh --session-start",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

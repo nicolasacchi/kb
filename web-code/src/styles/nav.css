@@ -1,0 +1,434 @@
+/* V70-A6 — the navigation layer's chrome: the Ramp's scent card, the
+ * per-pane history arrows, the trail origin chip, the inline peek widget and
+ * the identifier hover tooltip.
+ *
+ * Token-driven throughout (no literal colours), so the twelve theme families,
+ * the contrast slider and the density preference all keep working; every
+ * transition respects `prefers-reduced-motion`.
+ *
+ * ONE colour rule worth stating: the provisional pane's left edge is the
+ * ONLY chromatic pane state this unit introduces, and §P7 reserves that
+ * channel deliberately ("frame= … the only chromatic pane state"). Trust is
+ * carried by LINE STYLE (`--kbc-trust-style`, V70-A7's Lane Budget), never by
+ * hue, which is why the scent card and the peek widget reuse the shared
+ * `.kbc-trust-*` classes instead of inventing tints.
+ */
+
+/* ── the scent card (the Ramp's hover rung) ───────────────────────────── */
+
+.kbc-scent {
+  /* A transient, pointer-transparent overlay — the same ladder rung
+   * which-key uses (`--z-hint`), so it floats over popups without
+   * competing with the modal/drawer layer. */
+  z-index: var(--z-hint, 50);
+  width: min(420px, calc(100vw - 24px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 8px);
+  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.kbc-scent--inline {
+  position: static;
+  width: auto;
+  margin: var(--space-1, 4px) 0 var(--space-2, 8px);
+  box-shadow: none;
+  background: var(--surface-2, var(--surface));
+}
+
+.kbc-scent__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-1, 4px);
+}
+
+.kbc-scent__where {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.76rem;
+  color: var(--fg-subtle);
+  overflow-wrap: anywhere;
+}
+
+.kbc-scent__sig {
+  display: block;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  margin-bottom: var(--space-2, 8px);
+}
+
+.kbc-scent__grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px var(--space-2, 8px);
+}
+
+.kbc-scent__field {
+  display: contents;
+}
+
+.kbc-scent__label {
+  color: var(--fg-subtle);
+  font-size: 0.72rem;
+}
+
+.kbc-scent__value {
+  font-size: 0.74rem;
+}
+
+/* An ABSENT field is dimmed and italic — it still says its name, because a
+ * blank card and a card about a symbol with no signature must never look the
+ * same (the module doc's honesty rule). */
+.kbc-scent__field--absent .kbc-scent__value {
+  color: var(--fg-subtle);
+  font-style: italic;
+}
+
+.kbc-scent__keys {
+  margin-top: var(--space-2, 8px);
+  padding-top: var(--space-1, 4px);
+  border-top: 1px solid var(--border-subtle, var(--border));
+  color: var(--fg-subtle);
+  font-size: 0.7rem;
+}
+
+/* ── per-pane history arrows + the pane chrome strip ──────────────────── */
+
+.kbc-panechrome {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: 2px var(--space-2, 8px);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  min-height: 22px;
+  font-size: 0.72rem;
+}
+
+/* The provisional pane's LOUD signal: a coloured left edge, not italics.
+ * VS Code's preview tab is the measured counter-example (right mechanism,
+ * signal too quiet). */
+.kbc-panechrome--provisional {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.kbc-panechrome__mods {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  margin-left: auto;
+}
+
+.kbc-panechrome__chip {
+  background: transparent;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-1, 4px);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 var(--space-1, 4px);
+}
+
+.kbc-panehist {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.kbc-panehist__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-1, 4px);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  padding: 1px 3px;
+}
+
+.kbc-panehist__btn:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.kbc-panehist__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The forward arrow is the same glyph, mirrored — one icon, two directions,
+ * so the pair can never drift visually. */
+.kbc-panehist__btn--fwd svg {
+  transform: scaleX(-1);
+}
+
+.kbc-panehist__count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.66rem;
+}
+
+/* ── the trail origin chip ────────────────────────────────────────────── */
+
+.kbc-trailbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: 2px var(--space-3, 12px);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  background: var(--surface-2, var(--surface));
+}
+
+.kbc-trailchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  font-size: 0.74rem;
+}
+
+.kbc-trailchip__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1, 4px);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  padding: 1px var(--space-2, 8px);
+}
+
+.kbc-trailchip__key {
+  color: var(--fg-subtle);
+  font-size: 0.68rem;
+}
+
+.kbc-trailchip__tabs {
+  color: var(--fg-subtle);
+  font-size: 0.7rem;
+}
+
+/* ── the inline peek block widget ─────────────────────────────────────── */
+
+.kbc-inpeek {
+  margin: var(--space-1, 4px) 0 var(--space-1, 4px) 2.5em;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-2, 8px);
+  background: var(--surface-2, var(--surface));
+  overflow: hidden;
+  font-size: 0.86em;
+}
+
+.kbc-inpeek:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.kbc-inpeek__crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  padding: 2px var(--space-2, 8px);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  font-size: 0.78em;
+}
+
+.kbc-inpeek__sep,
+.kbc-inpeek__crumb {
+  color: var(--fg-subtle);
+}
+
+.kbc-inpeek__crumb:last-of-type {
+  color: var(--fg);
+}
+
+.kbc-inpeek__trust {
+  border-bottom: 1px var(--kbc-trust-style, solid) currentcolor;
+  color: var(--fg-subtle);
+  font-size: 0.9em;
+}
+
+.kbc-inpeek__dial {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.kbc-inpeek__dialbtn,
+.kbc-inpeek__close {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-1, 4px);
+  color: var(--fg-subtle);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.kbc-inpeek__dialbtn:hover,
+.kbc-inpeek__close:hover {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.kbc-inpeek__body {
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--space-1, 4px) 0;
+}
+
+.kbc-inpeek__line {
+  display: flex;
+  gap: var(--space-2, 8px);
+  padding: 0 var(--space-2, 8px);
+  font-family: var(--font-mono, monospace);
+  white-space: pre;
+  cursor: pointer;
+}
+
+.kbc-inpeek__line:hover {
+  background: var(--surface-3, var(--surface));
+}
+
+.kbc-inpeek__line--target {
+  background: var(--surface-3, var(--surface));
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
+.kbc-inpeek__num {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  min-width: 3.5ch;
+  text-align: right;
+  user-select: none;
+}
+
+.kbc-inpeek__msg {
+  color: var(--fg-subtle);
+  padding: var(--space-2, 8px);
+}
+
+.kbc-inpeek__msg--error {
+  color: var(--danger, var(--fg));
+}
+
+.kbc-inpeek__foot {
+  display: flex;
+  gap: var(--space-2, 8px);
+  padding: 2px var(--space-2, 8px);
+  border-top: 1px solid var(--border-subtle, var(--border));
+  color: var(--fg-subtle);
+  font-size: 0.74em;
+}
+
+.kbc-inpeek__keys {
+  margin-left: auto;
+}
+
+/* ── the identifier hover tooltip ─────────────────────────────────────── */
+
+.kbc-hovertip {
+  max-width: 460px;
+  padding: var(--space-2, 8px);
+  font-size: 0.8rem;
+}
+
+.kbc-hovertip__sig {
+  display: block;
+  font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+}
+
+.kbc-hovertip__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  margin-top: var(--space-1, 4px);
+  color: var(--fg-subtle);
+  font-size: 0.72rem;
+}
+
+.kbc-hovertip__trust {
+  border-bottom: 1px var(--kbc-trust-style, solid) currentcolor;
+}
+
+.kbc-hovertip__doc {
+  margin: var(--space-1, 4px) 0 0;
+  white-space: pre-wrap;
+  color: var(--fg-subtle);
+}
+
+.kbc-hovertip__prov,
+.kbc-hovertip__empty {
+  margin-top: var(--space-1, 4px);
+  color: var(--fg-subtle);
+  font-size: 0.72rem;
+}
+
+.kbc-hovertip__empty {
+  font-style: italic;
+}
+
+.kbc-hovertip__keys {
+  margin-top: var(--space-1, 4px);
+  padding-top: 2px;
+  border-top: 1px solid var(--border-subtle, var(--border));
+  color: var(--fg-subtle);
+  font-size: 0.68rem;
+}
+
+/* ── Recent Locations: code rows + the `via` filter chips ─────────────── */
+
+.kbc-recent-locs__vias {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1, 4px);
+  padding: var(--space-1, 4px) var(--space-3, 12px);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.kbc-recent-locs__viachip {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0 var(--space-2, 8px);
+}
+
+.kbc-recent-locs__viachip.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.kbc-recent-locs__via {
+  color: var(--fg-subtle);
+  font-size: 0.68rem;
+  margin-left: var(--space-2, 8px);
+}
+
+.kbc-recent-locs__snippet {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  color: var(--fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kbc-scent,
+  .kbc-inpeek,
+  .kbc-hovertip {
+    transition: none !important;
+  }
+}

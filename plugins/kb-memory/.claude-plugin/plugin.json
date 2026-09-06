@@ -1,0 +1,8 @@
+{
+  "name": "kb-memory",
+  "description": "Claude Code memory via the kb daemon: automatic recall each turn (UserPromptSubmit), a re-injected memory protocol at session start (SessionStart), verbatim transcript capture when the agent finishes (Stop), and a Stop-hook nudge that suggests /kb-distill when a session committed code but kept no memory — LLM-free, every hook just runs a kb verb. Ships /kb-distill (the episodic→semantic distiller: 1–3 quality-gated, deduped, provenance-stamped memories per session, --dry-run supported), /kb-weekly (the GET /api/sessions/ledger's narrative half — a project's week of sessions/commits/decisions turned into a short review note; facts from the daemon, prose from the agent), /kb-verify (the memory↔code drift sweep: code-citing memories resolved fresh through kb-code's doclens, dated [kb-drift] comments filed on dead citations — one open comment per (memory, path) — plus a born-stale check and kb memory flag escalation when the fact itself is wrong; --dry-run supported), /kb-setup: a guided first-run bootstrap (install check, daemon check, writes a kb.toml with memory + sessions corpora, starts + verifies the daemon), /kb-slate-tidy (kb-slate/1 housekeeping: reads a project's slate board plus history, drops noise the running session or a presumed-ended session authored, merges near-duplicate founds with --supersedes, closes asks whose asker ended — never touches a live other session's now/warn/take/hand), and /kb-slate-distill (turns a closed or rotated slate — current AND archived generations — into 1-5 durable memories, a narrative note, and a dated plan-file Status line).",
+  "version": "0.13.0",
+  "author": {
+    "name": "kb"
+  }
+}

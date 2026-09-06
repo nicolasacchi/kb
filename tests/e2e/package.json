@@ -1,0 +1,16 @@
+{
+  "name": "kb-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright iframe + SSE smoke tests against the in-process kb daemon.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

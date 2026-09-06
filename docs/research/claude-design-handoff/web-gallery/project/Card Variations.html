@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>kb · card variations</title>
+<link rel="stylesheet" href="app/styles.css"/>
+<style>
+  body { background: #0a0a0c; }
+  .dc-art-canvas { background: #0a0a0c !important; }
+  .vc-board { background: var(--bg); padding: 32px; min-height: 100%; }
+  .vc-board[data-theme="light"] { background: #f7f7f5; }
+  .vc-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    max-width: 1200px;
+  }
+  .vc-row-3 { grid-template-columns: repeat(3, 1fr); }
+  .vc-caption { font-family: var(--font-mono); font-size: 11px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 14px; }
+  .vc-h2 { font-size: 20px; font-weight: 500; letter-spacing: -0.02em; margin: 0 0 4px; color: var(--text-strong); }
+  .vc-sub { font-size: 13px; color: var(--muted); margin: 0 0 22px; max-width: 520px; line-height: 1.55; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="app/data.jsx"></script>
+<script type="text/babel" src="app/icons.jsx"></script>
+<script type="text/babel" src="app/cards.jsx"></script>
+<script type="text/babel">
+const { useEffect } = React;
+
+function Board({ style, theme = 'dark', count = 4, cols = 4 }) {
+  return (
+    <div className="vc-board" data-theme={theme}>
+      <div className={`vc-row ${cols === 3 ? 'vc-row-3' : ''}`} style={{gridTemplateColumns: `repeat(${cols}, 1fr)`}}>
+        {window.ARTIFACTS.slice(0, count).map(a => (
+          <Card key={a.id} a={a} style={style} density="comfortable"/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  // Force theme attribute on the page so CSS vars work even in scaled DC artboards
+  useEffect(() => { document.documentElement.dataset.theme = 'dark'; }, []);
+  return (
+    <DCRoot title="kb · card variations" subtitle="five preview directions × dark/light × densities">
+      <DCSection id="primary" title="Five preview directions" subtitle="Same content, five different ways to surface it on the gallery card.">
+        <DCArtboard id="collage-d" label="Collage · dark · default" width={1240} height={520}>
+          <Board style="collage" theme="dark" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="screenshot-d" label="Screenshot · dark" width={1240} height={520}>
+          <Board style="screenshot" theme="dark" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="bigtitle-d" label="Big title · no preview" width={1240} height={420}>
+          <Board style="bigtitle" theme="dark" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="terminal-d" label="Terminal · code-y" width={1240} height={520}>
+          <Board style="terminal" theme="dark" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="abstract-d" label="Abstract · gradient by tag" width={1240} height={520}>
+          <Board style="abstract" theme="dark" count={4} cols={4}/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="light" title="Light theme pass" subtitle="Same five styles in light mode — chrome flips, accent colors hold.">
+        <DCArtboard id="collage-l" label="Collage · light" width={1240} height={520}>
+          <Board style="collage" theme="light" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="bigtitle-l" label="Big title · light" width={1240} height={420}>
+          <Board style="bigtitle" theme="light" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="abstract-l" label="Abstract · light" width={1240} height={520}>
+          <Board style="abstract" theme="light" count={4} cols={4}/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="density" title="Density" subtitle="Compact / comfortable / spacious — same collage style across three densities.">
+        <DCArtboard id="dens-compact" label="compact · 5 cols" width={1240} height={420}>
+          <div className="vc-board" data-theme="dark">
+            <div className="vc-row" style={{gridTemplateColumns: 'repeat(5, 1fr)'}}>
+              {window.ARTIFACTS.slice(0, 10).map(a => (
+                <Card key={a.id} a={a} style="collage" density="compact"/>
+              ))}
+            </div>
+          </div>
+        </DCArtboard>
+        <DCArtboard id="dens-comfy" label="comfortable · 4 cols" width={1240} height={520}>
+          <Board style="collage" theme="dark" count={4} cols={4}/>
+        </DCArtboard>
+        <DCArtboard id="dens-spacious" label="spacious · 3 cols" width={1240} height={560}>
+          <div className="vc-board" data-theme="dark">
+            <div className="vc-row" style={{gridTemplateColumns: 'repeat(3, 1fr)'}}>
+              {window.ARTIFACTS.slice(0, 3).map(a => (
+                <Card key={a.id} a={a} style="collage" density="spacious"/>
+              ))}
+            </div>
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="notes" title="Decision matrix" subtitle="What each direction earns and what it costs.">
+        <DCArtboard id="matrix" label="tradeoffs" width={1240} height={520}>
+          <div className="vc-board" data-theme="dark" style={{padding: '40px 48px'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13, color: 'var(--text)'}}>
+              <thead>
+                <tr style={{borderBottom: '1px solid var(--border)', textAlign: 'left'}}>
+                  <th style={{padding: '12px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)'}}>style</th>
+                  <th style={{padding: '12px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)'}}>scannable</th>
+                  <th style={{padding: '12px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)'}}>distinctive at scale</th>
+                  <th style={{padding: '12px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)'}}>impl cost</th>
+                  <th style={{padding: '12px 8px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)'}}>recommendation</th>
+                </tr>
+              </thead>
+              <tbody style={{fontSize: 13.5, lineHeight: 1.6}}>
+                <tr style={{borderBottom: '1px solid var(--border)'}}>
+                  <td style={{padding: '14px 8px', color: 'var(--text-strong)', fontWeight: 500}}>collage</td>
+                  <td style={{padding: '14px 8px'}}>title + capability glyphs read in &lt; 1s</td>
+                  <td style={{padding: '14px 8px'}}>medium — varies by indicator mix</td>
+                  <td style={{padding: '14px 8px', fontFamily: 'var(--font-mono)', fontSize: 12}}>P0 (already indexed)</td>
+                  <td style={{padding: '14px 8px', color: 'var(--accent)'}}>ship as v1 default</td>
+                </tr>
+                <tr style={{borderBottom: '1px solid var(--border)'}}>
+                  <td style={{padding: '14px 8px', color: 'var(--text-strong)', fontWeight: 500}}>screenshot</td>
+                  <td style={{padding: '14px 8px'}}>highest — looks like the real thing</td>
+                  <td style={{padding: '14px 8px'}}>highest — every card unique</td>
+                  <td style={{padding: '14px 8px', fontFamily: 'var(--font-mono)', fontSize: 12}}>P2 (~150mb chromium)</td>
+                  <td style={{padding: '14px 8px'}}>v2, opt-in via setting</td>
+                </tr>
+                <tr style={{borderBottom: '1px solid var(--border)'}}>
+                  <td style={{padding: '14px 8px', color: 'var(--text-strong)', fontWeight: 500}}>big title</td>
+                  <td style={{padding: '14px 8px'}}>high — title is the work</td>
+                  <td style={{padding: '14px 8px'}}>low — risks looking same-y</td>
+                  <td style={{padding: '14px 8px', fontFamily: 'var(--font-mono)', fontSize: 12}}>P0</td>
+                  <td style={{padding: '14px 8px'}}>list-view alternate, or density: dense</td>
+                </tr>
+                <tr style={{borderBottom: '1px solid var(--border)'}}>
+                  <td style={{padding: '14px 8px', color: 'var(--text-strong)', fontWeight: 500}}>terminal</td>
+                  <td style={{padding: '14px 8px'}}>medium — packs metadata</td>
+                  <td style={{padding: '14px 8px'}}>medium — uniform shape</td>
+                  <td style={{padding: '14px 8px', fontFamily: 'var(--font-mono)', fontSize: 12}}>P1</td>
+                  <td style={{padding: '14px 8px'}}>opt-in for cli-fluent users</td>
+                </tr>
+                <tr>
+                  <td style={{padding: '14px 8px', color: 'var(--text-strong)', fontWeight: 500}}>abstract</td>
+                  <td style={{padding: '14px 8px'}}>low — pure mood</td>
+                  <td style={{padding: '14px 8px'}}>highest — instantly memorable</td>
+                  <td style={{padding: '14px 8px', fontFamily: 'var(--font-mono)', fontSize: 12}}>P0</td>
+                  <td style={{padding: '14px 8px'}}>great as the &ldquo;empty&rdquo; case fallback</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </DCArtboard>
+      </DCSection>
+    </DCRoot>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

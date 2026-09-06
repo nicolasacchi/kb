@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb Web Gallery specification — Claude Design handoff integrated. SPA: grid/list/atlas views, iframed detail, Cmd+K, comments with claude replies, status pill.">
+<title>10 · Web Gallery spec — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="../foundation/01-lancedb.html">01 · Storage</a>
+      <a href="../foundation/02-fastembed.html">02 · Embeddings</a>
+      <a href="../foundation/03-notify.html">03 · Watcher</a>
+      <a href="../foundation/04-sse-axum.html">04 · SSE</a>
+      <a href="../foundation/05-ratatui.html">05 · TUI</a>
+      <a href="06-iframe.html">06 · Iframe</a>
+      <a href="07-html-effectiveness.html">07 · HTML</a>
+      <a href="08-prior-art.html">08 · Prior art</a>
+      <a href="09-comments.html">09 · Comments</a>
+      <a href="10-web-gallery.html" class="is-current">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 10
+    <span>·</span>
+    <span class="meta">Web Gallery / SPA specification</span>
+    <span>·</span>
+    <span class="meta">Design handoff integrated 2026-05-11</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>Three views</em>. Iframed detail. Claude in the comments.<br>Multi-file is a first-class artifact.</h1>
+  <p class="lede">The Claude Design Web Gallery handoff bundle <code>E4XcIWFBUnJJqWOWAaNBeA</code> is the implementation contract for kb's user-facing SPA. Grid · List · Atlas views over the artifact catalog, iframed detail with floating chrome, Cmd+K hybrid search, in-iframe annotation with <code>kb-comments/1</code> exports, and a status pill that consumes the same SSE stream the TUI does. This page reproduces the spec with cross-links across topics 01/02/04/05/06/07/09, raises ten concerns, and proposes nine enhancements. The five canonical sample artifacts ship in <code><a href="../sample-artifacts/">sample-artifacts/</a></code>.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR — what the executor builds</span>
+    <p><strong>React + Vite + CSS variables. No Babel-in-browser.</strong> Geist sans + Geist Mono + Lora serif. Single accent variable (<code>--accent</code> defaults to <code>#7c8cff</code>) drives every interactive surface. Three gallery views: <strong>Grid</strong> (5 card styles, hybrid default), <strong>List</strong> (icon + title + summary + tags + age columns), <strong>Atlas</strong> (pan/zoom spatial canvas clustered by accent tag). Detail view = iframed artifact + four floating-chrome variants (capsule default). <strong>Multi-file artifacts</strong> are first class via a <code>pages: [{label, src, file}]</code> array. Cmd+K cycles <code>hybrid</code> / <code>keyword</code> / <code>semantic</code> with prefix filters. Comments live in localStorage, export to <code>kb/{kb}/.review/{id}.json</code> for Claude Code to read and reply to. Status pill consumes the canonical SSE event taxonomy from <a href="../foundation/05-ratatui.html#protocol">topic 05 §G</a>.</p>
+    <div class="badges">
+      <span class="conf conf--high">Layout · HIGH (design-locked)</span>
+      <span class="conf conf--med">Iframe sandbox · MED (conflicts topic 06)</span>
+      <span class="conf conf--med">Scope · MED (5 card styles × 4 chromes × 3 views)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight" id="handoff">
+  <div class="section-head">
+    <div class="num">A. Design handoff anchor</div>
+    <h2>The bundle is the spec. This page is the cross-linked read.</h2>
+  </div>
+  <div class="prose">
+    <p>Claude Design (<a href="https://claude.ai/design">claude.ai/design</a>) handoff bundle <code>E4XcIWFBUnJJqWOWAaNBeA</code>. <strong>Raw bundle archived at <a href="../claude-design-handoff/web-gallery/"><code>claude-design-handoff/web-gallery/</code></a></strong> — open <a href="../claude-design-handoff/web-gallery/README.md"><code>README.md</code></a>, <a href="../claude-design-handoff/web-gallery/project/Web Gallery.html"><code>Web Gallery.html</code></a>, the <a href="../claude-design-handoff/web-gallery/project/app/"><code>app/</code></a> jsx modules, and the <a href="../claude-design-handoff/web-gallery/project/layouts/"><code>layouts/</code></a> alternate explorations directly. Bundle contents (mirrored at runtime; this page reproduces them in spec form):</p>
+    <ul>
+      <li><strong><code>Web Gallery.html</code></strong> — primary clickable prototype (gallery + detail + cmd+K + tweaks). React 18 + Babel-standalone, 9 JSX modules under <code>app/</code> plus <code>app/styles.css</code>. ~3 KLOC of styles, ~2 KLOC of components.</li>
+      <li><code>Card Variations.html</code> — design canvas exploring 5 card preview styles (collage / screenshot / big-title / terminal / abstract) × 3 densities × dark+light. Background only.</li>
+      <li><code>Layouts.html</code> — design canvas linking 5 alternate gallery layouts (Press / Terminal / Atlas / Index / Stack). Background only — the chosen direction is the unified app with Grid · List · Atlas as in-app view toggles.</li>
+      <li><strong><code>artifacts/</code></strong> — five hand-built sample artifacts, mirrored into <code><a href="../sample-artifacts/">kb-research/sample-artifacts/</a></code>.</li>
+    </ul>
+    <p>The user's iteration path from the bundle's chat transcript: starter cards explored → hybrid (big title + collage) wins as default → right-rail detail layout wins → three sample artifacts built (fullscreen-viz, multi-page, kitchen-sink) → five alt layouts as exploration → Atlas promoted from alt to third view → multi-file artifacts introduced as a first-class concept with the postmortem (<code>s05</code>) → cross-artifact backlinks → comments redesigned: threaded, dated, edit/resolve/dismiss, Claude can reply, three exports.</p>
+    <blockquote>"Match the visual output; don't copy the prototype's internal structure unless it happens to fit." — bundle README. The prototype's React/Babel runtime, JSX module split, and tweaks panel are scaffolding; the spec is what the user sees.</blockquote>
+  </div>
+</section>
+
+<section class="section section-tight" id="stack">
+  <div class="section-head">
+    <div class="num">B. Stack</div>
+    <h2>React + Vite. CSS variables. No runtime Babel.</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Build:</strong> Vite + React 18 + TypeScript. The prototype's <code>https://unpkg.com/@babel/standalone</code> tag is concern #9 — production must bundle.</li>
+      <li><strong>State:</strong> useState + URL routing (enhancement #2). No external state manager required at v0.1 scale.</li>
+      <li><strong>Fonts:</strong> Geist (sans, weights 300–700), Geist Mono (400, 500), Lora (serif, 400, 500, 600). Self-host in production; the prototype hits Google Fonts.</li>
+      <li><strong>Theme:</strong> <code>data-theme="dark"</code> | <code>"light"</code> on <code>&lt;html&gt;</code>. Both palettes defined as CSS variables (section §K).</li>
+      <li><strong>Accent:</strong> single <code>--accent</code> custom property, default <code>#7c8cff</code> (kb-violet). Five swatches available: <code>#7c8cff</code>, <code>#e89a4a</code>, <code>#5db59a</code>, <code>#d56b8a</code>, <code>#9b6bd5</code>. <code>--accent-soft</code> derives via <code>color-mix(in oklch, var(--accent) 18%, transparent)</code>.</li>
+      <li><strong>Browser bar:</strong> Chrome 111+, Firefox 121+, Safari 15.4+. Drivers: <code>color-mix(in oklch, …)</code> needs Chrome 111+ / Firefox 113+ / Safari 16.2+ (later than the prior "Chrome 105+" claim, which only covered <code>:has()</code>). On Safari, the artifact-subdomain DNS resolution needs dnsmasq — see <a href="06-iframe.html#decisions">topic 06 Decisions</a>.</li>
+      <li><strong>SSE:</strong> native <code>EventSource</code>. Cross-link to <a href="../foundation/04-sse-axum.html">topic 04</a>.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight" id="chrome">
+  <div class="section-head">
+    <div class="num">C. Global chrome</div>
+    <h2>Top bar always; left rail toggleable; status pill bottom-right.</h2>
+  </div>
+  <div class="prose">
+    <h4>Top bar (52 px)</h4>
+<pre>┌─ kb-selector ─┬─ topbar-path ─┐  ┌─ topbar-search (Cmd-K pill) ─┐  ┌─ view-toggle (G/L/A) · settings ─┐</pre>
+    <ul>
+      <li>Left third: a <strong>daemon + kb selector</strong> (small mark + daemon name + "/" + kb name + chevron). Single-daemon installs collapse to just <code>mark + kb-name</code>. Cluster-4 multi-daemon detail: <a href="#decisions-ux">§O″</a>.</li>
+      <li>Middle third: a click-to-open search pill ("Search artifacts… ⌘K") that opens the Cmd+K modal.</li>
+      <li>Right third: view toggle (Grid · List · Atlas) and a settings icon.</li>
+      <li>Sticky, backdrop-blur, <code>color-mix(in oklch, var(--bg) 80%, transparent)</code> backing.</li>
+    </ul>
+
+    <h4>Left rail (220 px, toggleable via tweaks)</h4>
+    <ul>
+      <li><strong>Tags</strong> — top tags with count and color dot. Click to toggle.</li>
+      <li><strong>Capabilities</strong> — checkbox filters: visual / svg, interactive, long-read, code-heavy.</li>
+      <li><strong>Date</strong> — three radio buttons: 7d / 30d / all.</li>
+      <li><strong>Footer</strong> — total artifact count, mono small.</li>
+    </ul>
+
+    <h4>Status pill (bottom-right)</h4>
+    <p>Spec'd in §J. Idle = small dot. Active = capsule with spinner + "indexing N/M · {kb}". Click opens a drop-up with recent events and "view errors" / "open in tui" buttons.</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="views">
+  <div class="section-head">
+    <div class="num">D. Three gallery views</div>
+    <h2>Grid · List · Atlas. Same data, same filters, same accent.</h2>
+  </div>
+  <div class="prose">
+
+    <h3>Grid view (default)</h3>
+    <p>CSS grid with <code>repeat(var(--cols, 4), 1fr)</code>, gap 18 px. Breakpoints collapse at 1280/900/600. Five card styles, plus a sixth "hybrid" default:</p>
+    <table class="alt-table">
+      <thead><tr><th>Style</th><th>Recipe</th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td><strong>hybrid</strong> (default)</td><td>Big serif title (Lora 21 px) + slim glyph strip (capability icons w/ counts) + 3 px accent stripe</td><td>v0.1 default. Title-led; glyphs tell you what's in there at a glance.</td></tr>
+        <tr><td>collage</td><td>4-glyph grid centered, accent tints, "N glyphs" caption</td><td>When previewing capability matters more than title.</td></tr>
+        <tr><td>screenshot</td><td>Synthetic page mock (header + title lines + code block) in beige</td><td>When the artifact's <em>look</em> is the message.</td></tr>
+        <tr><td>bigtitle</td><td>Serif title + accent gradient backdrop. No preview.</td><td>When titles are evocative; minimal noise.</td></tr>
+        <tr><td>terminal</td><td>Faux terminal: titlebar dots, prompt, syntax-tinted code lines, blinking cursor</td><td>Code-heavy kbs.</td></tr>
+        <tr><td>abstract</td><td>Blurred-blob gradient + giant single-letter glyph, serif</td><td>Mood/poster aesthetic. Demo-friendly.</td></tr>
+      </tbody>
+    </table>
+    <p>Multi-file artifacts add a <strong>"N files"</strong> badge in the preview's top-left. New (unseen) artifacts add a 7 px accent dot in the top-right.</p>
+
+    <h3>List view</h3>
+<pre>┌─ 24px ─┬─ title 180–280 col ─┬─ summary 1fr ─┬─ tags auto ─┬─ words auto ─┬─ age auto ─┐</pre>
+    <p>Six-column grid. <code>list-row-icon</code> (24 px, muted) · <code>list-row-title</code> (13.5 px, 500) · <code>list-row-summary</code> (13 px, muted) · tag pills · word count mono · age mono. Hover background <code>--elev</code>.</p>
+
+    <h3>Atlas view</h3>
+    <p>Pan/zoom spatial canvas. <strong>v0.1 production:</strong> each artifact's 2-D coordinates come from a <strong>UMAP projection</strong> over the kb's embeddings, computed at index time and cached in the lance store. Cluster labels are derived from k-means over the projected coords keyed by accent tag (see <a href="#decisions-ux">§O″</a> cluster-4 decision). Edges connect any two artifacts sharing ≥ 2 tags. <em>Prototype fallback (used only when UMAP cache is cold):</em> the prototype hard-codes 9 cluster centers (<code>rust</code>, <code>memory</code>, <code>async</code>, <code>errors</code>, <code>systems</code>, <code>types</code>, <code>perf</code>, <code>pin</code>, <code>default</code>) and a deterministic hash placement — see prototype source for the hash recipe. Concern #6 resolved by cluster 4 (UMAP commit).</p>
+    <ul>
+      <li>Hash function: <code>hashOf(id)</code> = sum of char codes × 31. Angle = <code>(h % 360)·π/180</code>, radius = <code>60 + (h % 110)</code>. Within a cluster, identical id → identical position.</li>
+      <li>Zoom range 0.5–2.0; pan unbounded.</li>
+      <li>Click any node opens detail (same handler as Grid/List).</li>
+      <li>Cluster labels render at the cluster center, dimmed.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="detail">
+  <div class="section-head">
+    <div class="num">E. Detail view</div>
+    <h2>Iframe + floating chrome + slide-in panels.</h2>
+  </div>
+  <div class="prose">
+    <p>Full-viewport stage. Iframe takes the full width by default; right-side panels (comments / details) slide in and shrink the iframe column. The Pages panel for multi-file artifacts pins to the left edge.</p>
+
+    <h4>Floating chrome variants</h4>
+    <p>Four positions, switchable via tweaks (v0.1 default = capsule). Each variant exposes: back-to-gallery, search (opens Cmd+K), graph, copy-id, annotate (pen), comments (note + badge), details. The annotate and comments buttons highlight when active.</p>
+    <ul>
+      <li><strong>capsule</strong> (default) — bottom-right, pill-shaped, horizontal. Slides left when right-side panels open (the design uses CSS <code>:has()</code> selectors — concern #2).</li>
+      <li><strong>dock</strong> — bottom-center, all icons no labels. Tight.</li>
+      <li><strong>topright</strong> — top-right, compact icon strip. Also slides left when panels open.</li>
+      <li><strong>rail</strong> — middle-right edge, vertical column. Hidden when any right-side panel takes its column (auto-swap to capsule).</li>
+    </ul>
+
+    <h4>Details panel (right, 380 px)</h4>
+    <ul>
+      <li>Metadata block: kb, id (mono), path <code>kb/{kb}/{id}.html</code>, updated, words.</li>
+      <li>Tags row with accent tag highlighted.</li>
+      <li>Backlinks list (≤ 5, sharing ≥ 1 tag).</li>
+      <li>Related list (≤ 4, same <code>accentTag</code>) labeled "vector".</li>
+      <li>Actions: open in editor, regenerate, copy permalink (enhancement #9), delete (danger).</li>
+    </ul>
+
+    <h4>Crumb (top-center)</h4>
+    <p>Slides down from above when the mouse moves to the top 80 px, auto-hides after 2.2 s. Shows <code>{kb} ›  {artifact title}</code>. Mono small.</p>
+
+    <h4>Iframe rendering</h4>
+    <p>The prototype's <code>&lt;iframe sandbox="allow-scripts allow-popups allow-forms allow-same-origin"&gt;</code> uses the right flag set but the wrong serving origin (same as the parent → footgun per topic 06 §A). Production uses topic 06's amended recipe: <strong>keep <code>allow-same-origin</code></strong> (storage works, CodePen pattern), <strong>serve from a different origin</strong> (<code>&lt;id&gt;.artifacts.localhost:4000</code>, RFC 6761 auto-resolution on Chrome+Firefox, dnsmasq fallback on Safari). Drop only <code>allow-top-navigation*</code>. Recreate the iframe per render (<code>key={artifactId + ':' + pageIdx}</code>). postMessage RPC with direction-aware <code>targetOrigin</code> (parent → iframe uses subdomain; iframe → parent uses <code>http://localhost:4000</code>; parent <em>must</em> validate <code>event.origin</code>). Full detail: <a href="06-iframe.html#decisions">topic 06 Decisions</a>.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="multi-file">
+  <div class="section-head">
+    <div class="num">F. Multi-file artifacts</div>
+    <h2>A new first-class artifact dimension.</h2>
+  </div>
+  <div class="prose">
+    <p>The design promotes multi-file artifacts to a first-class concept. An artifact may carry a <code>pages</code> array; if absent, the artifact is single-file as before.</p>
+<pre>{
+  id: 's05',
+  title: 'INC-0315 · Checkout Outage Postmortem',
+  realSrc: 'artifacts/pm/00-summary.html',
+  pages: [
+    { label: 'Summary',      src: 'artifacts/pm/00-summary.html',  file: '00-summary.html'  },
+    { label: 'Timeline',     src: 'artifacts/pm/01-timeline.html', file: '01-timeline.html' },
+    { label: 'Root Cause',   src: 'artifacts/pm/02-cause.html',    file: '02-cause.html'    },
+    { label: 'Action Items', src: 'artifacts/pm/03-actions.html',  file: '03-actions.html'  },
+  ],
+}</pre>
+    <h4>UX</h4>
+    <ul>
+      <li><strong>Gallery card</strong> — "N files" badge in the preview's top-left.</li>
+      <li><strong>List row</strong> — inline pill in the title row.</li>
+      <li><strong>Detail view</strong> — slim left-edge <strong>Pages panel</strong> (240 px) with numbered files, current-file highlight, current-page dot, and prev/next stepper buttons.</li>
+    </ul>
+    <h4>Two-way sync (postMessage handshake)</h4>
+    <ul>
+      <li>Host → iframe: swap <code>src</code> when the user clicks a page in the Pages panel.</li>
+      <li>Iframe → host: when an internal <code>&lt;a href="01-timeline.html"&gt;</code> link is followed, the iframe posts <code>{type:'pm:page', page:N}</code> so the Pages-panel highlight stays in sync.</li>
+    </ul>
+    <p>Concern #7 — the handshake leaks contract into the artifact author. Resolution: optional. Without the handshake, the host falls back to watching the iframe's load event and matching <code>location.pathname</code> against the <code>pages[].src</code> entries.</p>
+    <p>The reference multi-file artifact is <code><a href="../sample-artifacts/pm/00-summary.html">sample-artifacts/pm/00-summary.html</a></code> + 3 siblings.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="backlinks">
+  <div class="section-head">
+    <div class="num">G. Cross-artifact backlinks</div>
+    <h2>Iframes can navigate the host.</h2>
+  </div>
+  <div class="prose">
+    <p>Artifacts can embed inline cards or links that open <em>other</em> artifacts in the host gallery. Mechanism: iframe posts <code>{type:'open-artifact', id:'s02'}</code>; the host validates id against <code>ARTIFACTS</code> and switches the open artifact.</p>
+    <p>Reference: <code>cost-of-abstraction.html</code> page 3 has a backlink card pointing at <code>s02</code> (the Rust Errors field guide). Stand-alone (file://) it renders as a visible card; iframed by the gallery it opens the linked artifact via postMessage.</p>
+    <p>Cross-link to anchor stability discussion in <a href="09-comments.html">topic 09</a> — same DOM anchor model (<code>data-</code> attributes) underlies both the comment system and backlinks.</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="cmdk">
+  <div class="section-head">
+    <div class="num">H. Cmd+K search overlay</div>
+    <h2>Three modes. Prefix filters. Score bars.</h2>
+  </div>
+  <div class="prose">
+    <p>Opens on <code>⌘K</code> / <code>Ctrl-K</code> / <code>/</code> (when no input is focused). Backdrop click or <code>Esc</code> closes.</p>
+    <h4>Modes</h4>
+    <p>Cycle via <code>Tab</code> (badge text on the right of the input):</p>
+    <table class="alt-table">
+      <thead><tr><th>Mode</th><th>Badge</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>hybrid</code> (default)</td><td><code>k+v</code></td><td>BM25 + vector cosine, combined score. Implies both stores are present at query time — confirms <a href="../foundation/01-lancedb.html">topic 01</a>'s split-store hypothesis.</td></tr>
+        <tr><td><code>keyword</code></td><td><code>k</code></td><td>BM25 / FTS5 only. Fast, exact.</td></tr>
+        <tr><td><code>semantic</code></td><td><code>v</code></td><td>Vector cosine only. Embedding-based. Cross-link to <a href="../foundation/02-fastembed.html">topic 02</a> for the model choice (bge-small).</td></tr>
+      </tbody>
+    </table>
+    <h4>Prefix filters in the query string</h4>
+    <ul>
+      <li><code>tag:rust</code> — filter to artifacts with the tag.</li>
+      <li><code>kb:work</code> — filter to the named kb.</li>
+      <li><code>since:7d</code> — time window.</li>
+      <li><code>mode:semantic</code> — switch mode inline (alternative to Tab).</li>
+    </ul>
+    <p>Filters compose AND-wise with the free-text terms.</p>
+    <h4>Result row</h4>
+    <ul>
+      <li>Icon · title · highlighted snippet (matched substring wrapped in <code>&lt;mark&gt;</code>) · tag chips · kb label.</li>
+      <li>Right edge: score bar (0…1) + numeric score (2 decimals).</li>
+      <li>Arrow keys move selection; Enter opens; hover also selects.</li>
+    </ul>
+    <h4>Empty states</h4>
+    <ul>
+      <li>No query: "type to search across N artifacts in K kbs."</li>
+      <li>Query, no results: "no matches. try fewer terms, or <code>mode:semantic</code>."</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="comments">
+  <div class="section-head">
+    <div class="num">I. Comments &amp; annotation</div>
+    <h2>Annotate the iframe. Threaded. Claude replies. Three exports.</h2>
+    <p class="deck">Supersedes topic 09's v1 export-only model. The anchor stability analysis in topic 09 stays load-bearing; the schema and threading model below are the new contract.</p>
+  </div>
+  <div class="prose">
+    <h4>Annotate mode</h4>
+    <p>Toggled by the pen icon in the floating chrome. When on, a bridge script is injected into the iframe's <code>contentDocument</code> (concern #10 about sandbox compatibility flagged). The bridge:</p>
+    <ul>
+      <li>Adds <code>data-cm-target</code> to every eligible block: headings, paragraphs, list items, table rows, code blocks, callouts.</li>
+      <li>Adds dashed-accent hover outlines.</li>
+      <li>On click: opens a popover above the element with a textarea. Selecting text first scopes the comment to the exact words (kind: <code>selection</code>); clicking without selection scopes to the whole block (kind: <code>block</code> or <code>heading</code>).</li>
+      <li>On save: posts <code>{type:'cm:add', artifactId, file, fileLabel, kind, tag, ref, snippet, body}</code> to the host. The host appends to localStorage and opens the Comments panel.</li>
+      <li>Existing comments get a 3 px accent left-rail on their anchored element; resolved ones go grey.</li>
+    </ul>
+
+    <h4>Comments panel (right, 360 px)</h4>
+    <ul>
+      <li>Filter strip: <code>open</code> / <code>resolved</code> / <code>all</code> with counts.</li>
+      <li>Mode toggle: "turn on annotate mode" / "annotating · click any block".</li>
+      <li>Comments grouped by file. Current file labeled "here".</li>
+      <li>Each comment row: relative time + author, body, threaded replies, icon-only actions (jump · reply · edit · resolve/reopen · delete).</li>
+      <li>Replies are themselves authored as <code>you</code> or <code>claude</code>. Claude-authored replies get an accent left-rail and a sparkle mark.</li>
+      <li>The reply composer has a <code>you ↔ claude</code> segmented toggle so the user can paste Claude's response back in inline (when working without the export flow).</li>
+      <li>Jump action: host posts <code>postMessage({type:'cm:flash', ref})</code> to the iframe; the annotator script (loaded via <code>?cm=on</code>, see <a href="06-iframe.html#decisions">topic 06</a>) handles the scroll-into-view + flash. Cross-page jump on multi-file: host first sets <code>pageIdx</code> (which swaps the iframe <code>src</code>), waits for <code>load</code>, then posts <code>cm:flash</code>. <em>Note: the prototype's host-side <code>iframe.__cmFlash()</code> direct call (in <code>comments.jsx</code>) <strong>does not work in production</strong> — the iframe is cross-origin from the parent (subdomain serving), so <code>iframe.contentDocument</code> access is blocked by Same-Origin Policy regardless of the <code>allow-same-origin</code> sandbox flag. <code>allow-same-origin</code> only governs whether the iframe gets an isolated opaque origin; it does not make the iframe same-origin with the parent. postMessage is the only path.</em></li>
+    </ul>
+
+    <h4>Schema (<code>kb-comments/1</code>)</h4>
+<pre>{
+  "schema": "kb-comments/1",
+  "artifact": {
+    "id": "s05",
+    "title": "INC-0315 · Checkout Outage Postmortem",
+    "kb": "work",
+    "tags": ["systems", "workflow"],
+    "pages": [{ "src": "artifacts/pm/00-summary.html", "label": "Summary" }, ...]
+  },
+  "generatedAt": "ISO",
+  "comments": [{
+    "id": "c_xxx",
+    "status": "open" | "resolved",
+    "file": "artifacts/pm/02-cause.html",
+    "fileLabel": "Root Cause",
+    "anchor": {
+      "kind": "block" | "heading" | "selection",
+      "tag": "p",
+      "ref": "el-12",       // data-cm-id on the element
+      "snippet": "the visible text — used to confirm the element"
+    },
+    "author": "you",
+    "body": "the comment text",
+    "createdAt": "ISO",
+    "editedAt": "ISO|null",
+    "replies": [{
+      "id": "r_x",
+      "author": "you" | "claude",
+      "body": "...",
+      "createdAt": "ISO",
+      "editedAt": "ISO|null"
+    }]
+  }]
+}</pre>
+
+    <h4>Three exports</h4>
+    <ol>
+      <li><strong>Claude prompt</strong> — a self-contained instruction pointing Claude at <code>kb/{kb}/.review/{id}.json</code>, telling it how to address open comments, append replies with <code>author: "claude"</code>, and flip status to resolved.</li>
+      <li><strong>kb JSON</strong> — the structured file (schema above).</li>
+      <li><strong>Markdown</strong> — readable summary for issue trackers / humans.</li>
+    </ol>
+    <p>Each export has copy + download. Concern #4 — the JSON must reach <code>kb/{kb}/.review/{id}.json</code>; recommend a daemon endpoint (<code>POST /kb/{kb}/review/{id}</code>) for v0.2 when comments ship.</p>
+
+    <h4>Persistence</h4>
+    <ul>
+      <li>Browser: <code>localStorage</code> key <code>artifact-comments-v2</code>; v1 schema auto-migrates on load.</li>
+      <li>Disk (v0.2): <code>kb/{kb}/.review/{id}.json</code> via daemon API.</li>
+    </ul>
+
+    <p>Cross-link: anchor stability across regenerate is <a href="09-comments.html">topic 09 §C</a> (auto-fuzzy-match + needs-review for low-confidence anchors). Snippet + ref is the fallback when <code>data-cm-id</code> attributes drift.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="status-pill">
+  <div class="section-head">
+    <div class="num">J. Status pill</div>
+    <h2>Bottom-right. SSE-driven. Drops up to recent events.</h2>
+  </div>
+  <div class="prose">
+    <p>Three phases:</p>
+    <ul>
+      <li><strong>idle</strong> — small dot only (button, 28 px). Click toggles the drop-up.</li>
+      <li><strong>indexing</strong> — capsule with spinner + "<code>indexing N/M · {kb}</code>". Progress derived client-side from the rolling <code>index.file</code> stream.</li>
+      <li><strong>degraded</strong> / <strong>disconnected</strong> — yellow / red dot, last-seen timestamp (enhancement #3 spec'd).</li>
+    </ul>
+    <h4>Drop-up</h4>
+    <ul>
+      <li>Header "recent events".</li>
+      <li>Event rows: type chip + message + age. Type colors mirror the canonical taxonomy (see below).</li>
+      <li>Footer buttons: <strong>view errors</strong> (filters the gallery to artifacts with parse errors) and <strong>open in tui</strong> (opens a terminal with <code>kb tui</code> if possible, else copies the command).</li>
+    </ul>
+    <h4>Event taxonomy (canonical, per <a href="../foundation/05-ratatui.html#protocol">topic 05 §G</a>)</h4>
+    <p>The SPA consumes the same SSE stream the TUI does. The design's prototype names (<code>index.progress</code>, <code>watcher.event</code>) are renamed to the canonical set:</p>
+    <table class="alt-table">
+      <thead><tr><th>Design prototype</th><th>Canonical</th><th>Rationale</th></tr></thead>
+      <tbody>
+        <tr><td><code>index.progress</code></td><td><code>index.file</code></td><td>File-by-file events; pill computes rolling N/M client-side.</td></tr>
+        <tr><td><code>watcher.event</code></td><td><code>watch.modify</code> / <code>watch.create</code> / <code>watch.delete</code></td><td>Specific verbs. Cross-link <a href="../foundation/03-notify.html">topic 03</a>.</td></tr>
+        <tr><td><code>index.start</code></td><td><code>index.start</code></td><td>Same.</td></tr>
+        <tr><td>(new)</td><td><code>query</code> / <code>error</code> / <code>connection</code> / <code>comments.updated</code></td><td>Last is enhancement #8 — wakes the pill on Claude-authored replies.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="tokens">
+  <div class="section-head">
+    <div class="num">K. Design tokens</div>
+    <h2>Dark + light. One accent. CSS variables.</h2>
+  </div>
+  <div class="prose">
+    <h4>Color palette — Dark (default)</h4>
+    <table class="alt-table">
+      <thead><tr><th>Token</th><th>Value</th><th>Usage</th></tr></thead>
+      <tbody>
+        <tr><td><code>--bg</code></td><td><code>#0a0a0c</code></td><td>page background</td></tr>
+        <tr><td><code>--surface</code></td><td><code>#111114</code></td><td>cards, panels</td></tr>
+        <tr><td><code>--elev</code></td><td><code>#16161b</code></td><td>hover, raised</td></tr>
+        <tr><td><code>--elev-hi</code></td><td><code>#1c1c22</code></td><td>strong hover</td></tr>
+        <tr><td><code>--border</code></td><td><code>#232329</code></td><td>1 px dividers</td></tr>
+        <tr><td><code>--border-hi</code></td><td><code>#2e2e36</code></td><td>focused borders</td></tr>
+        <tr><td><code>--text</code></td><td><code>#e6e6ea</code></td><td>body</td></tr>
+        <tr><td><code>--text-strong</code></td><td><code>#f4f4f8</code></td><td>titles</td></tr>
+        <tr><td><code>--muted</code></td><td><code>#8a8a93</code></td><td>secondary</td></tr>
+        <tr><td><code>--muted-2</code></td><td><code>#5f5f68</code></td><td>tertiary, separators</td></tr>
+      </tbody>
+    </table>
+    <h4>Color palette — Light</h4>
+    <table class="alt-table">
+      <thead><tr><th>Token</th><th>Value</th><th>Usage</th></tr></thead>
+      <tbody>
+        <tr><td><code>--bg</code></td><td><code>#f7f7f5</code></td><td>page background</td></tr>
+        <tr><td><code>--surface</code></td><td><code>#ffffff</code></td><td>cards, panels</td></tr>
+        <tr><td><code>--elev</code></td><td><code>#ffffff</code></td><td>hover</td></tr>
+        <tr><td><code>--elev-hi</code></td><td><code>#fafafa</code></td><td>strong hover</td></tr>
+        <tr><td><code>--border</code></td><td><code>#e6e6e3</code></td><td>1 px dividers</td></tr>
+        <tr><td><code>--border-hi</code></td><td><code>#d8d8d4</code></td><td>focused borders</td></tr>
+        <tr><td><code>--text</code></td><td><code>#1a1a1c</code></td><td>body</td></tr>
+        <tr><td><code>--text-strong</code></td><td><code>#0a0a0c</code></td><td>titles</td></tr>
+        <tr><td><code>--muted</code></td><td><code>#6a6a72</code></td><td>secondary</td></tr>
+        <tr><td><code>--muted-2</code></td><td><code>#9a9aa3</code></td><td>tertiary, separators</td></tr>
+      </tbody>
+    </table>
+    <h4>Accent</h4>
+    <ul>
+      <li><code>--accent</code> — settable; defaults <code>#7c8cff</code>. Five swatches available (see §B).</li>
+      <li><code>--accent-soft</code> — <code>color-mix(in oklch, var(--accent) 18%, transparent)</code>. Used for pill backgrounds, focus rings.</li>
+      <li><code>--accent-fg</code> — <code>white</code>; foreground on accent backgrounds (kb-mark, primary buttons).</li>
+    </ul>
+    <h4>Typography</h4>
+    <ul>
+      <li><strong>Sans:</strong> Geist, weights 300/400/500/600/700. <code>14 px / 1.5</code> body.</li>
+      <li><strong>Mono:</strong> Geist Mono, 400/500. Used for: kb path, kbd, file paths, ids, age, score, eyebrows.</li>
+      <li><strong>Serif:</strong> Lora, 400/500/600. Used for: card titles (hybrid + bigtitle), artifact body text in the synthetic-article fallback.</li>
+    </ul>
+    <h4>Spacing &amp; motion</h4>
+    <ul>
+      <li><code>--pad: 14px</code>, <code>--gap: 16px</code> (density-controlled).</li>
+      <li>Card grid gap: 18 px. Card border-radius: 10 px. Card hover lift: <code>translateY(-2px)</code> + shadow expand.</li>
+      <li>Easing: <code>cubic-bezier(0.2, 0.8, 0.2, 1)</code>.</li>
+      <li>Panel slide: 0.22 s with <code>cubic-bezier(0.2, 0.7, 0.3, 1)</code>.</li>
+      <li>Backdrop blur: 12 px on top bar, 16 px on floating chrome.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight" id="tweaks">
+  <div class="section-head">
+    <div class="num">L. Tweaks panel · prototype only</div>
+    <h2>Internal design knobs. Don't ship as user settings.</h2>
+  </div>
+  <div class="prose">
+    <p>The prototype's tweaks panel exposes: theme (dark/light), accent (5 colors), density (compact/comfy/spacious), card style (6), columns (2–5 slider), left rail (on/off), floating chrome (capsule/dock/topright/rail), kb name. This is design-review scaffolding — concern #8.</p>
+    <p><strong>Production v0.1:</strong> ship one default per axis. Expose only theme + accent + density via Settings.</p>
+    <table class="alt-table">
+      <thead><tr><th>Axis</th><th>v0.1 default</th><th>User-facing?</th></tr></thead>
+      <tbody>
+        <tr><td>Theme</td><td><code>system</code> (auto-respects <code>prefers-color-scheme</code>)</td><td>Yes — Settings</td></tr>
+        <tr><td>Accent</td><td><code>#7c8cff</code> (kb-violet)</td><td>Yes — Settings, 5 swatches</td></tr>
+        <tr><td>Density</td><td><code>comfortable</code></td><td>Yes — Settings</td></tr>
+        <tr><td>Card style</td><td><code>hybrid</code></td><td>No (v0.3+)</td></tr>
+        <tr><td>Grid columns</td><td><code>4</code> (responsive)</td><td>No</td></tr>
+        <tr><td>Left rail</td><td>visible</td><td>No (always on, scrollable)</td></tr>
+        <tr><td>Floating chrome</td><td><code>capsule</code></td><td>No (v0.3+)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section section-tight" id="concerns">
+  <div class="section-head">
+    <div class="num">M. Raised concerns</div>
+    <h2>Ten push-backs the executor needs to hear.</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>Iframe sandbox is storage-broken — same conflict <a href="06-iframe.html">topic 06</a> flagged. <span style="color:var(--accent)">Resolved 2026-05-11 (amended post deep-review) — see <a href="06-iframe.html#decisions">topic 06 Decisions callout</a>.</span></strong> Prototype uses <code>sandbox="allow-scripts allow-popups allow-forms allow-same-origin"</code>. When the iframe is served from the parent's origin, <code>allow-scripts + allow-same-origin</code> is equivalent to no sandbox at all (the embedded script can remove the sandbox attribute). <strong>Resolution:</strong> keep the prototype's flag set (it's correct), <strong>change the serving origin</strong> to <code>&lt;id&gt;.artifacts.localhost:4000</code>. Per-artifact subdomain via RFC 6761 (Chrome M67+, Firefox 84+ auto-resolve; Safari needs dnsmasq). With <code>allow-same-origin</code> + different serving origin, the iframe gets a real, isolated origin (storage works) and the parent's DOM is cross-origin (safe). The original cluster-1 decision to drop <code>allow-same-origin</code> was wrong — it conflicted with §B's own opaque-origin analysis. iframe-recreate via React key, direction-aware <code>targetOrigin</code> (parent → subdomain; iframe → <code>localhost:4000</code>).</li>
+      <li><strong><code>:has()</code> CSS dependency.</strong> The auto-slide of <code>.float-pill--capsule</code> when right-side panels open relies on <code>.detail:has(.detail-stage.with-comments)</code>. Ships in Chrome 105+, Safari 15.4+, Firefox 121+ (late 2023). <strong>Resolution:</strong> set the minimum-browser bar; for older browsers, fall back to a JS class toggle in the same component.</li>
+      <li><strong>Comment system supersedes <a href="09-comments.html">topic 09</a> v1.</strong> Topic 09 proposed export-only, no threading, no Claude-replier. Design has gone further: threaded replies, <code>author: you|claude</code>, three export formats, <code>kb-comments/1</code> schema, in-iframe annotator with <code>data-cm-id</code> anchors. <strong>Resolution:</strong> keep topic 09's anchor-stability analysis as the load-bearing technical work; the schema and threading model are now §I above. The "auto-resolve on regen with fuzzy anchor re-match" stays — wire to <code>anchor.snippet</code>.</li>
+      <li><strong>Comment write path needs daemon endpoint. <span style="color:var(--accent)">Resolved 2026-05-11 — see <a href="11-daemon-api.html#endpoints">topic 11 §B.3</a>.</span></strong> Comments persist in localStorage in the browser and need to reach <code>kb/{kb}/.review/{id}.json</code> for Claude Code to read and reply. <strong>Resolution:</strong> <code>POST /api/kb/{kb}/review/{id}</code> writes the body atomically to disk; <code>GET /api/kb/{kb}/review/{id}</code> reads it back for Claude-reply sync. File watcher (<a href="../foundation/03-notify.html">topic 03</a>) picks up the change and emits <code>comments.updated</code> via SSE; status pill grows a badge. v0.2 deliverable alongside the comments milestone. The export modal's "download" path stays as the v0.1 fallback when the daemon isn't running.</li>
+      <li><strong>Status-pill event names diverge from the canonical TUI taxonomy.</strong> Design prototype uses <code>index.progress</code> + <code>watcher.event</code>; the TUI integration (<a href="../foundation/05-ratatui.html#protocol">topic 05 §G</a>) canonized <code>index.file</code>, <code>watch.modify</code>, etc. <strong>Resolution:</strong> the TUI names win (they're already in the integrated spec); SPA renames as documented in §J above.</li>
+      <li><strong>Atlas cluster centers don't generalize.</strong> Hard-coded 9 centers in <code>app/atlas.jsx</code> assume a fixed tag vocabulary. <strong>Resolution:</strong> derive cluster centers from <a href="../foundation/02-fastembed.html">embeddings (topic 02)</a> via UMAP / t-SNE in a build step; cache per kb. Tag names label clusters but don't drive their positions. v0.3+ work.</li>
+      <li><strong>Multi-file <code>pm:page</code> handshake leaks contract into artifact authors.</strong> Asks the artifact to emit JS to coordinate with the host. <strong>Resolution:</strong> make optional. Without the handshake, the host watches iframe <code>load</code> events and matches <code>location.pathname</code> against <code>pages[].src</code> to infer the current page. Document both paths.</li>
+      <li><strong>Combinatorial UI scope.</strong> 6 card styles × 4 chrome variants × 3 views × 3 densities × dark/light = 432 surfaces. Tweaks panel is design-review only. <strong>Resolution:</strong> v0.1 ships one default per axis (see §L); Settings exposes theme + accent + density only. Card style + chrome variant + view default to hybrid/capsule/grid; Atlas + List + alt card styles ship in v0.3 as opt-ins.</li>
+      <li><strong>Babel-in-browser is prototype-only.</strong> The bundle's <code>&lt;script src="https://unpkg.com/@babel/standalone…"&gt;</code> tag is for the design surface, not production. <strong>Resolution:</strong> Vite + React + TypeScript bundle. The unpkg URLs do not ship.</li>
+      <li><strong>Annotator bridge with cross-origin iframe. <span style="color:var(--accent)">Resolved 2026-05-11 (amended).</span></strong> The prototype writes a <code>&lt;style&gt;</code> and event listeners into the iframe's <code>contentDocument</code> from the parent. With the amended cluster-1 decision (<em>keep</em> <code>allow-same-origin</code>, but iframe is on a different origin), this direct DOM access <em>fails</em> — the iframe is cross-origin from the parent. <strong>Resolution: serve-time injection.</strong> When the SPA toggles annotate mode, it requests the artifact with <code>?cm=on</code>; the kb daemon rewrites the response to insert <code>&lt;script src="/_kb/annotate.js" defer&gt;&lt;/script&gt;</code> before <code>&lt;/body&gt;</code> (with EOF fallback when <code>&lt;/body&gt;</code> is missing, using a streaming HTML rewriter to avoid matches inside <code>&lt;script&gt;</code> literals). The script runs in the artifact's own origin, has full DOM access (<code>allow-same-origin</code> is in!), and communicates with the host via postMessage with explicit <code>targetOrigin</code>. The injection also writes an inline JSON payload (<code>&lt;script&gt;window.__KB_COMMENTS = […]&lt;/script&gt;</code>) so left-rail <code>data-cm-has-comment</code> marks paint on first frame — no postMessage round-trip flash. Cache key includes <code>?cm=on</code> so the plain artifact stays cacheable. Annotator protocol additions: <code>cm:flash {ref}</code>, <code>cm:refresh {comments}</code>, <code>cm:mode {on}</code>.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight" id="enhancements">
+  <div class="section-head">
+    <div class="num">N. Enhancements — missing from the design</div>
+    <h2>Nine gaps to close before the executor starts.</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>Keyboard navigation across views.</strong> Design supports Cmd+K + in-modal arrows; no <code>j/k</code> on Grid/List, no <code>/</code> outside the modal. Add: <code>j/k</code> moves card selection, <code>Enter</code> opens, <code>Esc</code> clears filters. Match the TUI's vim-mode for consistency.</li>
+      <li><strong>URL routing.</strong> Detail state lives in React state — refresh blows it away, no shareable links. Add a URL parameter shape: <code>?view=grid&amp;tag=rust&amp;artifact=s05&amp;page=2&amp;comments=open</code>. Sync on mount and on state change. Equivalent to the TUI's "always start on HOME" question, but for the SPA the answer is "deep-link everything."</li>
+      <li><strong>Empty / loading / error states.</strong> Design has "no matches" (gallery) and "no comments yet" (panel). Missing: <strong>artifact 404</strong> (id in URL not in catalog), <strong>iframe failed to load</strong> (timeout / network / sandbox violation), <strong>daemon disconnected</strong> (status pill red, banner row). Spec all three.</li>
+      <li><strong>Accessibility.</strong> Design uses <code>&lt;button&gt;</code> everywhere (good) but: no landmark roles on top bar / left rail / main; no skip-link; no visible focus on dark-theme floating chrome; no aria-label on icon-only buttons. Cross-link to <a href="../foundation/05-ratatui.html#enhancements">topic 05 enhancement #7</a> — daemon HTTP API is the non-visual escape.</li>
+      <li><strong>Print / export the artifact + comments.</strong> Useful for archival; missing. <code>window.print()</code> against the iframe with a print stylesheet that inlines comments next to their anchors.</li>
+      <li><strong>Search result preview pane.</strong> Cmd+K shows score + snippet but no preview. For semantic mode, a right preview pane loading the artifact at the matched section would close the loop. v0.3 nice-to-have.</li>
+      <li><strong>Onboarding / empty kb.</strong> Design assumes 25 artifacts loaded. First-run (empty kb) is undefined. Add: "no artifacts yet — drop an HTML file into <code>kb/{kb}/</code> or run <code>kb add &lt;path&gt;</code>."</li>
+      <li><strong>Comment notification path.</strong> Once Claude has replied via the .review JSON loop, the SPA needs to know. Daemon emits <code>comments.updated</code> SSE event (added to the §J taxonomy table); status pill grows a comment badge; on click, jump to the Comments panel with the unread filter active.</li>
+      <li><strong>Permalink / share.</strong> The "copy permalink" button in Details panel has an undefined destination. v0.1: copy <code>http://localhost:4000/a/{kb}/{id}</code> (HTTP form, works in any browser). Custom-protocol <code>kb://artifact/{kb}/{id}</code> is internal-only; defer to v0.3.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight" id="decisions">
+  <div class="section-head">
+    <div class="num">O′. Decisions · 2026-05-11</div>
+    <h2>Cluster 1 of 4 resolved: iframe sandbox + wildcard DNS.</h2>
+  </div>
+  <div class="prose">
+    <p>Following an open-points discussion, the iframe + DNS chain is now fully spec'd. Resolves §M-1 and §M-10 above. The other three open-point clusters (daemon HTTP API surface, storage + embeddings + privacy scrub, UX gaps) remain on the table.</p>
+    <table class="alt-table">
+      <thead><tr><th>Knot</th><th>Decision</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>1 · Per-artifact origin</strong></td><td><code>&lt;id&gt;.artifacts.localhost</code></td><td><code>*.localhost</code> first (RFC 6761; Chrome (M67+, Dec 2017) and Firefox (84+, Dec 2020) auto-resolve). dnsmasq fallback (<code>address=/.localhost/127.0.0.1</code>) on Safari (macOS mDNSResponder doesn't implement RFC 6761). Per-port + <code>/etc/hosts</code> rejected. Caddy + DNS-01 + wildcard cert = self-host path.</td></tr>
+        <tr><td><strong>2a · Sandbox flags (amended post deep-review)</strong></td><td><code>allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads</code></td><td>Topic 06 Decisions permissive baseline. <strong>Keep <code>allow-same-origin</code></strong> — combined with serving from a different origin (subdomain), this gives the iframe a real isolated origin (storage works) and the parent's DOM is cross-origin (safe). The original cluster-1 "drop allow-same-origin" decision conflicted with §B's opaque-origin analysis; corrected after deep-review. Drop only <code>allow-top-navigation*</code>. Strict <code>allow-scripts</code>-only is deferred to v0.2+ via <code>&lt;meta name="kb-sandbox"&gt;</code> opt-in.</td></tr>
+        <tr><td><strong>2b · iframe-recreate</strong></td><td>React <code>key={artifactId + ':' + pageIdx}</code></td><td>Already in the Web Gallery prototype. Keep.</td></tr>
+        <tr><td><strong>2c · postMessage</strong></td><td>Explicit <code>targetOrigin</code> both directions</td><td>Three message types: <code>open-artifact</code>, <code>pm:page</code>, <code>cm:add</code>. No <code>'*'</code>.</td></tr>
+        <tr><td><strong>3 · Annotator bridge</strong></td><td>Serve-time injection of <code>/_kb/annotate.js</code></td><td>SPA requests artifact with <code>?cm=on</code>; daemon rewrites response to inject the script + an inline <code>window.__KB_COMMENTS</code> JSON literal before <code>&lt;/body&gt;</code>. Script runs in artifact origin; talks to host via postMessage. Cache key includes <code>?cm=on</code>.</td></tr>
+        <tr><td><strong>4 · HTTPS</strong></td><td>HTTP-localhost OK for v0.1</td><td>Canon uses no secure-context-only APIs. Defer mkcert / self-signed wildcard certs to self-host docs.</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Action items unblocked:</strong></p>
+    <ul>
+      <li>Spike: does Safari (macOS) resolve <code>foo.artifacts.localhost</code> to 127.0.0.1? mDNSResponder does NOT implement RFC 6761 — needs dnsmasq fallback to be confirmed. Chrome (M67+) and Firefox (84+) already auto-resolve.</li>
+      <li>Author <code>/_kb/annotate.js</code> (~3 KB) — runs the annotator UI inside the artifact origin. v0.2 deliverable alongside the comments milestone.</li>
+      <li>Author the response-rewriter middleware in the kb daemon — adds the injection when <code>?cm=on</code> is present. v0.2.</li>
+      <li>Add the Caddy DNS-01 + wildcard cert config snippet to kb's self-host docs when those land.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight" id="decisions-ux">
+  <div class="section-head">
+    <div class="num">O″. Decisions · 2026-05-11 (UX gaps · cluster 4 of 4)</div>
+    <h2>Final cluster landed. Maximalist v0.1.</h2>
+  </div>
+  <div class="prose">
+    <p>Open-points cluster 4 of 4 — every UX gap enumerated in §M (concerns) and §N (enhancements) is now decided. The chosen shape is bigger than the minimum v0.1 surface; the user explicitly chose the more ambitious path on three of four sub-questions.</p>
+
+    <h3>Atlas clustering algorithm (resolves §M-6)</h3>
+    <p><strong>UMAP via the <code>umap</code> crate (Brett Hodges, 0.5.x), computed at index time, cached per kb.</strong> Seeded for determinism across runs. Recompute on +10 % artifact delta or on explicit <code>kb atlas recompute</code>. Output: 2-D coordinates per artifact, persisted in the lance store alongside embeddings. Topic 02 documents the embedding pipeline; topic 11 §B.2 gains an implicit dependency (the <code>graph</code> endpoint will use these coordinates as a fallback when the requested artifact lacks explicit edges).</p>
+    <p>Tag-based cluster <em>labels</em> still apply on top of the UMAP positions — cluster centroids are derived from the placed artifacts (k-means with k = number of distinct accent tags ≤ 12), labels read off the dominant accent tag in each cluster. This preserves the design prototype's readable labels while the geometry comes from the embeddings.</p>
+
+    <h3>Settings persistence (resolves §enh table)</h3>
+    <p><strong>Hybrid: daemon canonical, localStorage cache.</strong> User prefs (theme, accent, density) and per-kb prefs (last view, last filter set if URL routing didn't capture it) live in <code>~/.config/kb/kb.toml</code> under <code>[ui]</code> and <code>[kb.&lt;name&gt;.ui]</code>. The SPA reads localStorage first on load for 0-RTT paint, then reconciles against the daemon's <code>GET /api/settings</code> (added in topic 11). On change, the SPA writes both: localStorage immediately, daemon via <code>PATCH /api/settings</code> debounced 500 ms. Conflict policy: last-write-wins, no merge — settings are small enough that this is fine.</p>
+
+    <h3>Multi-daemon shape (resolves topic 05 open question)</h3>
+    <p><strong>Multi-daemon from v0.1.</strong> Both the TUI and the SPA grow a daemon selector. Each daemon identifies itself via <code>GET /api/identity</code> (added in topic 11). Clients keep a list of known daemons in their own config:</p>
+    <ul>
+      <li>TUI: <code>~/.config/kb/daemons.toml</code> — one section per daemon (<code>[daemon.work-laptop] endpoint = "http://localhost:4000"</code>). The header chrome shows <code>kb &lt;daemon&gt; · &lt;kb&gt;</code> (e.g. <code>kb work-laptop · rust-learning</code>). <span class="kbd">D</span> opens a daemon-switcher overlay.</li>
+      <li>SPA: stored under <code>[ui.daemons]</code> in <code>kb.toml</code>. Top bar's kb selector becomes a daemon + kb selector (the existing dropdown grows a daemon header).</li>
+      <li><strong>Discovery for v0.1:</strong> config-file only. mDNS / <code>.local</code> auto-discovery is v0.4+ team-mode territory.</li>
+      <li><strong>SSE aggregation:</strong> the SPA's status pill aggregates across all configured daemons (sums of in-flight indexing, max-severity connection state). Per-daemon detail in the drop-up. The TUI subscribes to one daemon at a time (the "active" one).</li>
+    </ul>
+
+    <h3>Polish bundle — maximalist v0.1 (resolves §enh #1–#9)</h3>
+    <table class="alt-table" style="margin:.4rem 0;font-size:.88rem">
+      <thead><tr><th>Item</th><th>v0.1</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Keyboard nav (#1)</td><td>ship</td><td><code>j/k</code> Grid+List row nav · <code>Enter</code> open · <code>Esc</code> clear filters · <code>/</code> focus Cmd+K · <code>g g</code> jump top · <code>G</code> jump bottom. Vim-mode parity with TUI.</td></tr>
+        <tr><td>URL routing (#2)</td><td>ship</td><td><code>/?view=grid&amp;tag=rust&amp;kb=work</code> for gallery state. <code>/a/{kb}/{id}?page=N&amp;comments=open</code> for detail (already in topic 11 §B.4). Refresh-safe; shareable.</td></tr>
+        <tr><td>Empty / loading / error states (#3)</td><td>ship</td><td>artifact 404: panel with "not in this kb's catalog" + back-to-gallery link. iframe load fail: centered error with retry. Daemon disconnected: status pill red + banner row + last-known-state notice (cluster 1 freeze pattern).</td></tr>
+        <tr><td>Accessibility (#4)</td><td>ship</td><td>landmark roles (<code>banner</code> / <code>complementary</code> / <code>main</code> / <code>status</code>); <code>&lt;a class="skip-link"&gt;</code> first in DOM; <code>:focus-visible</code> outline visible on dark theme; <code>aria-label</code> on every icon-only button; <code>aria-live="polite"</code> on the status pill.</td></tr>
+        <tr><td>Print / export with comments (#5)</td><td>ship</td><td>Print stylesheet hides chrome; iframe content prints inline with the host page; comments rendered next to their anchors (margin notes). v0.1 prints empty-comments state if comments milestone hasn't landed yet.</td></tr>
+        <tr><td>Search result preview pane (#6)</td><td>ship</td><td>Cmd+K's right edge grows a preview pane when a result is focused for ≥300 ms. Pane loads the artifact at the matched section anchor (or top if no anchor). Esc + arrow keys still navigate results.</td></tr>
+        <tr><td>Onboarding (#7)</td><td>ship</td><td>Empty-kb state: "drop an HTML file into <code>kb/&lt;name&gt;/</code> or run <code>kb add &lt;path&gt;</code>" + a "Show me an example" button that invokes <code>kb add --demo</code> (daemon bundles <code>kitchen-sink.html</code> as a static asset). NOT a relative link to <code>sample-artifacts/</code> — that path is research-repo-only.</td></tr>
+        <tr><td>Comment notification (#8)</td><td>ship (event hooked; UI in v0.2 with comments)</td><td><code>comments.updated</code> SSE event already in the canonical taxonomy (topic 05 §G, topic 11 §B.1). Status pill grows a comment badge when received. Clicking it routes to the comments panel.</td></tr>
+        <tr><td>Permalink (#9)</td><td>ship</td><td>Resolved in cluster 2 — <code>/a/{kb}/{id}</code> (topic 11 §B.4). "Copy permalink" button copies <code>http://localhost:4000/a/&lt;kb&gt;/&lt;id&gt;</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>kb-mark logomark</h3>
+    <p><strong>Commit to the design prototype's arrow sigil.</strong> SVG path <code>M3 2v12M3 8l5-5M3 8l5 5</code> (16×16 viewBox, accent fill). Reads as a stylized fork / "k". Already shipped in the Web Gallery prototype; no new design needed. The mark renders inside the kb selector in the top bar (left third) at 18 × 18 px, accent background, white foreground.</p>
+
+    <h3>Smaller items pinned</h3>
+    <ul>
+      <li><strong>Search-as-you-type plumbing:</strong> debounced <code>GET /api/search</code> at 150 ms after the last keystroke. Streaming query channel deferred unless v0.3+ shows it's needed.</li>
+      <li><strong>Run history retention:</strong> in-memory 200-event ring buffer (topic 04) plus a daily-rotated ndjson at <code>~/.local/state/kb/runs/YYYY-MM-DD.ndjson</code>. Promote to a sqlite table only if the TUI grows a "scrollback into history" affordance — v0.3+.</li>
+      <li><strong>Recompute Atlas:</strong> the <code>+10 % artifact delta</code> trigger fires from the indexer's event loop, posting a <code>POST /api/kb/{kb}/atlas/recompute</code> (added implicitly to topic 11 §B.3 — async, 202 + run id).</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="canon">
+  <div class="section-head">
+    <div class="num">O. Sample artifacts · canon extension</div>
+    <h2>Five files that pin the iframe sandbox + indexing pipeline.</h2>
+  </div>
+  <div class="prose">
+    <p>The design bundle's <code>artifacts/</code> directory is mirrored verbatim into <code><a href="../sample-artifacts/">kb-research/sample-artifacts/</a></code>. They extend Thariq's upstream 20-artifact reference set (covered in <a href="07-html-effectiveness.html">topic 07</a>) with three patterns the upstream didn't include:</p>
+    <table class="alt-table">
+      <thead><tr><th>File</th><th>Pattern</th><th>What kb learns from it</th></tr></thead>
+      <tbody>
+        <tr><td><a href="../sample-artifacts/fullscreen-viz.html"><code>fullscreen-viz.html</code></a></td><td>full-screen interactive</td><td>Drag-to-resolve borrow checker. Confirms thesis: interactivity is load-bearing.</td></tr>
+        <tr><td><a href="../sample-artifacts/multi-page.html"><code>multi-page.html</code></a></td><td>single-file w/ internal nav</td><td>4 in-page chapters + sticky TOC. No multi-file, no scrolling marathon.</td></tr>
+        <tr><td><a href="../sample-artifacts/kitchen-sink.html"><code>kitchen-sink.html</code></a></td><td>component showcase</td><td>Every HTML primitive — &lt;details&gt;, &lt;dialog&gt;, native sliders, sortable tables, drag-to-reorder, image zoom, popovers, copy buttons. <strong>Iframe sandbox v0.0.1 smoke test.</strong></td></tr>
+        <tr><td><a href="../sample-artifacts/cost-of-abstraction.html"><code>cost-of-abstraction.html</code></a></td><td>4-page essay + internal index</td><td>Left-rail chapter index, drop-cap, pull quotes, inline cross-artifact backlink card (to <code>s02</code>) via <code>postMessage</code>.</td></tr>
+        <tr><td><a href="../sample-artifacts/pm/00-summary.html"><code>pm/00-summary.html</code></a> + 3 siblings</td><td><strong>multi-file</strong></td><td>SEV-1 postmortem (Summary · Timeline · Root Cause · Action Items). Shared <code>style.css</code>. Reference for the <code>pages</code> data shape + <code>pm:page</code> handshake.</td></tr>
+      </tbody>
+    </table>
+    <p>See <a href="../sample-artifacts/README.md"><code>sample-artifacts/README.md</code></a> for the full index and provenance notes.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH (visual contract)</span> <span class="conf conf--med">Confidence · MED (engineering scope · maximalist v0.1)</span></span>
+    <p style="font-size:.9rem;color:var(--ink-3);margin-bottom:.75rem"><em>Authoritative ship list lives in <a href="#decisions-ux">§O″ Decisions · cluster 4</a></em> — cluster 4 promoted most of the §N enhancements into v0.1. This block summarises the cluster-4 outcome.</p>
+    <h4>v0.1 ship list (maximalist, per §O″)</h4>
+    <ul>
+      <li><strong>Top bar</strong>: daemon + kb selector + path + Cmd-K search pill + view toggle (Grid/List/Atlas all from day one — cluster 4) + settings.</li>
+      <li><strong>Left rail</strong> always visible (tags + capabilities + date).</li>
+      <li><strong>Grid + List + Atlas views</strong> all in v0.1 (cluster 4 maximalist). Atlas uses pre-computed UMAP coordinates from the lance store (topic 02).</li>
+      <li><strong>Default card style</strong>: hybrid. Other 5 styles behind Settings (deferred v0.3 unless user requests).</li>
+      <li><strong>Detail view</strong>: capsule floating chrome default, all four variants available via Settings.</li>
+      <li><strong>Multi-file artifacts</strong> with left Pages panel + <code>pm:page</code> + load-fallback.</li>
+      <li><strong>Cross-artifact backlinks</strong> via <code>postMessage({type:'open-artifact', id})</code>.</li>
+      <li><strong>Cmd+K</strong> with all three modes + result preview pane (cluster 4).</li>
+      <li><strong>Status pill</strong> consuming the canonical SSE taxonomy from <a href="../foundation/04-sse-axum.html#canonical-taxonomy">topic 04</a>. Multi-daemon aggregation per §O″.</li>
+      <li><strong>URL routing</strong>: <code>?view=&amp;tag=&amp;kb=</code> for gallery, <code>/a/{kb}/{id}?page=N&amp;comments=open</code> for detail.</li>
+      <li><strong>Iframe sandbox</strong> = topic 06 permissive baseline + subdomain serving (concern #1 resolved).</li>
+      <li><strong>Keyboard nav</strong> (j/k/Enter/Esc parity with TUI).</li>
+      <li><strong>Empty / loading / error states</strong> (artifact 404, iframe load fail, daemon disconnected banner).</li>
+      <li><strong>Accessibility</strong> (landmark roles, skip-link, focus-visible, aria-labels).</li>
+      <li><strong>Print stylesheet</strong> (prints empty-comments state in v0.1; gets comments next to anchors when v0.2 lands).</li>
+      <li><strong>Onboarding</strong> for empty kb — "drop HTML into <code>kb/&lt;name&gt;/</code> or run <code>kb add &lt;path&gt;</code>". The "Show me an example" button calls <code>kb add --demo</code> which materializes <code>kitchen-sink.html</code> into the empty kb (not a static link to <code>sample-artifacts/</code> — that file doesn't exist in production).</li>
+      <li><strong>Permalink</strong> (<code>/a/{kb}/{id}</code> — cluster 4 promoted from v0.2).</li>
+      <li><strong>Logomark</strong>: design prototype's arrow sigil committed.</li>
+    </ul>
+    <h4>v0.2</h4>
+    <ul>
+      <li>Comments + annotator + three exports + daemon <code>POST /api/kb/{kb}/review/{id}</code>.</li>
+      <li><code>comment.*</code> SSE events + status-pill badge for unread Claude replies.</li>
+      <li>Annotator postMessage protocol additions (<code>cm:flash</code>, <code>cm:refresh</code>, <code>cm:mode</code>) — see <a href="06-iframe.html#decisions">topic 06</a>. Replaces the prototype's host-side <code>__cmFlash</code> which is impossible after the cluster-1 sandbox decision.</li>
+      <li>Print stylesheet's "comments inline with anchors" path.</li>
+    </ul>
+    <h4>v0.3+</h4>
+    <ul>
+      <li>Other 5 card styles + 3 other chrome variants moved out of Settings into per-kb config.</li>
+      <li>mDNS daemon auto-discovery (currently config-only).</li>
+      <li>ETag-based optimistic concurrency for review writes.</li>
+      <li>Self-host outbound scrubbing layer (<a href="07-html-effectiveness.html#decisions">topic 07 §Decisions</a>).</li>
+    </ul>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions remaining</span>
+    <ul>
+      <li><strong>Safari `*.localhost` spike</strong> (NOT Firefox — that's already resolved per <a href="06-iframe.html#decisions">topic 06</a>). Outstanding before v0.1 SPA ships. If Safari needs dnsmasq, document the macOS one-liner.</li>
+      <li><strong>Multi-daemon SSE aggregation mechanics.</strong> Aggregating N daemons' SSE streams in the SPA: per-daemon <code>EventSource</code>, per-daemon <code>lastEventId</code> in localStorage, per-daemon exponential-backoff reconnect, aggregation = <code>max(severity)</code> over <code>{connected &lt; degraded &lt; disconnected}</code>, progress = <code>sum(in-flight)/sum(total)</code> across all daemons with an open <code>index.start</code>. Browser per-host conn caps (~6) apply per-daemon-port — fine at v0.1 multi-daemon scale (≤3). Spec'd in cluster-4 §O″; verify with a 3-daemon stress test before v0.1 ships.</li>
+      <li><strong>Annotator bridge postMessage protocol completion</strong> — cluster-4 added the resolved set (<code>cm:flash</code>, <code>cm:refresh</code>, <code>cm:mode</code>) but they need <code>/_kb/annotate.js</code> handler implementations. v0.2.</li>
+      <li><strong>Onboarding demo provenance.</strong> <code>kb add --demo</code> needs the daemon to bundle the kitchen-sink artifact as a static asset. v0.1 implementation detail.</li>
+    </ul>
+  </div>
+
+  <p style="margin-top:1.5rem;font-size:.9rem;color:var(--ink-3)"><em>Resolved across clusters 1–4:</em> gallery view modes (grid/list/atlas, all v0.1), card style default (hybrid), chrome default (capsule), comments schema (<code>kb-comments/1</code>), comments export shape (three formats), multi-file artifact data shape (<code>pages</code>), cross-artifact backlink mechanism (<code>postMessage({type:'open-artifact'})</code>), Cmd+K modes (hybrid/keyword/semantic), status-pill phases, iframe sandbox (topic 06 permissive baseline + subdomain), multi-daemon, settings persistence (hybrid), Atlas clustering (UMAP), logomark (prototype arrow sigil).</p>
+</section>
+
+<nav class="page-nav section">
+  <a href="09-comments.html"><span class="dir">← Prev</span><span class="ttl">09 · Comments</span></a>
+  <a class="next" href="../index.html"><span class="dir">Up →</span><span class="ttl">Index</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · web gallery / SPA specification</p>
+      <p>Claude Design handoff <code>E4XcIWFBUnJJqWOWAaNBeA</code> integrated 2026-05-11. Three views, hybrid card, capsule chrome, threaded comments with claude replies. Ten raised concerns, nine enhancements proposed. Five canonical artifacts in <a href="../sample-artifacts/">sample-artifacts/</a>.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="../foundation/05-ratatui.html">05 TUI</a></li>
+        <li><a href="06-iframe.html">06 Iframe</a></li>
+        <li><a href="07-html-effectiveness.html">07 HTML</a></li>
+        <li><a href="09-comments.html">09 Comments</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://claude.ai/design">claude.ai/design</a></li>
+        <li><a href="https://vitejs.dev/">Vite</a></li>
+        <li><a href="https://react.dev/">React</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

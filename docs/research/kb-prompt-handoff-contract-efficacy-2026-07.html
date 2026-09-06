@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Does the kb-prompt handoff contract actually work? A census + blinded transmission experiment</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="fable-frontier, kb-prompt, handoff, authoring, experiment, transmission, invariant-5, research">
+<meta name="kb-summary" content="First functional test of kb's <template id=kb-prompt> handoff contract: a 1,704-file fleet census + a blinded 3-condition transmission experiment. The contract is widely adopted but rarely in its advertised form (~11 files fleet-wide use ROLE/STEPS); it briefs a code-equipped stranger far better than title+tags (6/6 vs 1/6) but not better than the body; and the tempting 'it's the fallback when the body is stripped' justification is REFUTED — the scrub strips the prompt, not the body, and is off by default.">
+<style>
+  /* kb visual floor — token roles fixed, values are this artifact's own; AA-verified both themes */
+  :root{
+    --bg:#fbfaf7; --surface:#f0ece3; --fg:#211d17; --muted:#5c5548;      /* muted/bg 6.4:1 */
+    --rule:#ddd6c8; --accent:#8a5a1a; --accent-fg:#ffffff;               /* accent/bg 5.3:1 · white/accent 4.9 */
+    --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+    --fs:1.06rem; --lh:1.62; --maxw:47rem;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --serif:ui-serif,Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --radius:7px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#16140f; --surface:#211d16; --fg:#ece7dc; --muted:#a8a08f;    /* muted/bg 6.9:1 */
+      --rule:#332e24; --accent:#e0b46a; --accent-fg:#16140f;             /* accent/bg 8.6:1 */
+      --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+    }
+  }
+  @media (prefers-reduced-motion:reduce){ html{scroll-behavior:auto} *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important} }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 var(--fs)/var(--lh) var(--sans)}
+  main{max-width:var(--maxw);margin:0 auto;padding:2.4rem 1.2rem 5rem}
+  h1{font-size:1.62rem;line-height:1.24;margin:.1em 0 .3em;letter-spacing:-.01em}
+  h2{font-size:1.2rem;margin:2.2em 0 .5em;padding-top:.7em;border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem;margin:1.5em 0 .3em;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:650}
+  p,li{font-family:var(--serif)}
+  a{color:var(--accent);text-underline-offset:2px}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em;font:600 .8rem/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none;z-index:9}
+  .skip-link:focus{left:.5em;top:.5em}
+  .kicker{font:600 .74rem/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .lede{font-size:1.16rem;margin:.5em 0 1em}
+  .meta{color:var(--muted);font:500 .8rem/1.5 var(--mono);margin-bottom:1.5rem}
+  code{font:.88em var(--mono);background:var(--surface);padding:.08em .35em;border-radius:4px}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.9em 1em;overflow-x:auto;font:.82rem/1.5 var(--mono)}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font:.88rem/1.45 var(--sans);margin:1.1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface);font-weight:650}
+  td.n{font-family:var(--mono);text-align:right;white-space:nowrap}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.3em 0;font-family:var(--serif)}
+  .callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+  .callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,var(--bg))}
+  .callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+  .label{display:block;font:650 .72rem/1.3 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin-bottom:.3em}
+  .callout--warn .label{color:var(--warn)} .callout--danger .label{color:var(--danger)} .callout--ok .label{color:var(--ok)}
+  .verdict{font:650 .74rem/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;padding:.2em .5em;border-radius:4px;border:1px solid var(--rule);white-space:nowrap}
+  .v-stands{color:var(--ok);border-color:var(--ok)} .v-bound{color:var(--warn);border-color:var(--warn)} .v-ref{color:var(--danger);border-color:var(--danger)}
+  footer{margin-top:3em;padding-top:1em;border-top:1px solid var(--rule);color:var(--muted);font:.82rem/1.5 var(--sans)}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<p class="kicker">Fable Frontier · run #7 · 2026-07-09</p>
+<h1>Does the kb-prompt handoff contract actually work?</h1>
+<p class="lede">Every kb artifact is supposed to carry an execution contract "written for a stranger who will never see the chat." In this corpus's whole history, no stranger had ever been handed one to check. So I ran the test: a fleet census, then a blinded experiment that hands separate agents different slices of an artifact and measures how well the work transmits. The contract is real, adopted, and useful — and two of its load-bearing justifications do not survive contact with evidence.</p>
+<p class="meta">method: census (23 corpora, 1,704 files) + blinded 3-condition transmission (7 artifacts × 3 slices, 6 blind judges, Opus) + 2 adversarial agents · lab /tmp/kb-prompt-efficacy-lab · no code changed · all proposals triage-gated</p>
+
+<section>
+<h2 id="premise">The premise being tested</h2>
+<p>kb's authoring guide is emphatic: each artifact embeds an inline <code>&lt;template id="kb-prompt"&gt;</code>, capped at 8&nbsp;KB, holding a machine-readable execution contract — "the handoff, not a TL;DR." It is structurally validated, composite-scored, protected by architecture invariant&nbsp;#5, and stripped on public export. An enormous amount of ceremony rests on one untested assumption: <strong>that the contract, handed to a fresh agent, actually conveys the work.</strong></p>
+<p>Six prior Fable-frontier runs interrogated the memory subsystem and determinism. None touched the authoring convention itself. That is the frontier here — not a review of the code that implements the template, but an <em>empirical test of whether the artifact it produces does its job.</em></p>
+</section>
+
+<section>
+<h2 id="census">Part 1 — Census: is it even adopted, and in what form?</h2>
+<p>A deterministic scan of every <code>*.html</code> across all 23 locally-mounted corpora (the 21 <code>kb.toml</code> corpora, plus the two nested <code>facs</code> mounts): 1,704 files, of which 697 carry the template.</p>
+<table>
+<thead><tr><th>Slice of the fleet</th><td class="n">files</td><td class="n">with kb-prompt</td><td class="n">rate</td></tr></thead>
+<tbody>
+<tr><td>All HTML, every corpus</td><td class="n">1,704</td><td class="n">697</td><td class="n">41%</td></tr>
+<tr><td>Authored only (excl. 203 machine-written memory/session envelopes)</td><td class="n">1,501</td><td class="n">697</td><td class="n">46%</td></tr>
+<tr><td>Carrying the <code>ROLE</code>/<code>STEPS</code> execution-contract scaffold</td><td class="n">1,704</td><td class="n">~11</td><td class="n">1.6%<span class="meta"> of templates</span></td></tr>
+<tr><td>Exceeding the 8&nbsp;KB inner budget</td><td class="n">1,704</td><td class="n">0</td><td class="n">0%</td></tr>
+</tbody>
+</table>
+<p>Two things stand out. First, adoption is real but partial — roughly half of authored artifacts carry the template; whole corpora skip it entirely (one corpus 0/7, one repo's <code>infra</code> half 0/11 while its sibling <code>app</code> half is 11/11 — one two-repo kb with one compliant half). Nobody ever exceeds the byte cap.</p>
+<p>Second, and more telling: <strong>the structured execution-contract form the guide describes is vanishingly rare</strong> — about a dozen files in the entire fleet (8 in <code>research</code>, 2 in <code>kb-docs</code>, 1 in another project). The other ~686 kb-prompts are freeform: a paragraph of intent, a mission summary, a note on provenance. The canonical placeholder marker ("Replace with the filled-in scaffold") appears in <em>zero</em> files — authors either fill the template or delete it to a stub, never ship the skeleton. So in practice the kb-prompt is a <em>short freeform provenance note</em>, and the "ROLE / PRECONDITIONS / STEPS / POSTCONDITIONS" execution contract is an ideal that ~1.6% of templates actually adopt.</p>
+</section>
+
+<section>
+<h2 id="experiment">Part 2 — Transmission: hand a stranger one slice, measure the work that survives</h2>
+<p>To measure transmission rather than assert it, I split 7 artifacts into three <em>disjoint</em> slices and gave each to a separate plan-only agent that could read the repository's <em>code</em> but not its <code>docs/</code>. Each produced an INTENT / PLAN / GAPS write-up. A blinded judge then read the ground-truth artifact and scored the three anonymized plans.</p>
+<h3 id="conditions">The three conditions</h3>
+<ul>
+<li><strong>prompt</strong> — the <code>&lt;template id="kb-prompt"&gt;</code> inner text only (472&nbsp;B–4.5&nbsp;KB).</li>
+<li><strong>body</strong> — the visible artifact text with the template removed (9–30&nbsp;KB).</li>
+<li><strong>floor</strong> — three lines: title, category, tags (&lt;300&nbsp;B). This is roughly what a search result or gallery card shows.</li>
+</ul>
+<p>The v024 milestone plan — the single richest, most contract-like prompt (7.3&nbsp;KB of ROLE/STEPS) — was <em>excluded</em> by the separation filter because its prompt and body deliberately share verbatim command chunks. Note that limitation now; it returns below.</p>
+<h3 id="results">Results (mean over 6 artifacts, each axis 0–10)</h3>
+<table>
+<thead><tr><th>Condition</th><td class="n">intent&nbsp;fidelity</td><td class="n">actionability</td><td class="n">groundedness</td><td class="n">adequate&nbsp;to&nbsp;execute</td><td class="n">ranked&nbsp;#1</td></tr></thead>
+<tbody>
+<tr><td><strong>body</strong></td><td class="n">9.83</td><td class="n">9.17</td><td class="n">9.67</td><td class="n">6/6</td><td class="n">6/6</td></tr>
+<tr><td><strong>prompt</strong></td><td class="n">8.33</td><td class="n">8.50</td><td class="n">9.50</td><td class="n">6/6</td><td class="n">0/6</td></tr>
+<tr><td><strong>floor</strong></td><td class="n">4.83</td><td class="n">5.67</td><td class="n">9.00</td><td class="n">1/6</td><td class="n">0/6</td></tr>
+</tbody>
+</table>
+<p>The ranking was <code>body &gt; prompt &gt; floor</code> in all six artifacts — perfectly consistent (I recomputed every per-artifact triple from the raw judge output; they reconcile exactly). Two clean signals emerge, and one tempting third signal that turns out to be an illusion.</p>
+
+<div class="callout callout--ok"><span class="label">Signal 1 — stands</span>The kb-prompt carries a real handoff. A freeform kb-prompt plus repository access let a stranger recover the work's decisions well enough to execute in <strong>6/6</strong> cases; title-plus-tags managed <strong>1/6</strong>. The judges' reasons for the floor's failure are concrete and code-independent: without the prompt or body, teams "would build the corpus-changelog verb the doc explicitly rejects," inferred a "wrong-by-inference 'greenfield' status," or "would produce a different artifact than the actual work item." That is a large gap, and code access is held constant across both arms, so the comparison is fair.</div>
+
+<div class="callout callout--ok"><span class="label">Signal 2 — stands (bounded)</span>Thin context costs completeness, not honesty. Groundedness stayed high in <em>every</em> condition, floor included (9.0/10): the failure mode of a starved agent was an honest GAPS list, not fabrication. Agents knew what they didn't know. (Caveat: groundedness here was cross-checkable against already-shipped features, and floor did double the fabrication rate — 0.33 vs 0.17 — so "untouched honesty" would overclaim; call it "far less degraded than completeness.")</div>
+</section>
+
+<section>
+<h2 id="refuted">Part 3 — The claim that died: "the kb-prompt is insurance for when the body is stripped"</h2>
+<p>The seductive third reading of the table: the body beats the prompt whenever both are available (ranked #1 in 6/6), so the kb-prompt is <em>marginally redundant</em> — its real payoff must be the scenario where the body is gone and the prompt is the survivor. Invariant #5 even names such a scenario: the outbound scrub. I wrote that framing down as the headline design takeaway. The adversarial pass killed it on the one fact it was told to check.</p>
+
+<div class="callout callout--danger"><span class="label">Inverted linchpin (code-verified)</span>The scrub does the <strong>opposite</strong> of what the insurance framing assumes. <code>kb_core::scrub::scrub</code> and <code>scrub_export</code> remove the <code>&lt;template id="kb-prompt"&gt;</code> element and <em>keep</em> the body (<code>scrub.rs:80–124</code>). <code>kb share</code> static export <em>always</em> strips the prompt (<code>scrub_export</code>); the live serve path strips it only on a non-loopback request <em>and</em> only when an operator opts a kb in — <code>strip_kb_prompt</code> defaults to <code>false</code> (<code>config.rs:530</code>, <code>:1704</code>). So the "body-stripped, prompt-survives" scenario <strong>does not exist</strong>: the scrub deletes the prompt and preserves the body, and by default deletes nothing at all.</div>
+
+<p>With the linchpin inverted, the redundancy claim collapses on three further counts the experiment's own design forces:</p>
+<ul>
+<li><strong>No <code>body+prompt</code> arm exists.</strong> The three slices are disjoint by construction (the template is removed from the body; the separation filter enforces zero chunk overlap). The study measured body-<em>alone</em> vs prompt-<em>alone</em> — which cannot establish that the prompt adds nothing <em>given</em> the body.</li>
+<li><strong>The margin is inside the bias envelope.</strong> The "blinded" judge was blind to the plan label but never to the condition — every floor subject announced its own slice ("the handoff is a 3-line metadata stub"), and the judges' justifications name each slice ("Received the document body"). A ~1.5-point intent-fidelity edge and a perfect 6/6 ranking are exactly what a "the body saw more input, so rank it higher" demand characteristic produces on its own. (The <code>prompt &gt;&gt; floor</code> gap, at ~3.5 points with concrete missing content, is far too large to be an artifact of this bias — which is why Signal 1 survives and the redundancy claim does not.)</li>
+<li><strong>Intent-fidelity against the body is circular.</strong> The ground truth the judge scores against <em>is</em> the body (~90% of the artifact's words). A slice that is the body will trivially match it better than a slice that is a compression of it.</li>
+</ul>
+<p>So "the body strictly dominates the prompt" is refuted, and "the prompt is redundant while the body is present" was never tested. What remains is only Signal 1 restated: the prompt beats metadata, not that it loses to the body.</p>
+</section>
+
+<section>
+<h2 id="audience">Where the kb-prompt is genuinely the only carrier</h2>
+<p>If not the public scrub, then where is the kb-prompt the <em>sole</em> machine-readable signal? The code answers precisely. A <code>&lt;template&gt;</code> element renders invisibly in a browser, so a human reading the artifact never sees the prompt — they read the body. On public serve and static share, the scrub removes the prompt outright. The one consumer that reads the prompt and nothing else is <strong>the indexer</strong>: <code>kb_core::parser::extract</code> pulls the template into the <code>prompt</code> / <code>prompt_size_bytes</code> fields at index time (<code>parser.rs:274</code>, <code>:288</code>), from the <em>private, unscrubbed</em> source.</p>
+<p>That reframes the convention honestly: the kb-prompt's unique audience is <strong>machine ingestion of a private artifact's source</strong> — the daemon indexing it, or a tool parsing raw HTML on the loopback path. Not humans, not the public web. Its job is to give that machine a compact, structured, parseable statement of intent and provenance. Which is exactly what the ~686 freeform prompts already provide, and exactly <em>not</em> the "stranger executes it step by step" contract the guide advertises.</p>
+</section>
+
+<section>
+<h2 id="verdicts">Claim ledger</h2>
+<table>
+<thead><tr><th>Claim</th><th>Verdict</th><th>Strongest defensible form</th></tr></thead>
+<tbody>
+<tr><td>Adoption &amp; form</td><td><span class="verdict v-stands">Stands</span></td><td>~41% of fleet HTML (46% excluding machine envelopes) carries a kb-prompt, but ~11 files fleet-wide (~1.6% of templates) use the ROLE/STEPS contract form — in practice it is a freeform provenance note, not a structured contract.</td></tr>
+<tr><td>Prompt &gt;&gt; metadata for handoff</td><td><span class="verdict v-bound">Bounded</span></td><td>Given repo access, a freeform kb-prompt let 6/6 teams recover the work vs 1/6 for title+tags — a large, code-controlled gap. Bounds: prompt <em>plus a codebase where the feature already ships</em>, not "alone"; adequacy is a doc-holding judge's hindsight prediction; untested for greenfield work.</td></tr>
+<tr><td>Body dominates / prompt is redundant insurance</td><td><span class="verdict v-ref">Refuted</span></td><td>The body is <em>preferred</em> when present (6/6) but does not strictly dominate (ties actionability 3/6, loses groundedness 2/6); no body+prompt arm exists; and the "payoff when body is stripped" surface is inverted — the scrub strips the prompt, off by default.</td></tr>
+<tr><td>Thin context hurts completeness, not honesty</td><td><span class="verdict v-bound">Bounded</span></td><td>Completeness fell far more than honesty (intent-fidelity 4.83 vs 9.83; groundedness only 9.67→9.0), but honesty was not untouched (floor doubled fabrications); confounded by a single-model monoculture.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="recommendation">Recommendation (triage-gated — no code touched)</h2>
+<p>The evidence points away from the instinct to "make kb-prompts bigger or mandatory." Two coherent directions, either defensible:</p>
+<div class="callout"><span class="label">Option A — call it what it is</span>Accept the kb-prompt as a compact, machine-parseable <em>provenance &amp; intent record</em> for the indexing path, and stop scoring it against an "execution contract" rubric that ~1.6% of the fleet meets. Update the authoring guide to describe the role authors actually use it for. Cheapest; aligns doc to reality.</div>
+<div class="callout"><span class="label">Option B — scope the contract role</span>If the step-by-step contract genuinely matters, it matters only for <code>plan</code>-category artifacts (the excluded v024 plan is the archetype — its body <em>points to</em> the prompt for the verify commands). Require ROLE/STEPS only there, and drop it for research/note/landscape, where the body out-transmits the prompt anyway.</div>
+<p>What the evidence does <em>not</em> support: mandating prompts corpus-wide, enlarging the 8&nbsp;KB budget (no file approaches it; medians are a few hundred bytes), or justifying the prompt as a hedge against body-stripping (the scrub strips the prompt).</p>
+</section>
+
+<section>
+<h2 id="limits">Limits &amp; integrity notes</h2>
+<ul>
+<li><strong>n = 6 artifacts, one judge, one model (Opus), one machine.</strong> No error bars, no inter-rater reliability. The perfect 6/6 ranking is not independent evidence under a non-blind judge.</li>
+<li><strong>Judge non-blindness is a real, self-documented flaw</strong> — it is survivable for the large prompt≫floor gap and fatal for the small body&gt;prompt gap, and I have scored the claims accordingly rather than around it.</li>
+<li><strong>Sample bias:</strong> all 7 artifacts are from <code>kb-docs</code>, and ≥4 were authored by this same Fable program — the model wrote the prompts, produced the plans, and judged them. A same-model judge rates same-model inferences as "grounded" partly because it shares them.</li>
+<li><strong>Favorable regime:</strong> all six tested features are already shipped in the tree the agents could grep, so the prompt was never tested on genuinely greenfield, unbuilt work — the case where a handoff contract would be stressed hardest.</li>
+<li><strong>Self-correction arc</strong> (matching this program's pattern — run #4 caught inflated counts, run #5 caught a wrong mechanism): here the run's own author wrote down an "insurance" headline that the adversarial pass inverted against invariant #5's actual code. The strong claim died; the census and the prompt≫metadata result are what survived.</li>
+<li><strong>Two agents lost to a spend limit</strong> (one judge, the automated adversarial phase's first attempt) — recovered from the workflow journal and re-run; 21/21 subject cells and 6/7 judges are intact.</li>
+</ul>
+</section>
+
+<footer>
+Fable Frontier run #7 · shipped 2026-07-09 · lab reproducible at <code>/tmp/kb-prompt-efficacy-lab</code> · no code changed, no invariant edited · all proposals await triage · companion runs: <code>recall-salience-inversion-eval-2026-07</code>, <code>turn-zero-injection-efficacy-2026-07</code>, <code>search-determinism-settling-window-2026-07</code>.
+</footer>
+</main>
+</body>
+</html>

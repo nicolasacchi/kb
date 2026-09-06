@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>kb&rsquo;s second-operator territory &mdash; three scenarios, mapped to rulings (2026-07)</title>
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:applied, project:kb, second-operator, non-goals, rulings, multi-user, sharing, public-mirror, auth, threat-model, fable">
+<meta name="kb-summary" content="Maps the three ways a second human meets kb — a stranger self-hosting (in-scope, already documented), a second human inside the operator's daemon (refused: one token = the operator, author is a role not an identity, memory/sessions leak, read-state pollutes), and a public read-only mirror (static share is complete; live mirror = daemon-per-audience deployment recipe). Ends in two ledger entries added to README non-goals, with the single-operator-compatible hardening list the rulings do NOT refuse.">
+
+<style>
+:root{
+  --bg:#f7f8fa; --surface:#eceef2; --fg:#1c2129; --muted:#525c69;
+  --rule:#d6dae1; --accent:#1f5f8b; --accent-fg:#ffffff;
+  --warn:#8a5a00; --danger:#9d2c25; --ok:#1e6b47;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:48rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#14181e; --surface:#1d232b; --fg:#e6e9ed; --muted:#9aa5b1;
+    --rule:#303945; --accent:#7fb8de; --accent-fg:#0d2231;
+    --warn:#e3b45f; --danger:#f0928a; --ok:#7ecfa5;
+  }
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;padding:0 1.25rem 4rem;font:400 var(--fs-body)/var(--lh) var(--sans);color:var(--fg);background:var(--bg)}
+main{max-width:var(--maxw);margin:0 auto}
+h1{font-size:1.75rem;line-height:1.25;margin:2.5rem 0 .5rem;letter-spacing:-.01em}
+h2{font-size:1.3rem;line-height:1.3;margin:2.75rem 0 .75rem;padding-top:.75rem;border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-size:1.05rem;margin:1.75rem 0 .5rem;scroll-margin-top:1rem}
+p{margin:.75rem 0}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5rem .9rem;border-radius:0 0 var(--radius) var(--radius);z-index:10}
+.skip-link:focus{left:0}
+.kicker{font-size:var(--fs-small);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-top:2.5rem}
+.lede{font-size:1.15rem;color:var(--muted);margin:.25rem 0 1rem}
+.meta-strip{font-size:var(--fs-small);color:var(--muted);display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.tag{background:var(--surface);border:1px solid var(--rule);border-radius:999px;padding:.05rem .6rem}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.06em .32em;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.85rem 1rem;overflow-x:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;border:0;padding:0}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.92rem}
+th,td{border:1px solid var(--rule);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:.75rem 1rem;margin:1.15rem 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout-label{display:block;font-size:var(--fs-small);font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.25rem}
+.ruling{border:1px solid var(--rule);border-left:4px solid var(--ok);border-radius:var(--radius);background:var(--surface);padding:1rem 1.15rem;margin:1.25rem 0}
+.ruling h3{margin-top:0}
+ul,ol{padding-left:1.4rem}
+li{margin:.35rem 0}
+.small{font-size:var(--fs-small);color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">design &middot; project:kb &middot; rulings</div>
+  <h1>kb&rsquo;s second-operator territory &mdash; three scenarios, mapped to rulings (2026-07)</h1>
+  <p class="lede">kb is single-operator per daemon by construction; this map turns that accident of the auth code into two recorded non-goals &mdash; the second human gets a share or their own daemon, never a seat inside yours.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span><span>&middot;</span>
+    <span class="tag">status:applied</span><span>&middot;</span>
+    <span class="tag">project:kb</span><span>&middot;</span>
+    <span class="tag">non-goals</span>
+  </div>
+</header>
+
+<section>
+<h2 id="verdict">The verdict, in one table</h2>
+<p>Three ways a second human meets kb, each with a different answer. Only one of them is new ruling territory in the code sense &mdash; but two of them were <em>accidental</em> boundaries until today, enforced by nothing more than a doc comment and the shape of an enum.</p>
+<table>
+<thead><tr><th>Scenario</th><th>What works today</th><th>What breaks</th><th>Ruling or feature?</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>(a)</strong> A stranger self-hosts for themselves</td>
+<td>Everything, once running &mdash; they are a full operator with their own daemon.</td>
+<td>Getting there: first-run friction, distribution floors, secure-by-default gaps &mdash; all previously documented.</td>
+<td><strong>Feature work, already scoped.</strong> Not a non-goal; cite the onboarding gap (<a href="#scenario-a-the-stranger-operator">&sect;A</a>).</td>
+</tr>
+<tr>
+<td><strong>(b)</strong> A second human inside the operator&rsquo;s daemon</td>
+<td>Reading artifacts; commenting (data-model-safe under the per-kb lock).</td>
+<td>Identity merges into one <code>you</code>; memory/sessions/SSE leak the operator&rsquo;s inner life; read-state silently corrupts; admin blast radius is total.</td>
+<td><strong>Ruling.</strong> One daemon, one operator &mdash; no second identity (<a href="#the-rulings">&sect;Rulings</a>).</td>
+</tr>
+<tr>
+<td><strong>(c)</strong> A public read-only mirror of selected kbs</td>
+<td>Static: <code>kb share</code> is complete (always-scrubbed, self-contained, three backends). Live primitives exist (auth-free artifact subdomains, OG shells, outbound scrub).</td>
+<td>Inside a shared daemon: no per-kb visibility, no read-only mode, federated reads fan out over <em>every</em> mounted corpus.</td>
+<td><strong>Ruling + a docs recipe.</strong> The corpus mount is the ACL; live mirror = a dedicated daemon behind an edge allowlist. In-daemon visibility/read-only mode refused (<a href="#the-rulings">&sect;Rulings</a>).</td>
+</tr>
+</tbody>
+</table>
+<div class="callout callout--ok"><span class="callout-label">End state</span>Two entries were added to <code>README.md &rarr; Non-goals</code> on 2026-07-06, verbatim text in <a href="#the-rulings">the rulings section</a>. They compose with, and do not touch, the existing <em>&ldquo;No CRDT / multiplayer editing&rdquo;</em> refusal &mdash; comments plus <code>.review</code> files stay the collaboration surface; what is newly recorded is <em>who</em> may be on the other side of it.</div>
+</section>
+
+<section>
+<h2 id="method">Method and evidence</h2>
+<p>Five read-only survey passes over the codebase and the production deployment, run 2026-07-06: (1) the auth and capability surface of <code>kb-server</code>; (2) the kb-comments/1 data model under two authors; (3) operator-private SPA/API surfaces and shared read-state tables; (4) the share/export engine versus live serving; (5) the prior-art trail for the onboarding gap. Every load-bearing claim below carries a <code>file:line</code> reference into the repo at commit <code>9279de1c</code>, the production reverse-proxy compose + <code>kb.toml</code>, or a named section of an existing research artifact. The threat-model framing follows a July 2026 security review (private): loopback is the assumed-trusted posture, and the interesting question is what a holder of the single valid token can do.</p>
+</section>
+
+<section>
+<h2 id="scenario-a-the-stranger-operator">Scenario A &mdash; the stranger operator (reference, don&rsquo;t redo)</h2>
+<p>A stranger self-hosting kb for themselves is <strong>not second-operator territory at all</strong> &mdash; they become a first operator of their own daemon, which is exactly the supported shape. Every gap on their path is already named, with owners and prompts, in four artifacts. This section exists only to pin the citations:</p>
+<ul>
+<li><strong>The first-run gap</strong> &mdash; <a href="kb-review-coverage-gaps-2026-07.html#gap-onboarding"><code>kb-review-coverage-gaps-2026-07.html#gap-onboarding</code></a>: quickstart, packaging docs, <code>install.sh</code> and <code>/kb-setup</code> all exist but were <em>&ldquo;authored by the person who cannot experience first-run friction&rdquo;</em>; no session has ever walked the happy path on a clean VM. Carries a paste-ready clean-VM dry-run prompt.</li>
+<li><strong>The distribution gap</strong> &mdash; <a href="installing-kb-everywhere-2026-07-06.html#what-ships-today"><code>installing-kb-everywhere-2026-07-06.html#what-ships-today</code></a>: no <code>v*</code> tag has ever fired <code>release.yml</code> end-to-end; the tarball ships no SPA; no self-update mechanism; integrity is checksum-only (and <code>install.sh</code> passes when the sha tool is missing); single-arch image. <a href="installing-kb-everywhere-2026-07-06.html#the-two-floors"><code>#the-two-floors</code></a> adds the silent excluders: glibc &ge; 2.39 and an x86-64-v3 CPU floor (pre-Haswell machines SIGILL at first inference, undocumented).</li>
+<li><strong>Build feasibility</strong> &mdash; <a href="cross-compiling-ci-zigbuild-spike-2026-07-06.html#recommended-ci-design"><code>cross-compiling-ci-zigbuild-spike-2026-07-06.html#recommended-ci-design</code></a>: <code>kb</code> can go static-musl (one upstream lance AVX-512 defect away); <code>kb-embedder</code> can never be zig-linked (C++ ABI wall) &mdash; so the native-runner matrix stays trunk.</li>
+<li><strong>Secure-by-default at the flip</strong> &mdash; <a href="kb-improvement-portfolio-2026-07.html#the-public-flip-changes-the-math"><code>kb-improvement-portfolio-2026-07.html#the-public-flip-changes-the-math</code></a> and <a href="kb-improvement-portfolio-2026-07.html#p07-private-serve"><code>#p07-private-serve</code></a>: with <code>[outbound]</code> unset (the default &mdash; <code>KbSection.outbound</code> is <code>Option</code>, default <code>None</code>, <code>config.rs:429-435</code>), served artifact bytes get zero scrub; <em>&ldquo;self-hosters without an edge gate inherit that silently.&rdquo;</em></li>
+</ul>
+<p>The authority to cite rather than redo is itself recorded: <a href="kb-next-prompts-playbook-2026-07.html#f6-stranger"><code>kb-next-prompts-playbook-2026-07.html#f6-stranger</code></a> scopes the second-operator question into exactly these three scenarios and delegates (a) to the onboarding gap. What already exists and works: <code>docs/self-host.md</code> is a real production guide (systemd hardening, Docker, backup/restore, token auth, hardening checklist) &mdash; with one known staleness, the <code>ORT_STRATEGY</code>/<code>ORT_LIB_LOCATION</code> guidance (ort 2.x uses <code>ORT_LIB_PATH</code>).</p>
+<p><strong>Ruling-vs-feature call: feature.</strong> Nothing here needs a refusal; it needs the already-queued onboarding work. No ledger entry.</p>
+</section>
+
+<section>
+<h2 id="scenario-b-the-second-human">Scenario B &mdash; a second human inside the operator&rsquo;s daemon</h2>
+<p>The concrete picture: a partner or colleague gets the SPA URL and either the shared bearer token or a seat on the same machine (loopback). The daemon cannot tell them apart from the operator &mdash; not as a bug, but as the entire shape of the system.</p>
+
+<h3 id="b-the-trust-model-is-binary">The trust model is binary, and the deferral that would have changed it never landed</h3>
+<p>There is exactly one bearer token per daemon, loaded from <code>&lt;config&gt;/kb/&lt;daemon&gt;/token</code> (<code>paths.rs:181</code>) into an <code>AuthConfig</code> that holds only the token and the trusted-proxy list (<code>state.rs:643-651</code>) &mdash; no scopes, roles, expiry, or read-only tier. <code>auth_bearer</code> (<code>middleware.rs:193-233</code>) gates the whole <code>/api/*</code> tree with two outcomes: loopback bypasses unconditionally (<code>:216-218</code>), everyone else either presents <em>the</em> token or gets 401. A grep for <code>read_only|visibility|acl|role|viewer</code> across config and server finds nothing inbound-auth-related.</p>
+<div class="callout callout--warn"><span class="callout-label">The accidental boundary</span>The doc comment at <code>paths.rs:178-180</code> reads: <em>&ldquo;Single shared token in v0.4; per-kb ACLs + multi-token defer to v0.5+.&rdquo;</em> That deferral was never revisited and never recorded as a decision &mdash; it is the exact species of boundary this artifact exists to convert into a ruling. <code>docs/self-host.md</code>&rsquo;s only &ldquo;multi-user&rdquo; section (&ldquo;Multi-user comment isolation&rdquo;, <code>self-host.md:779</code>) turns out to be proxy cache-header hygiene (<code>Cache-Control: private, no-store</code> + <code>Vary</code>) &mdash; the docs&rsquo; sole mention of a second user is a caching footnote.</div>
+
+<h3 id="b-comments-survive-identities-merge">Comments survive; identities merge</h3>
+<p>The comment data model is <em>mechanically</em> safe under two authors and <em>semantically</em> incapable of representing them:</p>
+<ul>
+<li><strong>Author is a role, not an identity.</strong> <code>enum Author { You, Claude }</code> (<code>review.rs:114-120</code>) &mdash; a closed two-variant, client-supplied label reused identically in replies, attachments, the manifest, the HTTP bodies, the <code>?author=</code> filter, and the SPA&rsquo;s TS union. The SPA hardcodes <code>you</code> (<code>useReview.ts:201</code>); <code>kb comments reply</code> hardcodes <code>claude</code> (<code>commands/comments.rs:1026</code>). Nothing derives it from the caller. Two humans collapse into one <code>you</code>.</li>
+<li><strong>Cross-human permission leaks by construction.</strong> The SPA&rsquo;s &ldquo;own comments&rdquo; edit gate is <code>comment.author === "you"</code> (<code>CommentModal.tsx:47</code>) &mdash; with two humans, either edits (and detaches attachments from) the other&rsquo;s comments; delete is ungated for everyone.</li>
+<li><strong>Concurrency is safe, conflicts are silent.</strong> Every mutation serializes under the per-kb <code>review_lock</code> (invariant #6), so nothing corrupts and appends never lose. But no write path passes an <code>If-Match</code> &mdash; every save is <code>save_atomic(&amp;path, &amp;file, None)</code> (<code>comments.rs:240</code> et al.), so a same-comment body edit race is last-write-wins with no 412. Tolerable for one human + one agent; wrong for two humans.</li>
+<li><strong>The agent loop assumes exactly one <code>you</code>.</strong> <code>kb comments watch</code>&rsquo;s echo-safety surfaces only <code>you</code>-authored items and skips <code>claude</code> (<code>docs/comment-workflow.md:204-208</code>) &mdash; a second human&rsquo;s comments enter the operator&rsquo;s triage loop indistinguishably, as if the single reviewer wrote them.</li>
+</ul>
+<p>So: <em>do comments survive two authors?</em> The files survive; the authorship doesn&rsquo;t. The limiting factor is the data model (the enum), not the UX &mdash; the panels already render <code>comment.author</code> verbatim and would happily display richer identity the schema cannot hold.</p>
+
+<h3 id="b-the-privacy-leak-is-total">The privacy leak is total: memory, sessions, and the live firehose</h3>
+<p>Every operator-private surface sits inside the same one-gate <code>/api</code> tree. A second human with SPA access sees, with no additional gate anywhere:</p>
+<table>
+<thead><tr><th>Surface</th><th>What it exposes</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td><code>GET /api/memory/recall</code>, the <code>/memory</code> route, the reader-rail &ldquo;Related memories&rdquo;</td><td>The operator&rsquo;s full remembered-facts corpus, salience-ranked</td><td><code>routes/memory.rs:146</code>; <code>useRelatedMemories</code> calls <code>scope:"all"</code></td></tr>
+<tr><td><code>GET /api/sessions</code> + decisions/commits/research, <code>/api/why</code>, recollect</td><td>First user prompts (<code>sessions.rs:64</code>), every steering decision (<code>:1062</code>), commits, searches &mdash; the reasoning trail behind every file</td><td><code>sessions.rs:1813</code> (<code>why</code>); SPA renders prompts verbatim (<code>sessions.tsx:598</code>)</td></tr>
+<tr><td>Session <code>export</code></td><td>The raw transcript zip; the <em>only</em> handler with any redaction &mdash; and the secrets-scrub floor applies only when the request looks non-loopback (<code>sessions.rs:2626-2631</code>). A loopback guest gets it unredacted.</td><td><code>router.rs:291</code></td></tr>
+<tr><td><code>GET /api/events</code> (and the Settings &rarr; Live tab)</td><td>One daemon-wide SSE firehose &mdash; <code>history.recorded</code>, <code>memory.*</code>, <code>session.captured</code>, <code>comments.updated</code> &mdash; the operator&rsquo;s activity, live, with only client-chosen <code>?types=</code> filtering</td><td><code>events.rs:47,150-210</code></td></tr>
+<tr><td><code>GET /api/config</code></td><td>The full live <code>kb.toml</code> + share-token env-var presence map</td><td><code>config.rs:34-44</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="b-read-state-pollution">Shared read-state: the second reader silently corrupts the first</h3>
+<p>All &ldquo;what have I read&rdquo; state is per-daemon, keyed on nothing resembling a user. The reader route fires <code>POST history/open</code> on open (<code>detail.tsx:410</code> &rarr; <code>INSERT INTO history</code>, <code>sqlite.rs:467</code>), scroll and section-dwell beacons upsert with <code>max()</code> into the same rows (<code>sqlite.rs:495,627</code>), and reading-list read-state is <em>derived</em> from those shared tables per response (<code>derive_read_state</code>, <code>lists.rs:354</code>; &ge;95% scroll = read, <code>reading.rs:38</code>). The schemas confirm it: <code>history</code> (V0003) has no user/client/owner column &mdash; its header comment says &ldquo;per-user activity log,&rdquo; but the user is the daemon; <code>reading_sections</code> (V0014) keys on <code>(visit_id, section_id)</code>; lists (V0015) likewise. A partner who reads three artifacts pollutes the operator&rsquo;s recents, flips list entries to Read, clears unread badges, and inflates section heatmaps &mdash; irreversibly (the history table is append-only by invariant #8, and <code>history/purge</code> wipes it for everyone).</p>
+
+<h3 id="b-admin-blast-radius">And the blast radius is everything</h3>
+<p>&ldquo;Read-only human&rdquo; is not a configuration that exists. The same credential that lets them read lets them: rewrite tags into source files (<code>PATCH .../meta</code>), delete artifacts, <code>DELETE /api/kb/{kb}</code> (wipe the index &mdash; <code>drop.rs:28</code>), <code>POST /api/shutdown</code>, and <code>PUT /api/config</code> &mdash; which persists a new <code>kb.toml</code> and trips an in-process restart (<code>config.rs:245-251</code>), i.e. full daemon takeover. The type-the-name confirmations on the Admin tab are client-side only (<code>Admin.tsx:158-203</code>); the routes accept no confirm token. The security review&rsquo;s threat model already prices this in: past the token there is no inner boundary.</p>
+
+<h3 id="b-ruling-vs-feature">Ruling-vs-feature call: ruling</h3>
+<p>Making a second human safe inside one daemon would require: a real identity source, multi-token auth, per-user read-state columns across four table families, a widened <code>Author</code> type threaded through three creation paths and the TS client, per-surface visibility gates on memory/sessions/SSE/config, and server-side authorization tiers &mdash; a materially different product (the one the <em>no-CRDT/multiplayer</em> refusal already declined, arriving through the back door). The honest recording is a refusal: <strong>one daemon, one operator</strong>. The second human&rsquo;s supported paths are a static share or a daemon of their own (scenario C&rsquo;s machinery, pointed inward).</p>
+</section>
+
+<section>
+<h2 id="scenario-c-the-public-mirror">Scenario C &mdash; a public read-only mirror of selected kbs</h2>
+
+<h3 id="c-the-static-story-is-complete">The static story is complete</h3>
+<p>The share engine (invariant #9, <code>crates/kb-core/src/share/</code>) already answers &ldquo;publish a subset&rdquo; end to end: target a file, a folder, or the whole kb (<code>{kb_name}-all.zip</code>, <code>routes/share.rs:273-277</code>); walk the filesystem (<code>mod.rs:285</code>); <strong>always</strong> strip <code>kb-prompt</code> regardless of per-kb <code>[outbound]</code> config (<code>scrub_export</code>, <code>scrub.rs:118-124</code>, pinned by test <code>:207-215</code>; <code>--no-scrub</code> is a loud opt-out); relativize in-share cross-artifact links into a self-contained bundle (<code>mod.rs:1195-1235</code>) with out-of-share danglers surfaced (or rewritten to <code>live_origin</code> with <code>--links absolute</code>). Three delivery shapes: Cloudflare Pages behind CF Access (<code>--gate email:&hellip;|google|github</code>, validated <code>mod.rs:789-821</code>), GitHub Pages (public-only), or a local zip via <code>--local</code>/<code>POST /share/export</code> (256 MB / 10k-file caps, <code>share.rs:31-32</code>). Note the &ldquo;share tokens&rdquo; in the daemon env are host API credentials (<code>KB_CF_API_TOKEN</code>/<code>KB_GH_TOKEN</code>, <code>config.rs:577-612</code>) &mdash; gating of a published share is Cloudflare Access&rsquo;s job, not a kb primitive.</p>
+
+<h3 id="c-live-primitives-exist">Live primitives exist &mdash; but only below the API line</h3>
+<p>Three pieces of the daemon are already built for strangers&rsquo; eyeballs: the auth-free artifact subdomains (<code>&lt;id&gt;.artifacts.&lt;suffix&gt;</code> served via the top-level fallback, deliberately outside the <code>/api</code> auth nest &mdash; <code>router.rs:571-586</code>, <code>self-host.md:116-120</code>); the permalink shells with server-spliced OpenGraph meta for unfurlers (<code>spa.rs:77-130</code>, invariant #34); and the outbound scrub that strips <code>kb-prompt</code> + redactions for non-loopback requests (<code>artifact.rs:622-642</code>). Two catches: the scrub is a per-kb <em>opt-in</em> (<code>[outbound]</code> default <code>None</code> &mdash; <a href="kb-improvement-portfolio-2026-07.html#p07-private-serve">portfolio P07</a>&rsquo;s exact complaint), and everything above the artifact-bytes line &mdash; search, gallery data, lists, notes &mdash; lives in <code>/api</code> where auth is all-or-nothing.</p>
+
+<h3 id="c-what-a-shared-daemon-cannot-do">What a shared daemon cannot do</h3>
+<p>Inside one daemon there is no notion of a public subset. <code>KbSection</code> (<code>config.rs:393-489</code>) has no <code>public</code>/<code>visibility</code>/<code>allowlist</code> field. And it wouldn&rsquo;t compose if it did: every federated read &mdash; <code>scope=all</code> search (<code>search.rs:1021</code>), ~40 sessions endpoints, memory recall, notes, lists, anchors, stats, the cross-kb id resolver &mdash; fans out over <code>state.kbs</code> unconditionally (invariant #28 hardens the <em>concurrency</em> of that fan-out, not its scope). A public visitor&rsquo;s search on the operator&rsquo;s daemon would hit the private corpora, full stop. The production instance makes the stakes concrete: one daemon, &asymp;26 corpora in a single process &mdash; showcase artifacts beside an audit corpus, incident runbooks, agent <code>memory</code>, and captured <code>sessions</code> &mdash; published only to <code>127.0.0.1:4000</code>, with Authelia on both routers and a bearer-injecting middleware. There is currently no unauthenticated path to anything, which is correct <em>and</em> fragile: one Traefik router misconfiguration away from scenario B.</p>
+
+<h3 id="c-daemon-per-audience-works-today">The live mirror that works today: daemon-per-audience</h3>
+<p>The isolation mechanism already exists and is load-bearing: <strong>a daemon serves exactly the corpora its own <code>kb.toml</code> mounts</strong> (<code>state.kbs</code> is built solely from <code>config.kb</code> &mdash; <code>lib.rs:302,1045</code>). The unconditional fan-out becomes safe when the corpus set <em>is</em> the public set. A live public mirror is therefore a deployment recipe, not a code change:</p>
+<ol>
+<li>A second <code>kb-public</code> service with its own <code>kb.toml</code>: own <code>[daemon] name</code>, own port, mounting <em>only</em> the public corpora (read-only bind-mounts if comments should be off).</li>
+<li>Every mounted corpus carries <code>[outbound] strip_kb_prompt = true</code> &mdash; mandatory, since the scrub is per-kb opt-in.</li>
+<li>Token-less behind the proxy via <code>KB_ALLOW_NO_AUTH=1</code> (<code>middleware.rs:242-244</code> &mdash; the documented &ldquo;proxy is the gate&rdquo; posture), on a Traefik router without Authelia.</li>
+<li>The edge <strong>allowlists</strong> the read surface. Method-blocking (drop non-GET) kills every mutation &mdash; but is not sufficient: <code>GET /api/config</code> leaks the full config and <code>GET /api/events</code> streams the index firehose. Allowlist artifact subdomains, <code>/a/&hellip;</code> permalinks, the SPA shell, and the handful of read APIs the mirror should answer (search, docs, facets); default-deny the rest.</li>
+</ol>
+<div class="callout"><span class="callout-label">Residual sharp edges the recipe must own</span>Empty-but-present surfaces (sessions/memory endpoints return empty sets when no such corpora are mounted &mdash; harmless but probe-able); history pollution from public readers (their opens write into the mirror daemon&rsquo;s own history &mdash; contained, but it makes the mirror&rsquo;s &ldquo;recent&rdquo; meaningless); and comments &mdash; a writable <code>.review</code> on a public daemon is an open guestbook, so mount read-only or block the routes.</div>
+
+<h3 id="c-ruling-vs-feature">Ruling-vs-feature call: ruling, plus one docs feature</h3>
+<p>The refusal: no per-kb visibility flags, no server-side read-only mode, no in-daemon &ldquo;public&rdquo; tier. Each would introduce a second trust level inside a process whose every subsystem &mdash; fan-out, SSE, read-state, config &mdash; assumes the operator is the only tenant; the audit surface of that assumption is the whole codebase. The accepted answer is composition: <em>the corpus mount is the ACL, the daemon process is the isolation boundary, the edge is the gate</em> &mdash; the same posture the fleet design (many daemons side-by-side) was already built on. The one genuine feature this leaves behind is documentation: a &ldquo;public mirror&rdquo; recipe section in <code>docs/self-host.md</code> encoding steps 1&ndash;4 and the sharp-edges list above.</p>
+</section>
+
+<section>
+<h2 id="the-rulings">The rulings (as added to the ledger)</h2>
+<p>Added verbatim to <code>README.md &rarr; Non-goals</code> on 2026-07-06, alongside the existing seven entries:</p>
+<div class="ruling">
+<h3 id="ruling-one-daemon-one-operator">One daemon, one operator &mdash; no second identity</h3>
+<p>The daemon has exactly one bearer token and no user concept; <code>author: you|claude</code> on comments is the human&harr;agent <em>role</em> split, never an identity. Roles, read-only tokens, viewer accounts, and per-user read-state are refused &mdash; a second human inside your daemon is a guest wielding your full authority, seeing your memory and sessions and polluting your read-state. The supported answers: hand them a static share (<code>kb share</code>), or give them a daemon of their own.</p>
+</div>
+<div class="ruling">
+<h3 id="ruling-the-corpus-mount-is-the-acl">No in-daemon visibility, ACLs, or public mode &mdash; the corpus mount is the ACL</h3>
+<p>Every federated read fans out over every mounted corpus by design; a daemon serves exactly what its <code>kb.toml</code> mounts. A live public mirror is a <em>dedicated daemon</em> mounting only public corpora behind an edge that allowlists the read surface &mdash; a deployment recipe, not a daemon feature. Per-kb <code>public</code> flags and a server-side read-only mode would smuggle a second trust tier into a process built on the operator-is-the-only-tenant assumption; <code>kb share</code> stays the blessed way to move content across a trust boundary.</p>
+</div>
+<p class="small">Scenario (a) deliberately gets no entry: a stranger operating their own daemon is the supported shape, and its gaps are queued feature work, not refusals.</p>
+</section>
+
+<section>
+<h2 id="what-the-rulings-do-not-refuse">What the rulings do <em>not</em> refuse</h2>
+<p>Single-operator hardening is compatible with both rulings and this survey surfaced four cheap pieces of it &mdash; defense-in-depth for the <em>one</em>-operator model, not multiplayer by stealth:</p>
+<ul>
+<li><strong>Server-side admin confirmation.</strong> <code>DELETE /api/kb</code>, <code>history/purge</code>, and <code>/api/shutdown</code> accept no confirm token; the type-the-name modals are client-side only (<code>Admin.tsx:158-203</code>). Mirror the token server-side.</li>
+<li><strong>Gate <code>GET /api/config</code>.</strong> It returns the full live <code>kb.toml</code> (<code>config.rs:34-44</code>); it belongs in the same privileged bucket as <code>PUT</code>.</li>
+<li><strong><code>If-Match</code> on comment writes.</strong> The 412 machinery exists and is dead (<code>save_atomic(&hellip;, None)</code> everywhere) &mdash; wiring it in protects even a solo operator with two browser tabs.</li>
+<li><strong>Scrub-by-default at the public flip</strong> &mdash; already adopted as <a href="kb-improvement-portfolio-2026-07.html#p07-private-serve">portfolio P07</a>; this survey independently re-derived its necessity (per-kb <code>[outbound]</code> opt-in is the one step of the mirror recipe humans will forget).</li>
+</ul>
+<p>Also explicitly untouched: richer <em>display</em> of the existing two-value author (pure UI), and the deferred-with-trigger MCP ruling (a second <em>agent</em> is not a second <em>operator</em> &mdash; agents ride the operator&rsquo;s credential by design).</p>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>Should the public-mirror recipe ship in <code>docs/self-host.md</code> before or after the first external request for it? (It is pure docs; the trigger could simply be &ldquo;someone asks.&rdquo;)</li>
+<li>Read-only bind-mounts on a mirror daemon: the indexer tolerates them for serving, but the recipe should verify watcher/index behavior on a truly read-only corpus before it&rsquo;s written down.</li>
+<li>Does the fleet&rsquo;s loopback-CORS multi-daemon story (one SPA reading several local daemons) need a matching note in the ledger, or is it already covered by &ldquo;the daemon process is the isolation boundary&rdquo;?</li>
+</ul>
+</section>
+
+<section>
+<h2 id="provenance">Provenance</h2>
+<p>Produced 2026-07-06 from five parallel read-only code surveys (auth surface; comments data model; operator-private surfaces and read-state schemas; share engine and production deployment; onboarding prior art) over the kb repo at <code>9279de1c</code> and the live reverse-proxy deployment config. Companion artifacts: a July 2026 security review (threat model, private), the <a href="kb-improvement-portfolio-2026-07.html">improvement portfolio</a> (P07, the public-flip section), the <a href="kb-review-coverage-gaps-2026-07.html#gap-onboarding">coverage-gaps analysis</a>, the <a href="installing-kb-everywhere-2026-07-06.html">distribution landscape</a>, and the <a href="kb-next-prompts-playbook-2026-07.html#f6-stranger">next-prompts playbook</a> (which commissioned this map). The two ledger entries in <a href="#the-rulings">&sect;Rulings</a> were applied to <code>README.md</code> in the same change that added this artifact.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

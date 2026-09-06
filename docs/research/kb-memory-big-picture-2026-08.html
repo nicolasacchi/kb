@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, memory, recall, visualization, fsrs, provenance, injection-ledger, conflict-detection, research-synthesis">
+<title>Memory as an instrument — the big-picture upgrade map for kb memory handling and visualization</title>
+<style>
+:root{
+  --bg:#faf7f2; --surface:#f1ece2; --fg:#26221c; --muted:#5a5347;
+  --rule:#d8d0c2; --accent:#8c4a03; --accent-fg:#ffffff;
+  --warn:#7a5200; --danger:#9c2b1f; --ok:#2f6b3a;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#191713; --surface:#211e18; --fg:#ece7dd; --muted:#b3aa99;
+    --rule:#3a352c; --accent:#e5a559; --accent-fg:#191713;
+    --warn:#ddb35c; --danger:#ec8074; --ok:#85c78f;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} *,*::before,*::after{animation:none!important;transition:none!important} }
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:46rem;margin:0 auto;padding:2.5rem 1.25rem 6rem}
+h1{font-size:1.9rem;line-height:1.2;margin:.4rem 0 .6rem;letter-spacing:-.015em}
+h2{font-size:1.35rem;margin:2.8rem 0 .7rem;scroll-margin-top:2rem;letter-spacing:-.01em}
+h3{font-size:1.05rem;margin:1.8rem 0 .5rem;scroll-margin-top:2rem}
+h2::before{content:"§ ";color:var(--accent);font-weight:600}
+p{margin:.7rem 0}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+code{font:.86em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface);padding:.1em .35em;border-radius:4px}
+pre code{display:block;padding:.8rem;overflow-x:auto}
+.kicker{font-size:.78rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+.kicker .dot{display:inline-block;width:.55em;height:.55em;border-radius:50%;background:var(--accent);margin-right:.45em}
+.lede{font-size:1.08rem;color:var(--muted);margin:.2rem 0 1rem}
+.meta-strip{font-size:.82rem;color:var(--muted);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:.5rem 0;display:flex;gap:.6rem;flex-wrap:wrap}
+.tag{background:var(--surface);padding:.1em .5em;border-radius:999px}
+.sep{color:var(--rule)}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:1rem 0}
+th,td{border:1px solid var(--rule);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--surface)}
+.callout{border-left:3px solid var(--accent);background:var(--surface);padding:.6rem .9rem;margin:1rem 0;border-radius:0 6px 6px 0}
+.callout-label{display:block;font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);font-weight:600;margin-bottom:.2rem}
+.callout--warn{border-color:var(--warn)} .callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-color:var(--danger)} .callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-color:var(--ok)} .callout--ok .callout-label{color:var(--ok)}
+.skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5rem 1rem;z-index:10}
+.skip-link:focus{left:.5rem;top:.5rem}
+ul,ol{padding-left:1.4rem}
+li{margin:.3rem 0}
+li::marker{color:var(--accent)}
+.ev{font-size:.8rem;color:var(--muted)}
+footer{margin-top:3rem;border-top:1px solid var(--rule);padding-top:1rem;font-size:.82rem;color:var(--muted)}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design &middot; kb</div>
+  <h1>Memory as an instrument — the big-picture upgrade map for kb memory handling and visualization</h1>
+  <p class="lede">kb's memory architecture is what the field's 2026 papers say memory should be — but the pipeline feeding it leaks at five verified joints, the scoring model never learns, nothing records what the agent was actually shown, and no surface lets the operator see memory as a living population. This map fixes all four, in dependency order.</p>
+  <div class="meta-strip">
+    <span>2026-08-05</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">5-agent research synthesis</span>
+  </div>
+</header>
+
+<section>
+<h2 id="method">Method</h2>
+<p>Five Sonnet research agents ran in parallel (2026-08-05, workflow <code>wf_0f4e6de2</code>, 717k tokens, 252 tool calls): a memory-engine code map, a visualization-surface map, a whole-ecosystem audit (kb daemon memory vs Claude Code file memory vs episodic sessions vs hooks, across all harnesses), an agent-memory state-of-the-art survey (19 systems/papers, 2024–2026), and a memory-visualization state-of-the-art survey. Fable synthesized. Every load-bearing claim below was spot-verified against the repo or the live corpus before inclusion; findings carry their evidence inline.</p>
+</section>
+
+<section>
+<h2 id="diagnosis">Diagnosis — four layers of the same problem</h2>
+<p>The population is real: 245 memory artifacts in <code>.kb-memory</code> (224 written in the last 5 weeks), 626 captured sessions (912 MB), recall running on every prompt of every session on the machine. The system is load-bearing. The research converges on four stacked findings:</p>
+<ol>
+<li><strong>The pipeline leaks</strong> — write-path and routing defects mean the engine is fed damaged input (<a href="#program-a-repair-the-pipeline">§A</a>).</li>
+<li><strong>The engine computes what it needs and throws it away, at both ends</strong> — the write path destroys its own payload (titles hard-cut mid-word to satisfy a rule that is false for current code), and the read path discards its own signal (the true BM25/vector relevance score is fetched and never used; the per-hit decay curve is computed and dropped before the wire) (<a href="#program-b-close-the-loop">§B</a>).</li>
+<li><strong>Nothing learns and nothing is recorded</strong> — salience is write-once, decay is static, no event anywhere records that a memory was injected into a session, so efficacy is structurally unanswerable (<a href="#program-b-close-the-loop">§B</a>).</li>
+<li><strong>Memory is invisible</strong> — the one memory-native surface is a top-50 ranked slice presented as if it were the corpus; supersede chains, provenance, decay trajectories, injection history, and cross-kb overlap all exist in the data and appear nowhere (<a href="#program-d-see-the-memory">§D</a>).</li>
+</ol>
+
+<h3 id="verified-defects">The five verified defects (live today)</h3>
+<table>
+<tr><th>Defect</th><th>Mechanism</th><th>Evidence</th></tr>
+<tr><td>Titles destroyed at write time</td><td>kb-distill's quality gate says "recall truncates at 80" — false for current code; agents pre-chop titles mid-word. 231/245 stored titles are &ge;78 chars (avg 80.7), e.g. "…root cause was I/" — cut exactly before the actual finding. The title is the <em>only</em> content the hooks inject.</td><td class="ev">plugins/kb-memory/skills/kb-distill/SKILL.md:107; corpus scan 2026-08-05</td></tr>
+<tr><td>Recall injects an index, not content</td><td>kb-recall.sh renders title + kb + id + read-state only — never <code>kb-summary</code> (already computed and on the wire, RA4) and never the body. Automatic recall is a table of contents, and nothing tells the agent to fetch the rest.</td><td class="ev">plugins/kb-memory/hooks/kb-recall.sh:64-84</td></tr>
+<tr><td>Cross-project pile-up</td><td><code>resolve_memory_kb</code> picks "the single corpus fleet-wide with memory_scope=project" with zero cwd awareness — every project's memories land in kb's <code>.kb-memory</code> (77/245 files belong to other projects the operator works in…). The corpus actually named "global" holds 1 fact. The documented global-by-default design is inverted in practice, and recall hooks inject scope=all with no project filter, so every session gets cross-project noise.</td><td class="ev">crates/kb-cli/src/commands/memory.rs:326-363; the daemon's kb.toml; corpus scan</td></tr>
+<tr><td>Distillation is harness-asymmetric and leaky</td><td>80% of the last 60 sessions produced zero curated memory (claude 50% distilled, grok 11%); the distill nudge exists only in Claude Code's hooks, and its suppression check matches a <code>kb remember</code> invocation that <em>failed</em>. No SubagentStop hook exists — subagent findings are structurally invisible (the 2026-07-06 review measured 79–94% of ultracode work lost).</td><td class="ev">sessions API cross-tab; kb-distill-nudge.sh; hooks.json</td></tr>
+<tr><td>The parallel file memory is being falsely declared dead</td><td>Claude Code's own MEMORY.md index tags 30/31 kb-project entries "[STALE: file not found]" — but only 3 files are actually missing; 27+ exist beside the index. The pattern reproduces across ~13 projects (consistent with an existence check resolving against cwd instead of the memory dir — a platform-level bug, no local generator string found). Cost: every session is told its memory is dead, and the same facts get re-encoded in 2–3 unsynced systems (CLAUDE.md, file memory, kb memory) with no cross-reference.</td><td class="ev">~/.claude/projects/&lt;encoded-cwd&gt;/memory/; cross-project sweep, spot-verified</td></tr>
+</table>
+
+<div class="callout callout--warn"><span class="callout-label">Why this matters for the big picture</span>Any grand redesign inherits these leaks. The repairs are not "quick fixes" beneath this document's ambition — they are the difference between upgrading a memory system and upgrading a memory system that is being fed truncated, misrouted, unrecorded input.</div>
+</section>
+
+<section>
+<h2 id="what-the-field-knows">What the field knows (and where kb stands)</h2>
+<p>The survey covered Letta/MemGPT (memory tiers, sleep-time compute), mem0 (extract→consolidate pipeline, graph variant), Zep/Graphiti (bi-temporal knowledge graph), LangMem (hot-path vs background writes), A-MEM (Zettelkasten evolution — and its no-audit-trail anti-pattern), HippoRAG (PageRank retrieval), Stanford's generative agents (recency×importance×relevance — the direct ancestor of kb's rank×salience×decay), ChatGPT/Claude memory products, FSRS-6 spaced-repetition science, CoALA's memory taxonomy, memory-poisoning research (MINJA: &gt;95% injection success), and the benchmark wave (LoCoMo, LongMemEval, MemBench, STALE).</p>
+
+<h3 id="kb-is-validated">Where kb is ahead — and should double down</h3>
+<p>A 2026 paper ("Don't Ask the LLM to Track Freshness", arXiv:2606.01435) empirically re-derives kb's exact architecture: LLM writes candidates, deterministic code aggregates and scores — +10.8pp over LLM-judged conflict resolution at 64K context, widening to +21pp at 262K. kb shipped that pattern in 2025. Every memory is a human-readable HTML file (vs ChatGPT's opaque notepad); recall is a pure, unit-tested function; supersede semantics are explicit; per-kb scoping sidesteps ACLs entirely. <strong>Do not chase LLM-mediated memory. kb's determinism is the moat — every upgrade below preserves it.</strong></p>
+
+<h3 id="kb-lags">Where kb genuinely lags the converged patterns</h3>
+<table>
+<tr><th>Field pattern</th><th>Who converged on it</th><th>kb today</th></tr>
+<tr><td>Usage-reinforced, difficulty-aware decay</td><td>FSRS (500M-review evidence, 20–30% better than static), MemoryBank, ACT-R, Letta</td><td>Static exponential on age-since-creation; a memory recalled 50 times decays identically to one never recalled. kb's decay is architecturally at the 2023 MemoryBank stage.</td></tr>
+<tr><td>Retrieval that weighs actual relevance</td><td>everyone (hybrid scores, rerankers)</td><td><code>rel = 1/(60+rank)</code> gives a ~24% spread across a whole result list while salience×recency swing 2–10×; the true BM25/vector score is fetched and discarded (routes/memory.rs:446-461). Recall currently answers "newest important things", not "relevant things".</td></tr>
+<tr><td>Conflict/contradiction handling</td><td>STALE benchmark's whole reason to exist (best system 68%, most &lt;10% — the field's hardest open problem)</td><td>None. Supersede is writer-declared only; two contradicting memories coexist silently.</td></tr>
+<tr><td>Invalidate, never delete (bi-temporal validity)</td><td>Zep/Graphiti (t_valid/t_invalid + t_created/t_expired)</td><td><code>kb forget</code> is a traceless hard file delete — which is exactly why kb's own 2026-07 temporal-query design had to <em>reject</em> <code>recall --as-of</code> ("a temporal query that silently lies about the past is worse than none").</td></tr>
+<tr><td>Typed memories + entity graph</td><td>CoALA (episodic/semantic/procedural), mem0-graph, Zep, A-MEM</td><td>Free-text category, almost always "memory-user"; no memory-to-memory edges (only kb-visibility links). Yet invariant #29's edge graph is already built for notes.</td></tr>
+<tr><td>Write-time origin/trust tagging</td><td>MINJA/AgentPoison literature; OWASP LLM08:2025</td><td>U3 provenance exists but only the SPA highlight path populates it; agent <code>kb remember</code> is global-by-default with zero origin signal — the exact MINJA amplifier (persist once, inject everywhere, forever).</td></tr>
+</table>
+
+<h3 id="the-viz-vacuum">The visualization vacuum — genuinely open ground</h3>
+<p>The sharpest external finding: <strong>nobody — not mem0, not Letta, not Zep, none of the funded memory-infrastructure category — has shipped a compelling visualization of memory as a first-class object</strong>: its health over time, its provenance, its lineage, or what the agent actually saw. The closest analogs are borrowed (Anki's forgetting curves + review queue, git blame lenses, RAG-provenance debuggers). kb, which already ships an embedding atlas with Procrustes time-lapse, a brush-synchronized reflection canvas, and full session capture, is closer to this than anyone. This is a place kb can be first, not a place to copy.</p>
+<p>Equally important negative result: the hairball literature quantifies why a whole-corpus memory graph must not be built — node-link layouts degrade past ~link-density 3 and reliably hairball past ~50 nodes/200 edges. Everything that works at scale (Neo4j Bloom, Kumu, Excalibrain) scopes to one entity or one query and expands outward. The one legitimately graph-shaped memory view is a supersede chain: 2–6 nodes.</p>
+</section>
+
+<section>
+<h2 id="the-programs">The upgrade map — five programs in dependency order</h2>
+
+<h3 id="program-a-repair-the-pipeline">Program A — Repair the pipeline (the feeding layer)</h3>
+<ul>
+<li><strong>Stop the title massacre.</strong> Delete the false "recall truncates at 80" rule from kb-distill; let titles be whole sentences; teach the skill that the <em>summary</em> (RA4) is the injection payload.</li>
+<li><strong>Inject content, not an index.</strong> kb-recall.sh renders <code>kb-summary</code> (already on the wire) under each hit within a fixed byte budget; kb-wake.sh likewise. This single hook edit changes what every future session on the machine actually knows.</li>
+<li><strong>Project-aware corpus resolution.</strong> <code>resolve_memory_kb</code> resolves from cwd/git-root (the hooks already compute a repo key), auto-falling back to global; a one-time migration re-homes the 77 misfiled memories using the provenance already stamped on each row. This unblocks per-project /memory panels for every other project on the fleet.</li>
+<li><strong>Nudge parity + failure-aware suppression.</strong> Port the distill nudge to codex/grok capture paths; verify the prior <code>kb remember</code> actually succeeded before suppressing. Add SubagentStop capture (or fold sidecar digests into the parent's distill input) to stop the 79–94% subagent loss.</li>
+<li><strong>Reconcile the file memory.</strong> The false-stale epidemic is likely a platform bug (report it), but the deeper fix is one write path: mirror auto-memory writes into <code>kb remember</code> with provenance, and let the kb-backed wake injection be the session-start surface — one memory, not three unsynced ones.</li>
+</ul>
+
+<h3 id="program-b-close-the-loop">Program B — Close the loop (the keystone program)</h3>
+<p><strong>B1. The recall-injection ledger.</strong> The single highest-leverage build in this document. kb's session renderer <em>already parses</em> every per-turn memory injection as <code>Item::MemoryInjection</code> (sessions/view.rs:476) — it is rendered as a chip in one session's transcript and then forgotten. Walking that same parse at session ingest and emitting one row per (memory_id, session_id, turn, timestamp) — a sqlite table in invariant #11's pattern, or edges rows (<code>kind="recalled_in"</code>) riding invariant #29 — creates, with <em>zero new capture</em>, the dataset that unlocks everything downstream:</p>
+<ul>
+<li>per-memory usage history ("recalled 40× this month" / "never recalled despite salience 0.9");</li>
+<li>the agent's-eye ledger ("what was injected last week, into which sessions");</li>
+<li>the efficacy join — sessions already carry the V0029 <code>substance</code> triage (trivial|routine|substantive), so "memories injected into substantive sessions" becomes a deterministic, LLM-free memory-efficacy metric no system in the survey has;</li>
+<li>the input signal for usage-reinforced decay (B2).</li>
+</ul>
+<p><strong>B2. Scoring v2 — deterministic, explainable, and it learns.</strong> Three changes, all pure arithmetic, all unit-testable like today's <code>rerank</code>: (1) restore the discarded true relevance score (normalized per corpus) so what actually matches the query matters again; (2) FSRS-inspired stability: each recorded injection bumps a memory's stability by a closed-form factor — larger when the memory was near its floor (Bjork's desirable difficulty, formalized) — so used memories persist and unused ones fade honestly; (3) keep the full decomposition surfaced (<code>--explain</code> grows two factors). This amends invariant #10's formula text — an explicit operator ruling, not a drive-by.</p>
+<p><strong>B3. Soft forget — one change that completes three unfinished designs.</strong> <code>rerank</code> already filters <code>status == "forgotten"</code> — a filter with <em>zero producers</em>, dead code from an abandoned soft-delete (memory.rs:189). Flip <code>kb forget</code> from hard unlink to writing <code>kb-status: forgotten</code> (+ forgotten-at timestamp; a <code>--purge</code> flag keeps true deletion available). This simultaneously: lights up the existing scorer path; makes forget traceable; re-opens the door the 2026-07 temporal-query design had to close (<code>recall --as-of</code> was rejected <em>only because</em> forget is traceless); and aligns kb with Zep's invalidate-don't-delete without importing a graph database. Pair with the already-endorsed, never-built <code>kb memory log &lt;id&gt;</code> (walk one supersede chain with timestamps) and <code>kb diff --between</code> (scoped verdict=ship in July, ~100 lines, unbuilt).</p>
+<p><strong>B4. Census route.</strong> <code>GET /api/memory/census</code>: a plain, uncapped, paginated scan per memory corpus (salience, decay bucket, age, pinned, links, supersedes, last-recalled). Today no endpoint lists the whole population — /memory's "N memories" header describes a biased top-50 sample (server MAX_LIMIT=50 vs the SPA's requested 100) presented as the corpus.</p>
+
+<h3 id="program-c-lifecycle-intelligence">Program C — Lifecycle intelligence at the agent layer (auditable, never automatic)</h3>
+<ul>
+<li><strong>Conflict-candidate detection, deterministically.</strong> An <code>EnrichmentHook</code> (the existing ordered registry) that on memory index flags pairs of active, non-superseded memories with high embedding similarity + shared tags as a system-generated review comment ("possible contradiction with …") through the existing kb-comments surface. Code detects candidates; a human or agent resolves via the normal reply/resolve + <code>--supersedes</code> workflow. This attacks the field's hardest open problem (STALE: most frameworks &lt;10%) in the one way that fits kb: candidates surfaced, never auto-resolved.</li>
+<li><strong>Scheduled sleep-time reflection.</strong> Letta's sleep-time compute + ChatGPT's dreaming, adapted: a nightly agent pass (cron, agent layer — never the daemon) reads recent memories + session digests and proposes merges/supersedes/salience adjustments <em>as a reviewable diff</em> through the existing proposals lane (/inbox already renders ProposalRow, which even carries a never-rendered <code>supersedes</code> field). This is the anti-A-MEM: consolidation with an audit trail and a reject button.</li>
+<li><strong>Types + entities on existing rails.</strong> A <code>kb-memory-type: episodic|semantic|procedural</code> meta (CoALA's minimal taxonomy — kb serves both a coding agent and a general assistant from one recall surface and currently can't tell a preference from a procedure), and entity <code>[[wikilinks]]</code> written at distill time riding invariant #29's edge graph — memory-to-memory and memory-to-artifact connective tissue with zero new infrastructure.</li>
+<li><strong>Origin/trust tagging.</strong> Extend U3 provenance so <code>kb remember</code> records <code>kb-source: fetched-web|user-dictated|agent-inference</code>. Surfaced-never-scored, like all provenance — but visible in every recall view, and untrusted-origin writes should warn on (or require opting into) global visibility. This closes kb's one concrete exposure to the MINJA-class persistence attack while respecting the one-trust-tier non-goal.</li>
+</ul>
+
+<h3 id="program-d-see-the-memory">Program D — See the memory (the visualization suite)</h3>
+<table>
+<tr><th>Surface</th><th>The question it answers (that nothing answers today)</th><th>Data status</th></tr>
+<tr><td><strong>Health timeline</strong> — per-row score-decay sparkline projected +90d, with the memory's raw salience shown against the policy floor as a <em>state</em> (above / below), not a future crossing</td><td>Which memories are fading toward unrecallability, and which are excluded right now?</td><td>Zero new storage — <code>decay</code>/<code>age_days</code> are computed per-hit in <code>rerank</code> and thrown away before the wire</td></tr>
+<tr><td><strong>Injection ledger views</strong> — per-memory injection sparkline; a salience × days-since-last-injection quadrant scatter; "memories recalled" beside "memories produced" in SessionInspector; a "what does the agent see right now" simulator (run recall for a draft prompt, show exactly the hook's output)</td><td>Is this memory pulling its weight? What did the agent actually see? Which high-salience facts are dead weight?</td><td>Needs B1 (derived from already-parsed events)</td></tr>
+<tr><td><strong>Lineage viewer</strong> — per-fact supersede DAG (2–6 nodes, the one place node-link is right), TimeArcs-style overlap shading between a fact and its correction</td><td>How did this belief evolve? What did it replace, and when?</td><td>Data written today, rendered nowhere; pairs with <code>kb memory log</code></td></tr>
+<tr><td><strong>Provenance thread</strong> — memory → origin session → its commits → "files touched since changed?" staleness check</td><td>Where did this come from, and is it still true?</td><td>Every hop exists (session_id on hits, session_commits tables, by-commit join); never chained</td></tr>
+<tr><td><strong>Memory atlas mode</strong> — extend AtlasPoint with salience/pinned/decay/supersedes when the kb is memory-scoped: color by decay, supersede edges, lasso→bulk review; the already-shipped Procrustes time-lapse becomes a belief-drift movie for free</td><td>What does my memory look like as a semantic space, and how has it drifted?</td><td>~90% built (canvas, lasso, history frames); memory semantics never reach the point payload</td></tr>
+<tr><td><strong>Memory lane on ReflectionCanvas + hygiene queue</strong> — a fifth brush-synchronized lane (writes/supersedes/forgets/pins), and an Anki-style bounded triage queue: N memories most worth 90 seconds now (near-floor, stale-source, conflicted, never-recalled) with cheap actions (pin / re-salience / supersede / forget)</td><td>Matuschak's "spaced everything": maintenance as a queue, not a chore — and the queue justifies each item ("in queue because it crosses the floor in 6d")</td><td>Canvas lane: trivial. Queue needs B4 + a daemon-owned salience-edit route (memory metadata is currently immutable via API — MemoryActions.tsx already flags this as a known-deferred follow-up)</td></tr>
+<tr><td><strong>Cross-kb overlap</strong> — UpSet-style matrix of visibility sets (global / per-kb combos), clicking pivots /memory to that set</td><td>How much of my memory is shared vs siloed?</td><td>Client-side aggregation of fields already on every hit</td></tr>
+</table>
+<p>Design rules carried from the research: reference lines on every trend (a decay curve without the floor line hides the one thing that matters); one muted trust/staleness color ramp reused across all surfaces (uncertainty viz erodes trust when it looks alarming); correlation insights in a separate feed, never bolted onto every chart (the Exist.io lesson); and no whole-corpus graph view, ever.</p>
+
+<h3 id="program-e-prove-it">Program E — Prove it (rigor nobody else can claim)</h3>
+<ul>
+<li><strong>A kb-native memory bench in CI.</strong> Extend <code>kb bench</code> with hand-curated deterministic fixtures modeled on LongMemEval's five abilities and STALE's conflict taxonomy: "after A supersedes B supersedes C, recall(topic) returns only A"; "recall(never-mentioned) returns nothing" (abstention); "a propagated conflict is flagged by the conflict hook". Every LLM-mediated competitor needs an expensive non-reproducible judge run to test memory correctness; kb can make it a fast Rust test suite. That is a category-level differentiator.</li>
+<li><strong>Transcript-at-rest trust review.</strong> Windows Recall's unencrypted capture DB produced a same-day credential-dumping PoC and a product recall. kb captures full session transcripts (912 MB, secrets plausibly included) as first-class searchable data, and the live-follow lane already had to go loopback-only-hard for exactly this reason. Before shipping any scrub-back timeline or wider session surface, run an explicit at-rest/redaction review of the sessions corpus.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="ranked-game-changers">Ranked: what is genuinely game-changing</h2>
+<ol>
+<li><strong>The injection ledger + agent's-eye view (B1, D2).</strong> Novel — no surveyed system shows a human what their agent's memory actually did. Unlocks three other programs. Derivable today with no new capture.</li>
+<li><strong>Deterministic usage-reinforced scoring (B2).</strong> Takes kb from 2023-vintage static decay to the field-leading model <em>while staying fully explainable</em> — the upgrade every competitor can't do without giving up auditability.</li>
+<li><strong>Content-bearing recall + pipeline repairs (A).</strong> The cheapest items on this list change what every future session knows. Everything else compounds on top of a fixed pipeline.</li>
+<li><strong>Soft forget + lineage + as-of (B3).</strong> One meta flip completes three designs kb already wrote, and gives memory a truthful past.</li>
+<li><strong>The health dashboard + hygiene queue (D1, D6).</strong> Anki-for-your-agent's-memory: the operator finally sees and tends the population instead of trusting it blindly.</li>
+<li><strong>Conflict candidates + reviewable reflection (C).</strong> Attacks the field's hardest open problem in kb's uniquely auditable way.</li>
+<li><strong>One memory across harnesses and stores (A5).</strong> Ends the three-unsynced-systems era; kb becomes <em>the</em> memory, not one of several.</li>
+<li><strong>The memory bench (E1).</strong> Small build, category-level rigor claim.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="what-not-to-build">What not to build (refusals, reaffirmed by evidence)</h2>
+<ul>
+<li><strong>No in-daemon LLM</strong> — the 2026 freshness paper is direct empirical validation of kb's stance; every program above keeps LLM steps at the agent layer behind review surfaces.</li>
+<li><strong>No whole-corpus memory graph view</strong> — quantified hairball thresholds sit far below kb's scale; scoped-and-expand or matrix views only.</li>
+<li><strong>No A-MEM-style self-rewriting consolidation</strong> — no memory mutation without an audit trail and a reject button.</li>
+<li><strong>No naive time-travel while forget is traceless</strong> — kb's own July ruling stands until B3 lands; a temporal query that lies is worse than none.</li>
+<li><strong>No memory-benchmark arms race</strong> — E1 is a regression suite for kb's own semantics, not a leaderboard entry (existing non-goal, unchanged).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="decisions-for-the-operator">Decisions for the operator</h2>
+<div class="callout callout--danger"><span class="callout-label">Correction 2026-08-07 — this document was wrong about decay</span>Two claims above (in <a href="#diagnosis">§Diagnosis</a> and the Health-timeline row of <a href="#program-d-see-the-memory">§D</a>) described the decay-policy floor as something a memory <em>crosses over time</em> — "decaying toward invisibility", "drops in 9d". <strong>That is false.</strong> Verified in code during W4: the floor is compared against <strong>raw, undecayed</strong> salience at both enforcement sites (<code>routes/memory.rs:511</code>, <code>kb-core/memory.rs:472</code>); <code>exp(-k·age)</code> is applied only to the ranking <em>score</em>. So a memory whose author-set salience is above the floor is <strong>never</strong> dropped by ageing — it only ranks lower until it stops making the top-N. The sole true evictions are an author-set salience already at or below the floor (true from day one), an explicit <code>kb forget</code> tombstone, and a supersede. The error originated in a research agent's summary and was propagated here unverified; the W4 surfaces were corrected to state the honest semantics before shipping. Decay is a <em>ranking</em> force, never an eviction.</div>
+<div class="callout callout--ok"><span class="callout-label">Ratified 2026-08-05</span>All six rulings were answered by the operator the same day: (1) full invariant-#10 amendment (relevance + stability); (2) tombstone-default forget with <code>--purge</code>; (3) global corpus + opt-in project corpora, misfiled rows migrated; (4) untrusted-origin writes lose the global default (tag stays surfaced-never-scored); (5) ledger = per-kb sqlite table in the sessions pattern, edges derivable later; (6) one "memory-instrument" milestone in waves W0–W5 — plan file <code>~/.claude/plans/time-to-start-the-dapper-seahorse.md</code>. The questions below are preserved as the decision record.</div>
+<ol>
+<li><strong>Amend invariant #10's formula?</strong> B2 changes ratified invariant text (relevance term + stability term). The budget is capped at 35 with slot #2 open; the amendment should be explicit, with the old formula retired in the same commit.</li>
+<li><strong>Soft forget as the new default?</strong> B3 changes <code>kb forget</code>'s contract (tombstone by default, <code>--purge</code> for true deletion). Traceable forgetting is also less private than destruction — a genuine trade-off to rule on.</li>
+<li><strong>Per-project memory corpora, or global-with-links?</strong> A3's migration needs a target topology: auto-provisioned <code>memory-&lt;project&gt;</code> corpora vs one global corpus with <code>--link</code> scoping. (The current state — everything in kb's project bucket — is the one clearly wrong answer.)</li>
+<li><strong>Flip global-by-default for untrusted-origin writes?</strong> C4's trust tagging can stay advisory or gate the global default. The poisoning literature argues for gating; the one-operator posture argues advisory is enough.</li>
+<li><strong>Where does the ledger live?</strong> Sessions-pattern sqlite tables (#11) vs edges rows (#29). Edges are cheaper and light up atlas/backlinks for free; a table is cleaner for time-series queries. Decide before B1.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="evidence-appendix">Evidence appendix</h2>
+<p><strong>Engine:</strong> crates/kb-core/src/memory.rs (rerank :164-241, RANK_K :22, dead "forgotten" filter :189, render_artifact :329, MemoryProvenance :284); crates/kb-server/src/routes/memory.rs (fan-out :168-224, discarded relevance :446-461, MAX_LIMIT :25-26, read-state enrichment :520-555); crates/kb-cli/src/commands/memory.rs (resolve_memory_kb :326-363, derive_title :392-406). <strong>Sessions join:</strong> crates/kb-core/src/sessions/view.rs (Item::MemoryInjection :476, :835). <strong>SPA:</strong> web/src/routes/memory.tsx; web/src/components/{MemoryActions,MemoryLinkChips,ProposalRow,AtlasView,ReflectionCanvas}.tsx. <strong>Hooks:</strong> plugins/kb-memory/hooks/{kb-recall.sh,kb-wake.sh,kb-capture.sh,kb-distill-nudge.sh}; plugins/kb-memory/skills/kb-distill/SKILL.md:107. <strong>Prior kb designs:</strong> <a data-kb-link="kb-temporal-query-surface-2026-07">temporal query surface (2026-07)</a> — rejected --as-of, endorsed-unbuilt <code>kb memory log</code> and <code>kb diff --between</code>; session-memory deep review (2026-07-06) — the subagent iceberg.</p>
+<p><strong>External (selected):</strong> <a href="https://arxiv.org/abs/2606.01435">Don't Ask the LLM to Track Freshness (arXiv:2606.01435)</a> · <a href="https://arxiv.org/abs/2605.06527">STALE conflict benchmark (arXiv:2605.06527)</a> · <a href="https://arxiv.org/abs/2410.10813">LongMemEval (arXiv:2410.10813)</a> · <a href="https://arxiv.org/abs/2501.13956">Zep/Graphiti bi-temporal KG (arXiv:2501.13956)</a> · <a href="https://arxiv.org/abs/2504.13171">sleep-time compute (arXiv:2504.13171)</a> · <a href="https://arxiv.org/abs/2504.19413">mem0 (arXiv:2504.19413)</a> · <a href="https://arxiv.org/abs/2502.12110">A-MEM (arXiv:2502.12110)</a> · <a href="https://arxiv.org/abs/2405.14831">HippoRAG (arXiv:2405.14831)</a> · <a href="https://dl.acm.org/doi/10.1145/3586183.3606763">generative agents (UIST 2023)</a> · <a href="https://arxiv.org/abs/2601.05504">MINJA (arXiv:2601.05504)</a> · <a href="https://expertium.github.io/Retention.html">FSRS retention analysis (500M Anki reviews)</a> · <a href="https://www.evl.uic.edu/pubs/2275">TimeArcs (EuroVis 2016)</a> · <a href="https://cambridge-intelligence.com/blog/hairball-effect-in-graph-visualization/">hairball thresholds (Cambridge Intelligence)</a>.</p>
+</section>
+
+<footer>
+Produced 2026-08-05 by a 5-agent Sonnet research workflow synthesized by Fable; all load-bearing repo/corpus claims spot-verified the same day. Supersedes nothing; informs the next memory milestone plan.
+</footer>
+</article>
+</main>
+</body>
+</html>

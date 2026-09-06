@@ -1,0 +1,141 @@
+# kb nightly search-quality regression job (GC-A8).
+#
+# Runs `kb bench run` (BM25/`keyword`-only — see scripts/bench-nightly.sh's
+# header for why: `disable_embedder_fallback` means the throwaway daemon
+# never spawns kb-embedder, so this job builds/links ZERO ONNX Runtime,
+# unlike the `embedder` job in ci.yml) against the repo's own
+# `docs/research` corpus + the committed `bench/queries/kb-docs.jsonl` gold
+# set, and reports signed quality+latency deltas vs. `bench/baseline.json`
+# as a job summary.
+#
+# D4 — SELF-HOSTED, THEREFORE UNREACHABLE FROM A PULL REQUEST. This job
+# benches against the deploy host's own disk, so it keeps
+# `runs-on: [self-hosted, kb-self-hosted]`. A PR from a fork must never reach that
+# machine: the triggers below are schedule + workflow_dispatch ONLY (no
+# `pull_request`, no `push`), and the job additionally refuses to run
+# outside this repository. Every PR lane lives in ci.yml, on GitHub-hosted
+# runners.
+#
+# NON-BLOCKING BY DESIGN: with no `pull_request`/`push` trigger and no
+# required-status-check registration, this can never block a PR or the
+# default branch; `continue-on-error: true`
+# on the bench step is a second, independent safety net (a flaky daemon boot
+# or a real quality regression surfaces in the summary/logs, not as a red X
+# forcing a revert).
+#
+# Injection-safety: the only untrusted-ish inputs are the two
+# `workflow_dispatch` strings below (operator-supplied, not attacker
+# fan-out like a PR title/body, but treated the same); both are passed
+# through `env:` and referenced as shell variables, never interpolated
+# directly into a `run:` body.
+name: bench-nightly
+
+on:
+  schedule:
+    # 03:17 UTC daily — off the top of the hour, alongside other nightly
+    # jobs, to spread self-hosted-runner load.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      corpus_dir:
+        description: "Corpus dir to index (repo-relative or absolute)"
+        required: false
+        default: "docs/research"
+      queries:
+        description: "Gold-set queries jsonl (repo-relative)"
+        required: false
+        default: "bench/queries/kb-docs.jsonl"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+permissions:
+  contents: read
+
+jobs:
+  bench-nightly:
+    name: bench-nightly (kb bench, keyword/BM25-only)
+    # `kb-self-hosted` is the discriminating label, not decoration: GitHub attaches
+    # `self-hosted`, `Linux` and `X64` to EVERY self-hosted runner
+    # automatically, so a generic `[self-hosted, linux, x64]` matches a
+    # runner on ANY box — which once routed this job to an orphaned one.
+    runs-on: [self-hosted, kb-self-hosted]
+    # D4's second gate, independent of the trigger list above: a fork never
+    # runs this (a fork's own scheduled runs would otherwise fire against
+    # whatever runner it can reach), and no pull-request event can either.
+    if: github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request'
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Install Rust toolchain
+        # Pinned to rust-toolchain.toml's version, same as ci.yml.
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        # Separate shared-key from ci.yml's `workspace`/`embedder` caches —
+        # this job builds `--profile fast` (different codegen-units/lto
+        # flags), so sharing a key would thrash both caches on every run.
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: bench-nightly
+
+      - name: Install protoc (lancedb transitive dep)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler curl
+
+      - name: Run nightly bench (BM25/keyword-only — no kb-embedder/ONNX)
+        id: bench
+        continue-on-error: true
+        env:
+          DISPATCH_CORPUS_DIR: ${{ github.event.inputs.corpus_dir }}
+          DISPATCH_QUERIES: ${{ github.event.inputs.queries }}
+        run: |
+          set -euo pipefail
+          export CORPUS_DIR="${GITHUB_WORKSPACE}/${DISPATCH_CORPUS_DIR:-docs/research}"
+          export QUERIES="${GITHUB_WORKSPACE}/${DISPATCH_QUERIES:-bench/queries/kb-docs.jsonl}"
+          BASELINE_ARGS=()
+          if [ -f bench/baseline.json ]; then
+            BASELINE_ARGS=(--baseline "$(pwd)/bench/baseline.json")
+          fi
+          ./scripts/bench-nightly.sh --out-dir bench-nightly-out "${BASELINE_ARGS[@]}"
+
+      - name: Job summary — quality + latency deltas
+        if: always()
+        run: |
+          {
+            echo "## kb bench — nightly search-quality regression"
+            echo
+            if [ -f bench/baseline.json ]; then
+              echo "Comparing against the committed \`bench/baseline.json\`."
+            else
+              echo "**No \`bench/baseline.json\` committed yet** — this run has no Δ" \
+                   "columns. A \`report.json\` artifact was uploaded (if the bench" \
+                   "step succeeded); review it, then \`cp\` it to" \
+                   "\`bench/baseline.json\` and commit to establish a baseline for" \
+                   "future nightly runs to diff against."
+            fi
+            echo
+            if [ -f bench-nightly-out/report.md ]; then
+              cat bench-nightly-out/report.md
+            else
+              echo "_bench step did not produce a report — see the job log for the failure._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-nightly-report
+          path: |
+            bench-nightly-out/report.md
+            bench-nightly-out/report.json
+          if-no-files-found: warn
+          retention-days: 90

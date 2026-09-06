@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Storage layer evaluation for kb — lancedb + sqlite vs sqlite-vec, Turso/libSQL, SurrealDB, DuckDB-VSS, qdrant-edge.">
+<title>01 · Storage — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="01-lancedb.html" class="is-current">01 · Storage</a>
+      <a href="02-fastembed.html">02 · Embeddings</a>
+      <a href="03-notify.html">03 · Watcher</a>
+      <a href="04-sse-axum.html">04 · SSE</a>
+      <a href="05-ratatui.html">05 · TUI</a>
+      <a href="../surfaces/06-iframe.html">06 · Iframe</a>
+      <a href="../surfaces/07-html-effectiveness.html">07 · HTML</a>
+      <a href="../surfaces/08-prior-art.html">08 · Prior art</a>
+      <a href="../surfaces/09-comments.html">09 · Comments</a>
+      <a href="../surfaces/10-web-gallery.html">10 · Web Gallery</a>
+      <a href="../surfaces/11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 01
+    <span>·</span>
+    <span class="meta">Storage layer</span>
+    <span>·</span>
+    <span class="meta">Confidence HIGH (committed cluster 3)</span>
+  </div>
+  <h1><span class="strike">verdict</span>Ship <em>lance + sqlite</em>.<br>Spike downgraded to regression test (cluster 3).</h1>
+  <p class="lede"><strong>v0.1 commits to <code>lancedb</code> + <code>sqlite</code> split</strong> per cluster 3 decision (<a href="#decisions">§Decisions</a>). Lance holds docs/vectors/BM25, sqlite holds relational tables (sources, errors, runs, edges, schema versions). The original "spike sqlite-vec + FTS5 first" recommendation in §F below is preserved as <em>historical context</em>; if a kb crosses ~50 k docs and the binary-size / single-backup pressure reverses, re-run the spike then.</p>
+</section>
+
+<section class="section section-tight">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Confirmation · SPA exposes three search modes (2026-05-11)</span>
+    <p style="margin:0;font-size:.95rem;line-height:1.55">The <a href="../surfaces/10-web-gallery.html#cmdk">Web Gallery handoff (topic 10 §H)</a>'s Cmd+K cycles three modes: <code>hybrid</code> (k+v) default, <code>keyword</code> (k), <code>semantic</code> (v). Both backends are reachable from one query plan via the committed lance + sqlite split: lance-native FTS for BM25, lance vector cosine for semantic. <code>hybrid</code> default uses <strong>RRF (Reciprocal Rank Fusion) with k=60</strong> per <a href="02-fastembed.html#decisions">topic 02 §Decisions</a> — score-agnostic, no alpha to tune (the original "<code>hybrid_alpha</code>" knob is replaced by <code>hybrid_k</code> in <code>kb.toml</code>, defaults to 60).</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="decisions">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Decisions · 2026-05-11 (cluster 3: storage — amended post deep-review)</span>
+    <p style="margin:0 0 .55rem;font-size:.95rem;line-height:1.55">Open-points cluster 3 of 4 landed. Storage decision committed without further spike. Post-review: fixed the <code>hybrid_alpha</code>/RRF inconsistency with topic 02; spec'd the atomic backup mechanism; added on-disk layout.</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><strong>Commit: <code>lancedb</code> + <code>sqlite</code> split for v0.1.</strong> Briefing default wins. Battle-tested IVF-PQ, columnar artifact storage, mature migration story. Trade-off accepted: larger binary, two stores to back up.</li>
+      <li><strong>sqlite-vec + FTS5 spike → downgraded to a regression test, not a v0.1 gate.</strong> Re-run if a kb crosses ~50k docs and the operational-simplicity / scaling tradeoff inverts.</li>
+      <li><strong>On-disk layout.</strong> Per kb: <code>~/.local/state/kb/&lt;daemon-name&gt;/&lt;kb-name&gt;/lance/</code> (vectors + BM25 + artifact columns) + <code>…/&lt;kb-name&gt;/index.db</code> (sqlite). Single writer per kb (daemon serializes via a tokio actor). <code>kb backup &lt;kb&gt;</code>: (1) issue <code>BEGIN IMMEDIATE</code> on sqlite, then <code>PRAGMA wal_checkpoint(TRUNCATE)</code>; (2) read lance's <code>_versions/&lt;latest&gt;.manifest</code> + tar the fragments it references (lance manifests are atomic — referenced fragments are immutable); (3) <code>COMMIT</code> sqlite. The indexer is paused during steps 1-3 (typically &lt;500 ms). True atomic-without-quiesce is a v0.2 follow-up.</li>
+      <li><strong>BM25 field-aware indexing.</strong> The lance-native FTS index carries five fields: <code>title</code> (extracted from <code>&lt;title&gt;</code> or first <code>&lt;h1&gt;</code>), <code>body</code> (DOM walk excluding <code>&lt;script&gt;</code>, <code>&lt;style&gt;</code>, <code>&lt;template&gt;</code> per <a href="../surfaces/07-html-effectiveness.html">topic 07 §D</a>), <code>headings</code> (all <code>&lt;h1&gt;</code>–<code>&lt;h6&gt;</code> + <code>&lt;details&gt;&lt;summary&gt;</code> outline tokens), <code>code</code> (<code>&lt;pre&gt;&lt;code&gt;</code> blocks), <strong><code>prompt</code></strong> (the <code>&lt;template id="kb-prompt"&gt;</code> contents, capped at 8 k tokens). The prompt template is indexed as its own filterable field (<code>kb search "claude-code" field:prompt</code>) so prompts are searchable when wanted, isolatable when not. Privacy rationale: see <a href="../surfaces/07-html-effectiveness.html#decisions">topic 07 Decisions</a>.</li>
+      <li><strong>Hybrid scoring: RRF k=60</strong> (matches <a href="02-fastembed.html#decisions">topic 02 §Decisions</a> and <a href="../surfaces/10-web-gallery.html#cmdk">topic 10 §H</a>). Reciprocal Rank Fusion is score-agnostic — no <code>hybrid_alpha</code> weight to tune; the <em>k</em> parameter (default 60, Cormack et al. 2009) controls how aggressively tail-rank results are penalized. Exposed in <code>kb.toml</code> as <code>[kb.&lt;name&gt;] hybrid_k = 60</code>. Pure-keyword and pure-semantic modes are query-time overrides (Cmd+K's mode toggle).</li>
+      <li><strong>Schema versions.</strong> sqlite <code>schema_migrations</code> table; lance dataset metadata carries a <code>kb_schema_version</code> field. Mismatch on daemon start triggers a re-index of touched docs (lazy backfill, not full re-index).</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>v0.1 commits to <code>lancedb</code> + <code>sqlite</code> split</strong> (cluster 3 — see <a href="#decisions">§Decisions</a>). Lance holds vectors + native-BM25 + columnar doc rows; sqlite holds sources / errors / runs / edges / schema_migrations. <strong>Hybrid scoring: RRF k=60</strong> per <a href="02-fastembed.html#decisions">topic 02</a>. The <em>historical</em> recommendation was "spike <code>rusqlite + sqlite-vec + FTS5</code> first (1–2 days); collapse if within 5% nDCG" — that spike is downgraded to a regression test triggered when a kb crosses ~50k docs. Rejected for v1: DuckDB-VSS (experimental), SurrealDB (BSL + heavy), Turso DB (beta), three-store tantivy paths.</p>
+    <div class="badges">
+      <span class="conf conf--med">Decision · MED</span>
+      <span class="conf conf--high">lance maturity · HIGH</span>
+      <span class="conf conf--med">Binary size cost · MED (40–80 MB)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. LanceDB Rust crate · current state</div>
+    <h2>Active, capable, still 0.x</h2>
+  </div>
+
+  <div class="prose">
+    <p>Crate <code>lancedb</code> on crates.io, license <strong>Apache-2.0</strong>. Latest is <strong>0.27.2 (2026-03-31)</strong>; recent cadence: 0.27.0 (2026-03-16), 0.26.0 (2026-02-06), 0.23.1 (May 2025). A minor every 4–6 weeks — clearly active, still 0.x so breaking-change semantics under cargo. The older <code>vectordb</code> crate is superseded.</p>
+
+    <h3>Single-table vector + FTS + scalar</h3>
+    <p>Yes. The Rust <code>Index</code> enum (<code>lancedb::index::Index</code>) exposes <code>Auto</code>, <code>BTree</code>, <code>Bitmap</code>, <code>LabelList</code>, <code>FTS(FtsIndexBuilder)</code>, plus IVF-PQ / IVF-HNSW vector variants — <em>all on the same table</em>. A <code>FixedSizeList&lt;Float32, 384&gt;</code> column gets an IVF-PQ index by default; scalar columns get BTree. Hybrid search is built in (<code>query_type="hybrid"</code> plus rerankers RRF/linear/Cohere/ColBERT).</p>
+
+    <h3>FTS specifics</h3>
+    <p>As of 2025 LanceDB has a <strong>native Rust FTS</strong> ("No more Tantivy"). It still re-uses tantivy's tokenizer enum for compat (<code>tantivy::tokenizer::Language::English</code>). Supports BM25 scoring, term, phrase (needs <code>with_position=true</code>), prefix, fuzzy (Levenshtein), boolean (<code>MatchQuery</code>/<code>PhraseQuery</code>/<code>BooleanQuery</code>/<code>BoostQuery</code>).</p>
+    <div class="note"><b>Important caveat:</b> "Lance-based FTS doesn't support queries using boolean operators OR, AND in the search string" — you build them programmatically via the query types, not in a single string. CJK tokenisation is a known gap (issue #2329); third-party <code>tantivy-jieba</code>/<code>cang-jie</code> not directly supported. For an English-language kb, this is fine.</div>
+
+    <h3>Indexing types</h3>
+    <p>IVF-PQ (default vector), IVF-HNSW-SQ/PQ, scalar BTree/Bitmap/LabelList, FTS. Optimise after writes: <code>tbl.optimize(OptimizeAction::All).execute().await?</code> — recommended every ~100k row changes or 20 ops.</p>
+
+    <h3>Concurrency</h3>
+    <p>MVCC. Readers never block. Single writer is the safe default on a local filesystem; concurrent writers on object storage need an external commit handler (S3 + DynamoDB). For kb (one daemon = one writer) this is a non-issue.</p>
+
+    <h3>Embedded mode</h3>
+    <p>Confirmed. <code>lancedb::connect("/path/to/db").execute().await?</code> opens a directory on local disk — same model as SQLite. Continue.dev, OpenClaw, and the wider local-RAG ecosystem use exactly this configuration.</p>
+
+    <h3>Binary size</h3>
+    <p>No public benchmark surfaced, but the dependency surface is <em>large</em>: full Apache Arrow stack (<code>arrow-array</code>, <code>arrow-cast</code>, <code>arrow-data</code>, <code>arrow-ipc</code>, <code>arrow-ord</code>, <code>arrow-schema</code>), Apache DataFusion (<code>datafusion-physical-plan</code> and friends), <code>object_store</code>, <code>tokio</code>, plus optional <code>candle</code>/HF features. Realistic expectation for a release build: <strong>40–80 MB stripped</strong>. <code>cargo bloat --crates</code> will give the real number; budget for it. Static link <code>lzma-sys</code> via the <code>static</code> feature for distribution.</p>
+
+    <h3>Schema migrations</h3>
+    <p><code>add_columns</code>, <code>alter_columns</code>, <code>drop_columns</code> are exposed in Rust. Changing a <code>FixedSizeList</code> dimension (e.g. 384 → 768) is <strong>not a compatible cast</strong> — must add-new + drop-old + rename. Lance file format 2.2 (2025) added nested schema evolution. <strong>Live bug as of 2026-03 (#3136):</strong> adding columns past an embedding column caused CastError on insert — watch the changelog.</p>
+    <div class="spike-update" style="margin:.5rem 0;padding:.55rem .8rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-lance</code> exercised the schema-evolution path against lance 4.0.0 with <code>NewColumnTransform::SqlExpressions(vec![("kb_category".into(), "CAST(NULL AS STRING)".into())])</code> — <strong>add_columns succeeded; bug #3136 NOT observed</strong>. The "live bug" warning above appears resolved in 4.0.0; production planning can drop the defensive workaround. Full context: <a href="../../spike-findings.md#spike-lance--2026-05-11">docs/spike-findings.md</a>.</div>
+
+    <h3>Arrow version alignment</h3>
+    <p>Lance 4.0.0 transitively depends on <code>arrow = 57.3.1</code> (and matching <code>arrow-array</code>, <code>arrow-schema</code>). If <code>kb-core</code>'s direct dependencies pin a different Arrow major (e.g. <code>arrow = "55"</code> or <code>"56"</code>), two distinct arrow crate versions coexist in the dependency graph and <code>RecordBatch</code> types from <code>arrow::array</code> vs <code>arrow_array::record_batch</code> don't unify — <code>Connection::create_table::&lt;T: Scannable&gt;</code> fails to type-check. <strong>Production <code>kb-core/Cargo.toml</code> must pin <code>arrow = "=57.3.1"</code></strong> (and <code>arrow-array</code>, <code>arrow-schema</code>) <em>exactly</em>, matching lance's transitive version. CI invariant: <code>cargo metadata --format-version 1 | jq '[.packages[] | select(.name | startswith("arrow")) | .version] | unique | length == 1'</code>. <code>lance-index</code> must also be a direct dep (pinned <code>=4.0.0</code>) because <code>FullTextSearchQuery</code> lives there, not in <code>lancedb</code>'s public exports. Disable lancedb's cloud features (<code>default-features = false</code>) — aws/gcs/azure/dynamodb/oss are dead weight for a local-only daemon.</p>
+    <div class="spike-update" style="margin:.5rem 0;padding:.55rem .8rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-lance</code> initially used <code>arrow = "55"</code>; the resulting dual-version graph blocked <code>create_table</code> for an hour before exact-pinning unblocked it. <code>Vec&lt;RecordBatch&gt;</code> is the simplest <code>Scannable</code> input and is what kb's per-watch-event indexing should use. Full context: <a href="../../spike-findings.md#spike-lance--2026-05-11">docs/spike-findings.md</a>.</div>
+
+    <h3>Backup / portability</h3>
+    <p>Lance datasets use <strong>relative paths</strong>. <code>tar -czf backup.tgz data/lance/</code> and extract elsewhere works. Capture <code>_versions/</code>, <code>_indices/</code>, <code>_transactions/</code> and the fragment files — those are what the manifest references.</p>
+
+    <h3>Cold-start latency</h3>
+    <p>No published numbers for 10k rows specifically. Lance is mmap-friendly columnar with lazy index loading. The 2025 native-FTS work targeted "reducing index file size to reduce cold latency". Expect tens of ms for 10k rows; <strong>worth a 50-line spike</strong>.</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">B. Alternatives</div>
+    <h2>One real challenger, several non-starters</h2>
+  </div>
+
+  <ol class="findings">
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Turso / libSQL</b> · vector + FTS in one file</div>
+        <h3>Strong shape, beta tax</h3>
+        <p>Crates: <code>libsql</code> (production), <code>turso</code> (the Rust rewrite — beta, not for production per their own docs). Native vector type with <strong>DiskANN</strong> built into libSQL, no extension needed. FTS5/BM25 inherited from SQLite; Turso DB adds <strong>Tantivy-backed FTS</strong> with <code>fts_score()</code> SQL function — but only in the beta engine.</p>
+        <p><strong>Risk:</strong> DiskANN index size — one user reported 30k × 1024-dim vectors (~117 MiB raw) producing <em>a 5 GiB index</em> (turso #3778). At 384-dim/50k rows it's more workable, but verify with a spike. <strong>Use this if</strong> you want one binary, one <code>.db</code> file, and accept the libSQL FTS5 BM25 limit (or pin the Turso-DB beta).</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>SurrealDB embedded</b> · graph-native</div>
+        <h3>Wrong model for kb</h3>
+        <p>Crate <code>surrealdb</code> v2.x. <strong>License: BSL 1.1</strong> — embedded use is permitted, only commercial DBaaS is restricted; converts to Apache-2.0 four years after release. In-memory <strong>HNSW</strong> index, <code>DEFINE INDEX … HNSW DIMENSION 384</code>. FTS / BM25 exists but the BM25 tuning surface isn't documented — maturity gap vs lance/tantivy. Binary heavy, SurrealQL is its own thing.</p>
+        <p><strong>Use this if</strong> you want graph/edges <em>inside</em> the same store and accept BSL.</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>DuckDB + VSS</b> · analytics-grade SQL</div>
+        <h3>Skip</h3>
+        <p>HNSW vector index via <code>vss</code> extension. <strong>VSS is officially experimental, not recommended for production</strong> (DuckDB docs). HNSW persistence requires <code>hnsw_enable_experimental_persistence=true</code>; index not buffer-managed (must fit in RAM, full re-serialise on checkpoint), WAL recovery incomplete, deletes are tombstones. FTS extension is BM25-lite.</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>rusqlite + sqlite-vec + FTS5</b> · the strongest one-store path</div>
+        <h3>Spike this before committing</h3>
+        <p>sqlite-vec is the <strong>successor to sqlite-vss</strong> (deprecated). Mozilla Builders project, sponsored by Fly/Turso/SQLite Cloud. Pure C, no deps, runs everywhere SQLite runs. KNN brute-force and IVF-style index in a <code>vec0</code> virtual table with <code>MATCH</code> operator.</p>
+        <p>Vectors via <code>vec0</code>, FTS5 with BM25 (built into SQLite), scalar/relational with normal SQL — <strong>everything in one .db file</strong>. Hybrid via RRF in plain SQL is documented.</p>
+        <p><strong>Risks:</strong> sqlite-vec is still 0.x; ANN quality has improved through 2025 but lance's IVF-PQ is more mature past 1M. FTS5's BM25 less tunable than Tantivy/lance-FTS (no per-language pipeline, fewer tokenisers). C extension means an extra <code>.so</code>/<code>.dylib</code> unless you use the vendored <code>sqlite-vec</code> crate.</p>
+        <p><strong>Use this if</strong> at ≤50k rows the FTS5 quality is "good enough" — you want the smallest binary, smallest dependency surface, easiest backup. <strong>This is the strongest alternative to the proposed split.</strong></p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Tantivy + sqlite-vec + sqlite</b> · three stores</div>
+        <h3>Three sets of consistency to manage</h3>
+        <p>Tantivy 0.25.0 (latest), MIT, by Quickwit. ~2× faster than Lucene per benchmarks. Pair with <code>lance</code>-the-format (no DB layer), <code>qdrant_client</code> (network), <code>qdrant-edge</code> (embedded), or <code>sqlite-vec</code>.</p>
+        <p><strong>Use this only if</strong> lance's FTS proves insufficient (richer query DSL, non-English tokenisers).</p>
+      </div>
+    </li>
+    <li class="finding">
+      <div>
+        <div class="tag"><b>qdrant-edge</b> · vector-only embedded</div>
+        <h3>New, no native BM25</h3>
+        <p>Crate <code>qdrant-edge</code> v0.6.0 (Feb 2026), public after a 2025 private beta. In-process via <code>EdgeShard</code>, synchronous, no background threads, reads server-format snapshots. Best-in-class vector search with HNSW + scalar/binary/PQ quantisation. <strong>No native BM25/FTS</strong> — Qdrant's full-text is a simpler text-match index, not Tantivy-grade BM25 ranking.</p>
+        <p><strong>Use this if</strong> vector recall is the first-order concern and you'd add tantivy or sqlite-FTS5 alongside. Don't conflate with <code>qdrant-client</code> (gRPC-only, not embedded).</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">C. Decision factors</div>
+    <h2>The split vs the collapse</h2>
+  </div>
+
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Storage candidate matrix · 2026-Q2</caption>
+      <thead>
+        <tr><th>Candidate</th><th>Single-binary</th><th>Bin-size</th><th>One-store?</th><th>Activity</th><th>License</th><th>Prod use</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>lancedb + sqlite</strong> (proposed)</td><td class="center"><span class="y">yes</span></td><td>40–80 MB</td><td>no (split)</td><td>weekly</td><td>Apache-2.0</td><td>Continue.dev, OpenClaw</td></tr>
+        <tr><td>libSQL</td><td class="center"><span class="y">yes</span></td><td>~5–10 MB</td><td class="center"><span class="y">yes</span></td><td>active</td><td>MIT</td><td>Kin AI, mobile RAG</td></tr>
+        <tr><td>Turso DB beta</td><td class="center"><span class="y">yes</span></td><td>small</td><td class="center"><span class="y">yes</span></td><td>very active</td><td>MIT</td><td><span class="n">beta</span></td></tr>
+        <tr><td>SurrealDB embedded</td><td class="center"><span class="y">yes</span></td><td>large</td><td class="center"><span class="y">yes</span></td><td>active</td><td><span class="p">BSL 1.1</span></td><td>graph users</td></tr>
+        <tr><td>DuckDB + VSS</td><td class="center"><span class="p">ext</span></td><td>med-large</td><td class="center"><span class="p">partial</span></td><td>active</td><td>MIT</td><td>analytics</td></tr>
+        <tr><td><strong>rusqlite + sqlite-vec + FTS5</strong></td><td class="center"><span class="y">yes</span></td><td><strong>3–8 MB</strong></td><td class="center"><span class="y">yes</span></td><td>active</td><td>MIT/Apache</td><td>many local-first</td></tr>
+        <tr><td>tantivy + sqlite-vec + sqlite</td><td class="center"><span class="y">yes</span></td><td>medium</td><td class="center"><span class="n">no (3)</span></td><td>active</td><td>MIT</td><td>Quickwit</td></tr>
+        <tr><td>qdrant-edge + sqlite-FTS</td><td class="center"><span class="y">yes</span></td><td>medium</td><td class="center"><span class="n">no</span></td><td>new (2026)</td><td>Apache-2.0</td><td>early</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Could kb collapse to ONE store?</h3>
+    <p>Yes — two viable paths:</p>
+    <ul>
+      <li><strong>rusqlite + sqlite-vec + FTS5</strong> — strongest "collapse" candidate. Smallest binary, easiest backup (<code>cp file.db</code>), edges/sources/index_runs/errors are just tables alongside docs. <em>Against:</em> BM25/FTS5 less tunable than Tantivy/lance-FTS; sqlite-vec ANN fine ≤50k rows but lance's IVF-PQ scales better past 1M.</li>
+      <li><strong>lancedb alone</strong> — lance can hold the relational tables too (scalar BTree/Bitmap, <code>LanceTableProvider</code> exposes DataFusion SQL). <em>Against:</em> lance is columnar/append-oriented; row-level updates to <code>index_runs</code>/<code>errors</code> work but heavier than SQLite. You also lose SQL ergonomics. Doable, not idiomatic.</li>
+    </ul>
+
+    <h3>Argument <em>for</em> the split (proposed)</h3>
+    <ul>
+      <li>Each store does what it's best at — lance for vec/FTS at scale, sqlite for transactional row updates, edges, history.</li>
+      <li>SQLite's WAL semantics + ergonomic transactions are a better fit for <code>index_runs</code> / <code>errors</code> than lance manifests.</li>
+      <li>Backup story stays simple: tar the lance dir + copy the sqlite file.</li>
+      <li>Schema evolution lives in two well-trodden tools.</li>
+    </ul>
+
+    <h3>Argument <em>against</em> the split</h3>
+    <ul>
+      <li>Two query paths, two transaction boundaries, two on-disk layouts to back up consistently (a snapshot of one without the other = inconsistency).</li>
+      <li>Slightly larger binary than sqlite-only (mostly Arrow + DataFusion).</li>
+      <li>For 10k–50k docs sqlite-vec + FTS5 would <em>work</em> and yield a far smaller binary.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH (cluster 3 committed)</span> <span style="font-size:.75rem;color:var(--ink-3);margin-left:.5rem">historical recipe below — preserved as regression-test trigger</span></span>
+    <p><strong>v0.1 commits to <code>lancedb + sqlite</code> split</strong> per <a href="#decisions">§Decisions</a>. The block below preserves the <em>historical</em> "spike sqlite-vec + FTS5 first" recipe — it is now the <strong>regression-test trigger</strong>: re-run if a kb crosses ~50k docs and the operational-simplicity / scaling tradeoff inverts. Hybrid scoring is RRF k=60 (not <code>hybrid_alpha</code>); see <a href="02-fastembed.html#decisions">topic 02 §Decisions</a>.</p>
+    <hr style="margin:1rem 0;border:0;border-top:1px dashed var(--ink-3);opacity:.5">
+    <p style="opacity:.7"><em>Historical (superseded by §Decisions — kept as regression-test trigger):</em> the proposed split is the well-trodden path; lance gives IVF-PQ + native BM25 + scalar indexes in one table, hybrid search and built-in rerankers, all from Rust. At 10k–50k docs and 384-dim vectors it is genuinely overkill in the safe direction. Schema evolution, backups, embedded story all solved.</p>
+    <p style="opacity:.7"><em>Historical:</em> the spike for <code>rusqlite + sqlite-vec + FTS5</code> would collapse to <strong>one file, one binary 5–10× smaller, one backup command</strong> — material wins for a single-user daemon if relevance survives.</p>
+    <h4 style="margin-top:1.4rem;opacity:.7">Regression-test recipe (run only if &gt;50k docs)</h4>
+    <ol>
+      <li>Index 5–10k real HTML docs into both stacks. Measure index time, on-disk size, binary size (<code>cargo bloat --crates --release</code>).</li>
+      <li>Run a 50-query relevance set (mix of keyword-only, semantic-only, hybrid). Compare nDCG@10 between (lance hybrid + RRF) and (sqlite-vec KNN + FTS5 + RRF in SQL).</li>
+      <li>Cold-open latency: kill the process, reopen, time the first query.</li>
+      <li>If sqlite-vec is within ~5% relevance and meets latency targets, <strong>collapse to one store</strong>. Otherwise ship the lance + sqlite split.</li>
+    </ol>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions / risks</span>
+    <ul>
+      <li><strong>Lance FTS in Rust:</strong> confirmed exposed (<code>Index::FTS(FtsIndexBuilder)</code>, <code>query.full_text_search()</code>). Not Python-only.</li>
+      <li><strong>Boolean operators in query strings</strong> not supported in lance FTS — must compose <code>BooleanQuery</code> programmatically. If kb's HTTP/SSE API accepts Lucene-style strings, write the parser yourself or use tantivy.</li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Schema migration risk:</strong> active bug #3136 on schema evolution past embedding columns. Pin to a known-good patch and re-test before 0.28+.</span> <em>Resolved — <code>spike-lance</code> (2026-05-11) confirmed <code>add_columns</code> works in lance 4.0.0; see <a href="#schema-migrations">§Schema migrations spike update</a>.</em></li>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)"><strong>Backup atomicity:</strong> lance dir + sqlite file aren't snapshot-consistent unless you stop the daemon. For a single-user kb, "stop, tar, restart" is fine; document it.</span> <em>Resolved cluster 3 — see <a href="#decisions">§Decisions</a>: indexer paused &lt;500 ms while sqlite WAL-checkpoints and lance manifest is read + fragments tar'd. True atomic-without-quiesce is v0.2.</em></li>
+      <li><strong>Cold-start latency:</strong> unmeasured for this size — spike it.</li>
+      <li><strong>Binary size:</strong> assume 50 MB+ stripped Linux release. If distribution cares about size (Homebrew, single-file), real cost vs sqlite-only.</li>
+      <li><strong>API churn:</strong> lancedb is 0.x with breaking minors every 1–2 months. Pin tightly, expect to rev.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="../index.html"><span class="dir">← Index</span><span class="ttl">All topics</span></a>
+  <a class="next" href="02-fastembed.html"><span class="dir">Next →</span><span class="ttl">02 · Embeddings</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · storage layer</p>
+      <p>Cluster 3 committed lance + sqlite split for v0.1; the sqlite-vec + FTS5 spike survives as a regression-test trigger past ~50 k docs. Hybrid scoring via RRF k=60.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="02-fastembed.html">02 Embeddings</a></li>
+        <li><a href="04-sse-axum.html">04 SSE</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://github.com/lancedb/lancedb">lancedb</a></li>
+        <li><a href="https://github.com/asg017/sqlite-vec">sqlite-vec</a></li>
+        <li><a href="https://github.com/quickwit-oss/tantivy">tantivy</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

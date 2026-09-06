@@ -1,0 +1,28 @@
+---
+source: crates/kb-core/tests/session_digest_snapshots.rs
+expression: "format! (\"{report:#?}\")"
+---
+DigestReport {
+    session_id: "5b2d9f41-6c07-4a3e-8f10-2d6b47e9c085",
+    message_count: 7,
+    first_user_prompt: None,
+    ai_title: None,
+    cwd: Some(
+        "/home/user/project/demo",
+    ),
+    all_cwds_count: 1,
+    git_branch: Some(
+        "main",
+    ),
+    model: None,
+    token_total: 0,
+    tool_calls: 0,
+    error_count: 0,
+    files_read_count: 0,
+    files_edited_count: 0,
+    decisions: [],
+    commits: [],
+    research: [],
+    digest: "project: demo branch: main",
+    digest_excerpt: "",
+}

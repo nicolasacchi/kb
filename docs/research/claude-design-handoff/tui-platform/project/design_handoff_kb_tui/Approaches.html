@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kb tui — 5 alternate approaches</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg: #fdf6e3; --bg-alt: #eee8d5;
+  --fg: #586e75; --fg-strong: #073642; --fg-muted: #93a1a1; --fg-faint: #d8d2bd;
+  --border: #d8d2bd;
+  --yellow: #b58900; --orange: #cb4b16; --red: #dc322f;
+  --magenta: #d33682; --violet: #6c71c4; --blue: #268bd2;
+  --cyan: #2aa198; --green: #859900;
+  --selection: #fef0a8; --selection-strong: #fce98a;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: #f3ecd5;
+  color: #586e75;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 14px;
+}
+.page { max-width: 1480px; margin: 0 auto; padding: 60px 40px 80px; }
+h1 { font-size: 28px; font-weight: 600; color: #073642; margin: 0 0 6px; letter-spacing: -0.01em; }
+.lede { color: #586e75; max-width: 760px; line-height: 1.55; margin: 0 0 48px; }
+.grid { display: grid; gap: 64px; }
+.frame { background: white; box-shadow: 0 1px 0 #d8d2bd, 0 12px 36px rgba(7,54,66,0.08); border-radius: 8px; overflow: hidden; }
+.fmeta { padding: 22px 26px 18px; border-bottom: 1px solid #eee8d5; }
+.fmeta .num { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500; color: #6c71c4; letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 8px; }
+.fmeta h2 { font-size: 22px; font-weight: 600; color: #073642; margin: 0 0 10px; letter-spacing: -0.01em; }
+.fmeta .desc { font-size: 14px; color: #586e75; margin: 0 0 0; line-height: 1.55; max-width: 820px; }
+.fmeta .pills { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #fef0a8; color: #586e75; letter-spacing: 0.04em; }
+.pill.alt { background: #ddeaf6; color: #268bd2; }
+.fbody { background: var(--bg); position: relative; overflow: hidden; }
+.bezel { height: 22px; background: var(--bg-alt); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 12px; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--fg-muted); }
+.dot { width: 10px; height: 10px; border-radius: 50%; }
+.dot.r { background: #f5736b; } .dot.y { background: #f7c365; } .dot.g { background: #62c554; }
+.term { background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace; font-size: 14px; line-height: 19px; height: 100%; }
+
+.c-y { color: var(--yellow); } .c-o { color: var(--orange); } .c-r { color: var(--red); }
+.c-v { color: var(--violet); } .c-b { color: var(--blue); } .c-c { color: var(--cyan); }
+.c-g { color: var(--green); } .c-s { color: var(--fg-strong); } .c-m { color: var(--fg-muted); }
+.c-f { color: var(--fg-faint); }
+.bg-sel { background: var(--selection); }
+.bg-selS { background: var(--selection-strong); color: var(--fg-strong); }
+.bg-cur { background: var(--bg-alt); }
+
+.footer-note { margin-top: 56px; padding-top: 20px; border-top: 1px solid #d8d2bd; color: #93a1a1; font-size: 13px; }
+.footer-note a { color: #268bd2; text-decoration: none; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+pre { margin: 0; font-family: 'JetBrains Mono', monospace; }
+
+/* Approach 4 (status board) gets a different palette */
+.tokyo {
+  --bg: #1a1b26; --bg-alt: #16161e;
+  --fg: #a9b1d6; --fg-strong: #c0caf5; --fg-muted: #565f89; --fg-faint: #3b4261;
+  --border: #3b4261;
+  --yellow: #e0af68; --orange: #ff9e64; --red: #f7768e;
+  --violet: #bb9af7; --blue: #7aa2f7; --cyan: #7dcfff; --green: #9ece6a;
+  --selection: #283457; --selection-strong: #3d59a1;
+}
+
+@keyframes blinkc { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+.cursor { display: inline-block; width: 1ch; background: var(--fg-strong); animation: blinkc 1s infinite; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>kb tui — 5 alternate approaches</h1>
+  <p class="lede">
+    The original <a href="kb tui.html" style="color:#268bd2;font-family:'JetBrains Mono',monospace;font-size:13px;">kb tui.html</a> is a four-panel ratatui dashboard in the k9s/lazygit lineage. Here are five other answers to the same brief, each committing hard to a different premise about what an operator wants from this tool. They're static — the question is which paradigm to invest interactivity in next.
+  </p>
+  <div class="grid">
+
+  <!-- ============================================================== -->
+  <!-- 1. DENSE OPS CONSOLE (k9s-style)                                -->
+  <!-- ============================================================== -->
+  <div class="frame">
+    <div class="fmeta">
+      <div class="num">approach · 01</div>
+      <h2>Dense ops console</h2>
+      <p class="desc">
+        No sidebar, no activity panel — a single full-screen table, like <code>k9s</code>. Every row is one source across all kbs; columns are the truth. Maximum information per scanline; chrome stripped to a one-line key bar. The activity log is folded into a footer ticker. For operators who want raw signal, no decoration.
+      </p>
+      <div class="pills"><span class="pill">single-pane</span><span class="pill">tabular</span><span class="pill">k9s</span><span class="pill alt">vim-driven</span></div>
+    </div>
+    <div class="fbody" style="height: 580px;">
+      <div class="bezel"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><span style="margin-left:10px;">~ — kb tui --dense</span></div>
+      <div class="term" style="height: calc(100% - 22px); padding: 8px 14px;">
+        <!-- crumb bar -->
+        <div style="display:flex; gap:2ch; align-items:center; padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px;">
+          <span class="c-s" style="font-weight:500;">kb</span>
+          <span class="c-m">·</span>
+          <span class="c-g">●</span><span class="c-s">running</span>
+          <span class="c-m">·</span>
+          <span class="c-m">7 sources / 4 kbs / 1,906 docs / 8.4k edges</span>
+          <span class="c-m">·</span>
+          <span class="c-b">⠼</span><span class="c-s"> 12/67</span><span class="c-m"> rust-learning</span>
+          <span style="flex:1"></span>
+          <span class="c-m">[1] sources [2] runs [3] errors [4] queries [5] graph</span>
+        </div>
+        <!-- column header -->
+        <div style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0; color: var(--fg-muted); border-bottom: 1px dashed var(--fg-faint);">
+          <span></span><span>KB</span><span>SOURCE</span><span>FILES</span><span>OK</span><span>ERR</span><span>EDGES</span><span>LAST</span><span>STATUS</span>
+        </div>
+<pre style="margin: 0; line-height: 19px;"><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;" class="bg-selS">  <span class="c-o">▶ </span><span class="c-s" style="font-weight:500;">rust-learn</span><span>/home/me/rust          </span><span class="c-s">67</span><span class="c-g">12</span><span class="c-m">0</span><span class="c-c">1801</span><span class="c-m">now</span><span class="c-b">⠼ indexing 12/67  18%</span></span><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;">  <span></span><span class="c-s">work</span><span>/home/me/work-notes    </span><span>342</span><span class="c-g">342</span><span class="c-m">0</span><span class="c-c">1804</span><span class="c-m">5m</span><span class="c-g">✓ idle  watcher on</span></span><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;">  <span></span><span class="c-s">work</span><span>/home/me/team-docs     </span><span>89</span><span class="c-g">89</span><span class="c-m">0</span><span class="c-c">300</span><span class="c-m">12m</span><span class="c-g">✓ idle  watcher on</span></span><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;">  <span></span><span class="c-s">personal</span><span>/home/me/personal      </span><span>156</span><span class="c-g">156</span><span class="c-m">0</span><span class="c-c">1180</span><span class="c-m">1h</span><span class="c-g">✓ idle  watcher on</span></span><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;">  <span></span><span class="c-s">personal</span><span>/home/me/garden        </span><span>12</span><span class="c-g">12</span><span class="c-m">0</span><span class="c-c">65</span><span class="c-m">3h</span><span class="c-m">⏸ paused  (manual)</span></span><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;">  <span></span><span class="c-s">archive</span><span>/home/me/old-blog      </span><span>1240</span><span class="c-g">1237</span><span class="c-r">3</span><span class="c-c">3262</span><span class="c-m">2d</span><span class="c-o">⚠ 3 errors  watcher on</span></span><span style="display:grid; grid-template-columns: 3ch 14ch 26ch 10ch 10ch 10ch 10ch 10ch 1fr; gap: 1ch; padding: 2px 0;">  <span></span><span class="c-s">archive</span><span>/mnt/external/papers   </span><span>0</span><span>0</span><span>0</span><span>0</span><span class="c-m">—</span><span class="c-r">✗ unreachable  /mnt missing</span></span></pre>
+        <!-- detail strip -->
+        <div style="margin-top: 14px; padding: 10px 12px; background: var(--bg-alt); border-left: 3px solid var(--blue);">
+          <div style="display:flex; justify-content:space-between; margin-bottom: 6px;">
+            <span class="c-s" style="font-weight:500;">/home/me/rust  ·  rust-learning</span>
+            <span class="c-m">run r-2c1 · started 14:31:58 · ETA 00:42 · model embed-large</span>
+          </div>
+          <div style="display:flex; gap:1ch; align-items:center;">
+            <span class="c-m">[</span>
+            <span class="c-b">██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span>
+            <span class="c-m">]</span>
+            <span class="c-s">12/67</span>
+            <span class="c-m">·</span>
+            <span class="c-m">currently:</span>
+            <span class="c-c">futures.html</span>
+            <span class="c-m">(126 KB)</span>
+          </div>
+          <div class="c-m" style="margin-top: 4px; font-size: 12.5px;">
+            recent: <span class="c-g">✓ async-traits.html (188ms, +2)</span> · <span class="c-g">✓ iterators-deep.html (212ms, +5)</span> · <span class="c-g">✓ ownership.html (96ms, +1)</span> · <span class="c-r">✗ draft-incomplete.html (timeout)</span>
+          </div>
+        </div>
+        <!-- one-line ticker -->
+        <div style="position: absolute; left: 0; right: 0; bottom: 28px; padding: 4px 14px; border-top: 1px dashed var(--fg-faint); color: var(--fg-muted); white-space: nowrap; overflow: hidden;">
+          <span class="c-f">[14:32:18]</span> <span class="c-b">▶</span> rust-learning / tokio-basics.html  ·  <span class="c-f">[14:32:14]</span> <span class="c-y">~</span> rust-learning / pin-projection.html modified  ·  <span class="c-f">[14:32:07]</span> <span class="c-c">?</span> work "borrow checker" → 5 hits in 14ms  ·  <span class="c-f">[14:32:02]</span> <span class="c-g">✓</span> work / event-sourcing.html (124ms, +3)
+        </div>
+        <!-- key bar -->
+        <div style="position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 14px; background: var(--fg-strong); color: var(--bg);">
+          <span style="opacity:0.5;">&nbsp;1 </span>sources&nbsp;&nbsp;<span style="opacity:0.5;">2 </span>runs&nbsp;&nbsp;<span style="opacity:0.5;">3 </span>errors&nbsp;&nbsp;<span style="opacity:0.5;">4 </span>queries&nbsp;&nbsp;<span style="opacity:0.5;">5 </span>graph&nbsp;&nbsp;<span style="opacity:0.5;">/ </span>filter&nbsp;&nbsp;<span style="opacity:0.5;">: </span>cmd&nbsp;&nbsp;<span style="opacity:0.5;">r </span>reindex&nbsp;&nbsp;<span style="opacity:0.5;">d </span>delete&nbsp;&nbsp;<span style="opacity:0.5;">p </span>pause&nbsp;&nbsp;<span style="opacity:0.5;">^c </span>quit
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- 2. REPL / NOTEBOOK                                              -->
+  <!-- ============================================================== -->
+  <div class="frame">
+    <div class="fmeta">
+      <div class="num">approach · 02</div>
+      <h2>REPL / notebook</h2>
+      <p class="desc">
+        The session itself is the UI. You type queries, commands, and questions; outputs render below as immutable cells. Status lives in the prompt itself (server pulse, indexing badge, active kb). Closer to <code>jq</code>+<code>jupyter</code> than to a dashboard. Best when the operator is exploring rather than monitoring.
+      </p>
+      <div class="pills"><span class="pill">conversational</span><span class="pill">scrollback</span><span class="pill">cell-based</span><span class="pill alt">no panels</span></div>
+    </div>
+    <div class="fbody" style="height: 620px;">
+      <div class="bezel"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><span style="margin-left:10px;">~/work — kb repl</span></div>
+      <div class="term" style="height: calc(100% - 22px); padding: 14px 18px; overflow:hidden;">
+        <!-- session start -->
+        <div style="margin-bottom: 12px;">
+          <span class="c-v">kb</span> <span class="c-m">v0.1.0 · connected localhost:4000 · 4 kbs · type</span> <span class="c-o">?</span> <span class="c-m">for help,</span> <span class="c-o">.q</span> <span class="c-m">to quit</span>
+        </div>
+
+        <!-- cell 1: search -->
+        <div style="margin-bottom: 14px; border-left: 2px solid var(--blue); padding-left: 12px;">
+          <div><span class="c-g">●</span> <span class="c-v">work</span><span class="c-m">@</span><span class="c-c">2h14m</span> <span class="c-o">❯</span> <span class="c-s">borrow checker</span></div>
+          <div class="c-m" style="font-size:12.5px;">  k+v · all kbs · 14ms · 5 hits</div>
+          <div style="margin-top: 6px; padding-left: 2ch;">
+            <div><span class="c-m">[1]</span> <span class="c-s">borrow-checker.html</span> <span class="c-m">·</span> <span class="c-c">rust-learning</span> <span class="c-g">0.94</span></div>
+            <div class="c-m" style="padding-left:4ch;">…the <span class="bg-selS">borrow checker</span> enforces aliasing-XOR-mutability at compile time…</div>
+            <div><span class="c-m">[2]</span> <span class="c-s">lifetimes.html</span> <span class="c-m">·</span> <span class="c-c">rust-learning</span> <span class="c-g">0.81</span></div>
+            <div class="c-m" style="padding-left:4ch;">…lifetimes are how the <span class="bg-selS">borrow checker</span> reasons about reference validity…</div>
+            <div><span class="c-m">[3]</span> <span class="c-s">ownership.html</span> <span class="c-m">·</span> <span class="c-c">rust-learning</span> <span class="c-g">0.72</span></div>
+          </div>
+        </div>
+
+        <!-- cell 2: open by index -->
+        <div style="margin-bottom: 14px; border-left: 2px solid var(--violet); padding-left: 12px;">
+          <div><span class="c-g">●</span> <span class="c-v">work</span><span class="c-m">@</span><span class="c-c">2h14m</span> <span class="c-o">❯</span> <span class="c-s">.open 1</span></div>
+          <div class="c-m" style="font-size:12.5px;">  → xdg-open https://kb.local/d/borrow-checker · opened in firefox</div>
+        </div>
+
+        <!-- cell 3: stats inline -->
+        <div style="margin-bottom: 14px; border-left: 2px solid var(--violet); padding-left: 12px;">
+          <div><span class="c-g">●</span> <span class="c-v">work</span><span class="c-m">@</span><span class="c-c">2h14m</span> <span class="c-o">❯</span> <span class="c-s">.stats rust-learning</span></div>
+<pre style="margin: 6px 0 0 2ch; line-height: 19px;" class="c-m">  docs   <span class="c-s">     67</span>     edges  <span class="c-s">    1,801</span>
+  words  <span class="c-s">184,220</span>     last   <span class="c-c">now (indexing 12/67)</span>
+  ▁▁▁▂▂▃▃▄▄▅▅▆▆▇█  <span class="c-m">  doc churn (last 14d)</span>
+  ▁▂▃▃▄▅▆▇████████  <span class="c-m">  edges in (last 14d)</span></pre>
+        </div>
+
+        <!-- cell 4: incoming async event -->
+        <div style="margin-bottom: 14px; padding-left: 14px; color: var(--fg-muted); font-style: italic; border-left: 2px solid var(--green);">
+          <div><span class="c-g">⌁</span> <span class="c-m">[14:32:18]</span> <span class="c-g">✓</span> rust-learning / tokio-basics.html (188ms, +2 edges)</div>
+          <div><span class="c-g">⌁</span> <span class="c-m">[14:32:21]</span> <span class="c-y">~</span> work / draft.html modified — re-queued</div>
+        </div>
+
+        <!-- live prompt -->
+        <div>
+          <div><span class="c-b">⠼</span> <span class="c-v">work</span><span class="c-m">@</span><span class="c-c">2h14m</span> <span class="c-o">❯</span> <span class="c-s">.graph borrow-c</span><span class="cursor">&nbsp;</span></div>
+          <!-- inline tab-complete suggestions below prompt -->
+          <div style="margin-top: 4px; padding-left: 4ch; color: var(--fg-muted); font-size: 12.5px;">
+            <span class="c-v">▸ </span><span class="c-s">.graph borrow-checker.html</span> <span class="c-f">    1-hop in/out</span><br/>
+            <span class="c-f">  </span><span class="c-m">.graph borrow-cell.html</span><br/>
+            <span class="c-f">  </span><span class="c-m">.graph borrow-checker-history.html</span>
+          </div>
+        </div>
+
+        <!-- bottom mini-status (always visible) -->
+        <div style="position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 18px; border-top: 1px dashed var(--fg-faint); display:flex; gap: 2ch; color: var(--fg-muted); font-size: 12.5px; background: var(--bg);">
+          <span class="c-g">●</span><span>kb-server :4000</span>
+          <span class="c-f">│</span>
+          <span class="c-b">⠼</span><span>indexing rust-learning 12/67</span>
+          <span class="c-f">│</span>
+          <span class="c-y">⚠</span><span>3 unresolved errors</span>
+          <span style="flex:1;"></span>
+          <span class="c-o">?</span><span>help</span>
+          <span class="c-f">·</span>
+          <span class="c-o">.q</span><span>quit</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- 3. SPATIAL MINIMAP                                              -->
+  <!-- ============================================================== -->
+  <div class="frame">
+    <div class="fmeta">
+      <div class="num">approach · 03</div>
+      <h2>Spatial minimap</h2>
+      <p class="desc">
+        Treat the corpus as terrain. Each kb is a block; each cell is one document. Color encodes <em>freshness</em> (saturated = recently re-indexed, faded = old, red = errored, dark = paused). One look reveals where the system is alive vs. stale. Hover/select reveals doc detail in the side rail.
+      </p>
+      <div class="pills"><span class="pill">spatial</span><span class="pill">heatmap</span><span class="pill">at-a-glance</span><span class="pill alt">novel</span></div>
+    </div>
+    <div class="fbody" style="height: 620px;">
+      <div class="bezel"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><span style="margin-left:10px;">~ — kb tui --map</span></div>
+      <div class="term" style="height: calc(100% - 22px); display: grid; grid-template-columns: 1fr 320px; gap: 14px; padding: 14px;">
+        <!-- map -->
+        <div style="display: flex; flex-direction: column; gap: 10px; overflow: hidden;">
+          <div style="display:flex; gap: 2ch; align-items: baseline;">
+            <span class="c-s" style="font-weight:500;">kb · spatial</span>
+            <span class="c-m">freshness map · 1 cell = 1 document · saturation = recency</span>
+            <span style="flex:1"></span>
+            <span class="c-m">legend:</span>
+            <span class="c-g">█</span><span class="c-m">&lt;1m</span>
+            <span class="c-c">█</span><span class="c-m">&lt;1h</span>
+            <span class="c-b">█</span><span class="c-m">&lt;1d</span>
+            <span class="c-v">█</span><span class="c-m">&lt;1w</span>
+            <span class="c-m">█</span><span class="c-m">old</span>
+            <span class="c-r">█</span><span class="c-m">err</span>
+            <span class="c-f">█</span><span class="c-m">paused</span>
+          </div>
+
+          <!-- kb: work -->
+          <div>
+            <div style="display:flex; justify-content:space-between; margin-bottom: 4px;"><span class="c-s">▌ work</span> <span class="c-m">431 docs · 2 sources · last 5m</span></div>
+<pre style="margin: 0; line-height: 16px; font-size: 13px;"><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span>
+<span class="c-c">█</span><span class="c-c">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span></pre>
+          </div>
+          <!-- kb: rust-learning (with cursor) -->
+          <div>
+            <div style="display:flex; justify-content:space-between; margin-bottom: 4px;"><span class="c-s">▌ rust-learning</span> <span class="c-m">67 docs · 1 source · indexing 12/67</span></div>
+<pre style="margin: 0; line-height: 16px; font-size: 13px;"><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span class="c-g">█</span><span style="background: var(--selection-strong); color: var(--fg-strong); padding: 0 1px; outline: 2px solid var(--orange);">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-c">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span></pre>
+          </div>
+          <!-- kb: personal -->
+          <div>
+            <div style="display:flex; justify-content:space-between; margin-bottom: 4px;"><span class="c-s">▌ personal</span> <span class="c-m">168 docs · 2 sources · last 1h</span></div>
+<pre style="margin: 0; line-height: 16px; font-size: 13px;"><span class="c-c">█</span><span class="c-c">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-b">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span></pre>
+          </div>
+          <!-- kb: archive -->
+          <div>
+            <div style="display:flex; justify-content:space-between; margin-bottom: 4px;"><span class="c-s">▌ archive</span> <span class="c-m">1,240 docs · 2 sources · last 2d · 3 errors</span></div>
+<pre style="margin: 0; line-height: 16px; font-size: 13px;"><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-r">█</span><span class="c-v">█</span><span class="c-r">█</span><span class="c-v">█</span><span class="c-v">█</span><span class="c-r">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-m">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span><span class="c-f">█</span></pre>
+          </div>
+
+          <div style="flex:1"></div>
+          <div class="c-m" style="font-size:12.5px; padding-top: 8px; border-top: 1px dashed var(--fg-faint);">
+            <span class="c-o">←↑→↓</span> move cursor · <span class="c-o">Enter</span> open · <span class="c-o">r</span> reindex cell · <span class="c-o">/</span> filter · <span class="c-o">f</span> sort by freshness/path/size · <span class="c-o">q</span> quit
+          </div>
+        </div>
+
+        <!-- side rail: hovered cell detail -->
+        <div style="border-left: 1px solid var(--border); padding-left: 14px; display:flex; flex-direction: column; gap: 10px;">
+          <div class="c-m" style="font-size: 12.5px; letter-spacing: 0.05em; text-transform: uppercase;">selected</div>
+          <div>
+            <div class="c-s" style="font-weight: 500; font-size: 15px;">futures.html</div>
+            <div class="c-c">rust-learning · /home/me/rust</div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 13px;">
+            <span class="c-m">size</span><span class="c-s">16.3 KB</span>
+            <span class="c-m">mtime</span><span class="c-s">today 14:28</span>
+            <span class="c-m">indexed</span><span class="c-b">⠼ in progress</span>
+            <span class="c-m">words</span><span class="c-s">2,841</span>
+            <span class="c-m">edges in</span><span class="c-c">7</span>
+            <span class="c-m">edges out</span><span class="c-c">4</span>
+            <span class="c-m">errors</span><span class="c-g">none</span>
+          </div>
+          <div>
+            <div class="c-m" style="font-size:12.5px; margin-bottom:4px;">linked from</div>
+            <div class="c-b" style="padding-left: 1ch;">→ async-traits.html</div>
+            <div class="c-b" style="padding-left: 1ch;">→ tokio-basics.html</div>
+            <div class="c-b" style="padding-left: 1ch;">→ pin-projection.html</div>
+          </div>
+          <div>
+            <div class="c-m" style="font-size:12.5px; margin-bottom:4px;">freshness over time</div>
+<pre style="margin: 0; line-height: 12px; font-size: 12px; color: var(--cyan);">▁▁▁▁▂▂▃▃▄▅▆▇█</pre>
+            <div class="c-m" style="font-size: 11px;">14d ──────────────── now</div>
+          </div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border);" class="c-m">
+            <span class="c-o">Enter</span> open · <span class="c-o">g</span> graph · <span class="c-o">e</span> errors
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- 4. STATUS BOARD (ambient / wall display)                        -->
+  <!-- ============================================================== -->
+  <div class="frame">
+    <div class="fmeta">
+      <div class="num">approach · 04</div>
+      <h2>Ambient status board</h2>
+      <p class="desc">
+        Designed to live on a second monitor or wall display. Big numbers, sparklines, no input expected. Tokyo-Night palette so it doesn't blow out a dim room. One screen tells you in two seconds: <em>is the system alive, what is it working on, has anything broken</em>. Run with <code>kb tui --board</code>.
+      </p>
+      <div class="pills"><span class="pill">glanceable</span><span class="pill">read-only</span><span class="pill">dim-room</span><span class="pill alt">tokyo-night</span></div>
+    </div>
+    <div class="fbody tokyo" style="height: 600px; background: var(--bg);">
+      <div class="bezel" style="background: var(--bg-alt); border-bottom: 1px solid var(--border); color: var(--fg-muted);"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><span style="margin-left:10px;">/dev/tty1 — kb tui --board</span></div>
+      <div class="term" style="height: calc(100% - 22px); padding: 24px 32px; background: var(--bg); color: var(--fg);">
+        <!-- top strip -->
+        <div style="display:flex; justify-content: space-between; align-items: baseline; padding-bottom: 14px; border-bottom: 1px solid var(--border);">
+          <div>
+            <span style="font-size: 22px; font-weight: 700;" class="c-s">KB</span>
+            <span class="c-m" style="margin-left: 1ch;">v0.1.0 · localhost:4000</span>
+          </div>
+          <div>
+            <span class="c-g" style="font-size: 18px;">●</span>
+            <span class="c-s" style="font-size: 18px; font-weight: 500; margin-left: 1ch;">RUNNING</span>
+            <span class="c-m" style="margin-left: 2ch;">14:32:18 · uptime 2h 14m 32s</span>
+          </div>
+        </div>
+
+        <!-- BIG numbers row -->
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 24px; padding: 26px 0; border-bottom: 1px solid var(--border);">
+          <div>
+            <div class="c-m" style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;">documents</div>
+            <div class="c-s" style="font-size: 44px; font-weight: 700; line-height: 1;">1,906</div>
+            <div class="c-g" style="font-size: 12.5px; margin-top: 4px;">+12 in last hour</div>
+          </div>
+          <div>
+            <div class="c-m" style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;">edges</div>
+            <div class="c-c" style="font-size: 44px; font-weight: 700; line-height: 1;">8,412</div>
+            <div class="c-g" style="font-size: 12.5px; margin-top: 4px;">+38 today</div>
+          </div>
+          <div>
+            <div class="c-m" style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;">queries / hr</div>
+            <div class="c-b" style="font-size: 44px; font-weight: 700; line-height: 1;">142</div>
+            <div class="c-m" style="font-size: 12.5px; margin-top: 4px;">avg 18ms · p95 41ms</div>
+          </div>
+          <div>
+            <div class="c-m" style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;">errors</div>
+            <div class="c-r" style="font-size: 44px; font-weight: 700; line-height: 1;">3</div>
+            <div class="c-m" style="font-size: 12.5px; margin-top: 4px;">all in archive · last 14:30</div>
+          </div>
+        </div>
+
+        <!-- middle: sparklines + indexing now -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 28px; padding: 24px 0; border-bottom: 1px solid var(--border);">
+          <div>
+            <div class="c-m" style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px;">queries · last 24h</div>
+<pre style="margin:0; line-height: 16px; font-size: 14px;" class="c-b">▁▁▁▁▁▂▂▃▃▄▄▄▅▅▆▆▇▇█████▇▆▅▄▃▂▂▁▂▃▄▅▆▇█</pre>
+            <div class="c-m" style="font-size: 11px; margin-top: 4px;">00:00 ───────────────────────── now</div>
+            <div class="c-m" style="margin-top: 12px; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;">indexing throughput · last 1h</div>
+<pre style="margin: 8px 0 0 0; line-height: 16px; font-size: 14px;" class="c-c">▃▄▅▆▇█▇▆▅▄▃▃▄▅▆▇▇▇▆▆▇█▇▆▅▄▄▅▆▇█▇▆▅▄▃▄▅</pre>
+            <div class="c-m" style="font-size: 11px; margin-top: 4px;">files/min · current peak 28</div>
+          </div>
+          <div>
+            <div class="c-m" style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px;">currently indexing</div>
+            <div class="c-s" style="font-size: 18px; font-weight: 500;">rust-learning / futures.html</div>
+            <div style="margin-top: 8px; display:flex; gap: 1ch; align-items: center;">
+              <span class="c-m">[</span>
+              <span class="c-b">██████████</span><span class="c-f">░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span>
+              <span class="c-m">]</span>
+              <span class="c-s" style="font-weight: 500;">12/67</span>
+              <span class="c-m">18%</span>
+            </div>
+            <div class="c-m" style="margin-top: 6px; font-size: 12.5px;">ETA 00:42 · 188ms/file avg · run r-2c1</div>
+            <div style="margin-top: 18px; display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+              <div><div class="c-m" style="font-size:11px;">work</div><div class="c-g" style="font-size: 22px; font-weight: 600;">●</div><div class="c-m" style="font-size: 11px;">idle</div></div>
+              <div><div class="c-m" style="font-size:11px;">rust-learning</div><div class="c-b" style="font-size: 22px; font-weight: 600;">⠼</div><div class="c-m" style="font-size: 11px;">indexing</div></div>
+              <div><div class="c-m" style="font-size:11px;">personal</div><div class="c-g" style="font-size: 22px; font-weight: 600;">●</div><div class="c-m" style="font-size: 11px;">idle</div></div>
+              <div><div class="c-m" style="font-size:11px;">archive</div><div class="c-y" style="font-size: 22px; font-weight: 600;">⚠</div><div class="c-m" style="font-size: 11px;">3 errors</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- marquee strip -->
+        <div style="padding-top: 18px; display: flex; gap: 2ch; align-items: center; white-space: nowrap; overflow: hidden;">
+          <span class="c-m" style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;">recent</span>
+          <span class="c-f">[14:32:18]</span> <span class="c-g">✓</span> <span>tokio-basics</span>
+          <span class="c-f">·</span>
+          <span class="c-f">[14:32:14]</span> <span class="c-y">~</span> <span>pin-projection</span>
+          <span class="c-f">·</span>
+          <span class="c-f">[14:32:07]</span> <span class="c-c">?</span> <span>"borrow checker" → 5</span>
+          <span class="c-f">·</span>
+          <span class="c-f">[14:30:44]</span> <span class="c-r">✗</span> <span>encoding.html invalid utf-8</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================== -->
+  <!-- 5. SWIM-LANE TIMELINE                                           -->
+  <!-- ============================================================== -->
+  <div class="frame">
+    <div class="fmeta">
+      <div class="num">approach · 05</div>
+      <h2>Swim-lane timeline</h2>
+      <p class="desc">
+        Promotes the activity log to the hero. Each kb is a horizontal lane; events render as colored runs across a time axis. You see <em>when</em> things happened, not just <em>what</em>. Indexing runs are bars; queries are dots; errors are red ticks. Scrub the cursor to read off the moment.
+      </p>
+      <div class="pills"><span class="pill">temporal</span><span class="pill">trace</span><span class="pill">scrubber</span><span class="pill alt">post-mortem</span></div>
+    </div>
+    <div class="fbody" style="height: 600px;">
+      <div class="bezel"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><span style="margin-left:10px;">~ — kb tui --timeline</span></div>
+      <div class="term" style="height: calc(100% - 22px); padding: 14px 18px;">
+        <!-- crumb -->
+        <div style="display:flex; align-items: baseline; gap: 2ch; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
+          <span class="c-s" style="font-weight: 500;">timeline</span>
+          <span class="c-m">last 5 minutes · 12:27:18 → 14:32:18 · 256 events</span>
+          <span style="flex:1;"></span>
+          <span class="c-m">zoom:</span>
+          <span class="c-m">1m</span><span class="c-f">·</span><span class="c-m">5m</span><span class="c-f">·</span><span class="c-s" style="background: var(--bg-alt); padding: 0 1ch;">15m</span><span class="c-f">·</span><span class="c-m">1h</span><span class="c-f">·</span><span class="c-m">24h</span>
+          <span class="c-m" style="margin-left: 2ch;"><span class="c-o">,</span>back · <span class="c-o">.</span>fwd · <span class="c-o">+/-</span>zoom</span>
+        </div>
+
+        <!-- time axis -->
+<pre style="margin: 14px 0 0 16ch; line-height: 19px; color: var(--fg-muted);">14:27         14:28         14:29         14:30         14:31         14:32        now
+│             │             │             │             │             │             │</pre>
+
+        <!-- lanes -->
+        <div style="margin-top: 4px;">
+          <!-- lane: work -->
+          <div style="display: flex; align-items: center; padding: 4px 0; gap: 0;">
+            <div style="width: 16ch; padding-right: 1ch;"><span class="c-s">work</span> <span class="c-m" style="font-size:11px;">/ 2 src</span></div>
+            <div style="flex: 1; position: relative; height: 22px;">
+              <div style="position:absolute; left: 0; right:0; top: 11px; height: 1px; background: var(--fg-faint);"></div>
+              <!-- index runs as bars -->
+              <div style="position:absolute; left: 4%;  top: 5px; height: 12px; width: 8%; background: var(--green); border-radius: 2px;" title="event-sourcing run"></div>
+              <div style="position:absolute; left: 22%; top: 5px; height: 12px; width: 4%; background: var(--green); border-radius: 2px;"></div>
+              <!-- watcher events as ticks -->
+              <div style="position:absolute; left: 33%; top: 8px; height: 6px; width: 2px; background: var(--yellow);"></div>
+              <div style="position:absolute; left: 35%; top: 5px; height: 12px; width: 5%; background: var(--green); border-radius: 2px;"></div>
+              <div style="position:absolute; left: 50%; top: 8px; height: 6px; width: 2px; background: var(--yellow);"></div>
+              <!-- query dot -->
+              <div style="position:absolute; left: 70%; top: 6px; width: 10px; height: 10px; background: var(--cyan); border-radius: 50%;"></div>
+              <!-- watcher modified -->
+              <div style="position:absolute; left: 92%; top: 8px; height: 6px; width: 2px; background: var(--yellow);"></div>
+            </div>
+          </div>
+
+          <!-- lane: rust-learning -->
+          <div style="display: flex; align-items: center; padding: 4px 0; gap: 0;">
+            <div style="width: 16ch; padding-right: 1ch;"><span class="c-s">rust-learning</span> <span class="c-m" style="font-size:11px;">/ 1 src</span></div>
+            <div style="flex: 1; position: relative; height: 22px;">
+              <div style="position:absolute; left: 0; right:0; top: 11px; height: 1px; background: var(--fg-faint);"></div>
+              <div style="position:absolute; left: 8%; top: 5px; height: 12px; width: 24%; background: var(--green); border-radius: 2px;"></div>
+              <div style="position:absolute; left: 40%; top: 6px; width: 10px; height: 10px; background: var(--cyan); border-radius: 50%;"></div>
+              <!-- still indexing run (lighter, with stripes -> use a soft blue) -->
+              <div style="position:absolute; left: 62%; top: 5px; height: 12px; width: 35%; background: linear-gradient(90deg, var(--blue) 30%, rgba(38,139,210,0.45) 100%); border-radius: 2px; outline: 1px dashed rgba(38,139,210,0.45);"></div>
+              <div style="position:absolute; left: 86%; top: 8px; height: 6px; width: 2px; background: var(--yellow);"></div>
+            </div>
+          </div>
+
+          <!-- lane: personal -->
+          <div style="display: flex; align-items: center; padding: 4px 0; gap: 0;">
+            <div style="width: 16ch; padding-right: 1ch;"><span class="c-s">personal</span> <span class="c-m" style="font-size:11px;">/ 2 src</span></div>
+            <div style="flex: 1; position: relative; height: 22px;">
+              <div style="position:absolute; left: 0; right:0; top: 11px; height: 1px; background: var(--fg-faint);"></div>
+              <div style="position:absolute; left: 12%; top: 5px; height: 12px; width: 4%; background: var(--green); border-radius: 2px;"></div>
+              <div style="position:absolute; left: 56%; top: 6px; width: 10px; height: 10px; background: var(--cyan); border-radius: 50%;"></div>
+              <!-- paused area -->
+              <div style="position:absolute; left: 25%; right: 5%; top: 9px; height: 4px; background: repeating-linear-gradient(45deg, transparent 0 4px, var(--fg-faint) 4px 6px);"></div>
+            </div>
+          </div>
+
+          <!-- lane: archive -->
+          <div style="display: flex; align-items: center; padding: 4px 0; gap: 0;">
+            <div style="width: 16ch; padding-right: 1ch;"><span class="c-s">archive</span> <span class="c-m" style="font-size:11px;">/ 2 src</span></div>
+            <div style="flex: 1; position: relative; height: 22px;">
+              <div style="position:absolute; left: 0; right:0; top: 11px; height: 1px; background: var(--fg-faint);"></div>
+              <div style="position:absolute; left: 0%; top: 5px; height: 12px; width: 64%; background: var(--orange); border-radius: 2px; opacity: 0.85;"></div>
+              <!-- error ticks -->
+              <div style="position:absolute; left: 32%; top: 2px; height: 18px; width: 2px; background: var(--red);"></div>
+              <div style="position:absolute; left: 33.5%; top: 2px; height: 18px; width: 2px; background: var(--red);"></div>
+              <div style="position:absolute; left: 35%; top: 2px; height: 18px; width: 2px; background: var(--red);"></div>
+            </div>
+          </div>
+
+          <!-- cursor -->
+          <div style="position: relative; height: 0; margin-left: 16ch;">
+            <div style="position: absolute; left: 70%; top: -90px; width: 1px; height: 90px; background: var(--violet);"></div>
+            <div style="position: absolute; left: calc(70% - 30px); top: -110px; padding: 2px 8px; background: var(--violet); color: var(--bg); font-size: 11px; white-space: nowrap;">14:32:07.413</div>
+          </div>
+        </div>
+
+        <!-- legend -->
+        <div style="margin-top: 28px; display:flex; gap: 24px; padding: 8px 0; color: var(--fg-muted); font-size: 12.5px;">
+          <span><span style="display:inline-block; width: 14px; height: 8px; background: var(--green); vertical-align: middle; border-radius: 2px;"></span> index ok</span>
+          <span><span style="display:inline-block; width: 14px; height: 8px; background: var(--blue); vertical-align: middle; border-radius: 2px;"></span> in progress</span>
+          <span><span style="display:inline-block; width: 14px; height: 8px; background: var(--orange); vertical-align: middle; border-radius: 2px;"></span> with errors</span>
+          <span><span style="display:inline-block; width: 2px; height: 12px; background: var(--red); vertical-align: middle;"></span> error</span>
+          <span><span style="display:inline-block; width: 2px; height: 12px; background: var(--yellow); vertical-align: middle;"></span> watcher event</span>
+          <span><span style="display:inline-block; width: 8px; height: 8px; background: var(--cyan); border-radius: 50%; vertical-align: middle;"></span> query</span>
+        </div>
+
+        <!-- cursor detail -->
+        <div style="margin-top: 14px; padding: 10px 12px; background: var(--bg-alt); border-left: 3px solid var(--violet);">
+          <div style="display:flex; justify-content: space-between; margin-bottom: 4px;">
+            <span class="c-s" style="font-weight: 500;">at 14:32:07.413  ·  cursor</span>
+            <span class="c-m">3 events within ±200ms</span>
+          </div>
+          <div class="c-m" style="font-size: 12.5px; line-height: 18px;">
+            <div><span class="c-c">?</span> <span class="c-s">work</span> "borrow checker" → 5 hits in 14ms · query.received</div>
+            <div><span class="c-b">▶</span> <span class="c-s">rust-learning</span> async-traits.html · index.start (run r-2c1)</div>
+            <div><span class="c-y">~</span> <span class="c-s">work</span> draft.html modified · watcher.event</div>
+          </div>
+        </div>
+
+        <!-- footer -->
+        <div style="position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 18px; background: var(--bg-alt); border-top: 1px solid var(--border); display: flex; gap: 2ch;">
+          <span class="c-m" style="background: var(--violet); color: var(--bg); padding: 0 1ch; font-weight: 700;"> NORMAL </span>
+          <span class="c-o">←→</span><span class="c-m">scrub</span>
+          <span class="c-f">·</span>
+          <span class="c-o">jk</span><span class="c-m">lane</span>
+          <span class="c-f">·</span>
+          <span class="c-o">Enter</span><span class="c-m">expand event</span>
+          <span class="c-f">·</span>
+          <span class="c-o">f</span><span class="c-m">filter kind</span>
+          <span class="c-f">·</span>
+          <span class="c-o">/</span><span class="c-m">find</span>
+          <span style="flex:1"></span>
+          <span class="c-m">256 events · 12 runs · 8 errors</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div>
+
+  <div class="footer-note">
+    5 alternate paradigms · the original four-panel build still lives at <a href="kb tui.html">kb tui.html</a>
+  </div>
+</div>
+</body>
+</html>

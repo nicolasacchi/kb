@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Hybrid, keyword, and semantic search in kb; embeddings and quality measurement.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, search, embeddings, hybrid, BM25">
+<title>Search · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="search.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/search.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html">Concepts</a>
+  <a href="search.html" aria-current="page">Search</a>
+  <a href="web.html">Web reader</a>
+  <a href="comments.html">Comments</a>
+  <a href="agent.html">Memory &amp; sessions</a>
+  <a href="organize.html">Lists &amp; notes</a>
+  <a href="operate.html">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">03 · Find things</p>
+  <h1>Search</h1>
+  <p class="lede">Hybrid keyword-plus-vector retrieval is the default. One CLI verb, one API, the same modes in the web command palette.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#modes">Three modes</a></li>
+    <li><a href="#cli">CLI and API</a></li>
+    <li><a href="#filters">Scope and filters</a></li>
+    <li><a href="#models">Embeddings and models</a></li>
+    <li><a href="#bench">Measure quality</a></li>
+  </ol>
+</nav>
+
+<section id="modes">
+<h2>Three modes</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Mode</th><th>What it does</th><th>Needs model?</th></tr></thead>
+  <tbody>
+    <tr><td><code>hybrid</code></td><td>BM25 + vector fused with Reciprocal Rank Fusion (k=60). <strong>Default.</strong></td><td>Yes</td></tr>
+    <tr><td><code>keyword</code></td><td>Pure BM25 lexical match — exact terms, paths, code tokens.</td><td>No</td></tr>
+    <tr><td><code>semantic</code></td><td>Pure vector similarity — meaning over phrasing.</td><td>Yes</td></tr>
+  </tbody>
+</table>
+</div>
+<p>If hybrid or semantic is requested without an embedding model, the daemon returns a problem+json <code>400</code>. An optional reranker can refine hybrid results when configured on the daemon.</p>
+<div class="note ok">
+  <strong>When in doubt, stay on hybrid.</strong> Keyword alone misses paraphrase; semantic alone misses exact identifiers. Hybrid is the day-to-day default for a reason.
+</div>
+</section>
+
+<section id="cli">
+<h2>CLI and API</h2>
+<pre><code>kb search "borrow checker" --kb canon
+kb search "borrow checker" --kb canon --mode keyword
+kb search "borrow checker" --kb canon --mode semantic
+kb search "borrow checker" --kb canon --json
+kb search "borrow checker" --offline          # keyword-only, no daemon
+
+# HTTP (loopback needs no token)
+curl -s 'http://127.0.0.1:4000/api/search?q=borrow&amp;kb=canon&amp;mode=hybrid'</code></pre>
+<p><code>kb find &lt;path-or-name&gt;</code> resolves to the 12-hex id and paths when you already know roughly which file. <code>kb get</code> / <code>kb cat</code> fetch metadata or HTML once you have an id; <code>kb read</code> opens the SPA permalink (or local file) in a browser rather than dumping content to stdout.</p>
+</section>
+
+<section id="filters">
+<h2>Scope and filters</h2>
+<ul>
+  <li><strong>Per-kb</strong> — pass <code>--kb NAME</code> on the CLI, or <code>kb=</code> on the API. The CLI has no <code>--scope</code> flag: omitting <code>--kb</code> only auto-picks when the daemon has exactly one corpus; otherwise the call fails.</li>
+  <li><strong>Federated (API / SPA)</strong> — cross-kb search uses <code>scope=all</code> (the SPA’s unscoped search). Default scope is one kb. Multi-kb fan-out is on a single daemon, not a multi-daemon proxy.</li>
+  <li><strong>Category</strong> — <code>--category</code> / <code>?category=</code> gates on <code>kb-category</code>. Session transcripts are excluded from default search on purpose (the R0 rule); pass <code>--category memory-session</code> or use session tools instead.</li>
+  <li><strong>Gallery filters</strong> — tags, folder, mtime window, read-state, explicit id sets — live on the docs list and deep-links from the reader; see <a href="web.html">Web reader</a>.</li>
+</ul>
+</section>
+
+<section id="models">
+<h2>Embeddings and models</h2>
+<p>Embeddings run in the <strong>out-of-process</strong> <code>kb-embedder</code> sidecar (ONNX Runtime, statically bundled). The daemon never links ORT itself.</p>
+<p>Model resolution order at startup (highest wins):</p>
+<ol>
+  <li>Per-kb <code>embedding_model</code> in <code>kb.toml</code></li>
+  <li>Daemon-wide <code>[defaults].embedding_model</code></li>
+  <li>Registry default <code>bge-small-en-v1.5</code></li>
+</ol>
+<pre><code>kb model list
+kb model set bge-large-en-v1.5 --kb research
+kb model set bge-small-en-v1.5 --kb research --in-place   # same-dim swap</code></pre>
+<div class="note warn">
+  <strong>Dim changes fail closed.</strong> Boot compares on-disk lance dim to the model. On a dim mismatch: stop the daemon, remove <code>&lt;state&gt;/&lt;kb&gt;/lance/</code>, restart so the indexer rebuilds. Same-dim swaps can use <code>--in-place</code>.
+</div>
+<p>If the embedder subprocess dies, a liveness probe respawns it; if it cannot, semantic search degrades to keyword-only and surfaces a degraded signal in the SPA and <code>kb metrics</code>.</p>
+</section>
+
+<section id="bench">
+<h2>Measure quality</h2>
+<p><code>kb bench</code> turns retrieval into numbers: scaffold queries, discover relevant ids, then report Recall@k, MRR, nDCG, and warm latency per mode. Use it when you change models, chunking, or rerankers — not as a leaderboard contest.</p>
+<pre><code>kb bench init
+kb bench discover
+kb bench run</code></pre>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="concepts.html"><span class="dir">Previous</span>Concepts</a>
+  <a class="next" href="web.html"><span class="dir">Next</span>Web reader</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

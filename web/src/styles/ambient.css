@@ -1,0 +1,164 @@
+/* Unit 2 — the desk radiator (`routes/ambient.tsx`, `/ambient`).
+   Imported from the route module, NOT main.tsx, so it rides the lazy
+   ambient chunk instead of the initial bundle. Tokens only (see
+   styles/tokens.css) — no literal colours, matching every other route's
+   stylesheet in this app.
+
+   Design intent: a full-screen, low-chrome, glanceable display for a spare
+   monitor — large type, generous spacing, no dashboard density. The ONLY
+   interactive element is an artifact link; everything else is read-only,
+   so there is no hover/focus treatment beyond what a plain `<a>` needs. */
+
+.kb-ambient {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-4);
+  height: 100%;
+  min-height: 0;
+  padding: var(--pad-4);
+}
+
+.kb-ambient--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.kb-ambient__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--pad-3);
+}
+
+.kb-ambient__kb {
+  margin: 0;
+  font-size: 2.25rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.kb-ambient__clock {
+  font-size: 1.1rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-ambient__status {
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+
+.kb-ambient__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--pad-4);
+  flex: 1;
+  min-height: 0;
+}
+
+.kb-ambient__panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--pad-3);
+  overflow: auto;
+}
+
+.kb-ambient__panel h2 {
+  margin: 0 0 var(--pad-2);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.kb-ambient__activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  margin: 0;
+}
+
+.kb-ambient__activity-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  margin: 0;
+}
+
+.kb-ambient__activity-label {
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.kb-ambient__activity-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+}
+
+.kb-ambient__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+
+.kb-ambient__list li {
+  padding: var(--pad-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.kb-ambient__list li:last-child {
+  border-bottom: none;
+}
+
+.kb-ambient__list a {
+  font-size: 1.15rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.kb-ambient__list a:hover,
+.kb-ambient__list a:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kb-ambient__sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.kb-ambient__empty {
+  color: var(--muted);
+  font-style: italic;
+  margin: 0;
+}
+
+/* Reduced-motion: this route has no scripted animation, but a themed
+   colour transition on the link hover state above is the one rule that
+   would otherwise animate — suppress it explicitly rather than relying on
+   the global stylesheet doing so, since an ambient display is exactly the
+   surface a reduced-motion user is most likely to leave open unattended. */
+@media (prefers-reduced-motion: reduce) {
+  .kb-ambient__list a {
+    transition: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .kb-ambient__grid {
+    grid-template-columns: 1fr;
+  }
+}

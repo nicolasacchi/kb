@@ -1,0 +1,95 @@
+# kb-code bench-search starter set — the kb repo itself (W5.5).
+#
+# One JSON object per line: {"query": "...", "expect_path": "...",
+# "expect_kind": "..."}. `expect_kind` only labels the human table's
+# grouping (symbol/filename/semantic/error-string) — it never gates
+# scoring. Every `query` uses kb-code's own search grammar (@sym, #file,
+# bare = every lane, `?nl ` = semantic, trailing `path:<substr>` to
+# disambiguate a string that appears in more than one file) — see
+# `kb_code_server::search::grammar`'s module doc.
+#
+# Run against a kb-code daemon configured with this repo itself as a
+# browsable repo, e.g.: `kb-code bench-search --repo kb --queries
+# crates/kb-code-cli/bench/kb-repo-queries.jsonl`.
+#
+# Paths/symbols/strings below were verified against the real source at
+# HEAD as of the W5.3+W5.5 commit — a later refactor can legitimately move
+# one of these and drop its recall; that's the bench doing its job, not a
+# bug in the query set.
+#
+# ROOT-CAUSE NOTE (dogfood run 2026-07-20, sessions 0/0, transcripts 0/0):
+# neither lane can EVER score a hit under this file's rows, and that is
+# STRUCTURAL, not a stale expect_path or a matcher bug to fix here.
+# `bench::hit_rank` (crates/kb-code-cli/src/bench.rs) matches a lane hit
+# purely by its `path` field. `search::sessions::SessionHit` and
+# `transcripts::search::TranscriptHit` (crates/kb-code-server/src/
+# search/sessions.rs, .../transcripts/search.rs) carry NO `path` field at
+# all — sessions hits are {session_id, title, score, started_at, source,
+# files_changed}, transcript hits are {session_id, uuid, ts, kind,
+# tool_name, project_dir, snippet, is_sidechain}. Every hit either lane
+# ever returns is therefore an automatic miss, independent of query
+# quality — bench.rs's own module doc ("Scoring") already says as much
+# ("lanes whose hits carry no `path` field, e.g. sessions/transcripts,
+# never match"). No row below targets either lane on purpose (there is no
+# `~`/`~~`-prefixed row in this file); they only show up in the table
+# because the four bare/unprefixed rows (the `kb-code-why.sh` filename row
+# and the three `error-string` rows below) fan out to EVERY lane per
+# `search::grammar`'s "no prefix = every lane" rule. Until `bench.rs`
+# grows a session/transcript-shaped match key (e.g. against `snippet`/
+# `title`/`session_id` instead of `path`), do not read a 0% row for either
+# lane as a retrieval regression, and do not "fix" it by editing
+# `expect_path` here — no path value can ever match.
+#
+# The sessions lane ALSO has a live-daemon dependency, verified flaky
+# in the same investigation: `search::sessions::search` federates a real
+# HTTP call to the OPERATOR'S OWN `kb` daemon (not kb-code) at
+# `[kb_daemon] url` (default `http://127.0.0.1:4000`), 1.5s timeout. A
+# repeated identical query against a live kb-code daemon returned
+# `unavailable_reason: "kb daemon unreachable ... error sending request"`
+# on 1 of 3 attempts (the other 2 succeeded in well under a second) — so
+# the sessions lane's reported `n` in a bench-search run is itself
+# non-deterministic run over run (it drops out of scoring entirely on a
+# miss, per bench.rs's `unavailable_reason` skip rule), on top of always
+# reading 0% recall. Requires: a reachable `kb` daemon at `[kb_daemon]
+# url` for the sessions lane to be present in the table at all; even then
+# its recall column is uninformative per the structural note above.
+
+# --- symbol lookups (@) -----------------------------------------------------
+{"query": "@resolve_commit", "expect_path": "crates/kb-code-server/src/join/ladder.rs", "expect_kind": "symbol"}
+{"query": "@KbClient", "expect_path": "crates/kb-code-server/src/join/kb_client.rs", "expect_kind": "symbol"}
+{"query": "@Confidence", "expect_path": "crates/kb-code-server/src/join/ladder.rs", "expect_kind": "symbol"}
+{"query": "@FileWhyOut", "expect_path": "crates/kb-code-server/src/provenance/why.rs", "expect_kind": "symbol"}
+{"query": "@UnifiedSearchResponse", "expect_path": "crates/kb-code-server/src/search/unified.rs", "expect_kind": "symbol"}
+{"query": "@oversample_limit", "expect_path": "crates/kb-code-server/src/search/unified.rs", "expect_kind": "symbol"}
+{"query": "@LANE_ORDER", "expect_path": "crates/kb-code-server/src/search/grammar.rs", "expect_kind": "symbol"}
+{"query": "@find_repo", "expect_path": "crates/kb-code-server/src/routes.rs", "expect_kind": "symbol"}
+{"query": "@safe_rel_path", "expect_path": "crates/kb-code-server/src/routes.rs", "expect_kind": "symbol"}
+{"query": "@RepoListEntry", "expect_path": "crates/kb-code-server/src/routes.rs", "expect_kind": "symbol"}
+{"query": "@GitRepo", "expect_path": "crates/kb-code-server/src/git/mod.rs", "expect_kind": "symbol"}
+{"query": "@switch_repo", "expect_path": "crates/kb-code-server/src/checkout.rs", "expect_kind": "symbol"}
+{"query": "@BlameRegion", "expect_path": "crates/kb-code-server/src/blame/incremental.rs", "expect_kind": "symbol"}
+{"query": "@DefsOut", "expect_path": "crates/kb-code-server/src/agentview/xref.rs", "expect_kind": "symbol"}
+{"query": "@MapOut", "expect_path": "crates/kb-code-server/src/agentview/map.rs", "expect_kind": "symbol"}
+{"query": "@BenchReport", "expect_path": "crates/kb-code-cli/src/bench.rs", "expect_kind": "symbol"}
+{"query": "@score_response", "expect_path": "crates/kb-code-cli/src/bench.rs", "expect_kind": "symbol"}
+
+# --- file names (#) ----------------------------------------------------------
+{"query": "#ladder.rs", "expect_path": "crates/kb-code-server/src/join/ladder.rs", "expect_kind": "filename"}
+{"query": "#kb_client.rs", "expect_path": "crates/kb-code-server/src/join/kb_client.rs", "expect_kind": "filename"}
+{"query": "#grammar.rs", "expect_path": "crates/kb-code-server/src/search/grammar.rs", "expect_kind": "filename"}
+{"query": "#checkout.rs", "expect_path": "crates/kb-code-server/src/checkout.rs", "expect_kind": "filename"}
+{"query": "#why.rs", "expect_path": "crates/kb-code-server/src/provenance/why.rs", "expect_kind": "filename"}
+{"query": "kb-code-why.sh", "expect_path": "plugins/kb-code/hooks/kb-code-why.sh", "expect_kind": "filename"}
+
+# --- NL semantic questions (?nl) ---------------------------------------------
+{"query": "?nl how does the join ladder decide which session produced a commit", "expect_path": "crates/kb-code-server/src/join/ladder.rs", "expect_kind": "semantic"}
+{"query": "?nl how is the semantic search lane staged with a timeout budget", "expect_path": "crates/kb-code-server/src/search/unified.rs", "expect_kind": "semantic"}
+{"query": "?nl how does the daemon decide whether it is safe to switch branches", "expect_path": "crates/kb-code-server/src/checkout.rs", "expect_kind": "semantic"}
+{"query": "?nl how does language detection pick a tree-sitter grammar for a file", "expect_path": "crates/kb-code-server/src/lang.rs", "expect_kind": "semantic"}
+{"query": "?nl how is recall and latency scored for the search bench", "expect_path": "crates/kb-code-cli/src/bench.rs", "expect_kind": "semantic"}
+
+# --- error strings / literal text --------------------------------------------
+{"query": "no such repo path:routes", "expect_path": "crates/kb-code-server/src/routes.rs", "expect_kind": "error-string"}
+{"query": "text search needs exactly one repo", "expect_path": "crates/kb-code-server/src/search/unified.rs", "expect_kind": "error-string"}
+{"query": "semantic search is disabled path:unified", "expect_path": "crates/kb-code-server/src/search/unified.rs", "expect_kind": "error-string"}
+{"query": "line must be >= 1 path:why", "expect_path": "crates/kb-code-server/src/provenance/why.rs", "expect_kind": "error-string"}

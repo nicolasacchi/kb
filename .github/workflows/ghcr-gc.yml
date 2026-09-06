@@ -1,0 +1,56 @@
+# Garbage-collects old ghcr.io container-image versions for the two
+# packages build-image.yml pushes to (`kb`, `kb-code`). Every green main
+# commit adds a NEW `main-<sha12>` tag and nothing ever deletes an old one
+# (build-image.yml intentionally never overwrites/moves a tag — see its own
+# "no moving main-latest" comment), so the version list only grows. Each kb
+# image tag is ~919 MB compressed (kb-code's is far smaller, ~116 MB, but
+# still adds up) — left alone this is unbounded storage growth for
+# artifacts nothing but a manual `docker pull ghcr.io/…:main-<sha12>`
+# during a redeploy ever reads.
+#
+# Runs on GitHub-hosted ubuntu-latest: pure ghcr.io/GitHub-API traffic, no
+# repo checkout, no compute — nothing here would benefit from, or should be
+# allowed to reach, a self-hosted runner.
+name: ghcr-gc
+
+on:
+  schedule:
+    # Weekly, off-peak — well clear of bench-nightly's 03:17 UTC and any
+    # build-image run a main push might have queued.
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  packages: write
+
+jobs:
+  gc:
+    name: gc (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [kb, kb-code]
+    steps:
+      - name: Delete old ${{ matrix.package }} versions
+        # SHA resolved + verified 2026-08-15 via:
+        #   gh api repos/actions/delete-package-versions/releases/latest --jq '.tag_name'   # -> v5.0.0
+        #   gh api repos/actions/delete-package-versions/git/ref/tags/v5.0.0 --jq '.object.sha,.object.type'
+        #     -> e5bc658cc4c965c472efe991f8beea3981499c55, commit
+        # (a lightweight tag — the ref resolves straight to the commit, no
+        # intermediate annotated-tag object to dereference).
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          # Keep the newest 10 tagged versions (~10 weeks of main pushes at
+          # a typical cadence) and prune everything older — plenty of
+          # headroom to pull a recent commit's image for a redeploy or a
+          # bisect, without the version list growing forever.
+          min-versions-to-keep: "10"
+          # false: prune TAGGED versions too (every version here is a real
+          # main-<sha12> build-image.yml tag — there's no untagged-only
+          # churn to distinguish, unlike a package that also accumulates
+          # anonymous multi-arch manifest layers).
+          delete-only-untagged-versions: false

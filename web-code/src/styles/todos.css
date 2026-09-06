@@ -1,0 +1,195 @@
+/* Phase N — `/r/:repo/~todos` page. */
+
+.kbc-todos {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-todos__head {
+  margin-bottom: 16px;
+}
+.kbc-todos__title {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+.kbc-todos__hint {
+  color: var(--ink-mute);
+  margin: 0;
+  font-size: 13px;
+}
+.kbc-todos__trunc {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-card));
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 12px;
+}
+.kbc-todos__filters {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.kbc-todos__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kbc-todos__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.kbc-todos__chip.is-on {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-todos__chip-n {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kbc-todos__chip.is-on .kbc-todos__chip-n {
+  color: var(--accent-soft);
+}
+.kbc-todos__row2 {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-todos__search {
+  flex: 1 1 220px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+.kbc-todos__scope {
+  flex: 0 0 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+.kbc-todos__muted {
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+.kbc-todos__error {
+  color: var(--red);
+  font-size: 13px;
+}
+.kbc-todos__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kbc-todos__group {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.kbc-todos__group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-panel);
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbc-todos__group-head:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-todos__chev {
+  color: var(--ink-dim);
+  flex: 0 0 auto;
+}
+.kbc-todos__group-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-todos__group-n {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-todos__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-todos__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink);
+  text-decoration: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  /* SH.C3 (audit re-check): pixel-measured both the desktop and mobile
+   * todos screenshots — `.kbc-todos__text` below already carries the full
+   * overflow/white-space/text-overflow triple and DOES ellipsize once a
+   * row's text actually exceeds the available width (confirmed on mobile's
+   * narrower column). No desktop row in the audited shot overflows its
+   * 960px `.kbc-todos` box at all — several TODO/FIXME comments just end
+   * mid-sentence in the SOURCE (single-line extraction in kb-code-server,
+   * not a CSS truncation), which reads like a cut but isn't one. This
+   * `min-width: 0` is defensive hardening only, not a functional fix: it
+   * guards the flex row itself against the classic "flex item's automatic
+   * minimum size" pitfall (root CLAUDE.md invariant class), should a future
+   * ancestor layout change stop giving `.kbc-todos__item` a definite
+   * width. */
+  min-width: 0;
+}
+.kbc-todos__item:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-todos__marker {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--warn);
+  min-width: 4.5em;
+}
+.kbc-todos__line {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+}
+.kbc-todos__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

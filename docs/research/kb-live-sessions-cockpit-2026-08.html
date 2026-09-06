@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Live Sessions Cockpit — who holds the ball, across five harnesses</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="sessions, live, cockpit, harness, claude-code, codex, grok, kimi, opencode, hooks, design">
+<meta name="kb-session" content="bf283e00-fa36-4a92-899a-980b2ea06d5c">
+<meta name="description" content="Design for a live agent-session cockpit in kb: in-progress / waiting-on-you / finished across claude-code, codex, grok, kimi and opencode — collection evidence, wire contract, server shape, SPA and CLI surfaces, and the recorded refusals.">
+
+<style>
+:root{
+  /* Instrument panel — warm paper by day, cold glass by night. All 26 known
+     role pairs verified >= 4.5:1 in both themes (see the Evidence appendix). */
+  --bg:#fcfbf7; --surface:#f2efe6; --fg:#1a1c1a; --muted:#5b5f58;
+  --rule:#ddd8c9; --accent:#0f6e5c; --accent-fg:#ffffff;
+  --warn:#7d5300; --danger:#9b2226; --ok:#216e39;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.65; --maxw:52rem;
+  --sans:"Iowan Old Style",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:5px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#14171a; --surface:#1c2024; --fg:#e8e6df; --muted:#a0a49c;
+    --rule:#2a2f34; --accent:#5ecfb0; --accent-fg:#0d1512;
+    --warn:#e3b34d; --danger:#f3857f; --ok:#6ed49b;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:var(--fs-body);line-height:var(--lh)}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 6rem}
+header.doc{border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem}
+h1{font-size:2rem;line-height:1.2;margin:.2em 0 .3em;letter-spacing:-.015em}
+h2{font-size:1.32rem;margin:2.6em 0 .6em;padding-top:.6em;border-top:1px solid var(--rule);
+  letter-spacing:-.01em}
+h3{font-size:1.06rem;margin:1.8em 0 .4em}
+h4{font-size:.95rem;margin:1.3em 0 .3em;color:var(--muted);
+  font:650 .8rem/1.3 var(--mono);text-transform:uppercase;letter-spacing:.06em}
+.kicker{font:650 .74rem/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);margin:0}
+.sub{color:var(--muted);font-size:1rem;margin:.6em 0 0}
+.meta{font:500 var(--fs-small)/1.5 var(--mono);color:var(--muted);margin-top:1rem}
+a{color:var(--accent);text-underline-offset:2px}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);
+  padding:.12em .35em;border-radius:3px;border:1px solid var(--rule)}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);
+  padding:.9rem 1rem;overflow-x:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;border:none;padding:0;font-size:inherit}
+table{width:100%;border-collapse:collapse;margin:1.2em 0;font-size:.9rem}
+th,td{text-align:left;padding:.5em .6em;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font:650 .74rem/1.3 var(--mono);text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);border-bottom:2px solid var(--rule)}
+tbody tr:hover{background:var(--surface)}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);
+  border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));
+  padding:.85em 1.1em;margin:1.3em 0}
+.callout-label{font:650 .72rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.4em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.tag{display:inline-block;font:650 .68rem/1 var(--mono);letter-spacing:.06em;
+  text-transform:uppercase;padding:.28em .5em;border-radius:3px;border:1px solid var(--rule);
+  color:var(--muted);white-space:nowrap}
+.tag--ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--rule))}
+.tag--warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--rule))}
+.tag--danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--rule))}
+.lede{font-size:1.12rem;line-height:1.6}
+.toc{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);
+  padding:1rem 1.2rem;margin:1.8rem 0}
+.toc ol{margin:.4em 0 0;padding-left:1.3em;columns:2;column-gap:2rem;font-size:.92rem}
+.toc li{margin:.22em 0;break-inside:avoid}
+@media (max-width:38rem){.toc ol{columns:1}}
+figure{margin:1.5em 0}
+figcaption{font-size:var(--fs-small);color:var(--muted);margin-top:.5em;font-style:italic}
+.lane{border:1px solid var(--rule);border-radius:var(--radius);overflow:hidden;margin:1.4em 0}
+.lane-head{background:var(--surface);padding:.5em .8em;font:650 .76rem/1.3 var(--mono);
+  letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--rule)}
+.lane-body{padding:.8em}
+.lane-row{display:flex;gap:.7em;align-items:baseline;padding:.32em 0;
+  border-bottom:1px dotted var(--rule);font-size:.88rem}
+.lane-row:last-child{border-bottom:none}
+.lane-row .t{font-family:var(--mono);color:var(--muted);min-width:3.4em;text-align:right}
+.lane-row .p{font-family:var(--mono);color:var(--accent);min-width:6em}
+.lane-row .d{flex:1}
+ul.tight li,ol.tight li{margin:.3em 0}
+.footnote{font-size:var(--fs-small);color:var(--muted)}
+hr{border:none;border-top:1px solid var(--rule);margin:2.5em 0}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="wrap">
+
+<header class="doc">
+  <p class="kicker">kb · design round · 2026-08-21</p>
+  <h1>The Live Sessions Cockpit</h1>
+  <p class="sub">Following every agent session live — in&nbsp;progress, waiting&nbsp;on&nbsp;you,
+  finished — across Claude&nbsp;Code, Codex, Grok, Kimi and opencode, in the SPA, in the CLI, and
+  in a feed an LLM or an ntfy bridge can act on.</p>
+  <p class="meta">Status: design ratified by evidence, not yet built · Prior art mined:
+  an earlier internal cockpit prototype (retired), a retired helper tool · 7 worker probes + 1 working spike · No daemon code changed
+  this round</p>
+</header>
+
+<main id="main">
+
+<p class="lede">Yes, it can be done — on all five harnesses, with real signals rather than
+guesses. Every harness writes an append-only per-session event file with explicit turn
+boundaries, and four of the five also offer a push hook. The hard part is not detection. It is
+that <strong>kb's existing live lane is structurally dead in the deployment the operator
+actually runs</strong>, and that the honest unit of state is not three buckets but two axes.</p>
+
+<div class="toc" aria-label="Contents">
+  <strong style="font:650 .74rem/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Contents</strong>
+  <ol>
+    <li><a href="#verdict">The verdict</a></li>
+    <li><a href="#dead">What already exists, and why it is dead</a></li>
+    <li><a href="#model">The model: two axes, not three buckets</a></li>
+    <li><a href="#collection">Collection, harness by harness</a></li>
+    <li><a href="#wire">The wire contract</a></li>
+    <li><a href="#server">Shaping the server</a></li>
+    <li><a href="#spa">The human interface</a></li>
+    <li><a href="#cli">The CLI and the machine surface</a></li>
+    <li><a href="#notify">Notification without new outbound code</a></li>
+    <li><a href="#refusals">What this refuses to do</a></li>
+    <li><a href="#phasing">Phasing and risk</a></li>
+    <li><a href="#evidence">Evidence appendix</a></li>
+  </ol>
+</div>
+
+<h2 id="verdict">1. The verdict</h2>
+
+<p>The operator wants three lanes: in progress, waiting for my input, finished — ordered, live,
+visible from the SPA and the CLI, and machine-readable enough to point an LLM or a notifier at.
+Taking each part in turn:</p>
+
+<table>
+  <caption class="footnote" style="text-align:left;margin-bottom:.6em">Feasibility per harness. "Proven" means observed in a live experiment or in real on-disk artifacts on this box during this round.</caption>
+  <thead>
+    <tr><th scope="col">Harness</th><th scope="col">In progress</th><th scope="col">Waiting on you</th><th scope="col">Finished</th><th scope="col">Push channel</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">Claude Code</th><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--ok">proven</span></td><td>hooks (5 of 7 already wired)</td></tr>
+    <tr><th scope="row">opencode</th><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--warn">inferred</span></td><td>plugin <code>event</code> hook (exists)</td></tr>
+    <tr><th scope="row">Grok</th><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--ok">proven</span></td><td>hooks dir present</td></tr>
+    <tr><th scope="row">Codex</th><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--warn">partial</span></td><td><span class="tag tag--ok">proven</span></td><td>hooks.json (Stop wired)</td></tr>
+    <tr><th scope="row">Kimi</th><td><span class="tag tag--ok">proven</span></td><td><span class="tag tag--warn">partial</span></td><td><span class="tag tag--ok">proven</span></td><td>hooks (Stop wired)</td></tr>
+  </tbody>
+</table>
+
+<p>The single most important finding is not on that table. It is this:</p>
+
+<div class="callout callout--danger">
+  <span class="callout-label">Load-bearing defect, found this round</span>
+  kb already ships a live-session lane — <code>GET /api/sessions/presence</code>,
+  <code>GET /api/sessions/{id}/live</code>, <code>kb sessions read --live</code>. In the
+  deployment the operator actually runs, <strong>all of it is unreachable</strong>. The daemon
+  runs in Docker; requests from the host arrive from the bridge gateway, not loopback, so the
+  hard loopback gate 403s the host's own CLI. And <code>[sessions] live_transcripts_dir</code>
+  is not configured, and <code>~/.claude/projects</code> is not among the container's
+  bind-mounts — so even from inside, the answer would be <code>{"enabled":false}</code>.
+  Verified live: <code>curl</code> with a valid bearer token returns
+  <em>"forbidden: the live-session lane (presence/live) is loopback-only in v1"</em>, and
+  <code>kb sessions read &lt;my-own-live-session&gt; --live</code> returns
+  <em>"session not live (no resolvable live transcript)"</em>.
+</div>
+
+<p>That is not an argument against the feature; it is the argument for its shape. A cockpit that
+polls the filesystem can only ever work for a bare-metal daemon co-located with the sessions.
+The operator's daemon is neither. <strong>Collection must therefore be push-first</strong> — the
+harness hooks, which run on the host and can reach the daemon over HTTP, are the only channel
+that survives containerisation, and the only one that would survive sessions running on a second
+machine.</p>
+
+<h2 id="dead">2. What already exists, and why it is dead</h2>
+
+<p>kb is much further along than a blank page. The pieces, and their status in production:</p>
+
+<table>
+  <thead><tr><th scope="col">Piece</th><th scope="col">What it does</th><th scope="col">Prod status</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Tier-0 presence</th><td>SPA-side, pure function of the landed capture's <code>ended_at</code> age (<code>ACTIVE_WINDOW_SECS</code> = 600), <code>web/src/lib/sessionPresence.ts</code></td><td><span class="tag tag--ok">works</span> everywhere — this is the only live-ish signal prod has today</td></tr>
+    <tr><th scope="row">Tier-1 presence</th><td>Server-side stat-only <code>readdir</code> over <code>live_transcripts_dir</code>, 120s window, capped at 4096 entries, ~1s TTL cache</td><td><span class="tag tag--danger">dead</span> — loopback-only + dir unmounted + unconfigured</td></tr>
+    <tr><th scope="row"><code>/{id}/live</code></th><td>Interpreted live delta over the <code>session-view/1</code> engine</td><td><span class="tag tag--danger">dead</span> — same gate</td></tr>
+    <tr><th scope="row"><code>session-view/1</code></th><td>The one JSONL interpreter; already tracks <code>PendingCalls</code>/<code>unpaired</code> — i.e. mid-turn detection</td><td><span class="tag tag--ok">reusable</span> — do not write a second interpreter</td></tr>
+    <tr><th scope="row">Capture pipeline</th><td>Stop hook writes one HTML artifact per session into the corpus; the watcher indexes it. Filesystem-based, never HTTP</td><td><span class="tag tag--ok">works</span> on all five harnesses</td></tr>
+    <tr><th scope="row"><code>[webhooks]</code> bridge</th><td>Event → outbound webhook, configured in <code>kb-core/src/config.rs</code>, driven from <code>kb-server/src/lib.rs</code></td><td><span class="tag tag--ok">works</span> — the only sanctioned outbound path, and the answer to "ntfy"</td></tr>
+    <tr><th scope="row">SSE bus</th><td>Free-form string-typed <code>emit(type, payload)</code>; <code>session.captured</code> / <code>session.deleted</code> exist; a drift test forces new kinds to be registered in <code>routes/schema.rs</code></td><td><span class="tag tag--ok">reusable</span></td></tr>
+    <tr><th scope="row"><code>kb events --follow</code></th><td>NDJSON tail of the bus with server-side type globs, <code>Last-Event-ID</code> resume and backoff</td><td><span class="tag tag--ok">reusable</span> — the CLI stream already exists</td></tr>
+    <tr><th scope="row">Hook wiring</th><td>SessionStart, UserPromptSubmit, PostToolUse (throttled), PreCompact, Stop</td><td><span class="tag tag--warn">partial</span> — <code>Notification</code> and <code>SessionEnd</code> are <em>not</em> registered</td></tr>
+  </tbody>
+</table>
+
+<h3 id="priorart">Prior art, and what it cost</h3>
+
+<p>Two previous attempts are directly relevant, and both were mined in full this round.</p>
+
+<p><strong>An earlier internal cockpit prototype</strong> (Go, retired) was a read-only live
+cockpit for Claude Code sessions. Its retirement is recorded not in its own repo but in kb's
+<code>kb-sessions-rethink-2026-07.html</code>: <em>"the project is dead, and kb builds this
+capability natively… its field notes are stolen with attribution."</em> The field notes worth
+keeping: stat-only bounded discovery (a bounded 64&nbsp;KiB head + 96&nbsp;KiB tail window, never
+a full parse just to render a status row); byte-offset tailing with complete-line discipline and
+restart-on-truncation; lazy-open engines reaped when no subscriber is attached; polling
+deliberately chosen over inotify (no watch-limit exhaustion, no missed events on rotation); and
+arrival-sequence ordering rather than wall-clock, because real transcript timestamps collide at
+millisecond resolution.</p>
+
+<div class="callout callout--warn">
+  <span class="callout-label">The mistake not to repeat</span>
+  the prototype's entire state model was "has anything moved in the last 45–90 seconds",
+  applied at three layers with three different windows, and one of them (one of its subsystems)
+  was wired to a <em>global launch flag</em> rather than per-session activity — which made its
+  <code>"done"</code> phase practically unreachable. Waiting-on-human and finished both collapsed
+  into one <code>idle</code> bucket. Meanwhile it parsed <code>Message.StopReason</code> onto
+  every turn and <strong>never read it again</strong>. The field that answers the operator's
+  actual question was captured and discarded.
+</div>
+
+<p><strong>A retired helper tool</strong> spiked opencode 1.17.9 and a cross-harness codex
+worker. Its transferable findings: opencode's <code>permission.asked</code> → <code>BLOCKED</code>
+→ <code>permission.replied</code> cycle is a genuine first-class "waiting on you" signal; codex
+in <code>exec</code> mode runs <code>approval_policy=never</code> and therefore has <em>no</em>
+blocked concept at all; and its own review found two high-severity state-machine bugs that a
+bucketer must design against — a late error event overwriting an already-correct terminal state,
+and a recoverable error hardcoded as fatal, freezing a session that was still alive.</p>
+
+<h2 id="model">3. The model: two axes, not three buckets</h2>
+
+<p>The naive design makes "in progress / waiting / finished" a single enum derived from file
+recency. That is exactly the trap the earlier prototype fell into, and the spike built for this round
+reproduced the failure before it was fixed: a session running a twenty-minute
+<code>cargo build</code> appends nothing to its transcript, so a recency rule calls it stalled,
+and a "waiting on you" lane fills with sessions that are working hard.</p>
+
+<p>The correct decomposition is two independent axes:</p>
+
+<table>
+  <thead><tr><th scope="col">Axis</th><th scope="col">Source</th><th scope="col">Values</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Who holds the ball</th><td>Turn-boundary records in the harness's own event file, or the hook that fired</td><td><code>agent</code> · <code>human</code> · <code>none</code> (ended)</td></tr>
+    <tr><th scope="row">How long since it moved</th><td><code>stat</code> mtime, or the last beat's timestamp</td><td>seconds, plus a confidence label</td></tr>
+  </tbody>
+</table>
+
+<p>The three lanes the operator asked for are a <em>rendering</em> of the first axis. The second
+axis never flips a lane — it only decorates, and escalates to an honest doubt marker:</p>
+
+<div class="lane">
+  <div class="lane-head" style="color:var(--accent)">In progress — the agent holds the turn</div>
+  <div class="lane-body">
+    <div class="lane-row"><span class="t">0s</span><span class="p">kb</span><span class="d">Sessions live tracking and orchestration <span class="tag">stop_reason=tool_use</span></span></div>
+    <div class="lane-row"><span class="t">6m</span><span class="p">kb</span><span class="d">Memory sessions, code, and artifacts connections <span class="tag">tail=tool_result</span></span></div>
+    <div class="lane-row"><span class="t">52m</span><span class="p">obs</span><span class="d">Rebuilding the metrics pipeline <span class="tag tag--warn">stalled? silent &gt;45m</span></span></div>
+  </div>
+</div>
+
+<div class="lane">
+  <div class="lane-head" style="color:var(--warn)">Waiting on you — longest wait first</div>
+  <div class="lane-body">
+    <div class="lane-row"><span class="t">50m</span><span class="p">kb</span><span class="d">Daemon connection loss handling and KB link routing <span class="tag">end_turn</span></span></div>
+    <div class="lane-row"><span class="t">17m</span><span class="p">usage</span><span class="d">Historic token usage metrics and caching <span class="tag">end_turn</span></span></div>
+    <div class="lane-row"><span class="t">4m</span><span class="p">research</span><span class="d">Monitoring tools CLI integration <span class="tag tag--danger">blocked: permission</span></span></div>
+  </div>
+</div>
+
+<div class="lane">
+  <div class="lane-head" style="color:var(--muted)">Finished · Cold</div>
+  <div class="lane-body">
+    <div class="lane-row"><span class="t">2h</span><span class="p">shelf</span><span class="d">Fix empty book reader <span class="tag tag--ok">SessionEnd</span></span></div>
+    <div class="lane-row"><span class="t">2d</span><span class="p">kb</span><span class="d">Research plugin architecture <span class="tag">cold — waiting &gt;8h</span></span></div>
+  </div>
+</div>
+
+<p>Four honest labels fall out of the two axes, and each is a statement kb can defend:</p>
+
+<ul class="tight">
+  <li><strong>working</strong> — agent holds the ball, moved recently.</li>
+  <li><strong>stalled?</strong> — agent holds the ball, silent past a threshold well above any
+  plausible single tool call (45 minutes). Never reclassified as "waiting on you": the transcript
+  says the agent has the turn, and silence is not evidence to the contrary.</li>
+  <li><strong>waiting</strong> — human holds the ball, since a known instant.</li>
+  <li><strong>cold</strong> — human has held the ball longer than a working day's patience
+  (8h). Still resumable, sorted below, out of the notification path.</li>
+</ul>
+
+<p>Plus two terminal cases: <strong>finished</strong> (an explicit end signal fired) and
+<strong>presumed ended</strong> (no end signal, but the lease expired and no capture landed) —
+which must be labelled differently, because one is a fact and the other is an inference.</p>
+
+<h2 id="collection">4. Collection, harness by harness</h2>
+
+<p>Every harness turned out to have the same two-part shape: an append-only per-session event
+file with explicit turn boundaries, and a hook or plugin that can push. The adapter per harness
+is small; the model above is shared.</p>
+
+<h3 id="c-claude">Claude Code — the dominant case</h3>
+
+<p>Scale first, because it decides priority: <strong>55 main session transcripts (191&nbsp;MB),
+21 touched in the last 14 days, with 999 subagent and workflow transcripts nested beneath
+them</strong>. By comparison codex has 4 rollouts in the same window. Claude Code is not one of
+five equal harnesses; it is the feature.</p>
+
+<p>Pull signal, verified first-hand: the last <em>assistant</em> record's
+<code>message.stop_reason</code> is the ball-holder oracle.</p>
+
+<pre><code>stop_reason = "tool_use"   → agent holds the turn (a tool call is outstanding)
+stop_reason = "end_turn"   → agent handed control back → WAITING ON YOU
+last record is a user text block   → the human just spoke → agent holds the turn
+last record is a user tool_result  → mid-turn, agent holds the turn</code></pre>
+
+<div class="callout callout--warn">
+  <span class="callout-label">Subtlety that costs correctness</span>
+  A <code>tool_result</code> and a human prompt are <em>both</em> <code>type:"user"</code>
+  records. They mean opposite things for state. The discriminator is the content block type:
+  <code>tool_result</code> is the agent feeding itself; a <code>text</code> block is the human
+  speaking. The spike got this wrong on the first run and mislabelled an actively-working
+  session.
+</div>
+
+<p>Push signals, confirmed live by a worker running an instrumented <code>claude -p</code> with a
+throwaway <code>--settings</code> file:</p>
+
+<pre><code>SessionStart      {"source":"startup"}
+UserPromptSubmit  {"prompt_id":…,"permission_mode":"default","prompt":"…"}
+Stop              {"hook_event_name":"Stop","last_assistant_message":"ping",…}
+SessionEnd        {"hook_event_name":"SessionEnd","reason":"other"}</code></pre>
+
+<p>Two of these matter enormously. <code>Stop</code> carries
+<strong><code>last_assistant_message</code> inline</strong> — the cockpit gets its "what did it
+last say" line for free, with no transcript re-parse. And <code>SessionEnd</code> fires reliably,
+including on interactive Ctrl-D — it is the FINISHED transition, and it is <em>not currently
+registered</em> in kb's plugin.</p>
+
+<div class="callout">
+  <span class="callout-label">Honest gap, and a real fact about this operator</span>
+  <code>Notification</code> (the permission-prompt / idle-prompt hook) is documented in the
+  bundled Anthropic plugin-dev docs but could not be confirmed firing on this box after seven
+  attempts — because the operator's own <code>~/.claude/settings.json</code> sets
+  <code>permissions.defaultMode: "auto"</code> and <code>settings.local.json</code> broadly
+  pre-allows Bash. Permission prompts effectively never fire for this operator. The
+  "blocked on permission" sub-state is therefore <em>real but nearly moot here</em>, and should
+  ship as best-effort, never as a load-bearing signal. <code>SessionEnd.reason</code> was
+  observed as the generic <code>"other"</code> for both a <code>-p</code> completion and a manual
+  exit — treat it as low-information, not a classifier.
+</div>
+
+<p>A further gotcha worth recording: a <code>claude</code> process spawned from inside another
+Claude Code session inherits <code>CLAUDE_CODE_CHILD_SESSION</code> and friends, which silently
+turns transcript saving <em>off</em> and forces auto-approve. Anyone testing this feature from
+inside Claude Code must scrub the environment first.</p>
+
+<h3 id="c-opencode">opencode — richest signals, hardest plumbing</h3>
+
+<p>opencode has the best vocabulary of any harness: an SSE stream at
+<code>GET /event?directory=…</code> carrying <code>session.status{type:"busy"|"idle"}</code>,
+<code>permission.asked</code>, <code>permission.replied</code>, <code>session.error</code>, and
+per-part streaming deltas. A pending permission is a first-class, observable "waiting on you".</p>
+
+<p>But the state is <strong>memory-only inside an ephemeral, randomly-ported process</strong>.
+There is no always-on <code>opencode serve</code> on this box, and nothing durable in
+<code>opencode.db</code> records busy/idle. Polling is therefore not merely expensive — it is
+impossible, because there is no port to poll and no registry of ports.</p>
+
+<p>The answer is already half-built: <code>~/.config/opencode/plugin/kb-memory.ts</code> exists
+and already registers a generic <code>event</code> handler, today filtered to
+<code>session.idle</code>. Widening that filter to forward <code>session.status</code>,
+<code>permission.asked</code> and <code>permission.replied</code> as fire-and-forget POSTs is a
+few lines in a file kb already owns. Note the schema's snake_case-column / camelCase-JSON split:
+the SSE field is <code>properties.sessionID</code>.</p>
+
+<h3 id="c-grok">Grok — a real event log, and a trap</h3>
+
+<p>Grok writes <code>~/.grok/sessions/&lt;url-encoded-cwd&gt;/&lt;session_id&gt;/events.jsonl</code>
+with exactly the records this design wants: <code>turn_started</code>, <code>turn_ended</code>,
+<code>phase_changed{"phase":"permission_prompt"}</code>, <code>permission_requested</code> /
+<code>permission_resolved</code>, plus tool phases. Sub-state within "in progress"
+(waiting-for-model vs streaming vs tool-execution) is directly readable.</p>
+
+<div class="callout callout--warn">
+  <span class="callout-label">Do not build on active_sessions.json</span>
+  <code>~/.grok/active_sessions.json</code> looks like a live registry and is the obvious first
+  target. It is empty for the invocation shape this operator actually uses (headless
+  <code>-p</code> via grokclaude) — it serves a leader/dashboard architecture that is unused
+  here. Separately, the job tier <code>.grokclaude/jobs/&lt;ulid&gt;/meta.json.status</code> has a
+  proven <strong>three-week-stale <code>"running"</code></strong> bug, so a job claiming to run
+  must be cross-checked against <code>progress.jsonl</code> mtime before being believed.
+</div>
+
+<h3 id="c-codex">Codex — clean turns, ambiguous ending</h3>
+
+<p>Rollouts at <code>~/.codex/sessions/&lt;y&gt;/&lt;m&gt;/&lt;d&gt;/rollout-*.jsonl</code> carry
+<code>task_started</code>, <code>task_complete</code> and <code>turn_aborted</code>
+<code>event_msg</code> records; the canonical id is
+<code>session_meta.payload.id</code>, which <code>kb-capture-codex.sh</code> already extracts. A
+last record of <code>task_started</code> with nothing after it means the agent holds the turn;
+<code>task_complete</code> means it handed back — but <em>waiting vs finished is genuinely
+ambiguous</em> from the file alone, because codex exits after an <code>exec</code> run and
+lingers in an interactive one. Disambiguation is process liveness on the same host, or an honest
+"presumed" label off-host. The experimental app-server exposes
+<code>ThreadStatusChangedNotification</code> with an <code>activeFlags</code> containing
+<code>waitingOnUserInput</code>; that is the precise signal, and it should stay out of v1 as an
+experimental dependency.</p>
+
+<h3 id="c-kimi">Kimi — hooks work, sandboxed workers do not</h3>
+
+<p>Kimi 0.37.2 lives at <code>~/.kimi-code/</code> (not <code>~/.kimi</code>) and writes
+<code>wire.jsonl</code> with <code>turn.prompt</code> / <code>turn.ended</code> records. kb's
+hooks are already installed for direct kimi, and <code>SessionEnd</code> is authoritative for
+finished. The split that matters: <strong>kimiclaude worker jobs run <code>kimi -p</code> inside
+bubblewrap</strong>, where kb's hooks are not injected into the generated per-job config — so
+those are pull-only, via the per-job <code>wire.jsonl</code> tail or <code>progress.jsonl</code>
+mtime.</p>
+
+<h2 id="wire">5. The wire contract</h2>
+
+<p>One canonical shape, <code>kb-live/1</code>. Adapters emit <em>events</em>; the daemon derives
+<em>state</em>. This split is the whole discipline: a hook is never allowed to assert "I am
+waiting", only "my turn ended at T". Everything the operator sees is computed, and can therefore
+be recomputed, explained, and corrected.</p>
+
+<h4>The beat (adapter → daemon)</h4>
+<pre><code>POST /api/kb/{kb}/sessions/beat
+{
+  "v": 1,
+  "session_id": "bf283e00-fa36-4a92-899a-980b2ea06d5c",
+  "harness":    "claude",            // claude|codex|grok|kimi|opencode
+  "event":      "turn_end",          // start|prompt|tool|turn_end|blocked|unblocked|end
+  "at":         "2026-08-21T20:41:02Z",
+  "host":       "workstation",
+  "pid":        1820040,
+  "cwd":        "~/project/kb",
+  "model":      "claude-fable-5",
+  "lease_secs": 900,
+  "title":      "Sessions live tracking and orchestration",   // optional
+  "last_line":  "…capped, scrubbed, opt-out-able…",           // optional
+  "detail":     {"reason": "permission", "tool": "Bash"}      // optional
+}</code></pre>
+
+<h4>The derived state (daemon → everyone)</h4>
+<pre><code>{
+  "session_id": "bf283e00-…", "kb": "sessions", "harness": "claude",
+  "holder":  "human",            // agent | human | none
+  "state":   "waiting",          // working | stalled | waiting | cold | finished | presumed_ended
+  "since":   "2026-08-21T20:41:02Z",
+  "since_secs": 2947,
+  "source":  "hook",             // hook | transcript | capture  — how we know
+  "confidence": "observed",      // observed | inferred | presumed
+  "project": "kb", "model": "claude-fable-5",
+  "title":   "Sessions live tracking and orchestration",
+  "resume":  "claude -r bf283e00-fa36-4a92-899a-980b2ea06d5c",
+  "artifact_id": "9f8b7182d433"  // the landed capture, when one exists
+}</code></pre>
+
+<p><code>source</code> and <code>confidence</code> are not decoration. They are what lets the UI
+tell the truth about a session it learned about from a stale capture rather than a live hook, and
+they are the mechanism by which this feature avoids the earlier prototype's central failure.</p>
+
+<h2 id="server">6. Shaping the server</h2>
+
+<h3 id="s-storage">Storage: nothing</h3>
+
+<p>The live registry is an <strong>in-memory map in the daemon, TTL'd</strong>. Not a table. This
+is not minimalism for its own sake — it is the standing ruling. LF-7, recorded in the
+sessions-rethink design round, says of the live lane: <em>"Everything the live lane shows is
+derived + ephemeral + never stored — no new tables, columns, lance writes, or review files."</em>
+And invariant&nbsp;#11 already fixes the tie-break: <em>if the live view and a landed capture ever
+disagree, the capture wins by definition.</em></p>
+
+<p>The cost is that a daemon restart loses live state. The mitigation is that it degrades into
+something already true: on boot, the cockpit rebuilds a Tier-0 view from the durable capture rows
+(<code>ended_at</code> age per session, newest-capture-scoped), labels every row
+<code>confidence: "presumed"</code>, and sharpens each one the moment its next beat arrives. A
+cold cockpit is honest rather than empty.</p>
+
+<div class="callout callout--ok">
+  <span class="callout-label">Two costs avoided</span>
+  No migration means no contention with the in-flight v0.38 milestone, which has already claimed
+  V0038 for its Kb-Memory trailers, and no schema-epoch bump — which matters because
+  <code>refuse_if_volume_ahead</code> hard-refuses boot when a volume's epoch exceeds the
+  binary's, the exact mechanism behind the 13.5-hour kbc outage.
+</div>
+
+<h3 id="s-routes">Routes</h3>
+
+<table>
+  <thead><tr><th scope="col">Route</th><th scope="col">Purpose</th><th scope="col">Posture</th></tr></thead>
+  <tbody>
+    <tr><th scope="row"><code>POST /api/kb/{kb}/sessions/beat</code></th><td>Adapter push. Cheap, idempotent, never blocks the caller</td><td><code>auth_bearer</code></td></tr>
+    <tr><th scope="row"><code>GET /api/sessions/live-status</code></th><td>The cockpit read; fans out over <code>state.kbs</code> via <code>buffered_join</code> per invariant&nbsp;#28</td><td><code>auth_bearer</code> + redaction floor</td></tr>
+    <tr><th scope="row"><code>GET /api/sessions/{id}/live</code></th><td>Raw interpreted transcript — <em>unchanged</em></td><td>loopback-only, untouched</td></tr>
+  </tbody>
+</table>
+
+<p>The posture question deserves a direct answer, because it looks like a violation and is not.
+LF-5 made the live lane loopback-only <em>because live transcripts are unscrubbed mid-flight
+content containing secrets the operator has not yet seen</em>. That reasoning applies to
+transcript bytes. It does not apply to "session X, harness claude, project kb, human has held the
+ball for 49 minutes", which is metadata of exactly the kind kb already serves under
+<code>auth_bearer</code> behind Authelia. LF-5 itself wrote down the graduation:
+<em>"if D-LF1 ever mounts live transcripts into prod, /live graduates to the export-route posture
+(token + forced scrub)."</em> This design takes that documented path for the state lane only,
+and leaves the content lane exactly where it is. The optional <code>last_line</code> field is the
+one place content leaks in, so it is capped, scrubbed, and switchable off by config.</p>
+
+<h3 id="s-sse">Events</h3>
+
+<p>One new SSE kind, <code>session.state</code>, emitted <strong>only on transition</strong> —
+never per heartbeat, or a busy fleet would flood every browser. Elapsed timers are a client
+concern; <code>useNowTick</code> already exists for exactly this. The kind must be registered in
+<code>routes/schema.rs</code>'s type table in the same commit, because a drift test enforces it.</p>
+
+<h3 id="s-liveness">Liveness without a PID namespace</h3>
+
+<p>The daemon is containerised and cannot see host PIDs, so process-based liveness is
+unavailable to it. Liveness is therefore a <strong>lease</strong>: every beat carries
+<code>lease_secs</code>; an agent-held session whose lease expires becomes
+<code>stalled?</code>, and a session with no beat and no capture for a long window becomes
+<code>presumed_ended</code>. A host-side <code>kb sessions reap</code> (cron or systemd timer)
+can optionally harden this by checking <code>/proc/&lt;pid&gt;</code> for beats it originated and
+reporting confirmed deaths — an enhancement, never a dependency.</p>
+
+<h2 id="spa">7. The human interface</h2>
+
+<p>Not a new dashboard. kb retired its TUI with a recorded refusal — <em>"don't rebuild a terminal
+dashboard"</em> — and the sessions-rethink round fenced off the earlier prototype's supervision half
+against a "recorded no-dashboard non-goal". A separate cockpit route would walk straight into
+both. The design instead puts the live state <strong>where sessions already are</strong>, and
+puts one number where the operator always is.</p>
+
+<ol class="tight">
+  <li><strong>A "Now" band at the top of <code>/sessions</code></strong> — the three lanes above
+  the existing day-buckets, collapsed to nothing when every lane is empty. The page already
+  renders <code>kb-ses__bucket</code> groups and already threads a <code>presenceSet</code> into
+  rows; this is a new group kind, not a new page.</li>
+  <li><strong>A TopBar chip: "2 waiting"</strong> — the global, always-visible signal, linking
+  into the waiting lane. This is the piece that makes the feature worth building: the operator
+  should not have to go look.</li>
+  <li><strong>Rows are actions, not readouts.</strong> Each row carries the harness glyph, the
+  project, the elapsed timer, the last assistant line, and one primary action — copy the resume
+  command. <code>buildResume</code> / <code>ResumeCommand</code> already exist in
+  <code>sessions.tsx</code>.</li>
+  <li><strong>Ordering per lane:</strong> waiting sorts longest-wait-first (that is the
+  "you are the bottleneck" signal); in-progress sorts most-recently-active first; finished sorts
+  newest-first.</li>
+</ol>
+
+<p>Reuse is mandated, not optional: <code>sessionPresence.ts</code> for the bucketing primitive,
+<code>sessionChips.ts</code> as the one chip vocabulary, <code>useNowTick</code> for timers. The
+refresh cadence becomes the fifth documented exception to invariant&nbsp;#23's
+<code>staleTime: Infinity</code> rule — and the precedent is exact, because sessions presence is
+already a named poll-based carve-out.</p>
+
+<h2 id="cli">8. The CLI and the machine surface</h2>
+
+<p>The operator asked to see session state from the CLI and to be able to point an LLM or a
+notifier at it. Three verbs, one of which already exists.</p>
+
+<pre><code># The snapshot — grouped, ordered, human-first
+kb sessions status
+kb sessions status --state waiting --project kb
+kb sessions status --json          # the machine/LLM surface
+
+# The stream — already exists, no new machinery
+kb events --follow --types 'session.state' --json
+
+# The offline path — direct-disk, zero daemon (matches `kb sessions read --live`)
+kb sessions status --local</code></pre>
+
+<p><code>--local</code> is not a fallback; it is the honest primitive. It reads the harness event
+files directly, exactly as the spike does, and works when the daemon is down, when the hooks are
+not wired, and on a laptop with no kb at all. It is also what makes the feature testable without
+touching the daemon.</p>
+
+<p>For an LLM, <code>--json</code> is the contract; a small companion rendering
+(<code>--brief</code>) collapses the fleet to a few lines suitable for pasting into a prompt, so
+an agent can be asked "which of my sessions needs me, and why?" without being handed a wall of
+JSON.</p>
+
+<h2 id="notify">9. Notification without new outbound code</h2>
+
+<p>The operator's box already runs the delivery infrastructure: an observability stack in
+<code>~/deploy/obs</code> containing <strong>ntfy</strong>, <code>ntfy-alertmanager</code>, and
+an Alertmanager whose default route is a webhook to it. And kb already has a
+<code>[webhooks]</code> event bridge. So the answer is configuration, not code:</p>
+
+<pre><code># Path A — kb's own bridge (in-daemon, already sanctioned)
+[webhooks]  → subscribe to session.state → POST to ntfy
+
+# Path B — the shell, zero config
+kb events --follow --types session.state --json \
+  | jq --unbuffered -r 'select(.payload.state=="waiting") | .payload.title' \
+  | while read -r t; do curl -d "waiting: $t" https://ntfy…/kb-sessions; done</code></pre>
+
+<p>Both leave kb doing what kb does — making state observable — and leave delivery to the
+operator. That matters beyond elegance: kb has a repeated, recorded posture against push
+mechanics in its read surfaces (<em>"no push, no streaks/goals/completion %, no badges"</em>).
+Building an ntfy client into the daemon would invite that refusal. Exposing an event and letting
+the operator's existing alerting consume it does not.</p>
+
+<div class="callout">
+  <span class="callout-label">Caveat to honour</span>
+  The <code>[webhooks]</code> bridge is documented as fire-and-forget and explicitly unsuitable
+  for synchronous decisions. A notifier built on it must tolerate dropped and lagged events. For
+  "you have been blocking a session for 20 minutes", that is fine. For anything that must not be
+  missed, poll <code>--json</code> on a timer instead.
+</div>
+
+<h2 id="refusals">10. What this refuses to do</h2>
+
+<p>Recorded now, so the next round does not have to re-litigate them.</p>
+
+<ul class="tight">
+  <li><strong>No control.</strong> The cockpit never answers a prompt, approves a permission,
+  kills, or resumes a session. It shows state and hands you a command to run yourself.
+  The earlier prototype built steering and then hard-refused the fleet-commanding half of it with a
+  <code>501</code>; kb should not start down that road at all. Read-only is the whole posture.</li>
+  <li><strong>No persisted state.</strong> Honours LF-7. If durability later proves necessary,
+  amend LF-7 deliberately with evidence — do not smuggle a table in.</li>
+  <li><strong>No second transcript interpreter.</strong> Invariant&nbsp;#11's "one engine, three
+  presenters" rule stands; the ball-holder derivation extends <code>session-view/1</code>'s
+  existing <code>PendingCalls</code>/<code>unpaired</code> tracking. A ruling landed
+  <em>today</em> (2026-08-21) also forbids kb and kb-code sharing a cursor over the same JSONL
+  files — the beat path must not become a second tailer.</li>
+  <li><strong>No new invariant slot.</strong> The budget is capped at 35 and full. This is an
+  <em>amendment to #11</em>, in the same way the W7 live-follow round was.</li>
+  <li><strong>No per-user scoping.</strong> One trust tier: identity is attribution, not
+  authorization. Every co-operator sees every session, by design.</li>
+  <li><strong>No pretending at parity.</strong> Where a harness cannot distinguish waiting from
+  finished, the UI says so rather than picking one.</li>
+</ul>
+
+<h2 id="phasing">11. Phasing and risk</h2>
+
+<table>
+  <thead><tr><th scope="col">Phase</th><th scope="col">Content</th><th scope="col">Proves</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">L1</th><td><code>kb sessions status --local</code>: the two-axis model + the Claude Code adapter, direct-disk, no daemon, no server change</td><td>The whole feature, on the harness that is 90% of the value, with zero risk to a hot repo</td></tr>
+    <tr><th scope="row">L2</th><td>Beat route + in-memory registry + <code>session.state</code> SSE kind + <code>kb sessions status</code> against the daemon</td><td>Push works through the container boundary</td></tr>
+    <tr><th scope="row">L3</th><td>Hook wiring: <code>SessionEnd</code> and <code>Notification</code> added to the plugin; a fast sibling script beside <code>kb-capture.sh</code>, never inside it</td><td>Finished becomes a fact rather than an inference</td></tr>
+    <tr><th scope="row">L4</th><td>SPA: the Now band + the TopBar chip</td><td>The operator stops having to go look</td></tr>
+    <tr><th scope="row">L5</th><td>Adapters: opencode (widen the existing plugin filter), grok, codex, kimi — in that order, by measured usage</td><td>Five harnesses, honestly labelled</td></tr>
+    <tr><th scope="row">L6</th><td>ntfy via <code>[webhooks]</code>; a documented example script</td><td>The phone buzzes when you are the bottleneck</td></tr>
+  </tbody>
+</table>
+
+<h3>Risks worth naming</h3>
+
+<ul class="tight">
+  <li><strong>Hook latency.</strong> Every beat sits in the operator's turn loop. Beats must be
+  fire-and-forget with a hard sub-second timeout and an unconditional <code>exit 0</code>,
+  matching the capture hooks' existing fail-open discipline. A cockpit that slows down typing is
+  a net loss.</li>
+  <li><strong>Beat volume.</strong> Per-tool beats would be hundreds per session. Beat on turn
+  boundaries and lifecycle only, with a throttled mid-turn heartbeat reusing
+  <code>kb-capture-throttle.sh</code>'s pattern.</li>
+  <li><strong>The hot repo.</strong> A concurrent milestone holds uncommitted WIP across
+  <code>routes/</code>, <code>web/src/lib/</code>, README and CLAUDE.md. L1 touches none of it;
+  everything later should land by explicit pathspec, never <code>add -A</code>.</li>
+  <li><strong>Cold-cache scan cost.</strong> 0.098s warm for 55 transcripts, but 8.4s cold on
+  this box's RAID5 spindles. Cache by <code>(mtime, size)</code> and keep the bounded-window
+  discipline; never full-parse to render a row.</li>
+</ul>
+
+<h2 id="evidence">12. Evidence appendix</h2>
+
+<h3>The spike</h3>
+
+<p>A working classifier was built and run against this box's real transcripts during this round.
+It walks <code>~/.claude/projects</code>, reads at most a 256&nbsp;KiB tail of each candidate,
+and buckets by the two-axis model. Live output, correctly separating three concurrently-working
+sessions from five waiting ones:</p>
+
+<pre><code>=== IN PROGRESS (agent holds the turn)
+      6m  kb        Memory sessions, code, and artifacts connections   [stop_reason=tool_use, tail=tool_result]
+      2m  kb        alex@prod-host cleanup and cache removal           [stop_reason=end_turn, tail=user_prompt]
+      0s  kb        Sessions live tracking and orchestration           [stop_reason=tool_use, tail=assistant]
+
+=== WAITING ON YOU
+     50m  kb        Daemon connection loss handling and KB link routing [stop_reason=end_turn]
+     49m  shelf     Fix empty book reader and improve UI with icons     [stop_reason=end_turn]
+     17m  usage     Historic token usage metrics and caching strategies [stop_reason=end_turn]
+
+=== COLD (waiting on you &gt; 8h)
+      5d  kb        kb-code-review-interface                           [stop_reason=end_turn]</code></pre>
+
+<p>It was sampled repeatedly over a minute and tracked the author's own session flipping between
+<code>tail=assistant</code> and <code>tail=tool_result</code> in real time.</p>
+
+<h3>Measurements taken</h3>
+
+<table>
+  <thead><tr><th scope="col">Measurement</th><th scope="col">Value</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Main session transcripts</th><td>55 (191 MB total); 21 touched in 14 days</td></tr>
+    <tr><th scope="row">Subagent / workflow transcripts</th><td>999 nested beneath them</td></tr>
+    <tr><th scope="row">Classifier, warm cache</th><td>0.098 s for the full walk</td></tr>
+    <tr><th scope="row">Classifier, cold cache</th><td>8.4 s (HDD RAID5)</td></tr>
+    <tr><th scope="row">Concurrent <code>claude</code> processes</th><td>7, ages 2 minutes to 7 days</td></tr>
+    <tr><th scope="row">Codex rollouts, 14 days</th><td>4</td></tr>
+    <tr><th scope="row">opencode sessions in its sqlite</th><td>1100, most recent the same day</td></tr>
+    <tr><th scope="row">Existing live lane, from the host CLI</th><td><code>403 forbidden — loopback-only in v1</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Negative results — things that look like signals and are not</h3>
+
+<ul class="tight">
+  <li><code>~/.grok/active_sessions.json</code> — empty for the invocation shape actually used.</li>
+  <li><code>permission-mode</code> records in Claude Code transcripts — carry the <em>mode</em>
+  (auto/default/plan), never a pending approval. There is no in-transcript record of "blocked
+  awaiting approval"; only the <code>Notification</code> hook can tell you.</li>
+  <li>Process file descriptors — Claude Code appends and closes, so <code>/proc/&lt;pid&gt;/fd</code>
+  does not map a process to its session. Nor does the environment: no session id is exported.
+  <strong>The hook is the only reliable process↔session binding.</strong></li>
+  <li>opencode's sqlite — 1100 sessions, but no durable busy/idle/permission state. The live
+  truth is memory-only in an ephemeral process.</li>
+  <li><code>SessionEnd.reason</code> — observed as <code>"other"</code> in every case tested.</li>
+</ul>
+
+<hr>
+
+<p class="footnote">Method: 7 Sonnet worker probes (5 harness investigations with live
+experiments, 2 kb code-map reads) and 2 prior-art mines, orchestrated by Claude Fable 5, which
+verified the Claude Code lane first-hand and built the classifier spike. Roughly 1.4M worker
+tokens. No daemon source was modified in this round — a concurrent session holds uncommitted WIP
+in this checkout.</p>
+
+</main>
+</div>
+</body>
+</html>

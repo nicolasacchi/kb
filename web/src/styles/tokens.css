@@ -1,0 +1,590 @@
+/* Design tokens — kb v0.10 refined-cartographic refresh (D1).
+ *
+ * Authoritative names come straight from the design handoff:
+ *   --bg, --bg-panel, --bg-panel-2, --bg-card, --bg-card-hi
+ *   --ink, --ink-mute, --ink-dim
+ *   --rule, --rule-hi
+ *   --accent, --accent-soft, --accent-bg, --accent-bor
+ *   --warn, --green, --red, --blue
+ *   --font-sans (Inter Tight) / --font-mono (JetBrains Mono) / --font-serif (Source Serif 4)
+ *
+ * Legacy names from the v0.6 gallery refresh (--surface, --elev, --elev-hi,
+ * --border, --border-hi, --text, --text-strong, --muted, --muted-2, --err,
+ * --ok, --info) are kept as aliases pointed at the new values so unrelated
+ * views (settings, comments, history, share modal) keep rendering until
+ * each is refreshed in subsequent phases. They retire in X1.
+ *
+ * Light theme is now first-class (kb2 redesign): a warm-paper palette with
+ * its own semantic + accent halo + card-glow values, mirrored into the
+ * prefers-color-scheme:light system block. Per-theme accent hexes live in
+ * api/prefs.ts (ACCENTS / ACCENTS_LIGHT), applied inline by applyPrefs().
+ *
+ * SH.A1 (design-token foundations + theme-correctness pass) added, ported
+ * from web-code's V4.U1 conventions — adopt-opportunistically, NOT a
+ * repo-wide sweep of existing rules:
+ *   --accent-fill / --accent-fill-fg  — solid-fill contexts where light
+ *     text sits ON the accent (buttons/badges); the raw --accent fails AA
+ *     with white in both themes, this is the fixed-contrast alternative.
+ *   --ink-faint                        — the pre-SH.A1 --ink-dim value,
+ *     for decorative rules/disabled glyphs ONLY, never running text.
+ *   --fs-xs/sm/md/lg/title/hero        — static type ramp (px, not
+ *     density-scaled).
+ *   --radius-lg                        — sheets/modals.
+ *   --dur-fast / --dur-base            — transition durations, pair with
+ *     --ease.
+ */
+
+/* A-w4/X1 — self-hosted (no Google Fonts CDN round-trip; the SPA must load
+ * offline-ish, same reasoning as the empty API base URL). Two disjoint
+ * `unicode-range` subsets per face/weight — latin-ext (Latin Extended-A/B +
+ * assorted punctuation) and latin (basic Latin) — so the browser only
+ * fetches the subset a given page's characters actually need; order between
+ * the two doesn't affect the cascade (ranges don't overlap), kept latin-ext-
+ * then-latin only because that's what the source tool emitted. Files live in
+ * web/public/fonts/, served at /fonts/<name>.woff2 (see
+ * web/public/fonts/README.md for the license + upstream sources).
+ */
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(/fonts/InterTight-300-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(/fonts/InterTight-300-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/InterTight-400-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/InterTight-400-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/InterTight-500-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/InterTight-500-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/InterTight-600-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/InterTight-600-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/InterTight-700-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/InterTight-700-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-400-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-400-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-500-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-500-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-600-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-600-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-400-italic-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-400-italic-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-400-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-400-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-500-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-500-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-600-normal-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/SourceSerif4-600-normal-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  /* Accent (overridable from Settings) — refined purple. */
+  --accent: #8a7fff;
+  --accent-soft: #aaa2ff;
+  --accent-bg: #1a1830;
+  --accent-bor: #3a3870;
+  --accent-fg: #ffffff;
+
+  --font-sans:
+    "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
+    Menlo, monospace;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+
+  /* Density (still wired to Settings → applyPrefs). */
+  --density: 1;
+  --pad: 14px;
+  --gap: 16px;
+  --row-h: calc(28px * var(--density));
+  --pad-1: calc(4px * var(--density));
+  --pad-2: calc(8px * var(--density));
+  --pad-3: calc(16px * var(--density));
+  --pad-4: calc(24px * var(--density));
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px; /* SH.A1 — sheets/modals (port of web-code V4.U1) */
+  --radius-pill: 999px;
+
+  /* SH.A1 — static type ramp, ported from web-code's V4.U1 tokens.css.
+   * Adopt-opportunistically: reach for these on NEW or TOUCHED font-size
+   * rules; this is not a sweep of existing literals, and density stays
+   * orthogonal (the ramp is static px, unlike --pad-*'s --density scaling —
+   * do not multiply these by var(--density)). */
+  --fs-xs: 10px;
+  --fs-sm: 11px;
+  --fs-md: 12px;
+  --fs-lg: 13px;
+  --fs-title: 18px;
+  --fs-hero: 24px;
+
+  /* z-index layers — APP-LEVEL stacking only, one ordered scale:
+   * bars < popovers < raised popovers / mobile panel < floating
+   * buttons < drawer scrim < drawer < overlay hints/pills < modal <
+   * always-on-top. Values mirror what each surface already used, so
+   * computed stacking is unchanged. Component-LOCAL z-index (1–11
+   * inside a card/cell/editor) deliberately stays literal — those
+   * order siblings within one stacking context, not app layers. */
+  --z-bar: 5; /* sticky chrome bars: .kb-head, .topbar, .cfg__bar */
+  --z-popover: 20; /* anchored popovers: .kb-popover, .kb-mem__links-pop */
+  --z-popover-hi: 30; /* popovers above popovers + the mobile comments panel */
+  --z-float: 35; /* floating buttons above panels: .kb-immersive-toggle */
+  --z-scrim: 40; /* mobile drawer scrim */
+  --z-drawer: 41; /* mobile drawer (above its scrim) */
+  --z-hint: 50; /* transient overlays: .kb-chord, .pill-container */
+  --z-modal: 100; /* modal layer: cmdk backdrop, keyhelp, skip-link */
+  --z-top: 1000; /* always-on-top: .cp__export */
+
+  --topbar-h: 52px;
+  --statusbar-h: 28px;
+  --ribbon-h: 34px; /* kb2 redesign — context line (was 38px) */
+  --rail-w: 240px; /* v0.10 D4 — was 220px in v0.6 */
+  /* Mobile bottom tab bar (kb2 redesign — Recent/Search/Memory/Lists). */
+  --tabbar-h: 56px;
+  /* Mobile hamburger-drawer width (MB-track). The 860px breakpoint that
+   * gates the mobile shell is a literal in styles/mobile.css —
+   * MOBILE_MAX_WIDTH in hooks/useIsMobile.ts mirrors it. */
+  --drawer-w: min(86vw, 320px);
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* SH.A1 — adopt-opportunistically durations (same convention as --fs-*
+   * above), ported from web-code's V4.U1. Pair with --ease; existing
+   * transition literals are untouched until a rule is next touched. */
+  --dur-fast: 100ms;
+  --dur-base: 160ms;
+
+  /* Semantic colors moved per-theme (kb2 redesign) — see the dark + light
+   * blocks below. Light gets its own legible-on-white values. The legacy
+   * aliases stay here: var(--red) etc. resolve against the active theme
+   * scope, so they pick up the per-theme values automatically. */
+  --err: var(--red);
+  --ok: var(--green);
+  --info: var(--blue);
+
+  /* D5 — `--success`/`--danger` are the names call sites actually reach for
+   * (vs. the legacy `--ok`/`--err`); alias them onto the same per-theme
+   * green/red so both spellings resolve identically in dark + light. */
+  --success: var(--green);
+  --danger: var(--red);
+}
+
+/* --- Dark palette (default + explicit) ------------------------------ */
+:root,
+:root[data-theme="dark"] {
+  /* Surfaces (authoritative names). */
+  --bg: #0e0e10;
+  --bg-panel: #141417;
+  --bg-panel-2: #0c0c0e;
+  --bg-card: #151518;
+  --bg-card-hi: #1a1a1f;
+
+  /* Ink. */
+  --ink: #e8e6df;
+  --ink-mute: #8a857d;
+  /* SH.A1 — bumped from #5a554f: --ink-dim is used as real running text
+   * (captions, secondary labels) at 2.4–2.7:1 against --bg/--bg-panel,
+   * failing WCAG AA. #726c65 clears AA against both. Existing call sites
+   * are NOT repointed — they become legible from this value change alone. */
+  --ink-dim: #726c65;
+  /* SH.A1 — the OLD --ink-dim value, kept for decorative rules/disabled
+   * glyphs ONLY (never running text): rule hairlines, disabled-icon tints,
+   * anything that was never meant to clear AA in the first place. */
+  --ink-faint: #5a554f;
+
+  /* Rules. */
+  --rule: #23232a;
+  --rule-hi: #2c2c36;
+
+  --shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card-hover:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 14px 30px rgba(0, 0, 0, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  --backdrop: rgba(8, 8, 10, 0.6);
+  --card-bg: linear-gradient(180deg, var(--bg-card) 0%, #131318 100%);
+  --collage-bg: #0e0e12;
+  --term-bg: #0c0c10;
+
+  /* Semantic colors (dark). */
+  --warn: #d8a04b;
+  --green: #7eb98f;
+  --red: #d77a6a;
+  --blue: #7aa9ff;
+
+  /* SH.A1 — solid-fill accent for contexts where white text sits ON the
+   * accent (buttons, badges): the raw --accent (#8a7fff dark default)
+   * measures 3.2:1 with white, failing AA. Darkened via color-mix so it
+   * tracks whichever accent hex Settings picks (api/prefs.ts ACCENTS) —
+   * verified every ACCENTS entry clears ≥5.16:1 with white at 72%. */
+  --accent-fill: color-mix(in srgb, var(--accent) 72%, #14121f);
+  --accent-fill-fg: #ffffff;
+
+  /* Reader prose canvas — the SPA-side reader chrome (gutter, native-note
+   * markdown, article frame). Iframed artifacts bring their own styling. */
+  --paper: #111114;
+  --paper-ink: var(--ink);
+  --paper-rule: var(--rule);
+
+  /* Card accent treatment. Dark cards lean on a top-left accent radial glow;
+   * the spine + glow-% are tuned per theme (white needs far less glow). */
+  --card-glow-pct: 18%;
+  --card-ring: rgba(255, 255, 255, 0.04);
+
+  /* Legacy surface aliases — values point at the new design palette so
+   * unrefreshed CSS keeps rendering with the new look. */
+  --surface: var(--bg-panel);
+  --elev: var(--bg-card);
+  --elev-hi: var(--bg-card-hi);
+  --border: var(--rule);
+  --border-hi: var(--rule-hi);
+  --text: var(--ink);
+  --text-strong: #f4f4f8;
+  --muted: var(--ink-mute);
+  --muted-2: var(--ink-dim);
+
+  --bg-alt: var(--surface);
+  --fg: var(--text);
+  --fg-muted: var(--muted);
+}
+
+/* --- Light palette --------------------------------------------------- */
+/* First-class light theme (kb2 redesign). Concrete values from the design
+ * handoff's THEMES() — a warm-paper light, not a flat white. The accent
+ * itself is set inline by applyPrefs() from the per-theme ACCENTS_LIGHT map
+ * (api/prefs.ts); accent-soft/bg/bor below give it a legible-on-white halo. */
+:root[data-theme="light"] {
+  --bg: #f3f1ec;
+  --bg-panel: #ffffff;
+  --bg-panel-2: #ecebe5;
+  --bg-card: #ffffff;
+  --bg-card-hi: #faf9f6;
+
+  --ink: #1c1b19;
+  --ink-mute: #6d685f;
+  /* SH.A1 — bumped from #a39d92 (same rationale as the dark block above). */
+  --ink-dim: #8a8376;
+  /* SH.A1 — the OLD --ink-dim value; decorative rules/disabled glyphs ONLY. */
+  --ink-faint: #a39d92;
+
+  --rule: #e4e1da;
+  --rule-hi: #d6d2c9;
+
+  /* Accent halo (the user's chosen --accent hex is applied inline; these
+   * are the violet-default soft/bg/bor tuned for white). */
+  --accent: #6657f5;
+  --accent-soft: #5546e0;
+  --accent-bg: rgba(102, 87, 245, 0.1);
+  --accent-bor: rgba(102, 87, 245, 0.28);
+
+  /* SH.A1 — solid-fill accent (see the dark block's own doc). Light needs a
+   * lighter mix-toward ratio than dark's 72% (light text sits on already-
+   * darker accent hexes) — verified every ACCENTS_LIGHT entry (api/prefs.ts)
+   * clears ≥4.5:1 with white at 88% (min: teal #1f857d → 5.32:1; raw teal
+   * alone is 4.46:1, failing AA — this mix is what fixes exactly that). */
+  --accent-fill: color-mix(in srgb, var(--accent) 88%, #141414);
+  --accent-fill-fg: #ffffff;
+
+  /* SH.A1/F5 port — WCAG AA text-AND-badge colors (mirrors web-code
+   * tokens.css:296-314's rationale): these four are used as real running
+   * text (prose, labels) AND as text painted directly on a same-hue tinted
+   * badge/chip background. The OLD values here read fine against dark
+   * canvases but measured 2.95–4.0:1 against light's near-white surfaces
+   * (WCAG AA text needs 4.5:1). Darkened just enough to clear 4.5:1 against
+   * --bg AND against color-mix badge tints already in use — verified via
+   * the relative-luminance formula, not eyeballed. */
+  --warn: #78541f;
+  --green: #366547;
+  --red: #954131;
+  --blue: #385a9a;
+
+  --shadow:
+    0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(0, 0, 0, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.03);
+  --shadow-card-hover:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 12px 28px rgba(0, 0, 0, 0.1),
+    0 2px 6px rgba(0, 0, 0, 0.05);
+  --backdrop: rgba(20, 20, 22, 0.4);
+  --card-bg: #ffffff;
+  --collage-bg: #f3f1ec;
+  --term-bg: #f3f1ec;
+
+  /* Reader prose canvas — true paper in light. */
+  --paper: #ffffff;
+  --paper-ink: #26241f;
+  --paper-rule: #ece8e0;
+
+  /* Card accent: white needs far less glow + a faint dark hairline ring. */
+  --card-glow-pct: 8%;
+  --card-ring: rgba(0, 0, 0, 0.04);
+
+  --surface: var(--bg-panel);
+  --elev: var(--bg-card);
+  --elev-hi: var(--bg-card-hi);
+  --border: var(--rule);
+  --border-hi: var(--rule-hi);
+  --text: var(--ink);
+  --text-strong: #0a0a0c;
+  --muted: var(--ink-mute);
+  --muted-2: var(--ink-dim);
+
+  --bg-alt: var(--surface);
+  --fg: var(--text);
+  --fg-muted: var(--muted);
+}
+
+/* --- System pref --------------------------------------------------- */
+/* applyPrefs() sets data-theme="system" when the user picks Settings →
+ * theme = system. The base rule above already gives us dark; this
+ * media block switches to light when the OS reports light. */
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg: #f3f1ec;
+    --bg-panel: #ffffff;
+    --bg-panel-2: #ecebe5;
+    --bg-card: #ffffff;
+    --bg-card-hi: #faf9f6;
+
+    --ink: #1c1b19;
+    --ink-mute: #6d685f;
+    /* SH.A1 — see the light block's own doc above. */
+    --ink-dim: #8a8376;
+    --ink-faint: #a39d92;
+
+    --rule: #e4e1da;
+    --rule-hi: #d6d2c9;
+
+    --accent: #6657f5;
+    --accent-soft: #5546e0;
+    --accent-bg: rgba(102, 87, 245, 0.1);
+    --accent-bor: rgba(102, 87, 245, 0.28);
+
+    /* SH.A1 — see the light block's own doc above. */
+    --accent-fill: color-mix(in srgb, var(--accent) 88%, #141414);
+    --accent-fill-fg: #ffffff;
+
+    /* SH.A1/F5 port — see the light block's own doc above. */
+    --warn: #78541f;
+    --green: #366547;
+    --red: #954131;
+    --blue: #385a9a;
+
+    --shadow:
+      0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 8px 24px rgba(0, 0, 0, 0.06);
+    --shadow-card:
+      0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(0, 0, 0, 0.05),
+      0 0 0 1px rgba(0, 0, 0, 0.03);
+    --shadow-card-hover:
+      0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 12px 28px rgba(0, 0, 0, 0.1),
+      0 2px 6px rgba(0, 0, 0, 0.05);
+    --backdrop: rgba(20, 20, 22, 0.4);
+    --card-bg: #ffffff;
+    --collage-bg: #f3f1ec;
+    --term-bg: #f3f1ec;
+
+    --paper: #ffffff;
+    --paper-ink: #26241f;
+    --paper-rule: #ece8e0;
+
+    --card-glow-pct: 8%;
+    --card-ring: rgba(0, 0, 0, 0.04);
+
+    --surface: var(--bg-panel);
+    --elev: var(--bg-card);
+    --elev-hi: var(--bg-card-hi);
+    --border: var(--rule);
+    --border-hi: var(--rule-hi);
+    --text: var(--ink);
+    --text-strong: #0a0a0c;
+    --muted: var(--ink-mute);
+    --muted-2: var(--ink-dim);
+  }
+}

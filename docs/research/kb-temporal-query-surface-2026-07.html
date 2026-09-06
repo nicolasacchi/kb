@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, temporal, versions, diff, memory, changelog, cli">
+<meta name="kb-summary" content="Assessment of four temporal queries against kb's existing time-bearing stores. Thin slice: kb diff --between — a pure date-to-ref resolver over the versions façade, zero server changes, zero new storage. recall --as-of and the corpus changelog are explicitly rejected.">
+<title>A temporal query surface for kb — one verb, not a time-travel epic</title>
+<style>
+:root{
+  --bg:#faf7f2;--surface:#f1ece2;--fg:#26221c;--muted:#554e40;
+  --rule:#ddd5c7;--accent:#0f6b5c;--accent-fg:#ffffff;
+  --warn:#8a5800;--danger:#a03024;--ok:#1f6b3a;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:47rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#181512;--surface:#221e19;--fg:#ece7dd;--muted:#a8a191;
+    --rule:#37312a;--accent:#5ec8b4;--accent-fg:#0c1512;
+    --warn:#e0b054;--danger:#f2857a;--ok:#7bd3a0;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.85rem;margin:.2em 0 .3em}
+h2{font-size:1.3rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.08rem;margin:1.6em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.16rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.83rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.88rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.verdict{font-family:var(--mono);font-size:.75rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;border-radius:4px;padding:.1em .5em;border:1px solid}
+.verdict--ship{color:var(--ok);border-color:var(--ok)}
+.verdict--reject{color:var(--danger);border-color:var(--danger)}
+.verdict--defer{color:var(--warn);border-color:var(--warn)}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> kb</div>
+  <h1>A temporal query surface for kb — one verb, not a time-travel epic</h1>
+  <p class="lede">Four candidate temporal queries assessed against what kb already stores. One survives on value/effort: <code>kb diff --between &lt;date&gt; &lt;date&gt;</code> — a pure date&rarr;ref resolver over the existing versions façade, zero server changes, zero new storage. The rest are rejected here, with reasons, so they stay rejected.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">temporal</span>
+  </div>
+</header>
+
+<section>
+<h2 id="brief">The brief</h2>
+<p>This answers the F3 recipe from the <a data-kb-link="kb-next-prompts-playbook-2026-07" href="kb-next-prompts-playbook-2026-07.html">next-prompts playbook</a>: kb's pieces all record time — the versions façade (invariant #14), the append-only <code>history</code> table (#8), memory supersede chains (#10), session timestamps (#11) — but no query composes them. Candidates to design against: <code>kb cat --as-of</code>, <code>kb diff --between</code>, <code>kb recall --as-of</code>, and a corpus changelog (the week-in-review idea's deterministic core). Constraints: deterministic (no in-daemon LLM — a recorded non-goal), no new storage if avoidable, and a thin-slice verdict rather than an epic.</p>
+</section>
+
+<section>
+<h2 id="substrate">The temporal substrate — what already records time</h2>
+<p>Everything below was verified in code on main @ <code>9279de1c</code> (2026-07-06).</p>
+<table>
+<thead><tr><th>Source</th><th>What it records</th><th>Timestamps</th><th>Honesty limits</th></tr></thead>
+<tbody>
+<tr><td><strong>Versions façade</strong><br><code>kb-core/src/versions.rs</code></td><td>Unified per-artifact timeline over three sources: git commits, index snapshots, working tree. Every <code>Version</code> carries an opaque <code>ref</code> + <code>ts_unix</code> (<code>versions.rs:36-52</code>); <code>raw_at(ref)</code> returns bytes (<code>:166-191</code>).</td><td>git = author date (<code>%at</code>, <code>crates/kb-core/src/vcs.rs:122-159</code>); snapshots = file mtime at index time; working = live mtime.</td><td><code>auto</code> mode is git <em>xor</em> snapshots, never both (<code>versions.rs:107-125</code>). Git author dates can be non-monotonic after rebases. Prod container ships without <code>.git</code> → snapshots only.</td></tr>
+<tr><td><strong><code>artifact_snapshots</code></strong><br>sqlite, V0013</td><td>Verbatim <code>raw_source</code> per distinct content hash, appended by the <code>SnapshotCaptureHook</code> after every content-changing index (<code>crates/kb-core/src/enrich.rs:555-604</code>).</td><td><code>captured_at</code> = mtime at index time.</td><td>Pruned to newest 25 per artifact (<code>DEFAULT_SNAPSHOT_KEEP</code>, <code>enrich.rs:544</code>). Rename strands old-id rows (git <code>--follow</code> crosses renames; snapshots don't). Session transcripts excluded by design.</td></tr>
+<tr><td><strong>Doc row</strong> (lance)</td><td>Per-artifact <code>mtime_unix</code>, <code>indexed_at_unix</code>, <code>created_unix</code> (<code>schema.rs:53-59</code>).</td><td><code>indexed_at_unix</code> advances only on real content change; <code>mtime_unix</code> can advance without one (<code>touch_mtime</code>, <code>crates/kb-core/src/storage/lance.rs:1336-1346</code>).</td><td>No first-seen column — <code>indexed_at_unix</code> is overwritten each reindex. <code>created_unix</code> is filesystem btime: nullable, tracks the file, not the index.</td></tr>
+<tr><td><strong><code>history</code> table</strong><br>sqlite, V0003 (#8)</td><td>Reading activity: <code>open</code> / <code>search</code> / <code>comment</code> rows, append-only.</td><td><code>started_at</code>, <code>updated_at</code>; window helpers exist (<code>history_opens_in_window</code>, <code>crates/kb-core/src/storage/sqlite.rs:906-935</code>).</td><td>Records <em>reads</em>, not index mutations. Since the v0.24 R2 cascade, <code>CascadeMode::Full</code> deletes an artifact's history rows too.</td></tr>
+<tr><td><strong>Memory rows</strong> (#10)</td><td>Supersede = forward pointer <code>kb_supersedes</code> on the <em>new</em> row only; the old row survives untouched with its original timestamps.</td><td>Supersede moment is reconstructable: it equals the superseding row's <code>created_unix</code>.</td><td><code>kb forget</code> is a hard delete — file and row destroyed, no tombstone, no timestamp (<code>crates/kb-server/src/routes/artifacts.rs:189-226</code>). The recall tombstone set is untimed (<code>list_supersede_targets</code>, <code>crates/kb-core/src/storage/lance.rs:1455-1482</code>).</td></tr>
+<tr><td><strong>Sessions tables</strong> (#11)</td><td><code>sessions.started_at/ended_at</code> windows; commits, files, decisions, research keyed to sessions.</td><td>Children carry no own timestamps — a commit's time is its session's window (<code>V0019</code>: no per-commit ts).</td><td>The 2026-07-06 <a data-kb-link="session-memory-deep-review-2026-07" href="session-memory-deep-review-2026-07.html">deep review</a> found <code>started_at</code> corruption (defect B2) and recommended deleting the funnel/rollups; fix landed, unverified on real data.</td></tr>
+<tr><td><strong>Deletions</strong></td><td>Nothing. <code>cascade::delete_artifact</code> (v0.24 R2) is the single choke point every removal flows through, but it persists no record; <code>index_runs</code> has no artifact ids; the SSE ring is volatile (1024 entries, in-memory).</td><td>—</td><td>Once an artifact dies, the daemon cannot say it ever existed. Only git knows, where git exists.</td></tr>
+</tbody>
+</table>
+<p>Also considered and set aside: lance's own dataset versioning. The architecture review (private) already noted it is deliberately unused (versions ride sqlite snapshots, #14), and compaction/retention make it unsuitable as a temporal source.</p>
+</section>
+
+<section>
+<h2 id="candidates">Four candidates, assessed</h2>
+
+<h3 id="diff-between"><code>kb diff &lt;id&gt; --between &lt;date&gt; &lt;date&gt;</code> <span class="verdict verdict--ship">ship</span></h3>
+<p><strong>Source that answers it:</strong> the versions façade, fully. <code>kb diff --from/--to</code> already exists, ref-addressed (git sha | <code>index:&lt;id&gt;</code> | <code>WORKING</code>), with server-side <code>similar</code>-crate hunks and a prose-vs-raw mode. The <em>only</em> missing piece is date&rarr;ref resolution — and every timeline entry already carries <code>ts_unix</code>.</p>
+<p><strong>Gap:</strong> one pure function. The diff route's current <code>from</code> default resolves <em>by position</em> in the newest-first list (<code>default_from</code>, <code>crates/kb-server/src/routes/versions.rs:203-208</code>), never by timestamp; nothing anywhere resolves a date (a repo grep for as-of/nearest-before finds nothing).</p>
+<p><strong>Cost:</strong> smallest possible. The CLI already fetches <code>GET /versions</code> as JSON; resolve each date client-side with a resolver that lives in kb-core (so a future server route reuses it), then call the existing <code>GET /diff?from=&amp;to=</code>. <strong>Zero server changes, zero new storage, zero schema.</strong> Roughly: ~15-line resolver + golden tests in <code>kb_core::versions</code>, ~80 lines of CLI flag + date parsing + output annotation.</p>
+<p><strong>Value:</strong> answers the natural agent and operator question — "what changed in this doc between June 1 and July 1?" — for any artifact with git history (full depth locally) or snapshots (25 revisions of depth everywhere, including prod). Deterministic: same timeline JSON &rarr; same refs.</p>
+
+<h3 id="cat-as-of"><code>kb cat &lt;id&gt; --as-of &lt;date&gt;</code> <span class="verdict verdict--defer">second slice</span></h3>
+<p><strong>Source:</strong> same façade; <code>raw_at(ref)</code> already returns any version's bytes in kb-core.</p>
+<p><strong>Gap:</strong> two, and one is structural. First, the same date&rarr;ref resolver as above (shared). Second, <em>no HTTP route exposes single-version content</em> — the façade serves a list and a diff, never bytes-at-ref. And <code>kb cat</code> today bypasses the façade entirely: it opens lance directly and dumps the current on-disk file (<code>crates/kb-cli/src/commands/cat.rs:38-45</code>), no daemon involved.</p>
+<p><strong>Cost:</strong> the resolver (shared with <code>--between</code>) plus one new endpoint (<code>GET .../artifacts/{id}/at?ts=</code> running resolve + <code>raw_at</code>), a wire type, and a daemon-backed mode for <code>cat</code>. Modest — but strictly more than <code>--between</code>, entirely because of the missing content-by-ref route.</p>
+<p><strong>Verdict:</strong> not rejected — <em>sequenced</em>. It is the natural second slice: by then the resolver exists, is golden-tested, and has proven its edge semantics in the field. Shipping it first would mean paying the new-route cost before knowing whether anyone asks temporal questions at all.</p>
+
+<h3 id="recall-as-of"><code>kb recall "&lt;q&gt;" --as-of &lt;date&gt;</code> <span class="verdict verdict--reject">reject</span></h3>
+<p><strong>Source:</strong> partially the memory rows. The good news is real: superseded memories are soft-kept with timestamps intact; the moment B stopped being live equals its superseder's <code>created_unix</code>; and the recall pipeline's decay clock is a single injected <code>now_unix</code> into a pure <code>rerank</code> (<code>crates/kb-server/src/routes/memory.rs:398</code> &rarr; <code>crates/kb-core/src/memory.rs:147-218</code>) — an as-of instant would drop in with no math change.</p>
+<p><strong>Why rejected anyway — three reasons, one fatal:</strong></p>
+<ul>
+<li><strong>Fatal: forgotten memories are unrecoverable.</strong> <code>kb forget</code> removes the file and the lance row with no tombstone and no timestamp. A memory that was live on date D and later forgotten simply cannot appear in an as-of-D recall — and nothing can even <em>warn</em> that the answer is incomplete. A temporal query that silently lies about the past is worse than no temporal query.</li>
+<li><strong>Chimera ranking.</strong> Pins, salience edits, and the recall policy are current-state only. An "as-of June 1" recall would honor supersedes as of June 1 but rank with today's salience and today's pins — a state that never existed at any point in time.</li>
+<li><strong>This ground is already ruled on.</strong> The <a data-kb-link="evolving-the-kb-memory-system" href="evolving-the-kb-memory-system.html">memory-system evolution review</a> rejected the bitemporal entity-graph (D3), and the endorsed salvage was <code>kb memory log &lt;id&gt;</code> — walk one supersede chain with timestamps, no ledger, no as-of. That remains the right memory-side temporal verb if one is ever wanted; <code>recall --as-of</code> would re-litigate a settled rejection at higher cost.</li>
+</ul>
+<p><strong>Cost if built anyway:</strong> moderate — <code>list_supersede_targets</code> flattens supersede edges to an untimed id set, so timing them means threading each superseder's <code>created_unix</code> through lance, the reranker, the route, and the CLI, plus widening the per-corpus over-fetch (as-of filtering drops recent rows and under-fills the current <code>limit&times;4</code> fetch). All of it in service of an answer with a hole in it.</p>
+
+<h3 id="corpus-changelog">Corpus changelog — "what appeared, changed, died this week" <span class="verdict verdict--reject">reject for now</span></h3>
+<p><strong>Sources, per column:</strong></p>
+<ul>
+<li><strong>Changed — well covered today.</strong> <code>indexed_at_unix</code> advances only on real content change, snapshots timestamp each revision, and the gallery already answers "changed in window" via the <code>?from&amp;to</code> mtime filter (invariant #35). No build needed for a listing; only presentation is missing.</li>
+<li><strong>Appeared — approximate at best.</strong> There is no first-seen column; <code>indexed_at_unix</code> is overwritten on every reindex; <code>created_unix</code> is nullable filesystem btime tracking the file, not the index; the earliest surviving snapshot is floor-bounded at 25 revisions.</li>
+<li><strong>Died — unanswerable.</strong> Deletion is a hard cascade that persists nothing, <code>index_runs</code> carries no artifact ids, and the event ring is volatile. Only git can answer, and prod has no <code>.git</code>.</li>
+</ul>
+<p><strong>Why rejected now:</strong> the honest version requires exactly what the brief avoids — new storage (a deletions journal) — <em>plus</em> inputs the <a data-kb-link="session-memory-deep-review-2026-07" href="session-memory-deep-review-2026-07.html">deep review</a> has already flagged: week-in-review was explicitly deferred there ("real ideas, wrong quarter") pending the session-data repair programs, and the funnel/rollup aggregates it would sit beside were recommended for deletion. Building a summary view over known-untruthful inputs launders them.</p>
+<p><strong>Defer-with-trigger, not never:</strong> revisit when (a) the session-data repairs land and verify on real data, and (b) — optionally, cheaply — a deletions journal rides <code>cascade::delete_artifact</code>, which v0.24 R2 just made the single choke point every removal flows through. One small append-only table (<code>artifact_id, path, deleted_at</code>) written at that choke point would make "died" answerable forward from the day it ships. Worth considering while cascade.rs is fresh, even with the consumer deferred.</p>
+</section>
+
+<section>
+<h2 id="thin-slice">The thin slice: <code>kb diff --between</code>, specified</h2>
+
+<h3 id="resolver-semantics">Resolver semantics</h3>
+<p><code>resolve_as_of(versions, at_unix)</code> in <code>kb_core::versions</code>: over the façade's newest-first, stably-sorted timeline, return the <em>first</em> entry with <code>ts_unix &le; at_unix</code>. Pure, golden-tested. The four edge cases the tests pin:</p>
+<ul>
+<li><strong>Ties</strong> — equal <code>ts_unix</code> resolves by the façade's existing stable order (working &rarr; git &rarr; snapshots); documented, not accidental.</li>
+<li><strong>Below the floor</strong> — a date older than the oldest known version is a hard error naming that oldest version's date. Never a silent empty result.</li>
+<li><strong>Above the ceiling</strong> — a date at or after the working tree's mtime resolves to <code>WORKING</code>.</li>
+<li><strong>Non-monotonic git author dates</strong> — rebases can reorder author dates; the resolver operates on the ts-sorted list the façade already produces, so it stays well-defined.</li>
+</ul>
+
+<h3 id="cli-shape">CLI shape</h3>
+<pre><code>kb diff &lt;target&gt; --between 2026-06-01 2026-07-01 [--raw --kb --json --daemon]
+
+resolved --between:
+  2026-06-01 &rarr; 3f2a9c1 "docs: v0.23 reader chrome" (git, 2026-05-29 18:04)
+  2026-07-01 &rarr; index:#812 (snapshot, 2026-06-30 22:11)</code></pre>
+<ul>
+<li><code>--between</code> takes two dates and <code>conflicts_with</code> <code>--from</code>/<code>--to</code> (clap-enforced).</li>
+<li><strong>Date grammar:</strong> <code>YYYY-MM-DD</code> means end-of-day 23:59:59 UTC — "as of June 5" includes June 5's changes; full RFC&nbsp;3339 for exact instants. Always UTC: local-midnight parsing would make the same command resolve differently per machine, breaking determinism.</li>
+<li><strong>The resolution is always echoed</strong> (as above): each date prints the ref it resolved to, that ref's real timestamp, and its source. The approximation stays visible instead of pretending dates are exact.</li>
+<li>Both dates resolving to the same ref &rarr; empty diff, exit 0, "no recorded change between d1 and d2".</li>
+<li>Implementation is pure composition: <code>GET /versions</code> &rarr; resolve twice &rarr; <code>GET /diff?from=&amp;to=</code>. No server delta; the existing text/raw diff modes come along for free.</li>
+</ul>
+
+<h3 id="verification">Verification</h3>
+<ul>
+<li>Golden tests on <code>resolve_as_of</code> in kb-core (the four edges above).</li>
+<li>CLI integration: a repo-tracked artifact diffed <code>--between</code> two dates straddling a known commit reproduces the same hunks as the equivalent <code>--from &lt;sha&gt; --to WORKING</code>.</li>
+<li>Snapshot-only path: an untracked corpus file edited twice, diffed between pre/post dates, shows the edit — proving the prod (no-<code>.git</code>) path.</li>
+<li>One green-CI commit; invariant #14's entry gains the resolver sentence (no new invariant — the 35 cap stands).</li>
+</ul>
+<div class="callout callout--ok"><span class="callout-label">Why this one wins</span>The other three candidates each require something that doesn't exist — a content-by-ref route (<code>cat --as-of</code>), timed tombstones plus unforgettable forgets (<code>recall --as-of</code>), a deletions journal plus truthful session data (changelog). <code>--between</code> requires only a 15-line pure function over data every corpus already has. If temporal queries turn out to earn their keep, the resolver is the foundation the second slice reuses; if not, kb carries ~100 lines, not an epic.</div>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>One-date convenience: should <code>--between &lt;d1&gt;</code> (single value) default the second date to now? Leaning yes, but it can wait for field use.</li>
+<li>Is 25 snapshots of depth enough in prod, where <code>auto</code> rides snapshots only? A per-kb <code>snapshot_keep</code> override is cheap if real use hits the floor.</li>
+<li>Should the deletions journal ship opportunistically now, while cascade.rs is fresh, even though its changelog consumer is deferred? It only helps forward from the day it exists.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="files">Files this will touch</h2>
+<ul>
+<li><code>crates/kb-core/src/versions.rs</code> — <code>resolve_as_of</code> + golden tests</li>
+<li><code>crates/kb-cli/src/main.rs</code> — <code>--between</code> on <code>Cmd::Diff</code>, <code>conflicts_with</code> from/to</li>
+<li><code>crates/kb-cli/src/commands/versions.rs</code> — date parsing, resolution, annotated output</li>
+<li><code>docs/architecture-invariants.md</code> — one sentence added to #14</li>
+<li><code>README.md</code> — verb documentation</li>
+</ul>
+<p><strong>Sequencing:</strong> v0.24 is executing and scope-frozen (reliability / index control / TUI retirement / logging — no temporal work). This is a next-milestone candidate; nothing in v0.24 conflicts, and R2's cascade choke point is where the optional deletions journal would later hook.</p>
+<p><strong>Next action:</strong> implement <code>resolve_as_of</code> in <code>kb_core::versions</code> with the four golden tests, then the CLI flag. One green-CI commit.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

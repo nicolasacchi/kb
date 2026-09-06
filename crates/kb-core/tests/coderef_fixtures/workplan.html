@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shopfront work plan — DCB coderef fixture</title>
+<meta name="kb-category" content="feature">
+<meta name="kb-tags" content="fixture, coderefs">
+<meta name="kb-code-rev" content="shopfront@bcd13a1d3+dirty">
+<style>/* a <code> in a style block must never be scanned: code { color: red } app/nope.rb:1 */</style>
+</head>
+<body>
+<h1>Shopfront work plan</h1>
+
+<!-- UNGROUPED: before the first h2/h3 -->
+<p>Entry point is <code>config/importmap.rb</code> and the dispatcher in
+<code>dispatcher.rb</code>.</p>
+
+<h2>Why reshuffle</h2>
+<p>Nothing here cites code. The <code>Product</code> and <code>ITEMS</code> tokens
+are event-name fragments; <code>EUR</code>, <code>GET</code>, <code>FIXME</code>,
+<code>HW3T8WVS73</code> and <code>API_WRITE_KEY</code> are not symbols.</p>
+
+<h2 id="work-items">Work items</h2>
+
+<div class="wi" id="wi-a1">
+  <h3>A1 — Token identity <span class="badge">Deploy A</span> ·
+    <a href="https://github.com/acme/shopfront/issues/15356">#15356</a></h3>
+  <p><strong>Files:</strong> <code>shared_controller_concern.rb</code>,
+  <code>current_user_controller.js</code>, <code>assets.js.erb</code></p>
+  <ol>
+    <li>Precedence inversion in <code>user_token</code>: header before the
+      <code>_SHOP</code> cookie. The only live caller is checkout
+      (<code>checkout_controller.rb:284</code> → <code>CreateOrderService</code> →
+      <code>dispatcher.rb</code>).</li>
+    <li>Guard on <code>device_id</code>: <code>UUID_FORMAT.test()</code> and
+      <code>/\A[0-9a-f]{32}\z/i</code> stay rejected.</li>
+    <li>Token shape is <code>shp-*</code>, never <code>shp-&lt;id&gt;</code>.</li>
+  </ol>
+</div>
+
+<div class="wi" id="wi-a2">
+  <h3>A2 — Conversion rewrite <span class="badge">Deploy A</span> ·
+    <a href="https://github.com/acme/shopfront/issues/15357">#15357</a></h3>
+  <p><strong>Files:</strong> <code>dispatcher.rb</code> (+ base),
+  <code>order_item.rb</code>, one migration on <code>orders</code></p>
+  <ol>
+    <li>Typed rewrite raising <code>Billing::InvoiceError</code> from
+      <code>Dispatcher#dispatch</code>; see also
+      <code>Checkout::UpdateCartService#item_attributes_for</code> and
+      <code>Store::Products::Indexer#indexable?</code>.</li>
+    <li>Ranges and lists: <code>dispatcher.rb:5,19,29</code>,
+      <code>checkout_controller.rb:425,440</code>,
+      <code>search_service.rb:41-55</code>,
+      <code>assets.js.erb:30,51-65,113-119</code>.</li>
+    <li>Third caller without a guard: <code>Order#confirm_payment!</code>
+      (<code>orders_controller.rb#confirm</code>).</li>
+    <li>Conventions: <code>.before_deploy.rb</code>, <code>.to_f</code>,
+      <code>validates :sku, presence: true, on: :create</code>,
+      <code>event_name: 'Order Purchased'</code>,
+      <code>Struct(items, order_id)</code>, <code>Time.zone.parse</code>,
+      <code>Arel.sql</code>, <code>order_items.sku</code>,
+      <code>hit.__queryID</code>, <code>insights.example.io</code>,
+      <code>.shop-Hits-item</code>, <code>jest.config</code>,
+      <code>start_time..end_time</code>, <code>shopclient-3.12.2</code>,
+      <code>search-insights@2.17.3</code>, <code>app/javascript</code>,
+      <code>app/tasks/maintenance/search/</code>,
+      <code>plan-a2-conversion.html:390</code>, <code>notes/design.md</code>,
+      <code>order_dispatch/{base,conversion}.rb</code>,
+      <code>db/migrate/20240312131315_..._to_order_item.before_deploy.rb</code>
+      — none of these is a code ref.</li>
+  </ol>
+  <p>Declared: <code data-kb-ref="app/models/order.rb#L120-L140">the order model</code>
+  and a typo'd one <code data-kb-ref="app/models/nope..rb">this one is malformed</code>.</p>
+</div>
+
+<div class="wi" id="wi-b1">
+  <h3 id="explicit-anchor">B1 — Vendor + listing</h3>
+  <p>Gem sources: <code>shopclient-3.12.2/lib/shopclient/api_client.rb:120</code>,
+  <code>activesupport-7.1.5.2/lib/active_support/core_ext/object/json.rb:126-138</code>.</p>
+  <p>Also <code>orders/indexer.rb</code>, <code>_results.html.erb</code>,
+  <code>popup_component.html.erb:36</code>,
+  <code>Maintenance::Search::ReconcileIndexTask</code>.</p>
+  <p>Inline markup inside a code element:
+  <code>widget(<strong>clickAnalytics=true</strong>)</code> — rejected, and a
+  second one <code>app/models/order.rb:<strong>77</strong></code> that only
+  parses if the walker reads textContent.</p>
+<pre><code># app/services/order_dispatch/conversion.rb
+module OrderDispatch
+  class Conversion &lt; Base
+    def dispatch                      # see app/models/order.rb:1044
+      Billing::InvoiceService.new(order).call
+    end
+  end
+end
+</code></pre>
+  <p>Issue seen twice, second time with a fragment:
+  <a href="https://github.com/acme/shopfront/issues/15351">#15351</a> and
+  <a href="https://github.com/acme/shopfront/issues/15351#issuecomment-5215243676">the comment</a>.</p>
+</div>
+
+<template id="kb-prompt">
+  <p>ROLE: you maintain this doc. Read <code>foo/nope.rb:12</code> and
+  <code>app/services/nope.rb:9</code>, then <code>Namespace::Nope#never</code>
+  and <a href="https://github.com/acme/shopfront/issues/99999">issue 99999</a>.</p>
+</template>
+<noscript><p>Fallback cites <code>app/nope_noscript.rb:3</code>.</p></noscript>
+<script>
+  // A real <code> element cannot live here (script content is TEXT), but the
+  // walker must still not scan it: var x = "app/nope_script.rb:7";
+</script>
+</body>
+</html>
