@@ -1025,6 +1025,17 @@ pub struct ReviewSection {
     /// `review_mutations_gate`'s own module doc).
     #[serde(default)]
     pub remote_mutations: bool,
+    /// V73-K1 — the NAMED HTML templates `GET /api/reviews/{id}/doc/render`
+    /// may render a `kbc-review/1` document through, `<name> = <path>`.
+    ///
+    /// A name, never a path, is what the route accepts, so that surface is
+    /// structurally unable to be talked into reading an arbitrary file; the
+    /// built-in `default` template always exists and cannot be shadowed
+    /// away by config. The CLI's `review render --template <file.html>`
+    /// does not consult this map at all — it POSTs the operator's own
+    /// template bytes to the loopback-only twin.
+    #[serde(default)]
+    pub doc_templates: std::collections::BTreeMap<String, std::path::PathBuf>,
 }
 
 impl ReviewSection {
@@ -1042,6 +1053,7 @@ impl Default for ReviewSection {
             patchset_capture: Self::default_patchset_capture(),
             max_patchsets: Self::default_max_patchsets(),
             remote_mutations: false,
+            doc_templates: std::collections::BTreeMap::new(),
         }
     }
 }

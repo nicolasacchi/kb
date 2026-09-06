@@ -817,6 +817,25 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // doc_meta`). Same ordinary auth_bearer read gate as `/distill`/
         // `/comments` — neither exposes anything more sensitive than the
         // rest of the review-read surface already does.
+        // V73-K1 (`kbc-review/1`, design D9/D9-a) — the review DOCUMENT's
+        // three reads. `/doc/lint` and `/doc/render` are literal segments
+        // under the `{id}` param, so they never collide with `/doc` itself
+        // (axum resolves the longer literal path). Ordinary `auth_bearer`
+        // reads: a document is prose about a diff, not transcript text, and
+        // the AUTHORING half (`compose`, `POST /doc/render`) stays
+        // loopback-only on `transcripts_api` below — D22 unchanged.
+        .route(
+            "/reviews/{id}/doc",
+            get(crate::review_doc::routes::get_review_doc),
+        )
+        .route(
+            "/reviews/{id}/doc/lint",
+            get(crate::review_doc::routes::lint_review_doc),
+        )
+        .route(
+            "/reviews/{id}/doc/render",
+            get(crate::review_doc::routes::render_review_doc),
+        )
         .route("/reviews/{id}/report", get(reviews::get_review_report))
         .route("/reviews/{id}/artifact", get(reviews::get_review_artifact))
         // PRR-R3 — the findings list read (see the module doc above).
@@ -1076,6 +1095,17 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/reviews/{id}/compose",
             post(crate::review_findings::compose_review_route),
+        )
+        // V73-K1 — render a review document through the OPERATOR'S OWN
+        // template bytes. Writes nothing; it is a POST only because a
+        // template is a whole HTML file rather than a query parameter, and
+        // it sits on this loopback-only family because the caller is the
+        // operator's own CLI on their own box (D22 local-canonical). The
+        // bearer-read twin above renders through a REGISTERED name instead,
+        // so no route ever takes a caller-supplied file PATH.
+        .route(
+            "/reviews/{id}/doc/render",
+            post(crate::review_doc::routes::render_review_doc_with_template),
         )
         // V3.4-C1 — canvas mutations (opaque layout write; same loopback-only
         // family as review mutations — NOT auth_bearer).

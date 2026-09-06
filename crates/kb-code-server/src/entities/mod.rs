@@ -836,6 +836,8 @@ mod tests {
         for c in V71_G0_ROUTES
             .iter()
             .chain(crate::rails::routes::V72_I1_ROUTES.iter())
+            // V73-K1 joins the SAME walk rather than starting a third one.
+            .chain(crate::review_doc::routes::V73_K1_ROUTES.iter())
         {
             let nested = c
                 .path

@@ -3041,17 +3041,129 @@ enum ReviewCmd {
     /// an optional review-level verdict in ONE sqlite transaction,
     /// rather than three separate `findings import` / `report --set` /
     /// `verdict` calls each with its own commit.
-    Compose {
+    ///
+    /// V73-K1 adds the `kbc-review/1` DOCUMENT form:
+    /// `kb-code review compose ID --doc review.md [--findings findings.json]
+    /// [--tier standard] [--dry-run]`. The document is Markdown with YAML
+    /// front matter; `compose` validates it against the tier, lints it
+    /// (resolving every `[[…]]` ref), reconciles the findings by
+    /// fingerprint, appends the document revision, sets the report and any
+    /// verdict — one sqlite transaction, one SSE event.
+    /// `--dry-run` lints and resolves and writes nothing.
+    Compose(Box<ReviewComposeArgs>),
+
+    /// `kb-code review doc ID [--ps N] [--resolve] [--json]` — V73-K1:
+    /// `GET /api/reviews/{id}/doc` (`kbc-review/1`). The stored review
+    /// document plus its stated omissions; `--resolve` turns every `[[…]]`
+    /// ref into a live card (`pinned` / `carried` / `orphan`).
+    Doc {
         id: i64,
-        #[arg(long = "from-file")]
-        from_file: Option<PathBuf>,
         #[arg(long)]
-        stdin: bool,
+        ps: Option<String>,
+        /// Resolve every ref into a live card.
+        #[arg(long)]
+        resolve: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
         json: bool,
     },
+
+    /// `kb-code review lint ID [--doc FILE] [--findings FILE] [--tier T]
+    /// [--ps N] [--json]` — V73-K1. With `--doc`, lints a CANDIDATE document
+    /// (`POST /api/reviews/{id}/compose` with `dry_run`, which writes
+    /// nothing); without it, lints the STORED one (`GET
+    /// /api/reviews/{id}/doc/lint`). Exit code 3 when the lint reports any
+    /// ERROR — the same `EXIT_CONFLICT` slot an HTTP 409 uses, and for the
+    /// same reason: the request is well-formed and the state refuses it.
+    Lint {
+        id: i64,
+        /// The candidate document. Omit to lint the stored one.
+        #[arg(long)]
+        doc: Option<PathBuf>,
+        /// The findings sidecar (a JSON array, or `{"findings": [...]}`).
+        #[arg(long)]
+        findings: Option<PathBuf>,
+        /// `minimal` | `standard` | `full` (default `standard`).
+        #[arg(long)]
+        tier: Option<String>,
+        #[arg(long)]
+        ps: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// `kb-code review render ID [--template FILE] [--out FILE] [--ps N]
+    /// [--json]` — V73-K1: the stored document + its resolved cards, poured
+    /// into an HTML template. With `--template`, the operator's own file is
+    /// POSTed to the loopback-only twin (`POST
+    /// /api/reviews/{id}/doc/render`) so there is ONE renderer, in the
+    /// daemon, rather than a second one here; without it, the built-in
+    /// template is rendered by `GET /api/reviews/{id}/doc/render`. The
+    /// result is a single self-contained HTML file the operator can drop
+    /// into a kb corpus — `kb-code review set-artifact` records the link.
+    Render {
+        id: i64,
+        /// An HTML template using the `{{summary}}` / `{{findings}}` /
+        /// `{{cards}}` / … placeholder grammar.
+        #[arg(long)]
+        template: Option<PathBuf>,
+        /// Write the HTML here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        ps: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `kb-code review compose` — boxed for the same reason
+/// [`ReviewFindingsAddArgs`] is (`clippy::large_enum_variant`: its field
+/// count would size the whole `ReviewCmd` enum).
+#[derive(clap::Args, Debug)]
+pub struct ReviewComposeArgs {
+    pub id: i64,
+    /// The `kbc-review/1` document (Markdown + YAML front matter).
+    #[arg(long)]
+    pub doc: Option<PathBuf>,
+    /// The findings sidecar (a JSON array, or `{"findings": [...]}`).
+    /// Document form only.
+    #[arg(long)]
+    pub findings: Option<PathBuf>,
+    /// `minimal` | `standard` | `full` (default `standard`). Document form
+    /// only.
+    #[arg(long)]
+    pub tier: Option<String>,
+    /// `full` (default) | `additive` — findings reconciliation mode.
+    #[arg(long)]
+    pub mode: Option<String>,
+    /// Patchset to compose against (default: latest).
+    #[arg(long)]
+    pub ps: Option<i64>,
+    /// `approve` | `request-changes` | `comment`.
+    #[arg(long)]
+    pub verdict: Option<String>,
+    #[arg(short = 'm', long = "message")]
+    pub verdict_note: Option<String>,
+    /// Lint + resolve only — nothing is written and no event fires.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+    /// The V0 `kbc-compose/1` JSON body (summary + a `kbc-findings/1`
+    /// block). Mutually exclusive with `--doc`.
+    #[arg(long = "from-file")]
+    pub from_file: Option<PathBuf>,
+    /// Read the V0 JSON body from stdin.
+    #[arg(long)]
+    pub stdin: bool,
+    #[arg(long, default_value = "http://127.0.0.1:4747")]
+    pub daemon: String,
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// PRR-R3 — `kb-code review findings <SUBCOMMAND> ID …`.
@@ -4421,13 +4533,52 @@ async fn run(cli: Cli) -> Result<()> {
             ReviewCmd::GithubThreads { id, daemon, json } => {
                 review_github_threads_cmd(&daemon, id, json).await
             }
-            ReviewCmd::Compose {
+            ReviewCmd::Compose(args) => review_compose_cmd(*args).await,
+            ReviewCmd::Doc {
                 id,
-                from_file,
-                stdin,
+                ps,
+                resolve,
                 daemon,
                 json,
-            } => review_compose_cmd(&daemon, id, from_file.as_deref(), stdin, json).await,
+            } => review_doc_cmd(&daemon, id, ps.as_deref(), resolve, json).await,
+            ReviewCmd::Lint {
+                id,
+                doc,
+                findings,
+                tier,
+                ps,
+                daemon,
+                json,
+            } => {
+                review_lint_cmd(
+                    &daemon,
+                    id,
+                    doc.as_deref(),
+                    findings.as_deref(),
+                    tier.as_deref(),
+                    ps.as_deref(),
+                    json,
+                )
+                .await
+            }
+            ReviewCmd::Render {
+                id,
+                template,
+                out,
+                ps,
+                daemon,
+                json,
+            } => {
+                review_render_cmd(
+                    &daemon,
+                    id,
+                    template.as_deref(),
+                    out.as_deref(),
+                    ps.as_deref(),
+                    json,
+                )
+                .await
+            }
         },
         Cmd::Pr { cmd } => match cmd {
             PrCmd::List { repo, daemon, json } => pr_list_cmd(&daemon, &repo, json).await,
@@ -11842,60 +11993,414 @@ async fn review_findings_import_cmd(
     Ok(())
 }
 
-/// `kb-code review compose ID {--from-file FILE|--stdin} [--json]` —
-/// V70-R: `POST /api/reviews/{id}/compose` (design doc D9 scoped to v0).
-/// The payload is a `kbc-compose/1` object — `summary` (required) plus the
-/// SAME `kbc-findings/1` shape `review findings import` accepts, nested
-/// under `findings` — the "today's findings JSON + summary, one
-/// transaction" v0 the milestone plan names.
-async fn review_compose_cmd(
-    daemon: &str,
-    id: i64,
-    from_file: Option<&Path>,
-    stdin: bool,
-    json: bool,
-) -> Result<()> {
-    if from_file.is_some() == stdin {
-        anyhow::bail!("review compose: pass exactly one of --from-file FILE or --stdin");
+/// `kb-code review compose ID …` — `POST /api/reviews/{id}/compose`.
+/// LOOPBACK-ONLY. Two forms, one route.
+///
+/// **The document form** (V73-K1, design D9) — `--doc review.md`: a
+/// `kbc-review/1` document (Markdown + YAML front matter), optionally with a
+/// findings sidecar (`--findings`), priced by `--tier`. One call validates
+/// the front matter against the tier, lints it (resolving every `[[…]]`
+/// ref), reconciles the findings by fingerprint, appends the document
+/// revision, sets the report and any verdict — ONE sqlite transaction, ONE
+/// SSE event. `--dry-run` stops after the lint and writes nothing.
+///
+/// **The V0 form** (V70-R) — `--from-file`/`--stdin`: the `kbc-compose/1`
+/// JSON body (summary + a `kbc-findings/1` block). Unchanged.
+///
+/// Exit code 3 (`EXIT_CONFLICT`) when a lint reports any ERROR — the request
+/// was well-formed and the state refused it, which is what that slot means.
+async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
+    let ReviewComposeArgs {
+        id,
+        doc,
+        findings,
+        tier,
+        mode,
+        ps,
+        verdict,
+        verdict_note,
+        dry_run,
+        from_file,
+        stdin,
+        daemon,
+        json,
+    } = args;
+
+    let forms = usize::from(doc.is_some()) + usize::from(from_file.is_some()) + usize::from(stdin);
+    if forms != 1 {
+        anyhow::bail!(
+            "review compose: pass exactly one of --doc FILE (the kbc-review/1 document form), \
+             --from-file FILE or --stdin (the V0 JSON body)"
+        );
     }
-    let text = if stdin {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-            .context("read compose payload from stdin")?;
-        buf
+
+    let payload = if let Some(doc_path) = doc.as_deref() {
+        let doc_md = std::fs::read_to_string(doc_path)
+            .with_context(|| format!("read --doc {}", doc_path.display()))?;
+        let mut body = serde_json::json!({
+            "schema": "kbc-review/1",
+            "doc_md": doc_md,
+            "dry_run": dry_run,
+        });
+        if let Some(t) = &tier {
+            body["tier"] = serde_json::json!(t);
+        }
+        if let Some(m) = &mode {
+            body["mode"] = serde_json::json!(m);
+        }
+        if let Some(n) = ps {
+            body["ps_number"] = serde_json::json!(n);
+        }
+        if let Some(v) = &verdict {
+            body["verdict"] = serde_json::json!(v);
+        }
+        if let Some(n) = &verdict_note {
+            body["verdict_note"] = serde_json::json!(n);
+        }
+        if let Some(f) = findings.as_deref() {
+            let text = std::fs::read_to_string(f)
+                .with_context(|| format!("read --findings {}", f.display()))?;
+            body["findings_v2"] =
+                serde_json::from_str(&text).context("parse --findings sidecar as JSON")?;
+        }
+        body
     } else {
-        let p = from_file.expect("checked above");
-        std::fs::read_to_string(p).with_context(|| format!("read --from-file {}", p.display()))?
+        let text = if stdin {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                .context("read compose payload from stdin")?;
+            buf
+        } else {
+            let p = from_file.as_deref().expect("checked above");
+            std::fs::read_to_string(p)
+                .with_context(|| format!("read --from-file {}", p.display()))?
+        };
+        serde_json::from_str(&text).context("parse compose payload as JSON")?
     };
-    let payload: serde_json::Value =
-        serde_json::from_str(&text).context("parse compose payload as JSON")?;
+
     let client = http_client()?;
     let path = format!("/api/reviews/{id}/compose");
-    let (status, body) = post_json_raw(&client, daemon, &path, &payload).await?;
+    let (status, body) = post_json_raw(&client, &daemon, &path, &payload).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
     }
     if !status.is_success() {
+        if body.get("lint").is_some() {
+            if !json {
+                print_lint(&body["lint"]);
+            }
+            std::process::exit(envelope::EXIT_CONFLICT);
+        }
         return Err(loopback_or_api_error(
             "review compose",
-            daemon,
+            &daemon,
             status,
             &body,
         ));
     }
     if !json {
-        let f = &body["findings"];
+        if body["dry_run"].as_bool().unwrap_or(false) {
+            let w = &body["would_write"];
+            println!(
+                "· dry run — nothing written.  findings={}  doc_bytes={}  cards={}",
+                w["findings"].as_i64().unwrap_or(0),
+                w["doc_bytes"].as_i64().unwrap_or(0),
+                body["cards"].as_array().map(|a| a.len()).unwrap_or(0),
+            );
+            print_lint(&body["lint"]);
+        } else {
+            let f = &body["findings"];
+            println!(
+                "✓ composed review {}  findings: created={} updated={} superseded={} unchanged={}  \
+                 report_set={} verdict_changed={}",
+                body["review_id"].as_i64().unwrap_or(id),
+                f["created"].as_array().map(|a| a.len()).unwrap_or(0),
+                f["updated"].as_array().map(|a| a.len()).unwrap_or(0),
+                f["superseded"].as_array().map(|a| a.len()).unwrap_or(0),
+                f["unchanged"].as_array().map(|a| a.len()).unwrap_or(0),
+                body["report_set"].as_bool().unwrap_or(false),
+                body["verdict_changed"].as_bool().unwrap_or(false),
+            );
+            if let Some(rev) = body["revision"].as_i64() {
+                println!(
+                    "  document revision {rev} at patchset {}",
+                    body["ps_number"]
+                );
+                print_lint(&body["lint"]);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One line per lint row, errors first — the same order the daemon returns
+/// them in, never re-sorted here.
+fn print_lint(lint: &serde_json::Value) {
+    let rows = lint["rows"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("  lint: clean");
+        return;
+    }
+    println!(
+        "  lint: {} error(s), {} warning(s), {} info",
+        lint["errors"].as_i64().unwrap_or(0),
+        lint["warnings"].as_i64().unwrap_or(0),
+        lint["infos"].as_i64().unwrap_or(0),
+    );
+    for r in rows {
+        let line = r["line"]
+            .as_i64()
+            .map(|n| format!(":{n}"))
+            .unwrap_or_default();
         println!(
-            "✓ composed review {}  findings: created={} updated={} superseded={} unchanged={}  \
-             report_set={} verdict_changed={}",
-            body["review_id"].as_i64().unwrap_or(id),
-            f["created"].as_array().map(|a| a.len()).unwrap_or(0),
-            f["updated"].as_array().map(|a| a.len()).unwrap_or(0),
-            f["superseded"].as_array().map(|a| a.len()).unwrap_or(0),
-            f["unchanged"].as_array().map(|a| a.len()).unwrap_or(0),
-            body["report_set"].as_bool().unwrap_or(false),
-            body["verdict_changed"].as_bool().unwrap_or(false),
+            "    [{}] {}{}  {}",
+            r["severity"].as_str().unwrap_or("?"),
+            r["rule"].as_str().unwrap_or("?"),
+            line,
+            r["message"].as_str().unwrap_or(""),
         );
+        if let Some(c) = r["candidates"].as_array() {
+            if !c.is_empty() {
+                let names: Vec<String> = c
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                println!("        did you mean: {}", names.join(", "));
+            }
+        }
+    }
+}
+
+/// `kb-code review doc ID [--ps N] [--resolve] [--json]` — V73-K1:
+/// `GET /api/reviews/{id}/doc`.
+async fn review_doc_cmd(
+    daemon: &str,
+    id: i64,
+    ps: Option<&str>,
+    resolve: bool,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if let Some(p) = ps {
+        query.push(("ps", p));
+    }
+    if resolve {
+        query.push(("resolve", "1"));
+    }
+    let body = get_json(&client, daemon, &format!("/api/reviews/{id}/doc"), &query).await?;
+    if json {
+        envelope::print_ok("kbc-review/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    println!(
+        "review {} · {} · patchset {} · revision {} of {} · tier {}",
+        body["review_id"],
+        body["repo"].as_str().unwrap_or("?"),
+        body["ps_number"],
+        body["revision"],
+        body["revisions"],
+        body["tier"].as_str().unwrap_or("?"),
+    );
+    if let Some(s) = body["summary_md"].as_str() {
+        println!("\n{s}");
+    }
+    let order = &body["reading_order"];
+    println!(
+        "\nreading order ({}): {}",
+        order["source"].as_str().unwrap_or("?"),
+        order["caption"].as_str().unwrap_or(""),
+    );
+    if let Some(omitted) = body["omitted"].as_array() {
+        if !omitted.is_empty() {
+            let names: Vec<String> = omitted
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            println!("\nomits (claims nothing about): {}", names.join(", "));
+        }
+    }
+    if let Some(cards) = body["cards"].as_array() {
+        println!("\ncards:");
+        for c in cards {
+            println!(
+                "  [{}{}] {}  {}",
+                c["state"].as_str().unwrap_or("?"),
+                c["trust"]
+                    .as_str()
+                    .map(|t| format!("/{t}"))
+                    .unwrap_or_default(),
+                c["ref"].as_str().unwrap_or("?"),
+                c["caption"].as_str().unwrap_or(""),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `kb-code review lint ID [--doc FILE] …` — V73-K1. With `--doc`, a
+/// `compose` dry run (which writes nothing); without it, `GET
+/// /api/reviews/{id}/doc/lint` over the stored document. Exits 3 on any
+/// lint ERROR.
+async fn review_lint_cmd(
+    daemon: &str,
+    id: i64,
+    doc: Option<&Path>,
+    findings: Option<&Path>,
+    tier: Option<&str>,
+    ps: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (status, body) = match doc {
+        Some(doc_path) => {
+            let doc_md = std::fs::read_to_string(doc_path)
+                .with_context(|| format!("read --doc {}", doc_path.display()))?;
+            let mut payload = serde_json::json!({
+                "schema": "kbc-review/1",
+                "doc_md": doc_md,
+                "dry_run": true,
+            });
+            if let Some(t) = tier {
+                payload["tier"] = serde_json::json!(t);
+            }
+            if let Some(p) = ps {
+                if let Ok(n) = p.parse::<i64>() {
+                    payload["ps_number"] = serde_json::json!(n);
+                }
+            }
+            if let Some(f) = findings {
+                let text = std::fs::read_to_string(f)
+                    .with_context(|| format!("read --findings {}", f.display()))?;
+                payload["findings_v2"] =
+                    serde_json::from_str(&text).context("parse --findings sidecar as JSON")?;
+            }
+            post_json_raw(
+                &client,
+                daemon,
+                &format!("/api/reviews/{id}/compose"),
+                &payload,
+            )
+            .await?
+        }
+        None => {
+            let mut query: Vec<(&str, &str)> = Vec::new();
+            if let Some(p) = ps {
+                query.push(("ps", p));
+            }
+            get_json_raw(
+                &client,
+                daemon,
+                &format!("/api/reviews/{id}/doc/lint"),
+                &query,
+            )
+            .await?
+        }
+    };
+    let lint = if body.get("lint").is_some() {
+        body["lint"].clone()
+    } else {
+        body.clone()
+    };
+    if !status.is_success() && lint.get("rows").is_none() {
+        return Err(loopback_or_api_error("review lint", daemon, status, &body));
+    }
+    if json {
+        envelope::print_ok("review-lint/1", &lint, Vec::new(), false, None);
+    } else {
+        print_lint(&lint);
+    }
+    if lint["errors"].as_i64().unwrap_or(0) > 0 {
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    Ok(())
+}
+
+/// `kb-code review render ID [--template FILE] [--out FILE]` — V73-K1.
+/// With `--template`, the operator's own file is POSTed to the loopback-only
+/// twin so the daemon stays the ONE renderer; without it, the built-in
+/// template is rendered by the bearer GET.
+async fn review_render_cmd(
+    daemon: &str,
+    id: i64,
+    template: Option<&Path>,
+    out: Option<&Path>,
+    ps: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (status, body) = match template {
+        Some(t) => {
+            let text = std::fs::read_to_string(t)
+                .with_context(|| format!("read --template {}", t.display()))?;
+            let mut payload = serde_json::json!({ "template": text });
+            if let Some(p) = ps {
+                payload["ps"] = serde_json::json!(p);
+            }
+            post_json_raw(
+                &client,
+                daemon,
+                &format!("/api/reviews/{id}/doc/render"),
+                &payload,
+            )
+            .await?
+        }
+        None => {
+            let mut query: Vec<(&str, &str)> = Vec::new();
+            if let Some(p) = ps {
+                query.push(("ps", p));
+            }
+            get_json_raw(
+                &client,
+                daemon,
+                &format!("/api/reviews/{id}/doc/render"),
+                &query,
+            )
+            .await?
+        }
+    };
+    if !status.is_success() {
+        return Err(loopback_or_api_error(
+            "review render",
+            daemon,
+            status,
+            &body,
+        ));
+    }
+    let html = body["html"].as_str().unwrap_or_default();
+    if let Some(path) = out {
+        std::fs::write(path, html).with_context(|| format!("write --out {}", path.display()))?;
+    }
+    if json {
+        let mut meta = body.clone();
+        // The HTML is the artifact, not a JSON field to scroll past — it
+        // is on stdout or in --out, never duplicated into the envelope.
+        if let Some(o) = meta.as_object_mut() {
+            o.remove("html");
+        }
+        envelope::print_ok("review-render/1", &meta, Vec::new(), false, None);
+    } else if out.is_some() {
+        println!(
+            "✓ wrote {} bytes to {}  (cards={} orphans={})",
+            html.len(),
+            out.expect("checked").display(),
+            body["cards"].as_i64().unwrap_or(0),
+            body["orphans"].as_i64().unwrap_or(0),
+        );
+    } else {
+        print!("{html}");
+    }
+    if let Some(unknown) = body["unknown_placeholders"].as_array() {
+        if !unknown.is_empty() {
+            let names: Vec<String> = unknown
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            eprintln!(
+                "! the template names placeholders this renderer does not fill (left verbatim): {}",
+                names.join(", ")
+            );
+        }
     }
     Ok(())
 }
@@ -19961,19 +20466,95 @@ mod tests {
     fn review_compose_parses_id_and_from_file() {
         match parse_cli(&["review", "compose", "4", "--from-file", "compose.json"]).unwrap() {
             Cmd::Review {
-                cmd:
-                    ReviewCmd::Compose {
-                        id,
-                        from_file,
-                        stdin,
-                        ..
-                    },
+                cmd: ReviewCmd::Compose(args),
             } => {
-                assert_eq!(id, 4);
-                assert_eq!(from_file.as_deref(), Some(Path::new("compose.json")));
-                assert!(!stdin);
+                assert_eq!(args.id, 4);
+                assert_eq!(args.from_file.as_deref(), Some(Path::new("compose.json")));
+                assert!(!args.stdin);
+                assert!(args.doc.is_none(), "the V0 form selects no document path");
             }
             other => panic!("expected Review{{Compose}}, got {other:?}"),
+        }
+    }
+
+    /// V73-K1 — `kb-code review compose ID --doc FILE --findings FILE
+    /// --tier full --dry-run`.
+    #[test]
+    fn review_compose_parses_the_kbc_review_document_form() {
+        match parse_cli(&[
+            "review",
+            "compose",
+            "7",
+            "--doc",
+            "review.md",
+            "--findings",
+            "findings.json",
+            "--tier",
+            "full",
+            "--dry-run",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd: ReviewCmd::Compose(args),
+            } => {
+                assert_eq!(args.id, 7);
+                assert_eq!(args.doc.as_deref(), Some(Path::new("review.md")));
+                assert_eq!(args.findings.as_deref(), Some(Path::new("findings.json")));
+                assert_eq!(args.tier.as_deref(), Some("full"));
+                assert!(args.dry_run);
+                assert!(args.from_file.is_none() && !args.stdin);
+            }
+            other => panic!("expected Review{{Compose}}, got {other:?}"),
+        }
+    }
+
+    /// V73-K1 — the three new document verbs parse.
+    #[test]
+    fn review_doc_lint_and_render_verbs_parse() {
+        match parse_cli(&["review", "doc", "3", "--resolve", "--ps", "2"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Doc {
+                    id, ps, resolve, ..
+                },
+            } => {
+                assert_eq!(id, 3);
+                assert_eq!(ps.as_deref(), Some("2"));
+                assert!(resolve);
+            }
+            other => panic!("expected Review{{Doc}}, got {other:?}"),
+        }
+        match parse_cli(&["review", "lint", "3", "--doc", "r.md", "--json"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Lint { id, doc, json, .. },
+            } => {
+                assert_eq!(id, 3);
+                assert_eq!(doc.as_deref(), Some(Path::new("r.md")));
+                assert!(json);
+            }
+            other => panic!("expected Review{{Lint}}, got {other:?}"),
+        }
+        match parse_cli(&[
+            "review",
+            "render",
+            "3",
+            "--template",
+            "t.html",
+            "--out",
+            "o.html",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd: ReviewCmd::Render {
+                    id, template, out, ..
+                },
+            } => {
+                assert_eq!(id, 3);
+                assert_eq!(template.as_deref(), Some(Path::new("t.html")));
+                assert_eq!(out.as_deref(), Some(Path::new("o.html")));
+            }
+            other => panic!("expected Review{{Render}}, got {other:?}"),
         }
     }
 
@@ -20532,8 +21113,15 @@ mod tests {
             lane_facts_request("repo", "a.rb", None, None),
             lane_summary_request("repo"),
             lane_ingest_request("repo"),
+<<<<<<< HEAD
             // V72-H2a — `outline/1`.
             outline_request("repo", "a.rb", None),
+=======
+            // V73-K1 — `kbc-review/1`'s three document reads, same rule.
+            review_doc_request(true),
+            review_doc_lint_request(),
+            review_doc_render_request(Some("default")),
+>>>>>>> af69200 (feat(kb-code): kbc-review/1 — review document, compose transaction, scheme refs → live cards, findings v2, lint, render (V73-K1))
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -20557,7 +21145,11 @@ mod tests {
             // V72-I1 — and one more, the same way.
             .chain(kb_code_server::rails::routes::V72_I1_ROUTES.iter())
             .chain(kb_code_server::lanes::V72_H4A_ROUTES.iter())
+<<<<<<< HEAD
             .chain(kb_code_server::outline::V72_H2A_ROUTES.iter());
+=======
+            .chain(kb_code_server::review_doc::routes::V73_K1_ROUTES.iter());
+>>>>>>> af69200 (feat(kb-code): kbc-review/1 — review document, compose transaction, scheme refs → live cards, findings v2, lint, render (V73-K1))
         for c in declared {
             let (path, query) = built
                 .iter()

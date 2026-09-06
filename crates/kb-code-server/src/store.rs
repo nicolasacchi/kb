@@ -6831,6 +6831,26 @@ pub struct ReviewFindingRow {
     pub import_batch_id: String,
     pub created_at: i64,
     pub updated_at: i64,
+    // --- findings v2 (V73-K1, migration V0032) ---------------------------
+    /// The SPEECH-ACT axis (`review_doc::ACTS`) — route-validated on the
+    /// `compose` path, `'issue'` by DEFAULT on every pre-V0032 row so an
+    /// existing finding reads back exactly as it always meant.
+    pub act: String,
+    /// The reviewer's OWN call, deliberately not derived from `severity`:
+    /// "a blocker that is not blocking this PR" is a real thing to say.
+    pub blocking: bool,
+    /// SECONDARY refs, raw JSON exactly as stored (same "row types don't
+    /// parse other modules' JSON" convention the rest of this struct
+    /// follows). The PRIMARY location is still `annotation_id`.
+    pub cites_json: Option<String>,
+    /// The CHANGE DETECTOR (`review_doc::fingerprint`). `None` on every
+    /// pre-V0032 row and never backfilled — nothing computed one for those
+    /// rows, and inventing one would let a re-compose silently adopt a
+    /// finding it did not write.
+    pub fingerprint: Option<String>,
+    /// The slug that REPLACED this one, when the composing author declared
+    /// the supersession. Never inferred.
+    pub superseded_by: Option<String>,
 }
 
 /// A finding ready to persist — the caller has already: (a) validated
@@ -6873,6 +6893,12 @@ pub struct NewReviewFinding {
     /// annotation's). `None` is acceptable (and typical) for
     /// `origin = "import"` in v1.
     pub finding_author: Option<String>,
+    // --- findings v2 (V73-K1) --------------------------------------------
+    /// `review_doc::ACTS`; `"issue"` reproduces the v1 meaning exactly.
+    pub act: String,
+    pub blocking: bool,
+    pub cites_json: Option<String>,
+    pub fingerprint: Option<String>,
 }
 
 /// One finding inside a `findings/import` batch — same shape as
@@ -6897,6 +6923,45 @@ pub struct ImportedFinding {
     pub anchor: String,
     pub anchor2: Option<String>,
     pub side: Option<String>,
+    // --- findings v2 (V73-K1) --------------------------------------------
+    /// `review_doc::ACTS`. The v1 `findings/import` route sends
+    /// `"issue"` for every row, which is exactly what those rows have
+    /// always meant.
+    pub act: String,
+    pub blocking: bool,
+    pub cites_json: Option<String>,
+    /// `Some` only on the `compose` (document) path — it is what
+    /// [`FindingIdentity::Fingerprint`] matches on. The v1 path sends
+    /// `None` and keeps matching on the slug.
+    pub fingerprint: Option<String>,
+    /// Slugs this finding declares it REPLACES. Written to the replaced
+    /// row's `superseded_by` during the supersede step. Never inferred.
+    pub supersedes: Vec<String>,
+}
+
+impl ImportedFinding {
+    /// A v1 (`kbc-findings/1`) import item's v2 defaults — one place, so
+    /// the two call sites (`findings/import` and `compose` v0) cannot
+    /// drift apart on what a v1 row means in the v2 columns.
+    pub fn v1_defaults() -> (String, bool, Option<String>, Option<String>, Vec<String>) {
+        ("issue".to_string(), false, None, None, Vec::new())
+    }
+}
+
+/// What makes two findings THE SAME finding across a re-import.
+///
+/// `Slug` is `kbc-findings/1`'s rule and the only one the low-level
+/// `findings import` twin has ever used: the author supplies a stable slug
+/// and owns it. `Fingerprint` is `kbc-review/1`'s (V73-K1, design D9): the
+/// slug is IDENTITY but is MINTED by this daemon, so a re-compose that
+/// re-words a finding must still land on the same row — the content
+/// fingerprint is what says so. Under `Fingerprint`, an EXPLICIT slug still
+/// wins (an author who names a slug means that row), and a slug is never
+/// reused for a different finding, not even after a tombstone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindingIdentity {
+    Slug,
+    Fingerprint,
 }
 
 /// Outcome of [`Store::reconcile_findings_import`] — the four slug buckets
@@ -7128,6 +7193,11 @@ fn review_finding_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewFind
         import_batch_id: r.get(28)?,
         created_at: r.get(29)?,
         updated_at: r.get(30)?,
+        act: r.get(31)?,
+        blocking: r.get::<_, i64>(32)? != 0,
+        cites_json: r.get(33)?,
+        fingerprint: r.get(34)?,
+        superseded_by: r.get(35)?,
     })
 }
 
@@ -7138,7 +7208,8 @@ const REVIEW_FINDING_COLUMNS: &str = "id, review_id, annotation_id, slug, severi
     disposition, disposition_note, disposition_by, disposition_at,
     content_updated_at, published_state, published_at, published_url,
     superseded, superseded_at, superseded_reason, import_batch_id,
-    created_at, updated_at";
+    created_at, updated_at,
+    act, blocking, cites_json, fingerprint, superseded_by";
 
 /// Insert one finding's `annotations` row AND its `review_findings`
 /// sibling, in that order, on an ALREADY-OPEN transaction — shared by
@@ -7182,12 +7253,14 @@ fn insert_review_finding_on(
              disposition, disposition_note, disposition_by, disposition_at,
              content_updated_at, published_state, published_at, published_url,
              superseded, superseded_at, superseded_reason, import_batch_id,
-             created_at, updated_at)
+             created_at, updated_at,
+             act, blocking, cites_json, fingerprint, superseded_by)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                  ?15, ?16,
                  NULL, NULL, NULL, NULL,
                  NULL, 'unpublished', NULL, NULL,
-                 0, NULL, NULL, ?17, ?18, ?19)",
+                 0, NULL, NULL, ?17, ?18, ?19,
+                 ?20, ?21, ?22, ?23, NULL)",
         params![
             f.review_id,
             annotation_id,
@@ -7208,6 +7281,10 @@ fn insert_review_finding_on(
             f.import_batch_id,
             now,
             now,
+            f.act,
+            f.blocking as i64,
+            f.cites_json,
+            f.fingerprint,
         ],
     )?;
     let finding_id = tx.last_insert_rowid();
@@ -7747,6 +7824,7 @@ impl Store {
             author,
             findings,
             mode,
+            FindingIdentity::Slug,
             now,
         )?;
         tx.commit()?;
@@ -7799,6 +7877,7 @@ impl Store {
             author,
             findings,
             mode,
+            FindingIdentity::Slug,
             now,
         )?;
 
@@ -7865,6 +7944,7 @@ fn reconcile_findings_import_on(
     author: &str,
     findings: &[ImportedFinding],
     mode: FindingsImportMode,
+    identity: FindingIdentity,
     now: i64,
 ) -> Result<FindingsImportOutcome> {
     let existing_rows: Vec<ReviewFindingRow> = {
@@ -7883,10 +7963,58 @@ fn reconcile_findings_import_on(
 
     let mut outcome = FindingsImportOutcome::default();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // V73-K1 — under `FindingIdentity::Fingerprint` an incoming finding may
+    // match an EXISTING row by content even though it carries no slug of its
+    // own; `resolve_identity` is the only place that decision is made, and it
+    // returns the slug to write, minting a fresh one from the ledger when
+    // nothing matched. Under `Slug` it is the identity function.
+    let mut by_fingerprint: HashMap<&str, &ReviewFindingRow> = HashMap::new();
+    if matches!(identity, FindingIdentity::Fingerprint) {
+        // Prefer a LIVE row over a tombstoned one carrying the same
+        // fingerprint: re-composing a finding that was dropped and is back
+        // must revive the row a human may already have disposed of, and if
+        // both exist the live one is the one they are looking at.
+        for row in existing.values() {
+            let Some(fp) = row.fingerprint.as_deref() else {
+                continue;
+            };
+            match by_fingerprint.get(fp) {
+                Some(prev) if !prev.superseded => {}
+                _ => {
+                    by_fingerprint.insert(fp, row);
+                }
+            }
+        }
+    }
+    let mut supersede_declarations: HashMap<String, String> = HashMap::new();
 
     for f in findings {
-        seen.insert(f.slug.clone());
-        match existing.get(&f.slug) {
+        let slug = match identity {
+            FindingIdentity::Slug => f.slug.clone(),
+            FindingIdentity::Fingerprint => {
+                if !f.slug.is_empty() {
+                    record_finding_slug_on(tx, review_id, &f.slug, now)?;
+                    f.slug.clone()
+                } else if let Some(hit) = f
+                    .fingerprint
+                    .as_deref()
+                    .and_then(|fp| by_fingerprint.get(fp))
+                {
+                    hit.slug.clone()
+                } else {
+                    mint_finding_slug_on(tx, review_id, &existing, now)?
+                }
+            }
+        };
+        for replaced in &f.supersedes {
+            supersede_declarations.insert(replaced.clone(), slug.clone());
+        }
+        seen.insert(slug.clone());
+        let f = &ImportedFinding {
+            slug: slug.clone(),
+            ..f.clone()
+        };
+        match existing.get(&slug) {
             None => {
                 let new_row = NewReviewFinding {
                     review_id,
@@ -7912,8 +8040,13 @@ fn reconcile_findings_import_on(
                     import_batch_id: import_batch_id.to_string(),
                     origin: FINDING_ORIGIN_IMPORT.to_string(),
                     finding_author: None,
+                    act: f.act.clone(),
+                    blocking: f.blocking,
+                    cites_json: f.cites_json.clone(),
+                    fingerprint: f.fingerprint.clone(),
                 };
                 insert_review_finding_on(tx, &new_row, now)?;
+                record_finding_slug_on(tx, review_id, &new_row.slug, now)?;
                 outcome.created.push(f.slug.clone());
             }
             Some(cur) => {
@@ -7943,7 +8076,15 @@ fn reconcile_findings_import_on(
                     || cur.rationale != f.rationale
                     || cur.recommendation != f.recommendation
                     || cur.evidence_lang != f.evidence_lang
-                    || cur.evidence_source != f.evidence_source;
+                    || cur.evidence_source != f.evidence_source
+                    || cur.act != f.act
+                    || cur.blocking != f.blocking
+                    || cur.cites_json != f.cites_json
+                    // A fingerprint the caller did not compute (the v1 twin)
+                    // never counts as a change — otherwise every v1 re-import
+                    // of an untouched v2 finding would clear its fingerprint
+                    // and orphan it from the next compose.
+                    || (f.fingerprint.is_some() && cur.fingerprint != f.fingerprint);
                 if content_changed || cur.superseded {
                     tx.execute(
                         "UPDATE review_findings SET
@@ -7951,7 +8092,9 @@ fn reconcile_findings_import_on(
                             location_lines = ?6, location_removed = ?7, title = ?8, rationale = ?9,
                             recommendation = ?10, evidence_lang = ?11, evidence_source = ?12,
                             content_updated_at = ?13, superseded = 0, superseded_at = NULL,
-                            superseded_reason = NULL, updated_at = ?14
+                            superseded_reason = NULL, superseded_by = NULL, updated_at = ?14,
+                            act = ?15, blocking = ?16, cites_json = ?17,
+                            fingerprint = COALESCE(?18, fingerprint)
                          WHERE id = ?1",
                         params![
                             cur.id,
@@ -7968,6 +8111,10 @@ fn reconcile_findings_import_on(
                             f.evidence_source,
                             now,
                             now,
+                            f.act,
+                            f.blocking as i64,
+                            f.cites_json,
+                            f.fingerprint,
                         ],
                     )?;
                     // Refresh the linked annotation's display body
@@ -7986,12 +8133,26 @@ fn reconcile_findings_import_on(
     if matches!(mode, FindingsImportMode::Full) {
         for (slug, row) in &existing {
             if !seen.contains(slug) && !row.superseded && row.origin == FINDING_ORIGIN_IMPORT {
+                // `superseded_by` is written ONLY when an incoming finding
+                // declared `supersedes: [this slug]`. Never inferred — see
+                // migration V0032's own comment on why guessing which new
+                // finding "is really" an old one is the wrong-exact class.
+                let by = supersede_declarations.get(slug);
                 tx.execute(
                     "UPDATE review_findings
                      SET superseded = 1, superseded_at = ?2,
-                         superseded_reason = 'not_in_reimport', updated_at = ?2
+                         superseded_reason = ?3, superseded_by = ?4, updated_at = ?2
                      WHERE id = ?1",
-                    params![row.id, now],
+                    params![
+                        row.id,
+                        now,
+                        if by.is_some() {
+                            SUPERSEDED_REASON_REPLACED
+                        } else {
+                            SUPERSEDED_REASON_NOT_IN_REIMPORT
+                        },
+                        by,
+                    ],
                 )?;
                 outcome.superseded.push(slug.clone());
             }
@@ -7999,6 +8160,334 @@ fn reconcile_findings_import_on(
     }
 
     Ok(outcome)
+}
+
+// ── V73-K1: kbc-review/1 — the review document, the slug ledger ─────────
+
+/// `review_findings.superseded_reason` — the two values a compose/import
+/// tombstone can carry. `not_in_reimport` is V0024's original (and still the
+/// default); `replaced` is written only when an incoming finding DECLARED
+/// `supersedes: [<slug>]`, alongside `superseded_by`.
+pub const SUPERSEDED_REASON_NOT_IN_REIMPORT: &str = "not_in_reimport";
+pub const SUPERSEDED_REASON_REPLACED: &str = "replaced";
+
+/// Record `slug` as TAKEN on this review, forever. `INSERT OR IGNORE` — a
+/// slug already in the ledger stays with its original `minted_at`.
+///
+/// The `ordinal` column is the `<n>` of an `f-<n>` slug and is what
+/// [`mint_finding_slug_on`] counts from; an author-supplied non-numeric slug
+/// (`f-dedup-race`) is recorded with a NULL ordinal: still taken, just not
+/// part of the counter.
+fn record_finding_slug_on(
+    tx: &Transaction<'_>,
+    review_id: i64,
+    slug: &str,
+    now: i64,
+) -> Result<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO review_finding_slugs (review_id, slug, ordinal, minted_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![review_id, slug, slug_ordinal(slug), now],
+    )?;
+    Ok(())
+}
+
+/// The `<n>` of an `f-<n>` slug, or `None` for any other shape.
+pub fn slug_ordinal(slug: &str) -> Option<i64> {
+    slug.strip_prefix("f-")?.parse::<i64>().ok()
+}
+
+/// Mint the next never-before-used `f-<n>` slug for this review, and record
+/// it in the ledger.
+///
+/// The counter is `1 + max(ledger ordinals, ordinals of slugs already on
+/// `review_findings`)`. Reading BOTH is what makes the rule true for a
+/// review that predates V0032 (its `f-1`/`f-2` slugs exist as rows but have
+/// no ledger entry yet) as well as for one whose highest-numbered finding a
+/// human deleted out from under the ledger. Both sources are monotonic and
+/// neither is ever pruned, so the counter cannot walk backwards — D9's
+/// "minted once per review and NEVER reused."
+fn mint_finding_slug_on(
+    tx: &Transaction<'_>,
+    review_id: i64,
+    existing: &HashMap<String, ReviewFindingRow>,
+    now: i64,
+) -> Result<String> {
+    let ledger_max: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(ordinal), 0) FROM review_finding_slugs WHERE review_id = ?1",
+        params![review_id],
+        |r| r.get(0),
+    )?;
+    let rows_max = existing
+        .keys()
+        .filter_map(|slug| slug_ordinal(slug))
+        .max()
+        .unwrap_or(0);
+    let next = ledger_max.max(rows_max) + 1;
+    let slug = format!("f-{next}");
+    record_finding_slug_on(tx, review_id, &slug, now)?;
+    Ok(slug)
+}
+
+/// One `review_docs` revision, as read back. `doc_md` is the WHOLE
+/// document (front matter + body) byte-for-byte as it was composed — the
+/// lossless record; every other column is a denormalised copy of a parsed
+/// front-matter field and the document itself wins on a disagreement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewDocRow {
+    pub id: i64,
+    pub review_id: i64,
+    pub ps_number: i64,
+    pub revision: i64,
+    pub schema: String,
+    pub tier: String,
+    pub doc_md: String,
+    pub summary_md: String,
+    pub risk_level: Option<String>,
+    pub risk_why: Option<String>,
+    /// Raw JSON array (same "row types don't parse other modules' JSON"
+    /// convention `AnnotationRow`/`ReviewFindingRow` already follow).
+    pub omitted_json: String,
+    pub author_json: Option<String>,
+    pub byte_len: i64,
+    pub created_at: i64,
+}
+
+/// A revision ready to append. `revision` is assigned by the store (the
+/// caller never picks one), so two concurrent composes cannot both claim
+/// the same number — the UNIQUE index would reject the second anyway, and
+/// this way it never gets that far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewReviewDoc {
+    pub review_id: i64,
+    pub ps_number: i64,
+    pub schema: String,
+    pub tier: String,
+    pub doc_md: String,
+    pub summary_md: String,
+    pub risk_level: Option<String>,
+    pub risk_why: Option<String>,
+    pub omitted_json: String,
+    pub author_json: Option<String>,
+}
+
+const REVIEW_DOC_COLUMNS: &str = "id, review_id, ps_number, revision, schema, tier, doc_md,
+    summary_md, risk_level, risk_why, omitted_json, author_json, byte_len, created_at";
+
+fn review_doc_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewDocRow> {
+    Ok(ReviewDocRow {
+        id: r.get(0)?,
+        review_id: r.get(1)?,
+        ps_number: r.get(2)?,
+        revision: r.get(3)?,
+        schema: r.get(4)?,
+        tier: r.get(5)?,
+        doc_md: r.get(6)?,
+        summary_md: r.get(7)?,
+        risk_level: r.get(8)?,
+        risk_why: r.get(9)?,
+        omitted_json: r.get(10)?,
+        author_json: r.get(11)?,
+        byte_len: r.get(12)?,
+        created_at: r.get(13)?,
+    })
+}
+
+/// Append one revision on an already-open transaction. Returns the
+/// revision number it was given.
+fn insert_review_doc_on(tx: &Transaction<'_>, d: &NewReviewDoc, now: i64) -> Result<i64> {
+    let prev: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(revision), 0) FROM review_docs
+         WHERE review_id = ?1 AND ps_number = ?2",
+        params![d.review_id, d.ps_number],
+        |r| r.get(0),
+    )?;
+    let revision = prev + 1;
+    tx.execute(
+        "INSERT INTO review_docs
+            (review_id, ps_number, revision, schema, tier, doc_md, summary_md,
+             risk_level, risk_why, omitted_json, author_json, byte_len, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            d.review_id,
+            d.ps_number,
+            revision,
+            d.schema,
+            d.tier,
+            d.doc_md,
+            d.summary_md,
+            d.risk_level,
+            d.risk_why,
+            d.omitted_json,
+            d.author_json,
+            d.doc_md.len() as i64,
+            now,
+        ],
+    )?;
+    Ok(revision)
+}
+
+/// [`Store::compose_review_doc`]'s result — one field per write the
+/// transaction performed.
+#[derive(Debug, Clone)]
+pub struct ComposeDocOutcome {
+    pub findings: FindingsImportOutcome,
+    pub revision: i64,
+    pub report_set: bool,
+    pub verdict_changed: bool,
+}
+
+impl Store {
+    /// The newest revision of this review's document at `ps_number`, or
+    /// `None` when it has none. "Newest wins" is the whole read rule —
+    /// revisions are append-only (migration V0032).
+    pub fn latest_review_doc(
+        &self,
+        review_id: i64,
+        ps_number: i64,
+    ) -> Result<Option<ReviewDocRow>> {
+        self.lock()
+            .query_row(
+                &format!(
+                    "SELECT {REVIEW_DOC_COLUMNS} FROM review_docs
+                     WHERE review_id = ?1 AND ps_number = ?2
+                     ORDER BY revision DESC LIMIT 1"
+                ),
+                params![review_id, ps_number],
+                review_doc_row_from,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Every revision of this review's document, oldest first, across every
+    /// patchset. The full record — nothing is ever rewritten, so this is a
+    /// real history and not a reconstruction.
+    pub fn list_review_docs(&self, review_id: i64) -> Result<Vec<ReviewDocRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {REVIEW_DOC_COLUMNS} FROM review_docs
+             WHERE review_id = ?1 ORDER BY ps_number ASC, revision ASC"
+        ))?;
+        let rows = stmt
+            .query_map(params![review_id], review_doc_row_from)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// V73-K1 — `kbc-review/1`'s ONE authoring transaction (design D9): the
+    /// document revision, findings reconciled by FINGERPRINT (the SAME core
+    /// [`Self::reconcile_findings_import`] uses, under
+    /// [`FindingIdentity::Fingerprint`] instead of `Slug`), the report, and
+    /// an optional review-level verdict — all inside one `BEGIN`/`COMMIT`.
+    ///
+    /// This is the v0 [`Self::compose_review`] one level up, and it keeps
+    /// every one of that method's own guarantees: a failure partway through
+    /// rolls back every prior write, so a caller never observes a document
+    /// stored with no findings, or findings with no report. The report is
+    /// pre-normalised by the caller through the SAME
+    /// `reviews::normalize_report_shape` `PUT /report` uses; the verdict
+    /// uses the SAME "no-op on an identical (state, note) pair" rule
+    /// `set_review_verdict` does, re-implemented against `tx` because
+    /// `self.lock()` is a non-reentrant `parking_lot::Mutex`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_review_doc(
+        &self,
+        doc: &NewReviewDoc,
+        repo_id: i64,
+        import_batch_id: &str,
+        author: &str,
+        findings: &[ImportedFinding],
+        mode: FindingsImportMode,
+        report_json: &str,
+        verdict: Option<(&str, Option<&str>)>,
+        now: i64,
+    ) -> Result<ComposeDocOutcome> {
+        let review_id = doc.review_id;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+
+        let findings_outcome = reconcile_findings_import_on(
+            &tx,
+            review_id,
+            repo_id,
+            doc.ps_number,
+            import_batch_id,
+            author,
+            findings,
+            mode,
+            FindingIdentity::Fingerprint,
+            now,
+        )?;
+
+        let revision = insert_review_doc_on(&tx, doc, now)?;
+
+        tx.execute(
+            "UPDATE reviews SET report_json = ?2, report_updated_at = ?3 WHERE id = ?1",
+            params![review_id, report_json, now],
+        )?;
+
+        let mut verdict_changed = false;
+        if let Some((verdict_state, note)) = verdict {
+            let cur: Option<(Option<String>, Option<String>)> = tx
+                .query_row(
+                    "SELECT verdict, verdict_note FROM reviews WHERE id = ?1",
+                    params![review_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            if let Some((cur_state, cur_note)) = cur {
+                let unchanged =
+                    cur_state.as_deref() == Some(verdict_state) && cur_note.as_deref() == note;
+                if !unchanged {
+                    tx.execute(
+                        "UPDATE reviews
+                         SET verdict = ?2, verdict_note = ?3, verdict_at = ?4, verdict_ps = ?5
+                         WHERE id = ?1",
+                        params![review_id, verdict_state, note, now, doc.ps_number],
+                    )?;
+                    verdict_changed = true;
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok(ComposeDocOutcome {
+            findings: findings_outcome,
+            revision,
+            report_set: true,
+            verdict_changed,
+        })
+    }
+
+    /// Up to `limit` indexed paths in this repo whose BASENAME is
+    /// `basename` — `review_doc::lint`'s "did you mean" candidates for an
+    /// unresolvable `code:` ref.
+    ///
+    /// A trailing-`LIKE` scan of one repo's `files` rows: fine for a
+    /// pre-flight the operator runs once per compose, and deliberately NOT
+    /// something any keystroke path may call (`search::matcher` is the
+    /// answer there — kb-code-server/CLAUDE.md invariant 16(b)).
+    pub fn paths_with_basename(
+        &self,
+        repo_id: i64,
+        basename: &str,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT path FROM files
+             WHERE repo_id = ?1 AND (path = ?2 OR path LIKE '%/' || ?3 ESCAPE '\\')
+             ORDER BY path LIMIT ?4",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![repo_id, basename, like_escape(basename), limit as i64],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
 }
 
 // ── PRR-N12: scip runs ──────────────────────────────────────────────────

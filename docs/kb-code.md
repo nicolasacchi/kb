@@ -1343,3 +1343,254 @@ and look complete, where highlighting over an error tree degrades VISIBLY
 The test that pins the gap fails the day a grammar that parses `@extend`
 lands, at which point flipping the tier back is a one-line change in
 `syntax::REGISTRY`.
+## Review — `kbc-review/1`, the review document (v7.3)
+
+kb-code v7.3 makes a review a **document** rather than a pile of API calls.
+Design of record: D9 + D9-a + Track K of
+`docs/research/kb-code-v7-continuum-2026-09.html`.
+
+### The document
+
+A `kbc-review/1` document is **Markdown with YAML front matter**, stored per
+review and patchset in `review_docs` (migration V0032) as an **append-only
+chain of revisions** — `compose` never updates a row, it appends the next
+revision and the highest wins on read. The body is Markdown and never HTML.
+D9-a records why: HTML is a permanent XSS surface, cannot be interdiffed
+across re-reviews, and its references are dead text. The operator's HTML
+artifact is met one level up, as a rendered **export** (below).
+
+Front matter — every key optional except `summary_md`, every unknown key
+refused **by name**:
+
+| key | shape |
+|---|---|
+| `schema` | `kbc-review/1` |
+| `summary_md` | **required** — the prose summary; becomes `report.summary` |
+| `risk` | `{level: low\|medium\|high, why: <one line>}` |
+| `reading_order` | `[{chapter, stops: [<ref> \| {ref, why}]}]` |
+| `blocks` | named sections: `context`, `approach`, `alternatives_considered`, `tests`, `rollout`, `open_questions` |
+| `findings` | the v2 finding list (or supply it as a sidecar) |
+| `flows` | `[{name, steps: [<ref>]}]` — named paths through the diff |
+| `questions` | `[{to: to_author\|to_reviewer\|to_agent, ask, ref?}]` |
+| `author` | `{kind: agent\|human, model?, session_id?, considered: [...], not_considered: [...]}` |
+
+The front-matter parser is a **closed YAML subset** written for this purpose
+(`review_doc::frontmatter`): block mappings and sequences, plain/quoted
+scalars, `\|`/`>` block scalars, one-line flow sequences, comments. Anchors,
+aliases, tags, merge keys, flow mappings, nested flow collections, tabs in
+indentation and duplicate keys are **refused by name** with the line number.
+Refusing is the point — a general YAML parser's job is to accept; this one's
+job is to guarantee that what the document says is what the daemon read.
+
+### Tiers, and what an omission means
+
+`--tier minimal|standard|full` prices the authoring and states what the
+document **promises**:
+
+| tier | requires |
+|---|---|
+| `minimal` | `summary_md`, and a `findings` list (an EMPTY list is a valid, explicit "this review found nothing" — different from not having looked) |
+| `standard` | + `risk` |
+| `full` | + `author`, + at least one named `blocks` section |
+
+`reading_order` is never a tier failure because it has a deterministic
+substitute: when a document declares none, the response carries a **derived**
+order from the existing review map (dependencies first, tests last —
+literally `review_map::compute_reading_order`, the same function
+`GET /api/reviews/{id}/reading-order` serves), captioned `derived`.
+`flows` and `questions` have no substitute and are therefore reported as
+omissions at every tier rather than as failures at `full`.
+
+Every optional block a document does **not** carry is listed in `omitted[]`
+on every read and in the rendered export. An absence is stated, never
+discovered.
+
+### Refs — the grammar
+
+A ref is a `[[…]]` span whose body starts with one of seven closed scheme
+prefixes. **A bare `[[X]]` is a kb wikilink and is never a kbc ref** (kb root
+invariant #29 owns that syntax); a `[[…]]` that names a known scheme but does
+not parse is reported as `ref_malformed`, never silently degraded into a
+wikilink.
+
+| scheme | form | example |
+|---|---|---|
+| `code` | `code:<path>[:<line>[-<end>]][@<blob-sha>]` | `[[code:app/models/order.rb:120-134@a1b2c3d]]` |
+| `sym` | `sym:<Qualified>[#<member>]` (`::` is never a field boundary) | `[[sym:Namespace::Class#method]]` |
+| `ent` | `ent:<Fqn>` | `[[ent:Shop::Order]]` |
+| `finding` | `finding:<slug>` | `[[finding:f-7]]` |
+| `gh` | `gh:<comment\|review\|issue\|pr>/<id>` | `[[gh:comment/12345]]` |
+| `kb` | `kb:<kb>/<id>` | `[[kb:research/9f8b7182d433]]` |
+| `hunk` | `hunk:<path>@<ps>#<n>` (`ps` may be `3` or `ps3`) | `[[hunk:app/models/order.rb@2#3]]` |
+
+Refs are read from BOTH surfaces through one parser: the prose scan (which
+skips fenced code blocks, inline code spans and the front-matter region) and
+the typed front-matter fields (`reading_order` stops, `flows` steps, a
+question's `ref`, a finding's `cites`). The grammar is golden-pinned by
+`crates/kb-code-server/grammar/kbcrefs.golden.json`, one fixture read by the
+Rust parser and (from v7.3's SPA unit) by its TS mirror.
+
+### Refs — the live cards
+
+`GET /api/reviews/{id}/doc?resolve=1` turns every ref into a **card**,
+computed per request and persisted nowhere:
+
+| state | meaning | trust |
+|---|---|---|
+| `pinned` | the bytes the author cited are the bytes shown | `exact` when the `@sha` IS the patchset's blob; `likely` when the ref pinned no blob |
+| `carried` | the bytes moved and the ladder re-anchored them, with a caption saying how | `likely` — never `exact` |
+| `orphan` | no honest match; **no position is reported** | none |
+| `inert` | `gh:`/`kb:` — kb-code makes no claim (it never calls GitHub and does not own the kb corpus) | none |
+
+A `code:` ref is carried by the **same** ladder review comments use
+(`annotations::resolve` plus the snippet guard) — not a second matcher. A
+`carried` ref is capped at `likely` even when the snippet matched verbatim:
+an exact text match at a different line in a different blob is strong
+evidence, not proof, and a wrong `exact` is this crate's release blocker.
+`sym:`/`ent:` resolve through the existing symbol/entity addressing and take
+only the EXACT rung — an ambiguous name is an orphan naming the count, never
+a guess, because a ref card carries no fallback anchor the way a `?sym=`
+link does. `ent:` additionally inherits the entity index's own class as a
+CEILING. Each card carries a snippet (capped at 40 lines) and server
+highlight spans, or `highlights: null` when the target blob is not one this
+daemon has indexed — a pure store lookup, never derived in a handler.
+
+### Findings v2
+
+Additive on `review_findings` (V0032), beside the unchanged `severity`
+(`blocker|concern|ok`) and the unchanged origin rule:
+
+- `act` — `issue|question|suggestion|nitpick|praise|note|todo|chore`
+- `category` — `correctness|security|performance|design|tests|docs|style|other`
+- `blocking` — the reviewer's own call, deliberately **not** derived from
+  `severity` ("a blocker that is not blocking this PR" is a real thing to say)
+- `cites` — SECONDARY refs; the PRIMARY location stays the annotation anchor
+  that gives the finding its ladder, its thread and its GitHub export
+- `fingerprint` — a stable hash of `act + category + normalised title +
+  primary path`; NULL on every pre-V0032 row and never backfilled
+- `superseded_by` — the slug that replaced a tombstoned finding, written
+  ONLY when an incoming finding declared `supersedes: [<slug>]`; never inferred
+
+**The slug rule.** `f-<n>` slugs are minted once per review from a monotonic
+ledger (`review_finding_slugs`) and are **never reused**, not even after the
+finding they named is tombstoned. Reconciliation on the document path
+matches by FINGERPRINT and keeps the slug, so re-wording a finding does not
+orphan a human's disposition; a finding that vanishes from a re-compose is
+tombstoned, never renumbered; an explicit author-supplied slug is honoured
+(and recorded as taken); a `manual` finding is never adopted or superseded
+by a compose, and an explicit slug naming one is a whole-compose 400.
+
+### `compose` — the one authoring transaction
+
+`POST /api/reviews/{id}/compose` — **loopback-only** (D22 local-canonical;
+no review-authoring surface graduates off loopback). One call:
+
+1. validates the front matter against the tier,
+2. lints (below), resolving every ref,
+3. reconciles the findings by fingerprint,
+4. appends the document revision,
+5. sets the report (`summary_md` becomes `report.summary`, normalised
+   through the same `normalize_report_shape` `PUT /report` uses),
+6. optionally sets the review-level verdict,
+
+— all in ONE sqlite transaction, then emits exactly ONE
+`review.changed{reason:"compose"}` and returns the resolved read. Any lint
+ERROR is a 400 carrying the whole lint (every problem at once) with nothing
+written. `dry_run: true` stops after the lint and writes nothing.
+
+It composes no `risk_score`: `risk` is a level plus a sentence, and coercing
+that into a number would be a precision the document never claimed.
+
+```
+kb-code review compose <id> --doc review.md [--findings findings.json] \
+    [--tier standard] [--mode full|additive] [--ps N] \
+    [--verdict approve|request-changes|comment] [-m NOTE] [--dry-run] [--json]
+```
+
+`findings import`, `report --set` and `verdict` remain the documented
+**low-level twins** — the same writes, one at a time, each with its own
+commit. The V0 `compose` form (`--from-file`/`--stdin`, a `kbc-compose/1`
+JSON body with `summary` + a `kbc-findings/1` block) is unchanged; `doc_md`
+is what selects the document path.
+
+### `lint` — the pre-flight
+
+`GET /api/reviews/{id}/doc/lint` lints the STORED document;
+`kb-code review lint <id> --doc review.md` lints a CANDIDATE via a `compose`
+dry run — the same code path, so a document that lints clean and then fails
+to compose would be one bug, not two surfaces disagreeing. Both write
+nothing.
+
+| rule | severity | when |
+|---|---|---|
+| `doc_parse` | error | the front matter or the model does not parse |
+| `size_cap` | error | over `MAX_DOC_BYTES` (256 KiB), `MAX_REFS` (2 000) or `MAX_FINDINGS` (500) — a REFUSAL naming the numbers, never a truncation |
+| `tier_unmet` | error | a tier requirement is missing, naming the field and the tier |
+| `ref_orphan` | error | a ref resolved to nothing, with nearest candidates |
+| `ref_wrong_patchset` | error | the ref names a patchset this review does not have (or not the one being read) |
+| `finding_no_location` | error | a finding with no usable primary location |
+| `finding_vocabulary` | error | act / severity / category / slug outside its closed set |
+| `duplicate_fingerprint` | error | two findings reconciliation could not tell apart |
+| `duplicate_slug` | error | two findings claiming one slug |
+| `ref_malformed` | warn | `[[code:]]` — a kbc scheme that does not parse |
+| `bare_wikilink` | info | `[[Order]]` is a kb link, not a kbc ref |
+| `stale_sha` | info | the ref resolved by carrying forward, not by a blob match |
+| `bare_symbol_mention` | info | `Shop::Order` in prose with no `sym:`/`ent:` prefix (the `::` is required — a bare CapWord is never reported) |
+| `question_without_ref` | info | a question with no location |
+
+`kb-code review lint` exits **3** when the lint reports any error — the same
+`EXIT_CONFLICT` slot an HTTP 409 uses, and for the same reason: the request
+is well-formed and the state refuses it.
+
+### `render --template` — the HTML export
+
+The stored Markdown plus its resolved cards, poured into an operator HTML
+template. This is the ONE place kb-code produces HTML from a review, and it
+is an export: nothing rendered is ever stored.
+
+```
+kb-code review render <id> [--template house.html] [--out review.html] [--ps N] [--json]
+```
+
+With `--template` the operator's own file is POSTed to the loopback-only
+twin so the daemon stays the only renderer; without it,
+`GET /api/reviews/{id}/doc/render?template=<name>` renders through a
+REGISTERED name — `default` (built-in) plus every key of
+`[review] doc_templates` in `kb-code.toml`. The route takes a NAME, never a
+path, so it is structurally unable to be talked into reading an arbitrary
+file.
+
+Placeholder grammar — `{{name}}` for a name in the closed set below; **every
+other `{{…}}` is left byte-for-byte alone** and reported in
+`unknown_placeholders`, so a template's own CSS/JS braces are never mangled
+and a typo is never a silent hole:
+
+`{{title}}` · `{{meta}}` (repo, review, patchset, revision, tier, render
+time) · `{{summary}}` · `{{risk}}` · `{{reading_order}}` · `{{blocks}}` ·
+`{{findings}}` · `{{cards}}` · `{{flows}}` · `{{questions}}` · `{{author}}` ·
+`{{omitted}}` · `{{body}}`
+
+Every dynamic string is HTML-escaped, and every Markdown body goes through
+kb-core's existing UNTRUSTED-body renderer (`render.unsafe = false`), so raw
+HTML inside a review document is escaped rather than passed through. Nothing
+this renderer emits can execute; the only script in the output is script the
+operator put in their own template. **kb-code never generates a
+`<template id="kb-prompt">`** — that convention is kb's (root invariant #5),
+and the kb-side authoring step owns writing one when the export is dropped
+into a corpus. `kb-code review set-artifact` records the link back.
+
+### Routes
+
+| route | posture |
+|---|---|
+| `GET /api/reviews/{id}/doc?ps=&resolve=1` | bearer |
+| `GET /api/reviews/{id}/doc/lint?ps=` | bearer |
+| `GET /api/reviews/{id}/doc/render?ps=&template=<name>` | bearer |
+| `POST /api/reviews/{id}/doc/render` | loopback-only (the operator's template bytes; writes nothing) |
+| `POST /api/reviews/{id}/compose` | loopback-only |
+
+The three reads are declared as `RouteContract`s in
+`kb_code_server::review_doc::routes::V73_K1_ROUTES` and walked by the same
+dead-surface test V71-G0 added.
+
+CLI: `kb-code review {doc,lint,render,compose}`.

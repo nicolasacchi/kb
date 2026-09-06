@@ -107,3 +107,60 @@ pub(super) fn blob_oid(repo: &GitRepo, rev: &str, path: &str) -> Result<Option<S
     })?;
     Ok(entry.map(|e| e.object_id().to_string()))
 }
+
+/// Read the raw bytes of a blob addressed by its OWN object id (full or
+/// abbreviated), refusing anything that is not a blob and refusing to load
+/// more than `max_bytes` (the same cheap ODB-header check [`read_blob`]
+/// makes).
+///
+/// V73-K1 — `kbc-review/1`'s `[[code:path:line@sha]]` pins the BLOB the
+/// author read, and the carry-forward ladder needs those exact bytes to
+/// re-anchor from. Every other read in this module addresses a blob through
+/// a REVISION plus a path; this one cannot, because a review document's ref
+/// names the content, not the commit it lived in — a commit may have been
+/// rewritten under the review while the blob it pointed at is still in the
+/// ODB, which is precisely the case a carry-forward exists to survive.
+///
+/// The caller-supplied id is not a general revspec: the `kbc-review/1`
+/// grammar constrains it to 4–64 hex digits before it ever reaches here
+/// (`review_doc::refs::is_hexish`), a closed alphabet that cannot express
+/// an option, a path or a range. An id that resolves to a non-blob object
+/// (a commit sha written where a blob sha belongs, the common author
+/// mistake) comes back as `NotABlob` so the caller can say so, rather than
+/// as a silent miss.
+pub(super) fn read_blob_by_oid(repo: &GitRepo, oid: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    let id = repo.resolve(oid)?;
+    let object = repo.repo.find_object(id).map_err(|e| GitError::Odb {
+        message: e.to_string(),
+    })?;
+    if object.kind != gix::object::Kind::Blob {
+        return Err(GitError::NotABlob {
+            rev: oid.to_string(),
+            path: String::new(),
+            actual: match object.kind {
+                gix::object::Kind::Tree => "directory",
+                gix::object::Kind::Commit => "commit",
+                _ => "tag",
+            },
+        });
+    }
+    let mut blob = object.try_into_blob().map_err(|e| GitError::Odb {
+        message: e.to_string(),
+    })?;
+    // Unlike [`read_blob`], the size check happens AFTER the read rather
+    // than as a cheap ODB header lookup first: this entry point is
+    // addressed by a blob id, not by a tree entry, so there is no
+    // already-resolved header to consult. It is a review-document
+    // pre-flight, not a hot path, and the cap still bounds what LEAVES this
+    // function — the difference is documented rather than silently absorbed.
+    let size = blob.data.len() as u64;
+    if size > max_bytes {
+        return Err(GitError::TooLarge {
+            rev: oid.to_string(),
+            path: String::new(),
+            size,
+            cap: max_bytes,
+        });
+    }
+    Ok(blob.take_data())
+}

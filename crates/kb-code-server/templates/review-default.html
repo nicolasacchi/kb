@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  kbc-review/1 — the BUILT-IN render template (V73-K1).
+
+  This file is a worked example of the placeholder grammar, not a house
+  style: `kb-code review render <id> --template <file.html>` takes the
+  operator's own template instead, and everything outside a `{{name}}` is
+  copied byte-for-byte.
+
+  Every `{{name}}` below is one of `review_doc::render::PLACEHOLDERS`; a
+  `{{…}}` this renderer does not know is left alone and reported in
+  `unknown_placeholders`, so a typo is never a silent hole.
+
+  kb-code deliberately does NOT emit a `<template id="kb-prompt">` here.
+  That convention belongs to kb (root invariant #5), and the kb-side
+  authoring step owns writing one when this export is dropped into a corpus.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0 auto; padding: 2rem 1.25rem 6rem; max-width: 46rem;
+         font: 16px/1.6 system-ui, sans-serif; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre.kbc-snippet { overflow-x: auto; padding: .75rem; border-radius: .375rem;
+                    background: rgba(127,127,127,.12); font-size: .875em; }
+  .kbc-meta, .kbc-caption, .kbc-empty { opacity: .72; font-size: .875em; }
+  .kbc-card { margin: 1rem 0; padding: .75rem; border-left: 3px solid currentColor; }
+  .kbc-card--orphan { opacity: .8; border-left-style: dashed; }
+  .kbc-card figcaption { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; }
+  .kbc-state, .kbc-trust { font-size: .75em; text-transform: uppercase; letter-spacing: .04em; }
+  .kbc-findings { border-collapse: collapse; width: 100%; font-size: .9em; }
+  .kbc-findings th, .kbc-findings td { border-bottom: 1px solid rgba(127,127,127,.3);
+                                       padding: .35rem .5rem; text-align: left; vertical-align: top; }
+  .kbc-risk--high { font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>{{title}}</h1>
+{{meta}}
+
+<section id="summary"><h2>Summary</h2>{{summary}}</section>
+<section id="risk"><h2>Risk</h2>{{risk}}</section>
+<section id="findings"><h2>Findings</h2>{{findings}}</section>
+<section id="reading-order"><h2>Reading order</h2>{{reading_order}}</section>
+<section id="body"><h2>Review</h2>{{body}}</section>
+<section id="blocks">{{blocks}}</section>
+<section id="flows"><h2>Flows</h2>{{flows}}</section>
+<section id="questions"><h2>Questions</h2>{{questions}}</section>
+<section id="cards"><h2>Cited code</h2>{{cards}}</section>
+<section id="author"><h2>Author</h2>{{author}}</section>
+<section id="omitted"><h2>What this document does not say</h2>{{omitted}}</section>
+</body>
+</html>

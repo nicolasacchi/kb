@@ -808,6 +808,73 @@ invariant #2 records).
     page), and a DISABLED lane is never swept out from under a re-enable.
     `lanes::V72_H4A_ROUTES` joins invariant 15's `RouteContract` walk from
     both sides.
+22. **`kbc-review/1` is a MARKDOWN document with a closed ref grammar; the
+    slug is identity and is never reused; `compose` is the ONE authoring
+    transaction** (V73-K1, `src/review_doc/`, migration V0032, design
+    D9/D9-a). Four rules, separate to state and easy to break one at a time.
+    (a) **The stored body is Markdown; HTML is only ever an EXPORT.** D9-a's
+    recorded departure from the operator's original ask — HTML is a
+    permanent XSS surface, cannot be interdiffed across re-reviews, and its
+    references are dead text. `review_docs` revisions are APPEND-ONLY
+    (`compose` never UPDATEs a row; highest revision wins on read), the
+    MI-W2.3 soft-forget posture this crate already applies to
+    `review_findings.superseded`, for the same reason: a re-compose that
+    says something different must not destroy what a human formed a
+    disposition against. `render` is the only HTML producer, every dynamic
+    string goes through `render::esc`, every Markdown body goes through
+    kb-core's UNTRUSTED-body renderer (`render.unsafe = false`), and an
+    unknown `{{…}}` placeholder is left VERBATIM and reported rather than
+    substituted — so an operator template's own CSS/JS braces survive and a
+    typo is never a silent hole. **kb-code never generates a `<template
+    id="kb-prompt">`**: that convention is kb's (root invariant #5).
+    (b) **A bare `[[X]]` is a kb wikilink and can never be a kbc ref.**
+    Root invariant #29 owns that syntax, which is why every kbc ref carries
+    one of the seven CLOSED scheme prefixes (`refs::SCHEMES`). A `[[…]]`
+    naming a known scheme that does not parse is `Malformed` with a reason,
+    never silently degraded into a wikilink — that would make the failure
+    invisible on both sides. ONE parser serves both surfaces (the prose scan
+    and the typed front-matter fields), and the grammar is golden-pinned by
+    `grammar/kbcrefs.golden.json`, the same one-fixture-two-parsers
+    discipline invariant 16(a) states for kbcq/1. The fixture lives on the
+    CRATE side because the Rust builder stage's Docker context is `COPY
+    crates ./crates`.
+    (c) **A ref that does not resolve is an ORPHAN, and `exact` is
+    unreachable from a carry.** `cards::trust_for` is the ONE minter;
+    `exact` comes from byte equality (the ref's `@sha` IS the patchset's
+    blob) or from a `finding:` row in this daemon's own store, and nothing
+    else. A CARRIED ref is capped at `likely` even when the ladder matched
+    the snippet verbatim — an exact text match at a different line in a
+    different blob is evidence, not proof, and invariants 13/20's oracle bar
+    applies here too. The carry itself REUSES `annotations::resolve` plus
+    `review_comments::line_matches_snippet` rather than adding a second
+    matcher. `sym:`/`ent:` take only the EXACT rung of the existing
+    addressing (an ambiguous name is an orphan naming the count) because a
+    ref card, unlike a `?sym=` link, carries no fallback anchor beside it;
+    `ent:` additionally inherits the entity index's own class as a CEILING
+    (`cap_trust`), never a floor. Highlight spans are a pure STORE lookup
+    (`GET /api/file`'s own rule) — an unindexed blob answers `null`.
+    (d) **The slug is identity; the fingerprint is a change detector; the
+    ledger makes "never reused" true.** `f-<n>` slugs are minted from
+    `review_finding_slugs`, whose counter reads BOTH that ledger and the
+    ordinals already on `review_findings`, so it cannot walk backwards for a
+    pre-V0032 review or after a hand-deleted row. Document-path
+    reconciliation matches by FINGERPRINT (`FindingIdentity::Fingerprint`,
+    the SAME `reconcile_findings_import_on` core the v1 slug-keyed path uses
+    — one implementation, two identity rules), so re-wording a finding keeps
+    its slug and therefore a human's disposition; `severity` and `blocking`
+    are deliberately NOT fingerprint inputs for that reason. `superseded_by`
+    is written only when an incoming finding DECLARED `supersedes: [<slug>]`
+    — never inferred, because guessing which new finding "is really" an old
+    one is the wrong-`exact` class one layer up. V0024's origin rule is
+    untouched: a `manual` finding is never adopted or superseded by a
+    compose, and an explicit slug naming one is a whole-compose 400.
+    `compose` is the ONE transaction (document revision + findings + report
+    + verdict in one `BEGIN`/`COMMIT`, ONE `review.changed{reason:
+    "compose"}`); `findings import` / `report --set` / `verdict` stay
+    documented low-level twins, and D22's local-canonical ruling is
+    unchanged — every authoring surface here is loopback-only and root
+    invariant #4 is not amended. `review_doc::routes::V73_K1_ROUTES` joins
+    invariant 15's `RouteContract` walk from both sides.
 
 ## When to update this file
 
