@@ -230,7 +230,7 @@ async fn an_ingest_lands_in_the_mutations_ledger_with_its_route_and_repo() {
     )
     .await;
     let audit = get(&base, "/api/audit", &[]).await;
-    let rows = audit["rows"].as_array().expect("rows");
+    let rows = audit["entries"].as_array().expect("entries");
     let row = rows
         .iter()
         .find(|r| r["route"].as_str() == Some("/api/lanes/rubocop/ingest"))
