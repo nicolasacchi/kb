@@ -855,7 +855,10 @@ fn find_interpolations(ctx: &mut Ctx, start: usize, end: usize) -> Vec<Span> {
                 i += 2;
                 continue;
             }
-            match scan_balanced(ctx.src, i + 1, b'{', b'}', ctx.src.len()) {
+            // Bounded by the TEXT's own end, not the file's: an unclosed
+            // `#{` must not reach forward and swallow a `}` from an
+            // unrelated line into one enormous interpolation.
+            match scan_balanced(ctx.src, i + 1, b'{', b'}', end) {
                 Some(close) => {
                     out.push(Span::new(i + 2, close - 1));
                     i = close;

@@ -536,7 +536,8 @@ mod tests {
                 .any(|p| kb_core::watcher::path_matches_skip_pattern(rel, basename, p))
         };
         assert!(matches("legacy/hotel/old.rb"));
-        assert!(matches("legacy")); // the gitlink dir itself (a Remove)
+        // The gitlink dir itself (a Remove).
+        assert!(matches("legacy"));
         // Component-boundary, never substring: a real sibling dir whose
         // name merely shares the prefix stays watched.
         assert!(!matches("legacy-fixes/new.rb"));
