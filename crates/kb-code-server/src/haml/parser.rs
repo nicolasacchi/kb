@@ -425,10 +425,7 @@ pub fn parse_str(src: &str) -> Document {
             if s.keyword.as_deref().is_some_and(|k| MID_BLOCK_KEYWORDS.contains(&k)));
         let mut popped_any = false;
         let mut popped_exact = false;
-        loop {
-            let Some(&(top_id, top_indent)) = stack.last() else {
-                break;
-            };
+        while let Some(&(top_id, top_indent)) = stack.last() {
             if top_indent > indent {
                 stack.pop();
                 popped_any = true;
@@ -897,8 +894,7 @@ fn parse_tag(ctx: &mut Ctx, i: usize) -> (NodeKind, Span, usize) {
     // the balanced scan is capped at the FILE end, not the line end.
     let mut attrs: Vec<AttrGroup> = Vec::new();
     let mut logical_end = line_end;
-    loop {
-        let Some(&b) = bytes.get(p) else { break };
+    while let Some(&b) = bytes.get(p) {
         let (form, open, close) = match b {
             b'{' => (AttrForm::RubyHash, b'{', b'}'),
             b'(' => (AttrForm::HtmlStyle, b'(', b')'),

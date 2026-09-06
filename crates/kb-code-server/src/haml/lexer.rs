@@ -40,7 +40,7 @@ impl Span {
     /// The source bytes this span addresses, or `None` when the span is not
     /// a valid range into `src` (which a correct scanner never mints — the
     /// fallible form exists so a test can ASSERT that, rather than panic).
-    pub fn slice<'a>(self, src: &'a str) -> Option<&'a str> {
+    pub fn slice(self, src: &str) -> Option<&str> {
         src.get(self.start as usize..self.end as usize)
     }
 }
