@@ -20,6 +20,7 @@ import {
   recipesPageUrl,
   reviewsUrl,
   stacksPageUrl,
+  railsUrl,
   todosUrl,
 } from "./lib/codeUrl";
 import { setsUrl } from "./lib/setsUrl";
@@ -88,6 +89,11 @@ const Todos = lazy(() => import("./routes/Todos"));
 // ~todos above, which it supersedes as the richer, kind-aware surface —
 // `~todos` keeps working, unchanged, and links forward to this one).
 const Comments = lazy(() => import("./routes/Comments"));
+// V72-I2 — `~rails`: the `rails/1` entity-index dashboard. Repo-scoped
+// sentinel, mounted EXACTLY like `~todos`/`~workspaces` above — §D1's "any
+// new surface lands in an existing region", not a second app shell and not a
+// new Desk center mode (`desk/centerModes.ts` still ships `reader` alone).
+const Rails = lazy(() => import("./routes/Rails"));
 // V3.2-B3 — behavioral attention hotspots (repo-scoped sentinel).
 const Hotspots = lazy(() => import("./routes/Hotspots"));
 // V3.R2 — local review sessions (list + cockpit detail).
@@ -305,6 +311,7 @@ function AppShell() {
     "nav.branches": () => navigate(repoRoute(branchesUrl)),
     "nav.todos": () => navigate(repoRoute(todosUrl)),
     "nav.comments": () => navigate(repoRoute(commentsUrl)),
+    "nav.rails": () => navigate(repoRoute((r) => railsUrl(r))),
     "nav.sets": () => navigate(repoRoute(setsUrl)),
     "nav.prs": () => navigate(repoRoute(prsUrl)),
     "nav.canvas": () => navigate(repoRoute(canvasPageUrl)),
@@ -371,6 +378,7 @@ function AppShell() {
                 <Route path="/r/:repo/~workspaces" element={<Workspaces />} />
                 <Route path="/r/:repo/~todos" element={<Todos />} />
                 <Route path="/r/:repo/~comments" element={<Comments />} />
+                <Route path="/r/:repo/~rails" element={<Rails />} />
                 <Route path="/r/:repo/~hotspots" element={<Hotspots />} />
                 <Route path="/r/:repo/~reviews" element={<Reviews />} />
                 <Route path="/r/:repo/~reviews/:id/diff" element={<ReviewDiff />} />

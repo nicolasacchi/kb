@@ -1,0 +1,514 @@
+/* V72-I2 — `/r/:repo/~rails` (the rails/1 dashboard), the Schema card and
+   the Rails atom table.
+
+   The trust channel is LINE STYLE, in one hue: a card and an atom target
+   both carry `kbc-trust-likely`/`kbc-trust-candidate` (tokens.css sets
+   `--kbc-trust-style` to dashed/dotted), and the border below READS that
+   variable. There is deliberately no `--exact` rule anywhere in this file:
+   rails/1 has no exact tier, so a solid Rails border must be impossible to
+   author by accident. */
+
+.kbc-rails {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-rails__head {
+  margin-bottom: 16px;
+}
+.kbc-rails__title {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+.kbc-rails__hint,
+.kbc-rails__muted {
+  color: var(--ink-mute);
+  margin: 0;
+  font-size: 13px;
+}
+.kbc-rails__error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* --- passport --------------------------------------------------------- */
+.kbc-rails__passport {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 12px 14px;
+  margin-bottom: 24px;
+}
+.kbc-rails__passport-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 0 0 10px;
+}
+.kbc-rails__passport-fact {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+}
+.kbc-rails__passport-fact dt {
+  color: var(--ink-mute);
+  margin: 0;
+}
+.kbc-rails__passport-fact dd {
+  margin: 0;
+  font-weight: 600;
+}
+.kbc-rails__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kbc-rails__count {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.kbc-rails__count-n {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-mute);
+}
+
+/* --- honesty ---------------------------------------------------------- */
+.kbc-rails__honesty {
+  margin: 8px 0 0;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  color: var(--ink-mute);
+}
+.kbc-rails__honesty.is-partial {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg-card));
+  color: var(--ink);
+}
+.kbc-rails__honesty.is-error {
+  border-color: var(--danger);
+  color: var(--ink);
+}
+.kbc-rails__note,
+.kbc-rails__caption {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ink-mute);
+  line-height: 1.5;
+}
+
+/* --- sections --------------------------------------------------------- */
+.kbc-rails__section {
+  margin-bottom: 20px;
+}
+.kbc-rails__section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 0;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-rails__section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.kbc-rails__section-n {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-rails__section-body {
+  padding-top: 10px;
+}
+.kbc-rails__section-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.kbc-rails__filter {
+  flex: 1 1 240px;
+  min-width: 180px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg-card));
+  color: var(--ink);
+  font-size: 13px;
+}
+.kbc-rails__page-caption {
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.kbc-rails__paging {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.kbc-rails__paging button {
+  border: 1px solid var(--line);
+  background: var(--bg-card);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-rails__paging button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* --- cards ------------------------------------------------------------ */
+.kbc-rails__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+.kbc-railscard {
+  border: 1px solid var(--line);
+  /* The trust channel: dashed = likely, dotted = candidate. */
+  border-left-width: 3px;
+  border-left-style: var(--kbc-trust-style, dotted);
+  border-left-color: var(--kbc-trust-color, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 10px 12px;
+}
+.kbc-railscard__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+.kbc-railscard__name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.kbc-railscard__name:hover {
+  text-decoration: underline;
+}
+.kbc-railscard__addr {
+  margin: 2px 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+.kbc-railscard__orphan {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--ink);
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+}
+.kbc-railscard__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0 0 6px;
+}
+.kbc-railscard__fact {
+  display: flex;
+  gap: 4px;
+  font-size: 11px;
+}
+.kbc-railscard__fact dt {
+  color: var(--ink-mute);
+  margin: 0;
+}
+.kbc-railscard__fact dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.kbc-railscard__fact.is-warn dd {
+  color: var(--warn);
+  font-weight: 600;
+}
+.kbc-railscard__flags {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--warn);
+}
+.kbc-railscard__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.kbc-railscard__chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+.kbc-railscard__chip:hover {
+  color: var(--ink);
+  border-color: var(--accent, var(--ink-mute));
+}
+.kbc-railscard__witness {
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+/* --- orphans ---------------------------------------------------------- */
+.kbc-rails__lane {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--bg-card);
+}
+.kbc-rails__lane-title {
+  font-size: 13px;
+  margin: 0 0 4px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.kbc-rails__lane-n {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-rails__lane-why,
+.kbc-rails__lane-caption {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--ink-mute);
+  line-height: 1.5;
+}
+.kbc-rails__lane-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kbc-rails__lane-rows li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.kbc-rails__lane-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  text-decoration: none;
+  color: var(--ink);
+  font-size: 12px;
+  min-width: 0;
+}
+.kbc-rails__lane-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+
+/* --- the Schema card (inspector rail) --------------------------------- */
+.kbc-schema {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--bg-card);
+}
+.kbc-schema__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.kbc-schema__title {
+  font-weight: 600;
+  font-size: 12px;
+}
+.kbc-schema__table {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-schema__fold {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--ink-mute);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.kbc-schema__fold.is-on {
+  color: var(--ink);
+  border-color: var(--accent, var(--ink-mute));
+}
+.kbc-schema__cols {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.kbc-schema__cols th {
+  text-align: left;
+  font-weight: 500;
+  padding: 1px 6px 1px 0;
+}
+.kbc-schema__colname {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-schema__colname:hover {
+  text-decoration: underline;
+}
+.kbc-schema__type {
+  color: var(--ink-mute);
+  font-family: var(--mono);
+  padding-right: 6px;
+}
+.kbc-schema__mods {
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+.kbc-schema__section pre {
+  font-size: 10px;
+  color: var(--ink-mute);
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+.kbc-schema__caption,
+.kbc-schema__absence {
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+/* The in-buffer fold placeholder. */
+.kbc-schemafold {
+  padding: 2px 0;
+}
+.kbc-schemafold__btn {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-mute);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.kbc-schemafold__btn:hover {
+  color: var(--ink);
+}
+
+/* --- the Rails atom table (under the hover card) ---------------------- */
+.kbc-railsatoms {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.kbc-railsatoms__head {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin-bottom: 4px;
+}
+.kbc-railsatoms__atom {
+  margin-bottom: 8px;
+}
+.kbc-railsatoms__kind {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.kbc-railsatoms__targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-railsatoms__targets li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  border-left: 2px solid var(--kbc-trust-color, var(--line));
+  border-left-style: var(--kbc-trust-style, dotted);
+  padding-left: 6px;
+}
+.kbc-railsatoms__target {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.kbc-railsatoms__target.is-unaddressed {
+  color: var(--ink-mute);
+}
+.kbc-railsatoms__dstkind,
+.kbc-railsatoms__note,
+.kbc-railsatoms__caption {
+  font-size: 10px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+.kbc-railsatoms__note,
+.kbc-railsatoms__caption {
+  margin: 4px 0 0;
+}
+.kbc-railsatoms__search {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-railsatoms__actions {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-railsatoms__actions li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.kbc-railsatoms__action-cli {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+}
+.kbc-railsatoms__action-off {
+  font-size: 10px;
+  color: var(--warn);
+}

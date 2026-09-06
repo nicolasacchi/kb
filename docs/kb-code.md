@@ -1455,6 +1455,54 @@ than matching a same-named path in the wrong repo. Same lock-step
 discipline as every other key: the TS mirror (`web-code/src/lib/kbcq.ts`)
 and the one shared fixture `crates/kb-code-server/grammar/kbcq.golden.json`.
 
+**The `~rails` surface (V72-I2).** `/r/:repo/~rails` is the dashboard over
+that wire — a repo-scoped sentinel page beside `~todos`/`~workspaces`, not a
+new shell. It shows the passport (detection, version and its source, the
+TRUE per-noun totals, lens freshness, the Zeitwerk read state, the read
+state), then one section per noun with a card per row: the model's table
+name and its association/validation/scope/callback counts, a route's
+verb+path and the action it reaches (flagged when it reaches none), an
+action's visibility, a job's enqueue-site count, a view's inbound render
+count, a concern's includers. Each card is ONE address the reader opens, a
+set of facet chips that pre-fill the search box with the matching `kbcq/1`
+atom (`model:`, `controller:`, `action:`, `route:`, `job:`, `rails:<noun>`),
+its witness count, and a trust LINE STYLE — dashed for `likely`, dotted for
+`candidate`, never solid, because `rails/1` has no exact tier. Paging and
+the `q=` filter are the SERVER's, so the "showing 1–25 of 312" caption is
+always true. The orphan report renders every lane with its own `why`
+verbatim and the report's caption above them, and a row that appears in a
+lane gets a badge on its card naming the lane.
+
+Two reader surfaces come with it. A model file carrying an annotaterb
+`# == Schema Information` banner gets a **Schema card** in the inspector
+rail — the column table, parsed in the browser out of the text `GET
+/api/file` already returned, captioned as a client read rather than a daemon
+fact — and the banner itself is FOLDED in the buffer behind a one-line
+placeholder (a browser-local opt-out pref, `Space z`, or the card's own
+button). Hovering (`K`) a line that produced rails-lens edges adds a **Rails
+atom table** to the hover card: the association/render/i18n/enqueue targets
+on that line, each with its own trust and address, plus the `kbc-actions/1`
+rows for the target, rendered whole in the daemon's order. Nothing on either
+surface auto-navigates. A route helper (`orders_path`) is shown as a SEARCH
+over the route index rather than a resolved target — `rails-lens/1` mints no
+route-helper edge, and the card says so instead of inventing one.
+
+**HAML in the lens, verified (V72-I2).** The `.haml` dispatch was already
+correct at V72-I1 — `rails::extract` has its own HAML arm,
+`rails_lens_relevant_path` lists both `.haml` predicates, `lang::detect`
+resolves `.haml` to the first-party scanner, and `find_view_files` matches a
+template by its STEM rather than its extension. What was missing was a test
+that any of it survives the real pipeline: every fixture running through
+`ingest::index_file` → `replace_rails_edges` → `GET /api/rails/*` was 100%
+ERB, and the only HAML lens assertions call `frameworks::extract_edges`
+directly, bypassing `is_rails`, the store and the daemon. The `acme-app`
+fixture now ships a `.haml` view (a partial render, a lazy `t(".key")`, a
+route helper) and `tests/rails_route.rs` asserts through the SHIPPED path
+that the partial rendered from HAML is not in the `view_never_rendered`
+orphan lane and that a locale key referenced only from HAML is not reported
+unused — with the genuinely-unused key as the negative control, so an
+emptied lane cannot pass either.
+
 CLI: `kb-code rails {home,models,controllers,actions,routes,jobs,mailers,views,concerns,orphans}
 --repo R [--q TEXT] [--limit N] [--offset N] [--json]`. The `--json` form is
 the standard envelope with `schema: "rails/1"`; the text form is compact

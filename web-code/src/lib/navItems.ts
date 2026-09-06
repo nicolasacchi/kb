@@ -11,6 +11,7 @@ import {
   commentsUrl,
   hotspotsUrl,
   prsUrl,
+  railsUrl,
   recipesPageUrl,
   reviewsUrl,
   stacksPageUrl,
@@ -45,6 +46,7 @@ export type NavKey =
   | "hotspots"
   | "todos"
   | "comments"
+  | "rails"
   | "recipes"
   | "stacks"
   | "canvas"
@@ -74,6 +76,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // V72-J2 (D8) — comments/1's dashboard: the richer, kind-aware surface
   // TODOs above now links forward to.
   { key: "comments", label: "Comments", icon: Icon.Comment, group: "explore", url: commentsUrl },
+  // V72-I2 — `~rails` (`rails/1`). In the catalog for the same reason every
+  // other sentinel is: the Explore popover, the mobile nav sheet and
+  // active-item highlighting all read THIS array, so a keyboard-only door
+  // (`Space g R`) would otherwise be the surface's only one.
+  { key: "rails", label: "Rails", icon: Icon.Entity, group: "explore", url: railsUrl },
   { key: "recipes", label: "Recipes", icon: Icon.Terminal, group: "explore", url: recipesPageUrl },
   { key: "stacks", label: "Stacks", icon: Icon.Layers, group: "explore", url: stacksPageUrl },
   { key: "canvas", label: "Canvas", icon: Icon.Graph, group: "explore", url: canvasPageUrl },

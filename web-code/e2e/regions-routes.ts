@@ -122,6 +122,12 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
     { name: "sets", url: `${BASE}/r/${REPO_NAME}/~sets` },
     { name: "todos", url: `${BASE}/r/${REPO_NAME}/~todos` },
     { name: "comments", url: `${BASE}/r/${REPO_NAME}/~comments` },
+    // V72-I2 — `~rails`. Reachable in this fixture because `fixture-repo.ts`
+    // writes a synthetic Rails app into the repo (`config/routes.rb` + a
+    // `Gemfile` declaring `gem "rails"` is exactly what `detect_is_rails`
+    // needs); the page's chrome is identical whether or not the app is
+    // detected, so this snapshot does not depend on the lens having settled.
+    { name: "rails", url: `${BASE}/r/${REPO_NAME}/~rails` },
     { name: "hotspots", url: `${BASE}/r/${REPO_NAME}/~hotspots` },
     { name: "reviews", url: `${BASE}/r/${REPO_NAME}/~reviews` },
     { name: "recipes", url: `${BASE}/r/${REPO_NAME}/~recipes` },

@@ -4768,3 +4768,147 @@ export interface BoardStatusOut {
   status: string;
   revision: number;
 }
+
+// --- V72-I2 — `rails/1` (`GET /api/rails/*`, the Rails entity index) -------
+//
+// Mirrors `crates/kb-code-server/src/rails/` field-for-field: `mod.rs`'s
+// `Honesty`/`Witness`/`RouteTriple`/`RailsRow`/`LensFreshness`/`ZeitwerkNote`,
+// `routes.rs`'s `RailsHomeOut`/`RailsListOut` and `orphans.rs`'s
+// `OrphanRow`/`OrphanLane`/`OrphansOut`. Closed vocabularies (`noun`,
+// `state`, `trust`, a witness `kind`) travel as plain `string` here, the same
+// open-string-on-the-wire posture `FrameworkEdge` above documents — a client
+// build can lag a daemon that has grown a ninth noun, and an unknown value
+// must render as itself rather than crash a card.
+//
+// EVERY NUMBER ON THESE TYPES IS THE DAEMON'S. `counts`, `total`, `returned`,
+// a lane's `total` — the SPA renders them verbatim and never re-derives one
+// from `rows.length` (root CLAUDE.md's usages/tree rule, restated for this
+// wire in `web-code/CLAUDE.md`'s `~rails` section).
+
+/// The four read states every `rails/1` response reports (`rails::STATE_*`).
+/// `error` is unreachable from the handlers — a genuine failure is an
+/// `ApiError` — and is listed so the vocabulary is complete.
+export interface RailsHonesty {
+  state: string;
+  reason?: string;
+}
+
+/// Where a fact came from: `convention` (a path rule), `entity` (an indexed
+/// definition site), `rails-edge` (a `rails-lens/1` row, carrying its own
+/// trust) or `symbol` (a mirror-index symbol).
+export interface RailsWitness {
+  kind: string;
+  detail: string;
+  path?: string;
+  line?: number;
+  trust?: string;
+}
+
+/// A route's address. `verb`/`path` are absent for an edge written before the
+/// extractor recorded them, or one whose pattern was not literal — unknown,
+/// never `/`.
+export interface RailsRouteTriple {
+  verb?: string;
+  path?: string;
+  target: string;
+}
+
+/// One Rails noun, as an ADDRESS plus its evidence. `trust` is `"likely"` or
+/// `"candidate"` — `rails::noun_trust`'s return type has no `exact` variant,
+/// so a Rails row is NEVER drawn solid.
+export interface RailsRow {
+  noun: string;
+  name: string;
+  path: string;
+  line?: number;
+  blob_sha?: string;
+  fqn?: string;
+  route?: RailsRouteTriple;
+  table?: string;
+  visibility?: string;
+  counts?: Record<string, number>;
+  flags?: string[];
+  trust: string;
+  witnesses: RailsWitness[];
+}
+
+/// How far behind the live tree the lens is. `generation` is the store's
+/// monotonic index generation, NOT a commit distance.
+export interface RailsLensFreshness {
+  edges_total: number;
+  source_files: number;
+  stale_source_files: number;
+  orphan_source_files: number;
+  grammar_version: string;
+  generation: number;
+}
+
+export interface RailsZeitwerkNote {
+  state: string;
+  reason?: string;
+}
+
+/// `GET /api/rails/home`'s body — the passport.
+export interface RailsHomeOut {
+  schema: string;
+  repo: string;
+  detected: boolean;
+  rails_version?: string;
+  version_source?: string;
+  /// TRUE totals per noun — the whole index, not a page of it.
+  counts: Record<string, number>;
+  nouns: string[];
+  lens: RailsLensFreshness;
+  zeitwerk: RailsZeitwerkNote;
+  honesty: RailsHonesty;
+  notes: string[];
+}
+
+/// `GET /api/rails/{noun-plural}`'s body — one page of one noun.
+export interface RailsListOut {
+  schema: string;
+  repo: string;
+  noun: string;
+  rows: RailsRow[];
+  /// Rows matching the query across the WHOLE index — never `rows.length`.
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  honesty: RailsHonesty;
+  notes: string[];
+}
+
+export interface RailsOrphanRow {
+  name: string;
+  path: string;
+  line?: number;
+  trust: string;
+  witnesses: RailsWitness[];
+}
+
+export interface RailsOrphanLane {
+  id: string;
+  title: string;
+  /// The witness, stated: what produced this lane and why it may be wrong.
+  /// Rendered VERBATIM — summarising it re-creates the failure the caption
+  /// exists to prevent.
+  why: string;
+  rows: RailsOrphanRow[];
+  total: number;
+  returned: number;
+  truncated: boolean;
+  state: string;
+  reason?: string;
+}
+
+/// `GET /api/rails/orphans`'s body — the triage queue, never a verdict.
+export interface RailsOrphansOut {
+  schema: string;
+  repo: string;
+  caption: string;
+  lanes: RailsOrphanLane[];
+  honesty: RailsHonesty;
+  notes: string[];
+}
