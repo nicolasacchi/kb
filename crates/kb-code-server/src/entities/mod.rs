@@ -838,6 +838,10 @@ mod tests {
             .chain(crate::rails::routes::V72_I1_ROUTES.iter())
             // V73-K1 joins the SAME walk rather than starting a third one.
             .chain(crate::review_doc::routes::V73_K1_ROUTES.iter())
+            // V74-L1 joins the SAME walk, one milestone later — a
+            // `kbc-canvas/1` read declared in `boards::V74_L1_ROUTES` with
+            // no registration in router.rs fails HERE, by path.
+            .chain(crate::boards::V74_L1_ROUTES.iter())
         {
             let nested = c
                 .path

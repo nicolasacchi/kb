@@ -317,6 +317,7 @@ pub mod annotations;
 pub mod api_schemas;
 pub mod behavioral;
 pub mod blame;
+pub mod boards;
 pub mod bookmarks;
 pub mod canvas;
 pub mod checkout;
