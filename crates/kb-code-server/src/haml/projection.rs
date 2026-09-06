@@ -35,7 +35,10 @@
 //!    compiles `%p a #{b}` into the Ruby string literal `"a #{b}"`, and
 //!    `== a`/`& a`/`! a` likewise. [`quote_ruby`] reproduces exactly that
 //!    transform, so the projection compares the same node kind on both
-//!    sides instead of declaring a permanent structural difference.
+//!    sides instead of declaring a permanent structural difference. The
+//!    trigger is the `#{` MARKER, not a resolved interpolation: HAML makes
+//!    `\#{x}` a script too (and emits the escape), even though the
+//!    fragment stream correctly declines to treat it as Ruby.
 
 use serde_json::{json, Map, Value};
 
@@ -68,7 +71,7 @@ fn node(doc: &Document, id: usize) -> Value {
         }
         NodeKind::Plain(t) => {
             // Rule 3: interpolated text IS a script node in HAML's model.
-            if t.forced_script || t.has_interpolation() {
+            if t.forced_script || t.has_interpolation_marker() {
                 obj.insert("kind".into(), json!("script"));
                 obj.insert("ruby".into(), json!(quote_ruby(t.value.trim())));
                 obj.insert("keyword".into(), Value::Null);
@@ -150,25 +153,58 @@ fn inline_text(t: &Text) -> Value {
     if value.is_empty() {
         return Value::Null;
     }
-    if t.forced_script || t.has_interpolation() {
+    if t.forced_script || t.has_interpolation_marker() {
         json!({ "script": quote_ruby(value) })
     } else {
         json!({ "text": value })
     }
 }
 
-/// HAML's own interpolated-text→Ruby transform: wrap in double quotes,
-/// escaping backslashes and double quotes and NOTHING else — `#{…}` is
-/// deliberately left intact, because reproducing it is the entire point.
+/// HAML's own interpolated-text→Ruby transform, derived from the gem's
+/// observed output rather than from its implementation.
+///
+/// Wrap in double quotes, then walk the text: **inside** an interpolation
+/// everything is copied VERBATIM (it is Ruby, and escaping a quote there
+/// would change the expression — `#{h({a: "x"}[:a])}` must stay exactly
+/// that); **outside** one, `"` becomes `\"` and `\` becomes `\\`. An
+/// ESCAPED interpolation (`\#{…}`) is copied verbatim too, backslash
+/// included — in the emitted Ruby that is precisely the escape that makes
+/// `#{…}` render literally, so doubling the backslash would break the very
+/// thing the author escaped.
+///
+/// Nested interpolation (`#{"a #{b}"}`) rides the same balanced scan
+/// `parser::scan_balanced` uses everywhere else.
 pub fn quote_ruby(text: &str) -> String {
+    let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            _ => out.push(c),
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // An escaped interpolation: the backslash AND the braced body pass
+        // through untouched.
+        let escaped =
+            bytes[i] == b'\\' && bytes.get(i + 1) == Some(&b'#') && bytes.get(i + 2) == Some(&b'{');
+        let plain = bytes[i] == b'#' && bytes.get(i + 1) == Some(&b'{');
+        if escaped || plain {
+            let brace = if escaped { i + 2 } else { i + 1 };
+            if let Some(close) = super::parser::scan_balanced(text, brace, b'{', b'}', text.len()) {
+                out.push_str(&text[i..close]);
+                i = close;
+                continue;
+            }
         }
+        match bytes[i] {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            _ => {
+                // Copy one whole char so multi-byte UTF-8 survives.
+                let ch = text[i..].chars().next().expect("in bounds");
+                out.push(ch);
+                i += ch.len_utf8();
+                continue;
+            }
+        }
+        i += 1;
     }
     out.push('"');
     out

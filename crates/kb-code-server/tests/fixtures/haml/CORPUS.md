@@ -116,7 +116,7 @@ differs is a real divergence and the corpus test is supposed to go red.**
 | 24 | `24-conditional-comment.haml` | `/[if IE]` |
 | 25–30 | `25…30-filter-*.haml` | `:javascript` `:css` `:ruby` `:markdown` `:plain` `:preserve` `:escaped` `:erb`, an UNKNOWN filter, and blank lines inside a filter body |
 | 31 | `31-escape-backslash.haml` | `\` escaping `=` `-` `%` `.` |
-| 32 | `32-pipe-multiline.haml` | `|` continuations, in a script and in text |
+| 32 | `32-pipe-multiline.haml` | `\|` continuations, in a script and in text — separated by a non-`\|` line, because HAML merges two ADJACENT `\|` blocks into one (verified against the gem, which does exactly the same) |
 | 33 | `33-trailing-comma.haml` | trailing-comma continuations |
 | 34 | `34-render-partial.haml` | `render` in every shape the lens resolves |
 | 35 | `35-i18n-keys.haml` | `t(".key")`, `t("a.b")`, `I18n.t`, a key in an attribute |

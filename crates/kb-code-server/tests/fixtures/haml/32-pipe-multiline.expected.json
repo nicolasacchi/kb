@@ -6,7 +6,25 @@
       "attributes": {},
       "self_closing": false,
       "inline": {
-        "script": "h(  \"a\" + \"b\")  %q a b"
+        "script": "h(  \"a\" + \"b\")"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "hr",
+      "attributes": {},
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "q",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "a b"
       },
       "children": []
     },

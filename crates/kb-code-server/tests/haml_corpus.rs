@@ -100,10 +100,13 @@ fn every_fixture_has_an_expectation_and_every_expectation_a_fixture() {
             "{name}: expectation with no fixture"
         );
     }
-    // The corpus never learned to run the gem itself.
+    // The corpus never learned to run the gem itself. The needle is
+    // assembled at runtime so this assertion cannot match ITSELF — the
+    // first version of it did, and failed on a suite that spawns nothing.
+    let needle = format!("{}::{}", "Command", "new");
     let test_src = include_str!("haml_corpus.rs");
     assert!(
-        !test_src.contains("Command::new"),
+        !test_src.contains(&needle),
         "the corpus test must never spawn a process — the gem is offline-only"
     );
 }

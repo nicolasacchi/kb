@@ -293,8 +293,20 @@ pub struct Text {
 }
 
 impl Text {
+    /// A REAL interpolation was found — the escaped `\#{…}` form is not
+    /// one, and never becomes a Ruby fragment.
     pub fn has_interpolation(&self) -> bool {
         !self.interpolations.is_empty()
+    }
+
+    /// The `#{` MARKER appears, escaped or not. HAML decides "is this line
+    /// a script" on the marker, not on whether the interpolation resolves
+    /// — `%p \#{x}` is a script whose Ruby is the string `"\#{x}"`. A
+    /// distinct predicate from [`Text::has_interpolation`] on purpose:
+    /// conflating them would either lose the escape or mint a Ruby
+    /// fragment for text that never evaluates.
+    pub fn has_interpolation_marker(&self) -> bool {
+        self.value.contains("#{")
     }
 }
 
@@ -346,6 +358,15 @@ pub struct Filter {
     pub text: String,
     pub body_span: Option<Span>,
 }
+
+/// HAML's own autoclose list, verbatim: a tag with one of these names is
+/// self-closing whether or not the author wrote `%tag/`. Probed off
+/// `Haml::Parser` rather than copied from an HTML spec — the corpus
+/// compares against the gem, so the gem's list is the one that is true.
+pub const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "command", "embed", "hr", "img", "input", "keygen", "link",
+    "menuitem", "meta", "param", "source", "track", "wbr",
+];
 
 /// The filter names HAML ships. An unlisted name is still parsed as a
 /// filter — its body is simply opaque, which is the honest answer for a
@@ -405,14 +426,6 @@ pub fn parse_str(src: &str) -> Document {
             i += 1;
             continue;
         }
-        if line.has_tab_indent && !ctx.tab_reported {
-            ctx.tab_reported = true;
-            ctx.diag(
-                DiagnosticKind::TabIndent,
-                line.line_no,
-                Span::new(line.start as usize, line.content_start as usize),
-            );
-        }
         let Some(sigil) = lexer::classify(line.content(ctx.src)) else {
             i += 1;
             continue;
@@ -425,6 +438,7 @@ pub fn parse_str(src: &str) -> Document {
             if s.keyword.as_deref().is_some_and(|k| MID_BLOCK_KEYWORDS.contains(&k)));
         let mut popped_any = false;
         let mut popped_exact = false;
+        let mut attached_to_block = false;
         while let Some(&(top_id, top_indent)) = stack.last() {
             if top_indent > indent {
                 stack.pop();
@@ -437,7 +451,13 @@ pub fn parse_str(src: &str) -> Document {
                     NodeKind::Script(_) | NodeKind::SilentScript(_)
                 );
                 if is_mid && top_is_script {
-                    break; // attach to the block this keyword continues
+                    // Attach to the block this keyword continues. Nothing
+                    // was closed, so this is NOT the between-levels dedent
+                    // the check below reports — `- else` sitting at its
+                    // `- if`'s own indentation is the correct shape, not a
+                    // malformed one.
+                    attached_to_block = true;
+                    break;
                 }
                 stack.pop();
                 popped_any = true;
@@ -449,7 +469,7 @@ pub fn parse_str(src: &str) -> Document {
         // Rule 2: a dedent that landed BETWEEN two open levels never
         // matched a level it could close. HAML raises here; this scanner
         // snaps to the nearest enclosing level and captions the file.
-        if popped_any && !popped_exact {
+        if popped_any && !popped_exact && !attached_to_block {
             ctx.diag(DiagnosticKind::InconsistentDedent, line.line_no, span);
         }
 
@@ -482,7 +502,45 @@ pub fn parse_str(src: &str) -> Document {
         }
         i = next;
     }
+    report_tab_indentation(&mut ctx);
     ctx.doc
+}
+
+/// Rule 2's other half, as a post-pass: a tab in the INDENTATION of any
+/// line HAML would have read structurally.
+///
+/// It runs after the walk, not inside it, for two reasons. A line absorbed
+/// by a continuation (an attribute hash spanning three lines) never
+/// reaches the main loop, and its indentation is still indentation. And a
+/// line inside a `:filter` or `-#` body is opaque CONTENT — a tab-indented
+/// `:javascript` block is not a HAML indentation error, and reporting one
+/// would be a false positive on the most common shape there is.
+fn report_tab_indentation(ctx: &mut Ctx) {
+    let bodies: Vec<(u32, u32)> = ctx
+        .doc
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::Filter(f) => f.body_span.map(|s| (s.start, s.end)),
+            NodeKind::HamlComment(c) => c.body_span.map(|s| (s.start, s.end)),
+            _ => None,
+        })
+        .collect();
+    let offender = ctx
+        .lines
+        .iter()
+        .find(|l| l.has_tab_indent && !bodies.iter().any(|(a, b)| l.start >= *a && l.start < *b));
+    if let Some(l) = offender {
+        let (line_no, start, content_start) = (l.line_no, l.start, l.content_start);
+        if !ctx.tab_reported {
+            ctx.tab_reported = true;
+            ctx.diag(
+                DiagnosticKind::TabIndent,
+                line_no,
+                Span::new(start as usize, content_start as usize),
+            );
+        }
+    }
 }
 
 /// Build the node starting at physical line `i`, returning it with the
@@ -937,7 +995,9 @@ fn parse_tag(ctx: &mut Ctx, i: usize) -> (NodeKind, Span, usize) {
     let tail_line_idx = line_index_at(ctx, logical_end.saturating_sub(1)).unwrap_or(i);
     let tail_end = ctx.lines[tail_line_idx].end as usize;
 
-    let mut self_closing = false;
+    // HAML's own rule: a void element is self-closing by NAME, before any
+    // `/` modifier is read.
+    let mut self_closing = VOID_ELEMENTS.contains(&name.as_str());
     let mut nuke_outer = false;
     let mut nuke_inner = false;
     while p < tail_end {
