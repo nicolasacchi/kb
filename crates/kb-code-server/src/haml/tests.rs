@@ -304,7 +304,7 @@ fn the_program_synthesizes_one_end_per_block_and_maps_every_row_back() {
     assert_eq!(
         lines,
         vec![
-            "if x",
+            " if x",
             " a",
             " else",
             " b",
@@ -312,7 +312,10 @@ fn the_program_synthesizes_one_end_per_block_and_maps_every_row_back() {
             " items.each do |i|",
             " i",
             "end",
-        ]
+        ],
+        "each fragment keeps its own leading space — only the ROW is \
+         load-bearing (`src_line` is re-anchored by row), and trimming \
+         would move no line"
     );
     // Every non-synthetic row re-anchors to the HAML line it came from...
     let mapped: Vec<Option<u32>> = (0..lines.len()).map(|r| prog.haml_line(r)).collect();
@@ -433,13 +436,92 @@ fn highlight_spans_are_sorted_non_overlapping_and_in_bounds() {
 // ── the corpus projection's own transforms ────────────────────────────────
 
 #[test]
-fn quote_ruby_escapes_only_backslashes_and_double_quotes() {
+fn quote_ruby_escapes_outside_an_interpolation_and_copies_inside_it() {
+    // Outside: `"` and `\` are escaped.
     assert_eq!(projection::quote_ruby("Hello #{name}"), "\"Hello #{name}\"");
     assert_eq!(
         projection::quote_ruby("He said \"hi\" #{x}"),
         "\"He said \\\"hi\\\" #{x}\""
     );
     assert_eq!(projection::quote_ruby("a\\\\b"), "\"a\\\\\\\\b\"");
+    assert_eq!(
+        projection::quote_ruby("back\\slash #{x}"),
+        "\"back\\\\slash #{x}\""
+    );
+    // INSIDE an interpolation nothing is escaped — it is Ruby, and
+    // escaping a quote there would change the expression.
+    assert_eq!(
+        projection::quote_ruby("#{h({a: \"x\"}[:a])}"),
+        "\"#{h({a: \"x\"}[:a])}\""
+    );
+    // Nested interpolation rides the same balanced scan.
+    assert_eq!(
+        projection::quote_ruby("a #{\"nested #{inner}\"} b"),
+        "\"a #{\"nested #{inner}\"} b\""
+    );
+    // An ESCAPED interpolation passes through with ONE backslash: in the
+    // emitted Ruby that is exactly the escape that renders `#{…}`
+    // literally, so doubling it would break what the author escaped.
+    assert_eq!(
+        projection::quote_ruby("\\#{not_interpolated}"),
+        "\"\\#{not_interpolated}\""
+    );
+}
+
+/// HAML autocloses a void element by NAME, before any `/` is read — and
+/// the corpus proves it, since the gem does the same.
+#[test]
+fn a_void_element_is_self_closing_without_a_slash() {
+    for name in ["meta", "br", "hr", "img", "input", "link", "wbr"] {
+        let d = doc(&format!("%{name}\n"));
+        let NodeKind::Tag(t) = &d.nodes[0].kind else {
+            panic!("{name}: not a tag")
+        };
+        assert!(t.self_closing, "%{name} must autoclose");
+        assert!(parser::VOID_ELEMENTS.contains(&name));
+    }
+    for name in ["div", "p", "span", "section"] {
+        let d = doc(&format!("%{name}\n"));
+        let NodeKind::Tag(t) = &d.nodes[0].kind else {
+            panic!()
+        };
+        assert!(!t.self_closing, "%{name} must NOT autoclose");
+    }
+    // An explicit `/` still closes a non-void tag.
+    let d = doc("%span/\n");
+    let NodeKind::Tag(t) = &d.nodes[0].kind else {
+        panic!()
+    };
+    assert!(t.self_closing);
+}
+
+/// The escaped form is a script to HAML but NOT a Ruby fragment here —
+/// two predicates, deliberately distinct.
+#[test]
+fn an_escaped_interpolation_is_a_script_but_never_a_ruby_fragment() {
+    let src = "%p \\#{not_interpolated}\n";
+    let d = doc(src);
+    let NodeKind::Tag(t) = &d.nodes[0].kind else {
+        panic!()
+    };
+    let Some(Inline::Text(inline)) = &t.inline else {
+        panic!("inline text")
+    };
+    assert!(inline.has_interpolation_marker(), "HAML sees a script here");
+    assert!(
+        !inline.has_interpolation(),
+        "but there is no Ruby to evaluate, so no fragment is minted"
+    );
+    assert!(
+        extract::ruby_fragments(&d, src).is_empty(),
+        "an escaped interpolation must never reach the Rails lens"
+    );
+    // ...and the projection reports the gem's shape.
+    let v = projection::project(&d);
+    assert_eq!(
+        v["nodes"][0]["inline"]["script"],
+        "\"\\#{not_interpolated}\""
+    );
 }
 
 #[test]
