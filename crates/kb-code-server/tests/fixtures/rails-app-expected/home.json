@@ -1,24 +1,24 @@
 {
   "counts": {
-    "action": 5,
+    "action": 6,
     "concern": 1,
     "controller": 2,
     "job": 2,
     "mailer": 1,
     "model": 3,
-    "route": 5,
-    "view": 5
+    "route": 6,
+    "view": 7
   },
   "detected": true,
   "honesty": {
     "state": "ok"
   },
   "lens": {
-    "edges_total": 21,
+    "edges_total": 26,
     "generation": 0,
     "grammar_version": "rails-lens/1",
     "orphan_source_files": 0,
-    "source_files": 7,
+    "source_files": 8,
     "stale_source_files": 0
   },
   "notes": [

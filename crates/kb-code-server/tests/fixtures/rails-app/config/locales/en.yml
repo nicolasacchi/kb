@@ -2,6 +2,9 @@ en:
   orders:
     index:
       title: "Orders"
+    summary:
+      heading: "Order summary"
+      link: "All orders"
     unused_key: "Nothing references this"
   admin:
     reports:
