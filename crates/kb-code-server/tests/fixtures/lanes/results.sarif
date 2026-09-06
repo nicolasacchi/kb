@@ -1,0 +1,50 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "ExampleScanner",
+          "version": "2.4.0",
+          "rules": [
+            { "id": "EX001", "name": "UnsafeEval", "shortDescription": { "text": "Unsafe eval" } }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "EX001",
+          "level": "error",
+          "message": { "text": "Possible unsafe eval of user input." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/models/widget.rb" },
+                "region": { "startLine": 3, "endLine": 4 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "EX002",
+          "message": { "text": "No level given; defaults to warning." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "file:///repo/lib/legacy.rb" },
+                "region": { "startLine": 2 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "EX003",
+          "level": "note",
+          "message": { "text": "A result with no location at all." },
+          "locations": []
+        }
+      ]
+    }
+  ]
+}

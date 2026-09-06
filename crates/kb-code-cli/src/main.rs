@@ -1328,6 +1328,17 @@ enum Cmd {
     ///
     /// Both write `index.scip` by default. LOOPBACK-ONLY (same gate as
     /// `checkout`/`session-diff`).
+    /// `kb-code lanes …` — V72-H4a's `aug-lane/1`: list the augmentation-lane
+    /// registry, read a path's facts with the class computed for THIS
+    /// request, summarise a repo's stored claims, and ingest a tool run.
+    ///
+    /// `ingest` runs the PARSER here, on the operator's box, and POSTs
+    /// `lane-ingest/1` over loopback — the daemon never runs the tool
+    /// (kb-code-server's invariant 10).
+    Lanes {
+        #[command(subcommand)]
+        cmd: LanesCmd,
+    },
     Scip {
         #[command(subcommand)]
         cmd: ScipCmd,
@@ -3207,6 +3218,94 @@ enum PrCmd {
     },
 }
 
+/// `kb-code lanes <subcommand>` — V72-H4a, `aug-lane/1`.
+#[derive(Subcommand, Debug)]
+enum LanesCmd {
+    /// List the registry with enablement, counts and last ingest
+    /// (`GET /api/lanes`).
+    List {
+        /// Narrow the counts to one repo.
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// A path's facts, each with the trust class computed for THIS request
+    /// (`GET /api/lanes/facts`).
+    Facts {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        path: String,
+        /// Only this lane.
+        #[arg(long)]
+        lane: Option<String>,
+        /// Class against this blob instead of the working tree's current
+        /// one.
+        #[arg(long = "at-blob")]
+        at_blob: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Per-lane/kind/severity counts over a bounded set of stored claims
+    /// (`GET /api/lanes/summary`).
+    Summary {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Parse a tool's output HERE and POST it as `lane-ingest/1`
+    /// (`POST /api/lanes/{lane}/ingest`, LOOPBACK-ONLY).
+    ///
+    /// `ADAPTER` is one of `coverage.simplecov`, `rubocop`, `sarif`. The
+    /// first two name their lane; `sarif` is a generic adapter, so it
+    /// needs `--lane sarif.<tool>` naming a lane the daemon's `[lanes]
+    /// enabled` declares.
+    Ingest {
+        /// `coverage.simplecov` | `rubocop` | `sarif`.
+        adapter: String,
+        #[arg(long)]
+        repo: String,
+        /// The tool's output file.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// The registered lane id — required for the `sarif` adapter.
+        #[arg(long)]
+        lane: Option<String>,
+        /// The root the TOOL saw, stripped from absolute paths it reports
+        /// (a coverage run inside a container reports `/app/...`).
+        #[arg(long = "strip-prefix")]
+        strip_prefix: Option<String>,
+        /// `rubocop` only: pull diagnostics through the daemon's kb-lip
+        /// provider (`GET /api/diagnostics`) instead of reading a file.
+        /// Those facts carry a TOOL-named blob, because lip's blob guard
+        /// proved it — see the verb's own doc.
+        #[arg(long = "from-lip")]
+        from_lip: bool,
+        /// `--from-lip`: the paths to pull. Repeat or comma-separate.
+        #[arg(long, value_delimiter = ',')]
+        paths: Vec<String>,
+        /// Facts per POST. A large run is posted in several batches, each
+        /// its own run row; every fact still names the run that made it.
+        #[arg(long = "batch-size", default_value_t = 5000)]
+        batch_size: usize,
+        /// Parse and print the run summary without POSTing anything.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum ScipCmd {
     /// Parse INDEX (a `.scip` protobuf file) and POST its mapped
@@ -4632,6 +4731,60 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .await
         }
+        Cmd::Lanes { cmd } => match cmd {
+            LanesCmd::List { repo, daemon, json } => {
+                lanes_list_cmd(&daemon, repo.as_deref(), json).await
+            }
+            LanesCmd::Facts {
+                repo,
+                path,
+                lane,
+                at_blob,
+                daemon,
+                json,
+            } => {
+                lanes_facts_cmd(
+                    &daemon,
+                    &repo,
+                    &path,
+                    lane.as_deref(),
+                    at_blob.as_deref(),
+                    json,
+                )
+                .await
+            }
+            LanesCmd::Summary { repo, daemon, json } => {
+                lanes_summary_cmd(&daemon, &repo, json).await
+            }
+            LanesCmd::Ingest {
+                adapter,
+                repo,
+                file,
+                lane,
+                strip_prefix,
+                from_lip,
+                paths,
+                batch_size,
+                dry_run,
+                daemon,
+                json,
+            } => {
+                lanes_ingest_cmd(
+                    &daemon,
+                    &adapter,
+                    &repo,
+                    file.as_deref(),
+                    lane.as_deref(),
+                    strip_prefix.as_deref(),
+                    from_lip,
+                    &paths,
+                    batch_size,
+                    dry_run,
+                    json,
+                )
+                .await
+            }
+        },
         Cmd::Scip { cmd } => match cmd {
             ScipCmd::Ingest {
                 index,
@@ -5688,6 +5841,502 @@ fn syntax_request() -> (&'static str, Vec<(&'static str, String)>) {
 /// The `GET /api/parity` request: `(path, query)`.
 fn parity_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::PARITY_ROUTE.path, Vec::new())
+}
+
+// --- V72-H4a: `aug-lane/1` (`kb-code lanes`) -----------------------------
+//
+// Four verbs against the four routes `kb_code_server::lanes::V72_H4A_ROUTES`
+// declares; the request builders below take their PATH from those consts
+// rather than a string literal, so
+// `cli_requests_send_every_param_their_route_requires` walks the CLI and
+// the server against each other.
+//
+// `ingest` is the interesting one: the PARSER runs here, in this process,
+// on the operator's box, and only the parsed facts cross the wire. The
+// daemon never runs the tool (kb-code-server's invariant 10) — which is
+// also why the parsers themselves live in the server crate: one home for
+// the fact shape, golden-tested by `cargo test -p kb-code-server`.
+
+/// The `GET /api/lanes` request: `(path, query)`.
+fn lanes_request(repo: Option<&str>) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = Vec::new();
+    if let Some(r) = repo {
+        q.push(("repo", r.to_string()));
+    }
+    (kb_code_server::lanes::LANES_ROUTE.path, q)
+}
+
+/// The `GET /api/lanes/facts` request: `(path, query)`.
+fn lane_facts_request(
+    repo: &str,
+    path: &str,
+    lane: Option<&str>,
+    at_blob: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string()), ("path", path.to_string())];
+    if let Some(l) = lane {
+        q.push(("lane", l.to_string()));
+    }
+    if let Some(b) = at_blob {
+        q.push(("at_blob", b.to_string()));
+    }
+    (kb_code_server::lanes::LANE_FACTS_ROUTE.path, q)
+}
+
+/// The `GET /api/lanes/summary` request: `(path, query)`.
+fn lane_summary_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::lanes::LANE_SUMMARY_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+/// The `POST /api/lanes/{lane}/ingest` request: `(declared path, query)`.
+/// The declared path carries the `{lane}` placeholder; `lanes_ingest_cmd`
+/// substitutes the real id.
+fn lane_ingest_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::lanes::LANE_INGEST_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+fn query_pairs<'a>(q: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    q.iter().map(|(k, v)| (*k, v.as_str())).collect()
+}
+
+async fn lanes_list_cmd(daemon: &str, repo: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = lanes_request(repo);
+    let body = get_json(&client, daemon, path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let empty = Vec::new();
+    let lanes = body["lanes"].as_array().unwrap_or(&empty);
+    println!(
+        "{:<22} {:<9} {:<9} {:<9} {:>8} {:>8}  {}",
+        "LANE", "KIND", "STATE", "CEILING", "FACTS", "RUNS", "LAST INGEST"
+    );
+    for l in lanes {
+        let id = l["id"].as_str().unwrap_or("?");
+        let state = if l["family"].as_bool().unwrap_or(false) {
+            "template"
+        } else if l["enabled"].as_bool().unwrap_or(false) {
+            "on"
+        } else {
+            "off"
+        };
+        let num = |v: &serde_json::Value| -> String {
+            v.as_i64().map(|n| n.to_string()).unwrap_or("-".into())
+        };
+        let last = l["last_ingest_at"]
+            .as_i64()
+            .map(|t| {
+                chrono::DateTime::from_timestamp(t, 0)
+                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| t.to_string())
+            })
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<22} {:<9} {:<9} {:<9} {:>8} {:>8}  {}",
+            id,
+            l["kind"].as_str().unwrap_or("?"),
+            state,
+            l["trust_ceiling"].as_str().unwrap_or("?"),
+            num(&l["facts"]),
+            num(&l["runs"]),
+            last
+        );
+    }
+    for u in body["unknown_enabled"].as_array().unwrap_or(&empty) {
+        println!(
+            "! {} is in `[lanes] enabled` but matches no registry row",
+            u.as_str().unwrap_or("?")
+        );
+    }
+    Ok(())
+}
+
+async fn lanes_facts_cmd(
+    daemon: &str,
+    repo: &str,
+    path: &str,
+    lane: Option<&str>,
+    at_blob: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (route, q) = lane_facts_request(repo, path, lane, at_blob);
+    let body = get_json(&client, daemon, route, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let empty = Vec::new();
+    println!(
+        "{} @ {}",
+        body["path"].as_str().unwrap_or(path),
+        body["blob"]
+            .as_str()
+            .unwrap_or("(no blob — path unreadable)")
+    );
+    for f in body["facts"].as_array().unwrap_or(&empty) {
+        let at = match (f["line"].as_u64(), f["line_end"].as_u64()) {
+            (Some(a), Some(b)) if b > a => format!("{a}-{b}"),
+            (Some(a), _) => a.to_string(),
+            _ => "file".into(),
+        };
+        println!(
+            "  {:<10} {:<18} {:<10} {:<8} {}  [{}]",
+            at,
+            f["lane"].as_str().unwrap_or("?"),
+            f["kind"].as_str().unwrap_or("?"),
+            f["class"].as_str().unwrap_or("?"),
+            f["value"],
+            f["reason"].as_str().unwrap_or("?")
+        );
+    }
+    println!(
+        "  {} fact(s){}",
+        body["returned"].as_u64().unwrap_or(0),
+        if body["truncated"].as_bool().unwrap_or(false) {
+            " (more exist — this response is capped)"
+        } else {
+            ""
+        }
+    );
+    for a in body["absent"].as_array().unwrap_or(&empty) {
+        println!("  - {}", a["reason"].as_str().unwrap_or("?"));
+        if let Some(r) = a["refresh"].as_str() {
+            println!("      {r}");
+        }
+    }
+    for n in body["notes"].as_array().unwrap_or(&empty) {
+        println!("  ! {}", n.as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
+async fn lanes_summary_cmd(daemon: &str, repo: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (route, q) = lane_summary_request(repo);
+    let body = get_json(&client, daemon, route, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let empty = Vec::new();
+    for b in body["buckets"].as_array().unwrap_or(&empty) {
+        println!(
+            "{:<22} {:<18} {:<9} {:>8}",
+            b["lane"].as_str().unwrap_or("?"),
+            b["kind"].as_str().unwrap_or("?"),
+            b["severity"].as_str().unwrap_or("-"),
+            b["count"].as_i64().unwrap_or(0)
+        );
+    }
+    println!(
+        "scanned {} row(s), bound {}{}",
+        body["scanned"].as_i64().unwrap_or(0),
+        body["scan_cap"].as_i64().unwrap_or(0),
+        if body["capped"].as_bool().unwrap_or(false) {
+            " (BOUND HIT — counts are over the newest rows only)"
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
+/// Which lane id an `ingest` invocation addresses. The two concrete
+/// adapters name their own lane; `sarif` is generic, so the operator must
+/// name the registered instance — a SARIF ingest into one shared bucket
+/// would make two scanners indistinguishable.
+fn ingest_lane_id(adapter: &str, lane: Option<&str>) -> Result<String> {
+    match adapter {
+        "coverage.simplecov" | "rubocop" => {
+            if let Some(l) = lane {
+                if l != adapter {
+                    anyhow::bail!(
+                        "adapter {adapter:?} names its own lane; --lane {l:?} contradicts it"
+                    );
+                }
+            }
+            Ok(adapter.to_string())
+        }
+        "sarif" => {
+            let l = lane.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the sarif adapter is generic: pass --lane sarif.<tool> (e.g. \
+                     --lane sarif.brakeman), declared in the daemon's `[lanes] enabled`"
+                )
+            })?;
+            if !l.starts_with("sarif.") || l["sarif.".len()..].is_empty() {
+                anyhow::bail!("--lane {l:?} must be `sarif.<tool>`");
+            }
+            Ok(l.to_string())
+        }
+        other => {
+            anyhow::bail!("unknown adapter {other:?} — one of coverage.simplecov | rubocop | sarif")
+        }
+    }
+}
+
+/// One parsed fact, on the wire. `range_start`/`range_end` collapse into
+/// the route's `range` pair; a file-level fact carries none.
+fn lane_fact_wire(
+    f: &kb_code_server::lanes::adapters::ParsedFact,
+    produced_at: i64,
+) -> serde_json::Value {
+    let mut o = serde_json::json!({
+        "path": f.path,
+        "kind": f.kind,
+        "value": f.value,
+        "produced_at": produced_at,
+    });
+    if let Some(b) = &f.blob_sha {
+        o["blob_sha"] = serde_json::json!(b);
+    }
+    if let (Some(s), Some(e)) = (f.range_start, f.range_end) {
+        o["range"] = serde_json::json!([s, e]);
+    }
+    if let Some(sev) = &f.severity {
+        o["severity"] = serde_json::json!(sev);
+    }
+    o
+}
+
+/// Pull diagnostics for `paths` through the daemon's kb-lip provider,
+/// bracketed by a before/after blob read of the SAME file.
+///
+/// kb-lip already hashes the on-disk bytes around every LSP round trip and
+/// refuses on mismatch, and `lip::verify_blob_freshness` re-checks it
+/// daemon-side — that is what lets these facts claim a TOOL-named blob and
+/// so reach `exact`. What neither guard covers is the gap between two of
+/// THIS process's HTTP calls, so the bracket closes it here: a file whose
+/// blob moved between the two reads is skipped with a stated reason rather
+/// than having a diagnostic pinned to bytes it was not computed against.
+async fn lip_diagnostic_facts(
+    client: &reqwest::Client,
+    daemon: &str,
+    repo: &str,
+    paths: &[String],
+) -> Result<kb_code_server::lanes::adapters::ParsedRun> {
+    let mut run = kb_code_server::lanes::adapters::ParsedRun::new("kb-lip");
+    for path in paths {
+        let q = [("repo", repo), ("path", path.as_str())];
+        let before = get_json(client, daemon, "/api/file", &q).await?;
+        let blob0 = before["blob_hash"].as_str().unwrap_or("").to_string();
+        let diag = get_json(client, daemon, "/api/diagnostics", &q).await?;
+        let after = get_json(client, daemon, "/api/file", &q).await?;
+        let blob1 = after["blob_hash"].as_str().unwrap_or("");
+        if blob0.is_empty() || blob0 != blob1 {
+            run.notes.push(format!(
+                "{path}: the file changed while its diagnostics were being fetched — skipped \
+                 rather than pinned to the wrong blob"
+            ));
+            continue;
+        }
+        if !diag["fetched"].as_bool().unwrap_or(false) {
+            run.notes.push(format!(
+                "{path}: no diagnostics ({})",
+                diag["unavailable_reason"].as_str().unwrap_or("unknown")
+            ));
+            continue;
+        }
+        if let Some(provider) = diag["provider"].as_str() {
+            if run.tool_version.is_none() {
+                run.tool_version = Some(provider.to_string());
+            }
+        }
+        run.inspected.push(path.clone());
+        let rows: Vec<serde_json::Value> =
+            diag["diagnostics"].as_array().cloned().unwrap_or_default();
+        run.facts.extend(
+            kb_code_server::lanes::adapters::rubocop::from_lip_diagnostics(path, &blob0, &rows),
+        );
+    }
+    Ok(run)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn lanes_ingest_cmd(
+    daemon: &str,
+    adapter: &str,
+    repo: &str,
+    file: Option<&Path>,
+    lane: Option<&str>,
+    strip_prefix: Option<&str>,
+    from_lip: bool,
+    paths: &[String],
+    batch_size: usize,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    use kb_code_server::lanes::adapters;
+
+    let lane_id = ingest_lane_id(adapter, lane)?;
+    let started_at = chrono::Utc::now().timestamp();
+    let client = http_client()?;
+
+    let (run, argv) = if from_lip {
+        if adapter != "rubocop" {
+            anyhow::bail!("--from-lip is only wired for the rubocop adapter");
+        }
+        if paths.is_empty() {
+            anyhow::bail!("--from-lip needs --paths a.rb,b.rb");
+        }
+        if file.is_some() {
+            anyhow::bail!("pass either --file or --from-lip, not both");
+        }
+        let run = lip_diagnostic_facts(&client, daemon, repo, paths).await?;
+        (
+            run,
+            format!("kb-code lanes ingest {adapter} --repo {repo} --from-lip"),
+        )
+    } else {
+        let file = file.ok_or_else(|| {
+            anyhow::anyhow!("lanes ingest needs --file <the tool's output> (or --from-lip)")
+        })?;
+        let text = std::fs::read_to_string(file)
+            .with_context(|| format!("read --file {}", file.display()))?;
+        let parsed = match adapter {
+            "coverage.simplecov" => adapters::simplecov::parse(&text, strip_prefix),
+            "rubocop" => adapters::rubocop::parse(&text, strip_prefix),
+            "sarif" => adapters::sarif::parse(&text, strip_prefix),
+            other => anyhow::bail!("unknown adapter {other:?}"),
+        }
+        .map_err(anyhow::Error::msg)?;
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "-".into());
+        (
+            parsed,
+            format!("kb-code lanes ingest {adapter} --repo {repo} --file {name}"),
+        )
+    };
+
+    let finished_at = chrono::Utc::now().timestamp();
+    let produced_at = run.produced_at.unwrap_or(started_at);
+    // Only paths the tool INSPECTED and reported nothing for; a path with
+    // facts in any batch must never appear here or a later batch would
+    // erase an earlier one's rows.
+    let with_facts: std::collections::BTreeSet<&str> =
+        run.facts.iter().map(|f| f.path.as_str()).collect();
+    let clear_paths: Vec<String> = run
+        .inspected
+        .iter()
+        .filter(|p| !with_facts.contains(p.as_str()))
+        .cloned()
+        .collect();
+
+    if dry_run {
+        let out = serde_json::json!({
+            "lane": lane_id,
+            "tool": run.tool,
+            "tool_version": run.tool_version,
+            "facts": run.facts.len(),
+            "clear_paths": clear_paths.len(),
+            "inspected": run.inspected.len(),
+            "notes": run.notes,
+            "posted": false,
+        });
+        if json {
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!(
+                "dry run: {} fact(s), {} path(s) to clear, {} note(s) — nothing posted",
+                run.facts.len(),
+                clear_paths.len(),
+                run.notes.len()
+            );
+            for n in &run.notes {
+                println!("  ! {n}");
+            }
+        }
+        return Ok(());
+    }
+
+    let route = format!("/api/lanes/{lane_id}/ingest");
+    let (_declared, q) = lane_ingest_request(repo);
+    let query = query_pairs(&q);
+    let mut runs: Vec<serde_json::Value> = Vec::new();
+    let mut accepted = 0u64;
+    let mut refused = 0u64;
+    let mut cleared = 0u64;
+
+    // Chunks of `batch_size`; `clear_paths` rides the FIRST batch only.
+    let chunks: Vec<&[adapters::ParsedFact]> = if run.facts.is_empty() {
+        vec![&[]]
+    } else {
+        run.facts.chunks(batch_size.max(1)).collect()
+    };
+    for (i, chunk) in chunks.iter().enumerate() {
+        let body = serde_json::json!({
+            "schema": "lane-ingest/1",
+            "run": {
+                "tool": run.tool,
+                "tool_version": run.tool_version,
+                "argv_redacted": argv,
+                "started_at": started_at,
+                "finished_at": finished_at,
+            },
+            "facts": chunk.iter().map(|f| lane_fact_wire(f, produced_at)).collect::<Vec<_>>(),
+            "clear_paths": if i == 0 { clear_paths.clone() } else { Vec::new() },
+        });
+        let (status, resp) = post_json_query_raw(&client, daemon, &route, &query, &body).await?;
+        if !status.is_success() {
+            return Err(loopback_or_api_error(
+                &format!("lanes ingest {lane_id}"),
+                daemon,
+                status,
+                &resp,
+            ));
+        }
+        accepted += resp["accepted"].as_u64().unwrap_or(0);
+        refused += resp["refused"].as_u64().unwrap_or(0);
+        cleared += resp["cleared"].as_u64().unwrap_or(0);
+        runs.push(resp);
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "lane": lane_id,
+                "tool": run.tool,
+                "tool_version": run.tool_version,
+                "accepted": accepted,
+                "refused": refused,
+                "cleared": cleared,
+                "notes": run.notes,
+                "runs": runs,
+            }))?
+        );
+        return Ok(());
+    }
+    println!(
+        "✓ {lane_id}: {accepted} fact(s) accepted, {refused} refused, {cleared} path(s) cleared \
+         across {} run(s)",
+        runs.len()
+    );
+    let no_refusals: Vec<serde_json::Value> = Vec::new();
+    for r in &runs {
+        for f in r["refusals"].as_array().unwrap_or(&no_refusals) {
+            println!(
+                "  ! {}: {}",
+                f["path"].as_str().unwrap_or("?"),
+                f["reason"].as_str().unwrap_or("?")
+            );
+        }
+    }
+    for n in &run.notes {
+        println!("  ! {n}");
+    }
+    Ok(())
 }
 
 /// Render one row's addressing keys: `.rb .rake` / `Gemfile` / `#!ruby`.
@@ -9014,6 +9663,30 @@ async fn post_json_raw(
     let url = format!("{}{path}", daemon.trim_end_matches('/'));
     let resp = client
         .post(&url)
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("POST {url} — is kb-code-server running at {daemon}?"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    Ok((status, json_body_or_null(&text)))
+}
+
+/// `post_json_raw` with QUERY parameters — V72-H4a's lane ingest addresses
+/// `/api/lanes/{lane}/ingest?repo=<r>`, and the audit middleware reads its
+/// `repo`/`target` columns from the query string, so the repo must ride
+/// there rather than in the body.
+async fn post_json_query_raw(
+    client: &reqwest::Client,
+    daemon: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    body: &serde_json::Value,
+) -> Result<(reqwest::StatusCode, serde_json::Value)> {
+    let url = format!("{}{path}", daemon.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .query(query)
         .json(body)
         .send()
         .await
@@ -19717,6 +20390,11 @@ mod tests {
             rails_list_request("mailers", "repo", None, None, None),
             rails_list_request("views", "repo", None, None, None),
             rails_list_request("concerns", "repo", None, None, None),
+            // V72-H4a — `aug-lane/1`'s four routes, same rule.
+            lanes_request(None),
+            lane_facts_request("repo", "a.rb", None, None),
+            lane_summary_request("repo"),
+            lane_ingest_request("repo"),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -19738,7 +20416,8 @@ mod tests {
             .chain(kb_code_server::syntax::V72_H1_ROUTES.iter())
             .chain(kb_code_server::entities::dossier::V72_G1_ROUTES.iter())
             // V72-I1 — and one more, the same way.
-            .chain(kb_code_server::rails::routes::V72_I1_ROUTES.iter());
+            .chain(kb_code_server::rails::routes::V72_I1_ROUTES.iter())
+            .chain(kb_code_server::lanes::V72_H4A_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

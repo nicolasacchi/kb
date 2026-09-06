@@ -140,6 +140,8 @@ pub struct KbCodeConfig {
     /// keeps the shipped ranking. See [`SearchSection`].
     #[serde(default)]
     pub search: SearchSection,
+    #[serde(default)]
+    pub lanes: LanesSection,
 
     /// `[security]` — V70-A2's local-daemon hardening knobs (SEC-13's
     /// server-enforced secret denylist + SEC-02's strict-request-header
@@ -315,6 +317,59 @@ impl SearchSection {
             frecency: self.frecency,
             demote_generated: self.demote_generated,
             lexical_rarity: self.lexical_rarity,
+        }
+    }
+}
+
+/// `[lanes]` — V72-H4a's `aug-lane/1` gate. The registry
+/// (`crate::lanes::LANES`) is a Rust table this binary ships; THIS section
+/// is the only thing that turns a row of it on.
+///
+/// Two rules, both load-bearing and both stated in the design's own
+/// security posture (§P8 #1): a lane is enabled ONLY here — never by a
+/// route, never by a request, and never by a file inside a repository (a
+/// committed `.kbc/lanes.toml` would be remote code execution by `git
+/// clone`, the `.vscode/tasks.json` trap) — and the default is EMPTY, so a
+/// daemon that says nothing about lanes has every lane off and every
+/// existing response byte-identical.
+///
+/// `retention_days` overrides a lane's registry default; a lane not named
+/// here keeps `LaneSpec::retention_days_default`. A `0` is not "keep
+/// forever" — it falls back to the registry default, because a fact store
+/// with no retention is exactly the unbounded-growth resource bug §P8's
+/// retention rule exists to prevent.
+///
+/// ```toml
+/// [lanes]
+/// enabled = ["git.behavior", "coverage.simplecov", "sarif.brakeman"]
+///
+/// [lanes.retention_days]
+/// "coverage.simplecov" = 14
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LanesSection {
+    #[serde(default)]
+    pub enabled: Vec<String>,
+    #[serde(default)]
+    pub retention_days: std::collections::BTreeMap<String, u32>,
+}
+
+impl LanesSection {
+    /// `true` iff `lane_id` appears verbatim in `enabled`. Exact string
+    /// match, never a prefix or glob: `sarif.*` is a registry FAMILY
+    /// template, and enabling one of its instances means naming that
+    /// instance (`sarif.brakeman`), so a typo is a lane that stays off
+    /// rather than a wildcard that quietly opens more than was meant.
+    pub fn is_enabled(&self, lane_id: &str) -> bool {
+        self.enabled.iter().any(|l| l == lane_id)
+    }
+
+    /// The retention window for `lane_id`, in days — the operator's
+    /// override when it is a positive value, else `default_days`.
+    pub fn retention_days(&self, lane_id: &str, default_days: u32) -> u32 {
+        match self.retention_days.get(lane_id) {
+            Some(&d) if d > 0 => d,
+            _ => default_days,
         }
     }
 }

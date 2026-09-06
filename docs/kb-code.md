@@ -980,3 +980,114 @@ CLI: `kb-code rails {home,models,controllers,actions,routes,jobs,mailers,views,c
 --repo R [--q TEXT] [--limit N] [--offset N] [--json]`. The `--json` form is
 the standard envelope with `schema: "rails/1"`; the text form is compact
 enough for an agent, and every number it prints is the daemon's own.
+**`aug-lane/1` (V72-H4a, D7 / §P8) — augmentation lanes.** A **lane** is a
+source of facts about code that kb-code did not derive from its own
+tree-sitter pipeline: the repository's git history, a coverage run, a
+linter, a SARIF-emitting scanner. One registry
+(`crates/kb-code-server/src/lanes/mod.rs`), one fact store (`lane_facts` +
+`lane_runs`, migration V0030), one classing function, one CLI.
+
+Three rules hold the whole thing up.
+
+*A lane is enabled ONLY by config.* `[lanes] enabled = ["git.behavior", …]`
+in `kb-code.toml` — never by a route, never by a request, and never by a
+file inside a repository (a committed `.kbc/lanes.toml` would be remote
+code execution by `git clone`). The default is empty: a daemon that says
+nothing about lanes has every lane off and every other response
+byte-identical. `[lanes.retention_days]` overrides a lane's registry
+default.
+
+*The daemon runs no tool.* The registry has two kinds. A `derived` lane is
+computed by the daemon from git and the mirror alone; an `ingested` lane's
+facts arrive as a `lane-ingest/1` POST from `kb-code lanes ingest`, which
+ran the tool on the operator's own box, over the **loopback-only**
+mutation lane (beside `checkout` and apply-suggestion, and in the V0027
+mutations ledger). There is no third path and no flag that creates one.
+
+*The trust class is computed per request and never persisted.*
+`lane_facts` has no class column. `lanes::classing::class_for` is the one
+function that turns a stored claim into a class, from `min(lane ceiling,
+per-fact cap, anchor state)`:
+
+| condition | class | `reason` |
+|---|---|---|
+| the path is not readable in the repo | `orphan` | `path-gone` |
+| blob == current, `sha_source = tool` | `exact` | `blob-current` |
+| blob == current, `sha_source = mirror_at_ingest` | `likely` | `blob-current-sha-attributed` |
+| blob moved, file-level fact | `likely` | `file-level-blob-moved` |
+| blob moved, content unreadable | `orphan` | `content-unreadable` |
+| blob moved, no stored snippet | `orphan` | `no-snippet` |
+| blob moved, snippet found verbatim | `likely` | `reanchored-exact` |
+| blob moved, only a fuzzy match | `candidate` | `reanchored-fuzzy` |
+| blob moved, nothing matched | `orphan` | `no-anchor` |
+
+Re-anchoring reuses the ONE carry-forward Ladder this daemon already has
+(`annotations::anchor_for_line` + `annotations::resolve` +
+`review_comments::line_matches_snippet` — the same three calls review
+comments and findings make), and the snippet it re-resolves is captured at
+ingest only when the fact's blob is what is on disk at that moment: this
+daemon cannot read bytes it does not have, so a fact about some other blob
+carries no snippet and becomes an honest orphan rather than a manufactured
+match. `sha_source` is the honesty bit that makes `exact` reachable at
+all — a blob the daemon *attributed* at ingest is not a blob the tool
+*named*, and reading it back as `exact` would be a wrong `exact`.
+
+**Routes.** `GET /api/lanes[?repo=]` (registry + enablement + counts +
+last ingest, and any `[lanes] enabled` id that matches no row, named);
+`GET /api/lanes/facts?repo=&path=[&lane=][&at_blob=]` (facts with the
+class computed NOW, the re-anchored line, the age and the run provenance;
+enabled lanes with nothing to say are listed in `absent` with the command
+that would produce facts); `GET /api/lanes/summary?repo=` (per
+lane/kind/severity counts over a stated bound — counts of stored claims,
+carrying no class, because a class is per path per request);
+`POST /api/lanes/{lane}/ingest?repo=` (loopback-only). Ingest refuses
+rather than truncates (413 with the counts), refuses a path outside the
+repository **by row** while the rest of the batch lands, and REPLACES the
+lane's facts for every path the batch names plus every path in
+`clear_paths` — which is how "the offense was fixed" is expressible at
+all.
+
+**The four lanes.**
+
+- **`git.behavior`** (derived) — `churn` (non-merge commits and distinct
+  authors in the last 90 days), `co_change` (files sharing ≥2 of those
+  commits, top 10 with the true total beside them) and `last_touch`.
+  Computed on demand through `history::run_git_raw` and memoised on
+  `(repo, HEAD, path)`; nothing is stored. Agent authorship comes from the
+  commit's official `Kb-Session:` trailer block: present is proof, so the
+  fact can reach `exact`; **absent is not proof of a human**, so that fact
+  caps itself at `likely`.
+- **`coverage.simplecov`** (ingested) — `kb-code lanes ingest
+  coverage.simplecov --repo R --file coverage/.resultset.json
+  [--strip-prefix /app]`. Both resultset shapes; several suites merge by
+  summing hits. One `coverage` fact per relevant line (`{hits}`) and one
+  `coverage_summary` per file (`{covered, total, pct}`, `pct` null rather
+  than 0.0 when a file has no relevant line).
+- **`rubocop`** (ingested) — `--file rubocop.json` (`rubocop --format
+  json`) → `{cop, message, correctable, corrected, severity_raw}` with the
+  severity normalised into `error|warning|info|hint` and RuboCop's own word
+  kept. Also `--from-lip --paths a.rb,b.rb`, which pulls the daemon's
+  kb-lip diagnostics; those facts carry a **tool-named** blob, because
+  lip's own pre/post blob guard proved it — and the CLI brackets the whole
+  round with its own before/after read of the same blob, since lip's guard
+  covers the LSP call and not the gap between two of the CLI's HTTP
+  requests. A file that moved mid-round is skipped with a stated reason.
+- **`sarif.*`** (ingested) — ONE generic SARIF 2.1.0 adapter and a lane
+  per tool: `--lane sarif.brakeman`, declared in `[lanes] enabled`. The
+  `sarif.*` row is a template and is not itself addressable. Results with
+  no location, regions with no `startLine`, and artifacts outside the root
+  are named skips, never guesses.
+
+**CLI:** `kb-code lanes list|facts|summary|ingest`, each with `--json`.
+`ingest` parses on the operator's box and posts in `--batch-size` chunks;
+`--dry-run` prints the run summary without posting.
+
+Retention is a paged background sweep (`lanes::gc`) on the V72-B0 shape:
+spawned before the bind and never awaited, one short transaction per page,
+recomputed cutoff per page so an interrupted pass simply resumes. A
+disabled lane is never swept out from under a re-enable.
+
+Not in this unit, by design: the SPA's Facts gutter, rail and hover
+(H4b); any lane beyond the four; the retrofit of kb-lip, rails-lens and
+the DCB doc-lens as lanes; and LLM-produced facts, which this daemon has
+no place for at all.

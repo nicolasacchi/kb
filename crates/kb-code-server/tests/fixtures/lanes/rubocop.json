@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "rubocop_version": "1.66.1",
+    "ruby_engine": "ruby",
+    "ruby_version": "3.3.4"
+  },
+  "files": [
+    {
+      "path": "app/models/widget.rb",
+      "offenses": [
+        {
+          "severity": "convention",
+          "message": "Style/StringLiterals: Prefer single-quoted strings.",
+          "cop_name": "Style/StringLiterals",
+          "corrected": false,
+          "correctable": true,
+          "location": { "start_line": 2, "start_column": 10, "last_line": 2, "last_column": 16 }
+        },
+        {
+          "severity": "warning",
+          "message": "Lint/UselessAssignment: Useless assignment to variable - `x`.",
+          "cop_name": "Lint/UselessAssignment",
+          "corrected": false,
+          "correctable": false,
+          "location": { "start_line": 5, "start_column": 5, "last_line": 5, "last_column": 5 }
+        }
+      ]
+    },
+    { "path": "lib/legacy.rb", "offenses": [] }
+  ],
+  "summary": { "offense_count": 2, "target_file_count": 2, "inspected_file_count": 2 }
+}

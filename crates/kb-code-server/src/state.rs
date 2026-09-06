@@ -78,6 +78,13 @@ pub struct AppState {
     /// every lane in one request agrees about which factors are on. `Copy`,
     /// not `Arc`: three booleans.
     pub search_factors: crate::search::Factors,
+    /// V72-H4a — `aug-lane/1`'s enablement gate (`[lanes]` in
+    /// kb-code.toml, `config::LanesSection`), resolved ONCE at boot for the
+    /// same reason `search_factors` is: every surface in one request must
+    /// agree about which lanes exist, and there is no live reload (see this
+    /// struct's own doc). A lane is enabled ONLY from here — never by a
+    /// route, never by a request, never by a file inside a repo.
+    pub lanes: crate::config::LanesSection,
     /// V70-A3X — `GET /api/status`'s per-repo cache, same generation-gated
     /// shape (and same per-boot-singleton convention) as `file_index`/
     /// `symbol_index` above — see `git_status`'s module doc.
