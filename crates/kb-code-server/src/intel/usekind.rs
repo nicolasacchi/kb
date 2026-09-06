@@ -79,9 +79,16 @@ fn name_leaf<'t>(
         return Some(node);
     }
     let mut c = node.walk();
-    node.named_children(&mut c).find(|&child| {
+    // NOT `node.named_children(&mut c).find(...)` as the tail expression:
+    // the iterator borrows `c`, and returning it directly here trips E0597
+    // ("c does not live long enough") — `c` is dropped at the end of this
+    // block, before the borrow the tail-expression temporary would need.
+    // Binding the `find` result to an owned local first (rustc's own
+    // suggested fix for this shape) drops the borrow before `c` does.
+    let found = node.named_children(&mut c).find(|&child| {
         child.start_position() <= point && point < child.end_position() && is_name_leaf(child)
-    })
+    });
+    found
 }
 
 fn is_name_leaf(node: tree_sitter::Node<'_>) -> bool {
