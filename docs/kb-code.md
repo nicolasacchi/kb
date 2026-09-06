@@ -702,11 +702,14 @@ keys are ordinary `kbc-cmd/1` rows (`scope: "search"`, `dispatch:
 
 **`syntax/1` (V72-H1, D7) — `GET /api/syntax` and `GET /api/parity`.** ONE
 registry (`crates/kb-code-server/src/syntax.rs`) says, per file TYPE, which
-tree-sitter grammar parses it, which EXTRACTION TIER the ingest pipeline
-runs, whether it is an injection host, and the extensions, exact filenames
-and `#!` interpreters that address it. `lang::detect` is now a thin façade
-over that table and its contract is unchanged (`Some` still means "there is
-a grammar, and `salt` keys its derived rows").
+ENGINE parses it, which EXTRACTION TIER the ingest pipeline runs, whether
+it is an injection host, and the extensions, exact filenames and `#!`
+interpreters that address it. `lang::detect` is a thin façade over that
+table: `Some` means "something in this build PARSES this file, and `salt`
+keys its derived rows". The engine is `tree_sitter` (the grammar crate),
+`scanner` (V72-H3's first-party HAML scanner) or nothing at all — the wire
+carries `grammar` and `scanner` as two nullable fields derived from it, so
+"no grammar" and "not parsed" are distinguishable.
 
 The tier is `full` (highlight spans + symbols), `highlight_only` (spans;
 symbol extraction skipped by ONE short-circuit at the top of the pipeline,
@@ -742,3 +745,89 @@ injection-aware pipeline, the universal `outline/1` contract, and the
 `symbol_salt`/`highlight_salt` split. `highlight_only` therefore ships as a
 mechanism with no production row yet, recorded by a test that fails when
 the first one lands.
+
+**`haml/1` (V72-H3, D7) — the first-party HAML scanner.** HAML is the one
+file type kb-code parses with code it owns rather than a tree-sitter
+grammar: no viable grammar exists (the best available is a 13-star
+repository, and nvim-treesitter registers no `haml` entry at all) while a
+Rails monolith's views are roughly half HAML. `crates/kb-code-server/src/
+haml/` is an indentation-aware scanner — `lexer` (physical lines, byte
+ranges, sigils), `parser` (the tree), `extract` (spans, outline, Ruby
+fragments), `projection` (the corpus's comparison shape) — registered as a
+`full`-tier `syntax/1` row whose engine is `scanner: "haml/1"` and whose
+`grammar` is `null`.
+
+It reproduces HAML's own tree, including the two rules a naive indentation
+walk gets wrong: a **mid-block keyword** (`- else`, `- when`, `- rescue`)
+is a CHILD of the block it continues, and **continuations are resolved from
+the source** — an attribute list runs until its brackets balance (a scan
+that respects string literals AND nested `#{}`), a `|` block until a line
+does not end in `|`, a trailing comma pulls in one more line — each capped,
+each cap a diagnostic. Malformed input is CAPTIONED, never fatal: tabs in
+the indentation, a dedent landing between two open levels, an unbalanced
+`{` or `#{`, invalid UTF-8 all produce a `DiagnosticKind` over whatever
+structure was recoverable, where HAML's own parser raises and produces
+nothing. Diagnostics live on the returned value and are persisted nowhere —
+kb-code has no diagnostics table and this unit adds none.
+
+What it feeds:
+
+- **highlight spans** — the template's own tokens (tag names, shorthands,
+  attribute names and literal values, script sigils, filter names,
+  comments, interpolation delimiters) plus every Ruby fragment painted by
+  the EXISTING Ruby highlighter, its spans shifted into HAML coordinates.
+  Sorted and non-overlapping, as the per-line integrity guard requires.
+- **the outline** — one `symbols` row per element and per filter, named the
+  way the source reads (`%section#hero.big` → `section#hero.big`),
+  `container` naming the nearest enclosing element, line range covering the
+  subtree. Script lines are NOT outline rows: they are Ruby, and this lane
+  mints no symbol for Ruby it did not scope-resolve. These kinds join
+  YAML/TOML/JSON's `key` in `extract::OUTLINE_ONLY_KINDS`, so they never
+  pollute a repo map.
+- **the Rails lens, through the EXISTING extractors.**
+  `haml::extract::ruby_program` concatenates every Ruby fragment (script
+  lines, `#{…}` interpolations, `{…}` attribute hashes, `[…]` object
+  references, a `:ruby` filter body) into ONE parseable Ruby program with
+  `end`s derived from the indentation tree, plus a LINE MAP back to HAML
+  lines. `frameworks::rails::support::walk_haml_ruby_fragments` parses it
+  once and hands the root to the SAME `scan` callback the ERB walk uses,
+  re-anchoring lines afterwards — so `views`, `i18n`, `view_component` and
+  `jobs_mailers` resolve HAML call sites with byte-identical logic and mint
+  `render_partial`, `render_view`, `turbo_stream_target`, `i18n_key`,
+  `view_component_render`, `job_enqueue` and `mailer_deliver` at the same
+  trust classes. **Capped at `likely`/`candidate` structurally** — the
+  lens's `Trust` has no `Exact` variant and the `rails_edges` DDL is
+  `CHECK (trust IN ('likely','candidate'))`. Unlike ERB's per-tag re-parse,
+  the HAML walk reconstructs control flow across constructs, so a `render`
+  written inside a `- if` resolves. `stimulus` is deliberately absent from
+  the HAML dispatch and the code says why: it regex-scans the ERB CST's raw
+  HTML `content` nodes, and HAML has no HTML text to scan.
+
+Correctness is pinned by a **divergence corpus**: 41 synthetic templates
+under `crates/kb-code-server/tests/fixtures/haml/`, each with the REAL
+`haml` gem's parse projected into one shared shape. The expectations were
+generated ONCE, offline, on a developer box (`generate_expected.rb`, haml
+7.5.1); **the gem is never invoked by CI and never by the daemon** — a test
+greps the corpus suite's own source for a process-spawn call so that cannot
+quietly stop being true, and `CORPUS.md` records the version, the three
+normalisations and the differences deliberately NOT normalised away. Beside
+it: ~500 byte-level mutations asserting no panic and no out-of-bounds span,
+offset-map round trips, a program-parses-as-Ruby sweep, and an ERB↔HAML
+edge-parity pair.
+
+Parity Grid cells for `haml`: `highlight` yes; `symbols` **partial**
+(template outline rows — the embedded Ruby fragments get no symbols of
+their own); `outline` **partial** (rendered from the symbols table; the
+universal `outline/1` contract is not built yet — the same reason every
+other row carries); `usages` **partial** (convention edges only,
+`likely|candidate`, no occurrences index so the ladder has no exact tier);
+`hover` **partial** (word-scan resolve over template outline rows); `lens`
+**no** (the CODE lens is callable/type declarations with occurrence-backed
+usage counts, which HAML has neither of — the Rails lens is a different
+lane, and claiming `partial` here because render/i18n edges exist would be
+exactly the over-claim the derived grid exists to prevent).
+
+Not in the HAML unit, by design: the universal `outline/1` contract and the
+injection-aware pipeline generalisation (H2a — but the HAML→Ruby fragment
+mapping is written so H2a can lift it), the SPA's consumption of HAML in
+the Rails lens (I2), and any Herb/ERB change (gated off by D7).

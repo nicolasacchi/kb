@@ -773,12 +773,15 @@ fn text_from(ctx: &mut Ctx, start: usize, end: usize, trim: bool) -> Text {
     let start = start.min(end);
     let raw = &ctx.src[start..end];
     let value = if trim { raw.trim() } else { raw }.to_string();
+    // Computed BEFORE the move: `verbatim` means "this value is exactly
+    // `span`'s bytes", which a trim can falsify.
+    let verbatim = !trim || raw.len() == value.len();
     let interpolations = find_interpolations(ctx, start, end);
     Text {
         span: Span::new(start, end),
         value,
         interpolations,
-        verbatim: !trim || raw.len() == value.len(),
+        verbatim,
         forced_script: false,
     }
 }

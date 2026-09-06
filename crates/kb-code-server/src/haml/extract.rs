@@ -35,7 +35,7 @@
 //! scope-proven, so nothing here may pretend they are.
 
 use super::lexer::Span;
-use super::parser::{AttrForm, Document, Inline, NodeKind, Script, Tag, Text};
+use super::parser::{AttrForm, Document, Inline, NodeKind, Script, Tag};
 use crate::extract::Symbol;
 use crate::highlight::{HighlightClass, Span as HlSpan};
 

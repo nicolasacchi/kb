@@ -506,7 +506,7 @@ invariant #2 records).
 
 18. **`syntax/1` is the ONE file-type declaration, the tier is ONE
     short-circuit, and the Parity Grid is DERIVED** (V72-H1, D7,
-    `src/syntax.rs`). Three rules, separate to state and easy to break
+    `src/syntax.rs`). Four rules, separate to state and easy to break
     independently.
     (a) **One declaration.** `syntax::REGISTRY` owns which file is which
     language — extensions, D7's filename-stem table (`Gemfile`,
@@ -553,6 +553,41 @@ invariant #2 records).
     discovered — the `usages2::UNMINTED_KINDS` precedent.
     `syntax::V72_H1_ROUTES` joins invariant 15's `RouteContract` walk from
     both sides.
+    (d) **The ENGINE is a separate axis from the tier, and a scanner row
+    is unreachable from every tree-sitter-gated pass** (V72-H3, D7,
+    `src/haml/`). `syntax::Engine` (`TreeSitter(crate)` | `Scanner(schema)`
+    | `None`) says WHO parses; the tier says WHAT is derived. They are
+    orthogonal on purpose: HAML is `Full`-tier with NO grammar (D7 — no
+    viable one exists), which is a shape (a) and (b) alone could not
+    express. Three consequences, each one a way to break this silently.
+    First, `lang::detect`'s contract widened by exactly one engine: `Some`
+    now means "SOMETHING parses this", so a caller that reads `Some` and
+    then reaches for `lang::parse` gets `Unsupported` — every existing one
+    already degrades on that (it is also what an unregistered id returns),
+    but a NEW caller that `unwrap`s would be broken only for `.haml`.
+    Second, a scanner row must not appear in ANY pass gated on a
+    tree-sitter parse (`supports_token_level`, `imports::supports`,
+    `locals::supports`, `supports_hierarchy`, `entities::indexes_lang`,
+    `extract::CST_OUTLINE_LANG_IDS`, `tags_query`, `highlights_query`) —
+    pinned by its own test, the sibling of (b)'s. Its rows come from the
+    two arms `extract::extract_symbols` and `highlight::extract_highlights`
+    grew instead, dispatched BEFORE `lang::parse` would fail. Third, the
+    salt's version component is the SCANNER's own
+    (`haml::SCANNER_VERSION`), so a change to `src/haml/` that would
+    produce different rows for unchanged bytes owes a salt bump exactly as
+    a grammar bump does — and `crate::lang::ALL_LANGS` must carry it or
+    invariant 11's stale-salt sweep deletes every current HAML row.
+    The Rails lens consumes HAML through the EXISTING extractors
+    (`support::walk_haml_ruby_fragments` parses ONE synthesized Ruby
+    program built from `haml::extract::ruby_program`'s fragment stream and
+    hands the root to the same `scan` callback the ERB walk uses,
+    re-anchoring lines afterwards through the program's line map) — so
+    there is ONE minting path for a render/i18n edge, not two, and invariant
+    12's trust posture applies unchanged. **The `haml` gem is an OFFLINE
+    oracle only**: `tests/fixtures/haml/`'s expectations were generated
+    once by hand and checked in, `ci-code` is pure Rust, and invariant 10
+    is untouched — `tests/haml_corpus.rs` greps its own source for
+    `Command::new` to keep that true.
 
 ## When to update this file
 
