@@ -429,6 +429,19 @@ mod tests {
         p
     }
 
+    /// Identity AND both dates are pinned, so the fixture repo's commit sha
+    /// is a CONSTANT rather than a fresh random value per run.
+    ///
+    /// This is not tidiness — it is a ~3.7 % CI flake, diagnosed 2026-09-06.
+    /// `sessions::parse_git_sha` deliberately requires a hex token to carry
+    /// at least one `a`–`f` (so a line count like `1234567` in git output is
+    /// never mistaken for a sha). With an unpinned commit date the 7-char
+    /// abbreviation this fixture feeds back through that grammar was a fresh
+    /// sha every run, and `(10/16)^7 ≈ 3.7 %` of the time it came out ALL
+    /// DECIMAL — the sha was then dropped, `commits_resolved` fell to 0, and
+    /// `capture_writes_the_envelope_with_resolved_commit_block` failed on an
+    /// unrelated PR with a bare `left: 0, right: 1`. Pinning the dates makes
+    /// the sha `ba57f42dd3af…`, which is stable and carries letters.
     fn run_git(dir: &Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .arg("-C")
@@ -442,6 +455,8 @@ mod tests {
                 "commit.gpgsign=false",
             ])
             .args(args)
+            .env("GIT_AUTHOR_DATE", "1700000000 +0000")
+            .env("GIT_COMMITTER_DATE", "1700000000 +0000")
             .status()
             .expect("git runs");
         assert!(status.success(), "git {args:?} failed");
@@ -500,6 +515,17 @@ mod tests {
             .unwrap();
         let head_sha = String::from_utf8(head.stdout).unwrap().trim().to_string();
         let short = &head_sha[..7];
+        // The grammar this fixture feeds (`sessions::parse_git_sha`) skips a
+        // hex token with no `a`–`f` letter, so an all-decimal abbreviation
+        // would silently drop the sha and fail the `commits_resolved`
+        // assertion below with no clue why. `run_git` pins the commit dates
+        // to keep this constant; fail HERE, by name, if a future fixture edit
+        // moves it onto an all-decimal sha.
+        assert!(
+            short.bytes().any(|b| b.is_ascii_alphabetic()),
+            "fixture commit abbreviates to {short:?}, which `parse_git_sha` \
+             skips as all-decimal — re-pin the fixture so the sha carries a letter"
+        );
 
         let sid = "sess-cap-1";
         let jsonl = fixture_with_commit(sid, repo.to_str().unwrap(), short);
