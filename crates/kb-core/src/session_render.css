@@ -1,0 +1,1257 @@
+/* Session-transcript styles — inlined into every memory-session artifact.
+   Self-contained; no external font/css fetches. Matches kb's "Eclipse
+   Deep" dark palette + monospace-leaning density from web/src/styles. */
+
+:root {
+  --bg: #0e0e10;
+  --bg-card: #151518;
+  --bg-card-hi: #1a1a1f;
+  --bg-pre: #0a0a0c;
+  --ink: #e8e6df;
+  --ink-mute: #8a857d;
+  --ink-dim: #5a554f;
+  --rule: #23232a;
+  --rule-soft: rgba(255, 255, 255, 0.05);
+  --accent: #8a7fff;
+  --accent-soft: #aaa2ff;
+  --accent-bg: rgba(138, 127, 255, 0.08);
+  --ok: #7eb98f;
+  --warn: #d8a04b;
+  --err: #d77a6a;
+  --blue: #7aa9ff;
+  --pink: #d49ec4;
+  --cyan: #7dcfd0;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", "Menlo", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fbfaf6;
+    --bg-card: #ffffff;
+    --bg-card-hi: #f5f3ed;
+    --bg-pre: #f0eee8;
+    --ink: #1f1d1a;
+    --ink-mute: #6b6760;
+    --ink-dim: #a09a92;
+    --rule: #e3dfd6;
+    --rule-soft: rgba(0, 0, 0, 0.06);
+    --accent: #5a4fd0;
+    --accent-soft: #4a40b8;
+    --accent-bg: rgba(90, 79, 208, 0.06);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+body {
+  padding: 32px 24px 96px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+/* ── Header ────────────────────────────────────────────────────────── */
+
+.ses-head {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 24px;
+  margin-bottom: 32px;
+}
+
+.ses-head__title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.ses-head__title h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.ses-head__sid {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.ses-head__raw {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+  text-decoration: none;
+  border: 1px solid var(--rule);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.ses-head__raw:hover { color: var(--blue); border-color: var(--blue); }
+
+.ses-head__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0 0 16px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.ses-head__meta dt {
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  padding-top: 3px;
+}
+
+.ses-head__meta dd {
+  margin: 0;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.ses-head__meta dd code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: none;
+  padding: 0;
+}
+
+.ses-head__tldr {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-bg);
+  color: var(--ink);
+  font-size: 14px;
+  font-style: normal;
+  border-radius: 0 4px 4px 0;
+}
+
+/* ── Filter / search toolbar (v2 — sticky just under header) ───────── */
+
+.ses-bar {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: -8px 0 24px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+}
+
+.ses-bar__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 100px;
+  border: 1px solid var(--rule);
+  background: var(--bg-card);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  cursor: pointer;
+  user-select: none;
+  transition: color 60ms ease, border-color 60ms ease, background 60ms ease;
+}
+.ses-bar__pill:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.ses-bar__pill input[type="checkbox"] {
+  margin: 0;
+  width: 10px;
+  height: 10px;
+  accent-color: var(--accent);
+}
+.ses-bar__pill:has(input:checked) {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.ses-bar__search {
+  flex: 1;
+  min-width: 120px;
+  max-width: 240px;
+  margin-left: auto;
+  padding: 4px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.ses-bar__search::placeholder { color: var(--ink-dim); }
+.ses-bar__search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ses-bar__btn {
+  padding: 3px 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ses-bar__btn:hover { color: var(--ink); border-color: var(--rule-hi); }
+
+.ses-bar__chip {
+  padding: 2px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 100px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: color 60ms ease, border-color 60ms ease, background 60ms ease;
+}
+.ses-bar__chip:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.ses-bar__sep {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: var(--rule);
+  margin: 0 2px;
+}
+
+/* Filter visibility — runtime toggles body data-attrs; CSS hides matching elements. */
+body[data-hide-user="1"]      .ses-turn--user      { display: none; }
+body[data-hide-assistant="1"] .ses-turn--assistant { display: none; }
+body[data-hide-tools="1"]     .ses-tool            { display: none; }
+body[data-hide-thinking="1"]  .ses-think           { display: none; }
+body[data-hide-system="1"]    .ses-chip            { display: none; }
+body[data-hide-hooks="1"]     .ses-hook            { display: none; }
+body[data-tool-search]        .ses-tool:not([data-search-match]) { display: none; }
+
+/* ── Jump rail (v2 — sticky right rail, hidden on narrow viewports) ── */
+
+.ses-jump {
+  position: fixed;
+  right: 16px;
+  top: 24px;
+  width: 220px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  z-index: 8;
+}
+
+.ses-jump h3 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+}
+
+.ses-jump ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ses-jump li {
+  margin: 0;
+}
+
+.ses-jump a {
+  display: flex;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  color: var(--ink-mute);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+}
+.ses-jump a:hover {
+  color: var(--ink);
+  background: var(--accent-bg);
+}
+.ses-jump a.is-current {
+  color: var(--ink);
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+}
+.ses-jump time {
+  flex-shrink: 0;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ses-jump span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+@media (max-width: 1280px) {
+  .ses-jump { display: none; }
+}
+
+/* ── Per-turn permalink anchor (timestamp wrapped in <a>) ──────────── */
+
+.ses-turn__permalink {
+  color: inherit;
+  text-decoration: none;
+  position: relative;
+}
+.ses-turn__permalink:hover { color: var(--accent-soft); }
+.ses-turn__permalink:hover::after {
+  content: " #";
+  color: var(--ink-dim);
+}
+
+/* W6 (moonshots M2) — "comment on this turn". Low-opacity by default (not
+   hover-only-visible — opacity alone keeps it discoverable + always
+   tappable on touch, where :hover never fires) so it doesn't compete with
+   the timestamp/role chrome on a quiet read. */
+.ses-turn__comment {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  opacity: 0.35;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+/* Deliberately no background swap — `.ses-turn--user` already tints the
+   whole card `--bg-card-hi`, which would make a same-color hover state
+   invisible there; color + opacity alone stay visible on every turn kind. */
+.ses-turn__comment:hover,
+.ses-turn__comment:focus-visible {
+  opacity: 1;
+  color: var(--accent-soft);
+}
+
+/* ── Conversation flow ─────────────────────────────────────────────── */
+
+.ses-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ses-turn {
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  padding: 14px 18px 16px;
+}
+
+.ses-turn--user {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-card-hi);
+}
+
+.ses-turn--assistant {
+  border-left: 3px solid var(--rule);
+}
+
+.ses-turn--side {
+  margin-left: 28px;
+  border-style: dashed;
+  opacity: 0.92;
+}
+
+.ses-turn__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ses-turn__role {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.ses-turn--user .ses-turn__role { color: var(--accent-soft); }
+.ses-turn--assistant .ses-turn__role { color: var(--ink); }
+
+.ses-turn__head time {
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.ses-turn__model {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.ses-turn__body p {
+  margin: 0 0 12px;
+}
+.ses-turn__body p:last-child { margin-bottom: 0; }
+
+.ses-turn__body code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-pre);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+/* ── Thinking accordions ───────────────────────────────────────────── */
+
+.ses-think {
+  margin: 10px 0;
+  border-left: 2px solid var(--ink-dim);
+  padding-left: 12px;
+}
+
+.ses-think > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  list-style: none;
+  padding: 4px 0;
+}
+
+.ses-think > summary::-webkit-details-marker { display: none; }
+.ses-think > summary::before {
+  content: "▸ ";
+  color: var(--ink-dim);
+}
+.ses-think[open] > summary::before { content: "▾ "; }
+
+.ses-think__body {
+  margin: 6px 0 4px;
+  color: var(--ink-mute);
+  font-style: italic;
+  font-size: 13px;
+}
+
+/* ── Tool cards ────────────────────────────────────────────────────── */
+
+.ses-tool {
+  margin: 8px 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg-pre);
+}
+
+.ses-tool > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ses-tool > summary::-webkit-details-marker { display: none; }
+.ses-tool > summary::before {
+  content: "▸";
+  color: var(--ink-dim);
+  font-size: 10px;
+  width: 8px;
+  flex-shrink: 0;
+}
+.ses-tool[open] > summary::before { content: "▾"; }
+
+.ses-tool__name {
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.ses-tool--file  .ses-tool__name { color: var(--blue);   background: rgba(122, 169, 255, 0.10); }
+.ses-tool--shell .ses-tool__name { color: var(--warn);   background: rgba(216, 160, 75, 0.12); }
+.ses-tool--delegate .ses-tool__name { color: var(--accent-soft); background: rgba(138, 127, 255, 0.12); }
+.ses-tool--net   .ses-tool__name { color: var(--cyan);   background: rgba(125, 207, 208, 0.10); }
+.ses-tool--plan  .ses-tool__name { color: var(--ok);     background: rgba(126, 185, 143, 0.10); }
+.ses-tool--mcp   .ses-tool__name { color: var(--pink);   background: rgba(212, 158, 196, 0.10); }
+.ses-tool--other .ses-tool__name { color: var(--ink-mute); background: var(--bg-card); }
+
+.ses-tool__head {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.ses-tool__input,
+.ses-result > pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--bg);
+  border-top: 1px solid var(--rule);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+/* ── Tool results ──────────────────────────────────────────────────── */
+
+.ses-result {
+  margin: 6px 0 10px;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--ok);
+  border-radius: 0 4px 4px 0;
+  background: var(--bg-pre);
+}
+.ses-result--err {
+  border-left-color: var(--err);
+}
+.ses-result > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.ses-result > summary::-webkit-details-marker { display: none; }
+.ses-result > summary::before {
+  content: "▸ ";
+  color: var(--ink-dim);
+}
+.ses-result[open] > summary::before { content: "▾ "; }
+.ses-result--err > summary { color: var(--err); }
+
+/* ── Code blocks inside prose ──────────────────────────────────────── */
+
+.ses-code {
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: var(--bg-pre);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre;
+}
+
+/* ── File-path links inside tool headlines (v2) ────────────────────── */
+
+.ses-path {
+  color: var(--blue);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.ses-path:hover {
+  color: var(--accent-soft);
+  text-decoration: underline solid;
+}
+/* A6 — out-of-corpus file path: shown but not a (mis-)navigable link. */
+.ses-path--plain {
+  color: var(--fg-soft, inherit);
+  text-decoration: none;
+  cursor: default;
+}
+
+/* ── Error callout (v2 — always-visible banner for is_error tool results) ── */
+
+.ses-error-callout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  background: rgba(215, 122, 106, 0.10);
+  border: 1px solid var(--err);
+  border-radius: 4px 4px 0 0;
+  border-bottom: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+.ses-error-callout__head {
+  flex-shrink: 0;
+  color: var(--err);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.ses-error-callout__msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+/* When the banner is rendered, the following ses-result sits flush below it. */
+.ses-error-callout + .ses-result {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* ── Time-gap markers (v2 — between turns >30s apart) ──────────────── */
+
+.ses-time-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 8px 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ses-time-gap::before,
+.ses-time-gap::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule-soft);
+}
+
+/* ── User-decision cards (v2.1 — AskUserQuestion / ExitPlanMode / deny) ── */
+
+.ses-decision {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-bg);
+  border-radius: 0 4px 4px 0;
+}
+.ses-decision__head {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-soft);
+  margin-bottom: 6px;
+}
+.ses-decision dl {
+  margin: 6px 0 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 0;
+}
+.ses-decision dt {
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.ses-decision dd {
+  margin: 2px 0 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--rule-soft);
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.ses-decision__reason {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
+/* Variant: approved — green */
+.ses-decision--approved {
+  border-left-color: var(--ok);
+  background: rgba(126, 185, 143, 0.08);
+}
+.ses-decision--approved .ses-decision__head { color: var(--ok); }
+
+/* Variant: rejected — red */
+.ses-decision--rejected,
+.ses-decision--denied {
+  border-left-color: var(--err);
+  background: rgba(215, 122, 106, 0.08);
+}
+.ses-decision--rejected .ses-decision__head,
+.ses-decision--denied .ses-decision__head {
+  color: var(--err);
+}
+
+/* ── Plan-mode bands (v2 — milestone chips wrapping plan-mode work) ── */
+
+.ses-plan-band {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 8px 14px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ses-plan-band > span {
+  flex: 1;
+  font-weight: 600;
+}
+.ses-plan-band > time {
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.ses-plan-band--start {
+  border-bottom-color: transparent;
+  border-radius: 4px 4px 0 0;
+}
+.ses-plan-band--end {
+  border-top-color: transparent;
+  border-radius: 0 0 4px 4px;
+  margin-top: 16px;
+}
+
+/* ── System chips ──────────────────────────────────────────────────── */
+
+.ses-chip {
+  display: inline-block;
+  margin: 4px auto;
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 100px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  align-self: center;
+}
+
+.ses-chip--queue {
+  color: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* ── Hook + edit details ──────────────────────────────────────────── */
+
+.ses-hook, .ses-edit {
+  margin: 8px 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg-card);
+}
+.ses-hook > summary, .ses-edit > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.ses-hook > summary::-webkit-details-marker,
+.ses-edit > summary::-webkit-details-marker { display: none; }
+.ses-hook > summary::before, .ses-edit > summary::before {
+  content: "▸ ";
+  color: var(--ink-dim);
+}
+.ses-hook[open] > summary::before,
+.ses-edit[open] > summary::before { content: "▾ "; }
+.ses-hook code, .ses-edit code {
+  background: none;
+  padding: 0;
+  color: var(--ink);
+}
+.ses-hook pre, .ses-edit pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  background: var(--bg-pre);
+  border-top: 1px solid var(--rule);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ── Per-turn debug "raw" accordion (v2 — uuid/parent/request) ─────── */
+
+/* A5 — per-block raw JSON toggle on lossy (decision) cards. Folded by
+   default + excluded from expand-all (runtime selector), like ses-debug. */
+.ses-rawblock {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.ses-rawblock > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-block;
+  padding: 1px 7px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+.ses-rawblock > summary::-webkit-details-marker { display: none; }
+.ses-rawblock > summary:hover { color: var(--ink-mute); background: var(--bg-pre); }
+.ses-rawblock > pre {
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  background: var(--bg-pre);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink-mute);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ses-debug {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.ses-debug > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0 6px;
+  color: var(--ink-dim);
+  border-radius: 3px;
+  user-select: none;
+}
+.ses-debug > summary::-webkit-details-marker { display: none; }
+.ses-debug > summary:hover { color: var(--ink-mute); background: var(--bg-pre); }
+.ses-debug > pre {
+  position: absolute;
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink-mute);
+  white-space: pre;
+  font-size: 10px;
+  line-height: 1.5;
+  z-index: 5;
+  max-width: 480px;
+  overflow-x: auto;
+}
+
+/* ── Raw / unparsed fallback ──────────────────────────────────────── */
+
+.ses-raw {
+  margin: 4px 0;
+  border: 1px dashed var(--rule);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.ses-raw > summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  list-style: none;
+}
+.ses-raw > summary::-webkit-details-marker { display: none; }
+.ses-raw pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-pre);
+  border-top: 1px solid var(--rule);
+}
+
+/* ── Light-mode polish (v2 — tool pills + accent contrast) ─────────── */
+
+@media (prefers-color-scheme: light) {
+  /* Tool-family pill backgrounds need more weight on a near-white page;
+     dark-mode used ~10% alpha which washes out to invisible on light. */
+  .ses-tool--file  .ses-tool__name { color: #1d4fb8; background: rgba(122, 169, 255, 0.20); }
+  .ses-tool--shell .ses-tool__name { color: #8a5b15; background: rgba(216, 160, 75, 0.22); }
+  .ses-tool--delegate .ses-tool__name { color: #4a40b8; background: rgba(138, 127, 255, 0.18); }
+  .ses-tool--net   .ses-tool__name { color: #1b7172; background: rgba(125, 207, 208, 0.20); }
+  .ses-tool--plan  .ses-tool__name { color: #2d6d3d; background: rgba(126, 185, 143, 0.20); }
+  .ses-tool--mcp   .ses-tool__name { color: #883766; background: rgba(212, 158, 196, 0.20); }
+  .ses-tool--other .ses-tool__name { color: var(--ink-mute); background: var(--bg-card-hi); }
+  /* Error callout — solid borders on a white field need a stronger left edge. */
+  .ses-error-callout {
+    background: rgba(215, 122, 106, 0.08);
+    border-color: #c95e4a;
+  }
+  /* Plan-mode bands — bump contrast since accent-bg is fainter on light. */
+  .ses-plan-band {
+    background: rgba(90, 79, 208, 0.07);
+    border-color: var(--accent);
+  }
+}
+
+/* ── W1 (sessions-rethink) — the session-view/1 renderer additions ──── */
+
+/* Filter visibility — debug pill (P13/hygiene bundle). */
+body[data-hide-debug="1"] .ses-debug { display: none; }
+
+/* content-visibility perf (reader.md Proposal 9) — the per-turn --ses-turn-est
+   custom property is stamped by the renderer from a cheap byte-length
+   heuristic; content-visibility keeps a huge session's DOM cheap to lay out
+   while anchors/find-in-page keep working (auto-hidden content stays
+   searchable/anchor-navigable in Chromium/Firefox). */
+.ses-turn, .ses-side-lane {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--ses-turn-est, 200px);
+}
+
+/* Activity minimap (reader.md Proposal 8) — the ≤1280px iframe nav answer. */
+.ses-minimap {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 0;
+}
+.ses-minimap svg { display: block; width: 100%; height: 24px; }
+.ses-minimap rect { fill: var(--ink-dim); }
+.ses-minimap a { cursor: pointer; }
+.ses-minimap a.is-current rect { fill: var(--accent); }
+.ses-mm-human rect { fill: var(--accent-soft); }
+.ses-mm-error rect { fill: var(--err); }
+.ses-mm-commit rect { fill: var(--ok); }
+.ses-mm-task rect { fill: var(--ok); }
+.ses-mm-side rect { fill: var(--ink-mute); }
+
+/* ↧ result FAB — visible at ALL widths (reader.md Proposal 3), the
+   `.is-visible` toggle is runtime-JS-driven on scroll position. */
+.ses-endfab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 11;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 100px;
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-decoration: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+.ses-endfab.is-visible { opacity: 1; pointer-events: auto; }
+.ses-endfab:hover { background: var(--accent-bg); }
+
+/* ── find-in-transcript (W6 — moonshots M7) ─────────────────────────── */
+
+.ses-find {
+  position: fixed;
+  top: 14px;
+  right: 20px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.ses-find[hidden] { display: none; }
+.ses-find__input {
+  width: 220px;
+  padding: 4px 6px;
+  background: var(--bg-pre);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.ses-find__input:focus { outline: 1px solid var(--accent); }
+.ses-find__count {
+  min-width: 44px;
+  color: var(--ink-mute);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.ses-find__btn {
+  appearance: none;
+  border: 1px solid var(--rule);
+  background: var(--bg-card-hi);
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 3px 7px;
+  cursor: pointer;
+  line-height: 1;
+}
+.ses-find__btn:hover { border-color: var(--accent); color: var(--accent-soft); }
+
+/* A transient background pulse on the CURRENT hit's whole turn card — turn
+   granularity, not a per-substring <mark> (deep links already target the
+   turn id, and highlighting only the hit-under-navigation avoids injecting
+   markup derived from the search term anywhere in the DOM). */
+.ses-turn.ses-find-current {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  animation: kb-ses-find-pulse 1.1s ease-out 1;
+}
+@keyframes kb-ses-find-pulse {
+  0% { box-shadow: 0 0 0 6px var(--accent-bg); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* jump-to-end header affordance + asked/closed peer blockquotes (R3). */
+.ses-head__end {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  text-decoration: none;
+  border: 1px solid var(--rule);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.ses-head__end:hover { color: var(--blue); border-color: var(--blue); }
+.ses-head__tldr-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  margin-bottom: 3px;
+}
+.ses-head__tldr--closed {
+  border-left-color: var(--ok);
+  background: rgba(126, 185, 143, 0.08);
+}
+
+/* empty-thinking header glyph (hygiene bundle — collapses N empty thinking
+   fragments to a zero-scroll-cost marker instead of N empty accordions). */
+.ses-turn__glyph {
+  color: var(--ink-dim);
+  font-size: 10px;
+  letter-spacing: 1px;
+  cursor: help;
+}
+
+/* sidechain lane wrapper (reader.md Proposal 4 — the in-flow collapsed
+   indented lane for a consecutive subagent run). */
+.ses-side-lane {
+  margin: 4px 0 4px 20px;
+  border-left: 2px dashed var(--rule);
+  padding-left: 12px;
+}
+.ses-side-lane > summary {
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  padding: 4px 0;
+}
+.ses-side-lane > summary::-webkit-details-marker { display: none; }
+.ses-side-lane__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* command / task / workflow / kb-command / memory-injection cards
+   (reader.md Proposals 2/4/5). */
+.ses-cmd { color: var(--accent-soft); border-color: var(--accent); }
+.ses-cmd__out { color: var(--ink-mute); }
+.ses-task { color: var(--ok); border-color: var(--ok); }
+.ses-chip--unpaired { color: var(--warn); border-color: var(--warn); }
+.ses-tool--kb { color: var(--cyan); border-color: var(--cyan); }
+
+.ses-workflow {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent-bg);
+}
+.ses-workflow > header {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-soft);
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.ses-workflow p { margin: 6px 0 0; font-size: 13px; color: var(--ink); }
+.ses-workflow__phases {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.ses-workflow__task {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.ses-memory-injection ul {
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+/* outcome footer (R3) */
+.ses-outcome {
+  margin-top: 40px;
+  padding: 20px 22px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-bg);
+}
+.ses-outcome__head {
+  margin: 0 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+}
+.ses-outcome__closing { font-size: 14px; color: var(--ink); }
+.ses-outcome__none { color: var(--ink-mute); font-style: italic; }
+.ses-outcome h3 {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+}
+.ses-outcome ul { margin: 0; padding: 0; list-style: none; }
+.ses-outcome li {
+  padding: 4px 0;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--ink);
+  border-bottom: 1px solid var(--rule-soft);
+}
+.ses-outcome__commit-status { color: var(--ink-dim); font-size: 10px; }
+.ses-outcome__truncated { color: var(--warn); }
+.ses-outcome__caveat {
+  margin: 16px 0 0;
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+
+/* ── Print ─────────────────────────────────────────────────────────── */
+
+@media print {
+  body {
+    max-width: none;
+    padding: 12px 18px;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  /* Chrome hidden — runtime affordances make no sense on paper. */
+  .ses-bar, .ses-jump, .ses-debug, .ses-minimap, .ses-endfab, .ses-find { display: none !important; }
+  /* Force every collapsible open and drop the arrow glyph. */
+  .ses-tool, .ses-think, .ses-result, .ses-hook, .ses-edit, .ses-raw {
+    page-break-inside: avoid;
+  }
+  details { display: block; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "" !important; }
+  details > *:not(summary) { display: block !important; }
+  .ses-tool > pre, .ses-result > pre, .ses-hook > pre, .ses-edit > pre {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  /* Tighter spacing — paper isn't a scrollable feed. */
+  .ses-turn { padding: 8px 12px; margin: 0 0 8px; }
+  .ses-flow { gap: 8px; }
+  /* Bands are already visible — drop the colored fill so they print clean. */
+  .ses-plan-band { background: none; }
+}

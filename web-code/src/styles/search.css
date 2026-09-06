@@ -1,0 +1,505 @@
+/* Search-Everywhere box (W4.3) — the Omnibox overlay, the /search page,
+ * and their shared SearchSection/PrefixChips markup. Every color reaches
+ * for a tokens.css variable (dark + light both fall out for free), same
+ * discipline reader.css documents. App-level stacking uses the `--z-*`
+ * ladder (V4.U1 / V4.U4). */
+
+/* --- top-bar / home search button -------------------------------------- */
+
+.kbc-search-mini {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-search-mini:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-search-mini kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--ink-dim);
+}
+
+/* --- Omnibox overlay ----------------------------------------------------- */
+
+.kbc-omnibox-backdrop {
+  position: fixed;
+  inset: 0;
+  /* F5 light-theme audit — was a flat `rgba(0,0,0,0.45)` in both themes;
+   * `--backdrop` (tokens.css) carries the same themed alpha split the
+   * confirm dialog + kbdhelp overlay now also use (dark scrims heavier,
+   * light lighter — kb's own cross-theme scrim rationale). */
+  background: var(--backdrop);
+  z-index: var(--z-modal);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 10vh;
+}
+.kbc-omnibox {
+  width: min(720px, 92vw);
+  max-height: 74vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  overflow: hidden;
+}
+.kbc-omnibox__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2, 8px);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-omnibox__input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  background: transparent;
+  color: var(--ink);
+  padding: 6px 0;
+}
+.kbc-omnibox__input::placeholder {
+  color: var(--ink-dim);
+}
+.kbc-omnibox__status {
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.kbc-omnibox__body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 120px;
+}
+.kbc-omnibox__hint,
+.kbc-omnibox__error {
+  padding: 14px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-omnibox__error {
+  color: var(--red);
+}
+.kbc-omnibox__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 14px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kbc-omnibox__keys kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  margin: 0 2px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+/* --- /search page --------------------------------------------------------- */
+
+.kbc-searchpage {
+  /* V71-D2 — three regions (facet rail · results · preview), so the page is
+     no longer a centred 880px column. It still centres, just wider. */
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-searchpage__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.kbc-searchpage__title {
+  font-size: 18px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.kbc-searchpage__input {
+  flex: 1 1 320px;
+  min-width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.kbc-searchpage__scope,
+.kbc-searchpage__status {
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.kbc-searchpage__body {
+  margin-top: 10px;
+}
+.kbc-searchpage__error {
+  padding: 14px 0;
+  color: var(--red);
+  font-size: 12px;
+}
+
+/* --- prefix chips (shared) ------------------------------------------------ */
+
+.kbc-search__chips {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-searchpage .kbc-search__chips {
+  padding: 8px 0;
+  border-bottom: none;
+}
+.kbc-search__chip-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.kbc-search__chip-btn:hover {
+  color: var(--ink);
+  border-color: var(--accent-bor);
+}
+
+/* --- lane sections (shared) ------------------------------------------------ */
+
+.kbc-search__section + .kbc-search__section {
+  border-top: 1px solid var(--rule);
+}
+.kbc-search__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  text-decoration: none;
+  color: var(--ink-mute);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.kbc-search__header.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.kbc-search__header-count {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+}
+.kbc-search__header.is-active .kbc-search__header-count {
+  color: var(--accent-soft);
+}
+
+.kbc-search__note {
+  padding: 6px 14px 10px;
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-style: italic;
+}
+.kbc-search__skeleton {
+  padding: 6px 14px 10px;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+/* SH.C1 — paint + motion (shimmer, keyframes, reduced-motion override) now
+ * live once in tokens.css's `.kbc-skeleton` selector list; this rule owns
+ * only the box model. */
+.kbc-search__skeleton::after {
+  content: "";
+  display: block;
+  height: 28px;
+  margin-top: 4px;
+}
+
+.kbc-search__row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  padding: 6px 14px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.kbc-search__row.is-active {
+  background: var(--accent-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.kbc-search__title {
+  color: var(--ink);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-search__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-search__container {
+  color: var(--ink-dim);
+}
+.kbc-search__chip {
+  display: inline-block;
+  background: var(--bg-card-hi);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  margin-right: 4px;
+  color: var(--ink-mute);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.kbc-search__mark {
+  background: color-mix(in srgb, var(--warn) 35%, transparent);
+  color: var(--ink);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.kbc-search__transcript {
+  display: flex;
+  flex-direction: column;
+}
+.kbc-search__popover {
+  margin: 0 14px 10px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.kbc-search__popover-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  margin-bottom: 4px;
+}
+.kbc-search__popover-snippet {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+
+/* --- V71-D2: the results page's three regions ----------------------------- */
+
+.kbc-searchpage__cols {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 10px;
+}
+/* One column below the Desk's own mobile breakpoint: the rail and the
+   preview stack under the results rather than squeezing them. */
+@media (max-width: 1100px) {
+  .kbc-searchpage__cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.kbc-searchpage__refine {
+  flex: 0 1 260px;
+  min-width: 160px;
+  background: var(--bg-card);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.kbc-searchpage__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+.kbc-searchpage__controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kbc-searchpage__ran,
+.kbc-searchpage__diag,
+.kbc-searchpage__refined,
+.kbc-searchpage__stale {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kbc-searchpage__diag {
+  color: var(--warn);
+}
+.kbc-searchpage__refined {
+  color: var(--accent);
+}
+.kbc-searchpage__history,
+.kbc-searchpage__stack {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.kbc-searchpage__history {
+  display: block;
+}
+.kbc-search__chip-btn.is-active {
+  border-color: var(--accent-bor);
+  color: var(--ink);
+}
+.kbc-search__chip-btn.is-evicted {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* --- the facet rail ------------------------------------------------------- */
+
+.kbc-facets {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.kbc-facets__basis,
+.kbc-facets__empty,
+.kbc-facets__omitted,
+.kbc-facets__refused {
+  margin: 0 0 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+.kbc-facets__refused {
+  font-style: italic;
+  padding: 3px 6px;
+}
+.kbc-facets__group {
+  margin-bottom: 12px;
+}
+.kbc-facets__label {
+  margin: 0 0 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute);
+}
+.kbc-facets__row {
+  display: flex;
+  width: 100%;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-facets__row:hover {
+  background: var(--bg-card-hi);
+  color: var(--ink);
+}
+.kbc-facets__row.is-active {
+  background: var(--accent-bg);
+  border-color: var(--accent-bor);
+  color: var(--ink);
+}
+.kbc-facets__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-facets__count {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+}
+.kbc-facets__count--clause {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* --- the live preview ----------------------------------------------------- */
+
+.kbc-searchpreview {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.kbc-searchpreview__head {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-searchpreview__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+.kbc-searchpreview__path--none {
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.kbc-searchpreview__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}

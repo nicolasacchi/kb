@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:planned, project:kb, sessions, episodic-memory, recollect, retrieval, claude-code, indexing, comments, design">
+<title>kb sessions as episodic memory — design</title>
+<style>
+/* ── kb visual floor — keep in sync with kb/docs/authoring-artifacts.md "Visual floor" ── */
+:root{
+  --bg:#fbfbfa;--surface:#f3f3f1;--fg:#1b1b1a;--muted:#5f5f5c;
+  --rule:#d9d9d6;--accent:#3a5a9f;--accent-fg:#ffffff;
+  --warn:#8a5f00;--danger:#9a2f28;--ok:#256148;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:50rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16171a;--surface:#1f2126;--fg:#e6e6e3;--muted:#a3a39e;
+    --rule:#2c2e33;--accent:#8fb0ee;--accent-fg:#11131a;
+    --warn:#e0b24d;--danger:#f08079;--ok:#6fcaa0;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.btn{font:600 var(--fs-small)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;border:1px solid var(--rule);border-radius:var(--radius);background:transparent;color:var(--fg)}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:focus-visible{outline:var(--focus);outline-offset:2px}
+.btn--primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+/* ── end kb visual floor ── */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:2rem;margin:.2em 0 .3em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.08rem;margin:1.7em 0 .3em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+a[target="_blank"]::after{content:" \2197";font-size:.8em}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.18rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0;font-size:1em}
+blockquote{margin:1em 0;padding:.2em 1em;border-left:3px solid var(--rule);color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.9rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td p,td li{font-family:var(--sans);margin:.2em 0}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+nav.toc{font-family:var(--sans);font-size:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:1em 1.2em;margin:1.5em 0}
+nav.toc strong{font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+nav.toc ol{margin:.5em 0 0;padding-left:1.3em}
+nav.toc li{font-family:var(--sans);margin:.15em 0}
+.pid{font-family:var(--mono);font-size:.78rem;color:var(--accent);font-weight:700}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="artifact">
+<main id="main" tabindex="-1">
+
+<p class="kicker"><span class="dot"></span> kb design research <span class="sep">·</span> sessions track <span class="sep">·</span> status: planned</p>
+<h1>Sessions as episodic memory for Claude&nbsp;Code</h1>
+<p class="lede">kb already captures and parses every Claude Code session. This design turns those
+captures into a <strong>pull-only episodic memory</strong> the agent queries to reconstruct
+<em>why</em> something was done and whether something <em>similar</em> was done before —
+kept strictly distinct from the curated semantic memory it sits beside.</p>
+<p class="meta-strip">
+<span class="tag">design</span>
+<span class="sep">·</span> deterministic / LLM-free core
+<span class="sep">·</span> phases R0–R5 (+R6 deferred)
+<span class="sep">·</span> companion to <a href="/a/kb/research/sessions-follow-the-work-design.html">follow-the-work design</a>
+</p>
+
+<nav class="toc" aria-label="Contents">
+<strong>Contents</strong>
+<ol>
+<li><a href="#problem">Problem, restated precisely</a></li>
+<li><a href="#model">The conceptual model: recall vs recollect</a></li>
+<li><a href="#retrieval">Retrieval — WHY + SIMILAR</a></li>
+<li><a href="#digest">The searchable surface — embed the digest, not the JSONL</a></li>
+<li><a href="#insights">Insights layer — research extraction + comments</a></li>
+<li><a href="#surfaces">Agent &amp; human surfaces</a></li>
+<li><a href="#llm">Where (if anywhere) an LLM belongs</a></li>
+<li><a href="#phasing">Phasing</a></li>
+<li><a href="#decisions">Decisions (locked)</a></li>
+<li><a href="#risks">Risks &amp; mitigations</a></li>
+<li><a href="#priorart">Prior-art lineage</a></li>
+<li><a href="#deferred">Deferred</a></li>
+</ol>
+</nav>
+
+<section id="problem">
+<h2>1 · Problem, restated precisely</h2>
+<p>kb already <strong>captures</strong> every Claude Code session verbatim — the Stop hook
+<code>plugins/kb-memory/hooks/kb-capture.sh</code> wraps the raw JSONL transcript in HTML,
+stamps <code>kb-category=memory-session</code>, and drops it in the <code>[kb.sessions]</code>
+corpus, indexed write-only and never rewritten (invariant&nbsp;#27). It already
+<strong>parses</strong> each one deterministically — <code>sessions.rs::parse_session_activity</code>
+extracts the title, cwd, files touched, decisions (AskUserQuestion answers + plan approvals),
+effort, and git commits into per-kb sqlite (<code>sessions</code> / <code>session_files</code> /
+<code>session_decisions</code> / <code>session_commits</code>).</p>
+<p>What is missing is <strong>retrieval</strong>. Today sessions are only <em>browsable</em>
+(<code>GET /api/sessions</code>, <code>kb sessions list/folders/threads/show</code>). The asks:</p>
+<ol>
+<li>Let the agent <strong>search old sessions</strong> to learn <strong>WHY</strong> something
+was done and find whether something <strong>SIMILAR</strong> was already done — with the tools
+to do it.</li>
+<li>Add a derived <strong>insights layer</strong> over the captures (how kb was used, what was
+researched) that also <strong>links to comments</strong> (the session↔artifact link already exists).</li>
+<li>Keep it conceptually <strong>distinct</strong> from the curated agent-memory
+(<code>kb remember</code> / <code>recall</code>).</li>
+</ol>
+<p>Three code-verified facts reshape the design:</p>
+<div class="callout callout--danger">
+<span class="callout-label">Live latent bug — fixed by R0</span>
+<p><code>~/deploy/kb/kb.toml</code> sets <code>[kb.sessions] memory_scope = "global"</code>, and
+the recall fetch (<code>routes/memory.rs:252-273</code>) runs <code>hybrid_query</code> /
+<code>bm25_query</code> / <code>list_docs</code> with <strong>no category filter</strong>. The
+capture hook stamps no <code>kb-salience</code>, so a transcript defaults to 0.5 and clears the 0.15
+<code>Balanced</code> floor. Net effect: <strong>multi-MB raw JSONL transcripts are injected into
+every-turn recall on the live kb.example.com deployment</strong>, and they dilute normal document search
+(the FTS/vector queries at <code>lance.rs</code> 626/744/776 carry no category predicate either).</p>
+</div>
+<ul>
+<li><strong>The transcript is unsearchable as itself.</strong> A session <code>&lt;body&gt;</code>
+is one giant <code>&lt;pre&gt;</code> of raw JSONL; the embed source is <code>fields.body</code>
+(<code>indexer.rs:1092</code>). It retrieves badly for itself and pollutes everything else.</li>
+<li><strong>WHY already exists as joins.</strong> <code>session_files_for_artifact</code> (reverse
+link via <code>target_artifact_id</code>), <code>session_decisions_for_session</code>,
+<code>session_commits_for_session</code>, <code>first_user_prompt</code>, the lance
+<code>kb_session</code> column, and the federated reverse route <code>artifact_sessions</code>
+(<code>sessions.rs:878</code>). WHY is an assembler, not a new index.</li>
+</ul>
+</section>
+
+<section id="model">
+<h2>2 · The conceptual model: recall vs recollect</h2>
+<p>The two-tier split the asks are groping toward is the canonical
+<strong>episodic vs semantic</strong> memory distinction (Tulving → CoALA). Prior art is unanimous
+that kb is structurally correct and must <em>not</em> merge the two.</p>
+<table>
+<thead><tr><th></th><th>recall — exists</th><th>recollect — new</th></tr></thead>
+<tbody>
+<tr><th>Memory type</th><td>Semantic — "what tends to be true"</td><td>Episodic — "what happened in this case"</td></tr>
+<tr><th>Source</th><td>Curated by <code>kb remember</code></td><td>Auto-captured verbatim transcript</td></tr>
+<tr><th>Mutability</th><td>Supersede / forget at recall time</td><td>Append-only, never rewritten (#27)</td></tr>
+<tr><th>Delivery</th><td><strong>Pushed</strong> every turn (<code>kb-recall.sh</code>)</td><td><strong>Pulled</strong> on demand (agent calls a verb)</td></tr>
+<tr><th>Ranking</th><td><code>1/(60+rank) × salience × exp(-k·age)</code></td><td><code>rel × recency-decay × success-boost</code> (success a capped tie-breaker)</td></tr>
+<tr><th>Answers</th><td>"What do I know?"</td><td>"Why was X done? Has Y been tried?"</td></tr>
+<tr><th>Asserted as truth?</th><td>Yes</td><td>No — evidence with provenance + staleness</td></tr>
+</tbody>
+</table>
+<p><strong>The one-liner that must never blur:</strong> <code>kb recall</code> <em>pushes</em>
+curated semantic facts the agent asserts as currently-true (they decay, supersede, forget).
+<code>kb recollect</code> / <code>kb why</code> <em>pull</em> immutable episodic evidence the agent
+reasons over to reconstruct why/whether-before — with provenance and staleness, never asserted as
+current truth, never auto-injected.</p>
+<p>They interoperate only through a deliberate <strong>one-way promotion</strong> (episode → fact),
+deferred to <span class="pid">R6</span>. Promoted facts land in the existing project/global memory
+corpus (not the sessions corpus), so R0 can sever sessions from recall cleanly while promotion keeps
+a scoped home. <strong>Never auto-promote</strong> (re-pollutes the semantic tier) and
+<strong>never auto-inject sessions</strong> — the documented #1 cause of context rot and the
+memory-self-reinforcement poisoning vector.</p>
+</section>
+
+<section id="retrieval">
+<h2>3 · Retrieval — WHY + SIMILAR</h2>
+<p>The two needs want different machinery and ship as two verbs.</p>
+<h3>WHY — <code>kb why &lt;path|artifact-id&gt;</code> (a structured join, not a search)</h3>
+<p>Reuse <code>session_files_for_artifact</code> (fanned out by <code>artifact_sessions</code>) to
+find the sessions that touched a path, ordered by edit-strength (edit&nbsp;&gt;&nbsp;write&nbsp;&gt;&nbsp;read)
+× recency, then inline the already-extracted <code>first_user_prompt</code>, decisions, and commits.
+The answer is fully deterministic: <em>"this file is like this because you asked X, decided Y, it
+shipped as commit Z."</em> Two caveats the assembler must handle:</p>
+<ul>
+<li><strong>Fuzzy-match false positives.</strong> Path→session matching is basename-fuzzy
+(<code>TouchesConfidence::Fuzzy</code>, <code>sessions.rs:838</code>): a same-named file in another
+folder can false-positive. Prefer <code>target_artifact_id</code> + canonical paths and
+<strong>label</strong> fuzzy hits rather than asserting them.</li>
+<li><strong>Second-order fan-out.</strong> <code>artifact_sessions</code> does a per-session
+<code>lookup_session</code> <em>after</em> its <code>buffered_join</code> (<code>sessions.rs:914</code>)
+= O(sessions × corpora). For a hot file, <strong>batch</strong> the session-metadata lookup (one
+fan-out keyed by the id set) — never a nested per-session fan-out loop (#28).</li>
+</ul>
+<h3>SIMILAR — <code>kb recollect &lt;q&gt;</code> over a clean digest surface</h3>
+<p>Genuine semantic retrieval, and it must <strong>not</strong> search the JSONL blob. The digest
+(§4) becomes the embedded/FTS unit; <code>recollect</code> runs federated hybrid search over digests,
+RRF-fused, then re-ranked with a deterministic, <code>memory::rerank</code>-shaped score:
+<code>rel × recency_decay(started_at) × success_boost</code>.</p>
+<div class="callout callout--warn">
+<span class="callout-label">Success is a tie-breaker, not a multiplier</span>
+<p>Commit SHAs are "detected, not ground truth" and a session may commit work unrelated to the
+matched digest, so <code>success_boost</code> is a <strong>low-default, tunable, capped tie-breaker</strong>
+— not a primary multiplier — and each hit <strong>surfaces success/error/recency as separate fields</strong>
+the agent weighs. A golden test pins the failure mode: a high-error, no-commit <em>exploratory</em>
+session with a stronger digest match must outrank a tangentially-committing session for a "why" query.</p>
+</div>
+<p><strong>Staleness is queryable metadata, never deletion</strong> (the #1 documented failure mode is
+a confidently-wrong old session explaining a since-rewritten subsystem). Computed at query time from
+<code>started_at</code> age, whether touched files changed/were deleted since, and whether decisions
+were later superseded — returned on each hit, nothing mutated (#27). This is <strong>v1 scope</strong>:
+shipping <code>recollect</code> without staleness ships a hallucinated-rationale generator.</p>
+<p>The interface is <strong>pull-first</strong>. <code>recollect</code> and <code>why</code> are CLI
+verbs the agent invokes deliberately, advertised by one SessionStart line and a skill. Nothing is
+injected per turn.</p>
+</section>
+
+<section id="digest">
+<h2>4 · The searchable surface — embed the digest, not the JSONL</h2>
+<p>The single highest-leverage change. For <code>kb_category == "memory-session"</code> rows the
+indexer substitutes a deterministic <strong>insight digest</strong> — title, first user prompt,
+decisions (Q→A), research queries, commit subjects, edited+read basenames, cwd/branch — assembled
+from fields the parse already produces. The raw transcript stays verbatim on disk and is served
+unchanged (#27). Net effect: vector + BM25 + the reranker see clean, dense, meaning-bearing text.
+This is the "index by description, not raw body" pattern (Voyager / Document-Summary-Index).</p>
+<div class="callout">
+<span class="callout-label">Three override points — all must be intercepted</span>
+<ol>
+<li><code>embed_body</code> — <code>indexer.rs:1092</code> (<code>fields.body.clone()</code>).</li>
+<li>chunk source <code>fields.body</code> — <code>indexer.rs:1154</code> (<strong>conditional</strong>:
+sessions aren't chunked in the live config — no <code>chunked</code> in kb.toml — so wire it but drop
+the unconditional chunk-from-digest snapshot test from v1).</li>
+<li><code>body_text_excerpt</code> — <strong>parser-derived</strong> (<code>parser.rs:413</code>,
+threaded at <code>indexer.rs:1211</code>): override a parser output, not a local <code>let</code>.</li>
+</ol>
+</div>
+<p><strong>Shared parse.</strong> The digest needs <code>SessionFacts</code> (first prompt, started_at,
+message_count) <em>and</em> the JSONL activity, so it must share <code>parse_session_html_full</code>
+(<code>sessions.rs:228</code>, the wrapper the hook calls at <code>enrich.rs:139</code>) — <em>not</em>
+<code>parse_session_activity</code> (<code>:263</code>, the <code>&lt;pre&gt;</code> sub-parse, which
+lacks <code>SessionFacts</code>).</p>
+<p><strong>One writer.</strong> The embed/chunk run in <code>index_file</code> <em>before</em> the
+post-upsert <code>SessionCaptureHook</code>. So <code>index_file</code> runs the shared parse itself
+pre-upsert, builds the digest, embeds it, <strong>and</strong> writes
+<code>session_insight.insight_text</code> there — one writer, no drift; the hook is demoted to writing
+only the child rows. A sidecar <code>.insight.html</code> artifact is rejected: it doubles the artifact
+count, needs its own gallery/atlas exclusion, and writing it into a watched dir triggers a re-index
+feedback loop.</p>
+<p><strong>Secrets.</strong> The digest is assembled only from structured fields (titles, queries,
+basenames, commit subjects) — never arbitrary prose — so it cannot smuggle a secret into the vector/FTS
+index; any non-loopback serve inherits the existing scrub (#9). The digest is the data-minimization
+point so the agent's common path never re-reads the raw blob.</p>
+<h3 id="exclusion">4a · The exclusion mechanism — spike before committing</h3>
+<p>R0 must stop transcripts polluting default search and recall. The mechanism is <strong>unproven</strong>
+and load-bearing: <code>.only_if("kb_category != 'memory-session'")</code> is used <em>nowhere</em>
+alongside <code>full_text_search()</code>/<code>nearest_to()</code> in <code>lance.rs</code> today (only
+plain scans at 994/1039/1098/1473/1513). Whether the pinned lance pushes a prefilter through a fused
+FTS+vector query — and whether it pre- vs post-filters (corrupting RRF / under-filling <code>limit</code>)
+— is unknown.</p>
+<p>So R0 <strong>leads with a throwaway spike</strong>. If <code>.only_if</code> composes and pre-filters,
+use it. Else the proven fallback: post-query filter on the already-projected <code>kb_category</code>
+(<code>SEARCH_PROJECTION</code>, <code>lance.rs:593</code>) in <code>MetaFilters::keep</code> with a
+documented over-fetch multiplier. The <strong>recall path needs its own exclusion</strong> (it bypasses
+<code>MetaFilters</code>): exclude memory-session corpora in <code>in_scope</code>
+(<code>memory.rs:117</code>) or post-fetch-filter the recall row-set — and do not blindly drop
+<code>memory_scope</code> from kb.toml (audit consumers; <code>SessionCaptureHook</code> is
+category-driven and independent of it).</p>
+</section>
+
+<section id="insights">
+<h2>5 · Insights layer — research extraction + comments</h2>
+<p>"More of the same parse, more child tables." Today the parse mines <code>tool_use</code> blocks only
+for file actions and Bash-git; it walks past <code>Task</code> (subagents), <code>WebSearch</code>/
+<code>WebFetch</code>, MCP tools, <code>Skill</code>/slash-commands, <code>ExitPlanMode</code>, and the
+kb CLI driven via Bash (<code>kb search|recall|find|remember|comments</code>). All extractable from the
+same <code>content[]</code> array, reusing the <code>git_action_of</code> Bash segmenter
+(<code>sessions.rs:553</code>) as the proven precedent.</p>
+<p><strong>Data (R4).</strong> One additive migration <strong>V0021</strong> mirroring V0017–V0019: a
+<code>session_research(artifact_id_session, session_id, seq, kind, query, target_kb, target_artifact_id)</code>
+child table (<code>kind ∈ kb_search|artifact_open|web|skill|subagent|plan_span</code>) with indexes, plus
+the 1:1 <code>session_insight</code> (introduced in R1 as <strong>V0020</strong>; <code>insight_text</code>
++ scalar counts), keeping the multi-hundred-byte <code>insight_text</code> out of the wide
+<code>sessions</code> row scanned by <code>sessions_list</code>. Backfill is free: one reindex re-runs the
+parse and replaces all child rows with no source rewrite (#27).</p>
+<p><strong>Honesty framing.</strong> Parsing kb-CLI intent out of free-form Bash (quoting, pipes,
+<code>env X=</code> prefixes, aliases) and version-varying <code>Task</code>/MCP block shapes is
+heuristic — extract via version-tolerant <code>.get().and_then()</code> chains, frame as "detected, not
+ground truth" like git SHAs (#10), and pin each tool-block shape with golden tests so extraction can't
+silently drift across Claude Code versions.</p>
+<div class="callout callout--ok">
+<span class="callout-label">Comments linkage — a computed-on-read join, no new edge table</span>
+<p>Comments mutate independently (resolve/reply/reanchor long after a session ends), so a persisted edge
+goes stale instantly. The chain already exists: <code>session_files.target_artifact_id</code> → that
+artifact's review file via the canonical <code>GET /api/reviews?artifact_id=</code> (never reading
+<code>.review/*.json</code> directly — #6). <code>GET /api/sessions/{sid}/comments</code> collapses the
+session's touched in-corpus artifacts and fans out reviews via <code>buffered_join</code> (#28).</p>
+</div>
+<p>A <strong>temporal</strong> variant ("comments raised <em>during</em> this session") is nearly free:
+<code>history_record_comment</code> (<code>sqlite.rs:515</code>) timestamps every comment creation, so a
+window query over <code>[started_at, ended_at]</code> (the mechanism <code>/readings</code> already uses)
+gives it — but <code>history</code> is <strong>per-kb</strong> and a session's comments span corpora, so
+the window must <strong>federate across per-kb history</strong> via <code>buffered_join</code>, and
+<code>ended_at</code> can be null on crashed sessions (fall back to a bounded window from
+<code>started_at</code>). There is no <code>resolved_at</code> in kb-comments/1, so "resolved during" is
+out of scope without touching #6; ship "raised during" + "comments on touched artifacts" only.</p>
+<p><strong>Aggregation (capstone).</strong> Build on <code>/api/sessions/folders</code> and
+<code>/threads</code>: per-folder/per-thread research rollups (top kb queries, top web queries, hot
+artifacts, most-used skills/subagents) and the deterministic funnel — <strong>searched → opened → edited
+→ committed → commented</strong> — all GROUP BY over the new tables, summed cross-corpus exactly like
+<code>folders()</code>. The literal "what has this project been researching" view.</p>
+</section>
+
+<section id="surfaces">
+<h2>6 · Agent &amp; human surfaces</h2>
+<p><strong>Agent (pull-first):</strong></p>
+<ul>
+<li><code>kb why &lt;file&gt;</code> — recall-formatted WHY answer (fuzzy hits labelled; batched lookup).</li>
+<li><code>kb recollect &lt;q&gt; [--folder] [--since] [--similar-to &lt;sid&gt;]</code> — federated digest
+search, recall-shaped output (<code>N sessions in M ms</code>, then
+<code>&lt;sid8&gt; &lt;title&gt; [&lt;kb&gt;/&lt;folder&gt;] score=</code> + why/decision snippet + separate
+success/error/recency fields + a staleness flag), capped ~8 hits so it never floods context.</li>
+<li>New federated <code>GET /api/why</code> and <code>GET /api/sessions/recollect</code> on
+<code>routes::buffered_join</code> (FANOUT_CAP=8, submission order, drop-on-error — #28; no
+<code>std::sync::Mutex</code> across the fan-out await — #15).</li>
+<li>One SessionStart discovery line in <code>kb-wake.sh</code>; a <code>kb-research</code>-style
+<code>SKILL.md</code> documenting the verbs. <strong>No per-turn injection.</strong></li>
+</ul>
+<p><strong>Human (SPA):</strong> extend the existing A7 <code>SessionsTouchedPanel</code>
+(<code>PreviewInspector.tsx</code>) into a "why is this like this" answer (each touching session's
+decision/why-snippet, deep-link to <code>/sessions?focus=&lt;sid&gt;</code>); a research-insight card on
+<code>sessions.tsx</code>; the research funnel on the folder/thread card. Reuse the SSE SharedWorker
+bridge (#24) for live refresh.</p>
+</section>
+
+<section id="llm">
+<h2>7 · Where (if anywhere) an LLM belongs</h2>
+<p>Everything above is deterministic (#10). The <strong>only</strong> justified LLM use is an optional,
+offline, opt-in <code>kb sessions distill</code> (deferred to <span class="pid">R6</span>) that reads the
+deterministic digest, calls a local model, and writes a one-line "what &amp; why" as a
+<code>kb remember</code>-style curated fact stamped <code>kb-session</code>, flowing into the existing
+recall system in the project/global memory corpus — never a new store, strictly off the retrieval/index
+hot path. The deterministic digest is always the source of truth and the fallback.</p>
+<div class="callout callout--warn">
+<span class="callout-label">Honest dependency caveat</span>
+<p>bge-small and the cross-encoder reranker are <strong>not generative</strong> — a local generative
+model is a net-new process the project does not host today. "Reuses the kb-embedder IPC isolation (#26)"
+is <em>pattern</em> reuse, not an available model. R6 is deferred so the deterministic core ships and
+proves the search win first; distill is a no-op when no model is configured.</p>
+</div>
+</section>
+
+<section id="phasing">
+<h2>8 · Phasing</h2>
+<p>Each phase is an additive, green-CI commit on <code>main</code> (<code>feat(crate): … (Rn)</code>).</p>
+<table>
+<thead><tr><th>Phase</th><th>Deliverable</th><th>Key reuse</th></tr></thead>
+<tbody>
+<tr><td class="pid">R0</td><td>Spike the exclusion mechanism, then exclude memory-session from default search + fix the recall posture (the latent-bug fix).</td><td><code>MetaFilters::keep</code>; <code>SEARCH_PROJECTION</code> kb_category; <code>in_scope</code>; kb.toml audit</td></tr>
+<tr><td class="pid">R1</td><td>Insight digest as the embedded/FTS surface over the three override points; V0020 <code>session_insight</code>; one-writer pre-upsert. The retrieval-quality win.</td><td><code>parse_session_html_full</code>; indexer embed/chunk/excerpt; V0017–V0019 migration template</td></tr>
+<tr><td class="pid">R2</td><td><code>kb why &lt;file&gt;</code> — structured WHY assembler (batched lookup, fuzzy labelling). Zero new index.</td><td><code>session_files_for_artifact</code>; <code>artifact_sessions</code>; decisions/commits; <code>buffered_join</code></td></tr>
+<tr><td class="pid">R3</td><td><code>kb recollect &lt;q&gt;</code> — SIMILAR digest search + sessions rerank (capped success tie-breaker) + staleness + discovery line + skill.</td><td><code>memory::rerank</code>; <code>fusion.rs</code> RRF + reranker; recall CLI format; <code>kb-wake.sh</code></td></tr>
+<tr><td class="pid">R4</td><td>Research extraction — V0021 <code>session_research</code> (kb-usage, web, subagents, skills, plan spans), golden-tested per block shape.</td><td>parse <code>tool_use</code> loop + <code>git_action_of</code>; <code>*_replace</code> idiom + cascade</td></tr>
+<tr><td class="pid">R5</td><td>Comments linkage (federated, null-guarded) + research rollups/funnel + SPA surfaces.</td><td><code>list_reviews</code> + <code>GET /api/reviews</code>; <code>history_record_comment</code>; folders/threads; <code>SessionsTouchedPanel</code>; SSE (#24)</td></tr>
+<tr><td class="pid">R6</td><td><strong>Deferred</strong> — optional offline LLM distill → deliberate episode→memory promotion.</td><td><code>kb remember</code> write path; R1 digest as LLM input; project/global memory corpus</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="decisions">
+<h2>9 · Decisions (locked 2026-06-26)</h2>
+<table>
+<thead><tr><th>Question</th><th>Decision</th></tr></thead>
+<tbody>
+<tr><td>Milestone scope</td><td><strong>Full deterministic core R0–R5</strong>; R6 deferred.</td></tr>
+<tr><td>Delivery posture</td><td><strong>Pull-only + one SessionStart discovery line</strong>. No per-turn injection.</td></tr>
+<tr><td>Optional LLM distill</td><td><strong>Defer R6</strong>; recall stays LLM-free; no new model dependency now.</td></tr>
+<tr><td>Verb names</td><td><strong><code>kb recollect</code></strong> (SIMILAR) + <strong><code>kb why</code></strong> (WHY).</td></tr>
+<tr><td>Searchable surface</td><td>Embed-override on the session's own row (not a sidecar).</td></tr>
+<tr><td>R0 exclusion</td><td>Spike <code>.only_if</code> on FTS/vector first; proven post-query kb_category filter as fallback.</td></tr>
+<tr><td>recollect ranking</td><td>Success as a low, capped, separately-surfaced tie-breaker.</td></tr>
+<tr><td>Comments scope</td><td>"Raised during" + "comments on touched artifacts" only (no <code>resolved_at</code> in #6).</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="risks">
+<h2>10 · Risks &amp; mitigations</h2>
+<ul>
+<li><strong>Lance composability (foundation of R0/R1).</strong> <code>.only_if</code> runs nowhere
+alongside FTS/vector today. → R0 leads with a spike; proven post-query <code>kb_category</code> filter +
+over-fetch is the fallback; recall needs its own exclusion.</li>
+<li><strong>Shared-parse + write ordering.</strong> Digest needs <code>parse_session_html_full</code>
+(not <code>:263</code>); three override points (one outside <code>index_file</code>); single writer for
+<code>insight_text</code> pre-upsert.</li>
+<li><strong>Success-signal false positives.</strong> Capped tie-breaker + separate fields + a golden test
+pinning exploratory-beats-tangential-commit.</li>
+<li><strong>Fuzzy path attribution.</strong> Prefer <code>target_artifact_id</code> + canonical; label
+fuzzy hits.</li>
+<li><strong>WHY fan-out amplification.</strong> Batch the per-session lookup; never nested fan-out (#28).</li>
+<li><strong>Heuristic extraction drift.</strong> Version-tolerant accessors; golden test per tool-block
+shape; "detected, not ground truth".</li>
+<li><strong>Secrets in transcripts.</strong> Digest from structured fields only; non-loopback inherits the
+scrub (#9); the digest is the data-minimization point.</li>
+<li><strong>Staleness is mandatory in v1</strong> — query-time trust signal, never deletion/rewrite (#27).</li>
+<li><strong>Comments-join federation + null <code>ended_at</code>.</strong> Federate the per-kb history
+window; bound from <code>started_at</code> on crashed sessions; bound per-artifact review lookups.</li>
+<li><strong>Table sprawl + cascade discipline.</strong> V0020/V0021 follow wholesale-replace +
+<code>sessions_delete</code> cascade (#11), keep <code>insight_text</code> out of the wide row.</li>
+<li><strong>Test-count guard.</strong> R0 flips existing transcript-in-results/recall tests; enumerate
+them so the per-crate count change is expected (CLAUDE.md guard), not a surprise.</li>
+<li><strong>Poisoning / self-reinforcement.</strong> Sessions stay pull-only and descriptive; promotion
+(R6) is deliberate and never automatic.</li>
+</ul>
+</section>
+
+<section id="priorart">
+<h2>11 · Prior-art lineage</h2>
+<ul>
+<li><strong>Tulving</strong> — episodic vs semantic memory; <strong>CoALA</strong> (arXiv:2309.02427) —
+episodic/semantic/procedural memory + internal vs external actions → the "pull" framing.</li>
+<li><strong>Letta / MemGPT</strong> — passively-recorded recall memory vs agent-queried archival memory →
+the push/pull split.</li>
+<li><strong>cass</strong> — Rust, SQLite-as-truth + Tantivy BM25 + FastEmbed + RRF (near-identical to kb's
+stack); raw, pull-only session search; <code>trust_tier</code> / <code>stale_reason</code>; refuses
+write-time summarization.</li>
+<li><strong>"Encode rich, consolidate later"</strong> (arXiv:2502.06975) — validates verbatim capture,
+warns against write-time distillation.</li>
+<li><strong>Voyager</strong> / <strong>Document-Summary-Index</strong> — index by NL description, not raw
+body → the digest-embed fix.</li>
+<li><strong>ReasoningBank</strong> {title, description, content} — the optional distillate shape (R6).</li>
+<li><strong>AgentLeak</strong> — logs leak &gt;60% of secrets → digest-from-structured-fields-only.</li>
+<li><strong>Memory self-reinforcement</strong> — sessions-injected-as-guidance poisoning vector → never
+auto-inject/auto-promote.</li>
+</ul>
+</section>
+
+<section id="deferred">
+<h2>12 · Deferred</h2>
+<ul>
+<li><span class="pid">R6</span> — optional offline LLM distill (<code>kb sessions distill</code>) +
+explicit episode→fact promotion (<code>kb sessions promote</code>); needs a net-new local generative
+model surface.</li>
+<li>Decision-level / passage-level retrieval (finer than whole-session) if whole-session proves too coarse.</li>
+<li>Session chunking on the digest — moot today (sessions aren't chunked); wired conditionally.</li>
+<li>"Resolved during this session" — needs <code>resolved_at</code> on kb-comments/1 (#6 cost).</li>
+<li>Cross-session "were the edits later reverted / re-touched" as a real success signal beyond commits.</li>
+<li>A procedural-memory layer (Voyager-style retrievable recurring workflows) — the untapped CoALA third axis.</li>
+<li>An MCP tool surface for the verbs — a skill is the recommended ergonomic; MCP is a net-new always-on process.</li>
+<li>Conditional "why/has-this-been-done" prompt-shape push — pull ships first; push only if pull proves insufficient.</li>
+<li>Timeline view (already deferred) + any aggressive archival/compaction policy for the unbounded episodic corpus.</li>
+</ul>
+</section>
+
+</main>
+</div>
+</body>
+</html>

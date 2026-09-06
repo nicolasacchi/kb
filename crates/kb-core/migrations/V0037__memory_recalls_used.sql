@@ -1,0 +1,24 @@
+-- CT-C5 — injection efficacy: did the session actually go on to REFERENCE
+-- the recalled memory (its id or title), not merely have it sit unused in
+-- the injected context?
+--
+-- `used` is derived, deterministic, EXPLICIT-REFERENCE-ONLY (never "the
+-- agent acted on the fact without naming it" — that isn't detectable
+-- without an LLM judge, which kb's no-in-daemon-LLM non-goal forbids): a
+-- second pass over the same already-parsed `SessionView`
+-- (`derive_memory_recalls`, `kb_core::sessions::view`) scans every turn
+-- STRICTLY AFTER the injection's own turn for the memory's 12-hex id or its
+-- injected title. Written by the same `memory-recall-ledger` enrichment
+-- hook, in the same `memory_recalls_replace` delete-then-insert as every
+-- other column — no separate write path, no backfill for pre-existing rows
+-- (they simply keep the column default until their capture is next
+-- re-parsed).
+--
+-- Surfaced-never-scored (the provenance_cannot_reach_the_scorer law):
+-- `used` rides the census read (`memory_recalls_counts_for_ids`'s new
+-- `used_count`) for DISPLAY only. It is never wired onto `RecallHit` and
+-- never read by `rerank_with_policy`/`rerank_with_policy_scored` — unlike
+-- `recall_count` (which the MI-W5.R `scoring_v2_stability` factor DOES
+-- read, a distinct, already-ruled-on wire), this column has no scoring
+-- consumer anywhere in the tree.
+ALTER TABLE memory_recalls ADD COLUMN used INTEGER NOT NULL DEFAULT 0;

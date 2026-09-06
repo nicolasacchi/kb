@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb web reader: gallery, atlas, detail view, history, and mobile sheet.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, spa, gallery, atlas, reader">
+<title>Web reader · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="web.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/web.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html">Concepts</a>
+  <a href="search.html">Search</a>
+  <a href="web.html" aria-current="page">Web reader</a>
+  <a href="comments.html">Comments</a>
+  <a href="agent.html">Memory &amp; sessions</a>
+  <a href="organize.html">Lists &amp; notes</a>
+  <a href="operate.html">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">04 · Read in the browser</p>
+  <h1>Web reader</h1>
+  <p class="lede">The SPA is the primary human surface: browse, search, read in a sandboxed iframe, explore the atlas, and open comments from one shell.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#routes">Routes</a></li>
+    <li><a href="#gallery">Gallery</a></li>
+    <li><a href="#atlas">Atlas</a></li>
+    <li><a href="#reader">Detail reader</a></li>
+    <li><a href="#history">History and canvas</a></li>
+    <li><a href="#mobile">Mobile</a></li>
+  </ol>
+</nav>
+
+<section id="routes">
+<h2>Routes</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>URL</th><th>View</th></tr></thead>
+  <tbody>
+    <tr><td><code>/</code></td><td>Gallery — grid / list / atlas / history (+ optional canvas, map-home shell)</td></tr>
+    <tr><td><code>/a/&lt;kb&gt;/&lt;path&gt;</code></td><td>Detail — one artifact in a sandboxed iframe (stable permalink)</td></tr>
+    <tr><td><code>/sessions</code></td><td>Captured sessions list/detail (<code>?focus=</code> opens one); CLI: <a href="agent.html">why / recollect</a></td></tr>
+    <tr><td><code>/replay/&lt;kb&gt;/&lt;sid&gt;</code></td><td>Session replay</td></tr>
+    <tr><td><code>/anchors</code></td><td>Pinned anchors; <code>?filter=stale</code> for comments whose anchors broke (<code>/stale-anchors</code> redirects here)</td></tr>
+    <tr><td><code>/settings</code></td><td>Theme, preferences, daemon list, fleet-style status pages</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Gallery state (kb, filters, sort, view) lives in the URL — every view is shareable and reload-safe. Open the command palette with <span class="kbd">⌘K</span> / <span class="kbd">Ctrl-K</span> for search modes and navigation.</p>
+</section>
+
+<section id="gallery">
+<h2>Gallery</h2>
+<ul>
+  <li><strong>Grid / list</strong> — virtualized cards with title, tags, age, reading-progress chip.</li>
+  <li><strong>Filters</strong> — tags, folder tree, capabilities, date range, category, read-state.</li>
+  <li><strong>Sort</strong> — recent, indexed, title, words, created time.</li>
+  <li><strong>Search</strong> — hybrid / keyword / semantic from the palette (same modes as the CLI).</li>
+</ul>
+<p>Clickable metadata on an open artifact (tag, category, folder, mtime) deep-links back into a filtered gallery — one URL builder, so chips stay consistent.</p>
+</section>
+
+<section id="atlas">
+<h2>Atlas</h2>
+<p>A 2-D map of a kb: each artifact is a point, colored by cluster, so related work sits near related work. Layout is deterministic (same inputs and seed → same coordinates). Recompute when the corpus has moved a lot:</p>
+<pre><code>kb atlas recompute --kb NAME
+kb atlas recluster --kb NAME --k 8    # retune clusters without full layout</code></pre>
+<p>Optional <strong>map-home</strong> shell (<code>?shell=map</code> or Settings → home preference) makes the atlas the primary navigation surface on desktop — opt-in experiment, not the default.</p>
+</section>
+
+<section id="reader">
+<h2>Detail reader</h2>
+<p>Each artifact loads from its own origin (<code>&lt;id&gt;.artifacts.&lt;suffix&gt;</code>) inside a sandboxed iframe. Same-origin isolation is what makes arbitrary LLM HTML safe to embed.</p>
+<div class="note warn">
+  <strong>Local artifact DNS.</strong> Defaults: suffix <code>.artifacts.localhost</code>, parent <code>http://127.0.0.1:4000/</code>. If the reader iframe is blank, check that <code>*.artifacts.localhost</code> resolves to loopback:
+  <pre><code>getent hosts s01.artifacts.localhost</code></pre>
+  Many Chromium builds resolve <code>*.localhost</code> without system DNS. If yours does not: dnsmasq with <code>address=/.localhost/127.0.0.1</code>. Production sets <code>artifact_host_suffix</code> (see <a href="start.html#beyond-loopback">Start → beyond loopback</a>).
+</div>
+<p>Around the iframe:</p>
+<ul>
+  <li><strong>Context bar</strong> — anchor, add-to-list, copy link, share, fullscreen / bare modes.</li>
+  <li><strong>Inspector rail</strong> — about / passport metadata, links (outlinks + backlinks), related memories, folder, comments and versions as dock panels.</li>
+  <li><strong>Versions &amp; diff</strong> — git, index snapshots, and working tree behind one façade.</li>
+  <li><strong>Reading progress</strong> — scroll and per-section dwell; resumes on reopen; feeds list read-state.</li>
+  <li><strong>Split compare</strong> (desktop) — <code>?pane2=</code> for two artifacts, one shared inspector on the focused pane.</li>
+</ul>
+<div class="note">
+  <strong>Authoring rule for embeds:</strong> no <code>&lt;base href&gt;</code>, no <code>target="_top"</code>, no <code>window.parent</code> reach-arounds. The parent SPA is a different origin by design.
+</div>
+</section>
+
+<section id="history">
+<h2>History and reflection canvas</h2>
+<p><strong>History</strong> is the activity timeline: opens (with scroll), searches, comments. <strong>Reflection canvas</strong> (<code>?view=canvas</code>) shows four synchronized day tracks — creation, reading, sessions, comments — with a brush that pivots into a normal gallery list scoped to what you selected.</p>
+</section>
+
+<section id="mobile">
+<h2>Mobile</h2>
+<p>At narrow widths the reader is a <strong>one-button sheet</strong>: the inspect control opens a bottom sheet that hosts inspector, comments, and versions without separate dead-end panels. Capture from a phone (share sheet / SPA capture) is a one-way staging drop into a <code>capture/</code> folder — not mobile authoring.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="search.html"><span class="dir">Previous</span>Search</a>
+  <a class="next" href="comments.html"><span class="dir">Next</span>Comments</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

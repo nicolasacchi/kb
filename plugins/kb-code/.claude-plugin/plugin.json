@@ -1,0 +1,6 @@
+{
+  "name": "kb-code",
+  "description": "Provenance-aware code browsing via a kb-code daemon: a PreToolUse hook (kb-code-why) that injects trailer/exact-confidence \"who wrote this and why\" context right before an Edit/Write touches a line kb-code can attribute, LLM-free and fail-open. A second hook (kb-code-annotations) surfaces the operator's `flag-for-agent` review annotations into the same sessions — a per-file PreToolUse nudge with the exact reply/resolve commands, plus a one-line SessionStart summary of any repo with open flags — turning reader-side review comments into a live human-to-agent dialogue. Ships `kb-code hook install|uninstall|status` to print the settings.json wiring for both hooks and check daemon reachability (never edits settings.json silently), and `kb-code bench-search` — a retrieval-quality/latency instrument over the unified Search-Everywhere box, with a starter query set for the kb repo itself.",
+  "version": "0.1.0",
+  "author": { "name": "kb" }
+}

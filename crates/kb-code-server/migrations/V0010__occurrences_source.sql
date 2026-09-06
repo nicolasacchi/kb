@@ -1,0 +1,15 @@
+-- S1 — the SCIP precision tier: `occurrences` rows can now come from two
+-- extraction sources — `'ts'` (the tree-sitter pass, `occurrences.rs`,
+-- unchanged) or `'scip'` (an operator-ingested SCIP index,
+-- `POST /api/scip/ingest`, `crate::scip`). Every pre-existing row predates
+-- this column and is, by construction, `'ts'` (SCIP ingestion didn't exist
+-- before this migration) — `DEFAULT 'ts'` backfills them for free, no
+-- separate UPDATE needed.
+--
+-- The `(blob_hash, salt, ordinal)` PRIMARY KEY is UNCHANGED (not widened to
+-- include `source`): `ts` rows and `scip` rows for the same `(blob_hash,
+-- salt)` share one dense ordinal space — `store::Store::
+-- replace_scip_occurrences` continues the ordinal sequence after whatever's
+-- already there (any source) rather than restarting at 0, so a `ts` re-run
+-- and a `scip ingest` run never collide regardless of which happened first.
+ALTER TABLE occurrences ADD COLUMN source TEXT NOT NULL DEFAULT 'ts';

@@ -1,0 +1,35 @@
+-- MR1 (SL6, kb-slate milestone) — the recalled hit's RANK inside the pack
+-- that injected it: 1 = the top hit, NULL = unknown.
+--
+-- Design: docs/research/kb-slate-design-2026-09.html §11 "The memory recall
+-- line". Layout v2 of `plugins/kb-memory/hooks/kb-recall.sh` deletes the
+-- `(id …, unread)` parenthetical — the id's one home becomes the
+-- `<!--kb-recall/1 …-->` machine marker, which gains a `pos=<n>` pair in
+-- the same change (`kb_core::sessions::view::parse_recall_marker`).
+--
+-- WHY the marker is the only source, and why the column is NULLABLE:
+--
+--   * a pre-MR1 capture's markers carry no `pos=` at all, and there is no
+--     backfill — those rows keep NULL until their capture is next
+--     re-parsed (exactly V0037 `used`'s posture, for the same reason: the
+--     enrichment hook is the only writer and it only ever sees the capture
+--     in front of it);
+--   * a hit that only the free-text fallback grammar could parse has no
+--     rank to give;
+--   * and the hit's INDEX inside `Item::MemoryInjection` is NOT a rank —
+--     layout `v2-last` prints the pack in reverse (rank 1 last) for the
+--     MR2 order probe, and nothing in a captured transcript says which
+--     layout produced it. `pos` therefore records what the hook KNEW, not
+--     what the transcript's shape suggests.
+--
+-- SURFACED-NEVER-SCORED (invariant #10's provenance law), like `used`
+-- before it: `pos` rides `memory_recalls_for_session` and
+-- `memory_recalls_for_memory` (→ `GET …/recalled-by`, `kb memory
+-- recalled-by`) for DISPLAY. It is never wired onto `RecallHit` and never
+-- read by `rerank_with_policy`/`rerank_with_policy_scored` — a ranking that
+-- fed on its own past rankings is precisely the feedback loop invariant #10
+-- exists to forbid.
+--
+-- ALTER-only by construction: V0035 created this table, V0037 already added
+-- a column to it, and a merged migration is never restated.
+ALTER TABLE memory_recalls ADD COLUMN pos INTEGER;

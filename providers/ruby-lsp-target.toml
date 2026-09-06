@@ -1,0 +1,57 @@
+# kb-lip provider: ruby-lsp bound to the v7.1 TARGET repo (acme-shop in this example).
+#
+# This is `ruby-lsp.toml` with the placeholder resolved and a second port,
+# so it can run BESIDE the generic reference config without a clash. Read
+# `ruby-lsp.toml` first — every prerequisite, the composed-bundle
+# behaviour, and the tuning notes live there and are NOT repeated here.
+#
+# Why a target-specific config exists (V71-E1, D4): after v7.1 the static
+# ladder can mint `exact` for Ruby, but ONLY same-file and only under D4's
+# STRICT rule (`intel::ruby_strict` — an unambiguous same-scope binding, a
+# name that is not a method on the enclosing hierarchy, and an enclosing
+# method free of eval/instance_eval/binding/send/define_method/
+# method_missing). Every CROSS-FILE Ruby `exact` still comes from exactly
+# one place: a blob-verified lsp-live answer through this provider. Without
+# it, `GET /api/usages/2` on this repo tops out at `likely` the moment the
+# question leaves the open file — which is honest, and much less useful.
+#
+# Usage (on the operator's own box — D22 local-canonical: the loopback
+# daemon owns this repo; a hosted read-only daemon hosts none of it):
+#
+#   kb-lip --config providers/ruby-lsp-target.toml
+#
+# then, in kb-code.toml:
+#
+#   [[intel.providers]]
+#   name  = "ruby-acme-shop"
+#   url   = "http://127.0.0.1:4842"
+#   langs = ["ruby"]
+#   repos = ["acme-shop"]     # allowlist — must match [[repos]] name
+#
+# See providers/README.md § "Enable ruby lsp-live on the local daemon" for
+# the operator steps and the confirmation curl.
+
+lang_ids = ["ruby"]
+
+command = ["ruby-lsp"]
+
+# The target checkout. Absolute, no `~` expansion (kb-lip does no
+# templating). Change this if your checkout lives elsewhere.
+workspace_root = "/home/user/project/acme-shop"
+
+# 4842 — one above the generic ruby-lsp.toml's 4841, so both can run.
+port = 4842
+
+[initialization_options]
+diagnostics = true
+formatter = "auto"
+
+[restart_backoff]
+initial_ms = 200
+# This repo's composed-bundle bootstrap is the slow case ruby-lsp.toml
+# warns about (a large Gemfile.lock with native extensions), so the restart
+# ceiling is raised from kb-lip's 30s default.
+max_ms = 60000
+multiplier = 2.0
+
+diagnostics_wait_ms = 2000

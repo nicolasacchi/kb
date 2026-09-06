@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, memory, sessions, kb-code, provenance, graph, connective-tissue, program">
+<title>The connective-tissue program: memory × sessions × code × artifacts</title>
+<style>
+:root{
+  --bg:#faf6ef; --surface:#f1ebe0; --fg:#23281f; --muted:#535d4d; --rule:#d9d2c2;
+  --accent:#196a5c; --accent-fg:#ffffff; --warn:#7a5300; --danger:#9e2b33; --ok:#1f6b3a;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#15191c; --surface:#1e2428; --fg:#e9e4d8; --muted:#aba695; --rule:#39424a;
+    --accent:#63cfbb; --accent-fg:#10312b; --warn:#e3b466; --danger:#ff9b94; --ok:#86d3a0;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:54rem;margin:0 auto;padding:2rem 1.25rem 5rem}
+h1,h2,h3{font-family:Georgia,"Times New Roman",serif;line-height:1.25;letter-spacing:-.01em}
+h1{font-size:2rem;margin:.4rem 0 .6rem}
+h2{font-size:1.45rem;margin:2.6rem 0 .7rem;border-top:1px solid var(--rule);padding-top:1.4rem;scroll-margin-top:1rem}
+h3{font-size:1.12rem;margin:1.6rem 0 .4rem;scroll-margin-top:1rem}
+p{margin:.6rem 0}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.4rem .8rem}
+.skip-link:focus{left:.5rem;top:.5rem;z-index:9}
+.kicker{color:var(--muted);text-transform:uppercase;letter-spacing:.14em;font-size:.72rem;margin-top:1rem}
+.lede{font-size:1.12rem;color:var(--muted);margin:.2rem 0 1rem}
+.meta-strip{color:var(--muted);font-size:.85rem;border-bottom:1px solid var(--rule);padding-bottom:1rem}
+.tag{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:.05rem .4rem}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.9rem}
+th{text-align:left;border-bottom:2px solid var(--rule);padding:.35rem .5rem;font-family:Georgia,serif}
+td{border-bottom:1px solid var(--rule);padding:.35rem .5rem;vertical-align:top}
+code{font:.86em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:.05em .3em}
+pre code{display:block;padding:.7rem;overflow-x:auto}
+.callout{background:var(--surface);border-left:3px solid var(--accent);padding:.6rem .9rem;margin:1rem 0;border-radius:0 4px 4px 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout-label{display:block;font-weight:700;font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.15rem}
+.cost{display:inline-block;font:700 .72rem ui-monospace,monospace;border:1px solid var(--rule);border-radius:3px;padding:0 .3em;background:var(--surface)}
+.pair{white-space:nowrap;font-size:.84rem;color:var(--muted)}
+ul{padding-left:1.3rem}
+li{margin:.3rem 0}
+footer{margin-top:3rem;border-top:1px solid var(--rule);padding-top:1rem;color:var(--muted);font-size:.85rem}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">design · project:kb · multi-agent synthesis</div>
+  <h1>The connective-tissue program: memory × sessions × code × artifacts</h1>
+  <p class="lede">kb writes lineage eagerly and reads it almost nowhere — the program is read-backs, chain assembly, and a correction arc, not new subsystems. The weakest pair is memory↔code.</p>
+  <div class="meta-strip">
+    <span>2026-08-20</span> ·
+    <span class="tag">status:open</span> ·
+    <span class="tag">project:kb</span> ·
+    <span>14 agent outputs · red-team verified · 2 map overclaims corrected</span>
+  </div>
+</header>
+
+<section>
+<h2 id="how-this-was-made">How this was made</h2>
+<p>A 13-agent workflow (2026-08-20, ~40 min, ~1.94M worker tokens, 373 tool calls) in three phases:
+<strong>5 Sonnet explorers</strong> mapped the memory, sessions, code, and artifact subsystems plus a
+dedicated six-pair cross-join inventory; <strong>5 Fable lenses</strong> ideated over the merged map
+(provenance, graph/navigation, agent leverage, human operator, contrarian/subtraction);
+<strong>3 Kimi workers</strong> added outside layers — cross-pollination from other ecosystems
+(job <code>01M0FMMEAK07FRM42WDKQG3GFK</code>), an adversarial red-team of the full idea list
+(job <code>01M0FMGR5X1T7MEK5KX95BR0CA</code>, <code>verify --strict</code> = verified, 46 findings all ok),
+and weakest-pair wildcards (job <code>01M0FMFZ08H6YMRQCPBCY59MSG</code>). Kimi reports no token usage —
+absent, not zero. ~75 raw ideas were reduced to the waves below.</p>
+<div class="callout callout--warn"><span class="callout-label">Corrections the chain caught</span>
+Two exploration claims died under verification, which is why every Wave-A item cites its file:
+(1) the memory explorer claimed "memory↔code has no structural join anywhere" — false:
+<code>CodeRefHook</code>'s only gate excludes <code>memory-session</code> transcripts
+(<code>crates/kb-core/src/enrich.rs:136-140</code>); ordinary memory artifacts <em>are</em> scanned into
+<code>code_refs</code> today. (2) the wildcard worker claimed <code>LineEvidence::RevRemap</code> is
+"never emitted" dead code — false: <code>doclens/resolve.rs:584</code> emits it as DCB-W2.A's arm 1 for
+docs declaring a usable <code>kb-code-rev</code>. Both downstream ideas were reduced accordingly.</div>
+</section>
+
+<section>
+<h2 id="the-map">The map: six pairs, honestly rated</h2>
+<table>
+<tr><th>Pair</th><th>State</th><th>What exists</th><th>The hole</th></tr>
+<tr><td class="pair">sessions↔code</td><td><strong>strong</strong></td><td><code>Kb-Session:</code> trailer, <code>session_commits</code> (V0025), kb-code's 6-arm join ladder, why/story/session-diff, why-hook</td><td><code>WhySession.kb</code> and <code>memory_ids</code> fetched then dropped; no deep link back to kb's transcript reader</td></tr>
+<tr><td class="pair">artifacts↔code</td><td><strong>strong</strong></td><td>DCB: <code>code_refs</code> hints → codelens per-request trust classes; reverse <code>doc_refs</code> CitedBy; sets/from-doc</td><td>staleness visible only inside one inspector sub-tab; no gallery/atlas presence; era-resolution incomplete</td></tr>
+<tr><td class="pair">sessions↔artifacts</td><td><strong>strong</strong></td><td><code>session_files</code> exact join, /touches fuzzy scan, /readings, /comments (R5/R8), kb why, turn-anchored comments</td><td>two precision tiers render identically; <code>kb add</code> never stamps <code>kb-session</code>; <code>artifact_open</code> is a dead enum with zero producers</td></tr>
+<tr><td class="pair">memory↔sessions</td><td><strong>good data, thin reads</strong></td><td><code>kb_session</code> stamp, V0035 <code>memory_recalls</code> ledger (incl. <code>turn_id</code>), /recalls + /memories routes, /kb-distill, ProvenanceThread</td><td>ledger rests on a fragile text grammar that fails silently; <code>turn_id</code> recorded, never projected; no memory-side "recalled-by" view</td></tr>
+<tr><td class="pair">memory↔artifacts</td><td><strong>soft</strong></td><td>memory IS an artifact (search/comments/lineage free); Related-Memories = recomputed embedding search; <code>memory_links</code> kb-scope</td><td>the one exact edge — U3 highlight provenance (<code>kb-source-kb/-artifact/-anchor</code> metas) — is <strong>write-only</strong>: <code>parser::Fields</code> never reads it back</td></tr>
+<tr><td class="pair">memory↔code</td><td><strong>weakest</strong></td><td>incidental: DCB scans memory bodies into <code>code_refs</code>; transitive chain fact→session→commits→files exists hop-by-hop</td><td>no surface assembles the chain; census/triage are code-blind; kb-code calls zero <code>/api/memory/*</code> routes; a fact citing <code>a1b2c3d</code> is machine-unverifiable</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="three-theses">Three theses</h2>
+<h3 id="thesis-write-read-asymmetry">1 · The write–read asymmetry</h3>
+<p>Every lens independently converged on the same pathology: joins get recorded at write time and die
+before any read path. The catalogue, all verified: U3 provenance metas (written by
+<code>SelectionActions.tsx</code>, parsed by nothing), <code>WhySession.kb</code> and
+<code>memory_ids</code> (fetched by kb-code, dropped at deserialize), <code>memory_recalls.turn_id</code>
+(recorded, never projected), <code>via_subagent</code> + <code>subagent_*</code> stats (on the wire,
+unrendered in the SPA), <code>session_commits.trailers</code> (stored, only <code>Kb-Session</code> consulted),
+<code>session_research.kind='artifact_open'</code> (CHECK-constrained, funnel-counted, icon-mapped, zero
+producers), and <code>kb-session</code> auto-stamping (full schema+route+flag support, no writer outside
+<code>kb remember</code>). The cheapest wins in the entire space are read-back completions of writes that
+already happen.</p>
+<h3 id="thesis-unlabeled-tiers">2 · Unlabeled join tiers, not missing joins</h3>
+<p>The complaints that read as "missing joins" are mostly <em>fuzzy joins rendered with exact-join
+authority</em>: the atlas session polylines (substring-scan /touches cache) and the reader's Sessions tab
+(exact <code>session_files</code>) silently disagree about the same artifact; Related-Memories similarity
+search reads as provenance; raised-during comment joins are temporal coincidence. kb-code already has the
+culture fix — trust classes and the oracle-bar rule ("a wrong exact is a release blocker") — but it stops
+at the daemon boundary. Export the labels, not a new engine: the red-team killed the L-sized
+"retrofit everything" version and kept the S-sized tier chips.</p>
+<h3 id="thesis-loop-without-correction">3 · The loop has no correction arc and no ritual</h3>
+<p>Memory's loop is write → inject. There is no in-session way to say "this injected fact is wrong"
+(the missing verb), no measurement of whether an injection was <em>used</em>, no code-drift feedback for
+the weakest pair, and — on the human side — no habitual surface, so every connective feature is
+pull-on-suspicion. Meanwhile the recall hook updates the fleet's working beliefs every turn while operator
+review is fully manual: the beliefs update faster than their owner.</p>
+</section>
+
+<section>
+<h2 id="wave-a">Wave A — read back what is already written (all S)</h2>
+<p>Seven items, each a read-side completion of an existing write, each one green-CI commit.</p>
+<table>
+<tr><th></th><th>Item</th><th>Mechanism · evidence</th></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A1 · U3 parse-back</strong> <span class="pair">memory↔artifacts</span></td><td>Parse <code>kb-author/kb-source-kb/kb-source-artifact/kb-source-anchor</code> into <code>parser::Fields</code> + additive lance column (the <code>kb_session</code> precedent); "Lifted from ⟨artifact⟩ §sec" chip on memory cards, reverse "memories highlighted from here" inspector section. Fence (contrarian): emit the stored anchor as a best-effort deep link — no re-anchoring machinery in v1. One reindex backfills. All five lenses converged; red-team rank #2.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A2 · kb-code dropped fields</strong> <span class="pair">sessions↔code, memory↔code</span></td><td>Surface <code>WhySession.kb</code> on <code>AttributionOut/LineWhyOut</code> (fixes the documented ?kb=-less deep links in the why-hook + WhyPanel); stop <code>SessionDetailSignals</code> dropping <code>memory_ids</code> — display-only "session also wrote N memories" line. The HTTP calls already happen; the bytes already arrive. Red-team rank #1. Fence: display ids + link out, no <code>/api/memory/*</code> client.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A3 · recall-marker hardening</strong> <span class="pair">memory↔sessions</span></td><td><code>kb-recall.sh</code> emits a machine marker per injected hit (e.g. an HTML-comment <code>kb-recall/1</code> line); <code>parse_recall_item</code> prefers it, keeps the text grammar as permanent fallback; capture counts marker/fallback/failed parses on the session row. Today a reformatted injection line silently zeroes the V0035 ledger that recall_count, triage dormancy, and the MI-W2.2 stability factor all score from. Harden the foundation before anything builds on it. Red-team rank #3.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A4 · auto-stamp kb-session on kb add</strong> <span class="pair">sessions↔artifacts</span></td><td><code>kb add</code>/<code>kb notes new</code>/kb-artifact skill read the same <code>~/.cache/kb/current-session</code> marker <code>remember_inner</code> already reads (same 40-min freshness rule, same <code>--no-session</code> escape). "Which research doc came out of this session" becomes populated instead of schema-possible. Gate on the CLI verbs only — watcher/bulk imports never inherit a marker. Red-team rank #4.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A5 · funnel honesty</strong> <span class="pair">sessions↔artifacts</span></td><td><code>artifact_open</code> is fully wired and has zero producers — the funnel's "opened" stage is 100% <code>session_files</code> reads wearing an artifact-view costume. Either add <code>cat/open/get</code> to <code>kb_cli_query</code>'s VERBS or delete the stage; the current state is the worst of the three. Red-team rank #10.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A6 · tier labels on touch signals</strong> <span class="pair">sessions↔artifacts</span></td><td>The /touches wire already carries <code>TouchesConfidence</code>; add an "inferred (text-scan)" legend chip to the atlas polyline overlay and an "exact" badge to Sessions-tab rows. The S slice of a join-tier vocabulary — the L retrofit-everything version is killed; grow labels surface-by-surface.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>A7 · render-or-retire sweep</strong> <span class="pair">sessions</span></td><td>One decision per fetched-and-unused field: <code>subagent_tokens/tool_calls/files_edited</code> get the one SPA line the CLI already prints; <code>via_subagent</code> gets a badge or leaves the wire type; <code>all_cwds</code> decide-or-drop. An unexposed column deserves a decision, not automatically a panel.</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="wave-b">Wave B — assemble the chains that already exist</h2>
+<table>
+<tr><th></th><th>Item</th><th>Mechanism · evidence</th></tr>
+<tr><td><span class="cost">S</span></td><td><strong>B1 · kb why-memory ⟨id⟩</strong> <span class="pair">memory↔code</span></td><td>CLI-side composition of three existing endpoints: hit's <code>session_id</code> → <code>GET /api/sessions/{sid}</code> → <code>/commits</code> → <code>/commits/{sha}/files</code> (live changed-since check). Zero new server surface. Output labels itself "commit still in history", never "fact still true"; no-session memories get an explicit "no origin recorded" line. The named, unbuilt proposal from <a href="agent-experience-review-2026-07.html">agent-experience-review</a>; red-team rank #6.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>B2 · recalled-by + turn deep links</strong> <span class="pair">memory↔sessions</span></td><td><code>GET /api/kb/{kb}/memories/{id}/recalls</code> — the row-level inverse of the existing <code>memory_recalls_counts_for_ids</code>, newest-capture-collapsed, each row deep-linking to the stable <code>t-&lt;uuid12&gt;</code> turn anchor the transcript reader already resolves. Turns "recalled 14×" into "jump to each moment it was injected". Red-team rank #5.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>B3 · ?ids= pivot chips</strong> <span class="pair">all pairs</span></td><td>Every cross-entity list that already resolves to artifact ids grows a "show in gallery" chip through the shipped golden-pinned <code>?ids=</code> atom: session files, session recalls, lineage families; plus one <code>by-target</code> param on the code-refs cursor feed so "every doc citing path P" lands in the gallery. Over-cap degrades loudly per invariant #35. Red-team rank #9.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>B4 · kb memory expand ⟨id⟩</strong> <span class="pair">memory↔artifacts</span></td><td>Resolve the U3 anchor (post-A1) through <code>review.rs</code>'s existing fuzzy ladder and print the surrounding source passage — honest orphan on a stale anchor, never a guess. The agent-facing consumption of A1: a terse fact regains its context in one call.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>B5 · linkify citations in prose</strong> <span class="pair">memory↔code, sessions↔code</span></td><td>A shared SPA decorator over memory/comment/decision prose: shas → kb-code commit / <code>/sessions?focus=</code> links (only on successful by-commit resolution), <code>path:line</code> → the kb-code reader, reusing the closed coderefs grammar against false positives. Client-side only; the inert <code>code_url</code> is the link base.</td></tr>
+<tr><td><span class="cost">L</span></td><td><strong>B6 · Memory Dossier</strong> <span class="pair">memory↔all</span></td><td>The why-believed cockpit replacing the thin ProvenanceThread modal: origin class, recall receipts (B2), lineage sparkline, the why-memory chain (B1), human read state, and code-citation freshness classified browser-side via the sanctioned SPA→kb-code CORS pattern — "kb-code unreachable" rendered distinctly from "drifted". Ships after A1/B1/B2 as their integrator; answers origin · currency · attention on one surface.</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="wave-c">Wave C — close the loop</h2>
+<table>
+<tr><th></th><th>Item</th><th>Mechanism · evidence</th></tr>
+<tr><td><span class="cost">M</span></td><td><strong>C1 · kb memory flag</strong> <span class="pair">memory↔sessions</span></td><td>The missing correction verb: an ordinary kb-comment on the memory artifact (rides kb-comments/1, no new storage); triage grows a read-time <code>flagged</code> reason; <code>kb-recall.sh</code> renders "⚠ disputed" on flagged hits. An agent that discovers an injected fact is wrong finally has a lightweight action between full supersede and silence; the flag protects every subsequent session while /kb-reflect adjudicates. Red-team rank #7.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>C2 · /kb-verify skill</strong> <span class="pair">memory↔code</span></td><td>Agent-layer (sanctioned LLM tier, may call both CLIs): sweep memories with <code>code_refs</code> rows through why-memory + kb-code doclens, file dated kb-comments on drifted citations (dedup: one open comment per (doc,ref)), fold in a born-stale check (memory created long after the cited lines last changed — the fact entered the corpus already unmoored). Findings land in the one inbox with an existing triage habit and feed resurface's comment lane for free. Subsumes the duplicate /kb-verify-memories.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>C3 · negative memory</strong> <span class="pair">memory↔sessions</span></td><td><code>kb remember --failed</code> + <code>kb-outcome</code> meta + a <code>warns</code> flag on recall — surfaced-never-scored per the R3 precedent. "X was tried and failed here" is the highest-value wrong-action preventer recall can deliver, and today it renders identically to a positive fact. /kb-distill already extracts FAILED candidates; it just gains the flag to write them with.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>C4 · recall code_hints, kb-local only</strong> <span class="pair">memory↔code</span></td><td><code>kb recall --json</code> gains a per-hit <code>code_hints</code> field from the kb-local <code>code_refs</code> table. The hook renders open drift-flags from C2 — it does <strong>not</strong> curl kb-code: the red-team killed a blocking cross-daemon call inside UserPromptSubmit as a reliability hazard, and the sweep-then-flag path keeps the drift signal at most one sweep stale.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>C5 · injection efficacy</strong> <span class="pair">memory↔sessions</span></td><td>One more deterministic pass over the already-parsed session-view/1 IR: after each <code>Item::MemoryInjection</code>, scan subsequent turns for the memory's hex12 id or exact title; stamp <code>used</code>. Census shows "injected N · referenced M". Honest caveat baked into the label: this measures <em>explicit reference</em>, not influence — an agent can use a fact without naming it. Surfaced-never-scored.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>C6 · kb doctor --hooks</strong> <span class="pair">all pairs</span></td><td>Read-only integrity check over the whole fragile chain, per harness: markers fresh, hooks wired, git trailer hook installed, kbc why-hook status, last capture's ledger rows nonzero when injections happened — plus the provenance-lint checks (orphan kb_session, dangling U3 targets, unresolved commits) folded in rather than shipped as a second health surface. Four silent-failure modes currently lose provenance invisibly for weeks.</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="wave-d">Wave D — the one new surface: kb context</h2>
+<p><span class="cost">L</span> The recorded deferral of <code>kb context</code> (fresh-eyes #10 (private), "the single most cross-entity-synthesizing idea on record") named exactly one blocker: no caller. The caller exists — <code>kb-recall.sh</code> receives the real task text and cwd on the first UserPromptSubmit. Design: a deterministic, budgeted, provenance-annotated pack (top recall hits with score decomposition, recollect digest <em>pointers</em>, open comments on matching artifacts, code_refs summary), injected as <em>scent</em> on turn 1 ("3 prior sessions, 2 open comments — run <code>kb context</code>") with the agent pulling substance — which keeps R0/R3 intact without a re-ruling. The contrarian's funding condition is the acceptance criterion: <code>kb-recall.sh</code>, /kb-distill, and /kb-weekly must <strong>rewire onto it</strong> (deleting their hand-chained 4–6-call assemblies) or the feature reverts — one home for context assembly, not a fifth. <code>kb sessions resume-pack</code> folds in as a continuation preset keyed to one session id. Red-team rank #8 — ranked low only because the rewiring is unproven, which the acceptance criterion converts from risk to gate.</p>
+</section>
+
+<section>
+<h2 id="wave-e">Wave E — operator surfaces</h2>
+<table>
+<tr><th></th><th>Item</th><th>Mechanism · evidence</th></tr>
+<tr><td><span class="cost">M</span></td><td><strong>E1 · daycard ?since=</strong></td><td>The red-team's sharpest repair: both the Morning-Desk and Operator-Trace proposals die (one duplicates the shipped <code>GET /api/kb/{kb}/daycard</code>, README:1132; the other is the recorded-deferred timeline under a new name) and their real need — "what happened while I was away" — ships as a <code>?since=</code> window + sessions-captured/memories-written lanes on the existing daycard route and CLI. Mobile-shaped, deterministic, no new noun.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>E2 · attention-gap Story beat</strong></td><td>"Session ⟨name⟩ edited this Tue 14:02 — you last read it Mon; changed sections unread since": a read-time join of <code>session_files</code> timestamps × <code>reading_sections</code> dwell × history last-open, as a Story-tab beat + amber dot. Conservative whole-artifact fallback when dwell is sparse. Also the repair for the killed artifact-blame snapshot differ.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>E3 · honest-staleness badge + ribbon</strong></td><td>Tier (a), always on: gallery badge + About line from <code>code_refs_docs</code> headers (ref_count, extracted_at, never_scanned — written every reindex, read today by one sub-tab). Tier (b), reader-only, kb-code reachable: "cites 12 code locations · 4 drifted" computed browser-side for the open doc. Unreachable degrades to (a), never a fake "fresh".</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>E4 · agent-hot, human-cold</strong></td><td>"Recalled 14× by agents · never opened by you" badge + <code>?sort=unverified</code> over fields census/recall already carry; optionally a third explainable resurface lane. The drift meter between fleet belief-updates and operator attention.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>E5 · session thread → reading list</strong></td><td>Materialize one session's story as a kb-list/1 list in narrative order (capture, artifacts touched, memories produced/recalled) via the existing P8 threads/save engine; the kb-code session-diff URL rides the description as an honest link-out. Lists give read-state, resume, and sharing for free.</td></tr>
+<tr><td><span class="cost">S</span></td><td><strong>E6 · echoes beliefs lane</strong></td><td>"One year ago you learned ⟨memory⟩ — still active / superseded ⟨date⟩ / forgotten", tombstone-era-honest. The supersede chain's only current audience is a chore queue; this gives it a reflective one.</td></tr>
+<tr><td><span class="cost">M</span></td><td><strong>E7 · reviews reach the journal</strong></td><td><code>kb-code review distill --json</code> (kb-code-local data dump) + an agent-layer step that writes the completed review — verdict, files, thread excerpts, applied suggestions — as a kb note stamped <code>kb-session</code>, idempotent on review id. Today a shipped review evaporates at GC; the commits survive but the review pressure that shaped them doesn't. Mechanism per the contrarian ruling: agent layer composes, no new daemon-to-daemon write path.</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="frontier">The frontier: novel mechanisms worth their strangeness</h2>
+<h3 id="kb-memory-trailer">F1 · <code>Kb-Memory:</code> commit trailers <span class="cost">M</span> <span class="pair">memory↔code</span></h3>
+<p>The strongest genuinely new mechanism found for the weakest pair. The trailer dispatcher
+(<code>plugins/kb-memory/hooks/git-dispatch/trailer-logic.sh</code>, verified: stamps <code>Kb-Session:</code>
+today) also stamps one <code>Kb-Memory: ⟨hex12⟩</code> per memory minted this session; capture already
+persists the full unfolded trailer block into <code>session_commits.trailers</code> and never parses it back —
+add one parse arm writing a <code>memory_commits</code> table (own table, per the <code>code_refs</code>
+precedent). Sounds wrong for ten seconds, then inevitable: prose citations become the same exact-id trust
+tier the session↔commit join enjoys, entirely kb-local, surviving kb-code being unreachable. The one
+frontier item that earns a new table. Needs an operator ruling: memory ids (opaque hex12) land in git
+history — fine for private repos; make it config-gated.</p>
+<h3 id="era-resolved-citations">F2 · era-resolved citations <span class="cost">M</span> <span class="pair">artifacts↔code</span> — endorsed reduced</h3>
+<p>Judge a doc's citations against the commit it was written at, not only HEAD. The wildcard's premise was
+half wrong — <code>RevRemap</code> is already live (arm 1 for docs declaring <code>kb-code-rev</code>) — so the
+remaining real work is: derive the era from <code>kb_session</code>→<code>session_commits</code> for the majority
+of docs that never declare a rev, and split the single Confirmed verdict into "correct when written" vs
+"still correct now". That distinction is the one every drift surface currently conflates.</p>
+<h3 id="unlinked-mentions">F3 · unlinked mentions <span class="cost">M</span> <span class="pair">artifacts↔artifacts</span></h3>
+<p><a href="https://help.obsidian.md/plugins/backlinks">Obsidian's lesson</a>: the graph you wrote is half the graph you meant. A read-time suggestion queue (the
+dupes/triage shape — human applies, never a hook) finding docs whose bodies contain another artifact's exact
+title/basename with no <code>edges</code> row; applying authors a real wikilink. Memories may appear as
+<em>targets</em> with an honest "cannot link from HTML memory body" note — the twice-declined ruling untouched.</p>
+<h3 id="frontier-rest">F4–F12 · the rest, with verdicts</h3>
+<table>
+<tr><th>Idea</th><th>Verdict</th></tr>
+<tr><td><strong>Session-residue</strong> — per-artifact count of memories born in its birth session (<code>count_docs_by_kb_session</code> exists), <code>?sort=residue</code>: "docs whose conclusions someone kept"</td><td>endorse after A4 populates the column</td></tr>
+<tr><td><strong>Corpus-health SLOs</strong> (<a href="https://sre.google/sre-book/service-level-objectives/">SRE model</a>) — per-kb targets over existing tables (hint-resolution %, orphan kb_session count, capture freshness), <code>kb slo snapshot</code> append-only log, surfaced never enforced</td><td>endorse — it is also the measurement instrument for this very program</td></tr>
+<tr><td><strong>Beliefs-at-risk</strong> — kb-code-side: memories whose cited paths sit in top churn/co-change percentile, ranked churn × recall_count</td><td>endorse as a kb-code report; direction-compliant</td></tr>
+<tr><td><strong>Memento timemap</strong> (<a href="https://datatracker.ietf.org/doc/html/rfc7089">RFC 7089</a>) — <code>?at=⟨unix⟩</code> nearest-prior-version resolver on the versions façade + "view doc as it stood at session end" links</td><td>endorse (a pure function over an existing list); flagged for an operator ruling since it borders the deferred timeline — it is per-artifact resolution, a strictly smaller claim, and explicitly not the rejected <code>recall --as-of</code></td></tr>
+<tr><td><strong>Blunder report</strong> — deterministic per-session incident score (error density/active hour) → "hardest sessions this week" lane + /kb-postmortem skill feeding distill</td><td>endorse-lite — triage ranking that /kb-weekly and distill consume</td></tr>
+<tr><td><strong>Decay-echo lane</strong> — a memory crossing its decay floor resurfaces its source artifacts: "re-ground it or let it go"</td><td>tentative — good inversion, but resurface lanes need budget discipline; after E4</td></tr>
+<tr><td><strong>Cited-but-unfinished</strong> — docs citing files with open TODO/FIXME markers (kb-code's <code>todo_items</code>)</td><td>endorse-lite, kb-code side</td></tr>
+<tr><td><strong>FSRS due lane</strong> (<a href="https://github.com/open-spaced-repetition/free-spaced-repetition-scheduler">open-spaced-repetition</a>) — retrievability schedule over the recall ledger feeding a "due" resurface lane</td><td>tentative — must reconcile with the shipped-but-default-off <code>scoring_v2_stability</code> factor scoring the same ledger; one model, two consumers, or it forks the math</td></tr>
+<tr><td><strong>Reading journeys / frecency</strong> — history-clustered resumable trails; frequency×recency ordering for the palette's empty state</td><td>tentative — human-nav quality, not connective tissue; park behind Wave E</td></tr>
+<tr><td><strong>Folgezettel seq edges</strong> — <code>kind="seq"</code> on the edges rail, prev/next chrome</td><td>optional — cheap and legal (same PK), but demand unproven</td></tr>
+<tr><td><strong>Transclusion (<code>!include</code>)</strong> — live section embeds with provenance chips</td><td>defer-with-trigger — the first structural doc→memory read path is tempting, but it adds grammar, share-export, and render surface at once; revisit if A1/B4 leave real demand for reference-without-copy</td></tr>
+<tr><td><strong>Capture templates</strong> — <a href="https://orgmode.org/manual/Capture-templates.html">org-capture</a>-style pre-triage for the mobile slot</td><td>endorse-lite — real, but not connective tissue; separate track</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="record-these-refusals">Record these refusals</h2>
+<p>The contrarian lens produced six recordable non-goals; the red-team endorsed all six as-is. Each names
+its re-open trigger, in the project's deferred-with-trigger style.</p>
+<ul>
+<li><strong>No unified transcript tailers.</strong> kb's R1 digest and kb-code's loopback raw-FTS lane index different projections for different masters; a shared cursor buys a cross-daemon contract and a new wedge mode to save disk reads. Display-level linkage only. <em>Re-open: transcript volume 10×.</em></li>
+<li><strong>No stored memory-of edge table.</strong> Two tiers suffice: U3 exact provenance (A1) + the similarity panel labeled as similarity. A third store rots under relocate/supersede/forget and needs all three lifecycle registries.</li>
+<li><strong>Wikilinks inside memories → permanent non-goal.</strong> Third strike: comrak sees no inline markdown inside <code>&lt;p&gt;</code>-wrapped HTML; a fix needs a third parser agreeing with two golden-pinned ones. The recurring cost is re-litigation, not the feature. <em>Auto-expires if memories become Markdown-bodied.</em></li>
+<li><strong>No memory-vs-artifact dupes widening.</strong> A memory duplicating a research doc is the system working — the distilled, injectable pointer. Flagging it trains deletion of exactly the curated layer.</li>
+<li><strong>No push events for citation drift.</strong> A drift event is a persisted trust class (violates DCB verbatim) addressed to nobody. Pull surfaces + the /kb-verify sweep cover the need.</li>
+<li><strong>No daemon-side memory↔code synthesis, either direction.</strong> Code-aware triage would need kb to consult kb-code (direction violation) or persist verdicts (DCB violation); auto review→memory export puts a deterministic daemon in a judgment seat. The agent layer composes verbs that exist or cost S.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="kill-list">Killed ideas (verified red-team, endorsed by this synthesis)</h2>
+<table>
+<tr><th>Killed</th><th>Why · where the need went</th></tr>
+<tr><td>Everything-Atlas (XL)</td><td>XL chrome on a deliberately-unmeasured surface (census.ts counters never leave the browser) + cross-corpus projection strains the per-kb embedding-dim invariant → typed ego-graph call + scope=all fan-out</td></tr>
+<tr><td>kb lineage + kb walk engines</td><td>premature abstraction: a registry over ~3 join arms that are each one SQL query → ship B1/B2/A1 concrete chains; abstract at n≥4</td></tr>
+<tr><td>memory_meta_events ledger</td><td>its only named payoff erodes blockers of the <em>refused</em> recall --as-of → compose the audit trail on read from tombstones + lineage + census</td></tr>
+<tr><td>Artifact blame (snapshot differ)</td><td>L-cost machinery, silently degrades on legacy docs → E2 attention-gap beat answers the actionable question</td></tr>
+<tr><td>Morning Desk + Operator Trace</td><td>duplicate the shipped daycard / the deferred timeline → E1 daycard ?since=</td></tr>
+<tr><td>Persisted drift-event rows</td><td>a stored prev→new trust-class pair violates DCB verbatim → live ribbon (E3) + agent sweep (C2)</td></tr>
+<tr><td>Blocking kb-code curl in UserPromptSubmit</td><td>reliability hazard in the hottest path → C4 kb-local hints + flag rendering</td></tr>
+<tr><td>session_mentions table ("discussed-but-not-touched")</td><td>reopens a documented deliberate exclusion at L cost with unevidenced demand; honest revisit needs evidence first</td></tr>
+<tr><td>kb-join/1 full retrofit (L)</td><td>right idea at 3× scope → A6 tier chips, surface-by-surface</td></tr>
+<tr><td>Atlas frame-explainers, atlas code/degree color modes</td><td>answers to unasked questions on an unmeasured map → E3 badge/ribbon carries the staleness signal where reading happens</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions for the operator</h2>
+<ul>
+<li><strong>A1 scope:</strong> chip only (contrarian) or chip + reverse "highlighted from here" panel (three lenses)? Recommendation: both — the reverse query is the same pattern as <code>list_docs_with_kb_session</code> — but hold the fence on anchor re-resolution.</li>
+<li><strong>F1 ruling:</strong> are opaque memory ids acceptable in git trailers on your repos? Recommendation: yes, config-gated per repo.</li>
+<li><strong>Memento timemap:</strong> is per-artifact <code>?at=</code> resolution the deferred timeline in disguise? Recommendation: no — strictly smaller claim over real snapshots — but it borders a recorded deferral and deserves an explicit yes.</li>
+<li><strong>E1 sufficiency:</strong> confirm daycard <code>?since=</code> satisfies the desk/trace need before any new surface is considered.</li>
+<li><strong>SLO seed set:</strong> which three to start — hint-resolution %, orphan-kb_session count, ledger parse-failure rate are the candidates this program itself would want watched.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="next-action">Next action</h2>
+<p>Ratify Waves A+B as one milestone through the plan-file workflow (direction questions first, per the
+cadence). Wave A is seven S-cost read-backs — roughly a week of one-commit-per-item green-CI work — and
+every later wave reads better data because of it. The six refusals cost one docs commit and prevent the
+third re-litigation of each. Nothing here is implemented as of 2026-08-20.</p>
+</section>
+
+<footer>
+Sources: workflow wf_f2f8b0a0-739 (5 Sonnet explorers · 5 Fable lenses · 3 Kimi relays); Kimi jobs
+01M0FMGR5X1T7MEK5KX95BR0CA (red-team, verified), 01M0FMFZ08H6YMRQCPBCY59MSG (wildcards),
+01M0FMMEAK07FRM42WDKQG3GFK (cross-pollination). Prior art:
+<a href="kb-memory-big-picture-2026-08.html">kb-memory-big-picture</a> ·
+<a href="agent-experience-review-2026-07.html">agent-experience-review</a> ·
+fresh-eyes-next-iteration (private) ·
+<a href="kb-graph-earns-its-keep-2026-07.html">kb-graph-earns-its-keep</a> ·
+<a href="kb-improvement-portfolio-2026-07.html">kb-improvement-portfolio</a> ·
+<a href="cross-harness-memory-exchange-ideas-2026-07.html">cross-harness-memory-exchange-ideas</a>.
+</footer>
+</article>
+</main>
+</body>
+</html>

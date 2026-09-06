@@ -1,0 +1,193 @@
+/* Obsidian-class markdown editor (MarkdownEditor + CodeMirror 6).
+ *
+ * Width adaptation is CONTAINER-driven (not viewport media queries): the editor
+ * adapts to its own width, so the 360px panel and the 640px modal differ in
+ * LAYOUT only (toolbar wraps; Split flips side-by-side ↔ stacked) while keeping
+ * the same feature set. Imported last in main.tsx so `.cme__mirror` overrides
+ * the legacy `.cp__*-input` sizing (the mirror is now a hidden value seam). */
+
+.cme {
+  container-type: inline-size;
+  container-name: cme;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Head: tab strip + formatting toolbar, wrapping when narrow. */
+.cme .cp__editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.cme .cp__editor-tabs {
+  margin-bottom: 0;
+}
+
+/* --- formatting toolbar --------------------------------------------------- */
+.cme__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+}
+.cme__tb-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.cme__tb-group + .cme__tb-group {
+  margin-left: 3px;
+  padding-left: 5px;
+  border-left: 1px solid var(--rule);
+}
+.cme__tb-btn {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+.cme__tb-btn:hover {
+  background: var(--bg-card-hi);
+  color: var(--fg);
+}
+.cme__tb-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.cme__tb-btn.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border-color: var(--accent-bor);
+}
+.cme__tb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cme__tb-b {
+  font-weight: 700;
+}
+.cme__tb-i {
+  font-style: italic;
+}
+.cme__tb-s {
+  text-decoration: line-through;
+}
+
+/* --- body: editor + preview ---------------------------------------------- */
+.cme__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.cme--split .cme__body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+/* Narrow container → stack the split panes (feature preserved, reflowed). */
+@container cme (max-width: 460px) {
+  .cme--split .cme__body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cme__cm {
+  position: relative;
+  min-width: 0;
+}
+.cme__cm--hidden {
+  display: none;
+}
+
+/* CM6 surface sizing (colours live in editor/theme.ts). */
+.cme .cm-editor {
+  min-height: 84px;
+  max-height: 46vh;
+}
+.cme--split .cm-editor {
+  max-height: 60vh;
+}
+@container cme (min-width: 620px) {
+  .cme .cm-editor {
+    min-height: 140px;
+  }
+}
+.cme .cm-scroller {
+  overflow: auto;
+}
+
+/* In Split, the preview pane sits beside the source (its base border/scroll
+   comes from .cp__editor-preview in app.css). */
+.cme--split .cp__editor-preview {
+  max-height: 60vh;
+}
+
+/* --- hidden mirror <textarea> (value + a11y-name + e2e seam) -------------- */
+/* MUST stay layout-present (non-zero box, not display:none) so Playwright can
+   .fill()/.toHaveValue() it and getByRole finds the named ones — but invisible
+   and focus-inert for humans. Overrides the legacy .cp__*-input sizing. */
+.cme__mirror {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  max-height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
+  resize: none;
+  white-space: pre;
+  pointer-events: none;
+  z-index: -1;
+  color: transparent;
+  background: transparent;
+}
+
+/* --- live-preview widgets ------------------------------------------------- */
+.cm-kb-task {
+  margin: 0 4px 0 0;
+  vertical-align: middle;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.cm-kb-hr {
+  display: inline-block;
+  width: 100%;
+  height: 0;
+  border-top: 1px solid var(--accent-bor);
+  vertical-align: middle;
+}
+.cm-kb-thumb {
+  max-height: 120px;
+  max-width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cme__tb-btn {
+    transition: none;
+  }
+}

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="landscape">
+<meta name="kb-session" content="289872ef-bbbd-42b9-8dac-90ac7052d433">
+<meta name="kb-tags" content="status:applied, project:kb, project:oh-my-pi, omp, integration, harness, memory, sessions, kb-code, capture, extensions">
+<title>omp × kb deep integration — the territory, three verified defects, and a tiered idea portfolio</title>
+<style>
+:root {
+  --bg: #faf7f2; --surface: #f1ece3; --fg: #26221c; --muted: #5c554a;
+  --rule: #d8d0c2; --accent: #9a3b1e; --accent-fg: #ffffff;
+  --warn: #7a5200; --danger: #a02020; --ok: #22633a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #191d21; --surface: #22272d; --fg: #e8e4dc; --muted: #a89f92;
+    --rule: #3a4048; --accent: #e78a5a; --accent-fg: #191d21;
+    --warn: #d9a441; --danger: #e07a6a; --ok: #7cc294;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.65 Georgia, 'Iowan Old Style', serif;
+}
+main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+h1, h2, h3 { font-family: system-ui, -apple-system, sans-serif; line-height: 1.25; letter-spacing: -0.01em; }
+h1 { font-size: 1.85rem; margin: 0.4rem 0 0.6rem; }
+h2 { font-size: 1.32rem; margin: 2.8rem 0 0.8rem; padding-top: 0.8rem; border-top: 2px solid var(--rule); scroll-margin-top: 1rem; }
+h3 { font-size: 1.05rem; margin: 1.8rem 0 0.5rem; scroll-margin-top: 1rem; }
+p, li { max-width: 44rem; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+code, pre {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.85em;
+  background: var(--surface); border-radius: 4px;
+}
+code { padding: 0.1em 0.35em; }
+pre { padding: 0.8rem 1rem; overflow-x: auto; line-height: 1.5; }
+.kicker {
+  font-family: system-ui, sans-serif; font-size: 0.78rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--muted);
+}
+.lede { font-size: 1.1rem; color: var(--muted); font-style: italic; margin-top: 0.2rem; }
+.meta-strip { font-family: system-ui, sans-serif; font-size: 0.8rem; color: var(--muted); margin: 0.8rem 0 0; }
+.meta-strip .sep { margin: 0 0.4em; }
+.tag { background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; padding: 0.1em 0.6em; }
+.callout {
+  background: var(--surface); border-left: 4px solid var(--accent);
+  padding: 0.7rem 1rem; margin: 1.1rem 0; border-radius: 0 6px 6px 0;
+}
+.callout--warn { border-left-color: var(--warn); }
+.callout--danger { border-left-color: var(--danger); }
+.callout--ok { border-left-color: var(--ok); }
+.callout-label {
+  display: block; font-family: system-ui, sans-serif; font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.2rem;
+}
+table { border-collapse: collapse; width: 100%; font-family: system-ui, sans-serif; font-size: 0.82rem; margin: 1rem 0; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.eff { white-space: nowrap; }
+.skip-link {
+  position: absolute; left: -999px; top: 0; background: var(--accent); color: var(--accent-fg);
+  padding: 0.5rem 1rem; z-index: 10;
+}
+.skip-link:focus { left: 0.5rem; top: 0.5rem; }
+figure { margin: 1.2rem 0; }
+figcaption { font-family: system-ui, sans-serif; font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem; }
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">landscape · kb × oh-my-pi</div>
+  <h1>omp × kb deep integration — the territory, three verified defects, and a tiered idea portfolio</h1>
+  <p class="lede">The existing omp integration uses 6 of 45 extension events and none of the tool/command registries; two silent defects mean omp never reaches the live cockpit and headless fleet jobs leave zero episodic trace. The best next moves are all extension-side, not upstream patches.</p>
+  <div class="meta-strip">
+    <span>2026-08-28</span>
+    <span class="sep">·</span>
+    <span class="tag">status:applied</span>
+    <span class="sep">·</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">·</span>
+    <span class="tag">project:oh-my-pi</span>
+  </div>
+</header>
+
+<div class="callout callout--ok"><span class="callout-label">Applied 2026-08-29</span>The program shipped the day after this landscape: D1+1c (kb <code>c4e7a687</code>), D2 (grokclaude <code>510f79e</code>), Tier 1 (kb <code>92a092b4</code> extension v2, <code>fd2b03f9</code> kb-code adapter), Tier 2 (kb <code>fe5165f7</code>), and Tier 3a as an upstream-ready oh-my-pi branch <code>feat/register-memory-backend</code> plus a feature-detected kb backend (<code>5bcd53c4</code>). Confirmed while executing: no omp session-id env var exists (trailer arm skipped — marker fallback stands), and <code>@oh-my-pi/collab-web</code> is not npm-published (3c parked as predicted). Commit hashes are pre-rebase for the plugins commits; resolve via <code>git log --grep='(OK'</code>.</div>
+
+<section>
+<h2 id="the-question">The question</h2>
+<p>omp's (Oh My Pi's multi-provider coding agent, <a href="https://github.com/can1357/oh-my-pi">github.com/can1357/oh-my-pi</a>, checked out at <code>~/project/oh-my-pi</code>, installed v18.0.8) workflow model is the one this design adopts, and it is open source. What <em>deep</em> integrations between omp and kb/kb-code are worth building — beyond the memory loop that already ships in <code>plugins/kb-memory/hooks/kb-omp.ts</code>?</p>
+<p>Method: a 6-agent exploration workflow (two Opus deep-reads over omp's extension API and memory/session internals; four Sonnet surveys over omp's auxiliary packages, kb's agent-facing surface, kb-code's agent-facing surface, and the capture pipeline), followed by a 3-agent adversarial verification pass with live probes. Every load-bearing claim below carries a file citation; the three headline claims were re-verified in refute mode, including live <code>--dry-run</code> reproduction on real job directories.</p>
+</section>
+
+<section>
+<h2 id="what-exists-today">What exists today</h2>
+<p>The current integration is real but narrow. <code>kb-omp.ts</code> (243 lines, symlinked into <code>~/.omp/agent/extensions/kb-memory.ts</code>) subscribes to six lifecycle events — <code>session_start</code>, <code>before_agent_start</code>, <code>tool_call</code>, <code>session_stop</code>, <code>session.compacting</code>, <code>session_shutdown</code> — and shells out to the same harness-agnostic scripts every other harness uses: wake (memory protocol + recent-memories index + distill-pending relay, once per session), recall (every prompt, injected as a hidden <code>custom_message</code>), transcript capture (a dedicated leaf-chain translator for omp's append-only session <em>tree</em>, not a naive reuse of Claude's flat shape), a distill nudge via <code>ctx.ui.notify</code>, and live-cockpit beats.</p>
+<p>What it does <em>not</em> use is most of omp's extensibility surface. The canonical contract (<code>packages/coding-agent/src/extensibility/extensions/types.ts</code>, 1,769 lines) exposes <strong>45 subscribable events</strong> plus <code>registerTool</code> (first-class model-callable tools), <code>registerCommand</code> (slash commands with argument completion), <code>registerFlag</code>, message/thinking renderers, composer widgets and status chips, dialog primitives, <code>appendEntry</code> (durable custom entries in the session tree), <code>sendMessage</code> with steer/followUp delivery, and session-control from command context (<code>newSession</code>, <code>branch</code>, <code>navigateTree</code>). kb-omp.ts calls none of the registries — every kb verb an omp model invokes today rides the generic bash tool on the model's own initiative.</p>
+<div class="callout"><span class="callout-label">The asymmetry</span>Today kb can only <em>push text at</em> omp (a hidden context blob at prompt time). omp cannot <em>ask kb anything</em> mid-turn except by guessing shell commands. Closing that asymmetry is the single highest-leverage theme in this portfolio.</div>
+</section>
+
+<section>
+<h2 id="verified-defects">Broken today — two verified defects</h2>
+<p>Both were found by three exploration agents independently, then confirmed in refute-mode with live probes. They are prerequisites: several portfolio ideas silently build on surfaces these defects disable.</p>
+
+<h3 id="defect-harness-closed-set">D1 — "omp" is not in kb's closed harness set</h3>
+<p><code>crates/kb-core/src/sessions/constants.rs:29</code> pins <code>HARNESSES</code> to exactly <code>["claude","codex","opencode","grok","kimi"]</code>. Capture-side the harness ladder (<code>enrich.rs:267-271</code>) stores any string unvalidated, so 26 omp sessions already sit in the corpus with <code>harness="omp"</code> — but every read-side surface that <em>validates</em> against the closed set misbehaves:</p>
+<ul>
+<li><strong>Every live-cockpit beat fails.</strong> (Cockpit design: <a href="kb-live-sessions-cockpit-2026-08.html">kb live-sessions cockpit, 2026-08</a>.) <code>POST /api/sessions/beat</code> 400s on unknown harness (<code>routes/sessions.rs:6144</code>; live probe returned <code>unknown beat harness "omp"</code>). <code>kb-beat.sh</code> posts via detached fire-and-forget curl with nulled stdio, so the failure has been invisible since the integration shipped. omp sessions can never appear in the live-sessions cockpit.</li>
+<li><strong>The harness filter silently lies.</strong> <code>GET /api/sessions?harness=omp</code> returns <em>unfiltered</em> rows (live probe returned claude+grok): <code>routes/sessions.rs:304</code> drops unknown csv values and an empty set means "no filter". The SPA even offers "omp" in its dropdown (built dynamically from <code>harness_mix</code>) — selecting it no-ops.</li>
+<li><code>kb sessions status --harness omp</code> hard-bails; the SPA harness glyph and <code>resume_hint()</code> fall back to generic placeholders.</li>
+</ul>
+<p><strong>Fix (small):</strong> add <code>"omp"</code> to the array + the pinned golden test, an omp arm in <code>resume_hint()</code> (<code>session_bundle.rs</code>) and <code>HARNESS_GLYPH</code> (<code>web/src/lib/hints.ts</code>); separately harden <code>parse_harness_csv</code> to 400 on unknown values rather than degrading a filtered query to unfiltered. This is a data change inside invariant #11, not a new invariant slot. An optional follow-on: a <code>live_adapters/omp.rs</code> Tier-0 rebuild arm mirroring <code>opencode.rs</code>.</p>
+
+<h3 id="defect-headless-fleet-capture">D2 — headless fleet jobs leave zero episodic trace</h3>
+<p>grokclaude's shared engine fires a post-job capture hook for all four backends (grokclaude/codexclaude/kimiclaude/ompclaude) — but <code>src/engine.rs:280-283</code> hardcodes the script to <code>kb-capture-grok.sh</code>, which resolves transcripts only under <code>~/.grok/sessions/</code> and only speaks grok's <code>chat_history.jsonl</code> directory schema. An omp job's real transcript is a single file at <code>&lt;job&gt;/omp-home/sessions/&lt;ts&gt;_&lt;sid&gt;.jsonl</code>; kimi's lives under <code>kimi-home/</code>. The verifier reproduced the skip (<code>reason=session-dir-not-found</code>) on four real omp/kimi job dirs, confirmed grok jobs capture fine as the control, and ran a corpus census: of 695 captured sessions, <strong>zero</strong> came from a headless non-grok job. The verifier also sharpened the claim three ways:</p>
+<ul>
+<li>The adapter is grok-<em>schema</em>-only, not just grok-labelled: even handed the right path, its translate stage reads <code>chat_history.jsonl</code> + <code>events.jsonl</code> and would fail on omp's format.</li>
+<li>The join key guarantees the miss: <code>meta.json.grok_session_id</code> is a legacy alias holding <em>whatever backend's</em> handle, which the script then looks up in the grok store.</li>
+<li>Bonus gap: capture only fires in <code>finish_ok_job</code> (<code>engine.rs:237</code>, sole call site) — <em>failed</em> jobs never capture on any backend, grok included.</li>
+</ul>
+<p><strong>Fix (medium, mostly grokclaude-side):</strong> make <code>trigger_kb_capture</code> dispatch on <code>meta.backend</code> to the sibling adapters that already exist and work — <code>kb-capture-omp.sh</code> has a CLI mode that accepts a session-file path directly; kimi/codex have their own siblings. Add per-backend env overrides beside <code>KB_GROK_CAPTURE_HOOK</code>, and decide deliberately whether failed jobs should capture too (they are often the most valuable episodic evidence).</p>
+</section>
+
+<section>
+<h2 id="tier-1-extension-upgrades">Tier 1 — upgrade kb-omp.ts in place (no upstream patch, no rebase tax)</h2>
+<p>Everything in this tier lives in a file kb already owns, carries zero fork burden, and preserves the hooks-never-block discipline.</p>
+
+<h3 id="native-kb-tools">1a. kb and kb-code as first-class omp tools</h3>
+<p>The headline move. <code>pi.registerTool</code> gives the model schema-typed, discoverable tools instead of guessed bash invocations: <code>kb_context</code> (the budgeted pack — substance, pulled by the model, which <em>preserves</em> the pull-only ruling), <code>kb_recollect</code>, <code>kb_why</code>, <code>kb_remember</code>, plus kb-code's four strongest verbs — <code>kbcode_search</code> (the unified 6-lane box), <code>kbcode_usages</code> (exact/likely/candidate trust classes, strictly better-labelled than grep), <code>kbcode_why</code> (pre-edit provenance), <code>kbcode_pack</code> (token-budgeted context assembly). All ride kb-code's ordinary <code>auth_bearer</code> router — no loopback constraint.</p>
+<div class="callout callout--warn"><span class="callout-label">The one trap (verified, test-pinned upstream)</span>A tool registered without <code>loadMode: "essential"</code> defaults to <code>"discoverable"</code>, and because <code>tools.xdev</code> defaults to true it is <em>removed from the top-level schema</em> and mounted behind <code>xd://</code> — the force-include of extension tools does not exempt it (<code>essential-tools.ts:45</code>, <code>xdev.ts:83-86</code>, <code>sdk.ts:3199-3213</code>). This is exactly how a kb tool integration would silently "work" while the model never calls it.</div>
+
+<h3 id="lifecycle-returns">1b. Use the lifecycle return values kb currently no-ops</h3>
+<p>kb-omp.ts already subscribes to <code>session_stop</code> and <code>session.compacting</code> but returns nothing from either. Verified consumption paths:</p>
+<ul>
+<li><strong>Headless-visible distill gate.</strong> <code>session_stop</code> may return <code>{continue: true, additionalContext}</code> — a model-visible (user-hidden, <code>display:false</code>) continuation turn, capped at exactly 8, never fired for subagents (<code>agent-session.ts:3535-3611</code>). Today's distill nudge rides <code>ctx.ui.notify</code>, which is literally a no-op in <code>-p</code> mode (print mode installs no UI context, so <code>hasUI</code> is false). Returning the nudge as continuation context makes the agent itself write the memory before the turn settles — and works headless.</li>
+<li><strong>kb-informed compaction.</strong> <code>session.compacting</code> may return <code>{context: string[], prompt, preserveData}</code>: context lines are spliced into the summarization prompt as <code>&lt;additional-context&gt;</code> (<code>compaction.ts:955</code>), so compaction stops forgetting what kb knows matters; <code>preserveData</code> persists on the compaction entry — a durable kb provenance stamp across the boundary. Nuances: mutually exclusive with a <code>session_before_compact</code> full-replacement, and inert when the snapcompact method is selected.</li>
+</ul>
+
+<h3 id="cockpit-and-visibility">1c. Cockpit completeness and visible recall</h3>
+<ul>
+<li><strong>blocked/unblocked beats.</strong> omp's <code>tool_approval_requested</code>/<code>tool_approval_resolved</code> events are the direct equivalent of Claude's Notification hook; wiring them to the existing <code>beat()</code> helper lights up the cockpit's blocked/<code>detail_reason</code> sub-label (display-only; Working/Stalled classification is unaffected). A few lines — after D1 lands.</li>
+<li><strong>Rendered recall instead of an invisible blob.</strong> <code>registerMessageRenderer("kb-memory-context", …)</code> makes injected recall visible and collapsible in the TUI (the <code>--explain</code> decomposition inline); <code>ctx.ui.setStatus("kb", "3 recalled")</code> and a <code>setWidget</code> composer strip give kb a persistent presence — a natural home for the desk-v2 changed-since-last-read banner.</li>
+</ul>
+
+<h3 id="structural-recall-ledger">1d. A structural recall ledger via appendEntry</h3>
+<p>kb's recall ledger currently rides a text marker (<code>&lt;!--kb-recall/1 …--&gt;</code>) smuggled inside injected prose and re-parsed at capture time. On omp, <code>pi.appendEntry("kb.recall", {kb, ids, query})</code> writes a first-class namespaced <code>custom</code> entry into the session tree — no text grammar, no parse-gap census, replayable via <code>getBranch()</code> on resume/branch. The free-text marker stays as the cross-harness fallback; the capture adapter learns to read the namespaced entry as a third, highest-confidence source. This also un-breaks <code>memory_recalls</code> for omp, which is structurally empty today because the capture rightly drops all <code>custom_message</code> content (kb's own injections must not echo back).</p>
+
+<h3 id="kb-code-provenance-in-omp">1e. kb-code provenance inside omp's loop</h3>
+<ul>
+<li><strong>An omp arm for the why-hook.</strong> <code>kb-code-why.sh</code> has exactly two bindings today (Claude native, Codex via a translation shim). The same pattern — extract file paths from omp's <code>tool_call</code> event for edit-shaped tools, re-dispatch through the unmodified delegate — is proven twice in-repo.</li>
+<li><strong>tool_result enrichment.</strong> omp's <code>tool_result</code> middleware sees every tool's output; appending a one-line blame/why footer to <code>read</code> results (plus memories citing the path via DCB hints) gives provenance without the model spending a tool call. Needs a hard latency budget and memoization.</li>
+<li><strong>Commit trailer coverage.</strong> omp commits currently get <code>Kb-Session:</code> trailers only through the 40-minute marker-file fallback (written by kb-recall.sh, which kb-omp.ts already triggers per prompt). Verify whether omp exports a session-id env var into bash children; if so, add a direct arm to <code>trailer-logic.sh</code> beside <code>CLAUDE_CODE_SESSION_ID</code>/<code>GROK_SESSION_ID</code>.</li>
+</ul>
+
+<h3 id="commands-agents-packaging">1f. Commands, flags, task agents, packaging</h3>
+<ul>
+<li><code>registerCommand</code>: <code>/kb-context</code>, <code>/kb-distill</code>, <code>/kb-desk</code> with argument completion — command context even offers <code>branch</code>/<code>newSession</code>, so <code>/kb-distill</code> can branch, distill, and return.</li>
+<li><code>registerFlag("kb-off")</code>: a real CLI kill-switch for the whole kb lane, which has none today.</li>
+<li><strong>Fix the dead plugin roots.</strong> omp reads Claude's <code>installed_plugins.json</code> and trusts <code>installPath</code> literally — kb-memory and kb-code point at cache dirs that do not exist, so <code>/kb-distill</code>, <code>/kb-verify</code>, <code>/kb-weekly</code> and kb-code's commands never reach omp. Better than repairing paths: give <code>plugins/kb-memory/</code> a proper omp package manifest (<code>omp.extensions</code>) so omp's own provider picks up the extension, commands, skills <em>and</em> a shipped <code>kb-librarian</code> task agent (frontmatter granting only the kb tools) from one root.</li>
+<li><code>kb daycard --since</code> in the shared wake path — the ready-made "what happened while I was away" digest no harness calls today.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="tier-2-capture-fidelity">Tier 2 — capture fidelity: omp's transcript is richer than what kb keeps</h2>
+
+<h3 id="subagent-sidecars">2a. The omp subagent iceberg</h3>
+<p>Every omp task subagent writes a <em>complete</em> session JSONL at <code>&lt;sessions&gt;/&lt;parent-stem&gt;/&lt;AgentName&gt;.jsonl</code> (verified live: <code>CliSurface.jsonl</code>, <code>ServerInternals.jsonl</code>… beside per-agent <code>.md</code> reports; ~9 MB of subagent transcript in one session dir). kb captures none of it, and the failure is doubly structural: the adapter hands the engine a <code>mktemp</code> transcript, so the derived sidecar dir is <code>/tmp/&lt;sid&gt;/subagents/</code> (never exists), and even the real layout matches neither the <code>subagents/</code> level nor the <code>agent-*.jsonl</code> prefix filter (<code>sessions_capture.rs:298-300</code>). <strong>Fix entirely inside the adapter:</strong> stage <code>&lt;tmpdir&gt;/&lt;sid&gt;/subagents/agent-&lt;Name&gt;.jsonl</code>, translating each child with the same jq program — the existing W0.5 digest block and W0.6 sidecar-text evidence lane then light up for free, caps and scrubbing already enforced engine-side. This is the same subagent-iceberg defect kb already fought and fixed on the Claude side.</p>
+
+<h3 id="dropped-entry-types">2b. Entry types the translator drops — including per-tool intent</h3>
+<p>The translator emits only <code>type=="message"</code> entries. Verified live against real session files, what falls on the floor:</p>
+<ul>
+<li><strong><code>tool_execution_start.intent</code></strong> — a natural-language statement of <em>why the agent ran that tool</em>, one per call (1,342 on this box, 100% discarded). Joined onto tool calls by <code>toolCallId</code>, this feeds <code>kb why</code> and kb-code's story lane with rationale no other harness provides.</li>
+<li><strong><code>compaction</code></strong> — <code>summary</code>, <code>shortSummary</code>, <code>tokensBefore</code>, <code>details.readFiles/modifiedFiles</code>: the agent's own distillation of discarded history — exactly the material <code>/kb-distill</code> wants, free. (Schema-verified upstream; no local session has compacted yet.)</li>
+<li><strong><code>session_exit</code></strong> — <code>kind: normal|signal|fatal|process_exit</code> + <code>pendingToolCalls</code>: an honest closure signal for kb's <code>substance</code> triage.</li>
+<li><strong><code>session_init</code></strong> (subagent contract: task, tools, system prompt) and <strong><code>branch_summary</code></strong> (agent-written summaries of <em>abandoned branches</em> — "roads not taken" evidence; 12 exist locally).</li>
+</ul>
+<p>Emission should follow the capture envelope's precedent: additive post-<code>&lt;pre&gt;</code> tail blocks, never touching the byte-identical transcript contract. One correction from verification: kb's decisions extractor is <em>not</em> wholly Claude-shaped — plan-approval decisions and error counts already work for omp captures; only AskUserQuestion-kind decisions are unreachable (they need the <code>toolUseResult</code> shape omp never emits).</p>
+
+<h3 id="titles-and-history">2c. Small honest wins</h3>
+<p><code>~/.omp/agent/history.db</code> (FTS5) carries a <code>session_titles</code> table — a free backfill for the 26 captured omp sessions that landed with null titles, and a per-project prompt corpus kb has no equivalent of. If omp's <code>local</code> memory backend is ever enabled, its outputs are plain Markdown files kb indexes natively.</p>
+</section>
+
+<section>
+<h2 id="tier-3-big-bets">Tier 3 — big bets (upstream or architectural)</h2>
+
+<h3 id="upstream-memory-backend">3a. kb as omp's memory backend — via an upstream pluggability PR</h3>
+<p>omp's memory backend id is a closed 4-value enum (<code>off|local|hindsight|mnemopi</code>) repeated across ~8 sites, and the memory tools bypass the <code>MemoryBackend</code> interface through hardcoded string gates — so "add kb as a fifth backend" is a multi-file patch to a vendored upstream with permanent rebase cost. mnemopi itself is <em>not</em> a seam: its storage is concretely <code>bun:sqlite</code> and its plugin system is an observer bus. But the <code>hindsight</code> backend proves a remote-HTTP backend works end-to-end, and there is no <code>registerMemoryBackend</code> on the extension API — an obvious upstream gap. <strong>The Fable-grade move is to upstream the registration API, not the kb backend:</strong> a PR adding <code>registerMemoryBackend</code> (and routing the memory tools through the interface's <code>search?/save?</code>) benefits every oh-my-pi user, and kb then ships its backend as a pure extension with zero fork burden. Until then, Tier-1a's tools deliver most of the value at none of the cost. Note: <code>memory.backend</code> is <code>off</code> on this machine — mnemopi competes with kb only architecturally, not operationally.</p>
+
+<h3 id="rpc-host-mode">3b. RPC host mode for the ompclaude driver</h3>
+<p>Extensions cannot register internal URL schemes (the router isn't exported, and the installed omp is a bundle), but an RPC <em>host</em> can: <code>omp --mode rpc</code> lets the driver own <code>set_host_tools</code> and <code>set_host_uri_schemes</code>, so a kb-aware driver could expose <code>kb://&lt;id&gt;</code> and <code>kbcode://&lt;path&gt;:&lt;line&gt;</code> reads with no extension at all. Worth it only where kb already supervises omp processes — i.e. as a grokclaude/ompclaude evolution, after D2.</p>
+
+<h3 id="collab-web-tool-render">3c. omp's tool-render library inside kb's session views</h3>
+<p><code>collab-web</code> ships a host-agnostic React renderer per omp built-in tool plus an <code>&lt;omp-tool-view&gt;</code> custom element taking plain JSON — the same bundle omp reuses for its standalone HTML session export. kb's session detail could embed omp's own maintained tool cards instead of reimplementing them. Blocker to verify first: the packages use workspace-catalog version refs and may not be npm-published.</p>
+
+<h3 id="parked-ideas">3d. Parked, with reasons</h3>
+<ul>
+<li><strong>kb MCP server</strong> — the recorded trigger (README Non-goals, re-ruled 2026-07-10 after the <a href="kb-memory-for-foreign-harnesses-2026-07.html">foreign-harness evaluation</a>) is not fired: omp has a shell tool, config escapes, and an extension API that is strictly <em>better</em> than MCP for this integration. omp is even MCP-client-only (no server mode to point at kb). Stays parked.</li>
+<li><strong>omp stats/OTEL → kb SLO</strong> — omp's telemetry is real (GenAI-semconv spans, per-run cost/latency summaries) but kb has no ingestion route, and building one crosses kb's surfaced-not-scored posture for someone else's metrics. Its <code>stats</code> package is a separate local dashboard; leave it be.</li>
+<li><strong>kb-embedder as mnemopi's embedding provider</strong> — both projects independently confine ONNX Runtime to an IPC subprocess (kb invariant #26; omp's <code>__omp_worker_mnemopi_embed</code>), so sharing one instance via a <code>/v1/embeddings</code> route is elegant — but nothing duplicates today (<code>memory.backend: off</code>) and the default dims differ (384 vs 768). Defensive only.</li>
+<li><strong>Per-provider-call recall refresh via the <code>context</code> event</strong> — powerful (replace exactly what is sent, per call) but fires on every LLM request; without strict memoization it is a latency tax on the hottest path. Revisit only with a measured budget.</li>
+<li><strong>wire-package drift audit</strong> — <code>packages/wire</code> is the versioned TS truth for omp's entry shapes; add "diff kb's translator against wire on omp version bumps" to the kb-audit cadence rather than building anything.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="comparison-matrix">Comparison matrix</h2>
+<table>
+<thead><tr><th>Idea</th><th>Side</th><th class="eff">Effort</th><th>Value</th><th>Risk / dependency</th></tr></thead>
+<tbody>
+<tr><td>D1 harness set + filter hardening</td><td>kb</td><td class="eff">small</td><td>unblocks cockpit + facets for 26+ sessions</td><td>lock-step pinned tests</td></tr>
+<tr><td>D2 backend-aware headless capture</td><td>grokclaude</td><td class="eff">medium</td><td>entire headless fleet becomes remembered</td><td>adapters exist; wiring only</td></tr>
+<tr><td>1a registerTool (kb + kb-code)</td><td>kb-omp.ts</td><td class="eff">small</td><td>closes the ask-kb-mid-turn asymmetry</td><td>loadMode:"essential" or invisible</td></tr>
+<tr><td>1b session_stop / compacting returns</td><td>kb-omp.ts</td><td class="eff">small</td><td>headless distill gate; compaction keeps kb context</td><td>8-cap; method nuances</td></tr>
+<tr><td>1c blocked beats + visible recall</td><td>kb-omp.ts</td><td class="eff">small</td><td>cockpit sub-label; operator trust in recall</td><td>needs D1 first</td></tr>
+<tr><td>1d appendEntry recall ledger</td><td>both</td><td class="eff">small/med</td><td>structural memory_recalls for omp</td><td>capture must read custom entries</td></tr>
+<tr><td>1e kb-code why adapter + tool_result</td><td>kb-omp.ts</td><td class="eff">medium</td><td>provenance in the edit loop</td><td>latency budget</td></tr>
+<tr><td>1f packaging + commands + agents</td><td>kb plugins</td><td class="eff">small</td><td>omp inherits kb's command/skill/agent surface</td><td>—</td></tr>
+<tr><td>2a subagent sidecars</td><td>adapter</td><td class="eff">medium</td><td>~9 MB/session of invisible work captured</td><td>staging layout only</td></tr>
+<tr><td>2b intent / compaction / exit entries</td><td>adapter+kb</td><td class="eff">medium</td><td>rationale + free distill material</td><td>additive tail blocks only</td></tr>
+<tr><td>3a upstream registerMemoryBackend</td><td>oh-my-pi PR</td><td class="eff">large</td><td>native memory tools, zero fork tax</td><td>upstream acceptance</td></tr>
+<tr><td>3b RPC host kb:// schemes</td><td>driver</td><td class="eff">large</td><td>read-tool-native kb access</td><td>only pays post-D2</td></tr>
+<tr><td>3c tool-render embedding</td><td>kb SPA</td><td class="eff">medium</td><td>omp-quality tool cards in session views</td><td>npm publishability unverified</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="recommended-sequence">Recommended sequence</h2>
+<ol>
+<li><strong>D1 + 1c</strong> — one kb-side commit: harness set, filter hardening, blocked/unblocked beats. Smallest change, ends two silent lies.</li>
+<li><strong>D2</strong> — grokclaude backend dispatch. The headless fleet starts leaving episodic memory; decide the failed-jobs question while in there.</li>
+<li><strong>1a + 1f</strong> — the tools + packaging wave: native kb/kb-code tools, commands, the kill-switch flag, the omp package manifest with a kb-librarian agent.</li>
+<li><strong>1b + 1d</strong> — lifecycle returns and the structural recall ledger (the capture-side reader for namespaced custom entries lands with 2b's parser work).</li>
+<li><strong>2a + 2b</strong> — capture fidelity: sidecars first (pure adapter), then the dropped-entry tail blocks.</li>
+<li><strong>Then reassess Tier 3</strong> — with 1a in daily use, real evidence decides whether an upstream memory-backend PR or the RPC driver is worth it.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="constraints">Constraints that bind every idea</h2>
+<ul>
+<li><strong>Hooks never block.</strong> Extensions are unsandboxed and in-process: a raw timer or detached promise that throws tears down the whole omp session. Only <code>ctx.setInterval/setTimeout</code>; every handler fail-silent.</li>
+<li><strong>Pull-only stands</strong> (invariant #11 R0/R3, from <a href="sessions-as-episodic-memory-design.html">sessions as episodic memory</a>): the context pack's substance is never auto-injected. A model-invoked tool preserves the posture; automatic injection would need a re-ruling, not an implementation.</li>
+<li><strong><code>custom_message</code> stays dropped</strong> in capture — kb's own injected context must never echo back into the sessions corpus. The recall ledger goes through namespaced <code>custom</code> entries instead.</li>
+<li><strong>Namespace everything:</strong> customTypes share a global namespace with core-reserved values; commands must avoid built-in collisions and reserved shortcuts.</li>
+<li><strong>No new invariant slots needed:</strong> everything here is data/adapter/extension work inside invariants #11 and the plugin layer; the 35-slot budget is untouched.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="when-to-revisit">When to revisit</h2>
+<ul>
+<li>omp ships <code>registerMemoryBackend</code> (or accepts the PR) → promote 3a immediately; the Tier-1 shim becomes the fallback.</li>
+<li>omp changes its session-entry shapes → the wire-package diff (parked 3d) becomes an active task; the translator and tail-block parsers are the exposure.</li>
+<li>The MCP trigger conditions actually fire (a harness in real use with no shell/config escape) → the read-only stdio facade ruling activates; omp is not that harness.</li>
+<li><code>memory.backend</code> gets turned on locally → the embeddings-sharing and local-artifact-ingest ideas stop being defensive.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="evidence-and-method">Evidence and method</h2>
+<p>Exploration: 6 workflow agents (1.18 M tokens, 377 tool calls) over <code>~/project/oh-my-pi</code>, <code>~/project/kb</code>, <code>~/project/grokclaude</code>, and live state (<code>~/.omp</code>, the kb daemon on 127.0.0.1:4000, <code>KB_SESSIONS_DIR</code>). Verification: 3 refute-mode agents (374 K tokens) with live probes — the beat 400 and filter degradation reproduced against the running daemon; the headless-capture no-op reproduced with <code>--dry-run</code> on four real job dirs plus a 695-file corpus census; the xdev demotion, session_stop continuation cap, compacting splice, and sidecar path derivation all traced to consumption sites (several pinned by upstream's own tests). One claim was partially refuted and is corrected above: plan-approval decisions and error counts <em>do</em> work for omp captures. omp facts cite <code>packages/coding-agent/src/…</code> in the oh-my-pi repo at commit <code>b85737857e</code>; kb facts cite this repo at <code>9b0d3728</code>.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

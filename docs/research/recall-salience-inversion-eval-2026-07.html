@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The salience inversion — a measured recall-quality eval of kb's agent memory</title>
+<meta name="kb-tags" content="fable-frontier, memory, recall, salience, experiment, eval">
+<meta name="kb-category" content="research">
+<meta name="kb-summary" content="First labeled-query recall eval of kb's memory: production recall misses ~half of realistic on-topic queries in its top-5 (live-confirmed 11/11) while retrieval had the right answer at rank 0 in 9 of 11 misses. Mechanism: RANK_K=60 compresses retrieval into a 1.32× band that the corpus's 1.8× salience spread overrides. The 06-29 'salience is inert' verdict flipped in seven days.">
+
+<style>
+  :root{
+    --bg:#0f1416; --surface:#182023; --fg:#e6ede9; --muted:#9db4a8;
+    --rule:#2c3a36; --accent:#63d0a8; --accent-fg:#0f1416;
+    --warn:#e5c065; --danger:#f29a8a; --ok:#63d0a8;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace;
+    --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f8f6; --surface:#e7efeb; --fg:#1c2723; --muted:#4d615a;
+      --rule:#c8d6d0; --accent:#125e43; --accent-fg:#f4f8f6;
+      --warn:#7d5c00; --danger:#a03227; --ok:#125e43;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.03rem/1.65 var(--sans)}
+  main{max-width:50rem;margin:0 auto;padding:2.4rem 1.2rem 4rem}
+  h1{font-size:1.7rem;line-height:1.2;margin:.2em 0 .3em;letter-spacing:-.01em}
+  h2{font-size:1.16rem;margin:2.2em 0 .5em;padding-top:1.1em;border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem;margin:1.4em 0 .3em;color:var(--muted)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.6 var(--mono)}
+  .verdict{border:1px solid var(--rule);border-left:5px solid var(--accent);border-radius:10px;
+    background:var(--surface);padding:1em 1.2em;margin:1.4em 0;font-size:1.05rem}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.84rem/1.55 var(--mono)}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  td.num,th.num{text-align:right;font-family:var(--mono);font-size:.86rem}
+  .hit{color:var(--ok);font-weight:600}
+  .miss{color:var(--danger);font-weight:600}
+  .warncell{color:var(--warn);font-weight:600}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  .callout--ok{border-left-color:var(--ok)}
+  details{border:1px solid var(--rule);border-radius:8px;background:var(--surface);
+    padding:.6em .9em;margin:1em 0}
+  summary{cursor:pointer;font-weight:600}
+  summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#verdict">Skip to verdict</a>
+<main>
+<h1>The salience inversion</h1>
+<p class="meta">a measured recall-quality eval of kb's agent memory · Fable frontier run #1 ·
+2026-07-06 22:50→23:30 CEST · live daemon 127.0.0.1:4000, 42-memory corpus ·
+adversarially verified (2 workflows, 7 agents, ~324k tokens) · status: finding, no code changed</p>
+
+<div class="verdict" id="verdict">
+<strong>Verdict.</strong> On today's corpus, kb's production recall buries the correct memory
+below its top-5 for <strong>11 of 21</strong> realistic on-topic queries — <em>live-confirmed,
+11/11, no replay involved</em> — while the underlying retrieval had already put the right memory
+at <strong>rank 0 in 9 of those 11</strong>. The multiplier chain
+<code>1/(60+rank) × salience × decay</code> is the cause: with <code>RANK_K=60</code>,
+retrieval evidence is compressed into a <strong>1.32×</strong> scoring band that the corpus's
+<strong>1.8×</strong> salience spread simply overrides. Salience was designed as a prior;
+in this constant regime it <em>is</em> the verdict. The 2026-06-29 ruling that "ranking is not
+the constraint, salience is inert" was true on that day's 13-memory near-uniform corpus —
+and flipped within seven days of graded salience arriving.
+</div>
+
+<h2 id="story">1 · Why this experiment exists</h2>
+<p>Seven days ago, <a href="evolving-the-kb-memory-system.html">the memory-system review</a>
+measured the live corpus (2026-06-29: 13 facts, 8 stuck at the 0.5 default) and concluded:
+<em>"the decay / floor / pin machinery is dormant. Recall ordering is effectively 'return search
+order.' Smarter ranking yields little until the write side supplies graded salience."</em>
+It was right — and it named the fix: build the write side (R6, the distiller).</p>
+<p>The write side got built. The July review avalanche plus <code>/kb-distill</code> (shipped
+this morning, <code>db7ce381</code>) tripled the corpus to 42 live memories and <em>graded</em>
+them: 28 of 42 now sit above the default (histogram: 0.5×14 · 0.55×2 · 0.6×2 · 0.7×3 · 0.75×3 ·
+0.8×6 · 0.85×5 · 0.9×7). And this morning, during the distiller's acceptance run, recall —
+even with <code>--no-floor</code> — failed to surface two verbatim pre-existing duplicates
+that corpus-direct search ranked #1–2. That live incident (recorded as memory
+<code>83afc6839cf4</code>) was the smoke. Nobody had ever measured recall <em>quality</em>
+here: the SQ program benches artifact <em>search</em>; the 06-29 review measured corpus
+<em>stats</em>. This is the first labeled-query eval of the memory-recall layer itself.</p>
+
+<h2 id="method">2 · Method</h2>
+<h3 id="method-formula">The system under test</h3>
+<p>Recall = per-corpus hybrid retrieval (top <code>per_corpus = clamp(4·limit, 20, 50)</code>,
+<code>routes/memory.rs:159</code>) followed by a pure re-rank
+(<code>kb-core memory.rs:161-218</code>):
+<code>score = 1/(60+rank) · salience · exp(−k·age_days)</code>, id-asc tiebreak, cross-corpus
+dedup keep-best, then <code>truncate(limit)</code>. An independent verifier agent re-derived
+every constant and path from source (40 file:line citations) and confirmed both 2026-06-29
+route defects (mtime-as-age, hardcoded 0.5) are <strong>fixed</strong> on main (RA1/RA3,
+commits <code>aa611591</code>/<code>0800a370</code>) — this eval measures the <em>repaired</em>
+system.</p>
+<h3 id="method-labels">Ground truth</h3>
+<p>Three reader agents each took a 14-memory slice (bodies, no rankings) and wrote
+<strong>21 labeled queries</strong> under anti-circularity rules: situational phrasing ("some
+artifacts show no backlinks even though other pages clearly link to them — has this come up
+before?"), no title-token copying, with the right to declare memories non-targets (17 of 42
+were). Kinds: 7 gotcha · 5 project-status · 3 operational · 3 preference · 3 dedup-probe.
+Full set in the <a href="#appendix">appendix</a>.</p>
+<h3 id="method-replay">Exact-rank replay</h3>
+<p>Naively re-running <code>kb search</code> to reconstruct retrieval order diverged from
+recall's internal retrieval (0/8 exact-order). Instead the replay <strong>inverts the
+formula</strong>: <code>kb recall --no-floor --limit 100</code> returns the full ranked corpus
+with scores; since salience and decay are known per memory,
+<code>rank = 1/(score/(s·dec)) − 60</code> recovers the daemon's own retrieval ranks exactly.
+Validation: <strong>8/8 queries reproduce live top-5 order with 0.0000 rank residuals</strong>.
+Alternative policies then re-score those recovered ranks, mirroring the production
+<code>rank &lt; 20</code> truncation. The floor never fires on this corpus (min salience 0.5 &gt;
+threshold 0.15) — verified live.</p>
+
+<h2 id="results">3 · Results</h2>
+<table>
+<tr><th>Policy (re-rank on identical retrieval)</th><th class="num">recall@5</th><th class="num">MRR</th><th class="num">top-1</th></tr>
+<tr><td><strong>P0 — shipped:</strong> <code>1/(60+r) · s · decay</code></td><td class="num miss">10/21 (48%)</td><td class="num">0.371</td><td class="num">33%</td></tr>
+<tr><td>P1 — content order only: <code>1/(60+r)</code></td><td class="num hit">21/21*</td><td class="num">0.797</td><td class="num">67%</td></tr>
+<tr><td>P2 — dampened: <code>1/(60+r) · √s · decay</code></td><td class="num warncell">13/21 (62%)</td><td class="num">0.412</td><td class="num">33%</td></tr>
+<tr><td>P3 — salience as tiebreak only</td><td class="num hit">21/21*</td><td class="num">0.654</td><td class="num">38%</td></tr>
+<tr><td>P4 — steeper rank: <code>1/(10+r) · s · decay</code></td><td class="num hit">19/21 (90%)</td><td class="num">0.575</td><td class="num">38%</td></tr>
+<tr><td>P5 — additive: <code>0.7·rel<sub>norm</sub> + 0.3·s<sub>norm</sub>·decay</code></td><td class="num hit">19/21 (90%)</td><td class="num">0.615</td><td class="num">48%</td></tr>
+</table>
+<p class="meta">* the adversarial pass proved P1 is honestly <strong>20/21</strong> — a
+cross-corpus duplicate outside the 42-memory universe occupied one recovered rank (see §5).
+Independent recompute of the whole table: 0 discrepancies across 126 rows.
+P2–P5 ordering is exploratory (n=21), not a ranking of remedies.</p>
+
+<h3 id="results-anatomy">Burial anatomy (P0's 11 misses)</h3>
+<ul>
+<li><strong>10 of 11</strong> buried memories had content rank ≤ 2; <strong>9 of 11 were
+retrieval's #1 answer</strong>. Retrieval is healthy; the re-rank undoes it.</li>
+<li>Buried memories average salience <strong>0.61</strong>; surfaced ones
+<strong>0.85</strong> — the policy systematically punishes honest mid-band grades.</li>
+<li>Five 0.85–0.9 "SHIPPED report" memories occupy <strong>53 of 105</strong> P0 top-5 slots
+across the query set. Two buried memories even appeared in <em>other, off-topic</em> queries'
+top-5s while missing their own — celebrity memories float everywhere except where needed.</li>
+<li>Per kind: dedup-probes <span class="miss">0/3</span> (the exact live failure that forced
+<code>/kb-distill</code>'s dual-arm oracle this morning), operational
+<span class="miss">1/3</span>, preference <span class="miss">1/3</span>, gotcha 4/7,
+project-status 4/5. The day-to-day kinds suffer most.</li>
+<li>Live check of all 11: expected memories rank <strong>6–27</strong> at
+<code>--limit 50</code> — ranking failures, not indexing failures; <code>--no-floor</code>
+changes nothing (byte-identical top-5s).</li>
+</ul>
+
+<h2 id="mechanism">4 · The mechanism, in one paragraph</h2>
+<p>Within the 20 hits production retrieval feeds the re-rank, relevance spans
+<code>1/60 → 1/79</code> — a <strong>1.32×</strong> band. Corpus salience spans 0.5 → 0.9 —
+<strong>1.8×</strong>. Slow decay adds up to ~1.4× against month-old memories. So a 0.9-salience
+memory at retrieval rank 19 outscores a 0.5-salience memory at rank 0
+(0.9/79 = 0.0114 &gt; 0.5/60 = 0.0083): salience can pay for <em>nineteen positions</em> of
+retrieval evidence. On 06-29, with near-uniform salience, the multiplier was a no-op — "recall
+= search order" — and the machinery looked dormant. The moment the write side started grading
+(exactly what that review prescribed!), the dormant multiplier woke up <em>as the dominant
+term</em>. This is the generalizable law: <strong>whenever the corpus's salience spread exceeds
+the retrieval band (~1.32× under RANK_K=60), recall ordering degenerates toward
+salience-sorted-membership</strong> — on a flat corpus P0 ≡ P1, on a graded one it inverts.
+It is also a Goodhart loop: honest 0.55–0.7 grades (the distiller rubric's whole point) are
+precisely the ones buried, so the local incentive is inflation toward 0.9 — which flattens the
+signal again inside the celebrity tier.</p>
+
+<h2 id="caveats">5 · What survived adversarial review — and the honest bounds</h2>
+<p>A hostile methodology agent, a live-reproduction agent, and an independent metrics agent
+attacked the finding. <strong>Zero fatal flaws; the headline survives</strong>
+(burial live-confirmed 11/11; McNemar 10–0 discordant pairs, p≈0.002). The real bounds:</p>
+<ul>
+<li><strong>P1 is 20/21, not 21/21.</strong> Live recall returns hits outside the replay's
+42-memory universe (one cross-corpus duplicate, <code>2e33ebfcac2c</code>); the replay silently
+dropped them — a tool defect worth knowing before anyone reuses <code>replay2.py</code>.</li>
+<li><strong>Query-from-body circularity inflates the content arm.</strong> 17/21 targets sit at
+content rank 0; blind future-agent queries will be harder for retrieval. The <em>burial</em>
+finding is independent of this (P0 demotes a rank-0 correct answer below plainly irrelevant
+memories no matter who wrote the query), and the dynamic-range law holds at any retrieval
+strength — but treat 48% vs 100% as regime-best-case, not universal.</li>
+<li><strong>Only the strong-retrieval regime is measured.</strong> The case salience-as-prior
+was designed for — ambiguous queries where retrieval is wrong and importance should win —
+is structurally absent from a labeled on-topic set. The aggregate effect over blind traffic is
+bounded by, not equal to, these numbers.</li>
+<li><strong>Snapshot of a moving corpus.</strong> The corpus mutated mid-experiment (one target
+memory has since dropped out of recall entirely); n=21 carries roughly ±20% CIs; all 42
+memories are slow-decay and recent, so the decay term is effectively untested. The verdict
+implicates <em>salience-as-multiplier under RANK_K=60</em>, nothing else.</li>
+<li><strong>Query mix is a free parameter</strong> (17/42 memories untargeted; a
+"what-shipped-lately"-heavy mix would flatter P0). Manual inspection found no
+unlabeled-but-valid answers inside any miss top-5, so the labels are sound for what was
+asked.</li>
+</ul>
+
+<h2 id="remedies">6 · Remedies — measured, deterministic, and gated on triage</h2>
+<p>Every candidate below stays pure math (invariant #10 untouched); none was landed tonight —
+this artifact is a finding plus a proposal, and ranking changes go through the standing
+review-triage discipline first.</p>
+<table>
+<tr><th>Option</th><th>Change</th><th class="num">Measured</th><th>Notes</th></tr>
+<tr><td><strong>Rank-dominant regime</strong></td><td><code>RANK_K</code> 60 → 10 in <code>rerank</code> (one constant)</td><td class="num">19/21, MRR 0.575</td><td>keeps salience multiplicative but restores retrieval dominance (rel band 1.32× → 3×); smallest diff</td></tr>
+<tr><td><strong>Salience as tiebreak</strong></td><td>sort by rank, salience breaks near-ties</td><td class="num">21/21*, MRR 0.654</td><td>cleanest semantics: salience keeps its floor/pin/dedup roles, stops overriding evidence</td></tr>
+<tr><td>Additive blend</td><td><code>0.7·rel + 0.3·s·decay</code> normalized</td><td class="num">19/21, MRR 0.615</td><td>best top-1 among fixes; two normalization constants to defend</td></tr>
+<tr><td>√-dampening</td><td><code>√salience</code></td><td class="num miss">13/21</td><td>measured insufficient — compression ≠ regime change</td></tr>
+</table>
+<p>Complementary, regardless of ranking choice: <strong>(a)</strong> a <code>kb recall
+--explain</code> flag printing the score decomposition per hit (this whole experiment would
+have been a one-liner with it, and the inversion replay <em>is</em> its prototype);
+<strong>(b)</strong> grading-side hygiene — the reflect/distill rubrics already cap
+project facts at 0.6–0.7; the 0.85–0.9 pile predates them and could be re-graded by
+<code>/kb-reflect</code>; <strong>(c)</strong> until a ranking change lands, agents doing
+on-topic lookups should pair <code>kb recall</code> with corpus-direct
+<code>kb search --kb memory-kb</code> — the dual-arm rule <code>/kb-distill</code> shipped
+this morning, now with its mechanism measured.</p>
+
+<h2 id="provenance">7 · Provenance</h2>
+<p class="meta">Scheduled Fable frontier run #1 (kickoff 22:50 CEST). Inputs workflow
+wf_00f5a8db-cb1 (3 slice-readers + 1 formula verifier, 177k tokens); verification workflow
+wf_0dae2a34-1dd (live-reproducer + metrics-recomputer + methodology skeptic, 147k tokens);
+replay + analysis inline. Data: /tmp/recall-eval/{memories.jsonl, labeled.jsonl, results.json,
+replay2.py, verify-metrics.py} (volatile — the labeled set is preserved in the appendix below).
+Formula source: crates/kb-core/src/memory.rs:161-218; route: crates/kb-server/src/routes/memory.rs.
+Related: evolving-the-kb-memory-system.html (the 06-29 baseline this revises),
+fable-frontier-program-2026-07.html (the program ledger), memory 83afc6839cf4 (the morning
+incident that motivated the frontier pick).</p>
+
+<h2 id="appendix">Appendix · the 21 labeled queries</h2>
+<details>
+<summary>Full query set (query · kind · expected id(s) · P0 outcome)</summary>
+<table>
+<tr><th>Query</th><th>Kind</th><th>Expected</th><th>P0</th></tr>
+<tr><td>Search on the production kb instance has gotten painfully slow again — diagnosed before? root cause and fixes?</td><td>gotcha</td><td><code>0a9c3288baaa</code></td><td class="hit">hit@1</td></tr>
+<tr><td>The e2e tests freeze inside the runner's Docker container but pass on bare metal — cause isolated? what does the workflow do today?</td><td>gotcha</td><td><code>39fb962129bc</code></td><td class="hit">hit</td></tr>
+<tr><td>What's still left for the operator to do before the kb repo goes public?</td><td>project-status</td><td><code>429abfc721be</code></td><td class="hit">hit</td></tr>
+<tr><td>Can we ship a fully static Linux binary, and is building the embedder on a non-native target feasible?</td><td>gotcha</td><td><code>1f29f8f5b672</code></td><td class="hit">hit</td></tr>
+<tr><td>Was anything decided about a second user on a kb daemon — viewer accounts or per-user permissions?</td><td>project-status</td><td><code>20d7c9de0ea9</code></td><td class="miss">miss</td></tr>
+<tr><td>Has a security audit of the kb codebase and its findings already been captured in memory?</td><td>dedup-probe</td><td><code>38d1710ce953</code></td><td class="miss">miss</td></tr>
+<tr><td>The operator requested a fix for one specific screen — keep strictly to what they named, or propose wider changes?</td><td>preference</td><td><code>0a207a163f8f</code></td><td class="hit">hit</td></tr>
+<tr><td>Some artifacts show no backlinks even though other pages clearly link to them with path-style links — known? fix?</td><td>gotcha</td><td><code>51a60e7e1585</code></td><td class="miss">miss</td></tr>
+<tr><td>just ci-e2e dies at the browser install step with exit 127 — how do I get the suite running locally?</td><td>operational</td><td><code>9e3bf714ce1c</code></td><td class="miss">miss</td></tr>
+<tr><td>A user on Ubuntu 22.04 says the release tarball won't start — what do we tell them; which runner builds Linux legs?</td><td>gotcha</td><td><code>681b519d71d9</code></td><td class="hit">hit</td></tr>
+<tr><td>Before writing a candidate fact into agent memory, is a recall query enough to prove it isn't a duplicate?</td><td>gotcha</td><td><code>83afc6839cf4</code></td><td class="miss">miss</td></tr>
+<tr><td>Picking kb work back up after a few days — what's queued next; anything urgent first?</td><td>project-status</td><td><code>9f9298aa4ec8</code>, <code>570f6dd254f7</code></td><td class="hit">hit@1</td></tr>
+<tr><td>Styling a new self-contained HTML report — prescribed palette or my own values, and how is contrast verified?</td><td>preference</td><td><code>5d237c495d8a</code></td><td class="miss">miss</td></tr>
+<tr><td>Agent-memory hooks write to the local containerized kb on 127.0.0.1:4000, CLI auto-loads the bearer — already stored?</td><td>dedup-probe</td><td><code>a8518576c9b3</code></td><td class="miss">miss</td></tr>
+<tr><td>A fix just landed on main — how do I get it running on the live production deployment?</td><td>operational</td><td><code>cd0cbc3b55e5</code>, <code>b40dae860550</code></td><td class="hit">hit</td></tr>
+<tr><td>Playwright won't set up so the browser suite can't run — fallback for checking web-UI changes by hand?</td><td>operational</td><td><code>cf6a22330895</code></td><td class="miss">miss</td></tr>
+<tr><td>Migrating another repo's Actions onto a CI runner — it spins up database service containers; supported?</td><td>gotcha</td><td><code>b55398c2ff56</code></td><td class="miss">miss</td></tr>
+<tr><td>git status shows modified files I didn't touch — where did these uncommitted changes come from?</td><td>project-status</td><td><code>eadd95d546aa</code>, <code>f513fbcf9791</code></td><td class="hit">hit</td></tr>
+<tr><td>About to pick up another project — pending uncommitted work or known driver bugs to account for first?</td><td>project-status</td><td><code>d1dadfd36c06</code>, <code>e378762fb420</code></td><td class="hit">hit@1</td></tr>
+<tr><td>Spinning up a brand-new web app for the operator — which CSS/styling framework should I default to?</td><td>preference</td><td><code>f09190b9b730</code></td><td class="miss">miss</td></tr>
+<tr><td>Session-memory distillation runs as an agent-layer slash command, not inside the daemon — already stored?</td><td>dedup-probe</td><td><code>accaf9596755</code></td><td class="miss">miss</td></tr>
+</table>
+</details>
+</main>
+</body>
+</html>

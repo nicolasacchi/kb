@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, cross-compile, zigbuild, ci, release, onnxruntime, glibc, musl, spike">
+<title>Cross-compiling kb — the zigbuild spike and the release-CI design</title>
+<style>
+:root{
+  --bg:#f8f9fc;--surface:#eef1f7;--fg:#1d2130;--muted:#545d72;
+  --rule:#d8dce6;--accent:#4338ca;--accent-fg:#ffffff;
+  --warn:#8a5300;--danger:#b02a26;--ok:#1e6b40;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.58;--maxw:50rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#14161d;--surface:#1c1f28;--fg:#e4e6ec;--muted:#9ba3b5;
+    --rule:#333846;--accent:#aab6ff;--accent-fg:#131629;
+    --warn:#e8b04a;--danger:#f2827a;--ok:#63d194;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.22;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.85rem;margin:.2em 0 .3em;letter-spacing:-.01em}
+h2{font-size:1.32rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:2px solid var(--rule)}
+h3{font-size:1.06rem;margin:1.6em 0 .4em;color:var(--accent)}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.55rem;height:.55rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.17rem;margin:.4em 0 1em}
+.meta-strip{font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.4rem;font-family:var(--sans)}
+.tag{font-family:var(--mono);font-size:.76rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9rem 1rem;overflow:auto;font-size:.8rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.86rem;margin:1em 0;font-family:var(--sans)}
+th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn)}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout--ok .callout-label{color:var(--ok)}
+.outcome-ok{color:var(--ok);font-weight:650}
+.outcome-fail{color:var(--danger);font-weight:650}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> project:kb <span class="sep">&middot;</span> release CI</div>
+  <h1>Cross-compiling kb — the zigbuild spike and the release-CI design</h1>
+  <p class="lede">An empirical answer, not a literature review: the full <code>kb</code> binary was actually cross-built on this machine to musl-static and to a pinned glibc-2.31 floor — and the embedder was proven un-cross-linkable. The CI design follows from the measurements.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span>companion: <a href="installing-kb-everywhere-2026-07-06.html">distribution-channel landscape</a></span>
+  </div>
+</header>
+
+<section>
+<h2 id="thesis">Thesis</h2>
+<p>kb's two binaries sit at opposite extremes of cross-compilability, and that asymmetry — measured on real hardware, below — dictates the whole release-CI shape. The main <code>kb</code> binary (daemon + CLI, no ONNX Runtime) cross-compiles under cargo-zigbuild to <em>both</em> fully-static musl and a pinned-old-glibc target, blocked today by exactly one upstream lance build defect. The <code>kb-embedder</code> sidecar can never be zig-linked at all: the failure is a C++ standard-library ABI wall, not a version problem. Therefore: <strong>keep the native-runner matrix as the trunk; add zigbuild only as an additive, <code>kb</code>-only "universal Linux" lane; harden the trunk with provenance attestations and a properly multi-arch image.</strong></p>
+</section>
+
+<section>
+<h2 id="spike-setup">The spike — setup</h2>
+<p>Run 2026-07-06, 07:58–09:33 CEST on the development machine: Arch Linux x86_64, 8 cores, glibc 2.43, <strong>no AVX-512</strong> (AVX2 present) — a detail that turned out to be load-bearing. Toolchain: <strong>zig 0.15.2</strong>, <strong>cargo-zigbuild 0.23.0</strong> (v0.23.0 released 2026-06-18; README supports zig 0.15+), <strong>rustc 1.96.0</strong> (the repo's pinned toolchain). All builds: <code>--locked --profile fast</code>, dedicated <code>CARGO_TARGET_DIR</code>, <code>nice -n 20 ionice -c 3</code>. Full logs: <code>/tmp/kb-distrib-research/spike.md</code> + <code>s1.log</code>/<code>s2.log</code>/<code>s3.log</code>.</p>
+</section>
+
+<section>
+<h2 id="s1-musl-static">S1 — musl-static <code>kb</code>: one lance defect away <span class="outcome-fail">(link_failure, 29.2 min)</span></h2>
+<p><code>cargo zigbuild --locked --profile fast -p kb-cli --bin kb --target x86_64-unknown-linux-musl</code></p>
+<p><strong>Every crate compiled cleanly for musl under zig cc</strong> — rusqlite's bundled sqlite amalgamation, zstd-sys, lz4-sys, ring, blake3, onig_sys, and the whole lance/datafusion/arrow/tantivy graph. The build failed only at the final link:</p>
+<pre><code>ld.lld: error: undefined symbol: sum_4bit_dist_table_32bytes_batch_avx512
+&gt;&gt;&gt; referenced by FlatIndex/IvfSubIndex::search in liblance-*.rlib</code></pre>
+<h3 id="s1-root-cause">Root cause — fully diagnosed, and it is not musl's fault</h3>
+<p>lance-linalg 4.0.0's build.rs compiles two AVX-512 C kernels and <em>both</em> emit the same <code>cargo:rustc-cfg=kernel_support="avx512"</code>:</p>
+<ul>
+<li><code>f16.c</code> — built with an explicit <code>-march=sapphirerapids -mavx512fp16</code>; pragma-vectorised, compiles on <em>any</em> host.</li>
+<li><code>dist_table.c</code> — built with <code>-march=native</code>; uses explicit <code>_mm512_*</code> intrinsics that clang gates on <code>evex512</code>. On a non-AVX512 build host, <code>-march=native</code> omits AVX-512 → the compile fails → the object is silently never emitted.</li>
+</ul>
+<p>The f16 kernel still sets the shared cfg, Rust code references the extern symbol, and the link dies. Proven with direct probes: <code>zig cc -target x86_64-linux-musl -march=sapphirerapids dist_table.c</code> compiles and defines the symbol (rc=0); <code>-march=native</code> fails on this host. The defect is <strong>host-CPU-dependent, not musl/zig-specific</strong> — a native gnu build on the same machine would hit it too. Fixes, in order of correctness: (a) upstream lance patch — give <code>dist_table.c</code> an explicit AVX-512 <code>-march</code> like its sibling, and/or stop sharing one cfg across two independently-compiled kernels; (b) build on an AVX-512-capable host; (c) <code>CFLAGS=-march=sapphirerapids</code> — links, but poisons all C with AVX-512 (SIGILL on older CPUs), so it is a diagnostic tool, not a shipping fix.</p>
+<div class="callout callout--ok"><span class="callout-label">Verdict</span>Fully-static musl <code>kb</code> — a universal Linux binary that kills the glibc floor for the daemon/CLI — is <strong>viable and one small upstream fix away</strong>. File the lance issue with the probe evidence.</div>
+</section>
+
+<section>
+<h2 id="s2-glibc-floor">S2 — glibc-floor pinning works end-to-end <span class="outcome-ok">(success, 27.5 min)</span></h2>
+<p><code>cargo zigbuild --locked --profile fast -p kb-cli --bin kb --target x86_64-unknown-linux-gnu.2.31</code>, run with the one-line <code>CFLAGS=-march=sapphirerapids</code> workaround so lance's <code>dist_table.c</code> compiles (see S1).</p>
+<ul>
+<li><strong>Linked, rc=0.</strong> 175 MB (fast profile, effectively unstripped), ELF 64-bit PIE.</li>
+<li><strong>Max glibc symbol referenced: GLIBC_2.30</strong> (<code>objdump -T</code> tail: 2.28 / 2.29 / 2.30) — comfortably under the requested 2.31 pin.</li>
+<li><strong>NEEDED: libm, libpthread, libc, libdl, ld-linux only.</strong> No libstdc++ (zero GLIBCXX symbols), no libgomp — the main binary carries no C++ runtime at all.</li>
+<li><strong>Runs on this host</strong>: <code>kb --version</code> → <code>kb 0.22-31-g9279de1c-dirty</code>, exit 0; <code>--help</code> exit 0. (Version/help paths don't execute AVX-512 kernels; this <em>specific</em> binary is not runtime-safe on non-AVX512 CPUs — an artifact of the workaround, not of glibc pinning. A build on an AVX-512 host, or post-lance-fix, has no such poisoning.)</li>
+</ul>
+<div class="callout callout--ok"><span class="callout-label">Verdict</span>A GLIBC_2.30-floored <code>kb</code> — Debian 10 / Ubuntu 20.04 / RHEL 8 era, four releases below today's documented Debian 13 / Ubuntu 24.04 floor — is achievable from a single x86_64 runner, gated on the same lance fix as S1.</div>
+</section>
+
+<section>
+<h2 id="s3-embedder">S3 — the embedder hits a C++ ABI wall, not a glibc floor <span class="outcome-fail">(link_failure, 20.9 min)</span></h2>
+<p><code>cargo zigbuild --locked --profile fast -p kb-embedder --bin kb-embedder --target x86_64-unknown-linux-gnu.2.31</code></p>
+<p>ort-sys downloaded the pyke prebuilt ORT for the target; ort, fastembed, and tokenizers all compiled. The link then failed on ~40 undefined <strong>GNU libstdc++</strong> symbols referenced from inside the prebuilt archive — <code>std::__cxx11::basic_string::_M_append</code>, <code>std::_Rb_tree_rebalance_for_erase</code>, <code>vtable for std::ostream</code>, <code>std::istream::read</code> (referenced by <code>inference_session.cc.o</code>). The link line passes <code>-lstdc++</code>, but zig's cross toolchain provides LLVM <strong>libc++</strong>, not GNU libstdc++ — the C++11-string-ABI symbols are unresolvable by construction. The planned <code>.2.39</code> retry was skipped: this failure fires <em>before</em> any glibc version check and is independent of the suffix.</p>
+<div class="callout callout--danger"><span class="callout-label">Verdict</span>cargo-zigbuild is a <strong>permanent non-starter for kb-embedder</strong> while it links pyke's GCC-built prebuilt ORT. The embedder stays on native ubuntu-24.04 runners. Invariant #26's two-binary split is exactly what makes the rest of this design possible.</div>
+</section>
+
+<section>
+<h2 id="the-ort-constraint">The ORT constraint, precisely</h2>
+<p>kb pins <code>ort</code>/<code>ort-sys</code> 2.0.0-rc.12 (via fastembed 5.13.4), which ships ONNX Runtime <strong>ms@1.24.2</strong> from pyke's CDN. The authoritative target list (<code>ort-sys/build/download/dist.txt</code> at the tag):</p>
+<table>
+<thead><tr><th>Target</th><th>CPU prebuilt?</th><th>Relevance to kb</th></tr></thead>
+<tbody>
+<tr><td><code>x86_64-unknown-linux-gnu</code></td><td>yes</td><td>shipped (release leg 1)</td></tr>
+<tr><td><code>aarch64-unknown-linux-gnu</code></td><td><strong>yes</strong></td><td>shipped (leg 2) — <strong>this resolves release.yml's open TODO</strong> about the arm64 ORT prebuilt possibly not existing; smoke it at rc1 regardless</td></tr>
+<tr><td><code>aarch64-apple-darwin</code></td><td>yes</td><td>shipped (leg 3)</td></tr>
+<tr><td><code>x86_64-apple-darwin</code></td><td><strong>no</strong> (dropped in rc.11)</td><td>Intel-mac asset would be <code>kb</code>-only today; ort main's platform table already lists x64-mac again — revisit on the next ort bump</td></tr>
+<tr><td>any <code>*-musl</code></td><td><strong>no</strong> (verified: no musl row anywhere)</td><td>a musl embedder means building ONNX Runtime from source (Alpine's onnxruntime 1.24.1 package, with its musl locale patches, is the reference)</td></tr>
+<tr><td><code>x86_64-pc-windows-msvc</code>, <code>aarch64-pc-windows-msvc</code>, android, iOS</td><td>yes</td><td>moot — native Windows is a recorded non-goal</td></tr>
+</tbody>
+</table>
+<p>Three findings that go beyond the target list:</p>
+<ul>
+<li><strong>The glibc-2.39 floor is pyke's choice, not ORT's.</strong> pyke builds Linux prebuilts on ubuntu-24.04 with no manylinux sysroot, baking in glibc-2.38 C23 symbols (<code>__isoc23_strtol</code>) and GCC-12 GLIBCXX_3.4.30. Microsoft's own onnxruntime 1.24 wheels are manylinux_2_28 (glibc ≥ 2.28). A CI-built ORT in a manylinux_2_28 container, fed to ort-sys via <code>ORT_LIB_PATH</code>, would lower the embedder floor to 2.28 — at the cost of owning an ORT build (~30–60 min/target; ort-sys expects the full cmake build tree with split <code>onnxruntime_*</code> + <code>_deps/</code> archives, not one <code>.a</code>). Demand-gated.</li>
+<li><strong>A second, undocumented floor: x86-64-v3.</strong> Since rc.11 the x86_64 prebuilt targets Haswell/Zen1+ (AVX2/BMI2/FMA); older CPUs SIGILL at first inference with no warning from any current kb check. Also from rc.11: ORT is compiled <code>--client_package_build</code> — inter/intra-op spinning off by default, tuned for edge not server throughput. Latent perf regression worth a <code>kb bench</code> pass; not a distribution blocker.</li>
+<li><strong>Doc correction to land:</strong> <code>ORT_STRATEGY</code> does not exist in ort 2.x (kb's Cargo.toml comment, CLAUDE.md, and self-host.md all reference it). The mechanism is <code>ORT_LIB_PATH</code> (deprecated alias <code>ORT_LIB_LOCATION</code>) plus disabling the download feature / <code>ORT_SKIP_DOWNLOAD</code>.</li>
+</ul>
+<p>Pure-Rust fallback backends exist (<code>ort-tract</code>, <code>ort-candle</code>) but are a contingency, not a plan: candle measured roughly an order of magnitude slower for BGE on CPU, tract's ort API coverage is partial, Burn can't import bge — and kb calls fastembed, which exposes no hook for alternative backends, so any of them means reimplementing the embed pipeline.</p>
+</section>
+
+<section>
+<h2 id="zigbuild-assessment">cargo-zigbuild assessment for kb's dependency set</h2>
+<p>Mechanism: zigbuild substitutes <code>zig cc</code>/<code>zig c++</code> (bundled clang + lld + multi-version glibc/musl headers and stubs) as the C compiler for <code>cc</code>-crate build scripts and as the Rust linker. The glibc suffix (<code>--target x86_64-unknown-linux-gnu.2.31</code>) pins the minimum version; un-suffixed <code>-gnu</code> already defaults to ~2.28 (varies by zig release). Known sharp edges that matter here: an invalid suffix fails <em>silently</em> to a fallback; version gating is imperfect near the host's own glibc; static <em>glibc</em> (<code>crt-static</code>) is unsupported (musl is the static path); always verify the real floor post-build (<code>objdump -T | grep GLIBC_</code> — as the spike did).</p>
+<table>
+<thead><tr><th>kb dependency</th><th>Native code</th><th>Measured/assessed risk</th></tr></thead>
+<tbody>
+<tr><td>ring (rustls crypto)</td><td>C + per-arch asm, target-list-gated build.rs</td><td class="outcome-ok">built cleanly in S1/S2 (musl + gnu). Nuance from the verify pass: historical ring×zig failures include genuine zig bugs (e.g. zig 0.16's ar wrapper), not only cc-crate regressions — pin zig + zigbuild versions</td></tr>
+<tr><td>libsqlite3-sys (bundled), zstd-sys, lz4-sys, onig_sys</td><td>vendored C via <code>cc</code></td><td class="outcome-ok">built cleanly — no system headers needed, so zigbuild's <code>-nostdinc</code> never bites</td></tr>
+<tr><td>blake3</td><td>C + SIMD asm</td><td class="outcome-ok">built cleanly</td></tr>
+<tr><td>lance-linalg</td><td>C AVX-512 kernels</td><td class="outcome-fail">the one defect found — host-CPU-dependent <code>-march=native</code> + shared cfg (S1); upstream fix</td></tr>
+<tr><td>prost-build (lance transitive)</td><td>needs host <code>protoc</code></td><td class="outcome-ok">host tool, orthogonal to the target — install on the runner as today</td></tr>
+<tr><td>ort-sys (embedder only)</td><td>prebuilt GCC-built static ORT</td><td class="outcome-fail">permanent blocker (S3) — GNU libstdc++ ABI vs zig's libc++</td></tr>
+</tbody>
+</table>
+<p>The crates that dominate zigbuild's issue tracker — aws-lc-sys, openssl-sys, opencv, linkme — are all absent from kb's Cargo.lock (rustls+ring is the single biggest enabler; keep it). Comparisons: <strong>cross-rs</strong> (container per target, real GNU sysroot) is the more reliable fallback for heavy C++ and the only option that runs tests under QEMU, at the cost of Docker and per-target images; plain gcc-cross toolchains offer no glibc pinning and per-target host setup. Real-world zigbuild shippers at kb's dependency weight: Cargo Lambda (default engine), Polars (maturin --zig), Astral's uv/ruff/ty (linux-cross + musllinux-cross legs). Maintenance note: zigbuild tracks pre-1.0 zig and the 0.15 transition needed explicit fixes — pin both tools by version/SHA. macOS-from-Linux cross is rejected outright: it needs a redistributed Apple SDK (license gray area for a public MIT repo) and per-arch ORT anyway. Windows targets: zigbuild doesn't support them (moot — non-goal).</p>
+</section>
+
+<section>
+<h2 id="runner-landscape">The 2026 runner landscape (all verified against GitHub's docs/changelogs)</h2>
+<table>
+<thead><tr><th>Runner</th><th>Status, July 2026</th><th>kb use</th></tr></thead>
+<tbody>
+<tr><td><code>ubuntu-24.04</code> (x64)</td><td>GA; free + unlimited for public repos</td><td>leg 1 — <strong>keep pinned</strong>: <code>ubuntu-latest</code> is migrating to 26.04 and would silently raise the embedder's glibc floor</td></tr>
+<tr><td><code>ubuntu-24.04-arm</code></td><td>GA since 2025-08; free for public repos (4 vCPU); in private repos since 2026-01 (metered)</td><td>leg 2 — no <code>-latest-arm</code> alias exists; pin explicitly</td></tr>
+<tr><td><code>macos-14</code>/<code>-15</code>/<code>-26</code> (arm64)</td><td>GA; 10× minute multiplier (free on public)</td><td>leg 3 (macos-14)</td></tr>
+<tr><td><code>macos-15-intel</code>, <code>macos-26-intel</code> (x86_64)</td><td><strong>GA — refutes the "Intel runners are gone" assumption</strong>; macos-13 retired 2025-12-04; Intel images supported through ~Aug 2027</td><td>optional Intel leg — but <code>kb</code>-only until ort ships an x64-mac ORT prebuilt</td></tr>
+<tr><td><code>ubuntu-22.04</code>(+arm)</td><td>deprecation begins 2026-09-17</td><td>never use — below the ORT link floor anyway (GCC 11)</td></tr>
+<tr><td><code>windows-11-arm</code>, <code>windows-2025</code></td><td>available</td><td>unused (non-goal)</td></tr>
+</tbody>
+</table>
+<p>Release tooling status: <strong>cargo-dist stays rejected, more firmly than before</strong> — axo.dev wound down (domain parked), upstream still tags releases (v0.32.0, 2026-05) but with issue creation locked, and Astral maintains a private-purpose fork; kb's two original reasons (workspace-together builds vs invariant #26; generated workflows with floating action refs vs 40-char SHA pins) both still bind. <code>taiki-e/upload-rust-binary-action</code> (supports <code>build-tool: cargo-zigbuild</code> and glibc suffixes) is the best reference implementation for checksum/zigbuild wiring but assumes one build per invocation — kb's explicit two-step builds are clearer. <code>release-plz</code> is a low-priority nice-to-have for auto-changelog + tag creation only.</p>
+</section>
+
+<section>
+<h2 id="recommended-ci-design">The recommended release-CI design</h2>
+<pre><code>on: push tag v*
+
+job 1  create-release                  (unchanged: gh release create --verify-tag)
+
+job 2  binaries — native matrix        [contents:write, id-token:write, attestations:write]
+  x86_64-unknown-linux-gnu   → ubuntu-24.04        (pinned; glibc-2.39 embedder floor)
+  aarch64-unknown-linux-gnu  → ubuntu-24.04-arm    (ORT prebuilt confirmed in dist.txt)
+  aarch64-apple-darwin       → macos-14            (no strip — ad-hoc signature)
+  [optional] x86_64-apple-darwin → macos-15-intel  (kb-only until ort ships x64-mac ORT;
+                                                    sunset ~Aug 2027)
+  per leg: free disk · protoc · rust-toolchain@1.96.0 · rust-cache key=release-&lt;target&gt;
+    · cargo build --release --locked -p kb-cli --bin kb            (no ORT)
+    · cargo build --release --locked -p kb-embedder --bin kb-embedder  (static ORT)
+    · package + sha256 sidecar
+    · NEW actions/attest-build-provenance (subject = archive)     → SLSA Build L2
+    · gh release upload
+
+job 3  universal-kb — zigbuild lane    [GATED on the lance-linalg fix]
+  one ubuntu-24.04 runner; setup-zig + cargo-zigbuild (both SHA/version-pinned)
+    · cargo zigbuild --locked --release -p kb-cli --bin kb --target x86_64-unknown-linux-musl
+    · cargo zigbuild --locked --release -p kb-cli --bin kb --target x86_64-unknown-linux-gnu.2.28
+    · (later, same runner: aarch64 variants of both)
+    · CI assertion: objdump -T | grep GLIBC_ ceiling ≤ pinned floor   (spike-proven check)
+    · package as kb-only assets (no embedder; keyword-only degradation documented)
+    · attest + upload
+
+job 4  docker — multi-arch             [packages:write, id-token:write]
+  matrix: linux/amd64 → ubuntu-24.04 · linux/arm64 → ubuntu-24.04-arm
+    each: buildx push-by-digest, oci-mediatypes=true
+    Dockerfile: TWO cargo build RUNs (restore invariant #26) · model-fetch stage
+    COPY --link'd into runtime (dedupes the 1.34 GB layer across arches) · :slim variant
+  merge: buildx imagetools create (tags: X.Y.Z, X.Y, latest, sha; annotations on the INDEX)
+    · cosign keyless sign the index digest + cosign attest SBOM
+    · attest-build-provenance (subject-digest = index)</code></pre>
+<p>Design notes: <code>fail-fast: false</code> throughout so one leg never sinks the others; every expression through <code>env:</code> (the existing injection-safe pattern); per-target <code>rust-cache</code> keys (the two-invocation split compiles kb-core twice per target with different feature sets — both cache correctly under one target key). The zigbuild lane is <em>additive</em>: the combined tarball's floor is always max(kb, embedder) = 2.39, so low-floor assets must ship as <code>kb</code>-only artifacts with the split floor stated plainly. If SLSA L3 is ever wanted, the per-target build moves into a reusable workflow that holds the attestation permissions itself; L2 is the pragmatic target now.</p>
+</section>
+
+<section>
+<h2 id="what-would-change-this">What would change this design</h2>
+<ul>
+<li><strong>lance-linalg fix lands</strong> (the gate on job 3) — file the issue now; the spike's <code>zig cc</code> probes are the reproduction. Also unblocks native builds on non-AVX512 hosts generally.</li>
+<li><strong>ort ships an x86_64-apple-darwin prebuilt</strong> (main's platform table lists it) → the optional Intel leg gains its embedder; decide native <code>macos-15-intel</code> vs cross-compiling from arm64 (same SDK) before the ~Aug 2027 runner sunset.</li>
+<li><strong>ort ships a musl prebuilt</strong> (none today, verified in dist.txt) or kb adopts a manylinux_2_28/musl ORT source build via <code>ORT_LIB_PATH</code> → the embedder joins the universal lane and the split floor collapses.</li>
+<li><strong>The next ort bump</strong> (main targets ONNX Runtime 1.27) → re-verify dist.txt, the glibc floor, x86-64-v3, and the <code>--client_package_build</code> throughput posture; pyke changes build environments between rcs.</li>
+<li><strong>zig/zigbuild churn</strong> — both pinned; a zig 0.16-era regression (e.g. the ar-wrapper ring breakage) is contained by the pins and the lane's additive nature.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="verification-plan">Verification plan</h2>
+<ol>
+<li><strong>rc1 smoke (after the public flip):</strong> throwaway <code>v0.0.0-rc1</code> tag; watch all binary legs (the aarch64 ORT download especially), the ghcr multi-arch push, <code>gh attestation verify</code> on one tarball and the image, and an end-to-end <code>install.sh</code> run against the real release.</li>
+<li><strong>zigbuild lane, when gated in:</strong> the <code>objdump -T</code> GLIBC ceiling assertion (≤ 2.28); run the musl <code>kb</code> inside <code>alpine:latest</code> (<code>kb daemon</code> + a keyword search against a canon corpus); run the gnu.2.28 <code>kb</code> inside <code>ubuntu:20.04</code>; confirm no AVX-512 poisoning (<code>objdump -d | grep -c zmm</code> on the C-kernel objects, or run on a non-AVX512 host — this spike's machine is exactly that).</li>
+<li><strong>musl allocator:</strong> before shipping musl assets, benchmark the daemon under concurrent indexing with musl malloc vs a jemalloc/mimalloc global-allocator swap (musl's allocator measured up to ~7–13× futex contention in multithreaded workloads).</li>
+<li><strong>Embedder throughput follow-up (orthogonal):</strong> <code>kb bench</code> before/after re-enabling ORT's inter/intra-op spinning, since rc.11+ prebuilts default to edge-tuned <code>--client_package_build</code>.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="files-this-will-touch">Files this will touch</h2>
+<ul>
+<li><code>.github/workflows/release.yml</code> — attestation steps on all legs; docker job → digest matrix + imagetools merge; later the gated zigbuild lane + floor assertion; optional <code>macos-15-intel</code> row.</li>
+<li><code>Dockerfile</code> — split the single <code>cargo build -p kb-cli -p kb-embedder</code> into two <code>RUN</code>s (it currently violates invariant #26 inside the image); model-fetch stage + <code>COPY --link</code>; <code>:slim</code> variant.</li>
+<li><code>scripts/install.sh</code> — fail-closed checksum, <code>--proto '=https' --tlsv1.2</code>, x86-64-v3 CPU probe, optional <code>gh attestation verify</code>; later: musl-fallback selection like uv's installer when glibc is too old.</li>
+<li><code>Cargo.toml</code> (workspace comment), <code>CLAUDE.md</code>, <code>docs/self-host.md</code> — the <code>ORT_STRATEGY</code> → <code>ORT_LIB_PATH</code> correction; document the x86-64-v3 floor beside the glibc floor.</li>
+<li><code>packaging/</code> — the systemd/launchd/compose/Quadlet assets from the <a href="installing-kb-everywhere-2026-07-06.html">companion landscape</a>.</li>
+<li><strong>Upstream:</strong> a lance-linalg issue — <code>dist_table.c</code> built with <code>-march=native</code> while the always-compiling f16 kernel independently sets the shared <code>kernel_support="avx512"</code> cfg; repro + probe evidence from this spike.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="sources">Provenance and key sources</h2>
+<p>Empirics: spike run 2026-07-06 on this machine (logs under <code>/tmp/kb-distrib-research/</code>; tool versions in <a href="#spike-setup">setup</a>). Research: ultracode workflow <code>wf_c511c0f9-3ea</code> — dedicated reports on cargo-zigbuild, ORT constraints, and the CI/runner landscape, plus 16 adversarial verifications. Load-bearing primary sources:</p>
+<ul>
+<li><a href="https://github.com/pykeio/ort/blob/main/ort-sys/build/download/dist.txt">pyke ort-sys <code>dist.txt</code></a> @ v2.0.0-rc.12 (target list) · <a href="https://github.com/pykeio/ort/releases/tag/v2.0.0-rc.11">rc.11</a>/<a href="https://github.com/pykeio/ort/releases/tag/v2.0.0-rc.12">rc.12 release notes</a> (x86-64-v3, <code>--client_package_build</code>, <code>ORT_LIB_PATH</code> rename)</li>
+<li><a href="https://github.com/pykeio/ort-artifacts/blob/main/.github/workflows/build.yml">pykeio/ort-artifacts build.yml</a> (ubuntu-24.04 build hosts → the glibc-2.38/2.39 floor) · <a href="https://pypi.org/project/onnxruntime/">Microsoft onnxruntime manylinux_2_28 wheels</a> (the floor is a packaging choice)</li>
+<li><a href="https://github.com/rust-cross/cargo-zigbuild/blob/main/README.md">cargo-zigbuild README</a> · issues <a href="https://github.com/rust-cross/cargo-zigbuild/issues/231">#231</a> (glibc-suffix semantics), <a href="https://github.com/rust-cross/cargo-zigbuild/issues/248">#248</a> (C++ linking), <a href="https://github.com/rust-cross/cargo-zigbuild/issues/433">#433</a> (zig churn) · <a href="https://github.com/ziglang/zig/issues/9832">ziglang #9832</a> (zig c++ doesn't auto-link libstdc++)</li>
+<li><a href="https://docs.github.com/en/actions/reference/runners/github-hosted-runners">GitHub runner reference</a> · <a href="https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/">arm64 GA for public repos</a> · <a href="https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down/">macos-13 retirement / <code>macos-15-intel</code> through Aug 2027</a></li>
+<li><a href="https://github.com/axodotdev/cargo-dist/releases">cargo-dist status</a> · <a href="https://github.com/taiki-e/upload-rust-binary-action">taiki-e/upload-rust-binary-action</a> · <a href="https://github.com/actions/attest-build-provenance">actions/attest-build-provenance</a> (SLSA levels)</li>
+<li><a href="https://docs.docker.com/build/ci/github-actions/multi-platform/">Docker multi-platform CI</a> (push-by-digest + imagetools) · <a href="https://medium.com/@vladkens/fast-multi-arch-docker-build-for-rust-projects-a7db42f3adde">vladkens' measured QEMU-vs-zigbuild times</a> (~50 vs ~13 min)</li>
+<li><a href="https://pkgs.alpinelinux.org/package/edge/community/x86_64/onnxruntime">Alpine onnxruntime 1.24.1 APKBUILD</a> (musl-ORT reference) · <a href="https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance/">musl-allocator contention (nickb.dev)</a> · <a href="https://raniz.blog/2025-02-06_rust-musl-malloc/">raniz.blog measurements</a></li>
+<li>Real-world zigbuild shippers: <a href="https://www.cargo-lambda.info/guide/cross-compiling.html">Cargo Lambda</a> · <a href="https://www.maturin.rs/distribution.html">maturin <code>--zig</code></a> (Polars, Astral uv/ruff/ty)</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb SPA mobile redesign — tablet (P1) + phone (P2) target widths, FloatingPill bottom-sheet rebuild, decision points + open questions for implementation.">
+<meta name="kb-tags" content="design, mobile, responsive, spa, floating-pill, popover, mockup">
+<meta name="kb-category" content="design-review">
+<meta name="kb-status" content="open">
+<title>12 · Mobile redesign — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+      <a href="12-mobile-redesign.html" class="is-current">12 · Mobile</a>
+      <a href="13-multi-daemon-architecture.html">13 · Multi-daemon</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 12
+    <span>·</span>
+    <span class="meta">SPA chrome on narrow viewports</span>
+    <span>·</span>
+    <span class="meta">Design review · 2026-05-19</span>
+  </div>
+  <h1>Phase&nbsp;1: tablet &ge;768px (CSS-only). <br>Phase&nbsp;2: phone &ge;375px (FloatingPill → bottom sheet).</h1>
+  <p class="lede">The SPA's FloatingPill + popover + comments panel were designed at desktop widths. Tablet works mostly accidentally; phone breaks: the pill overflows, the popover clips outside the viewport, the comments panel can't share screen with the iframe, and atlas is unusable. The iframe <em>content</em> stays the author's responsibility — this doc only redesigns the SPA chrome around it.</p>
+</section>
+
+<h2 id="targets">Target widths</h2>
+
+<p>Three breakpoints, chosen against real devices that surface in the access logs:</p>
+
+<table>
+  <thead><tr><th>Bucket</th><th>Width</th><th>Real-world devices</th><th>Phase</th></tr></thead>
+  <tbody>
+    <tr><td>Phone</td><td>375 – 599 px</td><td>iPhone SE/12/15, Pixel 7, most Android in portrait</td><td>P2</td></tr>
+    <tr><td>Tablet portrait</td><td>600 – 899 px</td><td>iPad Mini portrait, foldable inner, narrow laptop window</td><td>P1</td></tr>
+    <tr><td>Tablet landscape / desktop</td><td>&ge;900 px</td><td>iPad landscape, MacBook Air, monitor</td><td>shipped</td></tr>
+  </tbody>
+</table>
+
+<p>P1 is CSS-only — media queries, layout reflow, no JS or component restructuring. P2 is a real redesign because the FloatingPill+popover pattern doesn't translate cleanly to phone-native idiom; the pre-design assumption is bottom-sheet drawers replace popovers.</p>
+
+<h2 id="problem">What breaks today</h2>
+
+<p>Concrete failures observed at narrow widths:</p>
+
+<ul>
+  <li><strong>FloatingPill horizontal overflow</strong>. At &lt;600 px the inner row (kb pill, source path pill, nav arrows, comments toggle, sibling popover trigger) wraps awkwardly or clips. The pill itself has <code>min-width: ~520px</code> implied by its child content.</li>
+  <li><strong>Popover positioning</strong>. The G3/G4 sibling popover opens with a fixed width anchored to the trigger. At phone widths the popover hangs off the right edge of the viewport with no reflow fallback.</li>
+  <li><strong>CommentsPanel + iframe split</strong>. On <code>?cm=on</code> the SPA renders a side-by-side flex: iframe on the left, comments panel ~360px on the right. At &lt;1024 px the iframe gets squeezed to unusable. At &lt;768 px there's nothing usable.</li>
+  <li><strong>Gallery card grid</strong>. The CSS grid auto-fits to ~280px columns; at 375px we get one column but with too-tight gutters and the card chrome (tags, glyphs, footer) gets cramped.</li>
+  <li><strong>Atlas view</strong>. The 600×360 SVG is rendered as-is. At 375 px screen-width, points overlap; tap-targets are sub-12px; nobody can use this.</li>
+  <li><strong>IndexHero featured block</strong>. Renders fine at all widths but its margins assume desktop-class horizontal padding.</li>
+</ul>
+
+<h2 id="phase1">Phase 1 — tablet (≥768 px, CSS-only)</h2>
+
+<p>Goal: <strong>nothing visually broken at iPad portrait</strong>. Each fix is a CSS file edit; no component refactors.</p>
+
+<table>
+  <thead><tr><th>Component</th><th>P1 change</th></tr></thead>
+  <tbody>
+    <tr><td>FloatingPill</td><td>At &lt;900px wrap the source-path pill onto a second row inside the pill (CSS flex-wrap on the inner container).</td></tr>
+    <tr><td>Sibling popover</td><td>At &lt;900px: <code>max-width: calc(100vw - 32px)</code>, anchor-shift to clamp inside the viewport with a 16px gutter.</td></tr>
+    <tr><td>CommentsPanel</td><td>At &lt;1024px: stack vertically (iframe on top, panel below). Panel max-height 40vh + scroll.</td></tr>
+    <tr><td>Gallery cards</td><td>Add explicit breakpoint at 768px: 2 columns at 768–1023, 3+ at ≥1024 (auto-fit). Tighter inner padding at narrow widths.</td></tr>
+    <tr><td>AtlasView</td><td>If <code>window.innerWidth &lt; 800</code>, render a placeholder: "Atlas needs ≥800 px width — try landscape or a larger screen." Plain divs, no SVG.</td></tr>
+    <tr><td>IndexHero</td><td>Reduce horizontal padding to <code>16px</code> at &lt;900px.</td></tr>
+  </tbody>
+</table>
+
+<p>Estimated effort: 1-2 days. No new components, no JS, no new Playwright specs (the existing visual flow holds; we'd want a single new spec asserting the atlas placeholder + popover clamp).</p>
+
+<h2 id="phase2">Phase 2 — phone (≥375 px, FloatingPill rebuild)</h2>
+
+<p>The redesign:</p>
+
+<ol>
+  <li><strong>Collapsed state on phone</strong> — single floating button (FAB), bottom-right corner with safe-area padding. Contains the kb glyph + an unread-comments badge.</li>
+  <li><strong>Expanded state</strong> — tap the FAB → bottom-sheet drawer slides up, takes 50-60% of viewport height. Drawer hosts: kb name, source path, nav arrows, comments toggle, all the popover content (folder/sort/recent/siblings) inline as accordion sections.</li>
+  <li><strong>CommentsPanel on phone</strong> — full-screen overlay (modal sheet), accessed via the comments toggle in the drawer. Not side-by-side; phone doesn't have the pixels for split.</li>
+  <li><strong>Gallery cards on phone</strong> — single column, edge-to-edge with 12px gutters. Card chrome strips tags+glyphs to a single line ("3 tags · longread"). Filename + age + first-tag color band.</li>
+  <li><strong>Atlas on phone</strong> — placeholder div from P1, no point in trying.</li>
+  <li><strong>kb-switcher on phone</strong> — tap-and-hold the FAB → bottom sheet for kb picker. Or move to a dedicated route <code>/kbs</code>.</li>
+  <li><strong>Detail iframe</strong> — full-bleed (100vw × calc(100vh - safe-area-bottom - FAB height)). The FAB floats on top so the iframe content stays maximised.</li>
+</ol>
+
+<h2 id="mockups">ASCII mockups — detail view</h2>
+
+<h3 id="m-1024">≥1024 px (today)</h3>
+
+<pre>
+┌──────────────────────────────────────────────────────────────────┐
+│ ┌─────────────────────────────┬─────────────────────────────────┐│
+│ │ iframe (artifact)           │ CommentsPanel                   ││
+│ │                             │ 360px wide                      ││
+│ │                             │ comment 1                       ││
+│ │                             │ comment 2                       ││
+│ │                             │ ...                             ││
+│ │                             │                                 ││
+│ └─────────────────────────────┴─────────────────────────────────┘│
+│ FloatingPill: [kb] · /path · ◀ ▶ · ↕ N · 💬 cm                  │
+└──────────────────────────────────────────────────────────────────┘
+</pre>
+
+<h3 id="m-768">768 px (P1)</h3>
+
+<pre>
+┌──────────────────────────────────────┐
+│ ┌──────────────────────────────────┐ │
+│ │ iframe (full width)              │ │
+│ │                                  │ │
+│ │                                  │ │
+│ └──────────────────────────────────┘ │
+│ ┌──────────────────────────────────┐ │
+│ │ CommentsPanel (full width)       │ │
+│ │ max-height 40vh, scroll          │ │
+│ │ comment 1                        │ │
+│ │ comment 2 ...                    │ │
+│ └──────────────────────────────────┘ │
+│ FloatingPill (wrapped):              │
+│   [kb] · ◀ ▶ · ↕ N · 💬              │
+│   /long/path/to/artifact.html        │
+└──────────────────────────────────────┘
+</pre>
+
+<h3 id="m-375">375 px (P2)</h3>
+
+<pre>
+┌──────────────────────┐
+│ ┌──────────────────┐ │
+│ │ iframe full-bleed│ │
+│ │                  │ │
+│ │                  │ │
+│ │                  │ │  collapsed:
+│ │                  │ │  ┌───┐
+│ │                  │ │  │kb │  ← FAB
+│ │                  │ │  │ • │ (unread comment dot)
+│ │                  │ │  └───┘
+│ └──────────────────┘ │
+└──────────────────────┘
+
+  tap the FAB →
+
+┌──────────────────────┐
+│ ┌──────────────────┐ │
+│ │ iframe (dimmed)  │ │
+│ │                  │ │
+│ ╠══════════════════╣ │  drawer slides up
+│ │ KB · notes       │ │  60vh height
+│ │ /path/file.html  │ │
+│ │ ◀ prev  next ▶   │ │
+│ │ 💬 toggle cm     │ │
+│ │ ─────────────    │ │
+│ │ ▼ siblings (12)  │ │
+│ │ ▼ folder         │ │
+│ │ ▼ recent         │ │
+│ └──────────────────┘ │
+└──────────────────────┘
+</pre>
+
+<h2 id="decisions">Open decisions</h2>
+
+<p>Seven open-points the implementation round needs to resolve. Marked with my lean; flag any pushback.</p>
+
+<ol>
+  <li><strong>FAB position</strong> — bottom-right (standard) vs bottom-center (thumb-reachable). <em>Lean: bottom-right with safe-area-inset-right.</em></li>
+  <li><strong>FAB content</strong> — kb glyph + unread badge, vs minimal "kb" wordmark, vs hamburger icon. <em>Lean: kb name (truncated to 2 chars) + unread dot. Hamburger feels generic.</em></li>
+  <li><strong>Drawer dismiss gesture</strong> — tap outside, swipe down, or explicit close button. <em>Lean: all three; the close button is the AT-accessible path.</em></li>
+  <li><strong>Sibling popover content on phone</strong> — inline accordion sections in the drawer (folder/sort/recent as collapsible blocks), vs nested sub-sheets. <em>Lean: accordion sections; nested sheets are confusing.</em></li>
+  <li><strong>Comments composer on phone</strong> — full-screen modal, vs bottom sheet, vs inline-in-iframe (re-using annotate.ts's dialog). <em>Lean: full-screen modal — annotate.ts's <code>showModal()</code> is the right primitive but it lives in the iframe, not the parent; the SPA path is a modal route <code>/a/:kb/:id/cm/:cid</code>.</em></li>
+  <li><strong>kb-switcher gesture</strong> — tap-and-hold the FAB, vs a dedicated route, vs a separate persistent UI element. <em>Lean: dedicated <code>/kbs</code> route, accessed from the drawer footer. Hold-gesture is undiscoverable.</em></li>
+  <li><strong>Back-to-gallery on phone</strong> — browser back, vs swipe-right, vs explicit button in the drawer. <em>Lean: explicit button in the drawer + browser back (both work). Swipe gestures fight the iframe scroll.</em></li>
+</ol>
+
+<h2 id="impl-files">Implementation hit-list</h2>
+
+<table>
+  <thead><tr><th>File</th><th>Phase</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>web/src/styles/app.css</code></td><td>P1</td><td>Media-query block for ≥768px breakpoint. Wrap FloatingPill internals, popover max-width, CommentsPanel stack.</td></tr>
+    <tr><td><code>web/src/styles/gallery.css</code></td><td>P1</td><td>Explicit grid-template at 768/1024 breakpoints.</td></tr>
+    <tr><td><code>web/src/components/AtlasView.tsx</code></td><td>P1</td><td>Add <code>useEffect</code> watching <code>window.innerWidth</code>; render placeholder when &lt;800.</td></tr>
+    <tr><td><code>web/src/components/FloatingPill.tsx</code></td><td>P2</td><td>Major refactor: split into <code>FloatingPillDesktop</code> + <code>FloatingPillMobile</code>; mobile renders FAB + drawer.</td></tr>
+    <tr><td><code>web/src/components/FloatingPillMobile.tsx</code> (new)</td><td>P2</td><td>FAB + bottom-sheet drawer with accordion sections.</td></tr>
+    <tr><td><code>web/src/components/CommentsPanel.tsx</code></td><td>P2</td><td>Add <code>variant: "side" | "stack" | "modal"</code> prop; modal variant for phone.</td></tr>
+    <tr><td><code>web/src/routes/detail.tsx</code></td><td>P2</td><td>Branch on viewport: desktop vs mobile FloatingPill, side vs stack vs modal CommentsPanel.</td></tr>
+    <tr><td><code>web/src/routes/gallery.tsx</code></td><td>P1</td><td>No JS change; CSS-only.</td></tr>
+    <tr><td><code>tests/e2e/spa-mobile.spec.ts</code> (new)</td><td>P1+P2</td><td>Playwright with viewports {375, 768, 1024}; assert no overflow + atlas placeholder + drawer open/close.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="risks">Risks &amp; what to watch</h2>
+
+<ul>
+  <li><strong>Phase 2's CommentsPanel modal route</strong> — adds a URL state for the composer that didn't exist before. Touching the router config can drift the existing <code>/a/:kb/:id/*</code> splat semantics. Mitigation: use search-param state (<code>?cm=&lt;cid&gt;</code>) instead of a path segment.</li>
+  <li><strong>iframe full-bleed on phone</strong> — the artifact content is desktop-authored; many will have horizontal scroll or 1000px-wide layouts that overflow the viewport. SPA can't fix this; document the expectation in <code>authoring-artifacts.md</code> (a phone-friendly <code>&lt;meta viewport&gt;</code> snippet, fluid widths).</li>
+  <li><strong>Drawer focus trap</strong> — must keep keyboard nav and screen-reader announcements correct. Reuse the <code>&lt;dialog&gt;.showModal()</code> pattern (annotate.ts already uses it).</li>
+  <li><strong>safe-area-inset</strong> on iOS notch / dynamic-island devices — FAB position + drawer corners must respect <code>env(safe-area-inset-*)</code>.</li>
+</ul>
+
+<h2 id="non-goals">Non-goals</h2>
+
+<ul>
+  <li>Native mobile app. The PWA route (install-to-home-screen, offline cache, push notifications) is a separate decision; not in scope here.</li>
+  <li>Touch gestures beyond tap + standard scroll. Swipe-to-dismiss is the only optional gesture; if drag-handling fights the iframe scroll, drop it.</li>
+  <li>Reflowing artifact content. The iframe stays at the author's chosen layout; the SPA chrome adapts around it.</li>
+  <li>Phone landscape. ≥600px width hits the tablet bucket; the FAB shape stays mobile but the gallery grid expands.</li>
+</ul>
+
+</main>
+
+</body>
+</html>

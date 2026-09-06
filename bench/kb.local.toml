@@ -1,0 +1,31 @@
+# Local bench daemon config — single-corpus bake-off on kb's own
+# design docs (docs/research/, ~22 HTML files, technical prose).
+# This is the demo run, not the full multi-corpus production sweep
+# that bench/kb.toml templates.
+
+[daemon]
+name = "bench-local"
+
+[server]
+addr = "127.0.0.1:4100"
+metrics = true
+
+[kb.kb-docs-small]
+path = "~/project/kb/docs/research"
+embedding_model = "bge-small-en-v1.5"
+
+[kb.kb-docs-base]
+path = "~/project/kb/docs/research"
+embedding_model = "bge-base-en-v1.5"
+
+[kb.kb-docs-large]
+path = "~/project/kb/docs/research"
+embedding_model = "bge-large-en-v1.5"
+
+# Non-technical corpus — add your own natural-language corpus here (a
+# book synthesis, notes archive, etc.) with the same embedder as your
+# prod default so the quality+speed tester reflects how search behaves
+# on natural prose, not just the technical-English design docs above.
+# [kb.example-notes]
+# path = "/srv/example-notes"
+# embedding_model = "bge-large-en-v1.5"

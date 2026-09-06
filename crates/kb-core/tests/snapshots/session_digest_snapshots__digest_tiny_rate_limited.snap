@@ -1,0 +1,32 @@
+---
+source: crates/kb-core/tests/session_digest_snapshots.rs
+expression: "format! (\"{report:#?}\")"
+---
+DigestReport {
+    session_id: "8e41c7d2-1b93-4f65-a70c-3d9e5b06f428",
+    message_count: 18,
+    first_user_prompt: Some(
+        "look at the last handful of sessions on the demo renderer and tell me whether the digest is actually useful for finding them again, or whether it needs a different shape",
+    ),
+    ai_title: None,
+    cwd: Some(
+        "/home/user/project/demo",
+    ),
+    all_cwds_count: 1,
+    git_branch: Some(
+        "main",
+    ),
+    model: Some(
+        "<synthetic>",
+    ),
+    token_total: 0,
+    tool_calls: 0,
+    error_count: 0,
+    files_read_count: 0,
+    files_edited_count: 0,
+    decisions: [],
+    commits: [],
+    research: [],
+    digest: "look at the last handful of sessions on the demo renderer and tell me whether the digest is actually useful for finding them again, or whether it needs a different shape\nproject: demo branch: main",
+    digest_excerpt: "look at the last handful of sessions on the demo renderer and tell me whether the digest is actually useful for finding them again, or whether it needs a different shape",
+}

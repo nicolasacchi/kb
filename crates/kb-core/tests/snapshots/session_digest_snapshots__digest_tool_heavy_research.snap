@@ -1,0 +1,59 @@
+---
+source: crates/kb-core/tests/session_digest_snapshots.rs
+expression: "format! (\"{report:#?}\")"
+---
+DigestReport {
+    session_id: "d61e8c04-5f27-4a93-b8d2-90c1f7e3a582",
+    message_count: 75,
+    first_user_prompt: Some(
+        "Evaluate whether the demo renderer can serve as a notes store for other editors. (1) Inventory what each editor actually writes on disk: file formats, hook points, note ids — can one adapter cover the",
+    ),
+    ai_title: Some(
+        "Evaluate the demo renderer as a notes store for other editors",
+    ),
+    cwd: Some(
+        "/home/user/project/demo",
+    ),
+    all_cwds_count: 1,
+    git_branch: Some(
+        "main",
+    ),
+    model: Some(
+        "claude-fable-5",
+    ),
+    token_total: 5177,
+    tool_calls: 25,
+    error_count: 4,
+    files_read_count: 6,
+    files_edited_count: 5,
+    decisions: [],
+    commits: [],
+    research: [
+        (
+            "subagent",
+            "Map the note digest contract",
+        ),
+        (
+            "subagent",
+            "Survey editor hook surfaces",
+        ),
+        (
+            "kb_search",
+            "search renderer goldens end to end",
+        ),
+        (
+            "skill",
+            "notes-digest",
+        ),
+        (
+            "kb_search",
+            "search adapter contract refusals",
+        ),
+        (
+            "web",
+            "I need the exact configuration file format for the editor's hooks. Show: (1) the hooks file location(s) and its full schema — event names, matchers, and the pay",
+        ),
+    ],
+    digest: "Evaluate the demo renderer as a notes store for other editors\nEvaluate whether the demo renderer can serve as a notes store for other editors. (1) Inventory what each editor actually writes on disk: file formats, hook points, note ids — can one adapter cover the\nresearched: Map the note digest contract; Survey editor hook surfaces; search renderer goldens end to end; notes-digest; search adapter contract refusals; I need the exact configuration file format for the editor's hooks. Show: (1) the hooks file location(s) and its full schema — event names, matchers, and the pay\nfiles: conventions.md lessons.md adapter-contract.html adapter-landscape.html capture-alt.sh capture-contract.md capture.sh single-file.html\nclosed: Shipping it means four pieces: the adapter script, a backfill over the last thirty notes, a protocol block in the editor's config, and the sandbox rule that lets the adapter reach the local daemon. T…\nproject: demo branch: main",
+    digest_excerpt: "Evaluate the demo renderer as a notes store for other editors · Evaluate whether the demo renderer can serve as a notes store for other editors. (1) Inventory what each editor actually writes on disk: file formats, hook points, note ids — can one adapter cover the · closed: Shipping it means four pieces: the adapter script, a backfill over the last thirty notes, a protocol block in the editor's co",
+}

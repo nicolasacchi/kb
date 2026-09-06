@@ -1,0 +1,66 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: spans
+---
+[
+    Span {
+        byte_start: 0,
+        byte_len: 20,
+        class: Comment,
+    },
+    Span {
+        byte_start: 21,
+        byte_len: 4,
+        class: Keyword,
+    },
+    Span {
+        byte_start: 26,
+        byte_len: 3,
+        class: Variable,
+    },
+    Span {
+        byte_start: 30,
+        byte_len: 1,
+        class: Variable,
+    },
+    Span {
+        byte_start: 32,
+        byte_len: 3,
+        class: Type,
+    },
+    Span {
+        byte_start: 37,
+        byte_len: 1,
+        class: Variable,
+    },
+    Span {
+        byte_start: 39,
+        byte_len: 3,
+        class: Type,
+    },
+    Span {
+        byte_start: 44,
+        byte_len: 3,
+        class: Type,
+    },
+    Span {
+        byte_start: 51,
+        byte_len: 6,
+        class: Keyword,
+    },
+    Span {
+        byte_start: 58,
+        byte_len: 1,
+        class: Variable,
+    },
+    Span {
+        byte_start: 60,
+        byte_len: 1,
+        class: Operator,
+    },
+    Span {
+        byte_start: 62,
+        byte_len: 1,
+        class: Variable,
+    },
+]

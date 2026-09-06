@@ -1,0 +1,792 @@
+/* SL4 — the slate board (design §10).
+ *
+ * Imported in main.tsx BEFORE mobile.css, so the ≤860px overrides at the
+ * bottom of that file (and the `.kb-pinsp` sheet pattern this file reuses)
+ * still win the cascade.
+ *
+ * Every colour here is a tokens.css variable. `--slate-kind` is set per card
+ * from `lib/slateGlyphs.ts`'s family map (status --accent, work --blue,
+ * questions --warn, knowledge --ok, tried --danger, housekeeping --muted) —
+ * one custom property, so the family lives in ONE place (the TS map) and CSS
+ * only consumes it. Colour is never the only cue: every glyph has its word
+ * beside it in the DOM.
+ */
+
+/* ── /slates (the list) ────────────────────────────────────────────────── */
+
+.slates-view {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 20px 64px;
+}
+.slates-view__title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+.slates-view__sub {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 64ch;
+}
+.slates-view__error {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+.slates-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.slates-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--elev);
+  padding: 12px 14px;
+}
+.slates-row__link {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+.slates-row__slug {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-strong);
+}
+.slates-row__attention {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.slates-row__closed {
+  padding: 1px 6px;
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.slates-row__seq,
+.slates-row__age {
+  margin-left: auto;
+  color: var(--muted-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.slates-row__seq {
+  margin-left: 0;
+}
+.slates-row__counts,
+.slates-row__topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.slates-row__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--slate-kind, var(--muted));
+}
+.slates-row__chip-n {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.slates-row__chip-w {
+  color: var(--muted-2);
+}
+/* D27 — "served N": a cursor count, deliberately quieter than the attention
+   chip beside it. Attribution is not a call to action. */
+.slates-row__served {
+  padding: 0 6px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--muted-2);
+  cursor: help;
+}
+
+/* ── the board shell ───────────────────────────────────────────────────── */
+
+.slate-board {
+  padding: 0 16px 64px;
+}
+.slate-board__error {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+.slate-board__loading {
+  color: var(--muted);
+  font-size: 13px;
+}
+.slate-board__cols {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.slate-board__lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.slate-lane__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.slate-lane__count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── the NOW band (role="status") ──────────────────────────────────────── */
+
+.slate-now {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -16px 14px;
+  padding: 10px 16px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+.slate-now__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.slate-now__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+.slate-now__closed {
+  padding: 1px 6px;
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.slate-now__spacer {
+  flex: 1 1 auto;
+}
+.slate-now__topics {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.slate-topic {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.slate-topic.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.slate-now__act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--elev);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.slate-now__act--primary {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+}
+.slate-now__rows {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.slate-now__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.slate-now__kind {
+  flex: 0 0 auto;
+  font-weight: 650;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.slate-now__row--warn .slate-now__kind {
+  color: var(--warn);
+}
+.slate-now__lane {
+  flex: 0 0 auto;
+  min-width: 44px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.slate-now__seq,
+.slate-now__who {
+  flex: 0 0 auto;
+  color: var(--muted-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.slate-now__line {
+  flex: 1 1 auto;
+  color: var(--text-strong);
+}
+.slate-now__empty {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── columns ───────────────────────────────────────────────────────────── */
+
+.slate-col {
+  min-width: 0;
+}
+.slate-col__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.slate-col__count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-2);
+}
+.slate-col__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.slate-col__empty {
+  margin: 0;
+  color: var(--muted-2);
+  font-size: 11px;
+  font-style: italic;
+}
+.slate-col__accbtn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+/* ── cards ─────────────────────────────────────────────────────────────── */
+
+.slate-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--slate-kind, var(--border-hi));
+  border-radius: 8px;
+  background: var(--elev);
+  padding: 8px 10px;
+  /* The age fade is an inline `opacity` from `opacityForAge` (never below
+   * the AA floor); this transition just keeps a bucket change from popping. */
+  transition: opacity 0.2s var(--ease, ease);
+}
+/* Two sizes from the projection's `tier`, never author-chosen. */
+.slate-card--whole {
+  padding: 10px 12px;
+}
+.slate-card--whole .slate-card__line {
+  font-size: 14px;
+  font-weight: 500;
+}
+.slate-card--folded .slate-card__line {
+  font-size: 12.5px;
+}
+.slate-card.is-pinned {
+  border-color: var(--accent);
+}
+.slate-card.is-contested {
+  border-color: var(--danger);
+}
+.slate-card.is-focused {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.slate-card__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.slate-card__kind {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--slate-kind, var(--muted));
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.slate-card__seq {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-2);
+}
+.slate-card__who.is-you {
+  color: var(--accent);
+}
+.slate-card__age {
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+.slate-card__marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-strong);
+  cursor: help;
+}
+.slate-card__ring {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+}
+.slate-card__marks-n {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+/* D27 — `seen by N` on whole-tier NOW/WARN/HAND/ASK cards, in the NOW band
+   and the columns alike. Muted on purpose: it says who has been SERVED the
+   post, which is attribution, never an acknowledgement that anyone read it. */
+.slate-card__seen {
+  padding: 0 6px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted-2);
+  white-space: nowrap;
+  cursor: help;
+}
+.slate-now__seen {
+  margin-left: 6px;
+}
+.slate-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+}
+.slate-card__badge--pin {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.slate-card__badge--live {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.slate-card__badge--stale {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.slate-card__badge--expired,
+.slate-card__badge--unack {
+  border-color: var(--border-hi);
+  color: var(--muted);
+}
+.slate-card__badge--unack {
+  letter-spacing: 0.05em;
+}
+.slate-card__badge--contested {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.slate-card__line {
+  margin: 4px 0 0;
+  color: var(--text-strong);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.slate-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.slate-card__subject {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted-2);
+}
+.slate-card__topic {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.slate-card__was,
+.slate-ref--btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--blue);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.slate-card__takenover {
+  color: var(--warn);
+}
+.slate-card__refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.slate-ref {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--blue);
+  text-decoration: none;
+}
+.slate-ref--unresolved {
+  color: var(--muted-2);
+  border-style: dashed;
+}
+/* D29 — kb-code's groundedness caption, rendered BESIDE the chip (never
+   inside its label or href): the ref is what the post said, the caption is
+   what another daemon says about it right now. `unknown` is the quietest of
+   the three — an unanswered question must not look like a verdict. */
+.slate-ref__wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.slate-ref__cap {
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  cursor: help;
+}
+.slate-ref__cap[data-grounded="grounded"] {
+  color: var(--ok);
+}
+.slate-ref__cap[data-grounded="ungrounded"] {
+  color: var(--danger);
+}
+.slate-card__bodytoggle,
+.slate-card__act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.slate-card__bodytoggle {
+  margin-top: 6px;
+}
+.slate-card__act:hover,
+.slate-card__bodytoggle:hover {
+  border-color: var(--border-hi);
+  color: var(--text);
+}
+.slate-card__body {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 12.5px;
+}
+.slate-card__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+/* The new-card / jump flash. Decoration only — the scroll is the actual
+ * affordance, so `prefers-reduced-motion` removes it entirely (§10). */
+@keyframes slate-flash {
+  0% { background: var(--accent-bg); }
+  100% { background: var(--elev); }
+}
+.slate-card.is-flashing,
+.slate-hist__row.is-flashing {
+  animation: slate-flash 1.2s var(--ease, ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .slate-card.is-flashing,
+  .slate-hist__row.is-flashing,
+  .slate-card {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Focus rings on every action (§10 "Accessibility"). */
+.slate-card__act:focus-visible,
+.slate-card__bodytoggle:focus-visible,
+.slate-card__was:focus-visible,
+.slate-ref--btn:focus-visible,
+.slate-topic:focus-visible,
+.slate-now__act:focus-visible,
+.slate-col__accbtn:focus-visible,
+.slate-hist__close:focus-visible,
+.slate-composer__close:focus-visible,
+.slate-composer__go:focus-visible,
+.slate-composer__cancel:focus-visible,
+.slates-row__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ── the sandboxed sketch frame ────────────────────────────────────────── */
+
+.slate-sketch {
+  margin: 6px 0;
+}
+.slate-sketch__frame {
+  display: block;
+  width: 100%;
+  max-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel-2);
+}
+
+/* ── composer + history drawer (desktop) ───────────────────────────────── */
+
+.slate-composer,
+.slate-hist {
+  position: fixed;
+  top: var(--topbar-h);
+  right: 0;
+  bottom: 0;
+  width: min(440px, 92vw);
+  z-index: var(--z-drawer);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.slate-composer[hidden],
+.slate-hist[hidden] {
+  display: none;
+}
+.slate-composer__head,
+.slate-hist__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.slate-composer__title,
+.slate-hist__title {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+.slate-composer__close,
+.slate-hist__close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+}
+.slate-composer__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.slate-composer__lbl {
+  flex: 0 0 62px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.slate-composer__row input,
+.slate-composer__row select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--elev);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.slate-composer__count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-2);
+}
+.slate-composer__count.is-over {
+  color: var(--danger);
+  font-weight: 600;
+}
+.slate-composer__hint,
+.slate-composer__note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--warn);
+}
+.slate-composer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 70px;
+}
+.slate-composer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 180px;
+}
+.slate-composer__acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+.slate-composer__cancel,
+.slate-composer__go {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--elev);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.slate-composer__go {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+}
+.slate-composer__go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.slate-hist__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.slate-hist__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+.slate-hist__kind {
+  font-weight: 650;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.slate-hist__seq {
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+.slate-hist__line {
+  flex: 1 1 100%;
+  color: var(--muted);
+}
+.slate-hist__why {
+  flex: 1 1 100%;
+  color: var(--muted-2);
+  font-size: 11px;
+}
+.slate-hist__empty,
+.slate-hist__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.slate-hist__error {
+  color: var(--danger);
+}

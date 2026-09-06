@@ -1,0 +1,16 @@
+Relevant memories from kb (recall — these persist across sessions):
+- demo-repo build cache setup  [kb]  (id a1b2c3d4e5f6, read 42% — stopped at §3)
+    ↳ installed 2026-08-01; measured a modest speedup of roughly 15% (not the hoped-for 60%) because the build host is disk-bound not compute-bound; the parallel-jobs convention only helps once the scheduler is tuned, and the 
+<!--kb-recall/1 kb=kb id=a1b2c3d4e5f6-->
+- ⚠ disputed: Wrong port for the staging service  [main]  (id 0f0f0f0f0f0f, unread) [⚠ 1 drift-flagged citation(s)]
+    ↳ the staging service binds 127.0.0.1:9000 in the demo env and a spare port everywhere else; never curl 9000 from a test, and never bind it either — the demo container owns it and a bind fails closed, not shared.
+<!--kb-recall/1 kb=main id=0f0f0f0f0f0f-->
+- demo-repo fixture builds are IO-bound, not CPU-bound  [kb]  (id 111111111111, unread)
+    ↳ the demo-repo build tree and its fixture corpus share one disk, so a parallel build starves the test run; tuned by pruning a background index job, switching the disk scheduler and lowering swap use.
+<!--kb-recall/1 kb=kb id=111111111111-->
+- ✗ didn't work: demo-repo CI workflow facts  [kb]  (id 222222222222, unread)
+    ↳ sign-off needs a signed commit; the lint step runs before tests so a lint failure masks test failures; the main workflow only triggers on PRs to main, so stacked PRs run signature checks only.
+<!--kb-recall/1 kb=kb id=222222222222-->
+- Demo service file-descriptor ceiling  [main]  (id 333333333333, unread)
+    ↳ a long soak run exhausted the demo service's file descriptors and every request failed with too many open files; the fix is raising the descriptor limit and restarting the service.
+<!--kb-recall/1 kb=main id=333333333333-->

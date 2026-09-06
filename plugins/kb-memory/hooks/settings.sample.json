@@ -1,0 +1,28 @@
+{
+  "//": "Manual install: copy hooks/*.sh to ~/.claude/hooks/ (chmod +x), then merge this `hooks` block into ~/.claude/settings.json (or a project .claude/settings.json). For the plugin install path instead, see hooks/README.md.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/kb-recall.sh", "timeout": 15 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/kb-wake.sh", "timeout": 15 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/kb-capture.sh", "timeout": 30 },
+          { "type": "command", "command": "~/.claude/hooks/kb-distill-nudge.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

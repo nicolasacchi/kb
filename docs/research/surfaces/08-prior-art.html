@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Prior art for kb — bookmark managers, LLM-artifact tools, note apps, daemon-and-thin-clients architectures.">
+<title>08 · Prior art — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="../foundation/01-lancedb.html">01 · Storage</a>
+      <a href="../foundation/02-fastembed.html">02 · Embeddings</a>
+      <a href="../foundation/03-notify.html">03 · Watcher</a>
+      <a href="../foundation/04-sse-axum.html">04 · SSE</a>
+      <a href="../foundation/05-ratatui.html">05 · TUI</a>
+      <a href="06-iframe.html">06 · Iframe</a>
+      <a href="07-html-effectiveness.html">07 · HTML</a>
+      <a href="08-prior-art.html" class="is-current">08 · Prior art</a>
+      <a href="09-comments.html">09 · Comments</a>
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 08
+    <span>·</span>
+    <span class="meta">Prior art</span>
+    <span>·</span>
+    <span class="meta">Confidence HIGH (daemon path confirmed)</span>
+  </div>
+  <h1><span class="strike">verdict</span>Real gap.<br><em>Daemon path</em> confirmed.</h1>
+  <p class="lede">No tool combines local-daemon + thin-clients + HTML-as-primary-unit + LLM-prompt-aware metadata + semantic search. The closest substance match (<em>simonw/tools</em>) has no index. The closest form match (<em>Karakeep</em>) treats HTML as a web snapshot. Plugin / extension reframings (Obsidian, Karakeep-fork, TiddlyWiki) were considered as cheaper paths and <em>rejected</em> — each fails on at least one load-bearing requirement (observability, agent-ingest HTTP API, headless self-host, HTML-as-primary-unit). The bespoke daemon is the right path.</p>
+</section>
+
+<section class="section section-tight" id="decisions">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Decisions reinforced · 2026-05-11 (clusters 1–4)</span>
+    <p style="margin:0 0 .55rem;font-size:.95rem;line-height:1.55">Each of the four cluster outcomes <em>strengthens</em> the daemon-path verdict. The plugin/extension alternatives in §G remain rejected with stronger evidence:</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><strong>Cluster 1 (iframe + DNS):</strong> per-artifact subdomain serving (<code>&lt;id&gt;.artifacts.localhost</code>) requires a daemon with HTTP virtual-host routing. Obsidian/Karakeep-fork/TiddlyWiki can't do this — they're single-process Electron or static apps.</li>
+      <li><strong>Cluster 2 (HTTP API):</strong> 28 endpoints across five groups (<a href="11-daemon-api.html">topic 11</a>). The CSRF Origin allowlist + async <code>202 + run id</code> pattern + SSE firehose are exactly the surface plugins can't provide.</li>
+      <li><strong>Cluster 3 (storage + embeddings):</strong> lance + sqlite split + multi-model embeddings (<code>kb model {list,download,set,rm}</code>). No alternative in the matrix approaches this stack.</li>
+      <li><strong>Cluster 4 (multi-daemon):</strong> federation from v0.1 (<code>~/.config/kb/daemons.toml</code> + <code>GET /api/identity</code>). Obsidian is single-instance Electron — fundamentally incompatible with kb's multi-machine team-mode roadmap.</li>
+    </ul>
+    <p style="margin:.5rem 0 0;font-size:.95rem;line-height:1.55"><strong>HTML-as-primary-unit canon</strong> is now concretely backed by <a href="07-html-effectiveness.html">topic 07</a>'s extended canon — Thariq's 20 + kb-research's 5 sample artifacts (<a href="../sample-artifacts/"><code>sample-artifacts/</code></a>). The bespoke daemon is the right path with higher confidence than at original write time.</p>
+    <p style="margin:.4rem 0 0;font-size:.92rem;line-height:1.55"><em>Resolved by cluster 4:</em> <s>v0.0.1 indexer-only vs full-architecture-upfront</s> — cluster 4 committed to <strong>TUI + <a href="10-web-gallery.html#decisions-ux">SPA</a> + multi-daemon together in v0.1</strong> ("cluster 4 ambition"). Open question retired.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>The gap is real and narrow.</strong> Each kb property exists somewhere — daemon (Tailscale, Syncthing), HTML-as-unit (TiddlyWiki, simonw/tools), AI-tagged self-host (Karakeep), prompt-aware (Claude Artifacts). Never combined. <strong>Three plugin / extension reframings were considered and rejected</strong> — kb-as-Obsidian-plugin, kb-as-Karakeep-fork, kb-as-TiddlyWiki-extension. Each fails on at least one load-bearing requirement: <strong>observability</strong> (TUI live-watching SSE during indexing/generation), <strong>programmatic agent ingest</strong> (HTTP API hit by other Claude Code sessions), <strong>headless server-side use</strong> (self-host with thin clients hitting kb remotely), and <strong>HTML-as-primary-unit</strong> (one self-contained <code>.html</code> per artifact, not markdown-with-html-guest or capture-snapshot or single-file-quine). The daemon path is confirmed.</p>
+    <div class="badges">
+      <span class="conf conf--high">Gap exists · HIGH</span>
+      <span class="conf conf--high">Daemon path · CONFIRMED</span>
+      <span class="conf conf--high">Daemon precedent · HIGH (Syncthing)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. Bookmark / read-later / curation</div>
+    <h2>Self-hosted is the lesson; HTML-as-snapshot is the gap</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>are.na</strong> — Hosted SaaS. Channel-as-collection model is the philosophical match. <em>No self-host, no executable HTML.</em></li>
+      <li><strong>raindrop.io</strong> — SaaS bookmark manager. AI suggestions in Pro tier. <em>Not self-hostable; HTML is a static snapshot.</em></li>
+      <li><strong>instapaper</strong> — Hosted distraction-free reader. Picked up Kobo's Pocket-replacement slot in 2025. <em>Reading prose, not running interactive HTML.</em></li>
+      <li><strong>Pocket (RIP)</strong> — Mozilla shut down <strong>2025-07-08</strong>; API and data deletion finalised <strong>2025-11-12</strong>. <strong>Strongest argument anywhere for kb's self-hosted, files-on-disk premise.</strong></li>
+      <li><strong>Omnivore</strong> — Open source AGPL, shut down <strong>2024-11-15</strong> after acquihire by ElevenLabs. The omnivore.work fork provides simplified Docker self-host but is functionally cold.</li>
+      <li><strong>readeck</strong> — AGPL-3.0, single Go binary, single Docker container. ~512 MB RAM, ~200 MB disk. Singled out in 2025 as the post-Omnivore default. <em>Treats HTML as readable prose, no LLM-prompt awareness, no daemon-with-multiple-clients.</em></li>
+      <li><strong>wallabag</strong> — MIT, PHP/Symfony, mature. Heavier than readeck.</li>
+      <li><strong>Karakeep (formerly Hoarder)</strong> — AGPL-3.0, highest-momentum project post-Pocket. Next.js + Drizzle + Meilisearch + Puppeteer; AI auto-tagging via OpenAI or local Ollama; full-page HTML archive; OCR; yt-dlp; mobile + browser extensions. <strong>Closest in form.</strong> <em>But:</em> archived pages are <em>captured snapshots</em> (input from the web), not first-class authored artifacts (output from an LLM); no prompt linkage; no SSE observability.</li>
+      <li><strong>archivebox</strong> — Self-hosted internet archive (Python, Django, Docker). HTML/PDF/PNG/WARC/media. <em>Designed around capturing the web.</em></li>
+      <li><strong>shiori</strong> — Go single binary, "simple Pocket clone." URL-centric.</li>
+      <li><strong>linkding</strong> — Django, minimalist. <em>No content archiving by default.</em></li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">B. LLM-artifact tools</div>
+    <h2>The gap. No first-class tool.</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Claude Artifacts</strong> — Live preview pane in chat. Share/Publish links require viewer login on claude.ai. April-2026 "Live Artifacts" can refresh against MCP-connected data. <strong>Artifacts cannot be deployed, hosted, or shared as real apps outside Claude's ecosystem; no native export to a personal archive.</strong></li>
+      <li><strong>ChatGPT Canvas</strong> — Same shape. No public gallery, no export-to-personal-archive primitive.</li>
+      <li><strong>v0.app, bolt.new, Lovable</strong> — Generators (prompt → app), not galleries. Public community feeds, no per-user "everything I've made" surface.</li>
+    </ul>
+    <h4>Self-hosted attempts</h4>
+    <ul>
+      <li><strong><code>CrazyDubya/Claude-Artifacts</code></strong> — Closest match by stated intent: "Render Artifacts locally." Single-developer hobby project; embedder, not gallery.</li>
+      <li><strong><code>Nutlope/llamacoder</code></strong> — Generator (Llama on Together.ai), not gallery.</li>
+      <li><strong>madewithclaude / claudeartifacts.com / awesome-claude-artifacts</strong> — Public showcases. Show others' work; no private inbox for your own.</li>
+      <li><strong>Simon Willison's <code>simonw/tools</code></strong> — <strong>Most realistic personal precedent.</strong> ~200+ standalone single-file HTML tools served via GitHub Pages. Each commit links to the LLM transcript. Design rules: single file, no React/build, CDN deps only. <strong>Essentially "kb v0 done in public on GitHub Pages with no daemon."</strong> Validates the artifact-as-single-file primitive; leaves untouched everything kb proposes about local search, observability, prompt linkage, daemon architecture.</li>
+    </ul>
+    <p><strong>Verdict:</strong> No one has built kb. The space is defined by either walled-garden chat-side previews (Claude/ChatGPT/v0) or one influential dev's GitHub-Pages folder convention.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. Note apps (overlap risk)</div>
+    <h2>Markdown-shaped, not HTML-shaped</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Obsidian</strong> — Local-first, Markdown vault, plugin-rich. AI plugins (Smart Connections, Cortex). Bases shipped 2025. Considered as plugin host; <em>see section G — rejected because plugin API can't expose HTTP for agent ingest, can't run headless on a self-host server, and the markdown-vault model fights HTML-as-primary-unit.</em></li>
+      <li><strong>Logseq</strong> — Outliner, blocks-as-units. Same shape for our purposes.</li>
+      <li><strong>Bear / Joplin / AppFlowy</strong> — Markdown notes apps. Off-axis.</li>
+      <li><strong>Notion</strong> — Block-based, hosted, closed.</li>
+      <li><strong>Foam / Dendron</strong> — VS-Code markdown wikis.</li>
+      <li><strong>TiddlyWiki (5.3.8, August 2025)</strong> — <em>Genuinely interesting precedent.</em> Single self-contained HTML file containing CSS+JS+content; a quine that can save itself. Demonstrates HTML-first PKM is not absurd. <em>But:</em> tiddlers ≠ artifacts. No "this came from prompt X" concept.</li>
+      <li><strong>HedgeDoc / Outline</strong> — Multi-user collaborative; off-axis.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">F. Closest analogues, ranked</div>
+    <h2>Substance vs form — none combine both</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>simonw/tools</strong> — closest in <em>substance</em> (single-file HTML, LLM-authored, individually addressable, transcript-linked), furthest in <em>form</em> (no daemon, no local index, public GitHub Pages, no observability).</li>
+      <li><strong>Karakeep</strong> — closest in <em>form</em> (self-hosted, AI-tagged, FTS-indexed, full-page archive, multi-client surfaces), furthest in <em>substance</em> (input is "save URL from web," not "ingest LLM output").</li>
+      <li><strong>Readeck</strong> — clean Go-binary baseline for "minimal self-hosted + FTS + Docker." Simpler than Karakeep, same form objection.</li>
+      <li><strong>TiddlyWiki</strong> — only real precedent for HTML-as-primary-unit PKM. Quine-as-app architecture incompatible with kb's daemon ambition.</li>
+      <li><strong>ArchiveBox</strong> — closest <em>adjacent</em> tool: captures HTML at scale, daemon-friendly. Wrong direction (web → archive vs prompt → artifact).</li>
+    </ol>
+
+    <table class="alt-table">
+      <caption>kb vs analogues · capability matrix</caption>
+      <thead>
+        <tr><th>Product</th><th>Self-host</th><th>Open source</th><th>HTML-aware (executable)</th><th>Vector / semantic</th><th>LLM-prompt-aware</th><th>Daemon + thin clients</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>kb (target)</strong></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓ (primary unit)</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓ (first-class)</span></td><td class="center"><span class="y">✓</span></td></tr>
+        <tr><td>simonw/tools</td><td class="center"><span class="p">via GH Pages</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="p">transcript-linked</span></td><td class="center"><span class="n">✗</span></td></tr>
+        <tr><td>Karakeep</td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓ AGPL</span></td><td class="center"><span class="p">snapshot only</span></td><td class="center"><span class="p">FTS no vec</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="p">monolith + ext</span></td></tr>
+        <tr><td>Readeck</td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓ AGPL</span></td><td class="center"><span class="p">extracted text</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="p">Go server + ext</span></td></tr>
+        <tr><td>TiddlyWiki</td><td class="center"><span class="y">✓ (file)</span></td><td class="center"><span class="y">✓ BSD</span></td><td class="center"><span class="p">tiddlers</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="n">✗ (quine)</span></td></tr>
+        <tr><td>ArchiveBox</td><td class="center"><span class="y">✓</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="p">multi-format</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="p">Django + CLI</span></td></tr>
+        <tr><td>Claude Artifacts</td><td class="center"><span class="n">✗</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="n">✗</span></td><td class="center"><span class="y">✓</span></td><td class="center"><span class="n">✗ closed SaaS</span></td></tr>
+        <tr><td>Obsidian</td><td class="center"><span class="p">local</span></td><td class="center"><span class="n">✗ (free closed)</span></td><td class="center"><span class="p">md-first</span></td><td class="center"><span class="p">via plugin</span></td><td class="center"><span class="p">via plugin</span></td><td class="center"><span class="n">✗</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">G. The differentiation case</div>
+    <h2>kb's wedge — alternatives considered and rejected</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What no one else does:</strong> treat <em>LLM-emitted HTML artifacts</em> as the <strong>primary unit of storage</strong>, ingested via a local <strong>daemon</strong> that exposes the same data to <strong>multiple thin clients</strong> (CLI, TUI, SPA over HTTP/SSE) with first-class <strong>prompt/transcript linkage</strong> and <strong>semantic search</strong> over the artifacts themselves. Each existing tool gets one or two of those properties; none combine them.</p>
+    <div class="pull">"Generative tools have made it cheap to produce a small interactive HTML artifact for a given thought, but every popular surface for keeping those artifacts is shaped wrong."</div>
+    <p>Bookmark managers want URLs from the public web. Note apps want markdown blocks. Chat tools refuse to let the artifact leave their walls. Personal-tool collections like simonw/tools live as a public folder with no index or observability. <strong>kb is the local daemon that closes that loop</strong> — every artifact lands on disk, gets indexed lexically and semantically, served by a single process to whichever surface you want.</p>
+    <h3>Three alternative paths considered — all rejected</h3>
+    <p>Before committing to a bespoke daemon, three "use existing tools instead" reframings were evaluated. Each fails on at least one load-bearing requirement.</p>
+    <ol>
+      <li><strong>kb-as-Obsidian-plugin — rejected.</strong> A plugin treating <code>.html</code> as first-class, rendering in a sandboxed iframe pane, with YAML-frontmatter prompt metadata + Smart Connections vector search, would inherit Obsidian's vault, mobile clients, plugin ecosystem. <em>Fails on:</em> (a) <strong>observability</strong> — Obsidian doesn't expose a streaming surface for an external dashboard to live-watch indexing/generation; (b) <strong>programmatic agent ingest</strong> — Obsidian plugins can't cleanly expose an HTTP API for other Claude Code sessions to hit; (c) <strong>headless server-side use</strong> — Obsidian is bound to its Electron UI; a remote self-host with thin browser/CLI clients is not the model; (d) <strong>HTML-as-primary-unit</strong> — Obsidian treats markdown as the host and HTML as a guest, the inverse of kb's design.</li>
+      <li><strong>kb-as-Karakeep-fork — rejected.</strong> Karakeep already has self-host, AI tagging, FTS, multi-client surfaces. Forking it to add an "artifact ingest" endpoint that accepts inline HTML + prompt would be faster to a working v1. <em>Fails on:</em> (a) <strong>HTML-as-primary-unit</strong> — Karakeep's data model is "URL + captured snapshot," not "authored artifact + prompt"; reshaping the schema is invasive; (b) <strong>observability</strong> — no SSE event stream for a TUI to subscribe to; (c) <strong>fork maintenance burden</strong> — diverging from upstream Karakeep means owning the merge conflicts forever, for a feature set that is decisively not theirs.</li>
+      <li><strong>kb-as-TiddlyWiki-extension — rejected.</strong> TiddlyWiki takes "everything in HTML" seriously and a plugin could treat each artifact as a tiddler. <em>Fails on:</em> (a) <strong>quine architecture</strong> — TiddlyWiki bundles content + app into one self-modifying file; kb wants one <code>.html</code> per artifact, ingested by an external indexer; (b) <strong>no daemon, no thin-client surface</strong> — TiddlyWiki is the entire stack in one file; observability + agent ingest + remote thin clients have no place in that model.</li>
+    </ol>
+    <p><strong>Decision:</strong> each alternative fails on at least one load-bearing requirement (observability, agent-ingest HTTP API, headless self-host, HTML-as-primary-unit). The bespoke Rust daemon — single binary, multiple thin clients over HTTP+SSE, files-on-disk as source of truth — is the right path. The plugin / extension reframings are documented here as "considered, rejected" for future readers; they should not be reopened without new information that one of these load-bearing requirements has changed.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">H. Architecture precedent</div>
+    <h2>Daemon + thin clients is well-trodden</h2>
+  </div>
+  <div class="prose">
+    <h4>Daemon + REST/SSE + multiple clients</h4>
+    <ul>
+      <li><strong>Tailscale (<code>tailscaled</code>)</strong> — Long-running daemon owns WireGuard + control-plane state, exposes a LocalAPI; same binary acts as CLI when invoked under a different name. Limitation: only one daemon instance can run at a time.</li>
+      <li><strong>Syncthing</strong> — Go daemon with REST + WebSocket event API, ships built-in web UI, with multiple third-party CLI / TUI / mobile clients. <strong>Almost a textbook reference for kb's intended shape.</strong></li>
+      <li><strong>Jellyfin / Plex</strong> — Long-running media server, REST API, multiple thin clients. Same pattern, different content.</li>
+      <li><strong><code>bitcoind</code></strong> — Daemon + RPC + many third-party clients. The OG of this pattern in OSS.</li>
+      <li><strong>Prometheus + Thanos + Grafana</strong> — Separate services rather than one daemon, but the analog: kb daemon as time-series-style store, third-party UIs as the read/visualise layer.</li>
+    </ul>
+    <p>The pattern is so common that kb's choice of it raises no eyebrows. <strong>Syncthing</strong> is the best reference shape (one Rust daemon, REST + SSE, CLI + Ratatui TUI + browser SPA against the same API). kb's own concrete instantiation lives in <a href="11-daemon-api.html">topic 11</a> (28-endpoint HTTP contract) and <a href="10-web-gallery.html">topic 10</a> (browser SPA spec). The multi-daemon-from-v0.1 commitment in cluster 4 means kb actually goes further than Syncthing's single-process assumption — federation between user-configured daemons via <a href="11-daemon-api.html#endpoints"><code>GET /api/identity</code></a>.</p>
+
+    <h4>Ratatui dashboards over SSE</h4>
+    <p>Ratatui is rendering-only; events delegated to backend. Crossterm 0.29+ ships async <code>EventStream</code>. Idiomatic SSE-driven dashboard:</p>
+<pre>tokio::mpsc channel
+  ├─ task A: crossterm EventStream (keyboard / resize)
+  ├─ task B: reqwest + eventsource-stream (SSE from daemon)
+  └─ main loop: select!, update state, terminal.draw()</pre>
+    <p>The Ratatui FAQ recommends the async-template repo as the starting point. Real-world precedent: Netflix's <code>bpftop</code>, OpenAI's <code>codex</code> CLI both use Ratatui. <strong>I found no public end-to-end tutorial specifically gluing SSE + Ratatui</strong> — meaning kb is on solid but lightly-trodden ground.</p>
+
+    <h4>HTML files as primary data unit</h4>
+    <ul>
+      <li><strong>TiddlyWiki</strong> (since 2004) — single self-contained HTML file is the <em>whole app and store</em> via the quine pattern.</li>
+      <li><strong>ArchiveBox</strong> — stores HTML alongside PDF, PNG, WARC; HTML is one of the units.</li>
+      <li><strong>simonw/tools</strong> — a directory of single-file HTMLs as the unit of distribution.</li>
+      <li><strong>WARC archives, archive.today</strong> — HTML-centric but as captured snapshots.</li>
+    </ul>
+    <p><strong>kb's "HTML files as primary data unit, one file per artifact, everything else is metadata" is a defensible and lightly-claimed niche.</strong> TiddlyWiki and simonw/tools are the only real prior art and neither overlaps kb's daemon / index / observability surface.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <p><strong>Daemon path confirmed.</strong> kb is built as a single Rust binary exposing an HTTP+SSE API to thin clients (CLI, TUI, browser SPA). The plugin / extension alternatives evaluated in section G all fail on at least one of four load-bearing requirements:</p>
+    <ol>
+      <li><strong>Observability surface</strong> — Ratatui TUI live-watching SSE during indexing/generation is part of the product, not a nice-to-have.</li>
+      <li><strong>Programmatic agent ingest</strong> — other Claude Code sessions hit kb's HTTP API directly. Plugins can't expose HTTP cleanly; their host app's UI is the integration surface.</li>
+      <li><strong>Headless server-side use</strong> — kb may be self-hosted on a personal server with thin browser/CLI/TUI clients hitting it remotely. Plugins are bound to their host app's process and UI.</li>
+      <li><strong>HTML files on disk as primary unit</strong> — Karakeep treats HTML as a captured web snapshot, Obsidian treats it as a guest in a markdown vault, TiddlyWiki bundles everything into one quine. None match the design.</li>
+    </ol>
+    <p>Each requirement is non-negotiable per the briefing's HIGH-confidence stance on "one daemon + thin clients." The fact that all four exist together is the wedge that justifies the bespoke daemon. The plugin / extension alternatives stay documented in section G as "considered, rejected" for future readers — they shouldn't be reopened without new evidence that one of these requirements has changed.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions for the daemon path</span>
+    <ul>
+      <li><span style="text-decoration:line-through;color:var(--ink-3)">Whether to start v0.0.1 with "just the indexer + CLI" (no TUI, no SPA) and grow into the multi-client story incrementally, or commit to the full architecture upfront.</span> <em>Resolved 2026-05-11 — cluster 4 committed to TUI + SPA + multi-daemon together in v0.1 ("cluster 4 ambition"). See <a href="#decisions">§Decisions</a> above.</em></li>
+      <li>Wildcard-subdomain ergonomics on the operator's machine for artifact serving (covered in <a href="06-iframe.html">topic 06</a>); same question for future self-hosting (covered in <a href="../discussion.html">discussion topic 5</a>).</li>
+      <li>Cross-platform binary distribution mechanics — Homebrew tap, AUR package, GH Releases via cargo-dist (covered in <a href="../discussion.html">discussion topic 7</a>).</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="07-html-effectiveness.html"><span class="dir">← Prev</span><span class="ttl">07 · HTML effectiveness</span></a>
+  <a class="next" href="09-comments.html"><span class="dir">Next →</span><span class="ttl">09 · Comments</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · prior art</p>
+      <p>The gap is real and the daemon path is confirmed. Plugin / extension reframings were considered and rejected against four load-bearing requirements.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="../challenges.html">Challenges</a></li>
+        <li><a href="../discussion.html">Discussion</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://github.com/karakeep-app/karakeep">Karakeep</a></li>
+        <li><a href="https://github.com/simonw/tools">simonw/tools</a></li>
+        <li><a href="https://syncthing.net/">Syncthing</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,330 @@
+/* V70-A5 — cmd/1's chrome: which-key, the rehearsal overlay, the palette's
+ * command rows, the `?` sheet's preset select, and the two day-one teaching
+ * affordances (the Space hint chip and the `gd` coach-mark).
+ *
+ * Everything here is token-driven (no literal colours) so the twelve theme
+ * families and the contrast slider keep working, and everything transient
+ * respects `prefers-reduced-motion`.
+ */
+
+/* ── which-key ──────────────────────────────────────────────────────────
+ * Bottom-anchored, non-modal, pointer-transparent: it must never steal a
+ * click or dim the code you are mid-sentence in. It is a passive observer of
+ * the chord state, and it should feel like one.
+ */
+.kbc-whichkey {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-3, 12px);
+  transform: translateX(-50%);
+  z-index: var(--z-hint);
+  max-width: min(920px, calc(100vw - 32px));
+  max-height: 42vh;
+  overflow-y: auto;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 8px);
+  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  font-size: 0.82rem;
+}
+
+.kbc-whichkey__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding-bottom: var(--space-1, 4px);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  margin-bottom: var(--space-1, 4px);
+}
+
+.kbc-whichkey__pending {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.kbc-whichkey__scope {
+  color: var(--fg-subtle);
+  font-size: 0.75rem;
+}
+
+.kbc-whichkey__esc {
+  margin-left: auto;
+  color: var(--fg-subtle);
+  font-size: 0.72rem;
+}
+
+.kbc-whichkey__rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px var(--space-3, 12px);
+}
+
+.kbc-whichkey__cell {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+}
+
+.kbc-whichkey__cell kbd {
+  flex: 0 0 auto;
+  min-width: 1.6em;
+  text-align: center;
+}
+
+.kbc-whichkey__group {
+  flex: 0 0 100%;
+  color: var(--fg-subtle);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: var(--space-1, 4px);
+}
+
+.kbc-whichkey__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A group node is a promise of more keys, not an action — say so. */
+.kbc-whichkey__label.is-group {
+  color: var(--fg-subtle);
+  font-style: italic;
+}
+
+/* ── the rehearsal overlay ──────────────────────────────────────────────
+ * Hold the leader and every affordance that HAS a key says so, in place.
+ */
+.kbc-rehearsal {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-hint);
+  pointer-events: none;
+}
+
+.kbc-rehearsal__chip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  border-radius: var(--radius-1, 4px);
+  padding: 1px 5px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  box-shadow: var(--shadow-1, 0 2px 8px rgb(0 0 0 / 0.3));
+}
+
+/* ── the palette in command mode ────────────────────────────────────────
+ * A fixed right-aligned key column: the palette is where a mouse user LEARNS
+ * the key, so the column is never omitted — only ever empty.
+ */
+.kbc-omnibox__cmdrow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: var(--space-2, 8px);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1, 4px);
+  padding: var(--space-1, 4px) var(--space-2, 8px);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.kbc-omnibox__cmdrow.is-active {
+  background: var(--highlight-low, var(--surface-2));
+}
+
+.kbc-omnibox__cmdrow.is-unavailable {
+  opacity: 0.62;
+}
+
+.kbc-omnibox__cmdtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-omnibox__cmdtitle mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.kbc-omnibox__cmdgroup,
+.kbc-omnibox__cmdwhy {
+  color: var(--fg-subtle);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.kbc-omnibox__cmdwhy {
+  font-style: italic;
+}
+
+.kbc-omnibox__cmdkey {
+  justify-self: end;
+  min-width: 5.5em;
+  text-align: right;
+}
+
+.kbc-omnibox__cmdtoggle {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2, 8px);
+  padding: var(--space-1, 4px);
+  background: none;
+  border: 0;
+  border-top: 1px dashed var(--border);
+  color: var(--fg-subtle);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.kbc-omnibox__cmdtoggle:hover {
+  color: var(--fg);
+}
+
+.kbc-omnibox__scope {
+  margin-left: auto;
+  color: var(--fg-subtle);
+  font-size: 0.75rem;
+}
+
+.kbc-omnibox__legend {
+  display: inline-block;
+  margin-top: var(--space-2, 8px);
+  color: var(--fg-subtle);
+  font-size: 0.78rem;
+}
+
+/* ── the `?` sheet's new chrome ─────────────────────────────────────────── */
+.kbc-kbdhelp__scopename {
+  color: var(--fg-subtle);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.kbc-kbdhelp__preset {
+  margin-left: auto;
+  margin-right: var(--space-2, 8px);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  color: var(--fg-subtle);
+  font-size: 0.78rem;
+}
+
+.kbc-kbdhelp__preset select {
+  background: var(--surface-2, var(--surface));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1, 4px);
+  padding: 1px 4px;
+  font: inherit;
+}
+
+/* A row with no key in this preset is still listed — "reachable from the
+ * palette, not from the keyboard here" is a real answer. */
+.kbc-kbdhelp__nokey {
+  color: var(--fg-subtle);
+}
+
+.kbc-kbdhelp__row.is-planned {
+  opacity: 0.66;
+}
+
+.kbc-kbdhelp__planned {
+  color: var(--fg-subtle);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kbc-kbdhelp__foot {
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-top: 1px solid var(--border);
+  color: var(--fg-subtle);
+  font-size: 0.76rem;
+}
+
+/* ── day one (D24) ──────────────────────────────────────────────────────
+ * "The only teaching chrome above the fold is a Space hint and `?`." Two
+ * elements, both dismissible, neither ever shown twice.
+ */
+.kbc-spacehint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  color: var(--fg-subtle);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.kbc-coachmark {
+  position: fixed;
+  right: var(--space-4, 16px);
+  bottom: var(--space-4, 16px);
+  z-index: var(--z-hint);
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-2, 8px);
+  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
+  padding: var(--space-3, 12px);
+  font-size: 0.82rem;
+  animation: kbc-coach-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kbc-coachmark {
+    animation: none;
+  }
+}
+
+@keyframes kbc-coach-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.kbc-coachmark__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-2, 8px);
+  font-weight: 600;
+}
+
+.kbc-coachmark__close {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--fg-subtle);
+  font: inherit;
+  cursor: pointer;
+}
+
+.kbc-coachmark__ramp {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-2, 8px);
+  align-items: baseline;
+}
+
+.kbc-coachmark__ramp span {
+  color: var(--fg-subtle);
+}

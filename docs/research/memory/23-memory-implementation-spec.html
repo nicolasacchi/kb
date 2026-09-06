@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Implementation spec for the kb agent-memory subsystem: the phase-by-phase build brief Claude Code executes from. Locks the architecture decided across topics 19-22 (kb stays LLM-free; daemon-only, no MCP; agent-explicit capture; server-side /api/memory/recall with RRF x salience x recency-decay ranking; full SPA Memory view) and breaks it into eight green-CI phases (M1-M8) with file-level changes, per-phase acceptance tests, a testing matrix, the architecture invariants to respect, and a live end-to-end demo runbook.">
+<meta name="kb-tags" content="kb, memory, claude-code, implementation-spec, build, salience, decay, recall, cli, hooks, spa, daemon, agent-memory, no-mcp">
+<meta name="kb-category" content="spec">
+<title>23 · Memory implementation spec (build brief) — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="19-kb-as-claude-code-memory.html">19 · Hub</a>
+      <a href="20-memory-corpus-and-protocol.html">20 · Simple</a>
+      <a href="21-memory-mcp-and-memory-tool.html">21 · CLI verbs</a>
+      <a href="22-memory-native-subsystem.html">22 · Native</a>
+      <a href="23-memory-implementation-spec.html" class="is-current">23 · Build spec</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 23 · Build spec
+    <span>·</span>
+    <span class="meta">kb agent-memory subsystem</span>
+    <span>·</span>
+    <span class="meta">Spec · 2026-05-22</span>
+  </div>
+  <h1>Build brief: make kb<br>Claude Code's memory.</h1>
+  <p class="lede">This is the document Claude Code executes from. Topics <a href="19-kb-as-claude-code-memory.html">19</a>–<a href="22-memory-native-subsystem.html">22</a> are the <em>why</em>; this is the <strong>how</strong> — the locked architecture and an eight-phase, green-CI build plan with exact file-level changes and per-phase acceptance tests. The design is settled: kb stays <strong>LLM-free</strong>, daemon-only, no MCP; the live agent calls <code>kb remember</code>; recall is a server-side ranked fan-out across memory corpora; and a dedicated SPA <code>/memory</code> view lets a human see and correct everything. Build it phase by phase, each phase green before the next.</p>
+</section>
+
+<section class="section section-tight" id="how-to-use">
+  <div class="tldr">
+    <span class="lbl">How to use this spec</span>
+    <p>Implement <strong>M1 → M8 in order</strong>; each is an independent green-CI commit (<code>feat(crate): … (M&lt;n&gt;)</code> per the repo cadence). A phase is done when its <em>acceptance tests</em> pass and <code>just ci</code> is green. Don't start a phase until the prior one is committed. Read topics 19–22 for rationale before touching code; treat the <a href="#invariants">invariants</a> section as hard constraints. Every file:line below was mapped from the live tree but <strong>re-verify</strong> as you go — line numbers drift.</p>
+    <div class="badges">
+      <span class="conf conf--high">8 phases · green-CI each</span>
+      <span class="conf conf--high">kb stays LLM-free</span>
+      <span class="conf conf--med">line refs drift — re-verify</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-wide" id="architecture">
+  <div class="section-head">
+    <div class="num">01 — Architecture (locked)</div>
+    <h2>The shape, and the four decisions behind it</h2>
+    <p class="deck">Every choice here was settled in 19–22 + operator review. Do not re-litigate; build to it.</p>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>kb stays LLM-free.</strong> No Anthropic SDK, no <code>claude</code>-CLI shelling, no background extraction/consolidation. The live agent is the only intelligence — it decides what to keep and calls <code>kb remember</code>. Hooks are deterministic: recall is a search, episodic capture is a verbatim write.</li>
+      <li><strong>Daemon-only, no MCP.</strong> The only running process is the kb daemon. The agent talks to it through <code>kb</code> verbs over the Bash tool it already has.</li>
+      <li><strong>Server-side recall + full ranking.</strong> <code>GET /api/memory/recall</code> fans out across the memory corpora, merges, and re-ranks by <code>RRF × salience × recency-decay</code>, dropping superseded/forgotten memories.</li>
+      <li><strong>Full SPA Memory view.</strong> A dedicated <code>/memory</code> route — timeline + atlas mind-map + inline edit/merge/forget + reused comment-curation — split from normal artifacts.</li>
+    </ol>
+    <div class="note"><b>Data flow (the loop).</b> <code>remember</code>: agent → <code>kb remember</code> → ingest route → memory corpus (HTML artifact) → indexed. <code>recall</code>: <code>UserPromptSubmit</code> hook → <code>kb recall</code> → <code>/api/memory/recall</code> (fan-out + rank) → top hits injected into the turn. <code>curate</code>: human comments / edits in the SPA <code>/memory</code> view → agent reacts via <code>kb comments watch</code> → supersede/forget. Episodic: the <code>Stop</code> hook → verbatim transcript → <code>[kb.sessions]</code>.</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="data-model">
+  <div class="section-head">
+    <div class="num">02 — Data model &amp; schema</div>
+    <h2>Memories are artifacts with three new metas</h2>
+    <p class="deck">Reuse the artifact pipeline; add salience, decay, supersedes. Lazy column migration backfills existing datasets.</p>
+  </div>
+  <div class="prose">
+    <p>A memory is an ordinary kb HTML artifact in a memory corpus, with the four-type taxonomy as <code>kb-category</code> (<code>memory-user|feedback|project|reference</code>) plus three new metas:</p>
+    <pre><code>&lt;meta name="kb-salience"   content="0.8"&gt;        &lt;!-- f32 0..1; importance --&gt;
+&lt;meta name="kb-decay"      content="slow"&gt;       &lt;!-- slow | fast; recency fade rate --&gt;
+&lt;meta name="kb-supersedes" content="7f3a1c…"&gt;    &lt;!-- artifact id this memory replaces --&gt;</code></pre>
+    <p><strong>Parse</strong> in <code>crates/kb-core/src/parser.rs</code> — add three fields to <code>Fields</code> (near the existing <code>kb_status</code>/<code>kb_severity</code>), three selectors to <code>ParserSet</code>, and extraction in <code>extract()</code> mirroring the <code>kb-status</code> path; <code>salience</code> parses to <code>Option&lt;f32&gt;</code> (clamp 0..1; ignore unparseable). Add tests beside <code>extracts_kb_status_from_meta</code>.</p>
+    <p><strong>Store</strong> in <code>crates/kb-core/src/storage/schema.rs</code> — add <code>kb_salience: Option&lt;f32&gt;</code>, <code>kb_decay: Option&lt;String&gt;</code>, <code>kb_supersedes: Option&lt;String&gt;</code> to <code>Doc</code>; three nullable Arrow fields (<code>Float32</code>, <code>Utf8</code>, <code>Utf8</code>) in the schema builder; pack them in <code>docs_to_batches</code>. Migrate existing datasets with a new <code>ensure_v*_columns</code> step (same lazy <code>add_columns</code> pattern as the kb-meta columns) — nullable, backfilled on the next index pass.</p>
+    <p><strong>Surface</strong> in <code>crates/kb-core/src/storage/lance.rs</code> — add the three fields to <code>DocSummary</code> (returned by every query) so the recall re-rank can read them. <code>DocSummary</code> already carries <code>mtime_unix</code> + <code>indexed_at_unix</code> for recency.</p>
+    <div class="note"><b>Invariant.</b> The lance <code>embedding</code> column stays nullable on the outer (per-row writes); per-kb embedding dim is captured at <code>Storage::open</code> — don't touch either. New columns are scalar + nullable, so they don't interact with the embedding width.</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="recall">
+  <div class="section-head">
+    <div class="num">03 — Recall &amp; ranking</div>
+    <h2><code>/api/memory/recall</code>: fan out, merge, re-rank</h2>
+    <p class="deck">One server-side endpoint owns scope resolution + the ranking formula. The CLI and the hook are thin wrappers.</p>
+  </div>
+  <div class="prose">
+    <pre><code>GET /api/memory/recall?q=&lt;query&gt;&amp;scope=all|global|project&amp;project=&lt;name&gt;&amp;limit=5
+  → 200 { "hits": [ { id, kb, title, score, salience, ... } ], "ms": N }</code></pre>
+    <p><strong>Scope resolution.</strong> A corpus is a memory corpus when its <code>kb.toml</code> section sets <code>memory_scope = "global"|"project"</code> (§02 config). <code>scope=global</code> → corpora with <code>memory_scope="global"</code>; <code>scope=project</code> → the project corpus (matched by the <code>project</code> param, or the single <code>memory_scope="project"</code> corpus on this daemon); <code>scope=all</code> → both. The handler lives in <code>crates/kb-server/src/routes/memory.rs</code> (new), registered in <code>router.rs</code> beside the search routes; it reads <code>state.kbs</code> to find the in-scope corpora. <code>memory_scope</code> is a new <code>#[serde(default)] Option&lt;String&gt;</code> on <code>KbSection</code>, threaded onto <code>KbContext</code> at boot (the handler sees <code>KbContext</code>, not the raw section). New corpora are discovered at daemon <strong>(re)start</strong>, not hot-added — the kb.toml watcher only re-arms existing sources.</p>
+    <p><strong>Fan-out + merge.</strong> For each in-scope corpus, embed the query with <em>that corpus's own embedder</em> (memory corpora may differ in model/dim — re-embed per distinct model; if a corpus has no embedder, fall back to keyword/BM25 for it rather than failing the whole request), run the existing hybrid query (the path <code>/api/search</code> uses), <strong>over-fetch <code>limit</code> per corpus</strong> (so a high-salience hit ranked low in a busy corpus survives the merge), tag each hit with its source kb, concatenate, then re-rank globally. Rank-position relevance (above) sidesteps the cross-model score-scale mismatch. Add an acceptance test with two memory corpora on <em>different</em> embedding models.</p>
+    <div class="rec">
+      <div class="lbl">The ranking formula (deterministic)</div>
+      <p><strong>The relevance signal is rank-position, not a raw score</strong> — lance computes an RRF/relevance score internally but the query layer projects it away (<code>DocSummary</code> carries no score field), so derive relevance from each hit's <em>position</em> in its corpus result list: <code>rel = 1/(60 + rank)</code>. Then <code>final = rel × salience × exp(−k · age_days)</code>, where <code>salience</code> defaults to <code>0.5</code> when absent, <code>age_days</code> comes from <code>mtime_unix</code> (NOT <code>indexed_at_unix</code> — that resets on every reindex), and <code>k</code> from <code>kb-decay</code> (<code>slow → 0.01/day</code>, <code>fast → 0.1/day</code>; absent → <code>slow</code>). Then <strong>drop</strong> any hit whose id appears in another in-scope memory's <code>kb-supersedes</code> (unknown ids are no-ops), and any with <code>kb-status="forgotten"</code>. Truncate to <code>limit</code>. Keep the math in a pure, unit-tested function in <code>kb-core</code> (<code>memory::rerank(hits, now) -&gt; Vec&lt;Scored&gt;</code>). <em>Optional enhancement:</em> recover lance's real <code>_score</code> by widening the recall query's projection — but spike it against the pinned <code>lancedb 0.27.2</code> first (it may require <code>Select::All</code>); ship rank-position for the MVP.</p>
+    </div>
+    <div class="note"><b>Why server-side.</b> The CLI <code>kb recall</code>, the SPA, and the <code>UserPromptSubmit</code> hook all call this one endpoint, so the merge + ranking live in exactly one place. (Search itself stays single-corpus; this endpoint is the only thing that spans corpora.)</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="ingest">
+  <div class="section-head">
+    <div class="num">04 — Ingest</div>
+    <h2><code>kb remember</code> writes and indexes in one step</h2>
+    <p class="deck">A synchronous ingest route backs the verb. The one hazard is the live watcher double-indexing the file.</p>
+  </div>
+  <div class="prose">
+    <pre><code>POST /api/kb/{kb}/artifacts
+  { "title", "body" | "body_html", "category": "memory-user",
+    "tags": [...], "salience": 0.8, "decay": "slow", "supersedes": "&lt;id&gt;" }
+  → 201 { "id": "&lt;12-hex&gt;", "path": "&lt;slug&gt;.html" }</code></pre>
+    <p>Handler in <code>crates/kb-server/src/routes/artifacts.rs</code> (new; model on <code>routes/reindex.rs</code> for the shape, <code>routes/search.rs</code> for state access). It renders the memory HTML via a <strong>new <code>kb_core::memory::render_artifact(title, body, category, tags, salience, decay, supersedes) -&gt; String</code></strong> — a small shared builder that emits the full <code>&lt;!DOCTYPE html&gt;</code> + <code>&lt;meta kb-*&gt;</code> skeleton, callable by both this route and the CLI. (Do NOT try to reuse the <code>kb new</code> engine: it's a private fn in the kb-cli <em>binary</em>, the server can't call it, and it only substitutes placeholders into a template file that must already exist — it can't synthesize a document.) Then it writes the file into the corpus dir and indexes it through the storage actor.</p>
+    <div class="note"><b>The double-index hazard (must handle).</b> The corpus dir is under the live watcher; writing the file fires a real <code>watch.create</code> ~400&nbsp;ms later, and <strong><code>Created</code> events bypass the indexer's content-hash dedup gate</strong> (only <code>Modified</code> is gated; the <code>indexed_hashes</code> cache is private to the indexer task, not reachable from a route). A naïve handler embeds the doc twice (~170&nbsp;ms/doc). Two realistic mechanisms — pick one and let the M4 test enforce it: <strong>(a) MVP — write-only:</strong> the route writes the file and lets the watcher index it; "searchable immediately" becomes "within one debounce (~400&nbsp;ms)", zero double-embed, no new plumbing. <strong>(b) Immediate:</strong> add a public actor message (e.g. <code>MarkIndexedHash{id,hash}</code>) the route calls before writing, AND make the gate honor it for <code>Created</code> too (a deliberate change to the Created-bypass at <code>indexer.rs</code>). Either way, enqueue writes through the single-writer actor — <strong>no parallel writer</strong> (CHANNEL_CAPACITY invariant). M4 acceptance: exactly one embed per ingest.</div>
+  </div>
+</section>
+
+<section class="section section-wide" id="cli">
+  <div class="section-head">
+    <div class="num">05 — CLI verbs</div>
+    <h2><code>remember</code> · <code>recall</code> · <code>forget</code></h2>
+    <p class="deck">Thin daemon wrappers in <code>kb-cli</code>; the agent-facing primitives.</p>
+  </div>
+  <div class="prose">
+    <pre><code>kb remember "&lt;text&gt;" --scope project|global --category memory-user \
+   --tags a,b --salience 0.8 --decay slow [--supersedes &lt;id&gt;]   # → POST …/artifacts
+kb recall  "&lt;query&gt;" --scope all|project|global [--limit 5] [--json]  # → GET /api/memory/recall
+kb forget  &lt;id&gt; [--kb &lt;memory-kb&gt;]                                    # delete file or set kb-status=forgotten</code></pre>
+    <p>Add a <code>Memory</code>/verb arm to the clap <code>Cmd</code> enum in <code>crates/kb-cli/src/main.rs</code> and handlers in <code>crates/kb-cli/src/commands/memory.rs</code> (model on <code>commands/search.rs</code> + <code>comments.rs</code>): resolve the daemon via <code>http::detect_daemon</code>, send bearer auth, fall back to an offline lance read where sensible. <code>kb remember</code> renders the memory artifact via the shared <code>kb_core::memory::render_artifact</code> (§04) and POSTs it; <code>--scope</code> selects the target corpus from config. Provide <code>--json</code> on <code>recall</code> for the hook to parse.</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="invalidation">
+  <div class="section-head">
+    <div class="num">06 — Invalidation &amp; events</div>
+    <h2>Stale, superseded, forgotten — live</h2>
+    <p class="deck">Reuse the anchor-stale plumbing; add memory-specific SSE so the SPA updates without refresh.</p>
+  </div>
+  <div class="prose">
+    <p>Add <code>memory.*</code> string-const events in <code>crates/kb-core/src/events.rs</code>, emitted via the existing <code>bus.emit(...)</code> (the <code>comment.anchor_stale</code> call is the model): <code>memory.ingested</code>, <code>memory.stale</code> (superseded / decayed past a threshold), <code>memory.resolved</code>, <code>memory.forgotten</code>. The <em>trigger</em> is NOT the per-file indexer anchor hook — supersede is a relationship between two memories, not a function of one file's bytes. Emit <code>memory.stale</code> for id <code>X</code> from the <strong>ingest path</strong> when a memory carrying <code>kb-supersedes=X</code> lands; do the supersede/forget <strong>drop at recall time</strong> inside the pure <code>rerank()</code> (no sidecar needed). <code>kb forget</code> = <strong>delete the file</strong> (watcher → <code>watch.delete</code> → row removed) for the MVP; a soft <code>kb-status="forgotten"</code> would need a daemon-owned HTML rewrite that doesn't exist today — defer it.</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="spa">
+  <div class="section-head">
+    <div class="num">07 — SPA Memory view</div>
+    <h2><code>/memory</code>: timeline, mind-map, curate</h2>
+    <p class="deck">A dedicated route that reuses the gallery/atlas/comment machinery, scoped to the memory corpora.</p>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Route</strong> — add <code>/memory</code> in <code>web/src/app.tsx</code> (React Router v6) + <code>web/src/routes/memory.tsx</code>; add a nav affordance (the gallery view-toggle is gallery-only) and its own scope control (<em>all / global / project</em>, mirroring the recall <code>scope</code> param — the single-select <code>TopBar</code> kb picker can't express "global + project at once").</li>
+      <li><strong>Timeline</strong> — feed it from the <strong><code>/api/memory/recall</code> endpoint</strong> (§03) with a loose/empty query: it already spans corpora, ranks, and drops superseded/forgotten, so the SPA makes ONE call instead of building client-side multi-corpus aggregation (no existing view spans kbs). For a single corpus, <code>useDocs(kb, {sort:"recent"})</code> already gives authorship-recency — a new <code>useMemories</code> hook is warranted ONLY for cross-corpus merge, which recall already does. (Don't reuse <code>HistoryTimeline</code> — it's user-activity, not authorship.)</li>
+      <li><strong>Mind-map</strong> — reuse <code>AtlasView.tsx</code>, but note atlas coords (<code>atlas_x/y/cluster</code>) exist only AFTER a recompute (the indexer never computes them; a fresh corpus shows a hash-scatter fallback). Specify the trigger: a debounced recompute on <code>memory.ingested</code> (mind the atlas rate-limit) OR surface the existing recompute button. Needs the corpus to have an embedder; treat the map as a best-effort layer, not an M7 hard gate.</li>
+      <li><strong>Curate (two parts)</strong> — (a) <em>comment</em> curation: reuse <code>CommentsPanel.tsx</code> + <code>useReview.ts</code> on a memory artifact's <strong>detail</strong> view (CommentsPanel is iframe-coupled — half its props drive in-iframe behaviour). (b) <em>edit / merge</em> (set <code>kb-supersedes</code>) <em>/ forget</em>: a <strong>new memory-actions component</strong> wired to the ingest/forget routes (M4–M6) — net-new mutations, NOT part of CommentsPanel.</li>
+      <li><strong>Live</strong> — subscribe to the new <code>memory.*</code> SSE via the generic <code>subscribeEvent</code> in <code>web/src/api/sse.ts</code> (no SSE-layer change); refresh on change, mirroring <code>useReview</code>'s <code>comments.updated</code>.</li>
+      <li><strong>Split / scope</strong> — add a <code>memory_scope</code> field to <code>KbSummary</code> / <code>GET /api/kbs</code> (it carries none today) so the SPA can tell which corpora are memory and render the view distinct from <code>kb-docs</code>/<code>research</code>. This is a backend dependency for M7 (land it in M2).</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-wide" id="hooks">
+  <div class="section-head">
+    <div class="num">08 — Hooks plugin + protocol</div>
+    <h2>Deterministic Claude Code hooks (no LLM)</h2>
+    <p class="deck">Greenfield — no hook scaffolding exists in the repo. Every hook just runs a <code>kb</code> verb.</p>
+  </div>
+  <div class="prose">
+    <pre><code>// .claude/settings.json
+{ "hooks": {
+  "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "~/.claude/hooks/kb-recall.sh" } ] } ],
+  "SessionStart":     [ { "hooks": [ { "type": "command", "command": "~/.claude/hooks/kb-wake.sh" } ] } ],
+  "Stop":             [ { "hooks": [ { "type": "command", "command": "~/.claude/hooks/kb-capture.sh" } ] } ]
+} }</code></pre>
+    <ul>
+      <li><strong>kb-recall.sh</strong> (UserPromptSubmit) — read the prompt from stdin (<code>jq -r .prompt</code>), <code>kb recall "$prompt" --scope all --limit 5 --json</code>, print a compact titles+ids block to stdout (injected as turn context). Silent on no hits. <em>No LLM.</em></li>
+      <li><strong>kb-wake.sh</strong> (SessionStart) — print the memory protocol + a compact index (a couple of <code>kb</code> reads). <em>No LLM.</em></li>
+      <li><strong>kb-capture.sh</strong> (<code>Stop</code> — <em>not</em> "SessionEnd", which is not a real hook) — receives <code>transcript_path</code> (a JSONL file) on stdin; read + wrap it verbatim as an HTML artifact into <code>[kb.sessions]</code>. <em>No LLM, no extraction.</em></li>
+    </ul>
+    <p>Capture of <em>curated</em> memory is NOT a hook — the live agent calls <code>kb remember</code> per the <code>CLAUDE.md</code> memory protocol. <strong>This is the load-bearing artifact AND the main risk:</strong> if the agent never invokes the verb, nothing curated is captured (only the verbatim <code>Stop</code> transcript dump). Mitigate by shipping a strong protocol, having <code>kb-wake.sh</code> re-inject it every session, and making the demo (§11) prescribe the exact eliciting prompt so M8 is reproducible rather than model-whim. <strong>Verify ALL THREE hook contracts</strong> against current Claude Code docs before shipping: the teardown hook is <code>Stop</code> (not <code>SessionEnd</code>) and delivers <code>transcript_path</code>; <code>UserPromptSubmit</code> stdin is <code>.prompt</code> and its stdout injects into the turn (prefer the explicit <code>hookSpecificOutput.additionalContext</code> JSON form for robustness).</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="phases">
+  <div class="section-head">
+    <div class="num">09 — The phases</div>
+    <h2>M1 → M8, each green-CI</h2>
+    <p class="deck">Build in order. A phase ships only when its acceptance tests pass and <code>just ci</code> is green.</p>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Build phases (track M)</caption>
+      <thead><tr><th>Phase</th><th>Scope</th><th>Acceptance</th></tr></thead>
+      <tbody>
+        <tr><td><strong>M1</strong></td><td>schema + metas (parser, schema, DocSummary) + lazy migration</td><td>unit: parse 3 metas; reindex backfills nullable cols on an existing dataset</td></tr>
+        <tr><td><strong>M2</strong></td><td>config: <code>#[serde(default)] memory_scope</code> on <code>KbSection</code> (sweep ~17 struct-literal sites incl. test fixtures) + on <code>KbSummary</code>/<code>/api/kbs</code> + scope resolution threaded onto <code>KbContext</code></td><td>config round-trips; <code>/api/kbs</code> exposes scope; daemon lists in-scope corpora <em>after (re)start</em> (no hot-add)</td></tr>
+        <tr><td><strong>M3</strong></td><td><code>/api/memory/recall</code> fan-out (per-corpus embed + BM25 fallback) + pure <code>rerank()</code> on <strong>rank-position</strong> × salience × decay</td><td>unit: ranking determinism + supersede/forget drop; e2e: scope fan-out + a two-model-corpora merge</td></tr>
+        <tr><td><strong>M4</strong></td><td>ingest <code>POST …/artifacts</code> + <code>kb_core::memory::render_artifact</code>; dedup-safe (MVP: write-only → watcher indexes)</td><td>e2e: ingest → <strong>exactly one embed</strong> + searchable within ~400&nbsp;ms</td></tr>
+        <tr><td><strong>M5</strong></td><td>CLI <code>remember</code>/<code>recall</code>/<code>forget</code> + memory template</td><td>assert_cmd: each verb incl. <code>--json</code>; scope + offline paths</td></tr>
+        <tr><td><strong>M6</strong></td><td><code>memory.*</code> SSE + supersede/decay staleness</td><td>e2e: supersede emits <code>memory.stale</code> + drops from recall</td></tr>
+        <tr><td><strong>M7</strong></td><td>SPA <code>/memory</code>: timeline (via recall endpoint) + atlas (recompute trigger) + a new memory-actions component (edit/merge/forget) + reused comment-curation</td><td>extend <code>tests/e2e/global-setup.ts</code> with a memory corpus; Playwright <code>spa-memory.spec.ts</code> renders/mutates/live-updates (atlas accepts hash-fallback)</td></tr>
+        <tr><td><strong>M8</strong></td><td>hooks plugin (<code>UserPromptSubmit</code> recall, <code>SessionStart</code> wake, <code>Stop</code> episodic→<code>[kb.sessions]</code>) + <code>CLAUDE.md</code> protocol</td><td>verify hook contracts vs current docs; the live demo runbook (§11) passes end to end; tag</td></tr>
+      </tbody>
+    </table>
+    <p>Commit style: <code>feat(kb-core): memory metas + lazy column migration (M1)</code>, etc. Co-authored-by footer per the repo cadence. Tag <code>v0.x</code> at M8 with the verification summary.</p>
+  </div>
+</section>
+
+<section class="section section-wide" id="testing">
+  <div class="section-head">
+    <div class="num">10 — Testing matrix</div>
+    <h2>Fully tested, every layer</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>What gets tested where</caption>
+      <thead><tr><th>Layer</th><th>Harness</th><th>Covers</th></tr></thead>
+      <tbody>
+        <tr><td>kb-core unit</td><td>in-file <code>#[cfg(test)]</code> + tempdir</td><td>meta parse; column migration/backfill; <code>rerank()</code> math; supersede/forget filter</td></tr>
+        <tr><td>kb-server e2e</td><td><code>tests/end_to_end.rs</code> in-process daemon</td><td>recall fan-out + ranking; sync-ingest single-embed + immediate recall; <code>memory.*</code> SSE</td></tr>
+        <tr><td>kb-cli</td><td><code>assert_cmd</code></td><td><code>remember</code>/<code>recall --json</code>/<code>forget</code>; scope; offline</td></tr>
+        <tr><td>SPA</td><td>Playwright (<code>tests/e2e/</code>, daemon :4737)</td><td><code>/memory</code> timeline, atlas, edit/merge/forget, curation, live update</td></tr>
+        <tr><td>workspace</td><td><code>just ci</code> / <code>just ci-e2e</code></td><td>fmt + clippy + all tests + SPA build + Playwright</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section section-wide" id="demo">
+  <div class="section-head">
+    <div class="num">11 — Live demo runbook</div>
+    <h2>Feel the loop end to end</h2>
+    <p class="deck">After M8, run this to <em>see how it behaves</em> — the point of building it all.</p>
+  </div>
+  <div class="prose">
+    <ol>
+      <li>Configure <code>[kb.memory]</code> (<code>memory_scope="global"</code>) + <code>[kb.memory-kb]</code> (<code>memory_scope="project"</code>) + <code>[kb.sessions]</code>; start <code>kb daemon</code>.</li>
+      <li>Install the hooks + the <code>CLAUDE.md</code> memory protocol in a scratch project.</li>
+      <li><strong>Session A:</strong> state durable facts → confirm <code>kb remember</code> wrote artifacts (CLI list + the <code>/memory</code> view).</li>
+      <li><strong>Session B (fresh):</strong> ask about those facts → the <code>UserPromptSubmit</code> hook injects them (recall works across sessions); check the ranking (salience + recency).</li>
+      <li>Supersede one fact (<code>kb remember … --supersedes &lt;id&gt;</code>) → the old one drops from recall and the SPA shows <code>memory.stale</code>.</li>
+      <li>Correct one via a kb comment → the <code>kb comments watch</code> loop updates it; <code>kb forget &lt;id&gt;</code> removes one. Watch it all live in <code>/memory</code>.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-wide" id="invariants">
+  <div class="section-head">
+    <div class="num">12 — Invariants &amp; risks</div>
+    <h2>Hard constraints — breaking these fails subtly</h2>
+  </div>
+  <div class="prose">
+    <div class="open-q">
+      <div class="lbl">Respect these (from the kb architecture invariants)</div>
+      <ul>
+        <li><strong>Single-writer storage actor</strong> — ingest enqueues through the existing actor; never add a parallel writer (<code>CHANNEL_CAPACITY</code>).</li>
+        <li><strong>lance embedding column nullable on the outer</strong>; <strong>per-kb dim</strong> captured at <code>Storage::open</code> — new columns are scalar + nullable, don't touch the embedding width.</li>
+        <li><strong>Arrow/lance version pinning</strong> — don't pull deps that fork the arrow version.</li>
+        <li><strong>Atlas determinism</strong> — if the Memory view triggers a recompute, keep the layout seed-deterministic.</li>
+        <li><strong>Watcher <code>Created</code> bypasses the dedup gate</strong> — so ingest either writes-only and lets the watcher index (MVP), or adds a public pre-seed actor message + makes the gate honor it for <code>Created</code> (the M4 test guards exactly-one-embed).</li>
+        <li><strong>clippy</strong> — new <code>pub fn</code>s go before any <code>#[cfg(test)] mod tests</code>; run <code>cargo fmt</code> before each commit.</li>
+      </ul>
+    </div>
+    <div class="note"><b>Top risks (deep-review-surfaced):</b> lance does not expose the per-hit RRF score → recall ranks on <strong>rank-position</strong>, not raw score (M3); the memory HTML renderer is <strong>net-new in kb-core</strong> (the <code>kb new</code> engine can't be reused — private, kb-cli-only); ingest double-index → MVP writes-only and lets the watcher index, M4 proves single-embed; new corpora need a daemon <strong>(re)start</strong> (no hot-add); <code>memory_scope</code> is additive but sweeps ~17 struct-literal sites + must surface on <code>/api/kbs</code>; <code>Stop</code> (not <code>SessionEnd</code>) is the teardown hook and delivers <code>transcript_path</code>; the atlas mind-map needs a recompute + an embedder; <strong>agent-explicit capture</strong> depends on the agent actually calling <code>kb remember</code> (lean on the protocol + wake hook); cross-model corpora must embed per-corpus with a BM25 fallback.</div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="page-nav">
+    <a href="22-memory-native-subsystem.html">
+      <span class="dir">← Prev</span>
+      <span class="ttl">22 · Native subsystem</span>
+    </a>
+    <a href="../index.html" class="next">
+      <span class="dir">Index →</span>
+      <span class="ttl">Research index</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb agent-memory subsystem — the build spec.</p>
+      <p>The HOW for topics <a href="19-kb-as-claude-code-memory.html">19</a>–<a href="22-memory-native-subsystem.html">22</a>. Extension points mapped from the live tree (parser, storage/schema, lance, actor, indexer, router, kb-cli, web/); re-verify line refs as you build. LLM-free, daemon-only, eight green-CI phases.</p>
+    </div>
+    <div>
+      <h5>Sections</h5>
+      <ul>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#data-model">Data model</a></li>
+        <li><a href="#recall">Recall &amp; ranking</a></li>
+        <li><a href="#phases">The phases</a></li>
+        <li><a href="#demo">Demo runbook</a></li>
+        <li><a href="#invariants">Invariants</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Series</h5>
+      <ul>
+        <li><a href="19-kb-as-claude-code-memory.html">19 · Hub &amp; landscape</a></li>
+        <li><a href="20-memory-corpus-and-protocol.html">20 · Corpus + protocol</a></li>
+        <li><a href="21-memory-mcp-and-memory-tool.html">21 · CLI verbs</a></li>
+        <li><a href="22-memory-native-subsystem.html">22 · Native subsystem</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('kb-theme'); if (saved) root.dataset.theme = saved; } catch (e) {}
+  var btn = document.querySelector('[data-action="toggle-theme"]');
+  if (btn) btn.addEventListener('click', function () {
+    var next = root.dataset.theme === 'ink' ? 'paper' : 'ink';
+    root.dataset.theme = next;
+    try { localStorage.setItem('kb-theme', next); } catch (e) {}
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 't' || e.key === 'T') && !/input|textarea/i.test(e.target.tagName)) { if (btn) btn.click(); }
+  });
+  var bar = document.querySelector('.reading-progress');
+  if (bar) {
+    var tick = function () {
+      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+      bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+    };
+    document.addEventListener('scroll', tick, { passive: true });
+    tick();
+  }
+})();
+</script>
+</body>
+</html>

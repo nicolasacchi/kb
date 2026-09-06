@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Packaging kb for the desktop: can Pake / Tauri deploy and distribute it?</title>
+  <meta name="kb-category" content="research">
+  <meta name="kb-tags" content="packaging, distribution, deployment, tauri, pake, desktop-app, cargo-dist, pwa, onnx, code-signing, sidecar, webview, windows">
+  
+  <style>
+  /* ── kb visual floor — keep in sync with the kb-artifact skill's assets/style.css ── */
+  :root{
+    --bg:#fbfbfa; --surface:#f3f3f1; --fg:#1b1b1a; --muted:#5f5f5c;
+    --rule:#d9d9d6; --accent:#3a5a9f; --accent-fg:#ffffff;
+    --warn:#8a5f00; --danger:#9a2f28; --ok:#256148;
+    --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.6; --maxw:46rem;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --serif:ui-serif,Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --radius:6px; --focus:2px solid var(--accent);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#16171a; --surface:#1f2126; --fg:#e6e6e3; --muted:#a3a39e;
+      --rule:#2c2e33; --accent:#8fb0ee; --accent-fg:#11131a;
+      --warn:#e0b24d; --danger:#f08079; --ok:#6fcaa0;
+    }
+  }
+  @media (prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+  }
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+    font-size:var(--fs-body);line-height:var(--lh)}
+  :focus-visible{outline:var(--focus);outline-offset:2px}
+  .skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+    padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+    text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+  .skip-link:focus{left:.5rem;top:.5rem}
+  code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.85rem;line-height:1.5}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+  th{background:var(--surface);font-weight:600}
+  a{color:var(--accent);text-underline-offset:2px}
+  a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+  a[target="_blank"]::after{content:" \2197";font-size:.8em}
+  .callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);
+    border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+  .callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+    color:var(--accent);display:block;margin-bottom:.3em}
+  .callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+  .callout--warn .callout-label{color:var(--warn)}
+  .callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+  .callout--ok .callout-label{color:var(--ok)}
+  .callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+  .callout--danger .callout-label{color:var(--danger)}
+  /* ── end kb visual floor ── */
+
+  /* ── layout above the floor ── */
+  .wrap{max-width:64rem;margin:0 auto;padding:2.2rem 1.3rem 5rem}
+  main > section{max-width:var(--maxw);margin:0 auto}
+  .full{max-width:64rem;margin-left:auto;margin-right:auto}
+  header.doc{max-width:64rem;margin:0 auto 2rem}
+  h1{font-size:2rem;line-height:1.18;margin:.2em 0 .35em;letter-spacing:-.01em}
+  .sub{font-size:1.15rem;color:var(--muted);margin:0 0 1rem;max-width:46rem}
+  .meta-row{font:500 var(--fs-small)/1.5 var(--mono);color:var(--muted);
+    border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+    padding:.55rem 0;display:flex;gap:1.2rem;flex-wrap:wrap}
+  h2{font-size:1.45rem;margin:2.4rem 0 .5rem;padding-top:.6rem;letter-spacing:-.01em}
+  h3{font-size:1.08rem;margin:1.5rem 0 .3rem}
+  section{scroll-margin-top:1rem}
+  p{margin:.7em 0}
+
+  nav.toc{border:1px solid var(--rule);border-radius:var(--radius);padding:.8rem 1rem;
+    margin:1.6rem 0;background:color-mix(in srgb,var(--accent) 4%,var(--bg))}
+  nav.toc strong{font:650 .72rem/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:.5rem}
+  nav.toc ol{margin:0;padding-left:1.2rem;columns:2;column-gap:1.6rem;font-size:.9rem}
+  nav.toc li{margin:.18rem 0;break-inside:avoid}
+
+  .pill{display:inline-block;font:600 .68rem/1.4 var(--mono);text-transform:uppercase;
+    letter-spacing:.04em;padding:.12em .5em;border-radius:999px;border:1px solid var(--rule);
+    color:var(--muted);margin:.15rem .25rem 0 0}
+  .pill.now{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--rule))}
+  .pill.later{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--rule))}
+  .pill.no{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--rule))}
+
+  /* matrix table: fit + effort columns tinted */
+  table.matrix td:first-child{font-weight:600;width:16%}
+  table.matrix td{font-size:.84rem;line-height:1.5}
+  .fit-strong{color:var(--ok);font-weight:600}
+  .fit-good{color:var(--ok)}
+  .fit-fair{color:var(--warn)}
+  .fit-poor{color:var(--danger)}
+
+  .verdict{border-left:4px solid var(--accent);background:color-mix(in srgb,var(--accent) 6%,var(--bg));
+    border-radius:var(--radius);padding:.6em .9em;margin:1.1rem 0;font-size:.92rem}
+  .verdict b{font:700 .7rem/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--accent);display:block;margin-bottom:.25rem}
+
+  .tier{border:1px solid var(--rule);border-radius:var(--radius);padding:.9rem 1.1rem;margin:1rem 0;background:var(--surface)}
+  .tier h3{margin:.1rem 0 .4rem;font-family:var(--mono);font-size:1rem;letter-spacing:.01em}
+  .tier.now{border-top:3px solid var(--ok)}
+  .tier.later{border-top:3px solid var(--warn)}
+  .tier.no{border-top:3px solid var(--danger)}
+
+  .risk{border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:var(--radius);
+    padding:.6em .9em;margin:.8rem 0;background:color-mix(in srgb,var(--warn) 5%,var(--bg))}
+  .risk.high{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 6%,var(--bg))}
+  .risk .sev{font:700 .68rem/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--warn)}
+  .risk.high .sev{color:var(--danger)}
+  .risk .mit{font-size:.86rem;color:var(--muted);margin-top:.3rem}
+
+  ul.tight li{margin:.35rem 0}
+  ol.steps li{margin:.5rem 0}
+  .src{font-size:.85rem;color:var(--muted)}
+  .src ul{columns:2;column-gap:1.6rem}
+  .src li{break-inside:avoid;margin:.2rem 0;font-size:.8rem}
+  kbd{font-family:var(--mono);font-size:.82em;background:var(--surface);border:1px solid var(--rule);border-bottom-width:2px;border-radius:4px;padding:.05em .35em}
+  @media (max-width:640px){
+    nav.toc ol{columns:1}
+    .src ul{columns:1}
+    h1{font-size:1.6rem}
+  }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="wrap">
+  <header class="doc">
+    <h1>Packaging kb for the desktop: can Pake / Tauri deploy and distribute it?</h1>
+    <p class="sub">A multi-agent, adversarially-verified evaluation of <strong>Pake</strong> and the
+      desktop-wrapper option against kb's real distribution alternatives — for <em>kb</em>, a Rust
+      daemon + React SPA + ONNX-embedder sidecar that already serves itself as a local web app.</p>
+    <div class="meta-row">
+      <span>kb · docs/research</span>
+      <span>2026-06-21</span>
+      <span>11-agent workflow · 5 adversarial verifiers</span>
+      <span>verdict: tiered — not a desktop app first</span>
+    </div>
+  </header>
+
+  <main id="main">
+
+  <section id="summary">
+    <h2>Bottom line</h2>
+    <p><strong>Yes, something Pake-like <em>can</em> ship kb — but Pake the CLI itself cannot, and a
+      desktop wrapper is the wrong <em>first</em> move for kb's current audience.</strong> Pake wraps a
+      single URL in a webview with no backend or sidecar surface, so "use Pake" really means "fork down
+      to raw <strong>Tauri v2</strong> with <code>externalBin</code> sidecars." That path is feasible and
+      Rust-native — but the recurring sign + notarize + auto-update + native-Windows cost is high and
+      partly speculative, while two genuinely cheap channels already cover kb's developer / Claude-Code
+      users.</p>
+
+    <div class="verdict">
+      <b>Recommendation</b>
+      Adopt <strong>cargo-dist</strong> (<code>curl|sh</code> + Homebrew + npm) as the primary
+      distribution and ship an <strong>installable PWA</strong> over the loopback SPA — both now, both
+      cheap. Keep the <strong>Docker</strong> image as-is. Treat a thin <strong>Tauri tray-supervisor</strong>
+      as a <em>later, conditional</em> audience-expansion bet — only if non-technical and/or native-Windows
+      users are actually targeted, and only after closing two verified blockers.
+    </div>
+
+    <p>The three tiers at a glance:</p>
+    <div class="full">
+      <div class="tier now"><h3><span class="pill now">Now</span> Tier&nbsp;1 — cargo-dist + PWA + Docker</h3>
+        <p>One-line install (brew / <code>curl|sh</code> / npm), an installable PWA for a windowed
+          dock-icon feel, and the existing container. Low effort, low maintenance, matches the proven
+          shape for this category (Meilisearch, Syncthing, code-server, Ollama all ship binary + brew +
+          docker + browser-UI as the baseline).</p></div>
+      <div class="tier later"><h3><span class="pill later">Later, conditional</span> Tier&nbsp;2 — thin Tauri tray-supervisor (<code>kb-tray</code>)</h3>
+        <p>A small Rust shell that sidecar-spawns the existing <code>kb daemon</code> on a loopback port,
+          supervises its lifecycle, shows fleet status in a tray, and opens the UI. Justified <em>only</em>
+          to reach non-technical or native-Windows users. Gated on the WebKit subdomain fix + non-unix
+          supervision fix.</p></div>
+      <div class="tier no"><h3><span class="pill no">Rejected</span> Pake CLI as-is, and a consumer WebView monolith</h3>
+        <p>Pake can't bundle the daemon; a heavyweight all-in-one desktop app duplicates the CLI's
+          bring-up and carries the most signing/maintenance surface for the least incremental value.</p></div>
+    </div>
+  </section>
+
+  <nav class="toc full" aria-label="Contents">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#question">What "use Pake" actually means</a></li>
+      <li><a href="#audience">Whose problem are we solving?</a></li>
+      <li><a href="#options">The five channels, compared</a></li>
+      <li><a href="#tauri-path">The real desktop path: Tauri + sidecars</a></li>
+      <li><a href="#blockers">Three verified blockers (and two myths)</a></li>
+      <li><a href="#integration">If a shell is built: the phased sketch</a></li>
+      <li><a href="#risks">Risk register</a></li>
+      <li><a href="#recommendation">Recommendation &amp; sequencing</a></li>
+      <li><a href="#decisions">Open operator decisions</a></li>
+      <li><a href="#methodology">Methodology &amp; caveats</a></li>
+      <li><a href="#sources">Sources</a></li>
+    </ol>
+  </nav>
+
+  <section id="question">
+    <h2>What "use Pake" actually means</h2>
+    <p><a href="https://github.com/tw93/Pake" target="_blank" rel="noopener">Pake</a> (tw93, GPL-3.0) is a
+      command-line tool that turns <em>one webpage</em> into a lightweight Tauri-based desktop app, with
+      JS/CSS injection and a system tray. That is the whole surface. Its CLI flag list contains no
+      daemon, sidecar, or external-binary option; its only local-content flag, <code>--use-local-file</code>,
+      recursively copies a <em>static</em> HTML/CSS/JS folder into the bundle. It cannot run kb's axum
+      daemon, which is a live HTTP server that serves the React/Vite SPA via <code>ServeDir</code>, exposes
+      a REST + SSE API, and serves artifacts on <code>*.artifacts.&lt;suffix&gt;</code> subdomains.</p>
+
+    <div class="callout">
+      <span class="callout-label">The reframe</span>
+      kb is not "a webpage to wrap." It is a <strong>server + sidecar</strong> (the <code>kb</code> daemon
+      plus the <code>kb-embedder</code> ONNX process it spawns) that <em>already</em> renders a complete
+      local web app. So the desktop question is not "can Pake wrap our page" but "is it worth bundling a
+      Rust daemon into a desktop shell" — and Pake's own foundation, <strong>Tauri</strong>, is where you
+      end up the moment you need a bundled backend.
+    </div>
+
+    <p>Pake is built on Tauri, and Tauri fully supports bundling external binaries as
+      <a href="https://v2.tauri.app/develop/sidecar/" target="_blank" rel="noopener">sidecars</a>. So the
+      capability exists — but only once you fork Pake and drop into its <code>src-tauri/</code> project,
+      at which point you are doing raw Tauri development. (Adjacent webview toolkits —
+      <a href="https://neutralino.js.org/docs/api/extensions/" target="_blank" rel="noopener">Neutralino
+      extensions</a>, <a href="https://github.com/wailsapp/wails/discussions/3021" target="_blank" rel="noopener">Wails</a>,
+      or a bare OS webview pointed at <code>localhost</code> — could host the same "bundled daemon + webview"
+      shape, but Tauri v2 is the strongest single choice for a Rust project: <code>externalBin</code> maps
+      cleanly onto kb's two-binary rule, and the shell stays Rust.)</p>
+  </section>
+
+  <section id="audience">
+    <h2>Whose problem are we solving?</h2>
+    <p>kb's README frames it for <strong>developers and Claude-Code users</strong> who already have brew,
+      cargo, docker, and a terminal, and who run many self-hosted corpora/daemons. For them the friction is
+      not "I can't install a GUI app" — it is a one-line install and keeping daemons up. A signed desktop
+      installer removes a barrier this audience does not have.</p>
+    <p>A signed / notarized / auto-updating desktop <em>shell</em> serves a <strong>different</strong>
+      audience: non-technical "Obsidian-refugee" users who want click-an-icon → daemon-comes-up → tray shows
+      fleet status, plus <strong>native-Windows</strong> users (kb is WSL2-only today). The repository's own
+      Part&nbsp;IV deep-dive (<code>docs/research/obsidian-competitive/kb-desktop-onboarding.html</code>)
+      independently reached the same conclusion: a thin tray supervisor + first-run wizard earns its keep
+      for onboarding; a consumer WebView monolith does not.</p>
+    <div class="callout callout--warn">
+      <span class="callout-label">The actual decision</span>
+      A desktop shell is an <strong>audience-expansion</strong> decision (do we want non-technical and/or
+      native-Windows users?), <em>not</em> a "better distribution for current users" decision. Without that
+      expansion goal, cargo-dist + PWA dominate on cost/benefit.
+    </div>
+  </section>
+
+  <section id="options">
+    <h2>The five channels, compared</h2>
+    <p>Scored for kb specifically (Rust workspace, two same-dir binaries, loopback SPA + artifact subdomains).
+      "Fit" is fit for kb's <em>current</em> audience and shape.</p>
+    <div class="full">
+    <table class="matrix">
+      <thead><tr><th>Channel</th><th>Effort</th><th>Auto-update</th><th>Signing</th><th>Offline</th><th>Maint.</th><th>Fit</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Pake CLI as-is</td>
+          <td>S</td><td>None for kb's binaries</td><td>Empty shell only</td><td>No — can't bundle the daemon/model</td><td>Low</td>
+          <td class="fit-poor">poor — rejected</td>
+        </tr>
+        <tr>
+          <td>Raw Tauri v2 + sidecars</td>
+          <td>XL</td><td>Tauri updater (signed manifests)</td><td>Heavy &amp; recurring; both sidecars signed</td><td>Strongest if model bundled</td><td>High</td>
+          <td class="fit-fair">fair — expansion play</td>
+        </tr>
+        <tr>
+          <td>cargo-dist + brew + curl|sh</td>
+          <td>M</td><td>brew upgrade / re-run installer</td><td>Optional / light</td><td>glibc-gated; model fetched first run</td><td>Low</td>
+          <td class="fit-strong">strong — recommended</td>
+        </tr>
+        <tr>
+          <td>Docker</td>
+          <td>S (done)</td><td>Pull a new tag</td><td>N/A (image)</td><td>Best sealed offline (model baked)</td><td>None new</td>
+          <td class="fit-strong">strong — keep</td>
+        </tr>
+        <tr>
+          <td>Installable PWA / open-localhost</td>
+          <td>S</td><td>Served by the daemon — always current</td><td>None</td><td>SW caches shell; can't start daemon/model</td><td>~zero</td>
+          <td class="fit-good">good — cheap add-on</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <ul class="tight">
+      <li><strong>Pake CLI</strong> — rejected. No backend surface; <code>--use-local-file</code> is a static
+        copy. Forking it lands you in raw Tauri anyway.</li>
+      <li><strong>cargo-dist</strong> — recommended primary. Already templated in <code>docs/packaging.md</code>;
+        first-class multi-binary so <code>kb</code> + <code>kb-embedder</code> land in the same prefix and
+        sibling-by-path discovery just works. One make-or-break blocker (see <a href="#blockers">below</a>).</li>
+      <li><strong>Docker</strong> — keep as-is; complementary, serves the self-host slice, nothing to do.</li>
+      <li><strong>PWA</strong> — recommended cheap add-on. The daemon already meets the loopback secure-context
+        bar, so a web manifest gives ~90% of the desktop feel. Decisive gap vs a shell: a PWA <em>cannot</em>
+        launch or supervise the daemon, and has no system tray.</li>
+      <li><strong>Raw Tauri</strong> — the only path to a true native-Windows kb and click-to-run onboarding,
+        but XL and recurring. Justified only as audience expansion, and as the <em>thin tray-supervisor</em>
+        variant, not a monolith.</li>
+    </ul>
+  </section>
+
+  <section id="tauri-path">
+    <h2>The real desktop path: Tauri + sidecars</h2>
+    <p>If a shell is built, the verified-correct architecture is a <strong>thin supervisor</strong> that
+      sidecar-spawns kb's <em>existing</em> daemon — not an in-process re-implementation, and not a
+      port-less Tauri↔axum bridge (that would break the artifact-subdomain origin model). The shell:</p>
+    <ol class="steps">
+      <li>bundles <code>kb</code> + <code>kb-embedder</code> as <code>externalBin</code> (target-triple-suffixed,
+        built in <em>separate</em> cargo invocations — architecture invariant&nbsp;#26, or ONNX links into
+        <code>kb</code> too);</li>
+      <li>picks a free loopback TCP port, writes a <code>kb.toml</code> with
+        <code>[server] addr = "127.0.0.1:&lt;port&gt;"</code> (the <code>kb daemon</code> verb takes no port
+        flag — the address comes only from config), and spawns <code>kb daemon</code> via the shell plugin;</li>
+      <li>points the OS WebView at <code>http://127.0.0.1:&lt;port&gt;/</code> — loopback, so kb's
+        fail-closed no-token guard is satisfied with zero auth setup (invariant&nbsp;#4), and the daemon's
+        <code>[::1]</code> companion bind (invariant&nbsp;#21) makes <code>localhost</code> resolve either
+        family;</li>
+      <li>sets <code>KB_HOME</code> (or the three <code>KB_*_DIR</code> vars) to Tauri's
+        <code>app_data_dir()</code> so state/config/cache live in an app-owned dir — off-Linux this is the
+        only redirect knob, since <code>directories::ProjectDirs</code> ignores <code>XDG_*</code> on
+        macOS/Windows.</li>
+    </ol>
+    <p>kb already does almost all the work: the daemon serves the SPA + API + artifacts from one loopback
+      origin (which the SPA's same-origin SSE model requires — invariants&nbsp;#23/#24); the embedder never
+      panics the daemon — but a <em>missing</em> embedder binary fails daemon <strong>startup</strong> with a
+      clear error (and hybrid/semantic requests 400 without one), so the shell must ship <strong>both</strong>
+      binaries (it does, via <code>externalBin</code>) and surface embedder health. It also reuses
+      <code>$KB_EMBEDDER_BIN</code> as a single spawn chokepoint covering embed, rerank, and
+      <code>kb model download</code>. The shell is roughly a <code>src-tauri</code> Rust file plus ~200
+      lines of lifecycle glue (free-port, health-poll <code>/healthz</code>, tree-kill on exit).</p>
+  </section>
+
+  <section id="blockers">
+    <h2>Three verified blockers (and two myths the verify pass corrected)</h2>
+
+    <h3>Blocker 1 — <code>*.artifacts.localhost</code> does not resolve in WebKit <span class="pill no">holds</span></h3>
+    <p>kb serves artifact content <em>purely</em> on the Host header: an artifact iframe's <code>src</code> is
+      always <code>&lt;id&gt;.artifacts.localhost:&lt;port&gt;</code>, and the daemon dispatches on that
+      subdomain — there is <strong>no path-based artifact route today</strong>. Chromium and Edge/WebView2
+      hardcode <code>*.localhost → loopback</code> (RFC&nbsp;6761), so artifacts render on Windows. But
+      <strong>WKWebView (macOS &lt; 26) and WebKitGTK (without systemd-resolved / nss-myhostname) do not</strong> —
+      they defer to the OS resolver, which a stock <code>localhost</code> entry doesn't cover. kb already
+      documents the macOS dnsmasq requirement for browsers (<code>self-host.md</code>). Result: in a WebKit
+      desktop shell the SPA chrome would render but every artifact — the core feature — would fail to load.
+      (macOS&nbsp;26 "Tahoe" reportedly changes <code>*.localhost</code> handling; this was not bench-tested
+      here, so verify on the actual target macOS version before assuming the blocker's full breadth.)</p>
+    <div class="callout callout--danger">
+      <span class="callout-label">Hard prerequisite for a WebKit-targeting shell</span>
+      Add a <strong>DNS-free artifact origin</strong> before any macOS/Linux desktop build. Preferred: serve
+      artifacts from a <strong>second loopback port</strong> (cross-origin isolation by port, not DNS) so the
+      full probe/runtime/scroll/annotator/back-button injection pipeline is reused; or a Tauri custom-protocol
+      / <code>WKURLSchemeHandler</code> / WebKitGTK URI-scheme handler giving each artifact a distinct origin
+      (re-validate the iframe-sandbox <code>localStorage</code> isolation under the scheme). Worst option:
+      ship a dnsmasq/resolver setup in the installer (sudo, poor UX). Plumb the new suffix through
+      parse/extract/index per invariant&nbsp;#7 — <code>artifact_host_suffix</code> is runtime config, never
+      hardcoded — and the SPA follows automatically.
+    </div>
+
+    <h3>Blocker 2 — cargo-dist feature-unification: already solved by <code>precise-builds&nbsp;=&nbsp;true</code> <span class="pill later">low</span></h3>
+    <p>This concerns the <em>recommended</em> path, not the Tauri one — and it is largely already solved. A
+      naive single <code>dist</code> workspace build would pull the <code>local-embedder</code> feature into
+      <code>kb</code> via Cargo feature unification
+      (<a href="https://github.com/axodotdev/cargo-dist/issues/1740" target="_blank" rel="noopener">cargo-dist#1740</a>),
+      violating invariant&nbsp;#26 (which exists precisely so <code>kb</code> never links ONNX Runtime). But
+      cargo-dist's <code>precise-builds = true</code> runs one <code>cargo build -p &lt;package&gt;</code> per
+      package — exactly the per-binary invocation invariant&nbsp;#26 requires — and kb's own
+      <code>docs/packaging.md</code> <strong>already templates it as the load-bearing mitigation</strong>. So
+      the work is to adopt the templated config and verify the dist build honours it, not to invent custom
+      machinery. Fallbacks if <code>precise-builds</code> ever proves insufficient: split
+      <code>kb-embedder</code> into its own dist package (accept package-prefixed tags), or a bespoke GitHub
+      Actions release running the Dockerfile's two-pass build shape. The genuine cargo-dist "decide before
+      release" weight sits elsewhere — version scheme, tag format, the Homebrew tap, and the aarch64-linux
+      ONNX cross-link (all flagged in <code>docs/packaging.md</code>).</p>
+
+    <h3>Blocker 3 — non-unix daemon supervision is a stub <span class="pill later">medium</span></h3>
+    <p>In <code>daemon.rs</code>, <code>send_sigterm</code> bails on non-unix and <code>pid_is_alive</code>
+      returns false — so <code>kb daemon stop</code> and double-start protection don't work off-unix. Native
+      Windows needs this closed, or the Tauri wrapper must own full process-group tree-kill itself.</p>
+
+    <h3>Two myths the adversarial pass corrected</h3>
+    <div class="callout callout--ok">
+      <span class="callout-label">Myth 1 — "Windows ONNX is a hard gap"</span>
+      Overstated. kb's pinned <code>ort 2.0.0-rc.12</code> lists <code>x86_64-pc-windows-msvc</code> as a
+      green-tier platform whose <code>download-binaries</code> feature fetches a prebuilt <em>static</em> ONNX
+      Runtime (no <code>onnxruntime.dll</code>; the dynamic-load path is banned by invariant&nbsp;#26). So the
+      embedder <em>plausibly compiles</em> on Windows. It is a <strong>new, unvalidated matrix entry</strong>
+      (zero CI, <code>/MD</code> CRT → VC++ redist, aarch64-windows needs a source build), not a capability
+      gap. Validate the static link + dual-binary placement + lancedb build before committing.
+    </div>
+    <div class="callout callout--ok">
+      <span class="callout-label">Myth 2 — "the two-binary sidecar discovery breaks"</span>
+      Mostly wrong. Tauri <em>strips</em> the target-triple suffix at bundle time, so in production the bare
+      <code>kb-embedder</code> sits beside the app exe in <code>.app/Contents/MacOS</code> (or the resource
+      dir) and kb's <code>current_exe().parent()/kb-embedder</code> sibling discovery <em>succeeds with no env
+      var</em>. The suffix is retained only in <code>target/debug</code> — set <code>$KB_EMBEDDER_BIN</code>
+      there (belt-and-suspenders: set it unconditionally). The real wrinkle that <em>does</em> hold: on macOS
+      each embedded sidecar must be individually hardened-runtime-signed or notarization fails
+      (<a href="https://github.com/tauri-apps/tauri/issues/11992" target="_blank" rel="noopener">tauri#11992</a>);
+      kb-embedder's static ONNX may need <code>allow-unsigned-executable-memory</code> /
+      <code>disable-library-validation</code> entitlements.
+    </div>
+  </section>
+
+  <section id="integration">
+    <h2>If a shell is built: the phased sketch</h2>
+    <p>Thin <code>kb-tray</code> supervisor, as a <em>separate crate</em>; sidecar-spawn the existing daemon;
+      open the real UI. Never an in-process re-implementation.</p>
+    <ol class="steps">
+      <li><strong>Phase 0 — de-risk.</strong> Close the two blockers that don't depend on packaging at all:
+        (a) a DNS-free artifact-serving mode for WebKit, (b) the non-unix supervision stub. Neither requires
+        Tauri; both are independently useful (the artifact-origin change also helps the Safari browser path).</li>
+      <li><strong>Phase 1 — shell + sidecar wiring (macOS + Linux first).</strong> <code>externalBin</code> the
+        two binaries (separate builds), free-port + write <code>kb.toml</code> + spawn <code>kb daemon</code>,
+        set <code>KB_HOME</code>/<code>KB_SPA_DIST</code>, health-poll <code>/healthz</code> before showing the
+        WebView, tree-kill on exit (verify whether <code>kb daemon</code> already reaps <code>kb-embedder</code>
+        on SIGTERM; on macOS <code>app_handle.exit(0)</code> on window-close or the daemon survives headless).</li>
+      <li><strong>Phase 2 — signing + updater.</strong> macOS Developer ID + hardened runtime + per-sidecar
+        entitlements; Linux AppImage/deb carrying <code>libgomp1</code> (ONNX OpenMP) + <code>libssl3</code>,
+        built on glibc ≥ 2.38 (Ubuntu 24.04 / trixie, not 22.04); Tauri updater via GitHub Releases +
+        static <code>latest.json</code>, signing mandatory (<code>TAURI_SIGNING_PRIVATE_KEY</code>). Decide the
+        tag-format/version-scheme <em>once</em> — the same decision unblocks cargo-dist.</li>
+      <li><strong>Phase 3 — native Windows (only if the audience justifies it).</strong> Validate the static
+        <code>ort</code> link end-to-end, close the supervision stub, Azure Key Vault (OV) or EV signing,
+        WebView2 <code>offlineInstaller</code> (+~127&nbsp;MB) for a true-offline installer.</li>
+      <li><strong>Model delivery.</strong> Default to first-run fetch via <code>kb model download</code> behind
+        a progress UI (installer ~10–40&nbsp;MB); offer a bundled-model build only for a true-offline SKU
+        (+~130&nbsp;MB for bge-small). Surface embedder health so the silent keyword-only degradation is
+        visible.</li>
+    </ol>
+  </section>
+
+  <section id="risks">
+    <h2>Risk register</h2>
+    <div class="risk"><span class="sev">Low</span> — a naive cargo-dist workspace build could unify ONNX into
+      <code>kb</code> (feature unification, #1740), violating invariant&nbsp;#26 — but
+      <code>precise-builds = true</code> (already templated in <code>docs/packaging.md</code>) builds each
+      package on its own cargo invocation and resolves it declaratively.
+      <div class="mit">Mitigation: adopt the templated <code>precise-builds</code> config and verify the dist
+        build honours it; fallbacks (split <code>kb-embedder</code> into its own package, or a bespoke
+        Dockerfile two-pass Actions release) only if it proves insufficient.</div></div>
+    <div class="risk high"><span class="sev">High</span> — <code>*.artifacts.localhost</code> iframes fail in
+      WKWebView / WebKitGTK: the SPA renders but every artifact errors. Validated only in Chromium/WebView2.
+      <div class="mit">Mitigation: add a DNS-free artifact origin (second loopback port or custom protocol)
+        before any WebKit-targeting build; re-validate iframe sandbox isolation.</div></div>
+    <div class="risk"><span class="sev">Medium</span> — macOS notarization fails because embedded sidecars
+      aren't individually hardened-runtime-signed (tauri#11992); static ONNX may need extra entitlements.
+      <div class="mit">Mitigation: codesign each sidecar with Developer ID + per-binary entitlements; budget
+        entitlement tuning for ONNX.</div></div>
+    <div class="risk"><span class="sev">Medium</span> — native Windows is unvalidated end-to-end; the non-unix
+      supervision stub means <code>stop</code>/double-start don't work off-unix; <code>/MD</code> CRT → VC++
+      redist dependency.
+      <div class="mit">Mitigation: treat Windows as a fresh CI target with its own spike; close the supervision
+        stub or own tree-kill in the wrapper; keep the static link (no DLL).</div></div>
+    <div class="risk"><span class="sev">Medium</span> — Tauri <code>child.kill()</code> doesn't kill
+      grandchildren: <code>kb-embedder</code> orphans and holds the loopback port → "address already in use" on
+      relaunch; on macOS closing the window leaves the daemon headless.
+      <div class="mit">Mitigation: tree-kill via process group; <code>app_handle.exit(0)</code> on window-close;
+        first check whether <code>kb daemon</code> already cascades SIGTERM to the embedder.</div></div>
+    <div class="risk"><span class="sev">Medium</span> — recurring maintenance tail: Apple Developer (~$99/yr),
+      Windows cert, notarization queues, per-release <code>.sig</code>, fatal-if-lost updater key, ~200 lines of
+      supervisor code — for an audience that mostly doesn't need it.
+      <div class="mit">Mitigation: don't build the heavy shell for the current audience; gate it on a concrete
+        non-technical / native-Windows signal; keep it the thin tray-supervisor variant.</div></div>
+    <div class="risk"><span class="sev">Low</span> — bundling the ~130&nbsp;MB bge model balloons the installer;
+      first-run fetch needs network + a progress UX, and until the model is present hybrid/semantic search
+      returns an error (the keyword path still works).
+      <div class="mit">Mitigation: default to first-run fetch with a progress UI; surface embedder
+        health/respawn count so the missing-model state is visible.</div></div>
+  </section>
+
+  <section id="recommendation">
+    <h2>Recommendation &amp; sequencing</h2>
+    <p><strong>Do not build a Tauri/Pake desktop shell as the deployment answer for kb's current audience.</strong>
+      Sequence:</p>
+    <ol class="steps">
+      <li><strong>Now — cargo-dist.</strong> Adopt <code>curl|sh</code> + Homebrew + npm as the primary
+        distribution, resolving <code>docs/packaging.md</code>'s blockers. The ONNX feature-unification concern
+        is handled declaratively by <code>precise-builds = true</code> (already templated) — adopt it and verify
+        the dist build honours it. The real "decide before release" weight is the version-scheme/tag-format
+        (decide once — also unblocks a future updater), the Homebrew tap, and the aarch64-linux ONNX
+        cross-link. Keep Docker as-is.</li>
+      <li><strong>Now (cheap) — installable PWA.</strong> Add a web manifest (+ optional service worker) to
+        <code>web/dist</code>. Near-zero cost; gives the windowed/dock-icon feel for the in-front-of-screen use.
+        Quick check that the SPA origin and <code>*.artifacts.localhost</code> subdomains don't fight over
+        manifest/SW scope.</li>
+      <li><strong>Later, conditional — thin Tauri tray-supervisor.</strong> Only if a non-technical and/or
+        native-Windows audience is actually targeted. Hard prerequisites: a DNS-free artifact mode and a closed
+        non-unix supervision stub. Then accept the macOS sidecar-signing/notarization (and, if Windows is in
+        scope, the new MSVC <code>ort</code> validation + signing).</li>
+    </ol>
+    <p>Pake-the-CLI is out (no backend). Raw Tauri v2 is the right shell technology <em>if</em> a shell is built
+      (Rust-native; <code>externalBin</code> maps to the two-binary rule), but it is an audience-expansion bet,
+      not a better way to reach today's users.</p>
+  </section>
+
+  <section id="decisions">
+    <h2>Open operator decisions</h2>
+    <ul class="tight">
+      <li><strong>Audience.</strong> Do we want to expand to non-technical and/or native-Windows users? This single
+        decision determines whether a Tauri shell is worth building at all.</li>
+      <li><strong>Tag-format / version-scheme.</strong> <code>Cargo.toml</code> is <code>0.0.0</code>; the real
+        version comes from git tags. "One shared workspace version, unprefixed <code>v</code>-tag per milestone"
+        fits kb's cadence and unblocks both cargo-dist and a future updater — unless the kb-embedder-as-separate-package
+        workaround forces package-prefixed tags.</li>
+      <li><strong>cargo-dist ONNX feature-unification.</strong> Resolved in principle by
+        <code>precise-builds = true</code> (templated in <code>docs/packaging.md</code>); the only open item is
+        verifying the dist build honours it on the release runners — with split-package or a bespoke
+        Dockerfile-Actions release as fallbacks.</li>
+      <li><strong>DNS-free artifact mode</strong> (if a shell ships): second loopback port (simplest, reuses the full
+        injection pipeline) vs a custom protocol / URI-scheme handler (distinct origin, must re-validate sandbox
+        isolation) vs installer-shipped dnsmasq (poor UX).</li>
+      <li><strong>Model delivery</strong> for a desktop/offline SKU: first-run fetch (small installer, needs network)
+        vs bundle the bge model (large installer, true offline).</li>
+      <li><strong>Fleet shape &amp; ownership.</strong> Is the desktop value a single tray supervisor for all ~18
+        daemons (a GUI analog of the existing <code>kb tui</code>) or per-daemon windows — and who owns the recurring
+        Apple/Windows/updater signing infrastructure if a shell ships?</li>
+    </ul>
+  </section>
+
+  <section id="methodology">
+    <h2>Methodology &amp; caveats</h2>
+    <p>An 11-agent kb research workflow drove this. Five parallel <em>gather</em> arms collected evidence — three read
+      the kb codebase (daemon launch + embedder sidecar; web-serving + artifact-subdomain surface; build/packaging),
+      two ran web research (long-lived Rust server in Tauri v2; the non-Tauri alternatives). Five adversarial
+      <em>verify</em> agents each tried to refute a load-bearing claim. A final synthesis produced the tiered
+      recommendation. Current-state web facts (Pake CLI surface, Tauri v2 sidecar/updater/signing, ONNX cross-platform)
+      were verified inline before the workflow, so the agents built on ground truth rather than memory.</p>
+    <p>Codebase claims carry <code>file:line</code> citations against the repository at the time of writing
+      (kb&nbsp;v0.19, June&nbsp;2026). The adversarial pass corrected two over-statements — Windows ONNX is
+      <em>plausible</em> via ort's green-tier windows-msvc static binaries (a new, unvalidated matrix entry, not a hard
+      gap), and Tauri strips the triple suffix in production so kb's sibling discovery of <code>kb-embedder</code> works
+      with no env var. <strong>Caveats:</strong> the WebKit <code>*.localhost</code> behavior (and the macOS 26 "Tahoe"
+      change) was not bench-tested in a real WKWebView here — it is inferred from WebKit bug reports and kb's own
+      documented dnsmasq requirement; the native-Windows ONNX link, the cargo-dist two-pass build under feature
+      unification, and the sidecar-notarization entitlements are all <em>predicted-tractable but unproven</em> and each
+      needs a spike before commitment.</p>
+  </section>
+
+  <section id="sources">
+    <h2>Sources</h2>
+    <p class="src">Codebase references are <code>file:line</code> against this repository (kb v0.19). Key external
+      sources:</p>
+    <div class="src full">
+    <ul>
+      <li><a href="https://github.com/tw93/Pake" target="_blank" rel="noopener">tw93/Pake</a> + <a href="https://github.com/tw93/Pake/blob/main/docs/cli-usage.md" target="_blank" rel="noopener">CLI usage</a></li>
+      <li><a href="https://v2.tauri.app/develop/sidecar/" target="_blank" rel="noopener">Tauri v2 — Embedding External Binaries</a></li>
+      <li><a href="https://v2.tauri.app/learn/sidecar-nodejs/" target="_blank" rel="noopener">Tauri v2 — Node.js as a sidecar</a></li>
+      <li><a href="https://v2.tauri.app/plugin/updater/" target="_blank" rel="noopener">Tauri v2 — Updater plugin</a></li>
+      <li><a href="https://v2.tauri.app/distribute/sign/macos/" target="_blank" rel="noopener">Tauri v2 — macOS code signing</a></li>
+      <li><a href="https://v2.tauri.app/distribute/sign/windows/" target="_blank" rel="noopener">Tauri v2 — Windows code signing</a></li>
+      <li><a href="https://v2.tauri.app/reference/environment-variables/" target="_blank" rel="noopener">Tauri v2 — Environment variables</a></li>
+      <li><a href="https://github.com/tauri-apps/tauri/issues/11992" target="_blank" rel="noopener">tauri#11992 — sidecar codesign/notarization</a></li>
+      <li><a href="https://github.com/tauri-apps/tauri/discussions/2269" target="_blank" rel="noopener">tauri#2269 — nested binary signing</a></li>
+      <li><a href="https://github.com/tauri-apps/tauri/discussions/2751" target="_blank" rel="noopener">tauri#2751 — http server in a Tauri app</a></li>
+      <li><a href="https://ort.pyke.io/setup/platforms" target="_blank" rel="noopener">ort — supported platforms</a> + <a href="https://ort.pyke.io/setup/linking" target="_blank" rel="noopener">linking</a></li>
+      <li><a href="https://github.com/axodotdev/cargo-dist/issues/1740" target="_blank" rel="noopener">cargo-dist#1740 — feature unification</a></li>
+      <li><a href="https://axodotdev.github.io/cargo-dist/" target="_blank" rel="noopener">cargo-dist book</a></li>
+      <li><a href="https://bugs.webkit.org/show_bug.cgi?id=160504" target="_blank" rel="noopener">WebKit #160504</a> + <a href="https://bugs.webkit.org/show_bug.cgi?id=171934" target="_blank" rel="noopener">#171934</a> — localhost resolution</li>
+      <li><a href="https://chromium.googlesource.com/chromium/src/+/main/net/dns/README.md" target="_blank" rel="noopener">Chromium DNS — *.localhost → loopback</a></li>
+      <li><a href="https://web.dev/learn/pwa/installation" target="_blank" rel="noopener">web.dev — PWA installation</a> + <a href="https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable" target="_blank" rel="noopener">MDN — installable PWAs</a></li>
+      <li><a href="https://docs.crabnebula.dev/cloud/guides/auto-updates-tauri/" target="_blank" rel="noopener">CrabNebula — Tauri auto-updates</a></li>
+      <li><a href="https://github.com/canton7/SyncTrayzor" target="_blank" rel="noopener">SyncTrayzor</a> · <a href="https://coder.com/docs/code-server/install" target="_blank" rel="noopener">code-server install</a> · <a href="https://docs.ollama.com/macos" target="_blank" rel="noopener">Ollama macOS</a> · <a href="https://www.meilisearch.com/docs/learn/self_hosted/install_meilisearch_locally" target="_blank" rel="noopener">Meilisearch local install</a> — prior-art distribution shapes</li>
+      <li><a href="https://www.gethopp.app/blog/tauri-vs-electron" target="_blank" rel="noopener">Tauri vs Electron — bundle size</a></li>
+    </ul>
+    </div>
+    <p class="src">Companion in this corpus: <code>docs/research/obsidian-competitive/kb-desktop-onboarding.html</code>
+      (Part&nbsp;IV — independently reaches the thin-tray-supervisor conclusion) and <code>docs/packaging.md</code>
+      (the cargo-dist/Homebrew template + its six blockers).</p>
+  </section>
+
+  </main>
+  </div>
+</body>
+</html>

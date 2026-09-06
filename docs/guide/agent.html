@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb agent memory and episodic sessions: remember, recall, why, recollect.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, memory, sessions, why, recollect, recall">
+<title>Memory &amp; sessions · kb guide</title>
+<link rel="stylesheet" href="_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="docnav" aria-label="kb user guide">
+  <a class="home" href="index.html">kb guide</a>
+  <span class="lang"><a href="agent.html" aria-current="page">EN</a><span class="sep">·</span><a href="it/agent.html">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Start</a>
+  <a href="concepts.html">Concepts</a>
+  <a href="search.html">Search</a>
+  <a href="web.html">Web reader</a>
+  <a href="comments.html">Comments</a>
+  <a href="agent.html" aria-current="page">Memory &amp; sessions</a>
+  <a href="organize.html">Lists &amp; notes</a>
+  <a href="operate.html">Operate</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">06 · Agent-facing ledgers</p>
+  <h1>Memory &amp; sessions</h1>
+  <p class="lede">Two different stores: curated facts you keep on purpose, and episodic transcripts you pull when you need provenance. Neither is auto-injected into prompts by the daemon.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#split">The split</a></li>
+    <li><a href="#memory">Curated memory</a></li>
+    <li><a href="#sessions">Episodic sessions</a></li>
+    <li><a href="#capture">Capture and hooks</a></li>
+    <li><a href="#reading">Reading progress for agents</a></li>
+  </ol>
+</nav>
+
+<section id="split">
+<h2>The split</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th></th><th>Memory</th><th>Session</th></tr></thead>
+  <tbody>
+    <tr><td>Kind</td><td>Curated fact</td><td>What happened (transcript digest)</td></tr>
+    <tr><td>Write</td><td><code>kb remember</code> / proposals</td><td>Capture hooks at session stop</td></tr>
+    <tr><td>Read</td><td><code>kb recall</code></td><td><code>kb why</code> · <code>kb recollect</code> · <code>kb sessions …</code></td></tr>
+    <tr><td>In default search?</td><td>As artifacts in memory corpora</td><td>Excluded by default (R0)</td></tr>
+    <tr><td>Ranker</td><td>rank × salience × decay (deterministic)</td><td>Semantic over digests + provenance signals</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="note ok">
+  <strong>Pull, don’t inject.</strong> Success and staleness of recollect are surfaced for judgment — they are never silent score terms or auto-deletions. Capture wins over any live mid-flight view if they ever disagree.
+</div>
+</section>
+
+<section id="memory">
+<h2>Curated memory</h2>
+<p>Remember/recall only work for corpora with <code>memory_scope = "global"</code> or <code>"project"</code> in <code>kb.toml</code> (or ones created by the Claude <strong>kb-memory</strong> plugin + <code>/kb-setup</code>). A normal artifact corpus alone is not enough.</p>
+<pre><code># minimal memory corpus (then restart the daemon)
+# [kb.memory]
+# path = "/home/you/kb-memory"
+# memory_scope = "global"
+
+kb remember "We pin arrow and lance to the same version" \
+  --title "Arrow/lance pin" --salience 0.9 --tags "invariant,build"
+
+kb recall "arrow lance version"
+kb recall "arrow lance version" --explain
+kb forget &lt;id&gt;</code></pre>
+<p>Verify with <code>kb recall "test"</code> / <code>kb status</code>. Empty or error results usually mean no memory-scoped mount is loaded.</p>
+<p>Recall fans out across in-scope memory corpora and ranks by a fixed formula: <strong>rank-position × salience × decay</strong>. <strong>Supersede</strong> is a tombstone applied at recall time (history stays inspectable). <strong>Forget</strong> hard-deletes the memory artifact file. Pin holds a memory above the decay floor. <strong>Promote</strong> (SPA) copies a memory into a chosen regular non-memory kb and strips memory metas (salience/decay/pin/supersedes) — it is not a project→global flip inside the memory corpora, and there is no <code>kb promote</code> CLI verb.</p>
+<p>For a human gate instead of immediate write: <code>kb propose</code> → <code>kb proposals list|approve|reject</code>. Approving uses the same write path as <code>kb remember</code>.</p>
+</section>
+
+<section id="sessions">
+<h2>Episodic sessions</h2>
+<pre><code># Why is this file the way it is? (path → sessions + decisions + commits)
+kb why path/to/file.rs
+
+# Have we done something like this before? (semantic over session digests)
+kb recollect "federated search fan-out"
+# sessions similar to another session's digest (session id, not a file path):
+kb recollect --similar-to &lt;session_id&gt;
+
+kb sessions list
+kb sessions show &lt;session_id&gt;
+kb sessions read &lt;session_id&gt;
+kb sessions by-commit &lt;sha&gt;</code></pre>
+<ul>
+  <li><strong><code>kb why</code></strong> — reconstructs past sessions that touched a path, with prompts, decisions, and commits (confidence labeled).</li>
+  <li><strong><code>kb recollect</code></strong> — semantic search over session digests; surfaces recency, errors, commits so you can decide whether to trust a hit.</li>
+  <li><strong>Canonical session id</strong> — recovered from the transcript’s own <code>sessionId</code> (ground truth), not a truncated filename.</li>
+</ul>
+<p>The indexed surface is a deterministic <strong>digest</strong>, not the raw JSONL. Full transcript text is evidence you pull on demand; default search stays clean.</p>
+</section>
+
+<section id="capture">
+<h2>Capture and hooks</h2>
+<p>Claude Code (and sibling harness adapters) capture at Stop (and related hooks). One long session may produce many capture rows; list/show tooling scopes reads to the newest capture so counts do not double.</p>
+<p>Setup for Claude Code: marketplace + <strong>kb-memory</strong> plugin + <code>/kb-setup</code>. Other agents: shell out to the same <code>kb</code> verbs; put the protocol in AGENTS.md / instructions.</p>
+<pre><code>kb sessions capture …     # explicit capture when needed
+kb import claude-history  # bulk import historical transcripts</code></pre>
+<p><strong>Verify capture:</strong> after a session Stop hook, <code>kb sessions list</code> should show a row. Empty list usually means the daemon is down, the plugin/hooks are missing, or the harness adapter is not installed. <code>kb why</code> / <code>kb recollect</code> need at least one digest-indexed capture. Captures are pull-only — the daemon never auto-injects them into prompts.</p>
+</section>
+
+<section id="reading">
+<h2>Reading progress for agents</h2>
+<p>Before revising a long doc, check what a human actually read:</p>
+<pre><code>kb reading &lt;artifact-id&gt; --json</code></pre>
+<p>Progress is cumulative (max-merge), seeded on open, no SSE noise. It also feeds derived read-state on reading lists.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Page">
+  <a href="comments.html"><span class="dir">Previous</span>Comments</a>
+  <a class="next" href="organize.html"><span class="dir">Next</span>Lists &amp; notes</a>
+</nav>
+
+<footer class="site">kb user guide · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

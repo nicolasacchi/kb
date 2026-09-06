@@ -1,0 +1,949 @@
+/* Phase C-SPA ("kb-code v2 — The Operable Reader", Wave C, the SPA halves):
+ * commit page, compare page, branches page, the History inspector tab, the
+ * age-heatmap overlay, and the Provenance toggle's new 3-state segmented
+ * control. Same token discipline as `provenance.css`/`reader.css` — every
+ * color reaches for a `tokens.css` variable. */
+
+/* --- Provenance segmented control (off | dots | age) --------------------- */
+
+.kbc-provenance-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.kbc-provenance-toggle__opt {
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--ink-mute);
+  padding: 3px 9px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-provenance-toggle__opt:hover {
+  color: var(--ink);
+}
+.kbc-provenance-toggle__opt.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+
+/* --- Age heatmap overlay (line backgrounds, warm→cold) -------------------
+ * F5 — the tint alpha is `var(--age-tint, 8%)`, NOT a literal `8%`: dark's
+ * near-black canvas makes 8% clearly perceptible, but the same 8% all but
+ * disappears against light's near-white canvas, so `tokens.css` doubles it
+ * to 16% under `[data-theme="light"]` — one token, both themes, the
+ * component rule itself never forks. */
+
+.kbc-age-line--0 {
+  background: color-mix(in srgb, var(--warn) var(--age-tint, 8%), transparent);
+}
+.kbc-age-line--1 {
+  background: color-mix(in srgb, color-mix(in srgb, var(--warn) 75%, var(--blue) 25%) var(--age-tint, 8%), transparent);
+}
+.kbc-age-line--2 {
+  background: color-mix(in srgb, color-mix(in srgb, var(--warn) 50%, var(--blue) 50%) var(--age-tint, 8%), transparent);
+}
+.kbc-age-line--3 {
+  background: color-mix(in srgb, color-mix(in srgb, var(--warn) 25%, var(--blue) 75%) var(--age-tint, 8%), transparent);
+}
+.kbc-age-line--4 {
+  background: color-mix(in srgb, var(--blue) var(--age-tint, 8%), transparent);
+}
+
+/* --- Shared attribution badge/card (Commit page + Branches table) -------- */
+
+.kbc-attrib__confidence {
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.kbc-attrib__confidence--trailer,
+.kbc-attrib__confidence--exact {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-attrib__confidence--fuzzy {
+  background: transparent;
+  border: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kbc-attrib__confidence--none {
+  background: var(--bg-card-hi);
+  color: var(--ink-dim);
+}
+.kbc-attrib--compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.kbc-attrib__who {
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-attrib__who:hover {
+  text-decoration: underline;
+}
+.kbc-attrib__none {
+  color: var(--ink-dim);
+}
+.kbc-attrib-card {
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.kbc-attrib-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kbc-attrib-card__who {
+  color: var(--ink);
+}
+.kbc-attrib-card__none {
+  margin: 6px 0 0;
+  color: var(--ink-mute);
+  font-style: italic;
+}
+.kbc-attrib-card__open-session {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--accent-soft);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kbc-attrib-card__open-session:hover {
+  text-decoration: underline;
+}
+
+/* --- Expandable file-change row (Commit + Compare pages) ----------------- */
+
+.kbc-filechange {
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-filechange__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: 12px;
+}
+.kbc-filechange__expand {
+  flex: 0 0 auto;
+  width: 20px;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 11px;
+}
+.kbc-filechange__expand:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.kbc-filechange__status {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+}
+.kbc-filechange__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-filechange__path:hover {
+  text-decoration: underline;
+}
+.kbc-filechange__note {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-style: italic;
+}
+.kbc-filechange__stats {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+}
+.kbc-filechange__additions {
+  color: var(--green);
+}
+.kbc-filechange__deletions {
+  color: var(--red);
+}
+.kbc-filechange__binary {
+  color: var(--ink-dim);
+}
+
+/* --- Commit page ----------------------------------------------------------*/
+
+.kbc-commit {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-commit__subject {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+.kbc-commit__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-commit__sha {
+  font-family: var(--font-mono);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.kbc-commit__parents {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-commit__parent-link {
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+}
+.kbc-commit__body {
+  margin: 16px 0;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kbc-commit__trailers {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--ink-mute);
+}
+.kbc-commit__trailer-key {
+  color: var(--ink-dim);
+}
+.kbc-commit__attribution {
+  margin-bottom: 20px;
+}
+.kbc-commit__files-head,
+.kbc-compare__files-head {
+  padding: 8px 4px;
+  font-size: 12px;
+  color: var(--ink-mute);
+  border-bottom: 1px solid var(--rule-hi);
+  margin-bottom: 4px;
+}
+
+/* --- Compare page ---------------------------------------------------------*/
+
+.kbc-compare {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-compare__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.kbc-compare__ref-input {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 120px;
+}
+.kbc-compare__swap {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.kbc-compare__go {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-compare__dots-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-compare__resolved {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+  margin-bottom: 16px;
+}
+.kbc-compare__mergebase {
+  color: var(--accent-soft);
+}
+.kbc-compare__section-title {
+  font-size: 13px;
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+.kbc-compare__commits {
+  margin-bottom: 20px;
+}
+.kbc-compare__commit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-compare__commit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 4px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-compare__commit-sha {
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+}
+.kbc-compare__commit-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.kbc-compare__commit-meta {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+/* --- Branches page ----------------------------------------------------- */
+
+.kbc-branches {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-branches__title {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+.kbc-branches__truncated {
+  margin-bottom: 8px;
+  color: var(--warn);
+  font-size: 12px;
+}
+/* F5 — horizontal-scroll containment (see `Branches.tsx`'s own doc on the
+ * wrapper). A no-op whenever the table already fits its container. */
+.kbc-branches__table-wrap {
+  overflow-x: auto;
+}
+.kbc-branches__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.kbc-branches__table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--rule-hi);
+}
+.kbc-branches__table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+.kbc-branches__name {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  text-decoration: none;
+}
+.kbc-branches__name:hover {
+  text-decoration: underline;
+}
+.kbc-branches__head-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.kbc-branches__last-subject {
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+.kbc-branches__last-subject:hover {
+  text-decoration: underline;
+}
+.kbc-branches__no-attrib {
+  color: var(--ink-dim);
+}
+
+/* --- History inspector tab (Wave C) --------------------------------------*/
+
+.kbc-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-history__entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-history__entry.is-current {
+  background: var(--accent-bg);
+}
+.kbc-history__sha {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-history__sha:hover {
+  text-decoration: underline;
+}
+.kbc-history__sha--worktree {
+  color: var(--ink-mute);
+  font-style: italic;
+  font-family: var(--font-sans);
+}
+.kbc-history__row-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.kbc-history__subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.kbc-history__time {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-history__current-badge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: var(--radius-sm);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.kbc-history__truncated {
+  padding: 8px 10px;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+/* --- Merge-readiness card (Phase G1 — Compare's card + Branches' per-row
+ * lazy check) --------------------------------------------------------------*/
+
+.kbc-mergecheck {
+  margin: 4px 0 20px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+.kbc-mergecheck__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-mergecheck__chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.kbc-mergecheck__clean {
+  color: var(--green);
+  font-weight: 600;
+}
+.kbc-mergecheck__conflict-badge {
+  color: var(--red);
+  font-weight: 600;
+}
+.kbc-mergecheck__chip {
+  padding: 2px 8px;
+  background: var(--bg-panel-2);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+.kbc-mergecheck__mergebase {
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+}
+.kbc-mergecheck__paths {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-mergecheck__paths li a {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--red);
+}
+
+/* --- Branches page's per-row lazy merge check (Phase G1) ------------------ */
+
+.kbc-branches__check-btn {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 2px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-branches__check-btn:hover {
+  color: var(--ink);
+}
+.kbc-branches__check-pending {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-branches__check-clean {
+  color: var(--green);
+  font-weight: 600;
+}
+.kbc-branches__check-conflict,
+.kbc-branches__check-error {
+  color: var(--red);
+  font-size: 11px;
+}
+
+/* --- Compare page — "compare rebases →" + session-grouped review (Phase
+ * G3, the headline) --------------------------------------------------------*/
+
+.kbc-compare__rangediff-link {
+  display: inline-block;
+  margin-bottom: 14px;
+  color: var(--ink-mute);
+  font-size: 12px;
+  text-decoration: none;
+}
+.kbc-compare__rangediff-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.kbc-compare__layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+.kbc-compare__main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kbc-compare__commits-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-compare__view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.kbc-compare__view-opt {
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--ink-mute);
+  padding: 3px 9px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-compare__view-opt:hover {
+  color: var(--ink);
+}
+.kbc-compare__view-opt.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-compare__group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.kbc-compare__group {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.kbc-compare__group--none {
+  border-style: dashed;
+}
+.kbc-compare__group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.kbc-compare__group-name {
+  font-weight: 600;
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-compare__group-name:hover {
+  text-decoration: underline;
+}
+.kbc-compare__group-name--none {
+  color: var(--ink-dim);
+  font-style: italic;
+  font-weight: 400;
+}
+.kbc-compare__group-count {
+  margin-left: auto;
+  color: var(--ink-dim);
+}
+
+/* --- Range-diff page (Phase C6) -------------------------------------------*/
+
+.kbc-rangediff {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-rangediff__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.kbc-rangediff__input {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 180px;
+}
+.kbc-rangediff__swap {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.kbc-rangediff__go {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-rangediff__truncated {
+  margin-bottom: 8px;
+  color: var(--warn);
+  font-size: 12px;
+}
+.kbc-rangediff__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.kbc-rangediff__table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--rule-hi);
+}
+.kbc-rangediff__table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+.kbc-rangediff__glyph {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: center;
+  width: 20px;
+}
+.kbc-rangediff__glyph--equal {
+  color: var(--ink-dim);
+}
+.kbc-rangediff__glyph--modified {
+  color: var(--accent-soft);
+}
+.kbc-rangediff__glyph--added {
+  color: var(--green);
+}
+.kbc-rangediff__glyph--removed {
+  color: var(--red);
+}
+.kbc-rangediff__dash {
+  color: var(--ink-dim);
+}
+.kbc-rangediff__subject {
+  color: var(--ink);
+}
+
+/* --- PR overlay (Phase G4) --------------------------------------------------*/
+
+.kbc-prs {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-prs__unavailable {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 12px;
+}
+.kbc-prs__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-prs__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-prs__number {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+}
+.kbc-prs__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.kbc-prs__draft-badge {
+  padding: 0 5px;
+  background: var(--bg-panel-2);
+  color: var(--ink-mute);
+  border-radius: var(--radius-sm);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.kbc-prs__author,
+.kbc-prs__refs,
+.kbc-prs__updated {
+  color: var(--ink-mute);
+  flex: 0 0 auto;
+}
+.kbc-prs__refs {
+  font-family: var(--font-mono);
+}
+.kbc-prs__fetch-btn {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.kbc-prs__fetch-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* --- PR comments side strip (Phase G4 — Compare's read-only strip) -------- */
+
+.kbc-prcomments {
+  flex: 0 0 280px;
+  min-width: 0;
+  border-left: 1px solid var(--rule);
+  padding-left: 16px;
+}
+.kbc-prcomments__unavailable {
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 12px;
+}
+.kbc-prcomments__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kbc-prcomments__item {
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.kbc-prcomments__meta {
+  display: flex;
+  gap: 8px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.kbc-prcomments__author {
+  color: var(--ink-mute);
+  font-weight: 600;
+}
+.kbc-prcomments__path {
+  display: inline-block;
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+  margin-bottom: 4px;
+}
+.kbc-prcomments__body {
+  margin: 0;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+/* --- Repo-state banner (Phase G2) ------------------------------------------
+ * mirrors `.kbc-headmoved-banner`'s own conventions (`provenance.css`), a
+ * distinct class since repo-state has no live-mirror SSE payload of its own
+ * to piggyback on (see `RepoStateBanner.tsx`'s doc). */
+
+.kbc-repostate-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  border-bottom: 1px solid var(--red);
+  color: var(--red);
+  font-size: 12px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.kbc-repostate-banner__msg a {
+  color: inherit;
+  font-family: var(--font-mono);
+}
+.kbc-repostate-banner__conflicts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kbc-repostate-banner__conflict-chip {
+  padding: 1px 7px;
+  background: var(--bg-panel-2);
+  border-radius: var(--radius-pill);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-decoration: none;
+}
+.kbc-repostate-banner__conflict-chip:hover {
+  text-decoration: underline;
+}
+.kbc-repostate-banner__dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+/* --- CM6 conflict-marker line tint (Phase G2) ------------------------------
+ * mirrors `.kbc-age-line--N`'s own tint-alpha discipline (`--age-tint`, see
+ * this file's own doc above) — reuses the SAME token for consistency rather
+ * than inventing a second alpha variable. */
+
+.kbc-conflict-line {
+  background: color-mix(in srgb, var(--red) var(--age-tint, 8%), transparent);
+}

@@ -1,0 +1,9 @@
+{"ts":"2026-01-01T00:00:01.000Z","type":"turn_started","session_id":"01900000-0000-7000-8000-000000000001","turn_number":0}
+{"ts":"2026-01-01T00:00:02.000Z","type":"loop_started","loop_index":0}
+{"ts":"2026-01-01T00:00:02.000Z","type":"tool_started","tool_name":"read_file"}
+{"ts":"2026-01-01T00:00:03.000Z","type":"tool_completed","tool_name":"read_file"}
+{"ts":"2026-01-01T00:02:00.000Z","type":"loop_started","loop_index":1}
+{"ts":"2026-01-01T00:02:01.000Z","type":"tool_started","tool_name":"search_replace"}
+{"ts":"2026-01-01T00:02:02.000Z","type":"tool_completed","tool_name":"search_replace"}
+{"ts":"2026-01-01T00:04:00.000Z","type":"loop_started","loop_index":2}
+{"ts":"2026-01-01T00:05:00.000Z","type":"turn_ended","session_id":"01900000-0000-7000-8000-000000000001"}

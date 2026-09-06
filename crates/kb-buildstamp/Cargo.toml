@@ -1,0 +1,12 @@
+[package]
+name = "kb-buildstamp"
+description = "Leaf build-stamp crate (PF-B1): the ONLY crate whose build.rs watches .git/HEAD, so a new commit re-bakes the stamp here (milliseconds) instead of dirtying kb-server and everything downstream (kb-cli, kb-code-server, kb-code-cli, every kb-server test binary). Exposes the git sha + tag-derived version as consts; bins inject them (kb_server::set_build_stamp, clap version). Zero deps by design."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"

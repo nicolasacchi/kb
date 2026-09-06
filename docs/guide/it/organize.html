@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Liste di lettura, note, checklist e wikilink in kb.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, lists, notes, wikilinks, checklists">
+<title>Liste e note · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../organize.html">EN</a><span class="sep">·</span><a href="organize.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html" aria-current="page">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">07 · Struttura personale</p>
+  <h1>Liste e note</h1>
+  <p class="lede">Le liste di lettura ordinano il lavoro. Le note ospitano checklist e wikilink. Entrambe usano i meccanismi ordinari del corpus — nessun database parallelo per l’organizzazione “soft”.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#lists">Liste di lettura</a></li>
+    <li><a href="#notes">Note e checklist</a></li>
+    <li><a href="#wikilinks">Wikilink e backlink</a></li>
+  </ol>
+</nav>
+
+<section id="lists">
+<h2>Liste di lettura</h2>
+<p>Una lista è una sequenza nominata e ordinata di artefatti interi o di <strong>§sezioni</strong> di essi. Lo stato di lettura è <strong>derivato</strong> (override → permanenza sulla sezione → completamento dello scroll) — non un “flag letto” memorizzato a parte che finisce per divergere dalla realtà.</p>
+<pre><code>kb list create "Q3 design pass" --kb research
+kb list add &lt;list&gt; &lt;artifact&gt;
+kb list add &lt;list&gt; &lt;artifact&gt; --section overview
+kb list show &lt;list&gt;
+kb list update &lt;list&gt; &lt;entry&gt; --read     # entry = le_… id or 1-based index
+kb list move &lt;list&gt; &lt;entry&gt; --to 1       # 1-based position (or --before/--after)
+kb list prune &lt;list&gt;                    # dry-run: list tombstones, exit
+kb list prune &lt;list&gt; --yes              # apply: drop them
+kb list export &lt;list&gt; -o reading.md     # kb-list/1 Markdown or JSON
+kb list import reading.md --into &lt;list&gt;</code></pre>
+<p>Le voci <strong>tombstoned</strong> (segnaposto di elementi eliminati) puntano ad artefatti eliminati o che non si risolvono più nell’indice. <code>prune</code> rimuove quelle righe dalla lista; non cancella i file sorgente.</p>
+<p>Per condividere o esportare offline un’intera lista come bundle autonomo (voci ordinate + TOC generato) si usa <code>kb share --list … --local out.zip</code> — vedi <a href="operate.html#share">Operare → share</a>.</p>
+</section>
+
+<section id="notes">
+<h2>Note e checklist</h2>
+<p>Una nota è un artefatto Markdown con <code>kb-category: note</code>. È ricercabile e commentabile come ogni altro artefatto, ma esclusa dalla griglia della galleria e dall’atlante, così gli appunti personali non affogano la libreria.</p>
+<pre><code>kb notes new --folder projects/kb --title "Open threads"
+kb notes append &lt;note&gt; --item "Wire the guide into docs/README"
+kb notes check &lt;note&gt; --item 0
+kb notes list --kb research
+kb notes show &lt;note&gt;</code></pre>
+<p>Le task item GFM si attivano/disattivano in ordine di documento. Helper di stato: <code>done</code>, <code>archive</code>, <code>rm --yes</code>.</p>
+</section>
+
+<section id="wikilinks">
+<h2>Wikilink e backlink</h2>
+<p>Nelle note, <code>[[target|alias]]</code> è tessuto connettivo, non una nuova tabella. I link si risolvono localmente al corpus (id → path source-rel → titolo esatto → basename univoco) e usano il grafo di edge esistente (<code>kind=link</code>), così compaiono nei conteggi di backlink, nelle linee di collegamento dell’atlante e nel pannello Links del reader.</p>
+<pre><code>kb notes links &lt;note&gt;      # outlinks + backlinks
+kb backlinks &lt;artifact&gt;    # who points here</code></pre>
+<p>I target ambigui vengono esclusi dal grafo anziché indovinati. L’HTML servito mantiene <code>[[…]]</code> letterale; la SPA renderizza i link risolti a partire dalla mappa del server.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="agent.html"><span class="dir">Precedente</span>Memoria e sessioni</a>
+  <a class="next" href="operate.html"><span class="dir">Successiva</span>Operare</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,302 @@
+/* V3.4-C3 — symbol-first browser (Smalltalk lens). */
+
+.kbc-browser {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--topbar-h, 48px));
+  min-height: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.kbc-browser__head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 16px 16px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.kbc-browser__title {
+  font-size: 20px;
+  margin: 0;
+}
+
+.kbc-browser__hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-mute);
+  max-width: 56em;
+  line-height: 1.4;
+}
+
+.kbc-browser__hint kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 0 4px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--bg-panel);
+}
+
+.kbc-browser__filter {
+  min-width: 180px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+
+.kbc-browser__panes {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(140px, 0.9fr) minmax(200px, 1.4fr) minmax(160px, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 960px) {
+  .kbc-browser__panes {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+}
+
+.kbc-browser__pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-right: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+
+.kbc-browser__pane:last-child {
+  border-right: none;
+}
+
+.kbc-browser__pane.is-focused {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.kbc-browser__pane-title {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kbc-browser__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kbc-browser__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  row-gap: 1px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.kbc-browser__row--static {
+  cursor: default;
+}
+
+.kbc-browser__row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.kbc-browser__row.is-active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-left-color: var(--accent);
+}
+
+.kbc-browser__kind {
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--ink-dim);
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  align-self: center;
+}
+
+.kbc-browser__name {
+  grid-column: 2;
+  grid-row: 1;
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-browser__open {
+  grid-column: 3;
+  grid-row: 1;
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+.kbc-browser__open:hover {
+  color: var(--accent);
+}
+
+.kbc-browser__path {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  font-size: 10px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-browser__muted {
+  color: var(--ink-mute);
+  font-size: 12px;
+  padding: 10px;
+}
+
+.kbc-browser__error {
+  color: var(--red);
+  font-size: 12px;
+  padding: 10px;
+}
+
+.kbc-browser__trunc {
+  font-size: 11px;
+  padding: 6px 10px;
+  color: var(--warn);
+}
+
+.kbc-browser__types {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--rule);
+  padding: 6px 10px 10px;
+  font-size: 11px;
+  max-height: 30%;
+  overflow: auto;
+}
+
+.kbc-browser__sublab {
+  font-weight: 600;
+  color: var(--ink-mute);
+  margin: 4px 0;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.kbc-browser__typelist {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.kbc-browser__typelist li {
+  padding: 2px 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.kbc-browser__pane--source {
+  background: var(--bg);
+}
+
+.kbc-browser__source {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  min-height: 0;
+}
+
+.kbc-browser__source-link {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.kbc-browser__source-link:hover {
+  text-decoration: underline;
+}
+
+.kbc-browser__tab {
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.kbc-browser__tab.is-on {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Sparkline (shared with hotspots + entity rail) */
+.kbc-spark {
+  display: inline-flex;
+  vertical-align: middle;
+  line-height: 0;
+}
+
+.kbc-spark__line {
+  stroke: var(--accent);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+.kbc-spark__dot {
+  fill: var(--accent);
+}
+
+.kbc-spark__empty {
+  stroke: var(--rule);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}

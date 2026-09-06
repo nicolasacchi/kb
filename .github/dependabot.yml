@@ -1,0 +1,56 @@
+# Dependabot — automated dependency PRs for every ecosystem in the repo.
+# Minor/patch bumps are grouped into one PR per ecosystem to limit noise;
+# majors come as individual PRs (they may need code changes). github-actions
+# is included so the SHA-pinned actions in .github/workflows stay current
+# (Dependabot bumps the SHA and its `# vX` comment together).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/tests/e2e"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      e2e-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        patterns: ["*"]
+    ignore:
+      # dtolnay/rust-toolchain's TAGS ARE TOOLCHAIN VERSIONS, not action
+      # releases: `@1.96.0` means "install Rust 1.96.0", and the tag is
+      # re-pointed as new Rust versions ship. Dependabot reads them as
+      # ordinary semver and bumps to the newest tag it can see, silently
+      # re-pinning the compiler. On 2026-08-12 it opened a PR moving every
+      # job to `@1.100.0`; each one died in ~15 seconds on a 404 from
+      # static.rust-lang.org for a Rust that does not exist.
+      #
+      # The toolchain is pinned deliberately and in ONE place —
+      # rust-toolchain.toml (1.96.0) — with the action's ref kept in step by
+      # hand so local `rustup` auto-switch and CI can never disagree about
+      # which clippy is authoritative. Bump both together, manually.
+      - dependency-name: "dtolnay/rust-toolchain"

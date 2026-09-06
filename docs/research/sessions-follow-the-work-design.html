@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:applied, project:kb, sessions, follow-the-work, transcript, claude-code, indexing, spa, ux, design">
+<title>kb sessions — follow-the-work design</title>
+<style>
+/* ── kb visual floor — keep in sync with kb/docs/authoring-artifacts.md "Visual floor" ── */
+:root{
+  --bg:#fbfbfa;--surface:#f3f3f1;--fg:#1b1b1a;--muted:#5f5f5c;
+  --rule:#d9d9d6;--accent:#3a5a9f;--accent-fg:#ffffff;
+  --warn:#8a5f00;--danger:#9a2f28;--ok:#256148;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:50rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16171a;--surface:#1f2126;--fg:#e6e6e3;--muted:#a3a39e;
+    --rule:#2c2e33;--accent:#8fb0ee;--accent-fg:#11131a;
+    --warn:#e0b24d;--danger:#f08079;--ok:#6fcaa0;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+.btn{font:600 var(--fs-small)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;border:1px solid var(--rule);border-radius:var(--radius);background:transparent;color:var(--fg)}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:focus-visible{outline:var(--focus);outline-offset:2px}
+.btn--primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+/* ── end kb visual floor ── */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:2rem;margin:.2em 0 .3em}
+h2{font-size:1.4rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.08rem;margin:1.7em 0 .3em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+a[target="_blank"]::after{content:" \2197";font-size:.8em}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.18rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0;font-size:1em}
+blockquote{margin:1em 0;padding:.2em 1em;border-left:3px solid var(--rule);color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.9rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td p,td li{font-family:var(--sans);margin:.2em 0}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+nav.toc{font-family:var(--sans);font-size:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:1em 1.2em;margin:1.5em 0}
+nav.toc strong{font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+nav.toc ol{margin:.5em 0 0;padding-left:1.3em}
+nav.toc li{font-family:var(--sans);margin:.15em 0}
+.askid{font-family:var(--mono);font-size:.78rem;color:var(--accent);font-weight:700}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<div class="callout callout--ok"><span class="callout-label">Superseded note (2026-07-02)</span>The "one refinement remains" line below is out of date: <strong>P8</strong> (save a session thread as an editable kb-list/1 reading list) shipped 2026-06-26. All of P0&ndash;P8 is now on <code>main</code>.</div>
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> project:kb</div>
+  <h1>kb sessions — follow-the-work design</h1>
+  <p class="lede">The sessions corpus already parses almost everything the user wants — folder, title, first prompt, file edits, decisions — and then throws it away on every serve. The plan turns one shared extractor and one widened table into a navigable work journal: readable rows grouped by project, bidirectional file links everywhere, and a follow-the-work layer of decisions, commits, timelines and resume cards.</p>
+  <div class="meta-strip">
+    <span>2026-06-25</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:applied</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">10 features &middot; 5 phases</span>
+  </div>
+</header>
+
+<div class="callout callout--ok"><span class="callout-label">Implementation status (shipped — P0–P7)</span>
+Implemented and merged on <code>main</code> across nine green-CI commits, end-to-end verified in a real browser. <strong>Delivered:</strong> the full 7 asks A1–A7 (P0 extractor + V0017 schema; P1 readable index + folder grouping; P2 bidirectional file links; P3 AskUserQuestion fix + raw escape hatch); the follow-the-work core (P4: V0018 decisions log + effort/error stats + deterministic resume card); <em>and</em> all four originally-deferred S10 pieces — <strong>P5</strong> session→git-commit linkage (V0019 <code>session_commits</code>; SHAs detected from Bash output), <strong>P6</strong> sessions-scoped keyword search (<code>?q=</code>) + per-project timeline rollups (count · span · files edited · tokens), and <strong>P7</strong> auto-clustered narrative threads (deterministic folder + time-gap clustering). Every feature has CLI parity: <code>kb sessions list --folder · folders · search · threads · show · resume</code>. <strong>One refinement remains</strong>: persisting threads as <em>editable</em> kb-list/1 lists (invariant #25; the read-only clustered view ships now) — cheap on top of the P7 clustering.</div>
+
+<nav class="toc" aria-label="Table of contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#thesis">Thesis &amp; the seven asks</a></li>
+    <li><a href="#current-state">How sessions work today (and where they leak)</a></li>
+    <li><a href="#decisions">Resolved decisions</a></li>
+    <li><a href="#data-model">Foundation: one extractor, one migration</a></li>
+    <li><a href="#identity-index">Identity &amp; index (A1, A2, A3)</a></li>
+    <li><a href="#file-links">File activity &amp; bidirectional links (A4, A6, A7)</a></li>
+    <li><a href="#presentation">Presentation (A5)</a></li>
+    <li><a href="#follow-the-work">The follow-the-work layer (beyond the asks)</a></li>
+    <li><a href="#phasing">Phasing &amp; verification</a></li>
+    <li><a href="#invariants">Invariants this plan must respect</a></li>
+    <li><a href="#open-questions">Remaining open questions</a></li>
+    <li><a href="#files-touched">Files this will touch</a></li>
+  </ol>
+</nav>
+
+<section>
+<h2 id="thesis">Thesis &amp; the seven asks</h2>
+<p>A kb session is a captured Claude Code transcript: the <code>Stop</code> hook <code>plugins/kb-memory/hooks/kb-capture.sh</code> HTML-escapes the raw JSONL, wraps it in one <code>&lt;pre&gt;</code>, and drops <code>session-&lt;ts&gt;-&lt;sid&gt;.html</code> into the <code>[kb.sessions]</code> corpus. Today the corpus is a flat, day-bucketed stream of cryptically-named blobs. The opportunity: the renderer <em>already</em> extracts the working directory, the AI title, the first prompt, every file edit and every steering decision on each serve — and discards all of it. The plan persists that extraction once at index time and builds a work journal on top.</p>
+<p>The user framed seven concrete asks (labelled A1–A7) plus a meta-goal — <em>"a tool that helps the end user follow the work."</em> Each ask maps to one or more numbered features (S1–S10):</p>
+<table>
+<thead><tr><th>Ask</th><th>What the user wants</th><th>Features</th></tr></thead>
+<tbody>
+<tr><td><span class="askid">A1</span></td><td>Separate sessions by their per-session folder (kb has no folders, but each session has a <code>cwd</code>).</td><td>S3, S4, S5</td></tr>
+<tr><td><span class="askid">A2</span></td><td>A readable name instead of <code>session-20260618T071023Z-8fb51651-…html</code>.</td><td>S3, S4, S5</td></tr>
+<tr><td><span class="askid">A3</span></td><td>The index shows the first user interaction so each row is self-describing.</td><td>S1, S4, S5</td></tr>
+<tr><td><span class="askid">A4</span></td><td>Link the files a session changed / read / used (to the kb artifact where one exists).</td><td>S2, S3, S6, S7</td></tr>
+<tr><td><span class="askid">A5</span></td><td>Parse everything nicely by default; raw JSON only behind a button; AskUserQuestion shown as clean Q&amp;A.</td><td>S8</td></tr>
+<tr><td><span class="askid">A6</span></td><td>A summary of files read &amp; edited, <em>including files outside any kb corpus</em>.</td><td>S2, S3, S6, S7</td></tr>
+<tr><td><span class="askid">A7</span></td><td>Bidirectional session&harr;file links visible everywhere — and the reverse, an artifact showing the sessions that touched it.</td><td>S6, S7</td></tr>
+<tr><td><span class="askid">meta</span></td><td>Follow the work over time.</td><td>S9, S10</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="current-state">How sessions work today (and where they leak)</h2>
+<p>The pipeline is three stages, confirmed against the source. There is no contradiction between the "dumb" capture hook and the 1,743-line renderer — they are different stages.</p>
+<h3 id="pipeline">The three stages</h3>
+<ul>
+<li><strong>Capture</strong> (<code>kb-capture.sh</code>) — escapes the JSONL into one <code>&lt;pre&gt;</code>, stamps <code>kb-category=memory-session</code>, <code>kb-session=&lt;sid&gt;</code>, a hardcoded <code>&lt;title&gt;Session transcript &lt;ts&gt;&lt;/title&gt;</code>. Zero extraction. The on-disk file is the lossless store and is never rewritten.</li>
+<li><strong>Index-time enrich</strong> — <code>enrich.rs</code>'s <code>SessionCaptureHook</code> (the first ordered hook) calls <code>sessions::parse_session_html</code> and upserts one slim V0008 row into the per-kb sqlite <code>sessions</code> table, so <code>/api/sessions</code> never re-scrapes the multi-MB body.</li>
+<li><strong>Render-on-read</strong> — <code>crates/kb-server/src/routes/artifact.rs</code> (~L652) calls <code>session_render::render_if_session</code> on <em>every</em> serve, after the outbound scrub and before probe/runtime injection. It re-parses the <code>&lt;pre&gt;</code> JSONL into user/assistant cards, collapsible tool calls, decision cards, a jump rail and a header summary. A renderer change needs no reindex.</li>
+</ul>
+<h3 id="what-already-works">What already works</h3>
+<p><code>session_render.rs</code> already deserializes and renders <code>cwd</code>, <code>gitBranch</code>, <code>aiTitle</code>, every <code>Read</code>/<code>Edit</code>/<code>Write</code>/<code>Bash</code> tool call, AskUserQuestion answers, plan approvals, token usage and duration. <span class="askid">A2</span> is half-done: <code>aiTitle</code> drives the in-page <code>&lt;h1&gt;</code> (<code>derive_summary</code>, L576–580) but not the artifact <code>&lt;title&gt;</code>, the kb list title, or the filename. <span class="askid">A5</span> is mostly done: AskUserQuestion is already parsed into a decision card (<code>render_user_decision</code>, L1045; <code>parse_qa_pairs</code>, L1103), and raw JSON is <em>not</em> the default — only malformed lines fall back to a <code>&lt;details&gt;</code>.</p>
+<h3 id="where-it-leaks">Where it leaks</h3>
+<div class="callout callout--warn"><span class="callout-label">Confirmed gaps</span>
+<ul>
+<li><strong>The data is extracted and discarded.</strong> V0008 persists exactly 7 columns (<code>artifact_id</code> PK, <code>session_id</code>, <code>started_at</code>, <code>ended_at</code>, <code>message_count</code>, <code>first_user_prompt</code>, <code>source_relative</code>). <code>cwd</code>, <code>git_branch</code>, file edits and decisions live only inside the HTML.</li>
+<li><strong>A3 first-prompt extraction is bugged.</strong> The render-path extractor (<code>first_text_of</code>) picks the <code>&lt;local-command-caveat&gt;</code> wrapper on modern transcripts, not the typed prompt. The clean signal is <code>promptSource == "typed"</code> with a wrapper-stripping fallback for old (v2.1.148) transcripts.</li>
+<li><strong>Two divergent <code>first_user_prompt</code> implementations</strong> already exist (<code>sessions.rs</code> 200-char vs <code>session_render</code> 280-char) — adding more extraction without factoring one parser guarantees a third.</li>
+<li><strong>A5's AskUserQuestion card is silently broken on recent sessions.</strong> It matches only the prose prefix <code>"User has answered your questions: "</code>, but the dominant form is now <code>"Your questions have been answered: "</code> (~70 vs ~31 in-corpus), so the Q&amp;A card falls through to raw text on most recent sessions.</li>
+<li><strong>No session&rarr;file table.</strong> <code>/touches</code> is a per-request whole-transcript substring scan, corpus-only, with no read/edit split and structurally blind to out-of-corpus files (<span class="askid">A6</span>). There is no reverse artifact&rarr;sessions endpoint.</li>
+<li><strong>A1 folder grouping is absent end to end.</strong> <code>cwd</code> is parsed but persisted nowhere; the list is a flat cross-kb day stream. <code>cwd</code> is <em>not</em> a session constant — ~60% of sessions span 2–5 directories.</li>
+<li><strong>The open-artifact link mis-resolves.</strong> The runtime posts <code>open-artifact</code> with a raw absolute <code>file_path</code>, but <code>detail.tsx</code> treats it as source-relative.</li>
+<li><strong><code>ended_at</code> is wrong.</strong> It is the capture mtime, not the last-event timestamp, so <code>/readings</code> windows and durations are imprecise.</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2 id="decisions">Resolved decisions</h2>
+<p>Six forks were surfaced; the operator resolved four by preference and two are engineering calls taken on the recommendation.</p>
+<table>
+<thead><tr><th>Decision</th><th>Choice</th><th>Consequence</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td><strong>Full vision</strong></td><td>A1–A7 + S9 persistence + the S10 journal UX, shipped incrementally across P0–P4.</td></tr>
+<tr><td>Folder UX (A1)</td><td><strong>Filter, then day buckets</strong></td><td>A <code>?folder=</code> facet narrows the set; the familiar day timeline stays inside it.</td></tr>
+<tr><td>Row title (A2)</td><td><strong>Two-line</strong></td><td>Bold <code>aiTitle</code> + dimmed first prompt; prompt promotes when title absent. Satisfies A2 + A3 at once.</td></tr>
+<tr><td>Project key</td><td><strong>Modal cwd</strong></td><td>Most-frequent dir as the key; store <code>all_cwds</code>; label by kb.toml corpus when mounted, else basename.</td></tr>
+<tr><td>Corpus membership</td><td><strong>Resolve at index time</strong></td><td>Widen <code>EnrichCtx</code> with the mount table from <code>state.kbs</code>; the file manifest and reverse endpoint become pure indexed seeks.</td></tr>
+<tr><td><code>ended_at</code></td><td><strong>Correct in place</strong></td><td>Set to the last-event ts; a one-time <code>[kb.sessions]</code> reindex backfills. No reason to keep a known-wrong value.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="data-model">Foundation: one extractor, one migration (S1, S2)</h2>
+<p>Everything downstream rests on two pieces of groundwork that change no user-visible behaviour (beyond the A3 fix). This is phase P0.</p>
+<h3 id="s1-extractor">S1 — the one shared pure extractor</h3>
+<p>Add a single pure <code>parse_session_activity(transcript) -&gt; SessionActivity</code> in <code>crates/kb-core/src/sessions.rs</code>, and refactor <code>session_render</code> to call it so the rendered view and the persisted row can never drift. The struct carries everything the asks need:</p>
+<pre><code>SessionActivity {
+  ai_title,            // LAST aiTitle line (current code wrongly takes the first)
+  cwd, all_cwds,       // modal key + the full set
+  git_branch,
+  first_user_prompt,   // fast path: first user line with promptSource=="typed";
+                       // fallback: first non-meta/non-sidechain user line NOT
+                       // starting with <command-name|local-command-caveat|
+                       // local-command-stdout|task-notification|system-reminder>
+  ended_at,            // max event timestamp
+  files: [FileTouch{ abs_path, action: read|edit|write }],
+  edited_set,          // authoritative: LAST file-history-snapshot.trackedFileBackups
+  questions: [QA{ question, chosen, options }],
+  errors, token_total, tool_calls, model,
+}</code></pre>
+<p>Golden-test it against three fixtures: a modern transcript with <code>promptSource</code> (e.g. <code>f7ab49ec</code>), an old transcript without it, and an AskUserQuestion turn. This single change fixes the bugged A3 extraction and removes the duplicate <code>first_user_prompt</code> logic with no schema change.</p>
+<h3 id="s2-migration">S2 — V0017: widen the row, add the edge table</h3>
+<p>One combined migration (next free slot is V0017; V0016 is the latest on disk) because <code>cwd</code>, <code>title</code> and <code>git_branch</code> are wanted by three different clusters — uncoordinated <code>ALTER TABLE</code>s on <code>sessions</code> would collide.</p>
+<ul>
+<li><strong>Widen <code>sessions</code></strong>: add <code>title</code>, <code>cwd</code>, <code>git_branch</code>, <code>files_read_count</code>, <code>files_edited_count</code>; add <code>idx_sessions_cwd</code>; correct <code>ended_at</code> to the last-event ts. All additive/nullable so old rows backfill on reindex.</li>
+<li><strong>Add <code>session_files</code></strong>: <code>(artifact_id_session, session_id, abs_path, basename, action CHECK(read|edit|write), in_corpus, target_kb, target_artifact_id, occurrences, first_seen, last_seen)</code>, PK <code>(artifact_id_session, abs_path, action)</code>; indexes on <code>session_id</code> and <code>target_artifact_id</code>. Populated once at index time; deleted in the indexer unlink pass beside <code>sessions_delete</code> (model on V0014's cascade child).</li>
+</ul>
+<div class="callout callout--danger"><span class="callout-label">Lockstep hazard</span><code>SessionRow</code>, the V0008/V0017 column list, <code>sessions_upsert</code>, <code>sessions_list</code> <code>COLS</code> and <code>map_row</code> must all move together — a single missed column shifts every positional <code>r.get(N)</code> and silently corrupts the mapping (<code>sqlite.rs</code> ~L1921–1990). This is the most error-prone change in the whole plan; add a row-count assertion test.</div>
+</section>
+
+<section>
+<h2 id="identity-index">Identity &amp; index — A1, A2, A3 (S3, S4, S5)</h2>
+<h3 id="s3-write-side">S3 — persist identity &amp; file edges from the enrich hook</h3>
+<p>The central architectural move. Extend <code>SessionCaptureHook::enrich</code> to call <code>parse_session_activity</code> on <code>ctx.html</code> and persist: <code>title = ai_title</code> (fallback first prompt), the modal <code>cwd</code>, <code>git_branch</code>, the corrected <code>ended_at</code>, and the counts. For each file touch, canonicalise the path via <code>paths::canonical_abs</code> <em>first</em> (invariant #27 — symlinked roots like macOS <code>/var</code> or WSL mounts otherwise fail silently), prefix-test it against the mount table, and resolve an in-corpus path to its artifact id purely via <code>ArtifactId::from_path(doc_rel_path(abs, root))</code> with no doc lookup. Out-of-corpus paths persist with <code>in_corpus=0</code> and a plain path (<span class="askid">A6</span>). Write through <code>session_files_replace</code> (one transaction) via a new <code>StorageHandle</code> verb.</p>
+<div class="callout"><span class="callout-label">The fork, resolved</span><code>EnrichCtx</code> today knows only the current kb, but a session in <code>[kb.sessions]</code> routinely edits files under <code>[kb.kb]</code>. <strong>Resolution: widen <code>EnrichCtx</code> with <code>&amp;[(KbName, source_root)]</code> from <code>state.kbs</code></strong> and resolve at index time. The mount list is small and static-ish; this makes both the file manifest and the reverse lookup pure indexed seeks — exactly what A7 needs.</div>
+<h3 id="s4-server-identity">S4 — server: <code>display_name</code>, <code>folder</code>, the folders route</h3>
+<p><code>SessionOut</code> gains a server-computed <code>display_name</code> (<code>title</code> &rarr; <code>first_user_prompt</code> &rarr; <code>sid[:8]</code>, never null — no client label drift) and a <code>folder</code> (basename of <code>cwd</code>, full <code>cwd</code> in the tooltip). Once <code>title</code> is a column, drop the per-row <code>get_by_id().title</code> lance read. Add <code>GET /api/sessions/folders &rarr; {folder, count, latest}[]</code> via <code>buffered_join</code> (invariant #28), and a <code>?folder=</code> param applied per-kb <em>before</em> the cross-kb merge so keyset pagination stays correct.</p>
+<h3 id="s5-spa-index">S5 — SPA: two-line rows, first interaction, folder filter</h3>
+<p>Centralise <code>sessionDisplayName(row)</code> in <code>web/src/lib/</code>, reused by <code>SessionListRow</code>, <code>SessionInspector</code> and <code>SessionPicker</code>. Render the agreed two-line row and the folder-filter-then-day-buckets layout:</p>
+<pre>┌ Sessions ──────── [Folder: kb ▾] ────────┐
+│ ── Today ──────────────────────────────  │
+│  ● Evolve sessions into a journal          │  ← bold aiTitle (display_name)
+│    "review the sessions, make them more…"  │  ← dimmed first_user_prompt
+│    kb · 2h · 14 files · 3 decisions        │  ← meta strip
+│  ● Fix SSE reconnect race                  │
+│ ── Mon Jun 23 ─────────────────────────   │
+│  ● Relativize share permalinks             │
+└───────────────────────────────────────────┘</pre>
+<p>The folder dropdown is fed by <code>/api/sessions/folders</code> and defaults to <code>all</code>; selecting one threads <code>?folder=</code> through the keyset query, and the day buckets render within it.</p>
+</section>
+
+<section>
+<h2 id="file-links">File activity &amp; bidirectional links — A4, A6, A7 (S6, S7)</h2>
+<h3 id="s6-endpoints">S6 — files endpoint + reverse artifact&rarr;sessions endpoint</h3>
+<p>With <code>session_files</code> persisted, both link directions become cheap indexed reads instead of multi-MB scans:</p>
+<ul>
+<li><code>GET /api/sessions/{sid}/files</code> &rarr; rows grouped <code>read|edit|write</code>; out-of-corpus rows carry plain paths (<span class="askid">A6</span>).</li>
+<li><code>GET /api/artifacts/{kb}/{id}/sessions</code> &rarr; the sessions that touched this artifact, newest-first, backed by an index on <code>target_artifact_id</code>, collapsing actions per (session, artifact) to max severity (edit &gt; write &gt; read).</li>
+</ul>
+<p>Both fan out across kbs (a session in one corpus touches files in another) via <code>buffered_join(FANOUT_CAP=8)</code> in BTreeMap order, folding partials and dropping-on-error — never a serial loop or a <code>?</code>-propagate (#28, #15). <code>/touches</code> becomes a thin shim deriving ids from <code>session_files WHERE in_corpus=1</code>; the per-request <code>touches_cache</code> retires.</p>
+<h3 id="s7-spa-links">S7 — SPA: the manifest, the reader panel, the link fix</h3>
+<ul>
+<li><strong>Session side</strong>: replace the bare <code>&lt;code&gt;{id}&lt;/code&gt;</code> "artifacts touched" block with a grouped read / edited / created manifest — in-corpus files as <code>&lt;Link to=/a/{kb}/{source_relative}&gt;</code>, out-of-corpus as muted <code>&lt;code&gt;</code> with copy + "show N more" folding away <code>target/</code>, <code>node_modules</code> and lockfiles.</li>
+<li><strong>Artifact side (A7)</strong>: add a "Sessions that touched this file" panel to <code>PreviewInspector</code> in <code>detail.tsx</code>, fed by the reverse endpoint, mirroring the existing memory "from session" line with a session-colour swatch; lazy-fetch, invalidate on the <code>session.captured</code> SSE event (invariant #23).</li>
+<li><strong>The fix</strong>: normalise the <code>open-artifact</code> message — the runtime posts a raw absolute <code>file_path</code> but <code>detail.tsx</code> treats it source-relative. Stamp a source-relative <code>data-path</code> at render time (reuse S3's resolution) or extend the message to carry <code>kb</code> + <code>target_artifact_id</code>.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="presentation">Presentation — A5 (S8)</h2>
+<p>A5 is mostly satisfied at render time; the work is to fix the silent breakage and add the raw escape hatch. This phase depends only on S1, so it can ship right after P0.</p>
+<ul>
+<li><strong>Fix the decision card</strong>: add a <code>"Your questions have been answered: "</code> arm to <code>render_user_decision</code> reusing <code>parse_qa_pairs</code>, and — more durably — read the <em>structured</em> <code>toolUseResult.answers</code> map keyed against <code>questions[]</code> so a future wording change can't break it; keep the prose match only as fallback. Handle <code>multiSelect</code> (array &rarr; <code>&lt;ul&gt;</code>).</li>
+<li><strong>Per-block raw</strong>: add a <code>&lt;details class="ses-rawblock"&gt;</code> with pretty JSON on the lossy cards (tool_result, decision, attachment). Update the runtime's expand/collapse selector from <code>:not(.ses-debug)</code> to <code>:not(.ses-debug):not(.ses-rawblock)</code> in lockstep, or "expand all" becomes a wall of JSON.</li>
+<li><strong>Whole-session raw</strong>: add <code>wants_raw(&amp;uri)</code> (mirroring <code>wants_annotator</code>) gating the render call at <code>artifact.rs</code> ~L650. A <code>?raw=1</code> request skips <em>only</em> <code>session_render</code> — never the kb-prompt outbound scrub (#5/#9). <code>build_document</code> emits a "view raw transcript" download link.</li>
+</ul>
+<div class="callout callout--warn"><span class="callout-label">Render cost</span>Render-on-read means every presentation change re-runs on each serve over a 2–6 MB body. The richer cards plus the structured-answer pairing compound that cost; pair S8 with a render cache (keyed on artifact id + mtime) so the heavier renderer does not regress serve latency.</div>
+</section>
+
+<section>
+<h2 id="follow-the-work">The follow-the-work layer — beyond the asks (S9, S10)</h2>
+<p>Once the shared extractor and the enrich hook run, the journal features are nearly free — each is a cheap indexed read over data already parsed. All are deterministic and LLM-free, matching the agent-memory ethos (invariant #10): they surface <em>detected</em> signals, never claimed ground truth.</p>
+<h3 id="s9-persist">S9 — persist decisions, commits, errors, effort</h3>
+<ul>
+<li><strong>Decisions</strong> (<code>session_decisions</code>): question&rarr;chosen-answer from the structured <code>toolUseResult.answers</code> (S8), plus ExitPlanMode approvals and tool rejections — the steering moments of a session.</li>
+<li><strong>Commits</strong> (<code>session_commits</code>): best-effort SHAs parsed from <code>git commit</code>/<code>push</code>/<code>tag</code> Bash calls and their results, validated against the git root via the #14 resolver — answers "what shipped from this work" and bridges to the existing Versions/Diff surface.</li>
+<li><strong>Errors &amp; effort</strong>: an error count + sampled blob; <code>token_total</code>, <code>tool_calls</code>, <code>model</code> on the row — so the index can flag the heavy sessions.</li>
+</ul>
+<h3 id="s10-journal-ux">S10 — the navigable work journal</h3>
+<ul>
+<li><strong>Per-project timeline</strong>: a folder-scoped chronological lane (display name + first prompt + duration + files-changed + decision count), seeded by the existing day-bucketing.</li>
+<li><strong>Decisions log</strong>: a cross-session feed and a per-session inspector section of every steering moment as jump anchors — the spine of "follow the work".</li>
+<li><strong>Deterministic resume card</strong>: last typed prompt + edited-but-uncommitted files (<code>session_files</code> minus <code>session_commits</code>) + open decisions + branch + recent actions, with a copy button and a <code>kb sessions resume</code> CLI verb. No LLM.</li>
+<li><strong>Sessions-scoped search</strong>: the transcripts are already in the lance hybrid index — filter <code>kb-category=memory-session</code>, group by folder, facet on model/duration/first-prompt. Mostly UI/routing, no new indexing.</li>
+<li><strong>Narrative threads</strong>: cluster sessions by shared <code>cwd</code> + contiguous time + edited-set overlap + first-prompt similarity, materialised as <strong>kb-list/1 lists</strong> (V0015, invariant #25 — suppress list read-state derivation for session entries). Auto-clustering is a suggestion the user can edit.</li>
+<li><strong>Per-file history in the reader</strong>: with <code>session_files</code>, each artifact shows its lineage — created in session X, revised in Y, referenced in Z — a mini work-journal per artifact.</li>
+</ul>
+<p>Smaller wins that ride the same data: inline red/green diff rendering for <code>Edit</code> (the input carries <code>old_string</code>/<code>new_string</code>); auto-collapse routine tool output but auto-<em>expand</em> errors and decisions; a hot-files heatmap across all sessions; and an out-of-corpus promotion hint ("this folder is edited often — bind-mount it as a kb").</p>
+</section>
+
+<section>
+<h2 id="phasing">Phasing &amp; verification</h2>
+<p>Every phase leaves the system green and shippable, matching the project's phased-commit cadence on <code>main</code>.</p>
+<table>
+<thead><tr><th>Phase</th><th>Features</th><th>Delivers</th><th>Verify</th></tr></thead>
+<tbody>
+<tr><td><strong>P0</strong> Foundation</td><td>S1, S2</td><td>One shared extractor (fixes A3); V0017 widened row + <code>session_files</code>. No visible change beyond A3.</td><td><code>cargo test -p kb-core sessions</code>; <code>just ci</code></td></tr>
+<tr><td><strong>P1</strong> Identity/index</td><td>S3, S4, S5</td><td>A1, A2, A3 — readable two-line rows, folder filter, persisted identity &amp; file edges.</td><td><code>just ci</code>; <code>just ci-spa</code>; <code>curl /api/sessions/folders</code></td></tr>
+<tr><td><strong>P2</strong> File links</td><td>S6, S7</td><td>A4, A6, A7 — file manifest (incl. out-of-corpus), reverse panel, link-resolution fix.</td><td><code>just ci-e2e</code> (<code>spa-sessions.spec.ts</code>)</td></tr>
+<tr><td><strong>P3</strong> Presentation</td><td>S8</td><td>A5 — fixed AskUserQuestion card, per-block raw, <code>?raw=1</code> download. Independent of P1/P2.</td><td><code>cargo test -p kb-core session_render</code></td></tr>
+<tr><td><strong>P4</strong> Follow-the-work</td><td>S9, S10</td><td>Persisted decisions/commits/effort; timeline, decisions log, resume card, search, threads.</td><td><code>just ci</code>; manual SPA</td></tr>
+</tbody>
+</table>
+<p>P3 depends only on S1, so it can land right after P0 if presentation is the priority. P4 ships one green commit per sub-feature. A one-time <code>[kb.sessions]</code> reindex backfills the new columns and <code>session_files</code> for the back-catalogue (no on-disk rewrite).</p>
+</section>
+
+<section>
+<h2 id="invariants">Invariants this plan must respect</h2>
+<ul>
+<li><strong>#27</strong> — ids are source-relative, <code>Doc.path</code> canonical. The readable name and links are <em>display</em> only; never rename <code>session-&lt;ts&gt;-&lt;sid&gt;.html</code> or re-key the artifact. Canonicalise every edited path before any prefix test.</li>
+<li><strong>#11</strong> — <code>kb-session</code> meta is canonical; new columns/tables are additive. <code>session_id</code> is non-unique (<code>artifact_id</code> is PK; re-captures create a second row), so every per-session table keys on <code>artifact_id</code> (+ <code>session_id</code>) and handles multi-capture.</li>
+<li><strong>#8 / #19</strong> — <code>history</code> is append-only; the session&harr;reading link stays a derived join, never a history-row mutation. <code>/readings</code> precision rides the corrected <code>ended_at</code>.</li>
+<li><strong>#28 / #15</strong> — the new <code>/files</code>, <code>/folders</code> and reverse endpoints fan out via <code>buffered_join(FANOUT_CAP=8)</code> in BTreeMap order, fold partials, drop-on-error; no <code>Mutex</code> guard crosses a fan-out await.</li>
+<li><strong>#5 / #9</strong> — <code>?raw=1</code> and per-block raw dumps skip <em>only</em> <code>session_render</code>, never the outbound kb-prompt scrub; wire raw strictly after scrub.</li>
+<li><strong>kb-core #2 / #5</strong> — all sqlite/lance writes go through <code>StorageHandle</code> from the best-effort enrich hook, never inline in <code>index_file</code>.</li>
+<li><strong>#14</strong> — commit linkage uses the existing git-root resolver; never assume <code>cwd</code> is the git root.</li>
+<li><strong>#23 / #24 / #25</strong> — new panels refresh only via <code>session.captured</code>/<code>deleted</code> through the SharedWorker SSE bridge; narrative threads reuse kb-list/1 grammar with session read-state suppressed.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="open-questions">Remaining open questions</h2>
+<p>The six surfaced forks are resolved; a few smaller calls are deferred to implementation time:</p>
+<ul>
+<li><strong>Render cache</strong>: land alongside S8 or as its own commit? Recommendation — alongside, since the richer renderer is what creates the pressure.</li>
+<li><strong>Thread auto-clustering thresholds</strong> (time gap, Jaccard overlap, prompt-similarity cutoff): tune empirically on the existing back-catalogue before exposing; ship suggestions as user-editable, never silent.</li>
+<li><strong>Folder label collisions</strong>: when two corpora share a basename, fall back to the full <code>cwd</code> or the kb name; decide once <code>/api/sessions/folders</code> is live against real data.</li>
+<li><strong>Error sampling budget</strong>: how many error snippets to persist per session before it is noise — start small (≤5) and revisit.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="files-touched">Files this will touch</h2>
+<ul>
+<li><code>crates/kb-core/src/sessions.rs</code> — <code>SessionActivity</code> + <code>parse_session_activity</code>; fix <code>first_user_prompt_from</code>; corpus-resolution helper; golden fixtures.</li>
+<li><code>crates/kb-core/src/session_render.rs</code> — call the shared extractor (<code>derive_summary</code>, <code>first_text_of</code>); fix <code>render_user_decision</code> + <code>parse_qa_pairs</code>; per-block raw cards.</li>
+<li><code>crates/kb-core/migrations/V0017__session_identity_and_files.sql</code> (+ V0018 for S9 child tables) — widen <code>sessions</code>, add <code>session_files</code>, <code>session_decisions</code>, <code>session_commits</code>.</li>
+<li><code>crates/kb-core/src/storage/{sqlite.rs,actor.rs}</code> — grow <code>SessionRow</code> + upsert/list/get in lockstep; <code>session_files_*</code> CRUD via new <code>StorageHandle</code> verbs.</li>
+<li><code>crates/kb-core/src/enrich.rs</code> — <code>SessionCaptureHook::enrich</code> persists activity + files; widen <code>EnrichCtx</code> with the mount table.</li>
+<li><code>crates/kb-core/src/indexer.rs</code> — delete <code>session_files</code> in the unlink pass.</li>
+<li><code>crates/kb-server/src/routes/sessions.rs</code> — <code>display_name</code>/<code>folder</code> on <code>SessionOut</code>; <code>/folders</code>, <code>/{sid}/files</code>, reverse <code>/artifacts/{kb}/{id}/sessions</code>; <code>/touches</code> shim; resume + decisions feeds.</li>
+<li><code>crates/kb-server/src/routes/artifact.rs</code> — <code>wants_raw</code> gate before the render call (after scrub).</li>
+<li><code>crates/kb-server/src/router.rs</code> — register the new routes.</li>
+<li><code>crates/kb-cli/src/commands/sessions.rs</code> — <code>--folder</code>, files section, <code>resume</code> + search verbs.</li>
+<li><code>web/src/routes/sessions.tsx</code>, <code>web/src/routes/detail.tsx</code> — two-line rows, folder filter, file manifest, reader "sessions that touched this file" panel, timeline, decisions, resume card.</li>
+<li><code>web/src/lib/sessionDisplayName.ts</code> (new), <code>web/src/api/sessions.ts</code>, <code>web/src/hooks/useSessions.ts</code>, <code>web/src/styles/sessions.css</code>, <code>web/src/components/search/rail/SessionPicker.tsx</code>.</li>
+<li><code>crates/kb-core/src/session_render_runtime.js</code> + <code>session_render.css</code> — raw-block selector lockstep; clean-reading filter.</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

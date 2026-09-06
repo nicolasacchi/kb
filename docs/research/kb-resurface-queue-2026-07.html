@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, resurface, reading, comments, memory, cli, spa">
+<meta name="kb-summary" content="Design of a deterministic, pull-only resurfacing queue for kb: score = f(open comments, unfinished reads, list membership, memory decay, git staleness), always-explainable, no LLM. Anti-feature analysis of why resurfacing queues annoy, and the thin slice (open comments + unfinished reads) implemented as kb resurface + a gallery strip.">
+<title>A resurfacing queue for kb — pull-only, explainable, and it forgets</title>
+<style>
+:root{
+  --bg:#f7f7fa;--surface:#eeedf3;--fg:#201d26;--muted:#565064;
+  --rule:#d8d5e0;--accent:#6d28a8;--accent-fg:#ffffff;
+  --warn:#8a5800;--danger:#a03024;--ok:#22673f;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:47rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#17151b;--surface:#211e27;--fg:#eae7f0;--muted:#a49fb2;
+    --rule:#363043;--accent:#c39aea;--accent-fg:#1b1322;
+    --warn:#e0b054;--danger:#f0837a;--ok:#79cf9e;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.85rem;margin:.2em 0 .3em}
+h2{font-size:1.3rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.08rem;margin:1.6em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.16rem;margin:.4em 0 1em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.83rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.88rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.verdict{font-family:var(--mono);font-size:.75rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;border-radius:4px;padding:.1em .5em;border:1px solid}
+.verdict--ship{color:var(--ok);border-color:var(--ok)}
+.verdict--reject{color:var(--danger);border-color:var(--danger)}
+.verdict--defer{color:var(--warn);border-color:var(--warn)}
+main:focus{outline:none}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design <span class="sep">&middot;</span> kb</div>
+  <h1>A resurfacing queue for kb — pull-only, explainable, and it forgets</h1>
+  <p class="lede">kb's library is write-only after first read. This designs the fix — a deterministic <code>kb resurface</code> ranked by open comments, unfinished reads, and (later) importance — plus the anti-feature analysis of why resurfacing queues are universally annoying and how this one structurally can't be. The thin slice is implemented.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">resurface</span>
+  </div>
+</header>
+
+<section>
+<h2 id="brief">The brief, and what's already ruled</h2>
+<p>This answers recipe F5 from the <a data-kb-link="kb-next-prompts-playbook-2026-07" href="kb-next-prompts-playbook-2026-07.html">next-prompts playbook</a>. The idea has prior standing: the architecture review (private) formally ruled resurfacing <em>accept-in-principle</em> — "the frontier is synthesis and resurfacing on rails already laid" — proposing importance&nbsp;&times;&nbsp;attention-staleness over edges + history + reading, with the recorded risk: <em>"Could nag — cap to top-2, dismissible, opt-in per kb."</em> The <a data-kb-link="kb-improvement-portfolio-2026-07" href="kb-improvement-portfolio-2026-07.html">improvement portfolio</a> roadmapped it at effort M. Nothing was ever built (grep: no resurface/spaced/today surface in code).</p>
+<p><strong>One correction to the brief itself:</strong> it asks for "<code>--explain</code> like recollect's" — but <code>kb recollect</code> has no <code>--explain</code> flag (clap definition at <code>crates/kb-cli/src/main.rs:180-203</code>). What recollect actually established is better: a house style where <strong>every hit always carries its signals inline</strong> (score, <code>age_days</code>, <code>stale</code>, <code>error_count</code> — surfaced, never silently filtered), scoring constants are named and doc-commented (<code>RECOLLECT_RANK_K = 60</code>, 365-day recency half-life, 180-day stale threshold), and behavior is golden-tested ("recency is gentle, not dominant" pins a 1-year-old hit to ~half weight). <code>kb resurface</code> follows that style: reasons are always printed; <code>--explain</code> additionally prints the per-term arithmetic.</p>
+</section>
+
+<section>
+<h2 id="anti-features">Anti-feature analysis — why resurfacing queues are annoying</h2>
+<p>Every mainstream resurfacing system (inbox-zero apps, spaced-repetition decks, "your daily review" features) converges on the same pathologies, because they optimize for engagement rather than the reader:</p>
+<table>
+<thead><tr><th>Pathology</th><th>Mechanism of harm</th><th>This design's structural counter</th></tr></thead>
+<tbody>
+<tr><td><strong>Streak mechanics</strong></td><td>Manufactured obligation: the tool invents a daily debt, then punishes lapses. The queue becomes about the streak, not the content.</td><td>No time-boxed anything. The queue has no concept of "today", no history of whether you looked at it, no reward for looking.</td></tr>
+<tr><td><strong>Guilt accumulation</strong></td><td>Unbounded counters that only grow ("247 unread"). Abandonment becomes visible debt; the rational response is to stop opening the app.</td><td><strong>The queue forgets.</strong> Unfinished reads decay with a 45-day half-life and fall off entirely below a score floor (~90 idle days for a half-read artifact). Only explicit, resolvable debt (open comments) persists — and that set is bounded and closable.</td></tr>
+<tr><td><strong>Push interruption</strong></td><td>Notifications convert a library into a demand stream.</td><td>Pull-only, like everything in kb. The queue exists only where you already chose to look: the gallery you opened, the CLI verb you ran. Zero push paths exist to misuse.</td></tr>
+<tr><td><strong>Chrome badges</strong></td><td>A persistent red dot is a notification you can't dismiss — ambient guilt on every glance.</td><td><strong>No count anywhere in persistent chrome, ever.</strong> The strip renders inline in the gallery body, shows at most 2 items, and renders <em>nothing</em> when empty — no "all caught up!" celebration either (gamified emptiness is the same mechanic inverted).</td></tr>
+<tr><td><strong>Algorithmic opacity</strong></td><td>"For you" ranking you can't interrogate breeds distrust; you can't tell signal from manipulation.</td><td>Deterministic arithmetic on two named constants, reasons on every item, <code>--explain</code> prints the exact formula. Same inputs + same clock &rarr; same queue, reproducible in a test.</td></tr>
+<tr><td><strong>Queue-tending as a chore</strong></td><td>"Mark done / snooze / archive" adds a second inbox to manage — state about state.</td><td><strong>Stateless.</strong> There are no queue rows. Acting on the underlying object clears the item naturally: resolve the comment, finish (or let time fade) the read. The only dismiss is a per-tab <code>sessionStorage</code> hide of the strip — no server ever knows.</td></tr>
+</tbody>
+</table>
+<div class="callout"><span class="callout-label">The invariant behind all six</span>The queue is a <em>view over existing state</em>, never state of its own. That single property makes streaks, badges, accumulation, and queue-tending impossible to add without first violating the design — which is exactly the kind of structural refusal kb's non-goals list exists for.</div>
+</section>
+
+<section>
+<h2 id="score-design">The full score design — five signal families</h2>
+<p>The general shape: <code>score(artifact) = &Sigma; w<sub>i</sub> &middot; term<sub>i</sub></code>, every term in [0,1], every term computed from stored rows plus an injected <code>now_unix</code> (the recollect/rerank pattern — one clock parameter, pure function behind it). Per family, the source, the gap, and the verdict:</p>
+
+<h3 id="signal-comments">Open comments <span class="verdict verdict--ship">thin slice</span></h3>
+<p><strong>Source:</strong> the kb-comments/1 review store. Enumeration exists: the fleet inbox (<code>GET /api/inbox</code>) already walks <code>.review/</code> dirs keeping <code>status == open</code> (<code>crates/kb-server/src/routes/inbox.rs:136-213</code>); comments carry <code>created_at</code> and deliberately no <code>resolved_at</code> (resolve is a status flip, <code>review.rs:719-724</code>). <strong>Term:</strong> <code>min(open_count, 4)/4</code> — piecewise-linear, saturating, trivially explainable. <strong>No decay:</strong> an unresolved comment is explicit, human-created, resolvable debt; letting it fade would silently drop a promise. The oldest-open age appears in the reason string but not the score (surfaced, not scored — the recollect precedent). <strong>Cost:</strong> one dir walk per request (the known-blocking, N+1 walk on main; the resurface route bounds the per-doc lookups to the truncated result, and the perf-sweep branch's memoized walk supersedes this wholesale when it merges).</p>
+
+<h3 id="signal-reads">Unfinished reads <span class="verdict verdict--ship">thin slice</span></h3>
+<p><strong>Source:</strong> <code>reading_rollup</code> (<code>crates/kb-core/src/storage/sqlite.rs:812-901</code>) — one indexed window-function pass over <code>history</code> yielding every artifact's newest open visit + <code>completion_pct</code> + derived state; <code>InProgress</code> (opened, &lt;95% complete, no override) is exactly the unfinished set. The search route already exposes this as a facet (<code>read=in_progress&amp;sort=progress</code>), so resurfacing adds <em>scoring and composition</em>, not capability. <strong>Term:</strong> <code>(completion_pct/100) &middot; 0.5^(idle_days/45)</code> — progress-weighted (endowed effort: the 70%-read design doc you were interrupted in outranks the 10% skim you abandoned on purpose) times a 45-day half-life on idleness. <strong>The decay is the anti-guilt mechanism</strong>, not an accident. <strong>Bonus reason string:</strong> "~N min left" = <code>word_count &middot; (1 &minus; completion/100) / 220wpm</code> — progress-aware remaining time is new (lists' <code>remaining_minutes</code> counts each unfinished entry's <em>full</em> estimate; <code>EST_WORDS_PER_MINUTE = 220</code>, <code>lists.rs:41-51</code>).</p>
+
+<h3 id="signal-lists">List membership <span class="verdict verdict--defer">phase 2</span></h3>
+<p>An artifact sitting unread in a reading list is a deliberate queue signal (someone put it there). But lists already own a continuation surface — <code>continueTarget</code> / the QueueBar / "Continue reading" on ListCard — and the resurface queue must not duplicate a working affordance. Phase 2, if wanted: a small additive term for "in a list, state Unread/InProgress", sourced from <code>list_entries</code> + the same derived read state, with the list name in the reason string. Deferred until the thin slice proves retention.</p>
+
+<h3 id="signal-importance">Importance (backlinks) <span class="verdict verdict--defer">phase 2</span></h3>
+<p>The architecture review's proposed axis: inbound edges (<code>backlinks_of</code>, invariant #29) as an importance multiplier, so a hub document with five backlinks outranks a leaf note at equal attention-debt. Cheap (edges table), deterministic, explainable ("5 backlinks"). Deferred only for thinness: multipliers interact with weights, and tuning two constants on real use beats tuning four on guesses.</p>
+
+<h3 id="signal-memory">Memory salience + decay <span class="verdict verdict--reject">not this queue</span></h3>
+<p>Memories already have a deterministic attention economy: recall's <code>rel &times; salience &times; exp(&minus;k&middot;age)</code> with supersede/forget drops (invariant #10). Re-ranking them here would create a second, disagreeing authority over the same rows. The right surface for "memories needing attention" is the roadmap's <em>memory hygiene view</em> (tombstoned / superseded / near-floor listing) — a triage view, not a reading queue. Resurface excludes <code>memory-*</code> categories outright (they're also excluded from snapshots and default search for the same reason: different lifecycle).</p>
+
+<h3 id="signal-git">Artifact age vs subject's git activity <span class="verdict verdict--reject">reject</span></h3>
+<p>The idea: a design doc whose subject files kept changing after it was written is stale and worth re-reading. Three defeaters, in code: (1) <strong>prod has no git</strong> — the container ships without <code>.git</code>, so the versions façade falls back to snapshots there; a headline signal that silently vanishes in the primary deployment is a trap. (2) <strong>Artifact&rarr;subject mapping is guesswork</strong> — session_files from the producing session, or paths mentioned in the body, are heuristics; a scoring term whose <em>input</em> is a guess breaks the explainability contract even when the arithmetic is exact ("your doc is stale because we think it's about indexer.rs" is not an explanation, it's an assertion). (3) <strong>Cost:</strong> git is shelled per-request with no server-side cache. The honest version of this need is the temporal surface's <code>kb diff --between</code> (<a data-kb-link="kb-temporal-query-surface-2026-07" href="kb-temporal-query-surface-2026-07.html">already designed</a>) — pull the diff when <em>you</em> suspect staleness, not a scored guess pushed at you.</p>
+</section>
+
+<section>
+<h2 id="thin-slice">The thin slice, specified and implemented</h2>
+<p>Per the brief — and the field data agrees — "commented but never resolved + unfinished reads" is the value core: both are things <em>you</em> did (wrote a comment, started reading) that point back at a specific artifact with a specific next action. Implemented on branch <code>feat/resurface-thin-slice</code> (worktree, isolated from the in-flight v0.24 tree).</p>
+
+<h3 id="score-spec">Score</h3>
+<pre><code>score = 0.6 &middot; min(open_comments, 4)/4
+      + 0.4 &middot; (completion_pct/100) &middot; 0.5^(idle_days/45)
+
+idle_days = (now_unix &minus; last_opened_unix)/86400
+floor: items with score &lt; 0.05 are dropped (the queue forgets)
+order: score desc, then artifact_id asc (total, deterministic)</code></pre>
+<p>Constants are named and doc-commented in <code>kb_core::resurface</code> (<code>COMMENT_WEIGHT</code>, <code>READ_WEIGHT</code>, <code>COMMENT_SATURATION</code>, <code>READ_HALFLIFE_DAYS</code>, <code>SCORE_FLOOR</code>) — the recollect pattern. Golden tests pin: determinism, the 45-day half-life ratio, comment saturation at 4, the floor fade-out horizon, comment-debt-beats-decayed-read ordering, and the id tie-break.</p>
+
+<h3 id="surfaces">Surfaces</h3>
+<ul>
+<li><strong>HTTP:</strong> <code>GET /api/kb/{kb}/resurface?limit=</code> (default 8, clamp 1–50; per-kb only — fleet scope deferred; when wanted it must ride <code>buffered_join</code> per invariant #28). Response: <code>{ items, now_unix }</code>; each item carries id, title, source_rel, score, both terms, the raw signals (open_comments, oldest_open_unix, completion_pct, last_opened_unix, est_min_left), and server-built reason strings — one wire truth for CLI and SPA. ts-rs types regenerated (<code>just types</code>), route table regenerated (<code>just api-docs</code>) — both are CI drift-guards.</li>
+<li><strong>CLI:</strong> <code>kb resurface [--kb] [--limit] [--explain] [--json]</code>. Reasons always print (house style); <code>--explain</code> adds the arithmetic line per item, e.g. <code>score = 0.6&middot;2/4 + 0.4&middot;(0.62&middot;0.5^(5/45)) = 0.300 + 0.229 = 0.529</code>.</li>
+<li><strong>SPA:</strong> a gallery strip (template: the sessions strip, <code>.gallery-sessions-strip</code> in <code>chrome.css:1247</code>) showing the <strong>top 2</strong> items with their first reason, linking into the reader. Gated like the sessions strip (only on the unfiltered gallery), renders nothing when empty, per-tab dismissible (sessionStorage only). <strong>Not reader chrome</strong> — invariant #30 untouched. Hook <code>useResurface</code> is a bare TanStack query (<code>staleTime: Infinity</code>, zero fetch plumbing); the SSE bridge maps <code>comments.updated</code> and <code>history.recorded</code> &rarr; invalidate <code>["resurface"]</code> (invariant #23; reading-progress beacons have no SSE by design — #19 — so the read term refreshes on the next natural invalidation, which is correct for a calm surface).</li>
+</ul>
+
+<h3 id="verification">Verification</h3>
+<ul>
+<li>Golden tests on the pure scoring module (six behaviors above).</li>
+<li>Route test: seeded history + review file &rarr; expected order, floor, and reason strings.</li>
+<li><code>cargo fmt</code> + workspace clippy (excl. kb-embedder) + kb-core/kb-server/kb-cli test suites + <code>just types-check</code> + <code>just api-docs-check</code> + SPA <code>typecheck</code> + <code>vite build</code>.</li>
+<li>Deterministic by construction: the route computes <code>now_unix</code> once and threads it; tests pass a fixed clock.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="rejections">Standing rejections (the never-list)</h2>
+<ul>
+<li><strong>Streaks, daily goals, review targets</strong> — never. They invert the tool's loyalty.</li>
+<li><strong>Unread/queue counts in persistent chrome</strong> (header, favicon, tab title) — never. The existing header inbox pill is an <em>inbox</em> (explicit debt you created); resurface adds no second badge.</li>
+<li><strong>Push/notifications/scheduled digests</strong> — never in-daemon. If the operator ever wants a weekly nudge, that's the agent layer's job (a cron running <code>kb resurface --json</code>), outside kb — same boundary as the no-in-daemon-LLM non-goal.</li>
+<li><strong>Server-side dismiss/snooze state</strong> — rejected; it's the second-inbox trap. The strip's sessionStorage hide is deliberately ephemeral.</li>
+<li><strong>Git-activity staleness term</strong> — rejected above; the pull-shaped answer is <code>kb diff --between</code>.</li>
+<li><strong>Memory re-ranking in this queue</strong> — rejected above; belongs to the memory hygiene view.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>The weights (0.6/0.4) and half-life (45d) are reasoned guesses; a month of real use should tune them. They're single named constants — retuning is a one-line diff plus a golden-test update.</li>
+<li>Arch review suggested "opt-in per kb". The strip self-gates on having items and the verb is pull-only — is a config knob solving a problem anyone has? Leaning no until asked.</li>
+<li>Phase 2 ordering: importance multiplier (backlinks) vs list-membership term — importance first, it's cheaper and benefits every item.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="files">Files touched (implementation)</h2>
+<ul>
+<li><code>crates/kb-core/src/resurface.rs</code> <em>(new)</em> — pure scoring, constants, reason building, golden tests; registered in <code>lib.rs</code></li>
+<li><code>crates/kb-server/src/routes/resurface.rs</code> <em>(new)</em> — the per-kb route; <code>routes/mod.rs</code>, <code>router.rs</code></li>
+<li><code>crates/kb-cli/src/commands/resurface.rs</code> <em>(new)</em> + <code>main.rs</code> <code>Cmd::Resurface</code></li>
+<li><code>web/src/hooks/useResurface.ts</code>, <code>web/src/components/ResurfaceStrip.tsx</code> <em>(new)</em>; <code>api/client.ts</code>, <code>api/queryClient.ts</code> (bridge), <code>routes/gallery.tsx</code>, <code>styles/chrome.css</code></li>
+<li><code>web/src/api/generated/*</code> + <code>docs/api-routes.md</code> regenerated</li>
+</ul>
+<p><strong>Status:</strong> implemented and committed as <code>ef8b6f1a</code> on <code>feat/resurface-thin-slice</code> (branched from main @ <code>db7ce381</code>, isolated worktree — the main tree carries in-flight v0.24 work). Verified: fmt + workspace clippy (-D warnings) + kb-core/kb-server/kb-cli suites green + SPA typecheck/vitest/build, plus a live scratch-daemon smoke — a 60%-read artifact with one open comment scored 0.390 (= 0.150 + 0.240, arithmetic exact over the wire), and resolving the comment dropped it to 0.240 with the comment reason gone: acting on the item clears it, as designed. Merge to main after the v0.24 run settles; the review-walk cost note above already anticipates the perf-sweep branch superseding the walk.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

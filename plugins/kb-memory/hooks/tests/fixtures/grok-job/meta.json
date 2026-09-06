@@ -1,0 +1,11 @@
+{
+  "id": "FIXTURE0JOBULID000000001A",
+  "type": "build",
+  "status": "needs_review",
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "updated_at": "2026-01-01T00:05:00.000Z",
+  "role": "builder",
+  "grok_session_id": "01900000-0000-7000-8000-000000000001",
+  "round": 0,
+  "cwd": "/tmp/kb-grok-fixture-cwd"
+}

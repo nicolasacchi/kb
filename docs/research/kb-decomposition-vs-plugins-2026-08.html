@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:applied, project:kb, plugins, architecture, decomposition, modular-monolith, sibling-daemon, build-economics, rfc">
+<title>Should kb decompose into separately compiled plugins? (2026-08)</title>
+
+<style>
+:root {
+  --bg: #faf6ef;
+  --surface: #f0e9dd;
+  --fg: #2b241d;
+  --muted: #5f5245;
+  --rule: #d9cfbf;
+  --accent: #8f4416;
+  --accent-fg: #ffffff;
+  --warn: #7a5200;
+  --danger: #9c2731;
+  --ok: #2c6640;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1a15;
+    --surface: #292219;
+    --fg: #ece3d6;
+    --muted: #bcab97;
+    --rule: #463b2e;
+    --accent: #e39a67;
+    --accent-fg: #1f1a15;
+    --warn: #d9ab4e;
+    --danger: #ea8f8a;
+    --ok: #94c79f;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 17px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+.skip-link {
+  position: absolute; left: -999px; top: 0;
+  background: var(--accent); color: var(--accent-fg);
+  padding: .5rem 1rem; z-index: 10; border-radius: 0 0 .5rem 0;
+}
+.skip-link:focus { left: 0; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
+header.doc { border-bottom: 2px solid var(--rule); padding-bottom: 1.25rem; margin-bottom: 2rem; }
+.kicker {
+  font-size: .8rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: .5rem;
+}
+h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .75rem; letter-spacing: -.01em; }
+.lede { font-size: 1.1rem; color: var(--muted); margin: 0 0 .75rem; }
+.meta-strip { font-size: .85rem; color: var(--muted); }
+.meta-strip .tag {
+  display: inline-block; background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 999px; padding: .05rem .6rem; margin-right: .35rem;
+}
+h2 {
+  font-size: 1.35rem; margin: 2.5rem 0 .75rem; scroll-margin-top: 1rem;
+  border-top: 1px solid var(--rule); padding-top: 1.5rem; letter-spacing: -.005em;
+}
+h3 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; scroll-margin-top: 1rem; }
+p, li { max-width: 70ch; }
+code, pre {
+  font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+  font-size: .88em;
+}
+code {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 4px; padding: .08em .35em;
+}
+pre {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+  padding: .9rem 1rem; overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; border: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.callout {
+  background: var(--surface); border-left: 4px solid var(--accent);
+  border-radius: 0 8px 8px 0; padding: .8rem 1rem; margin: 1.25rem 0;
+}
+.callout--warn { border-left-color: var(--warn); }
+.callout--danger { border-left-color: var(--danger); }
+.callout--ok { border-left-color: var(--ok); }
+.verdict { font-weight: 600; }
+.v-no { color: var(--danger); }
+.v-yes { color: var(--ok); }
+.v-defer { color: var(--warn); }
+footer.doc {
+  margin-top: 3rem; padding-top: 1.25rem; border-top: 2px solid var(--rule);
+  font-size: .85rem; color: var(--muted);
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header class="doc">
+  <div class="kicker">research &middot; project:kb &middot; decision analysis</div>
+  <h1>Should kb decompose into separately compiled plugins? (2026-08)</h1>
+  <p class="lede">No — not as runtime plugins, and not by decomposing what already exists. The four needs hiding inside the word &ldquo;plugins&rdquo; are each already served by a proven seam; two of those seams deserve formal hardening now, and the refusals get explicit revisit triggers.</p>
+  <div class="meta-strip">
+    <span>2026-08-16</span>
+    <span class="tag">status:applied</span>
+    <span class="tag">project:kb</span>
+    <span class="tag">8 research agents</span>
+    <span class="tag">measured builds</span>
+  </div>
+</header>
+
+<h2 id="the-question">The question, and why it is four questions</h2>
+<p>The operator asked: does it make sense to think about <em>plugins instead of this monolithic project — plugins that can be installed and compiled separately</em>? kb today is one Cargo workspace (6 crates, two React SPAs), one ~128&nbsp;MB daemon binary, ~98k&nbsp;LOC in <code>kb-core</code> alone, 35 architecture invariants at a hard cap.</p>
+<p>This is not the first time the repo has faced the word &ldquo;plugin&rdquo;. <a href="kb-plugins-extensibility-rfc.html">The 2026-05-31 extensibility RFC</a> and <code>docs/extending.md</code> already ruled on <em>how outsiders extend kb</em>: dylibs rejected, wasm deferred, subprocess IPC + event bus + declarative meta named as the extension story. But the operator&rsquo;s question is different — it is about <em>decomposing kb itself</em>. And it decomposes into four distinct needs that the word &ldquo;plugins&rdquo; conflates:</p>
+<table>
+<tr><th>Need</th><th>What would satisfy it</th><th>Where kb stands</th></tr>
+<tr><td>Compile separately (build speed)</td><td>Crate splits, CI isolation</td><td>Partly shipped; measured below</td></tr>
+<tr><td>Install separately (optionality)</td><td>Separate binaries / daemons</td><td>Shipped twice (kb-embedder, kb-code)</td></tr>
+<tr><td>Extend without recompiling</td><td>A plugin runtime or protocol</td><td>Agent layer + sidecar protocol</td></tr>
+<tr><td>Blast-radius legibility</td><td>Compiler-enforced boundaries</td><td>The genuinely open question</td></tr>
+</table>
+<p>Each need gets a different answer. Treating them as one question — &ldquo;plugins, yes or no&rdquo; — is how projects end up building a plugin SDK nobody asked for while their actual pain (build time, drift, deploy risk) goes unaddressed. A fifth motivation — attracting external developers — arrived as an operator follow-up and gets its own <a href="#the-external-developer-path">staged answer in the addendum</a>.</p>
+
+<h2 id="the-short-answer">The short answer</h2>
+<table>
+<tr><th>Option</th><th>Verdict</th><th>Dominating reason</th></tr>
+<tr><td><a href="#option-a-modular-monolith">A. Modular monolith</a> (kernel + feature crates, one binary)</td><td class="verdict v-defer">Not now</td><td>8&ndash;13 days buys 6&ndash;10s per edit on a 17&ndash;20s baseline; a real crate cycle sits in the storage actor</td></tr>
+<tr><td><a href="#option-b-sibling-daemons">B. Sibling daemons for new domains</a></td><td class="verdict v-yes">Yes — formalize</td><td>Proven by kb-code; missing piece is a version/schema-epoch contract, not more daemons</td></tr>
+<tr><td><a href="#option-b-sibling-daemons">B&prime;. Extract existing features into daemons</a></td><td class="verdict v-no">No</td><td>All five candidates implausible; the storage actor is single-writer per process, no flock</td></tr>
+<tr><td><a href="#option-c-subprocess-protocol">C. Generic subprocess plugin protocol</a></td><td class="verdict v-defer">Deferred, with trigger</td><td>One sidecar exists; generalize on the second, not before</td></tr>
+<tr><td><a href="#option-d-runtime-plugins">D. In-process dylib plugins</a></td><td class="verdict v-no">Rejected (reaffirmed)</td><td>No stable Rust ABI; the <code>arrow=57.3.1</code> pin makes mismatch UB, not a load error</td></tr>
+<tr><td><a href="#option-d-runtime-plugins">D&prime;. wasm plugins</a></td><td class="verdict v-defer">Deferred (amended rationale)</td><td>PR review &ne; runtime execution of untrusted code; no runtime consumer exists</td></tr>
+<tr><td><a href="#option-e-agent-layer">E. Agent-layer plugins</a></td><td class="verdict v-yes">Already shipped &times;5</td><td>The marketplace in <code>plugins/</code> is kb&rsquo;s real, working plugin system</td></tr>
+<tr><td><a href="#the-thin-cli-steelman">Thin CLI split</a> (kb as 9&nbsp;MB HTTP client)</td><td class="verdict v-defer">Opportunistic</td><td>50+ of 61 CLI verbs are already pure HTTP; blocked on kb-core&rsquo;s non-optional lance dep</td></tr>
+</table>
+
+<h2 id="how-this-was-researched">How this was researched</h2>
+<p>Two orchestrated workflows, eight worker agents (sonnet + grok lanes), 2026-08-16: an evidence sweep (kb-core coupling map, server/SPA seam inventory, build economics, external precedents, in-repo decision record + 400-commit co-change analysis) and a design round (a measured modular-monolith deep-dive with real timed builds, a sibling-daemon contract gap analysis against the live deploy scripts, and an adversarial red team attacking the draft thesis). The red team changed the thesis in three places — documented in <a href="#amended-thesis">the amended thesis</a>. All raw tables, per-lane verification caveats, and source citations live in the companion appendix: <a href="kb-decomposition-evidence-2026-08.html">kb decomposition research — evidence appendix</a>.</p>
+
+<h2 id="what-the-monolith-costs">What the monolith actually costs today</h2>
+<p>Measured on the development workstation (8 cores, warm cache, <code>--profile fast</code>):</p>
+<table>
+<tr><th>Action</th><th>Wall time</th></tr>
+<tr><td>Touch <code>kb-core/src/memory.rs</code> (3,220 LOC) &rarr; rebuild kb-server</td><td>19.7s</td></tr>
+<tr><td>Touch <code>kb-core/src/storage/mod.rs</code> (11 lines) &rarr; rebuild kb-server</td><td>16.6s</td></tr>
+<tr><td>Touch a kb-server-only route file &rarr; rebuild</td><td>9.7s (the floor)</td></tr>
+<tr><td>Full warm rebuild of kb-core + kb-server</td><td>2m22s</td></tr>
+</table>
+<p>Two readings matter. First, <strong>the crate boundary, not the edit size, drives the cost</strong>: an 11-line re-export file costs ~7s of kb-core recompile; a 3,220-line feature file costs only ~3s more. Cargo&rsquo;s recompile unit is the crate — which is exactly what a crate split would fix. Second, <strong>the inner loop is not actually broken</strong>: 10&ndash;20s per edit, with a ~9.7s floor (kb-server&rsquo;s own recompile + linking a 133&nbsp;MB binary) that no kb-core split can touch.</p>
+<p>The heavier costs live elsewhere:</p>
+<ul>
+<li><strong>The lance tax is structural.</strong> lancedb/lance/arrow/datafusion (~104 crates) is a <em>non-optional</em> dependency of kb-core, so every binary that touches the index pays the whole graph — kb-code-server even declares its own <em>second</em> lancedb/arrow dependency set for its own dataset. Release binaries: kb 133&nbsp;MB, kb-server 128&nbsp;MB, kb-code-server 129&nbsp;MB. The one thin binary, kb-code-cli at 9&nbsp;MB, is thin precisely because it links neither.</li>
+<li><strong>CI cannot absorb more parallelism.</strong> The CI runner is memory-capped; <code>cargo -j2</code> was capped this month (commit <code>10890afc</code>) because higher parallelism OOM&rsquo;d the image build. More crates compiled in parallel is plausibly a CI <em>regression</em>, not a win.</li>
+<li><strong>Drift, not compile time, is the visible monolith symptom.</strong> The sweep found the SSE type enum missing ~14 event kinds that production code actually emits, a stale hook list in kb-core&rsquo;s own CLAUDE.md (6 documented, 7 live), and <code>docs/extending.md</code> undercounting the shipped plugins. But note: the SSE kind field is a plain <code>String</code> on both the Rust and TypeScript sides — <strong>crate boundaries would not have caught any of these</strong>. They are protocol-discipline failures, and kb&rsquo;s own prior fix for the same class of drift was a generic frame decoder, not a stricter type.</li>
+</ul>
+
+<h2 id="option-a-modular-monolith">Option A — modular monolith: real, modest, not now</h2>
+<p>The shape: split kb-core into a kernel crate (storage actor, indexer, search, events, config, ids, paths) plus per-feature engine crates (memory, sessions, atlas, comments, lists, notes/links, coderefs, share&hellip;), selected by cargo features on one binary — the <a href="https://caddyserver.com/docs/build#xcaddy">Caddy/xcaddy</a>/Vector compile-time composition model, which is also what every surveyed Rust tool that &ldquo;has plugins&rdquo; without a runtime actually does.</p>
+<p>What the deep-dive established:</p>
+<ul>
+<li><strong>The registration machinery already exists.</strong> <code>enrich.rs</code> has a production <code>trait EnrichmentHook</code> + <code>default_hooks()</code> registry called from the indexer — the split would relocate the seven hook implementations into their owning feature crates and build the vec in a composition root. No new pattern needed there.</li>
+<li><strong>One genuine crate cycle blocks the split.</strong> The storage actor and its sqlite layer bake feature DTOs into their message enum — <code>reading::{ReadingSectionRow, VisitRollup, ReadRollup}</code>, <code>lists::{ImportMode, NewListEntry, Patch, &hellip;}</code>, <code>sessions::ProjectFilter</code> — while those same feature modules import <code>StorageHandle</code> back. That is a two-way dependency Cargo will refuse; breaking it means a DTO-only kernel crate carved out of the two largest, most invariant-dense files in the codebase (<code>storage/actor.rs</code> 6,295 LOC, <code>storage/sqlite.rs</code> 12,404 LOC).</li>
+<li><strong>The indexer needs a net-new extension point.</strong> Sessions&rsquo; body/excerpt/code fields are computed <em>pre-upsert</em> inside <code>prepare_doc</code> — the existing post-upsert hook registry cannot express it, so a split invents a <code>FieldDerivationHook</code>. About 150 further lines of never-hookified review-anchor logic sit beside the hook loop.</li>
+<li><strong>The lifecycle registries should NOT be feature-gated.</strong> <code>CASCADE_STEPS</code>/<code>SWEEP_TABLES</code>/relocate are pure data arrays; a DELETE against a disabled feature&rsquo;s empty table is a harmless no-op. Compile the full lists always — feature-gating them would convert a no-op into a silent-strand hazard.</li>
+<li><strong>The SPA gains nothing.</strong> <code>features.ts</code> booleans are runtime property reads Rollup cannot tree-shake; the right SPA model stays one universal bundle probing daemon capabilities.</li>
+</ul>
+<div class="callout"><p><strong>Verdict: not now.</strong> 8&ndash;13 person-days concentrated in the riskiest files, an ongoing per-route <code>cfg</code> tax across 178 route registrations, added load on an OOM-throttled CI — to save 6&ndash;10 seconds on a sub-20-second edit cycle. If the goal ever shifts from build speed to <em>compiler-enforced blast radius</em>, start with the atlas group (<code>atlas.rs</code> + <code>atlas_field.rs</code> + <code>atlas_labels.rs</code> + <code>procrustes.rs</code>, 4,756 LOC, 4.9% of kb-core, <strong>zero inbound references from any other feature</strong>, no indexer/enrich entanglement) as a cheap pilot that proves the pattern before touching the sessions/storage knot. Sessions is the largest feature (~13,600 LOC, 14% of kb-core) and the worst-coupled — it follows a successful pilot, never leads.</p></div>
+
+<h2 id="option-b-sibling-daemons">Option B — sibling daemons: the pattern that works, minus its fig leaves</h2>
+<p>kb already runs a federation of two: kb-code-server is a separate binary with its own store, own SPA, own CI recipes, path-filtered CI jobs, and a hard one-call-direction rule. The co-change evidence says the pattern genuinely decouples: kb-code co-changes with kb/* in only 6.2% of its commits (two episodes, not steady-state), <code>web/</code> and <code>web-code/</code> co-changed in <strong>0 of 400</strong> commits, and kb-embedder has been touched in <strong>2 of 1,294</strong> lifetime commits since isolation shipped.</p>
+<p>The red team&rsquo;s corrections keep this honest:</p>
+<ul>
+<li><strong>The boundary is partly compile-time, not protocol.</strong> kb-code links kb-server <em>as a library</em> for <code>auth_bearer</code> and the loopback predicates, and imports kb-core&rsquo;s <code>EventBus</code> type. That is deliberate (never re-derive security logic) but it is recompile coupling wearing a daemon costume.</li>
+<li><strong>Federation tax is current and visible.</strong> Four of the five most recent commits on main are two-image plumbing (OOM tuning, shared build stage, image GC, cancel-in-progress blast radius). kb-code&rsquo;s image only stopped paying for kb&rsquo;s unused 1.34&nbsp;GB embedder model tail on 2026-08-15 (<code>c46fd184</code>) — build independence was <em>achieved</em>, not free.</li>
+<li><strong>The 13.5h kbc outage was not cross-daemon skew.</strong> The draft thesis mis-cited it. Root cause: the deploy script&rsquo;s naive 60s health check timed out mid-boot and auto-rolled-back the <em>binary</em> while its <em>own volume</em> had already forward-migrated — an intra-service binary/schema mismatch that a green liveness probe then masked. The already-shipped fixes (no auto-rollback on kbc, a migration-advance guard on kb, boot-backfill log waits) treat the real cause.</li>
+</ul>
+<h3 id="kb-sibling-1">The missing piece: a kb-sibling/1 contract</h3>
+<p>What the outage <em>and</em> the precedents (<a href="https://www.nushell.sh/book/plugins.html">nushell&rsquo;s</a> hard version Hello; rust-analyzer&rsquo;s advisory-only handshake that let a v6 server talk past a v5 client for days in 2026) jointly demand is small and cheap:</p>
+<ul>
+<li>Extend <code>GET /api/identity</code> with <code>build_sha</code>, <code>sibling_protocol</code> (exact-match string <code>kb-sibling/1</code>), <code>sibling_major</code> (must match), and <code>schema_epoch</code> (persisted on the volume after migration) vs the binary&rsquo;s supported range — and <strong>refuse to boot</strong>, hard, when the volume&rsquo;s epoch exceeds the binary&rsquo;s. Advisory warnings are the documented failure mode.</li>
+<li>A sibling client&rsquo;s first call is <code>GET /api/identity</code>; protocol/major mismatch fails closed, distinct from degrade-to-unavailable (reserved for unreachable peers).</li>
+<li><code>/healthz</code> stays pure unauthenticated liveness — never a compat signal. Readiness is the boot-backfill log line, as the post-outage deploy scripts already do.</li>
+<li>Give kb-code a <code>schema.rs</code>: its SSE kinds (<code>annotation.changed</code>, <code>review.changed</code>, &hellip;) are entirely undocumented today, in the exact drift class that has burned kb twice.</li>
+</ul>
+<h3 id="extraction-is-not-the-move">Extraction of existing features is not the move</h3>
+<p>All five plausible-sounding extractions were evaluated and fail, each on one dominating fact: <strong>atlas</strong> and <strong>memory</strong> <em>are</em> kb&rsquo;s own embedding matrix and index (extracting them means re-fetching the corpus over HTTP to compute what the actor already holds); <strong>share</strong> is a pure library over the source tree already slated for a subprocess backend variant, not a daemon; <strong>resurface/timeline/daycard</strong> are stateless views that would fight the one-SSE-connection-per-browser invariant; <strong>sessions</strong> is the other half of the memory system — and kb-code already implements the correct sibling relationship <em>to</em> it from outside. Underneath all five: a sibling cannot open kb&rsquo;s <code>index.db</code> or <code>lance/</code> at all — the storage actor is single-writer per process with no file lock, so shared-state extraction is structurally forbidden, and API-mediated extraction reduces to &ldquo;a client&rdquo;, which is what the CLI already is.</p>
+<div class="callout callout--ok"><p><strong>Verdict: the sibling pattern is kb&rsquo;s real &ldquo;installable plugin&rdquo; story — for genuinely new domains with their own data.</strong> Right shape when: own store, own read/write patterns, disjoint dependency families (kb-code brought tree-sitter + gix), a UI that is its own product, and a one-direction call graph. Wrong shape for anything that shares kb&rsquo;s rows. Formalizing kb-sibling/1 is days of work and hardens both the existing pair and the next daemon.</p></div>
+
+<h2 id="option-c-subprocess-protocol">Option C — the sidecar protocol: generalize on the second consumer</h2>
+<p>kb-embedder is already a textbook out-of-process plugin: separate binary, NDJSON over stdio (<code>Embed</code>/<code>Rerank</code>/<code>Shutdown</code>, a <code>Ready</code> handshake carrying model+dim), bounded startup timeout, 1&nbsp;Hz liveness probe with in-place respawn, and zero ONNX linkage in the daemon. rust-analyzer&rsquo;s proc-macro server — the industry&rsquo;s closest analogue — validates the shape and supplies the warning: its separately-versioned protocol still skewed in 2026 because the version check was advisory. When a second sidecar appears (a different embedder family, an OCR/thumbnailer, a transcriber), lift the pattern into a declared <code>[sidecar.*]</code> config surface with a hard-fail version Hello. Until then, a generic protocol with one consumer is speculative generality — the same reasoning the repo already applied to MCP (&ldquo;deferred-with-trigger&rdquo;).</p>
+
+<h2 id="option-d-runtime-plugins">Option D — runtime plugins: dylib no, wasm still deferred, premise amended</h2>
+<p><strong>Dylib: rejected, reaffirmed with new evidence.</strong> Rust has <a href="https://doc.rust-lang.org/reference/abi.html">no stable ABI</a>; the workspace&rsquo;s exact <code>arrow=57.3.1</code> pin means a plugin built against anything else is undefined behaviour rather than a load error; abi_stable has been unmaintained since 2023-10; and <a href="https://helix-editor.com">Helix&rsquo;s</a> plugin author reports trying a C ABI for Rust-to-Rust plugins &ldquo;with little success&rdquo; — Helix, nine years in, still ships no plugin system at all. The 2026 landscape did not soften this ruling; it hardened it.</p>
+<p><strong>wasm: still deferred, but the justification must change.</strong> The old rationale — &ldquo;single-operator tool, no untrusted code&rdquo; — is now literally false: kb is a public MIT repo with a DCO gate, a plugin marketplace, and adapters for four non-Claude harnesses. The red team is right that the framing was stale. The rationale that survives: <em>PR review is a different threat model than runtime execution of untrusted code</em>. Contributions arrive as reviewable diffs into a compile-time composition; nothing executes unreviewed. wasm becomes worth revisiting only if kb ever wants to run code it has <em>not</em> reviewed — see <a href="#triggers-to-revisit">triggers</a>.</p>
+
+<h2 id="option-e-agent-layer">Option E — the plugin system kb already has</h2>
+<p>The <code>plugins/</code> marketplace ships five agent-layer plugins (kb-memory, kb-research, kb-comments, kb-reflect, kb-code): hooks + skills that drive the CLI, installed separately, versioned separately, zero daemon compile, zero SPA change. For a tool whose primary users are agents, this <em>is</em> the extension surface — behavior plugs in above the daemon, consistent with the no-in-daemon-LLM non-goal. The decision doc for &ldquo;should kb have plugins?&rdquo; must not overlook that it already does, and they are the cheapest kind.</p>
+
+<h2 id="the-thin-cli-steelman">The thin-CLI steelman worth keeping</h2>
+<p>The red team&rsquo;s strongest constructive find: 50+ of kb-cli&rsquo;s 61 command modules are already pure HTTP clients; only <code>daemon.rs</code> pulls in <code>serve_loop</code> (and with it the whole 133&nbsp;MB link), and only 4 verbs touch lance directly for offline fallback. The cargo/git subcommand precedent (separate <code>kb-*</code> binaries on PATH, zero ABI) fits kb&rsquo;s CLI shape naturally. What blocks it today: kb-core&rsquo;s lance dep is non-optional, so any crate that links kb-core is a fat binary — a thin <code>kb</code> needs a <code>kb-client</code> crate (wire types + HTTP only, no kb-core). Not urgent — 133&nbsp;MB on disk is cheap — but it is the honest answer to &ldquo;compiled separately&rdquo; for the CLI surface, and the 9&nbsp;MB kb-code-cli proves it works.</p>
+
+<h2 id="amended-thesis">The amended thesis</h2>
+<p>The adversarial round changed the draft in three places, kept it in the rest:</p>
+<ul>
+<li><strong>Corrected:</strong> the kbc outage as evidence for a cross-daemon handshake. It was intra-service; the schema-epoch boot-refuse is the fix the evidence demands, the Hello handshake is cheap insurance against the failure mode that has <em>not</em> happened yet.</li>
+<li><strong>Corrected:</strong> the single-operator premise for deferring wasm. The repo is public infrastructure now; the deferral survives on the review-vs-runtime threat-model distinction instead.</li>
+<li><strong>Adopted:</strong> the sibling pattern is not free (library-level auth coupling, federation plumbing tax, a young codebase whose 6.2% co-change is an early snapshot) — formalization, not celebration, is the right response.</li>
+<li><strong>Rejected attacks, for the record:</strong> &ldquo;crate boundaries would have prevented the drift bugs&rdquo; (the SSE kind is a String on both sides; discipline, not boundaries, was the fix that worked); &ldquo;the monolith is quietly becoming configurable anyway&rdquo; (2 of the 4 SPA feature flags are dead code; the 2 cargo features are build isolation, not composition); &ldquo;vertical-slice commits would just become two PRs&rdquo; (spot-checked commits are genuinely atomic single-intent changes — splitting them across repos manufactures coordination, it does not remove it).</li>
+</ul>
+
+<h2 id="the-external-developer-path">Addendum — if external developers and outside ideas are the goal</h2>
+<p><em>Added 2026-08-16 on operator follow-up: &ldquo;what if I want external developers and ideas on it?&rdquo;</em> The verdict does not flip — it re-orders. External contribution arrives in three tiers of trust, and kb already has the right seam for the first two. Only the third would ever justify a plugin runtime, and it gets a demand trigger, not a milestone.</p>
+<h3 id="tier-1-contributions-you-review">Tier 1 — contributions you review (PRs into the repo)</h3>
+<p>The monolith is not the obstacle; it is arguably the right shape for reviewed contribution — Vector and Caddy accept third-party components exactly this way, as diffs into a compile-time composition. What actually blocks an external developer is <strong>legibility</strong>: ~98k LOC in kb-core, 35 invariants written for context-loaded agents, and docs that currently lie in places (the hook list, the plugin count). If external devs are wanted, the <a href="#do-now-regardless">do-now list</a> gets promoted from hygiene to onboarding surface, plus a human-facing CONTRIBUTING document. And the <a href="#option-a-modular-monolith">atlas crate pilot</a> re-scores: its value was never build speed — it is letting a stranger touch one feature behind a compiler-enforced interface without first understanding the storage actor.</p>
+<h3 id="tier-2-zero-trust-extensions">Tier 2 — built against kb, zero runtime trust</h3>
+<p>This is where outside <em>ideas</em> flow cheapest, because their code never runs in kb&rsquo;s process:</p>
+<ul>
+<li><strong>Agent-layer plugins</strong> — the <code>plugins/</code> marketplace accepts this today; anyone can ship skills/hooks that drive the CLI.</li>
+<li><strong>Sidecars</strong> — an outside developer could ship an alternate embedder, OCR, or reranker as a subprocess in any language; this is precisely the &ldquo;second consumer&rdquo; that triggers formalizing the <a href="#option-c-subprocess-protocol">sidecar protocol</a> with its hard-fail Hello.</li>
+<li><strong>Sibling daemons</strong> — kb-code proves an entire product surface can be built against kb&rsquo;s HTTP API by someone who never touches kb&rsquo;s code. For outsiders this requires exactly what <a href="#kb-sibling-1">kb-sibling/1</a> prescribes, plus the SSE schema repair and the HTTP API documented as a stable contract. This tier is also where the recorded no-MCP ruling gets re-tested: external agent developers are the demand its trigger conditions anticipate.</li>
+</ul>
+<h3 id="tier-3-unreviewed-runtime-code">Tier 3 — running code you have not reviewed, inside the daemon</h3>
+<p>The Obsidian/VS Code model: users install third-party plugins that execute in the host. Only this tier justifies a wasm runtime (the Zed/extism wasip2 stack), and it carries the real costs the precedents documented: designing a WIT capability API, a distribution story (Zed&rsquo;s own maintainer expects their git-registry model &ldquo;will likely have to go&rdquo;), and a sandbox boundary kb has never needed. Ecosystems follow adoption — Zed and Obsidian grew plugin systems after users demanded them. Building this ahead of demand is the same speculative generality the repo already declined with MCP.</p>
+<div class="callout callout--ok"><p><strong>The staged path: publish the contract before the runtime.</strong> (1) Drift fixes + contributor docs — days. (2) kb-sibling/1 + the HTTP API and marketplace documented as &ldquo;how you extend kb&rdquo; — opens tiers 1 and 2 to outsiders entirely. (3) wasm only when tier-3 demand is demonstrated by real people asking to run unreviewed code. Stages 1&ndash;2 are cheap and are themselves the instrument that measures whether stage 3 is ever real.</p></div>
+
+<h2 id="do-now-regardless">Do now, regardless of everything above</h2>
+<p>These fell out of the research as defects and cheap hardening, independent of any decomposition position:</p>
+<div class="callout callout--ok"><p><strong>Executed 2026-08-17</strong> — items 1&ndash;6 landed as four green-gate commits: <code>cb60d32d</code> (SSE drift + guard), <code>1550b46a</code> (percent_decode&rarr;strutil), <code>1df3872f</code> (kb-sibling/1 core: boot refuse + identity Hello), <code>9cf3a703</code> (kb-code schema surface + fail-closed handshake), plus the docs-of-record commit. CONTRIBUTING.md was updated to the stage-1 external-developer spec in the same wave. Prod redeploy of both daemons still pending.</p></div>
+<ol>
+<li><code>kb-server/src/routes/schema.rs</code> — add the ~14 emitted-but-undeclared SSE kinds (<code>note.*</code>, <code>memory.linked/unlinked</code>, <code>board.updated</code>, <code>session.memory_recalls</code>, <code>quarantine.restored</code>, &hellip;).</li>
+<li>kb-code-server — create its missing <code>schema.rs</code>; its SSE kinds are entirely undocumented.</li>
+<li>kb-sibling/1 — the identity-endpoint extension + hard schema-epoch boot refuse (<a href="#kb-sibling-1">spec above</a>).</li>
+<li><code>docs/extending.md</code> — plugin count says three, lists four, actual is five (kb-code missing); add the kb-sibling/1 ruling so this question&rsquo;s answer lives in-repo.</li>
+<li><code>crates/kb-core/CLAUDE.md</code> — hook list is 6, production registers 7 (CodeRefHook missing).</li>
+<li><code>parser.rs:845</code> — move <code>share::percent_decode</code> into <code>strutil.rs</code> (the one true kernel&rarr;feature inversion outside the storage actor; two-minute fix).</li>
+</ol>
+
+<h2 id="triggers-to-revisit">Triggers that reopen this decision</h2>
+<table>
+<tr><th>Trigger</th><th>Reopens</th></tr>
+<tr><td>A second subprocess sidecar is wanted (OCR, transcriber, alternate embedder)</td><td>Option C — generalize the sidecar protocol with a hard-fail Hello</td></tr>
+<tr><td>Warm incremental kb-core edits exceed ~60s, or kb-core crosses ~150k LOC</td><td>Option A — run the atlas pilot, then reassess sessions</td></tr>
+<tr><td>A new domain arrives with its own store + disjoint deps (the kb-code test)</td><td>Option B — build it as sibling daemon number three, under kb-sibling/1</td></tr>
+<tr><td>Tier-3 demand materializes — real users asking to run unreviewed code in the daemon (<a href="#the-external-developer-path">the external-developer path</a>)</td><td>Option D&prime; — wasm, starting from the Zed/<a href="https://extism.org">extism</a> wasip2 stack</td></tr>
+<tr><td>A second machine needs to serve one corpus (multi-process on shared state)</td><td>The storage actor&rsquo;s no-flock single-writer ruling itself</td></tr>
+<tr><td>External contributors ship a 6th agent-layer plugin</td><td>Marketplace governance, not daemon architecture</td></tr>
+</table>
+
+<h2 id="provenance">Provenance and confidence</h2>
+<p>Orchestrated 2026-08-16 as two background workflows over eight worker agents (five evidence lanes, three design/adversarial lanes; sonnet + grok workers, ~763k worker tokens, 293 tool calls), with synthesis and the final positions written by the orchestrating model. Build timings were measured live on the development workstation, warm cache, fast profile. Known confidence limits: the two grok evidence lanes completed without their formal self-verification pass (one hit its turn cap mid-verify, one lacked the verify flag), and the two lanes that counted the SSE type enum disagree 57 vs 59 — exact counts in this document should be read as &plusmn;2. Every load-bearing number, file:line citation, precedent URL, and per-lane caveat is preserved in the <a href="kb-decomposition-evidence-2026-08.html">evidence appendix</a>; the prior ruling this document re-examines is the <a href="kb-plugins-extensibility-rfc.html">2026-05-31 extensibility RFC</a> and <code>docs/extending.md</code>.</p>
+
+<footer class="doc">
+<p>kb research corpus &middot; docs/research/ &middot; generated 2026-08-16 &middot; companion: <a href="kb-decomposition-evidence-2026-08.html">evidence appendix</a></p>
+</footer>
+</article>
+</main>
+</body>
+</html>

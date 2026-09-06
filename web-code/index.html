@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <!-- R11 — ONE unconditional theme-color, seeded to the static
+         `data-theme="dark"` above and then rewritten by `applyTheme` to the
+         chosen theme's live `--bg`. The two `prefers-color-scheme`-keyed
+         metas this replaces followed the OS, not the choice: picking light
+         on a dark OS left the mobile browser chrome at #0e0e10. -->
+    <meta name="theme-color" content="#0e0e10" />
+    <title>kb-code</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

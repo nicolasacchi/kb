@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb SPA D7 multi-daemon architecture — B2 baseline (true multi-origin) with B1 (federation via hub) as a co-located optimisation. Per-daemon auth, iframe artifact-host coordination, URL scheme, SSE strategy.">
+<meta name="kb-tags" content="design, multi-daemon, federation, cors, auth, sse, iframe, architecture">
+<meta name="kb-category" content="design-review">
+<meta name="kb-status" content="open">
+<title>13 · Multi-daemon architecture — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+      <a href="12-mobile-redesign.html">12 · Mobile</a>
+      <a href="13-multi-daemon-architecture.html" class="is-current">13 · Multi-daemon</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 13
+    <span>·</span>
+    <span class="meta">D7 — SPA against ≥1 daemon</span>
+    <span>·</span>
+    <span class="meta">Design review · 2026-05-19</span>
+  </div>
+  <h1>One active daemon at a time, picked by URL. <br>B2 (true multi-origin) baseline; B1 (federation) as Traefik-only optimisation.</h1>
+  <p class="lede">The SPA today is <code>base = ""</code> — every fetch is same-origin against the daemon that served it. With co-located peers (sibling <code>kbB.example.com</code> hosts) <em>and</em> remote peers (laptop, work machine), B1 alone isn't enough — federation only works when daemons trust each other inside one Traefik. This doc commits to <strong>B2 as the architectural baseline</strong> and uses <strong>B1 as a Traefik-config optimisation</strong> for peers that happen to be co-located.</p>
+</section>
+
+<h2 id="problem">Problem statement</h2>
+
+<p>The fleet TUI already addresses multi-daemon for the terminal. The SPA hasn't — three pieces are hardcoded same-origin today:</p>
+
+<ul>
+  <li><code>web/src/api/client.ts</code> — REST surface (<code>fetchDoc</code>, <code>fetchDocs</code>, <code>fetchReview</code>, <code>fetchAtlasEdges</code>, ...).</li>
+  <li><code>web/src/api/history.ts</code> — history POST family (<code>recordOpen</code>, <code>recordScroll</code>, <code>recordSearch</code>, <code>fetchHistory</code>).</li>
+  <li><code>web/src/api/sse.ts</code> — SSE consumer. <strong>Already daemon-aware</strong> (<code>state.url</code> per daemon); the fleet TUI's per-daemon-SSE pattern was lifted here too. No change needed for D7.</li>
+</ul>
+
+<p>D7-prep (commit on this round) extracted the base URL into <code>web/src/api/base.ts</code> with a getter/setter; <code>client.ts</code> and <code>history.ts</code> now read it on every call. Forward-compatible with whichever pattern lands.</p>
+
+<h2 id="patterns">Three patterns</h2>
+
+<p>Recap of the options surfaced in the deep-review residue discussion:</p>
+
+<table>
+  <thead><tr><th>ID</th><th>Pattern</th><th>SPA changes</th><th>Daemon changes</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr><td><strong>A</strong></td><td>Tab per daemon</td><td>None</td><td>None</td><td>0d</td></tr>
+    <tr><td><strong>B1</strong></td><td>Federation via hub daemon</td><td>None — SPA stays same-origin</td><td>Hub gains <code>/api/proxy/&lt;daemon&gt;/*</code>; SSE multiplexed</td><td>2-3d</td></tr>
+    <tr><td><strong>B2</strong></td><td>True multi-origin</td><td>Per-daemon base, CORS preflight, per-daemon auth</td><td>CORS response headers; cross-daemon Origin allowlist</td><td>3-5d</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Why B2 as the baseline</strong>: B1 requires the daemons to be co-located behind a shared trust boundary (one Traefik, same Authelia chain). A laptop offline kb can't proxy through the production hub — it'd need a public endpoint and reverse-tunnel. The fleet promise is "see everything from one SPA" regardless of where the daemons live; B2 is the only pattern that delivers that.</p>
+
+<p><strong>Why B1 stays around</strong>: when two daemons <em>are</em> co-located, B1 is cheaper (no CORS dance, single Authelia session). Implementation: a Traefik rule + a <code>[server.federation]</code> kb.toml block, no SPA changes. Ship as a follow-up optimisation, not a Round 8 commitment.</p>
+
+<h2 id="model">Mental model — one active daemon</h2>
+
+<p>The TUI shows multiple daemons side-by-side (OVERVIEW rolls them up; TRAFFIC overlays req/sec). The SPA does <em>not</em> attempt that — there's no useful "unified gallery across daemons" on a small canvas. Instead: <strong>one daemon active at a time</strong>, identified by URL.</p>
+
+<pre>
+https://kb.example.com/?daemon=production       (default — kb.example.com itself)
+https://kb.example.com/?daemon=laptop           (proxied via B1 or remote-CORS via B2)
+https://kb.example.com/?daemon=remote-server    (only via B2)
+</pre>
+
+<p>The SPA loads at <code>kb.example.com</code> (the "host" origin). The <code>?daemon=</code> query param picks which daemon answers <em>data</em> requests; the host origin still serves the JS/CSS bundle. Switching daemons in the SPA mutates the URL (<code>history.pushState</code>) so deep links work.</p>
+
+<h3 id="why-not-subdomain">Why not <code>daemon.kb.example.com</code> subdomain?</h3>
+
+<p>Each daemon already owns a subdomain space for its artifact iframes (<code>*.artifacts.kb.example.com</code>, <code>*.artifacts.kb-laptop.local</code>). Putting the SPA itself on a daemon-specific subdomain doubles the namespace and forces the SPA bundle to be rebuilt per-daemon. Single-host SPA with query-param selection is cheaper.</p>
+
+<h2 id="b2-architecture">B2 architecture (baseline)</h2>
+
+<h3 id="b2-spa">SPA side</h3>
+
+<ol>
+  <li><strong>Daemon list source</strong>. A new <code>/api/daemons</code> endpoint on the host daemon returns the configured fleet (or just <code>[{name, base_url}]</code>). The SPA fetches it once at boot; populates a daemon picker. Same source the TUI's <code>daemons.toml</code> uses, but served via HTTP so the SPA doesn't need filesystem access.</li>
+  <li><strong>Boot path wiring</strong>. <code>App.tsx</code> reads <code>?daemon=</code> from <code>useUrl()</code>; calls <code>setDaemonBase(daemon.base_url)</code> from <code>api/base.ts</code> before any data fetch fires.</li>
+  <li><strong>Daemon switch UI</strong>. New <code>&lt;DaemonPicker&gt;</code> component in the LeftRail (or a dedicated header dropdown). Selecting a daemon mutates the URL; SSE reconnects via the existing <code>sse</code> module (which already takes a per-daemon URL).</li>
+  <li><strong>Per-daemon bearer auth</strong>. Today the SPA relies on Authelia's session cookie + Traefik's <code>kb-inject-bearer</code> middleware. Cross-origin destroys that — cookies are per-domain. <strong>The SPA must explicitly carry a per-daemon bearer</strong>. New <code>api/bearer.ts</code> module mirrors kb-tui's <code>set_bearer</code>: the daemon picker UI prompts for / stores tokens per daemon. Local-only daemons can omit (they bypass on loopback).</li>
+  <li><strong>iframe artifact-host</strong>. Today <code>useArtifactHostSuffix()</code> reads <code>/api/identity</code> and gets ".artifacts.kb.example.com". With per-daemon base, this query now returns the suffix matching the <em>active</em> daemon. The iframe loads from <code>&lt;id&gt;.artifacts.&lt;active-daemon-suffix&gt;</code>.</li>
+  <li><strong>postMessage origin checks</strong>. <code>web/src/lib/artifactHost.ts</code>'s <code>isArtifactOrigin</code> needs to compare against the <em>active</em> daemon's suffix (not a single hardcoded value). Already parameterised — D7 just threads the active suffix through.</li>
+</ol>
+
+<h3 id="b2-daemon">Daemon side</h3>
+
+<ol>
+  <li><strong>CORS preflight</strong> on <code>/api/*</code>. Today every cross-origin POST fails preflight (no CORS response). Need to respond to OPTIONS with <code>Access-Control-Allow-Origin</code> matching the requesting SPA's origin <em>iff</em> it's on the cross-daemon allowlist.</li>
+  <li><strong>Cross-daemon Origin allowlist</strong>. A new <code>[server] cross_daemon_origins = ["https://kb.example.com", "http://kb-laptop.local:4000"]</code> in <code>kb.toml</code>. Origin-allowlist middleware accepts any origin in this list <em>in addition</em> to the configured <code>parent_origin</code>.</li>
+  <li><strong>Bearer-per-daemon</strong>. Already done — each daemon's <code>auth.token</code> is its own. The SPA carries the right one because it stored them per daemon.</li>
+  <li><strong>`/api/identity` includes artifact host suffix</strong>. Already does — the field exists. D7 just makes the SPA use it as the source of truth (today some code paths hardcode <code>.artifacts.localhost</code> as a fallback).</li>
+  <li><strong>`/api/daemons` endpoint on the host</strong>. Returns the fleet list (name, base_url, status). For a singleton deploy, returns just self. For a multi-daemon deploy, returns the union of <code>daemons.toml</code> + self.</li>
+</ol>
+
+<h2 id="b1-architecture">B1 as a Traefik-only optimisation</h2>
+
+<p>When two daemons sit behind the same Traefik (sibling hostnames <code>kbA.example.com</code> + <code>kbB.example.com</code>), the cross-origin dance is unnecessary — Traefik can proxy. Ship as a config recipe, not as SPA code:</p>
+
+<pre>
+# docker-compose.yml — add a second kb service:
+kbB:
+  build: { context: ~/project/kbB }
+  image: kb:local
+  labels:
+    - "traefik.http.routers.kbB-api.rule=Host(`kbB.example.com`)"
+    - "traefik.http.routers.kbB-api.middlewares=authelia@docker,kbB-inject-bearer"
+</pre>
+
+<p>Then the SPA loaded from <code>kb.example.com</code> opens <code>?daemon=kbB</code> → base URL <code>https://kbB.example.com</code> → Traefik routes to the kbB container, same Authelia session applies, CORS preflight succeeds because both origins share Authelia's <code>SameSite=Lax</code> cookie. <strong>No SPA code change</strong> — B2 already handles this transparently. B1 is then a deployment recipe documented in <code>docs/self-host.md</code>.</p>
+
+<h2 id="iframe-coordination">iframe artifact-host coordination</h2>
+
+<p>The trickiest cross-cutting concern. Each daemon has its own artifact subdomain space (<code>*.artifacts.kb.example.com</code>, <code>*.artifacts.kb-laptop.local</code>). When the SPA active daemon switches:</p>
+
+<ul>
+  <li>The iframe URL must re-target — new suffix, possibly new id space.</li>
+  <li>postMessage origin checks must update — pre-D7 the parent uses one hardcoded suffix; post-D7 it reads the active daemon's suffix from <code>useArtifactHostSuffix()</code> (already an SSE-subscribed hook).</li>
+  <li>The runtime injection (<code>routes/artifact.rs::runtime_js</code>) hardcodes <code>postmessage_target</code> from <code>parent_origin</code> — each daemon needs to set this to <code>https://kb.example.com</code> (the host SPA), regardless of which daemon serves the artifact.</li>
+</ul>
+
+<p>Net result: <strong>every daemon in the fleet must configure <code>parent_origin = "https://kb.example.com"</code></strong> (or whichever single origin hosts the SPA). The SPA's host origin is the canonical parent for every daemon's iframes. Document this in self-host.md.</p>
+
+<h2 id="sse-strategy">SSE strategy — one active daemon</h2>
+
+<p>The fleet TUI subscribes to every daemon's SSE simultaneously and aggregates in <code>traffic</code>/<code>events</code> tabs. The SPA does <em>not</em>: only the active daemon's SSE is open. Rationale:</p>
+
+<ul>
+  <li>SSE consumers run in the browser; each connection is a long-lived TCP socket. Browsers cap ~6 connections per origin; multi-daemon would burn through that fast.</li>
+  <li>The SPA's reactive UI updates (gallery refresh on <code>artifact.indexed</code>, history bump on <code>history.recorded</code>) only make sense for the daemon the user is currently looking at.</li>
+  <li>Daemon-switch in the picker tears down the old SSE + opens the new one. The existing <code>sse.ts</code> module's <code>add(url)</code> / <code>remove(url)</code> already supports this — the active daemon swap is a remove-old + add-new.</li>
+</ul>
+
+<p>If "see live activity across the fleet" is wanted later, the TUI is the right surface — it's already designed for it.</p>
+
+<h2 id="url-scheme">URL scheme</h2>
+
+<p>Decision: <strong>query param, not path segment</strong>.</p>
+
+<pre>
+?daemon=production               (default; can omit)
+?daemon=laptop
+/a/kb/&lt;id&gt;?daemon=laptop          (deep link to artifact on a specific daemon)
+</pre>
+
+<p>Why not <code>/d/&lt;daemon&gt;/a/&lt;kb&gt;/&lt;id&gt;</code>? It's nicer but doubles the route table. Query param is one router rule.</p>
+
+<p>Default selection: the URL the SPA was served from. If <code>kb.example.com</code> serves the SPA, <code>?daemon=</code> default is <code>kb.example.com</code>. Avoids "what's my home?" ambiguity.</p>
+
+<h2 id="decisions">Open decisions</h2>
+
+<ol>
+  <li><strong>Daemon-list source format</strong>. Just <code>{name, base_url}</code>, or include <code>artifact_host_suffix</code> + <code>auth_required: bool</code> so the SPA pre-knows what to ask for? <em>Lean: include both; chatty but stable.</em></li>
+  <li><strong>Bearer storage</strong>. Per-daemon token in <code>localStorage</code> (durable, cross-tab) vs <code>sessionStorage</code> (transient). <em>Lean: localStorage; the SPA's bearer-show route can clear on demand.</em></li>
+  <li><strong>Token entry UX</strong>. Prompt at first cross-daemon switch, vs a Settings tab, vs assume Authelia/SSO carries it. <em>Lean: settings tab + first-switch prompt as a one-off.</em></li>
+  <li><strong>Cross-daemon Origin allowlist</strong>. Static config in <code>kb.toml</code>, vs runtime API <code>/api/peers</code> readable by the operator. <em>Lean: static <code>cross_daemon_origins</code> array in kb.toml; runtime config is a future-feature.</em></li>
+  <li><strong>Daemon picker placement</strong>. Header dropdown next to KB picker, vs a dedicated <code>/daemons</code> route, vs a global <code>D</code> hotkey (mirror of TUI). <em>Lean: header dropdown; the TUI's <code>D</code> overlay is too modal for browser muscle memory.</em></li>
+  <li><strong>OPTIONS handler for CORS</strong>. Per-route axum config, vs a tower middleware that handles preflight generically, vs <code>tower-http::cors</code>. <em>Lean: <code>tower-http::cors</code> — well-tested, configurable, matches the trusted-proxy allowlist.</em></li>
+  <li><strong>What happens if a peer is unreachable</strong>. Hide from the picker, vs grey-out with "offline since &lt;timestamp&gt;", vs error toast. <em>Lean: grey-out; the picker is the operator's view of the fleet's health.</em></li>
+</ol>
+
+<h2 id="impl-files">Implementation hit-list (B2 baseline)</h2>
+
+<table>
+  <thead><tr><th>File</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>web/src/api/base.ts</code></td><td>(shipped D7-prep) Getter/setter for daemonBase.</td></tr>
+    <tr><td><code>web/src/api/bearer.ts</code> (new)</td><td>Per-daemon bearer store backed by localStorage; <code>setBearer(daemon, token)</code> / <code>getBearer(daemon)</code>.</td></tr>
+    <tr><td><code>web/src/api/client.ts</code></td><td>Thread <code>Authorization: Bearer ...</code> from <code>bearer.ts</code>. Read on every call.</td></tr>
+    <tr><td><code>web/src/api/history.ts</code></td><td>Same — bearer header from <code>bearer.ts</code>.</td></tr>
+    <tr><td><code>web/src/api/daemons.ts</code> (new)</td><td><code>fetchDaemons()</code> against the host's <code>/api/daemons</code>.</td></tr>
+    <tr><td><code>web/src/components/DaemonPicker.tsx</code> (new)</td><td>Header dropdown; switches active daemon via URL mutation.</td></tr>
+    <tr><td><code>web/src/App.tsx</code></td><td>Boot: read <code>?daemon=</code>, call <code>setDaemonBase</code>, populate bearer.</td></tr>
+    <tr><td><code>web/src/hooks/useArtifactHost.ts</code></td><td>Already re-fetches per active daemon via <code>/api/identity</code> — confirm it re-runs on daemon switch.</td></tr>
+    <tr><td><code>web/src/api/sse.ts</code></td><td>Already daemon-aware; add a "switch" helper that removes old + adds new.</td></tr>
+    <tr><td><code>crates/kb-server/src/routes/daemons.rs</code> (new)</td><td><code>GET /api/daemons</code> — returns self + configured peers.</td></tr>
+    <tr><td><code>crates/kb-core/src/config.rs</code></td><td>Add <code>[server] cross_daemon_origins</code> and <code>[fleet] peers</code> sections.</td></tr>
+    <tr><td><code>crates/kb-server/src/middleware.rs</code></td><td><code>origin_allowed</code> consults <code>cross_daemon_origins</code> in addition to <code>parent_origin</code>.</td></tr>
+    <tr><td><code>crates/kb-server/src/router.rs</code></td><td>Add <code>tower-http::cors</code> layer with the cross-daemon allowlist.</td></tr>
+    <tr><td><code>docs/self-host.md</code></td><td>Document the multi-daemon deployment recipe (both B1 Traefik-style and B2 cross-host).</td></tr>
+    <tr><td><code>tests/e2e/spa-multi-daemon.spec.ts</code> (new)</td><td>Playwright: spin up 2 daemons on random ports, load SPA from #1 with <code>?daemon=#2</code>, assert REST + SSE + iframe all work.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="risks">Risks &amp; what to watch</h2>
+
+<ul>
+  <li><strong>CORS preflight cost</strong> — every state-changing POST gains an OPTIONS round-trip. For <code>history/scroll</code> (debounced 1s) that's 1 extra request per active reading session, negligible. For batched comment writes it could matter; if so, <code>Access-Control-Max-Age</code> caches the preflight for 24h.</li>
+  <li><strong>SSE behind CORS</strong> — EventSource supports CORS but <em>only</em> when the daemon sets the headers correctly AND the SPA opens the stream with the right URL (no <code>withCredentials</code> mismatch). Same trap that bit the early SPA on Chrome's stricter SSE preflight.</li>
+  <li><strong>Bearer leak</strong> — per-daemon tokens in localStorage are accessible to any JS in the SPA origin. The SPA is small + first-party, but any XSS (e.g. S1 if we'd missed it in Round 1) leaks every daemon token. Watch for new XSS surface; the comment-body escape (commit <code>a4aa6c5</code>) stays load-bearing.</li>
+  <li><strong>Daemon-switch mid-flight</strong> — what if the user switches daemons while a history POST is in flight? AbortController on every fetch should handle this. Was extended in Round 7 (commit <code>9860fd0</code>); D7 amplifies the test surface.</li>
+  <li><strong>iframe re-mount on switch</strong> — the parent iframe's origin changes; the artifact reloads. Document this in the SPA's daemon-switch path (the user expects a flash).</li>
+  <li><strong>artifact_host_suffix mismatch</strong> — if a peer daemon's <code>parent_origin</code> isn't set to the SPA's host, postMessage rejects from the parent side. The host-SPA prints a clear warning on mismatch (banner like the pre-existing identity check).</li>
+</ul>
+
+<h2 id="non-goals">Non-goals</h2>
+
+<ul>
+  <li><strong>Unified gallery across daemons</strong>. The fleet TUI is the surface for fleet-level views. The SPA is single-daemon-at-a-time.</li>
+  <li><strong>Cross-daemon search</strong>. Search queries hit the active daemon's lance only. Fan-out is a future feature, probably API-level rather than SPA-level.</li>
+  <li><strong>Cross-daemon comments / review file portability</strong>. Comments live in <code>&lt;state&gt;/&lt;kb&gt;/.review/&lt;id&gt;.json</code> per-daemon. The SPA shows the active daemon's comments only.</li>
+  <li><strong>P2P daemon discovery</strong>. mDNS already exists for LAN; over-the-internet discovery is out of scope. The operator lists peers in <code>kb.toml</code>.</li>
+</ul>
+
+</main>
+
+</body>
+</html>

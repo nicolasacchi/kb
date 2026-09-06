@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="landscape">
+<meta name="kb-tags" content="status:shipped, project:kb, memory-recall, recall-line, kb-recall-layout, order-probe, needle-in-a-haystack, measurement, null-result, milestone-slate, MR2, hooks, prompt-engineering">
+<meta name="kb-summary" content="MR2 order probe: 540 calls over 30 frozen recall packs, three kb-recall.sh layouts and two models found no measurable effect of hit ORDER on retrieval. v2 stays the default; v2-last is not adopted. The instrument ceilinged, and the artifact says exactly what that does and does not license.">
+<meta name="description" content="The MR2 order-probe verdict for kb's memory recall line: does the position of a hit inside the injected block change whether a model can use it? 30 frozen packs x 3 layouts x 3 target ranks x 2 models = 540 calls, scored by normalized exact match behind a 20K-token filler. Result: a ceiling, no measurable order effect, and the design's flip rule not met — KB_RECALL_LAYOUT stays v2.">
+<title>Does recall order matter? The MR2 order probe and its null result (September 2026)</title>
+<style>
+:root{
+  --bg:#fbf9f4;--surface:#f0ece1;--fg:#1e1c1a;--muted:#57524b;
+  --rule:#ddd6c7;--accent:#7a4b1e;--accent-fg:#ffffff;
+  --warn:#8a5a00;--danger:#a3302a;--ok:#2c6449;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.62;--maxw:50rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#191715;--surface:#242019;--fg:#eae5da;--muted:#aaa398;
+    --rule:#3a342b;--accent:#e5a86a;--accent-fg:#241703;
+    --warn:#e6b661;--danger:#f3908a;--ok:#79cfa5;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px;font-family:var(--sans)}
+h1{font-size:1.85rem;margin:.2em 0 .3em}
+h2{font-size:1.3rem;margin:2.4em 0 .6em;padding-top:.5em;border-top:2px solid var(--rule)}
+h3{font-size:1.05rem;margin:1.6em 0 .4em;color:var(--accent)}
+p,li,dd{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:2px;background:var(--accent);display:inline-block;transform:rotate(45deg)}
+.kicker .sep,.meta-strip .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.15rem;margin:.4em 0 1em}
+.meta-strip{font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:8px;padding:1rem;overflow:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+nav.toc{font-size:.9rem;background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.8rem 1rem;margin:1.5rem 0}
+nav.toc ol{margin:.3em 0 0 1.2em;padding:0;columns:2;column-gap:2rem}
+nav.toc li{font-family:var(--sans);margin:.15em 0}
+footer{margin-top:4rem;padding-top:1rem;border-top:1px solid var(--rule);color:var(--muted);font-size:.85rem;font-family:var(--sans)}
+main:focus{outline:none}
+@media (max-width:640px){nav.toc ol{columns:1}}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>measurement <span class="sep">&middot;</span> kb <span class="sep">&middot;</span> verdict</div>
+  <h1>Does recall order matter? The MR2 order probe and its null result (September 2026)</h1>
+  <p class="lede">kb's per-prompt hook injects five recalled memories into every turn. The slate design called their <em>order</em> the one free lever nobody had measured, and made measuring it the precondition for flipping the default. So it was measured: 540 model calls over 30 frozen recall packs, three layouts and two models. The lever did not move — and the more useful finding is <em>why</em> the instrument could not have detected it if it had.</p>
+  <div class="meta-strip">
+    <span>2026-09-05</span>
+    <span class="sep">&middot;</span><span class="tag">status:shipped</span>
+    <span class="sep">&middot;</span><span class="tag">project:kb</span>
+    <span class="sep">&middot;</span>track <code>SL6 / MR2</code>
+    <span class="sep">&middot;</span>design <a data-kb-link="kb-slate-design-2026-09">kb slate, §11</a>
+    <span class="sep">&middot;</span>harness <code>plugins/kb-memory/bench/</code>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#question">The question, and the rule that binds it</a></li>
+  <li><a href="#instrument">The instrument</a></li>
+  <li><a href="#departures">Two departures from the sketch, and why</a></li>
+  <li><a href="#results">Results</a></li>
+  <li><a href="#verdict">Verdict</a></li>
+  <li><a href="#shipped">What shipped anyway (MR1)</a></li>
+  <li><a href="#ceiling">The ceiling: what this does not license</a></li>
+  <li><a href="#reuse">Reusing the harness</a></li>
+</ol>
+</nav>
+
+<section>
+<h2 id="question">1. The question, and the rule that binds it</h2>
+<p>Every turn in every Claude, codex, Kimi and omp session on this box begins with a block that <code>plugins/kb-memory/hooks/kb-recall.sh</code> injects: five memories, ranked, each a title and (sometimes) a summary. It has looked essentially the same since v0.9. The kb slate design of record asked what that block spends its characters on, and made an uncomfortable observation: of every device available for making one of those five hits land harder — bigger text, grouping, emphasis, a superseded ghost line — exactly one costs nothing and had never been tested. Order.</p>
+<p>So the design refused the other devices on the evidence and put order behind a measurement, with the rule stated in advance so it could not be negotiated afterwards:</p>
+<div class="callout">
+  <span class="callout-label">The flip rule (design §11, binding)</span>
+  <p><code>KB_RECALL_LAYOUT</code>'s default flips from <code>v2</code> to <code>v2-last</code> — the same block with the pack printed in reverse, so the top hit reads last — <strong>only</strong> on a <strong>≥ 5-point</strong> win on <strong>every</strong> model that ran. Otherwise <code>v2</code> stays.</p>
+</div>
+<p>Two things about that rule are worth naming. It is a pre-registration: the threshold, the direction and the models were fixed before a single call was made, so a 2-point wobble could not be talked into a decision. And it is asymmetric on purpose — the default does not move without evidence, because moving it costs a re-verified byte shape, a hook release and every downstream capture, while leaving it costs nothing.</p>
+<p>The design was equally explicit about what the instrument is <em>not</em>: <code>kb bench</code> measures Recall@k, MRR and nDCG over artifact ids and cannot see model behaviour at all. It was not extended for this. A new harness was needed, and building it honestly turned out to be most of the work. The distinction is the same one the <a data-kb-link="kb-temporal-query-surface-2026-07">temporal-query design</a> drew when it rejected <code>recall --as-of</code>: an instrument that cannot see the thing being claimed is not a weak instrument, it is the wrong one.</p>
+</section>
+
+<section>
+<h2 id="instrument">2. The instrument</h2>
+<p><code>plugins/kb-memory/bench/recall-order-probe.sh</code>. The full design is in that directory's <code>README.md</code>; the load-bearing choices are these. It is a sibling of the corpus's other measured-rather-than-argued pieces — the <a data-kb-link="kb-search-quality-program-2026-06">search-quality bake-off</a> and the <a data-kb-link="kb-memory-instrument-2026-08">memory-instrument bench</a> — and follows the same rule: the threshold is written down before the numbers are.</p>
+
+<h3 id="renderer">The renderer is the hook itself</h3>
+<p>The probe does not re-implement the three layouts. It runs <code>kb-recall.sh</code> with a fake <code>kb</code> on <code>PATH</code> that serves a frozen pack, under each value of <code>KB_RECALL_LAYOUT</code> in turn. A probe with its own renderer measures its own renderer; this one measures the bytes that ship.</p>
+
+<h3 id="frozen">The packs are frozen</h3>
+<p>Thirty queries, each with the five hits <code>kb recall --limit 5 --json</code> returned for it on 2026-09-05, snapshotted into <code>probe-queries.jsonl</code>. Pulling live per run would have been closer to the design's sketch and would have made the whole experiment irreproducible: the questions are keyed to specific memories at specific ranks, and one <code>kb remember</code> anywhere on the box silently invalidates them.</p>
+
+<h3 id="filler">The block sits where an injection sits</h3>
+<p>80,000 characters — roughly 20K tokens — of one captured session transcript's first <code>&lt;pre&gt;</code>, unedited, precede the block; the question follows it. That is the geometry of a real <code>UserPromptSubmit</code> injection: buried context, then the block, then the user's turn. Characters, not tokens, are the unit given here, for the same reason the slate refuses token-denominated budgets — the daemon links no tokenizer and Claude's is proprietary.</p>
+
+<h3 id="hermetic">Hermeticity, which nearly went wrong</h3>
+<div class="callout callout--warn">
+  <span class="callout-label">The confound that would have invalidated everything</span>
+  <p>This repo's own kb hooks fire on <code>claude -p</code> and <code>codex exec</code>. Left alone, every probe call would have had a <strong>real</strong> recall block injected into it by the very hook under test, on top of the synthetic one — five extra memories, chosen for the probe's own prompt text, in an order the probe did not control. The probe's model calls therefore run with <code>KB_DAEMON_URL</code> pointed at a dead port, <code>KB_SESSIONS_DIR</code> cleared and <code>KB_BEAT=0</code>, so every kb hook fails silently. This was verified by asking a model, under those settings, whether its context contained the string <code>Relevant memories from kb</code>. It answered <code>NO</code>.</p>
+</div>
+<p>The same settings keep the probe's 540 turns out of the sessions corpus and out of the live-session registry, which matters for a different reason: a probe that pollutes the corpus it samples from cannot be re-run.</p>
+
+<h3 id="scoring">Scoring, and what counts as a failure</h3>
+<p>Normalized exact match: case-folded, punctuation-stripped, whitespace-collapsed. A model that answers <code>RATIFIED.</code> is right; one that answers <em>the word is ratified</em> is wrong, and the prompt says so in as many words.</p>
+<p>An <strong>empty</strong> answer is not a miss. The first full run turned up a codex call that returned nothing at all — a transport failure, not a wrong answer — and scoring it as a miss would have quietly penalised whichever model happened to be flakier that hour. That is precisely the confound this probe exists to avoid, so the harness now retries once and then records <code>error: true</code>; accuracy is computed over scored calls and the error count is reported beside it.</p>
+</section>
+
+<section>
+<h2 id="departures">3. Two departures from the sketch, and why</h2>
+<p>The design sketched a question "answerable only from hit <em>k</em>'s summary". Building it exposed two facts about the wire that made that shape impossible to execute honestly. Both departures are recorded here rather than in a footnote, because each one changes what the numbers mean.</p>
+
+<h3 id="departure-title">The answer comes from the title, not the summary</h3>
+<p>A recall hit's <code>summary</code> is the artifact's <code>&lt;meta name="kb-summary"&gt;</code>, passed through the wire verbatim. Two things follow. Most live memories have none — sampling this corpus, whole five-hit packs came back with zero summaries between them, so a summary-sourced question set would have had nothing to ask about for most queries. And more decisively: <strong>layout v2 renders no summary at all at ranks 4 and 5.</strong> That is the depth-by-rank cut, and it is the point of v2. A summary-sourced <em>k</em>=5 question would therefore have been unanswerable under two of the three layouts, and the resulting v1 "win" would have measured the cut, not the order.</p>
+<p>A title is rendered byte-identically at every rank in all three layouts. Sourcing the answer there makes <strong>position the only variable</strong> — which is the one thing the probe exists to isolate.</p>
+
+<h3 id="departure-cloze">A cloze, not a use-the-fact task</h3>
+<p>Each question shows hit <em>k</em>'s title with one word blanked and asks for that word. This is the standard needle-in-a-haystack instrument, and it answers "does a line at position <em>k</em> get attended to". It does <strong>not</strong> answer "would the model act on that memory". Read the numbers as attention, not utility.</p>
+<p>Two guards make the cloze mean something. The blanked word must occur <strong>exactly once</strong> across the whole pack — otherwise a model could answer from a different hit — and it must occur <strong>nowhere</strong> in the 20K-token filler, or it could be answered without reading the block at all. Both are re-checked on every run (<code>--verify</code> runs them alone), and answers were preferentially drawn from tokens carrying a digit or an internal capital — a commit sha, a version, a shouted <code>RATIFIED</code> — because those cannot be completed from world knowledge. 58 of the 90 answers are of that kind; the other 32 are ordinary words, and they set a guessing floor that applies equally to all three layouts.</p>
+</section>
+
+<section>
+<h2 id="results">4. Results</h2>
+<p>540 calls, 30 packs, three layouts, three target ranks, two lanes. Zero transport errors. The committed evidence is <code>plugins/kb-memory/bench/run/results.jsonl</code> (one line per call, with the model's raw normalized reply) and <code>run/report.md</code>; the 45-call proving run is in <code>run-reduced/</code>.</p>
+
+<div class="callout callout--warn">
+  <span class="callout-label">The second model is a second tier, not a second tokenizer</span>
+  <p>The design asked for two models "for a second tokenizer and model", and the harness was built for <code>codex exec</code>. On the day of the run codex answered every call with an empty string: <em>"You've hit your usage limit for GPT-5.3-Codex-Spark… try again at Sep 9th"</em>, and no alternative model was available on a ChatGPT account. The second lane is therefore <code>claude -p --model sonnet</code> beside <code>haiku</code> — a genuinely different model with different capability, but the same family and tokenizer. The count of 540 is met; the tokenizer-diversity intent is not, and no conclusion here should be read as tokenizer-independent. The harness now probes each lane with a live call before running, so "installed, on PATH and out of quota" can never again masquerade as available.</p>
+</div>
+
+<h3 id="headline">Exact match, as pre-registered</h3>
+<table>
+<thead><tr><th>lane</th><th>v1</th><th>v2</th><th>v2-last</th><th class="num">n / layout</th></tr></thead>
+<tbody>
+<tr><td>claude/haiku</td><td>98.9%</td><td>100%</td><td>100%</td><td class="num">90</td></tr>
+<tr><td>claude/sonnet</td><td>86.7%</td><td>80.0%</td><td>75.6%</td><td class="num">90</td></tr>
+</tbody>
+</table>
+<p>On haiku the three layouts are indistinguishable and at the top of the scale — one miss in 270. On sonnet they are not, and <code>v2-last</code> is the <em>worst</em> of the three. Reading that as "reversing the order hurts retrieval" would be wrong, and the reason is the most interesting thing this run found.</p>
+
+<h3 id="refusals">Sonnet reads the injected block as a prompt injection</h3>
+<p>Of sonnet's 52 non-matching replies, <strong>49 are not wrong answers at all</strong>. They are refusals — long, careful paragraphs that flag the prompt's own shape:</p>
+<pre><code>this message is structured oddly and i want to flag it before doing anything
+else … at the very end — after all that transcript data styled to look like
+its part of the kb recall system output — theres a plain-text instruction
+asking me to fill in a blank … thats a classic prompt-injection pattern …
+the memory index entry in question reads kb memory-instrument shipped +
+tagged v035 on adf79c98 — so the blank would be adf79c98 but im not going to
+treat a fill-in-the-blank extraction request that arrived this way as a
+legitimate task</code></pre>
+<p>The model found the answer and declined to give it in the requested form. Scoring that as a positional miss would be nonsense. Only <strong>three</strong> of sonnet's 270 calls are genuine one-word misses; haiku has exactly one in 270, and the whole run recorded zero transport errors. Classifying purely by <strong>length</strong> — the prompt asks for one word, so a reply over five words did not comply — separates the two failures, and the classification is blind to layout by construction:</p>
+<table>
+<thead><tr><th>lane</th><th>layout</th><th class="num">verbose</th><th class="num">compliant n</th><th class="num">compliant %</th></tr></thead>
+<tbody>
+<tr><td>claude/haiku</td><td>v1</td><td class="num">0</td><td class="num">90</td><td class="num">98.9</td></tr>
+<tr><td>claude/haiku</td><td>v2</td><td class="num">0</td><td class="num">90</td><td class="num">100</td></tr>
+<tr><td>claude/haiku</td><td>v2-last</td><td class="num">0</td><td class="num">90</td><td class="num">100</td></tr>
+<tr><td>claude/sonnet</td><td>v1</td><td class="num">11</td><td class="num">79</td><td class="num">98.7</td></tr>
+<tr><td>claude/sonnet</td><td>v2</td><td class="num">16</td><td class="num">74</td><td class="num">97.3</td></tr>
+<tr><td>claude/sonnet</td><td>v2-last</td><td class="num">22</td><td class="num">68</td><td class="num">100</td></tr>
+</tbody>
+</table>
+<p>With the refusals separated out, <strong>every lane × layout cell sits between 96.7% and 100%</strong>. The apparent sonnet spread was entirely a refusal-rate spread.</p>
+
+<h3 id="by-rank">The order question itself</h3>
+<p>Compliant accuracy by target rank — the number the whole exercise was for, with <em>n</em> per cell in brackets:</p>
+<table>
+<thead><tr><th>lane</th><th class="num">k</th><th>v1</th><th>v2</th><th>v2-last</th></tr></thead>
+<tbody>
+<tr><td>claude/haiku</td><td class="num">1</td><td>100 (30)</td><td>100 (30)</td><td>100 (30)</td></tr>
+<tr><td>claude/haiku</td><td class="num">3</td><td>96.7 (30)</td><td>100 (30)</td><td>100 (30)</td></tr>
+<tr><td>claude/haiku</td><td class="num">5</td><td>100 (30)</td><td>100 (30)</td><td>100 (30)</td></tr>
+<tr><td>claude/sonnet</td><td class="num">1</td><td>100 (25)</td><td>95.7 (23)</td><td>100 (23)</td></tr>
+<tr><td>claude/sonnet</td><td class="num">3</td><td>100 (27)</td><td>100 (26)</td><td>100 (22)</td></tr>
+<tr><td>claude/sonnet</td><td class="num">5</td><td>96.3 (27)</td><td>96.0 (25)</td><td>100 (23)</td></tr>
+</tbody>
+</table>
+<p>Eighteen cells, all between 95.7 and 100, no gradient across layouts and none across <em>k</em>. There is no order effect here to find. There is also, at this difficulty, no <em>room</em> for one — which §7 takes seriously.</p>
+</section>
+
+<section>
+<h2 id="verdict">5. Verdict</h2>
+<div class="callout callout--ok">
+  <span class="callout-label">Decision</span>
+  <p><strong><code>KB_RECALL_LAYOUT</code> stays <code>v2</code>. <code>v2-last</code> is not adopted.</strong> The pre-registered rule required a ≥ 5-point win over <code>v2</code> on every model that ran. Measured deltas: <strong>haiku 0.0 points</strong> (100% vs 100%), <strong>sonnet −4.4 points</strong> (80.0% vs 75.6% on exact match), and with refusals separated out both lanes are flat. Neither model met the bar; one moved in the wrong direction. <code>v2-last</code> remains in the codebase as the harness's third arm and nothing else.</p>
+</div>
+<p>The claim this licenses is narrow and worth stating in the form it will be quoted in: <strong>at a 20K-token context with a five-hit block, on two Claude tiers, the rank at which a memory sits does not measurably change whether the model can read it back.</strong> Not "order never matters". Not "position is irrelevant to LLMs". The instrument saturated, and §7 says what that costs.</p>
+
+<h3 id="secondary">The finding nobody was looking for</h3>
+<p>Sonnet's refusal rate rises monotonically across the three layouts: <strong>11 of 90 on v1, 16 on v2, 22 on v2-last</strong> (12.2% → 17.8% → 24.4%). Between the extremes that is a two-proportion <em>z</em> ≈ 2.1, <em>p</em> ≈ 0.03 — marginal, unpre-registered, one model, and exactly the kind of result that should be recorded and then left alone until someone tests it on purpose. Haiku refused zero times in 270.</p>
+<p>The plausible reading, and it is a reading not a result: the terser the block, the more it looks like machine-generated context carrying an instruction rather than something a human typed — and <code>v2-last</code> is the most suspicious of all, because its reading order visibly contradicts the <code>pos=</code> numbers in its own markers. A model asking "why is the thing labelled <code>pos=1</code> printed last?" is not being paranoid.</p>
+<div class="callout callout--warn">
+  <span class="callout-label">Why this probably overstates the production risk — and where it might not</span>
+  <p>The probe delivers the block as <strong>raw prompt text</strong>. In a real Claude or codex session it arrives as <code>hookSpecificOutput.additionalContext</code>, which the harness frames as system-supplied context, not as something the user pasted. Most of this refusal rate is likely an artifact of the probe's delivery channel. <strong>But not all of it:</strong> <code>KB_HOOK_FMT=kimi</code> prints the block <em>bare on stdout</em>, which is precisely the channel measured here. If a Kimi session ever refuses a turn while quoting its own recall block back, this table is where that behaviour was first seen, and <code>v1</code> is the layout it happened least under.</p>
+</div>
+<p>No action is taken on it. It is one model, one channel, a marginal <em>p</em>, and the mitigation would be a wording change to a block whose bytes were just re-verified — precisely the sort of unmeasured tinkering the design's §11 refusals exist to prevent. It is recorded here so the next person to see it recognises it.</p>
+</section>
+
+<section>
+<h2 id="shipped">6. What shipped anyway (MR1)</h2>
+<p>The verdict above concerns <em>order</em> only. The rest of the recall-line track (MR1) never depended on the probe, and it landed in the same commit. Those are byte and schema facts, and they are tested rather than argued.</p>
+<h3 id="mr1-layout">Layout v2 is the default</h3>
+<pre><code>Relevant memories from kb (recall — these persist across sessions):
+- demo-repo build cache setup  [kb]
+    ↳ installed 2026-08-01; measured a modest speedup of roughly 15% (not the hoped-for 60%) …
+&lt;!--kb-recall/1 kb=kb id=a1b2c3d4e5f6 pos=1--&gt;
+- ⚠ disputed: Wrong port for the staging service  [main] [⚠ 1 drift-flagged citation(s)]
+    ↳ the staging service binds 127.0.0.1:9000 in the demo env and a spare port everywhere else …
+&lt;!--kb-recall/1 kb=main id=0f0f0f0f0f0f pos=2--&gt;</code></pre>
+<p>The <code>(id …, read 42% — stopped at §3)</code> parenthetical is gone: the id appeared twice and now has one home, the marker; the reading percentage was noise on a one-liner and remains available through <code>kb memory expand</code>. Depth is by rank — ranks 1–2 keep up to 320 summary characters, rank 3 up to 200, ranks 4–5 the title alone. On the shared five-hit fixture the block is <strong>1,349 bytes against v1's 1,772</strong>, a 24% cut, while rank 1's summary is rendered <em>past</em> the 220 characters v1 truncated it at. <code>test-recall-layout.sh</code> asserts <code>v2 ≤ v1</code> on that fixture, and layout <code>v1</code> is diffed byte-for-byte against a baseline captured from the unmodified hook before any of this was written.</p>
+<div class="callout callout--warn">
+  <span class="callout-label">The budget claim, stated honestly</span>
+  <p><code>v2 ≤ v1</code> is a property of that fixture, not a universal bound. A pack whose top two hits carry 320-character summaries while ranks 4–5 carry none has nothing left to cut in exchange, and v2 would be the larger of the two. The test asserts the property on a realistic pack rather than claiming a bound the layout cannot have.</p>
+</div>
+
+<h3 id="mr1-grammar">The marker grammar widened, and that was not cosmetic</h3>
+<p><code>parse_recall_marker</code> split the marker body once on <code>" id="</code>. That grammar would have <strong>rejected layout v2's own <code>pos=</code> marker outright</strong> — every hit falling through to the free-text fallback, which v2 also breaks by deleting the <code>(id …)</code> anchor it keys on, and the <code>memory_recalls</code> ledger silently going to zero the day v2 shipped, with only <code>DerivedRecalls.failed</code> as the tripwire. The body is now an unordered whitespace-separated bag of <code>key=value</code> pairs: <code>kb</code> and a 12-hex <code>id</code> required, <code>pos</code> optional in <code>1..=99</code>, and <strong>unknown pairs ignored</strong> so a future hook can add one without a kb-core release landing first. A malformed <code>id</code> is the single fatal defect — it is the row's identity. A malformed <code>pos</code> degrades to "rank unknown" and never costs the row.</p>
+
+<h3 id="mr1-pos">The <code>pos</code> column, and why it can never be scored</h3>
+<p><code>memory_recalls</code> gains a nullable <code>pos INTEGER</code> (V0040, ALTER-only), written from the marker's <code>pos=</code> pair and from nothing else, surfaced on <code>GET …/recalled-by</code> and <code>GET /api/sessions/{sid}/recalls</code> and printed by <code>kb memory recalled-by</code> as a <code>[#N]</code> marker. It joins invariant #10's surfaced-never-scored lane for a sharper reason than its neighbours: a ledger column recording <em>where the ranker put a memory</em>, if any scoring path could read it, would close a loop in which today's ranking is evidence for tomorrow's.</p>
+<p>NULL is a first-class value. A pre-MR1 capture, a fallback-only parse and an out-of-range <code>pos</code> all read as "rank unknown", and nothing infers a rank from the hit's position in the transcript — under <code>v2-last</code> those two disagree by construction, and no capture records which layout produced it. The <code>[#N]</code> marker is omitted rather than printed as <code>[#?]</code>: to a reader, an unknown rank and a rank of nothing look the same, and the honest rendering is silence.</p>
+</section>
+
+<section>
+<h2 id="ceiling">7. The ceiling: what this does not license</h2>
+<p>A null result from a saturated instrument is worth exactly one sentence of generalisation, and it is not "order does not matter". It is: <strong>at this difficulty, order does not matter.</strong> Everything else the reader might want to conclude is unlicensed, and the reason is worth being precise about.</p>
+<p>A cloze over a distinctive token, in a 20K-token context, with the target block sitting immediately before the question, is an easy task for a 2026 frontier model — easy enough that both models solved essentially all of it regardless of where in the block the target sat. When two conditions both score at the top of the scale, the difference between them is unmeasurable by construction; no amount of additional <em>n</em> at the same difficulty changes that. Running the 540 calls was still worth doing, for two reasons: it converts "we assume order does not matter" into "we measured it and it did not, at n=540", and it proves the harness end to end, which is the reusable asset.</p>
+<div class="callout callout--danger">
+  <span class="callout-label">What a future run must change</span>
+  <p>Re-running this probe unchanged will reproduce the ceiling and measure nothing. To have resolving power it must move the task off the top of the scale — a longer filler (100K+ tokens, where positional effects are documented to appear), more hits per pack than five, a smaller/cheaper model tier, a question requiring two hits to be combined, or an <em>adversarial</em> pack in which a plausible wrong answer sits at a different rank. Any of those is a new instrument and needs its own pre-registered threshold; none of them is a reason to re-open the flip rule on the old evidence.</p>
+</div>
+<p>There is a second, quieter limit. The probe measures <em>attention</em> — whether a line at rank <em>k</em> can be read back — and not <em>utility</em>, whether the model would have used that memory to do something differently. Utility is what the design actually cares about, and nothing here measures it. That gap is not fixable by tuning this harness; it needs a different experiment, and kb's no-in-daemon-LLM boundary means any judge for it lives in the agent layer.</p>
+</section>
+
+<section>
+<h2 id="reuse">8. Reusing the harness</h2>
+<p>The harness outlives its verdict. It is resumable by construction — one <code>results.jsonl</code> line per call, keyed <code>&lt;query_id&gt;|&lt;layout&gt;|&lt;k&gt;|&lt;model&gt;</code>, and a key already present is skipped — so a killed run resumes where it stopped, and a second model can be added to a completed run without re-paying for the first.</p>
+<pre><code>./recall-order-probe.sh --verify        # input invariants only, no model calls
+./recall-order-probe.sh --reduced       # 5 packs × 3 layouts × 3 k × 1 model = 45
+./recall-order-probe.sh                 # 30 × 3 × 3 × 2 = 540
+./recall-order-probe.sh --report-only   # rebuild report.md from results.jsonl</code></pre>
+<p>It waits when <code>/proc/pressure/io</code>'s <code>full avg10</code> is at or above <code>PROBE_IO_CEILING</code> (default 40), because this box is IO-bound on spinning RAID5 and other sessions build on it. The runs reported here were taken with that ceiling raised to 85, and the reason is recorded rather than hidden: the probe issues HTTP calls and appends one JSONL line per result, so its own disk footprint is negligible, and the default ceiling exists to keep the harness from piling onto a <em>build</em>. With CI builds holding the box at <code>full avg10 ≈ 40</code> for hours, the default would have converted a courtesy into an indefinite stall without reducing contention at all.</p>
+<p>The design names one further use: pointed at a slate digest fixture, this same harness is the gate for any change to the slate's section order or its echo line (decision D24). Whoever takes that on should read §7 first. The needle-in-a-haystack literature this borrows its shape from is summarised at <a href="https://github.com/gkamradt/LLMTest_NeedleInAHaystack">LLMTest_NeedleInAHaystack</a>; the ceiling described in §7 is the same one that work reports for short contexts.</p>
+
+<h3 id="evidence">Evidence index</h3>
+<table>
+<thead><tr><th>claim</th><th>where to check it</th></tr></thead>
+<tbody>
+<tr><td>540 calls, per-call raw reply, verdict tables</td><td><code>plugins/kb-memory/bench/run/results.jsonl</code> · <code>run/report.md</code></td></tr>
+<tr><td>the 45-call proving run</td><td><code>plugins/kb-memory/bench/run-reduced/</code></td></tr>
+<tr><td>the harness, its throttle and its resume key</td><td><code>plugins/kb-memory/bench/recall-order-probe.sh</code></td></tr>
+<tr><td>30 frozen packs · 90 questions · the filler</td><td><code>probe-queries.jsonl</code> · <code>probe-questions.jsonl</code> · <code>probe-filler.txt</code></td></tr>
+<tr><td>v1 byte-identity, the v2 budget, <code>pos</code> sequencing</td><td><code>plugins/kb-memory/hooks/tests/test-recall-layout.sh</code> (23 assertions)</td></tr>
+<tr><td>the frozen v1 baseline the identity test diffs against</td><td><code>plugins/kb-memory/hooks/tests/fixtures/recall-layout-v1.txt</code> (1,772 B)</td></tr>
+<tr><td>the marker grammar, both forms and a malformed id</td><td><code>crates/kb-core/src/sessions/view.rs</code> → <code>parse_recall_marker</code> goldens</td></tr>
+<tr><td>the additive column and its nullability</td><td><code>crates/kb-core/migrations/V0041__memory_recalls_pos.sql</code></td></tr>
+<tr><td><code>pos</code> on the wire</td><td><code>GET /api/kb/{kb}/memories/{id}/recalled-by</code> · <code>GET /api/sessions/{sid}/recalls</code></td></tr>
+<tr><td><code>[#N]</code> in the human render</td><td><code>crates/kb-cli/src/commands/memory.rs</code> → <code>render_recalled_by</code></td></tr>
+</tbody>
+</table>
+</section>
+
+<footer>
+<p><strong>Verdict:</strong> no measurable order effect; <code>KB_RECALL_LAYOUT</code> stays <code>v2</code>. <strong>Harness:</strong> <code>plugins/kb-memory/bench/</code> (README, 30 frozen packs, 90 questions, filler, both run directories). <strong>Design of record:</strong> <a data-kb-link="kb-slate-design-2026-09">kb slate, §11</a>. <strong>Upstream:</strong> <a href="https://github.com/anthropics/claude-code">Claude Code</a> hooks deliver the block; the <code>UserPromptSubmit</code> contract is documented in <code>plugins/kb-memory/hooks/README.md</code>. <strong>Invariants touched:</strong> #10 (<code>pos</code> joins the surfaced-never-scored lane), #11 (the <code>kb-recall/1</code> marker grammar).</p>
+<p>Track SL6 / MR2 of the kb-slate milestone · 2026-09-05 · authored by Claude Fable 5.1.</p>
+</footer>
+
+</article>
+</main>
+</body>
+</html>

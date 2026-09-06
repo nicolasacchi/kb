@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Reader web di kb: galleria, atlante, vista dettaglio, cronologia e sheet mobile.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, spa, gallery, atlas, reader">
+<title>Reader web · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../web.html">EN</a><span class="sep">·</span><a href="web.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html" aria-current="page">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">04 · Leggere nel browser</p>
+  <h1>Reader web</h1>
+  <p class="lede">La SPA è la superficie umana principale: sfogliare, cercare, leggere in un iframe sandbox, esplorare l’atlante e aprire i commenti da un unico shell.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#routes">Route</a></li>
+    <li><a href="#gallery">Galleria</a></li>
+    <li><a href="#atlas">Atlante</a></li>
+    <li><a href="#reader">Reader di dettaglio</a></li>
+    <li><a href="#history">Cronologia e canvas</a></li>
+    <li><a href="#mobile">Mobile</a></li>
+  </ol>
+</nav>
+
+<section id="routes">
+<h2>Route</h2>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>URL</th><th>Vista</th></tr></thead>
+  <tbody>
+    <tr><td><code>/</code></td><td>Galleria — griglia / lista / atlante / cronologia (+ canvas opzionale, shell map-home)</td></tr>
+    <tr><td><code>/a/&lt;kb&gt;/&lt;path&gt;</code></td><td>Dettaglio — un artefatto in un iframe sandbox (permalink stabile)</td></tr>
+    <tr><td><code>/sessions</code></td><td>Elenco/dettaglio delle sessioni catturate (<code>?focus=</code> ne apre una); CLI: <a href="agent.html">why / recollect</a></td></tr>
+    <tr><td><code>/replay/&lt;kb&gt;/&lt;sid&gt;</code></td><td>Replay di sessione</td></tr>
+    <tr><td><code>/anchors</code></td><td>Ancore fissate; <code>?filter=stale</code> per i commenti con ancore rotte (<code>/stale-anchors</code> reindirizza qui)</td></tr>
+    <tr><td><code>/settings</code></td><td>Tema, preferenze, elenco daemon, pagine di stato in stile flotta</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Lo stato della galleria (kb, filtri, ordinamento, vista) vive nell’URL — ogni vista è condividibile e resiste al reload. Si apre la command palette con <span class="kbd">⌘K</span> / <span class="kbd">Ctrl-K</span> per le modalità di ricerca e la navigazione.</p>
+</section>
+
+<section id="gallery">
+<h2>Galleria</h2>
+<ul>
+  <li><strong>Griglia / lista</strong> — card virtualizzate con titolo, tag, età e chip di progresso di lettura.</li>
+  <li><strong>Filtri</strong> — tag, albero delle cartelle, capability, intervallo di date, categoria, stato di lettura.</li>
+  <li><strong>Ordinamento</strong> — recenti, indicizzati, titolo, parole, data di creazione.</li>
+  <li><strong>Ricerca</strong> — ibrida / keyword / semantic dalla palette (stesse modalità della CLI).</li>
+</ul>
+<p>I metadati cliccabili su un artefatto aperto (tag, categoria, cartella, mtime) deep-linkano di nuovo a una galleria filtrata — un unico costruttore di URL, così i chip restano coerenti.</p>
+</section>
+
+<section id="atlas">
+<h2>Atlante</h2>
+<p>Una mappa 2-D di un kb: ogni artefatto è un punto, colorato per cluster, così il lavoro correlato sta vicino al lavoro correlato. Il layout è deterministico (stessi input e seed → stesse coordinate). Si ricalcola quando il corpus si è spostato molto:</p>
+<pre><code>kb atlas recompute --kb NAME
+kb atlas recluster --kb NAME --k 8    # retune clusters without full layout</code></pre>
+<p>Lo shell opzionale <strong>map-home</strong> (<code>?shell=map</code> oppure Impostazioni → preferenza home) fa dell’atlante la superficie di navigazione principale su desktop — esperimento opt-in, non il default.</p>
+</section>
+
+<section id="reader">
+<h2>Reader di dettaglio</h2>
+<p>Ogni artefatto si carica dalla propria origin (<code>&lt;id&gt;.artifacts.&lt;suffix&gt;</code>) dentro un iframe sandbox. L’isolamento same-origin è ciò che rende sicuro incorporare HTML arbitrario prodotto da LLM.</p>
+<div class="note warn">
+  <strong>DNS locale degli artefatti.</strong> Default: suffisso <code>.artifacts.localhost</code>, parent <code>http://127.0.0.1:4000/</code>. Se l’iframe del reader è vuoto, verificare che <code>*.artifacts.localhost</code> risolva su loopback:
+  <pre><code>getent hosts s01.artifacts.localhost</code></pre>
+  Molte build Chromium risolvono <code>*.localhost</code> senza DNS di sistema. Se la propria non lo fa: dnsmasq con <code>address=/.localhost/127.0.0.1</code>. In produzione si imposta <code>artifact_host_suffix</code> (vedi <a href="start.html#beyond-loopback">Avvio → oltre il loopback</a>).
+</div>
+<p>Intorno all’iframe:</p>
+<ul>
+  <li><strong>Barra di contesto</strong> — ancora, aggiungi-a-lista, copia link, condividi, modalità fullscreen / bare.</li>
+  <li><strong>Rail dell’inspector</strong> — about / metadati “passport” (scheda identità), link (outlink + backlink), memorie correlate, cartella, commenti e versioni come pannelli dock.</li>
+  <li><strong>Versioni e diff</strong> — git, snapshot dell’indice e working tree dietro un’unica facciata.</li>
+  <li><strong>Progresso di lettura</strong> — scroll e permanenza per sezione; riprende alla riapertura; alimenta lo stato di lettura delle liste.</li>
+  <li><strong>Confronto affiancato</strong> (desktop) — <code>?pane2=</code> per due artefatti, un inspector condiviso sul riquadro in focus.</li>
+</ul>
+<div class="note">
+  <strong>Regola di authoring per gli embed:</strong> niente <code>&lt;base href&gt;</code>, niente <code>target="_top"</code>, niente scorciatoie verso <code>window.parent</code>. La SPA genitore è un’origin diversa di proposito.
+</div>
+</section>
+
+<section id="history">
+<h2>Cronologia e reflection canvas</h2>
+<p>La <strong>cronologia</strong> è la timeline di attività: aperture (con scroll), ricerche, commenti. Il <strong>reflection canvas</strong> (<code>?view=canvas</code>) mostra quattro tracce giornaliere sincronizzate — creazione, lettura, sessioni, commenti — con una selezione a pennello (brush) che apre una galleria filtrata su ciò che si è selezionato.</p>
+</section>
+
+<section id="mobile">
+<h2>Mobile</h2>
+<p>A larghezze ridotte il reader è un <strong>sheet a un solo pulsante</strong>: il controllo inspect apre un bottom sheet che ospita inspector, commenti e versioni senza pannelli separati a vicolo cieco. La cattura da telefono (share sheet / cattura SPA) è un drop di staging unidirezionale in una cartella <code>capture/</code> — non è authoring mobile.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="search.html"><span class="dir">Precedente</span>Ricerca</a>
+  <a class="next" href="comments.html"><span class="dir">Successivo</span>Commenti</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

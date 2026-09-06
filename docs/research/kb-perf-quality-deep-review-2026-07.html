@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:applied, project:kb, code-review, performance, quality, sessions-rethink, grok, ultracode, review-wave-1">
+<meta name="kb-summary" content="The 2026-07-30 ten-lens deep review of kb at HEAD 889ec81 (post v0.31): 131 findings from a grokclaude research fanout, 90 strict-verified, the load-bearing ones hand-gated. Two P0s (a UTF-8 cap-slice panic reachable from artifact serve, a Rules-of-Hooks violation on the live-follow path), two invariant-#11 violations, and 8 of the 2026-07-06 review's 10 fix-now defects still open — all fixed same-day in review-wave-1 (commits b6a5006..21e8dea) by grok builders under host review, with measured before/after endpoint latency.">
+<title>kb performance + quality deep review — 2026-07 (review-wave-1)</title>
+<style>
+:root{
+  --bg:#f4f2f7; --surface:#fcfbfe; --fg:#26212e; --muted:#5f5769; --rule:#d6d0de;
+  --accent:#5e3f8f; --accent-fg:#ffffff; --warn:#8a5200; --danger:#a03030; --ok:#2c6b50;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#1a1721; --surface:#241f2e; --fg:#e9e5f0; --muted:#a89fb5; --rule:#3d3549;
+    --accent:#c0a3ee; --accent-fg:#1a1721; --warn:#e3b26a; --danger:#ea8f83; --ok:#8ecbaa;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:58rem;margin:0 auto;padding:2rem 1.25rem 4rem}
+h1{font-size:1.7rem;line-height:1.25;margin:.5rem 0 0}
+h2{font-size:1.25rem;margin:2.2rem 0 .6rem;padding-top:.6rem;border-top:2px solid var(--rule);scroll-margin-top:1rem}
+h3{font-size:1.05rem;margin:1.4rem 0 .4rem;scroll-margin-top:1rem}
+p,li{max-width:50rem}
+a{color:var(--accent)}
+code{font-family:ui-monospace,monospace;font-size:.88em;background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:0 .25em;overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;margin:.8rem 0;font-size:.9rem}
+th,td{border:1px solid var(--rule);padding:.35rem .55rem;text-align:left;vertical-align:top}
+th{background:var(--surface)}
+.meta{color:var(--muted);font-size:.9rem;margin:.2rem 0 0}
+.callout{background:var(--surface);border-left:4px solid var(--accent);padding:.6rem .9rem;margin:1rem 0;border-radius:0 4px 4px 0}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.sev{font-weight:600}
+.sev--p0{color:var(--danger)}
+.sev--p1{color:var(--warn)}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.4rem .8rem}
+.skip-link:focus{left:.5rem;top:.5rem;z-index:10}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#how-this-review-ran">Skip to content</a>
+<main>
+<header>
+<h1>kb performance + quality deep review — 2026-07 (review-wave-1)</h1>
+<p class="meta">Reviewed 2026-07-30 at HEAD <code>889ec81</code> (one commit past v0.31 sessions-rethink) · fixes landed 2026-07-31 as commits <code>b6a5006</code>…<code>21e8dea</code> · companion: <a href="kb-tech-ideas-and-backlog-2026-07.html">tech ideas + strategic backlog</a></p>
+</header>
+
+<section>
+<h2 id="how-this-review-ran">How this review ran</h2>
+<p>Ten parallel research lenses (grokclaude fanout, Grok Build headless workers) each read the repo cold with a self-contained brief: four performance lenses (sessions routes · view engine · sqlite/actor · SPA), four quality lenses (fix-now audit vs the <a href="kb-code-craft-review-2026-07.html">2026-07-06 craft review</a> · silent failures · duplication drift · test gaps), plus build-times and tech ideas. They produced <strong>131 structured findings; 90 passed <code>grokclaude verify --strict</code></strong> (evidence re-derived from the tree). Every finding acted on was additionally hand-confirmed in source by the orchestrating session — including both P0s, whose machine verification had failed on selector grounds while the defects were real.</p>
+<p>Fixes were implemented by four grok builders in isolated worktrees against packet briefs, test-run to green per packet, then host-reviewed hunk-by-hunk and integrated as five commits. A measured endpoint-latency baseline was captured <em>before</em> any change (fresh lab, 191 docs / 5 kbs / 11 real session captures; <code>/tmp/kb-perf-lab/results/baseline-889ec81.json</code>).</p>
+</section>
+
+<section>
+<h2 id="headline-defects">Headline defects (all fixed in this wave)</h2>
+
+<h3 id="p0-utf8-cap-panic">P0 · UTF-8 cap-slice panic reachable from artifact serve</h3>
+<p><span class="sev sev--p0">QERR-1</span> — <code>parse_workflow_meta</code> (<code>sessions/view.rs</code>) sliced a Workflow tool script at a raw 64 KiB byte index: any transcript carrying a &gt;64 KiB script with a multi-byte character straddling byte 65,536 panicked the view engine — inline on the axum worker for artifact serve, and as an opaque 500 for <code>/view</code> and <code>/live</code>. The same defect class was fixed in <code>parser.rs</code> months ago and recurred in new code. Fixed with the crate's <code>floor_char_boundary</code> idiom + a straddling-boundary regression test (<code>d7fa04e</code>).</p>
+
+<h3 id="p0-rules-of-hooks">P0 · Rules-of-Hooks violation on the live-follow path</h3>
+<p><span class="sev sev--p0">PSPA-1</span> — <code>ArtifactPane</code> called <code>useIsMobile()</code> + <code>useLiveTailPortal()</code> inside a conditional IIFE gated on follow-mode + presence: toggling follow (or a presence change) changed the component's hook count — React's "rendered fewer/more hooks" crash, in the reader. Hooks hoisted; render gate untouched (<code>636b5c3</code>).</p>
+
+<h3 id="invariant-11-violations">Invariant #11 violations · multi-capture over-counting</h3>
+<p><span class="sev sev--p1">PSTOR-1/6</span> — three sqlite reads skipped the newest-capture predicate that every per-session read must apply (a session captured at every Stop accrues many rows): <code>session_files_in_folder</code> (inflates the funnel's "commented" stage) and the reverse lookups <code>session_files_for_artifact/_basename</code> (duplicate "sessions touched this file" edges, one per Stop). All three now apply the predicate, with a multi-capture regression test (<code>b6a5006</code>).</p>
+
+<div class="callout callout--danger"><p><strong>The recurrence signal worth keeping:</strong> the byte-slice-at-a-cap panic class has now appeared twice (2026-07 parser lane, then new W-wave view code), and the 2026-07-06 review's fix-now list survived three milestones nearly untouched — 8 of 10 still open at this HEAD. Verified defect lists don't fix themselves; they need a scheduled repair wave like this one.</p></div>
+</section>
+
+<section>
+<h2 id="fix-now-scorecard">The 2026-07-06 fix-now list, re-audited then closed</h2>
+<table>
+<tr><th>Defect (2026-07-06)</th><th>Status at 889ec81</th><th>Now</th></tr>
+<tr><td>Quoted-search tokenizer mojibakes multi-byte UTF-8</td><td>still present</td><td>fixed <code>34edb26</code> (byte-span slicing; città/CJK tests)</td></tr>
+<tr><td>Byte-index truncate panics (share/cloudflare, share/github, push)</td><td>still present ×3 copies</td><td>fixed <code>34edb26</code> (one <code>strutil::truncate_bytes_ellipsis</code>)</td></tr>
+<tr><td><code>block_on</code> inside async doctor probe</td><td>still present</td><td>fixed <code>34edb26</code></td></tr>
+<tr><td>Folder-zip blocking read+Deflate on async worker</td><td>still present (comment rationalized it)</td><td>fixed <code>b6a5006</code> (<code>spawn_blocking</code>)</td></tr>
+<tr><td>Embedder IPC steady-state timeout</td><td><strong>fixed</strong> 2026-07-10 (<code>749c051c</code>)</td><td>—</td></tr>
+<tr><td>Mobile sheet missing dialog semantics on main path</td><td>still present, hotter (two-pane added a 2nd site)</td><td>fixed <code>636b5c3</code> (<code>asSheet={isMobile}</code>)</td></tr>
+<tr><td>Settings templates "+ add" no-op</td><td>still present</td><td>fixed <code>636b5c3</code> (draft-state editor)</td></tr>
+<tr><td><code>ArtifactId</code> newtype unenforced</td><td>still present</td><td>backlog (L; see companion)</td></tr>
+<tr><td>Invariant #19 docs contradict R2 cascade</td><td>still present</td><td>fixed <code>21e8dea</code> (docs state Full-deletes truth; V0014 file frozen by refinery checksums)</td></tr>
+<tr><td><code>index_file</code> monolith</td><td>partially fixed (GC-B7 split)</td><td>residual = craft backlog</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="performance-findings">Performance findings → what changed</h2>
+<table>
+<tr><th>Finding</th><th>Evidence</th><th>Fix</th></tr>
+<tr><td><span class="sev sev--p1">PSRV-1</span> ledger N+1: 3 serial actor round-trips per session, cap 2000 → up to 6000 messages per kb</td><td><code>routes/sessions.rs:1330–1373</code></td><td>batched <code>*_for_sessions</code> sqlite+actor APIs; 3 calls per kb total (<code>b6a5006</code>)</td></tr>
+<tr><td><span class="sev sev--p1">PVIEW-2</span> every view re-parsed the whole JSONL a second time for the outcome line</td><td><code>view.rs:1996–2044</code> → <code>closing_assistant_text</code></td><td>outcome derived from walked turns; old-rule equivalence pinned across fixtures (<code>d7fa04e</code>)</td></tr>
+<tr><td>PVIEW-5 chained <code>str::replace</code> escapes — ~3 full-string intermediates per 50 MB recover</td><td><code>sessions.rs:2019–2037</code>, <code>session_render.rs:88</code></td><td>single-pass with entity-order pins both directions (<code>d7fa04e</code>)</td></tr>
+<tr><td>PVIEW-7/8/9 full <code>ViewCarry</code> clone per view; sidecar double-parse; linear dedups</td><td><code>view.rs:1996</code>, <code>sessions.rs:2187/726</code></td><td><code>view_finish(&amp;mut)</code>; one-pass agent id; O(1) membership sets, order kept (<code>d7fa04e</code>)</td></tr>
+<tr><td>PSRV-3 presence re-walked every project dir per poll, on the async worker</td><td><code>sessions.rs:4904–5003</code></td><td>~1s TTL snapshot + <code>spawn_blocking</code>; loopback gate stays first (<code>b6a5006</code>)</td></tr>
+<tr><td>PSRV-7/10 per-row <code>get_by_id</code>/<code>sessions_get</code> despite batch APIs</td><td><code>files</code> ~1800; <code>by_job</code> ~5560</td><td>per-kb <code>get_by_ids</code> / <code>sessions_get_many</code> (<code>b6a5006</code>)</td></tr>
+<tr><td>PSTOR-2/3 full scans: by-commit sha prefix, by-job (kind,query)</td><td>no indexes after V0019/V0030</td><td>V0031 adds three indexes (<code>b6a5006</code>)</td></tr>
+<tr><td>PSTOR-8/11 non-tx 5-DELETE <code>sessions_delete</code>; per-node prepare in edge BFS</td><td><code>sqlite.rs:2772/430</code></td><td>one tx; prepare hoisted (<code>b6a5006</code>)</td></tr>
+</table>
+<p>Deferred perf work (touches diet, view response defaults, newest-capture materialization, funnel single-pass, <code>prepare_cached</code>, single-parse pipeline) is ranked with evidence in the <a href="kb-tech-ideas-and-backlog-2026-07.html">companion backlog</a>.</p>
+</section>
+
+<section>
+<h2 id="quality-findings">Quality findings → what changed</h2>
+<ul>
+<li><strong>Drift already shipping</strong> (QDUP, all strict-verified): CLI accepted <code>--turn 5</code> while the server silently ignored <code>?turns=5</code> — one grammar now lives in <code>kb_core::sessions::view::parse_turn_window</code>, both callers delegate, grammar unit-pinned. Three SPA <code>relativeAge</code> implementations disagreed (10 days rendered "10d", "1w", or "10d ago" depending on surface) — one export remains. Duration chips unified on <code>humanizeDuration</code>.</li>
+<li><strong>Silent loss made visible</strong> (QERR-3/4): unreadable sidecars and unparseable JSONL lines were skipped bare — both now warn and count (<code>CaptureSummary.sidecars_skipped</code>, <code>SessionActivity.skipped_lines</code>).</li>
+<li><strong>Error truthfulness</strong> (QERR-2/5/6): live-lane IO failures no longer masquerade as 404 "session not found"; <code>ensure_*_index</code> failures return the first actionable error instead of a vaguer downstream 500; view/live join errors emit problem+json.</li>
+<li><strong>Counter casts</strong> (QERR-9): session counters read with saturating conversions instead of <code>as u32</code> wraps.</li>
+<li><strong>Tests that lied or were missing</strong> (QTEST): the presence e2e asserted <code>enabled:false</code> with a comment claiming the live dir is never configured — global-setup had configured it since F3; the spec now asserts the true contract and seeds a live transcript. New handler-level pins: presence/live 403 for non-loopback peers (no-store, no slug/transcript leak), live truncate-fallthrough reboots the carry, presence scan edge cases, turn-id stability across a growing re-capture.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="verification">Verification of this wave</h2>
+<ul>
+<li><strong>The builder-pipe lesson, honestly:</strong> the four builders' worktree test runs piped <code>cargo test</code> through <code>tail</code>, swallowing exit codes (the repo's recorded pipefail gotcha, re-learned) — three RW1 test assertions were in fact wrong and only surfaced at the integrated <code>just ci</code> gate: two entity-order pins asserted double-decoding (<code>&amp;amp;gt;</code> → <code>&gt;</code>) against the one-pass inverse-of-sed-chain contract both implementations actually share, and the workflow-cap test's <code>phases</code> fixture didn't match <code>scan_phase_entries</code>' <code>phase: 'x'</code> grammar. All three corrected in <code>16898b9</code>; the P0 panic-regression pin itself passed unmodified.</li>
+<li><strong>Gate result:</strong> fmt + clippy (<code>-D warnings</code>) green; 41/44 workspace test binaries green in a full single run; SPA gate green (tsc, vite build, vitest 807 + new pairs tests). The 3 remaining binaries are <em>pre-existing load-sensitive flakes in subsystems RW1 never touched</em>, each green when run solo (kb-core lib 1499/1499 incl. all 42 atlas tests; end_to_end 318/318; notes 3/3): 6 atlas tests die under full-suite memory churn with lance's external-sort pool starved to ~400 KB ("Resources exhausted" from <code>merge_insert</code> — kb-core configures no datafusion memory pool at all), plus two daemon-boot polling tests (fixture-index wait, wikilink-resolution wait) that time out under the same load. Filed as a CI-infra finding in the companion backlog.</li>
+<li><strong>Endpoint latency</strong> re-measured on the same lab corpus (<code>results/baseline-889ec81.json</code> vs <code>results/after-rw1.json</code>, commit <code>16898b9</code>): zero regressions, every endpoint faster — but the improvement is uniform (−47…−74% p50 including endpoints RW1 never touched), which is the signature of a quieter box, not a code-attributable win. Honest read: <em>no regression, consistent with expectations</em>; the N+1/batching wins target multi-capture corpora far larger than the lab's 11 single-capture sessions. A ledger payload-size delta between runs was chased to the rolling day-window crossing midnight — the batch fold is field-for-field identical to the old per-session code.</li>
+<li><strong>Playwright e2e (release build):</strong> 200/204 on the first full run; the 3 failures were bisected against a baseline-commit worktree and <em>all three reproduced identically pre-RW1</em> — inherited red specs from the post-v0.31 follow-ups lane, which never ran full e2e. Repaired in <code>62d3a39</code>: a stale replay expectation (predating W2's closure change), a REAL SPA bug (<code>?turn=end</code> cold deep-links lost the scroll message before the iframe listener existed — now delivered via the kb-probe handshake like <code>?sec=</code>), a live-tail spec asserting an open turn's text under the TurnClosed-only wire (confirmed by hand-polling <code>/live</code>), plus a fourth latent flake (the new 1s presence snapshot could serve the panel a stale-empty set). 25/25 across the affected spec files after repair; vitest 807/807.</li>
+<li>Wire-behavior deltas shipped knowingly: <code>?turns=5</code> now filters (was no-op); live IO errors return 500 problem+json (were 404); SPA age/duration labels unified (drift table in the B4 commit); presence responses may be up to ~1s stale (TTL snapshot).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="what-was-not-done">What was deliberately not done in this wave</h2>
+<p>Everything L-effort or needing an operator decision moved to the <a href="kb-tech-ideas-and-backlog-2026-07.html">companion backlog</a>: the single-parse transcript pipeline, newest-capture materialization/compaction, atomic capture write, <code>/view</code> response defaults, build-shape proposals (e2e split, CLI/daemon decouple, lance feature gate), <code>ArtifactId</code> threading, capture-adapter unification, sessions-list virtualization, and SSE-invalidation centralization. Ideas that would violate recorded non-goals were rejected at brief time (the lens was told the refusals) — one already-shipped duplicate (a view cache) was caught by the lens itself.</p>
+</section>
+</main>
+
+</body>
+</html>

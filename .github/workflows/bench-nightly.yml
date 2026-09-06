@@ -1,0 +1,171 @@
+# kb nightly search-quality regression job (GC-A8).
+#
+# Runs `kb bench run` (BM25/`keyword`-only — see scripts/bench-nightly.sh's
+# header for why: `disable_embedder_fallback` means the throwaway daemon
+# never spawns kb-embedder, so this job builds/links ZERO ONNX Runtime,
+# unlike the `embedder` job in ci.yml) against the repo's own
+# `docs/research` corpus + the committed `bench/queries/kb-docs.jsonl` gold
+# set, and reports signed quality+latency deltas vs. `bench/baseline.json`
+# as a job summary.
+#
+# SELF-CONTAINED BY CONSTRUCTION: every input is in this repository (corpus,
+# gold set, baseline) and scripts/bench-nightly.sh boots its throwaway daemon
+# under an isolated KB_HOME in a mktemp dir on loopback — nothing reads or
+# writes a path outside the workspace, and the report leaves as an uploaded
+# artifact, never a file on the machine that ran it.
+#
+# NON-BLOCKING BY DESIGN: the triggers are schedule + workflow_dispatch ONLY
+# (no `pull_request`, no `push`), and there is no required-status-check
+# registration, so this can never block a PR or the default branch;
+# `continue-on-error: true` on the bench step is a second, independent safety
+# net (a flaky daemon boot or a real quality regression surfaces in the
+# summary/logs, not as a red X forcing a revert).
+#
+# Injection-safety: the only untrusted-ish inputs are the two
+# `workflow_dispatch` strings below (operator-supplied, not attacker
+# fan-out like a PR title/body, but treated the same); both are passed
+# through `env:` and referenced as shell variables, never interpolated
+# directly into a `run:` body.
+name: bench-nightly
+
+on:
+  schedule:
+    # 03:17 UTC daily — off the top of the hour, where scheduled-job queues
+    # are shortest.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      corpus_dir:
+        description: "Corpus dir to index (repo-relative or absolute)"
+        required: false
+        default: "docs/research"
+      queries:
+        description: "Gold-set queries jsonl (repo-relative)"
+        required: false
+        default: "bench/queries/kb-docs.jsonl"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+permissions:
+  contents: read
+
+jobs:
+  bench-nightly:
+    name: bench-nightly (kb bench, keyword/BM25-only)
+    runs-on: ubuntu-latest
+    # A fork inherits this file's `schedule`, so without the repository guard
+    # every fork would silently run a nightly bench of its own on GitHub's
+    # minutes. Belt-and-braces on the event too — there is no pull_request
+    # trigger above to begin with.
+    if: github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request'
+    # A cold cache means compiling the whole lance/datafusion graph
+    # (`--profile fast`, so ~3x quicker than a release build, but still the
+    # full dependency tree) before the bench itself, which takes seconds.
+    # Warm runs finish far inside this.
+    timeout-minutes: 120
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # A runner starts with only ~14 GB free on /, and the lance/datafusion
+        # dependency graph plus its link step can eat that (a full disk shows
+        # up as a SIGBUS'd linker, not as ENOSPC). Reclaim ~20 GB of
+        # preinstalled toolchains nothing here uses. Inline on purpose — no
+        # third-party action to pin/trust. Best-effort: missing dirs ignored.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        # Pinned to rust-toolchain.toml's version, same as ci.yml.
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        # Its own cache family, deliberately — but not for the reason this
+        # comment used to give ("`--profile fast` vs. their dev profile"),
+        # which is only half true: ci.yml's `e2e` lane builds the SAME fast
+        # profile over a SUPERSET of what scripts/bench-nightly.sh needs
+        # (`-p kb-server -p kb-cli` there vs. `-p kb-cli` here), so
+        # `e2e-fast` would in principle fit. Two things keep it separate.
+        # (1) The keys could not collide anyway without aligning both files:
+        # rust-cache hashes every CARGO_*/RUST* env var into its key, and
+        # this job sets CARGO_PROFILE_DEV_DEBUG (inert here — `fast` inherits
+        # `release`) while not setting ci.yml's CARGO_INCREMENTAL=0.
+        # (2) More usefully, a nightly-only entry is by construction the
+        # least recently used one in the repository, so if the 10 GB Actions
+        # cache cap is ever exceeded (see ci.yml's CACHING note for the
+        # per-family accounting) GitHub's LRU eviction lands HERE — on a
+        # non-blocking nightly — instead of on a PR lane. Keep it that way.
+        # No `save-if`: this workflow only ever runs on main.
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: bench-nightly
+
+      - name: Install protoc (lancedb transitive dep)
+        # BOTH packages, exactly as ci.yml and the Dockerfile install them:
+        # libprotobuf-dev ships the well-known-type includes
+        # (google/protobuf/empty.proto, …) that lance-encoding's build
+        # imports, while protobuf-compiler provides only the binary — alone
+        # it fails with "google/protobuf/empty.proto: File not found".
+        # Runners preinstall neither.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev curl
+
+      - name: Run nightly bench (BM25/keyword-only — no kb-embedder/ONNX)
+        id: bench
+        continue-on-error: true
+        env:
+          DISPATCH_CORPUS_DIR: ${{ github.event.inputs.corpus_dir }}
+          DISPATCH_QUERIES: ${{ github.event.inputs.queries }}
+        run: |
+          set -euo pipefail
+          export CORPUS_DIR="${GITHUB_WORKSPACE}/${DISPATCH_CORPUS_DIR:-docs/research}"
+          export QUERIES="${GITHUB_WORKSPACE}/${DISPATCH_QUERIES:-bench/queries/kb-docs.jsonl}"
+          BASELINE_ARGS=()
+          if [ -f bench/baseline.json ]; then
+            BASELINE_ARGS=(--baseline "$(pwd)/bench/baseline.json")
+          fi
+          ./scripts/bench-nightly.sh --out-dir bench-nightly-out "${BASELINE_ARGS[@]}"
+
+      - name: Job summary — quality + latency deltas
+        if: always()
+        run: |
+          {
+            echo "## kb bench — nightly search-quality regression"
+            echo
+            if [ -f bench/baseline.json ]; then
+              echo "Comparing against the committed \`bench/baseline.json\`."
+            else
+              echo "**No \`bench/baseline.json\` committed yet** — this run has no Δ" \
+                   "columns. A \`report.json\` artifact was uploaded (if the bench" \
+                   "step succeeded); review it, then \`cp\` it to" \
+                   "\`bench/baseline.json\` and commit to establish a baseline for" \
+                   "future nightly runs to diff against."
+            fi
+            echo
+            if [ -f bench-nightly-out/report.md ]; then
+              cat bench-nightly-out/report.md
+            else
+              echo "_bench step did not produce a report — see the job log for the failure._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-nightly-report
+          path: |
+            bench-nightly-out/report.md
+            bench-nightly-out/report.json
+          if-no-files-found: warn
+          retention-days: 90

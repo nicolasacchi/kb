@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Commenti in kb: revisione in loco, ancore, ciclo reply/resolve dell'agente, identità.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, comments, review, anchors">
+<title>Commenti · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../comments.html">EN</a><span class="sep">·</span><a href="comments.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html" aria-current="page">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">05 · Revisione</p>
+  <h1>Commenti</h1>
+  <p class="lede">Umani e agenti lasciano note a margine sugli artefatti renderizzati. Il daemon possiede i file di review; la CLI è l'unica via di mutazione sicura per gli agenti.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#in-ui">Nell'interfaccia</a></li>
+    <li><a href="#anchors">Ancore e obsolescenza</a></li>
+    <li><a href="#agent-loop">Ciclo dell'agente</a></li>
+    <li><a href="#apply">Applicare in blocco</a></li>
+    <li><a href="#identity">Identità</a></li>
+  </ol>
+</nav>
+
+<section id="in-ui">
+<h2>Nell'interfaccia</h2>
+<p>Apri un artefatto e attiva l'annotazione (dock commenti / sheet di ispezione). Clic su un blocco: una selezione di testo diventa un'ancora <strong>Selection</strong>, un'intestazione un <strong>Chapter</strong>, un elemento con id una <strong>Section</strong>. I thread vivono nei file <code>.review/&lt;id&gt;.json</code> di proprietà del daemon (kb-comments/1) — non modificarli a mano; la SPA ascolta gli aggiornamenti in tempo reale via SSE.</p>
+</section>
+
+<section id="anchors">
+<h2>Ancore e obsolescenza</h2>
+<p>A ogni reindex il daemon ri-risolve le ancore aperte. Se un target si è spostato troppo, il commento viene marcato come stale (obsoleto) (badge + dashboard delle ancore stale/obsolete). Il resolver è solo di <strong>rilevazione</strong> — non riscrive mai in silenzio l'ancora congelata. Quando si sposta intenzionalmente una sezione, si ripunta con l'ancora corretta:</p>
+<pre><code>kb comments reanchor &lt;comment_id&gt; --path &lt;artifact&gt; --anchor section:&lt;new-id&gt;</code></pre>
+<p>Gli <code>id</code> stabili delle intestazioni nell'HTML di origine sono ciò che mantiene sane le ancore Section tra una rigenerazione e l'altra. Evitare id basati su UUID o timestamp.</p>
+</section>
+
+<section id="agent-loop">
+<h2>Ciclo dell'agente</h2>
+<p>Turno tipico di un agente:</p>
+<pre><code>kb find &lt;path-or-name&gt; --json
+kb comments list --path &lt;artifact&gt; --json
+# edit the source file on disk (watcher reindexes)
+kb comments reply &lt;comment_id&gt; --path &lt;artifact&gt; --body "What changed."
+# resolve one comment (kb + artifact id + comment id as positionals):
+kb comments resolve &lt;kb&gt; &lt;artifact_id&gt; &lt;comment_id&gt;
+# or resolve every open comment on an artifact:
+kb comments resolve --path &lt;artifact&gt; --all</code></pre>
+<div class="tldr">
+  <h2>Regola di triage</h2>
+  <ul>
+    <li><strong>Fix chiaro e piccolo</strong> (typo, formulazione) → modifica + reply + resolve.</li>
+    <li><strong>Ambiguo o ampio</strong> → reply con una domanda o delle opzioni; lasciare aperto.</li>
+    <li><strong>Incerto</strong> → reply piuttosto che risolvere in silenzio.</li>
+  </ul>
+</div>
+<p>Ciclo in tempo reale da terminale: <code>kb comments watch</code>. Esportare un thread intero con <code>kb comments export</code>; incorporare i commenti in una copia HTML portabile con <code>--embed</code> e rileggerli con <code>import</code>.</p>
+</section>
+
+<section id="apply">
+<h2>Applicare in blocco</h2>
+<p>Quando un turno di review produce molte mutazioni, inviarle in modo atomico:</p>
+<pre><code>kb comments apply --path &lt;artifact&gt; --ops-json '[
+  {"op":"add_reply","comment_id":"c_aaa","author":"claude","body":"fixed in §2"},
+  {"op":"set_anchor","comment_id":"c_bbb","anchor":{"kind":"section","id":"overview"}},
+  {"op":"resolve","comment_id":"c_ccc"}
+]'</code></pre>
+<p>Tutte le operazioni atterrano o nessuna; un solo aggiornamento SSE. Un batch non può fare reply a un commento che crea nello stesso batch (gli id sono assegnati dal server).</p>
+</section>
+
+<section id="identity">
+<h2>Identità (attribuzione, non autorizzazione)</h2>
+<p>kb può registrare <em>chi</em> ha agito — identità dal bordo della rete (es. Authelia <code>Remote-User</code> su un hop fidato), token API per utente, o l'operatore loopback configurato — e associa per utente lo stato di lettura e l'autorialità dei commenti.</p>
+<p>Ciò che <strong>non</strong> fa: password, ruoli, token di sola lettura o ACL. Ogni identità ammessa è un co-operatore a pieno titolo. L'unica eccezione di igiene: <strong>modificare o eliminare il body di un commento è riservato al proprietario</strong> (altrimenti 403). Resolve, reply, attach e reanchor restano aperti a tutti i collaboratori.</p>
+<p><code>author: you|claude</code> è la distinzione di <em>ruolo</em> umano↔agente; il campo <code>user</code> è la stringa di identità.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="web.html"><span class="dir">Precedente</span>Reader web</a>
+  <a class="next" href="agent.html"><span class="dir">Successivo</span>Memoria e sessioni</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

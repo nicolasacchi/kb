@@ -1,0 +1,446 @@
+{
+  "schema": "kbcq/1",
+  "note": "GENERATED-THEN-REVIEWED fixture, shared by the Rust parser (crates/kb-code-server/src/search/grammar.rs) and its TS mirror (web-code/src/lib/kbcq.ts). Both walk THESE bytes; neither is derived from the other. Add a case here when you touch the grammar.",
+  "cases": [
+    {
+      "raw": "add widget",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "add widget",
+      "text_mode": "literal",
+      "normalized": "add widget"
+    },
+    {
+      "raw": "",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "",
+      "text_mode": "literal",
+      "normalized": ""
+    },
+    {
+      "raw": "#config.rs",
+      "lanes": [
+        "files"
+      ],
+      "query": "config.rs",
+      "text_mode": "literal",
+      "normalized": "#config.rs"
+    },
+    {
+      "raw": "@GitRepo::open",
+      "lanes": [
+        "symbols"
+      ],
+      "query": "GitRepo::open",
+      "text_mode": "literal",
+      "normalized": "@GitRepo::open"
+    },
+    {
+      "raw": "~fixed the gizmo race",
+      "lanes": [
+        "sessions"
+      ],
+      "query": "fixed the gizmo race",
+      "text_mode": "literal",
+      "normalized": "~fixed the gizmo race"
+    },
+    {
+      "raw": "~~gorgonzola bug",
+      "lanes": [
+        "transcripts"
+      ],
+      "query": "gorgonzola bug",
+      "text_mode": "literal",
+      "normalized": "~~gorgonzola bug"
+    },
+    {
+      "raw": "?nl how does auth work",
+      "lanes": [
+        "semantic"
+      ],
+      "query": "how does auth work",
+      "text_mode": "literal",
+      "normalized": "?nl how does auth work"
+    },
+    {
+      "raw": "?nlnotarealprefix",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "?nlnotarealprefix",
+      "text_mode": "literal",
+      "normalized": "?nlnotarealprefix"
+    },
+    {
+      "raw": "/fn add/",
+      "lanes": [
+        "text"
+      ],
+      "query": "fn add",
+      "text_mode": "regex",
+      "normalized": "/fn add/"
+    },
+    {
+      "raw": "/fn\\s+add/i",
+      "lanes": [
+        "text"
+      ],
+      "query": "fn\\s+add",
+      "text_mode": "regex",
+      "filters": {
+        "case": false
+      },
+      "normalized": "/fn\\s+add/i"
+    },
+    {
+      "raw": "/needle lang:rust",
+      "lanes": [
+        "text"
+      ],
+      "query": "needle",
+      "text_mode": "regex",
+      "filters": {
+        "lang": "rust"
+      },
+      "normalized": "/needle/ lang:rust"
+    },
+    {
+      "raw": "/*abc",
+      "lanes": [
+        "text"
+      ],
+      "query": "*abc",
+      "text_mode": "literal",
+      "normalized": "/*abc"
+    },
+    {
+      "raw": "/*abc case:no",
+      "lanes": [
+        "text"
+      ],
+      "query": "*abc",
+      "text_mode": "literal",
+      "filters": {
+        "case": false
+      },
+      "normalized": "/*abc case:no"
+    },
+    {
+      "raw": "widget lang:rust path:src/ repo:kb case:yes",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "filters": {
+        "lang": "rust",
+        "path": "src/",
+        "repo": "kb",
+        "case": true
+      },
+      "normalized": "widget lang:rust path:src/ repo:kb case:yes"
+    },
+    {
+      "raw": "order kind:class|module ext:rb|erb",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "order",
+      "text_mode": "literal",
+      "filters": {
+        "ext": [
+          "rb",
+          "erb"
+        ],
+        "kind": [
+          "class",
+          "module"
+        ]
+      },
+      "normalized": "order ext:rb|erb kind:class|module"
+    },
+    {
+      "raw": "order -path:spec/ -ext:min.js -lang:ruby -kind:const",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "order",
+      "text_mode": "literal",
+      "filters": {
+        "not_lang": [
+          "ruby"
+        ],
+        "not_path": [
+          "spec/"
+        ],
+        "not_ext": [
+          "min.js"
+        ],
+        "not_kind": [
+          "const"
+        ]
+      },
+      "normalized": "order -lang:ruby -path:spec/ -ext:min.js -kind:const"
+    },
+    {
+      "raw": "\"lang:rust is a phrase\" widget",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "lang:rust is a phrase widget",
+      "text_mode": "literal",
+      "normalized": "\"lang:rust is a phrase\" widget"
+    },
+    {
+      "raw": "widget path:\"src/my dir\"",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "filters": {
+        "path": "src/my dir"
+      },
+      "normalized": "widget path:\"src/my dir\""
+    },
+    {
+      "raw": "order sort:path explain:1",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "order",
+      "text_mode": "literal",
+      "sort": "path",
+      "explain": true,
+      "normalized": "order sort:path explain:1"
+    },
+    {
+      "raw": "widget case:YES sort:PATH explain:YES",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "filters": {
+        "case": true
+      },
+      "sort": "path",
+      "explain": true,
+      "normalized": "widget case:yes sort:path explain:1"
+    },
+    {
+      "raw": "widget laang:rust",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget laang:rust",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "unknown filter `laang:` — searched as an ordinary word",
+          "severity": "warning",
+          "suggestion": "lang:rust",
+          "token": "laang:rust"
+        }
+      ],
+      "normalized": "widget laang:rust"
+    },
+    {
+      "raw": "case:closed widget",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "case:closed widget",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "`case:` takes yes|true|1|no|false|0 — `closed` searched as an ordinary word",
+          "severity": "warning",
+          "token": "case:closed"
+        }
+      ],
+      "normalized": "case:closed widget"
+    },
+    {
+      "raw": "widget lang:",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget lang:",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "`lang:` has no value — searched as an ordinary word",
+          "severity": "warning",
+          "token": "lang:"
+        }
+      ],
+      "normalized": "widget lang:"
+    },
+    {
+      "raw": "order -repo:kb",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "order -repo:kb",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "`repo:` cannot be negated — searched as an ordinary word",
+          "severity": "warning",
+          "token": "-repo:kb"
+        }
+      ],
+      "normalized": "order -repo:kb"
+    },
+    {
+      "raw": "order sort:churn",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "order sort:churn",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "`sort:` takes relevance|path — `churn` searched as an ordinary word",
+          "severity": "warning",
+          "token": "sort:churn"
+        }
+      ],
+      "normalized": "order sort:churn"
+    },
+    {
+      "raw": "https://example.com/x",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "https://example.com/x",
+      "text_mode": "literal",
+      "normalized": "https://example.com/x"
+    },
+    {
+      "raw": "order group:dir facets:1",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "order",
+      "text_mode": "literal",
+      "group": "dir",
+      "facets": true,
+      "normalized": "order group:dir facets:1"
+    },
+    {
+      "raw": "@Order group:KIND facets:no",
+      "lanes": [
+        "symbols"
+      ],
+      "query": "Order",
+      "text_mode": "literal",
+      "group": "kind",
+      "normalized": "@Order group:kind"
+    },
+    {
+      "raw": "widget group:none",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "group": "none",
+      "normalized": "widget group:none"
+    }
+  ]
+}

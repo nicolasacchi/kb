@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Typo tolerance in keyword search: a spike, a regression, and a fix (GC-D1)</title>
+<meta name="kb-category" content="landscape">
+<meta name="kb-tags" content="status:reference, project:kb, search-quality, bm25, lance, fts, benchmark">
+<meta name="description" content="Spike on typo-tolerant BM25 search: lance's inverted index already ships fuzzy full-text matching, but naively enabling it query-wide measurably wrecks Recall@1/MRR on ordinary typo-free queries. Root-caused to a lance library quirk that silently drops fuzziness on multi-column queries, then fixed with a fallback-on-zero-hits design that bench-measures quality-neutral.">
+<style>
+:root{
+  --bg:#f7f8f6;--surface:#ebede8;--fg:#1b201d;--muted:#5b6560;
+  --rule:#d1d6cf;--accent:#1f6f6b;--accent-fg:#ffffff;
+  --warn:#8a5a00;--danger:#a4291f;--ok:#1f6e3f;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.6;--maxw:48rem;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#14181a;--surface:#1d2225;--fg:#e7eae7;--muted:#a6ada8;
+    --rule:#2c3336;--accent:#7fd1c9;--accent-fg:#0b1a18;
+    --warn:#e3b24f;--danger:#f0897e;--ok:#7ecb9a;}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+*{box-sizing:border-box}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:var(--lh);font-size:var(--fs-body)}
+.artifact{max-width:var(--maxw);margin:0 auto;padding:3rem 1.25rem 6rem}
+h1,h2,h3{line-height:1.25;font-weight:650;scroll-margin-top:24px}
+h1{font-size:1.85rem;margin:.2em 0 .3em;font-family:var(--serif)}
+h2{font-size:1.3rem;margin:2.2em 0 .6em;padding-top:.5em;border-top:1px solid var(--rule)}
+h3{font-size:1.05rem;margin:1.5em 0 .4em}
+p,li{font-family:var(--serif)}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.kicker{font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:.5ch;flex-wrap:wrap}
+.kicker .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent);display:inline-block}
+.kicker .sep{color:var(--rule)}
+.lede{font-family:var(--serif);font-size:1.15rem;margin:.5em 0 1.2em}
+.meta-strip{font-family:var(--sans);font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6ch;align-items:center;margin-bottom:1.5rem}
+.tag{font-family:var(--mono);font-size:.76rem;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .45em}
+code{font-family:var(--mono);font-size:.87em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.83rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font-family:var(--sans);font-weight:650;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+details{border:1px solid var(--rule);border-radius:var(--radius);padding:.6em 1em;margin:1em 0;background:var(--surface)}
+summary{cursor:pointer;font-family:var(--sans);font-weight:600;font-size:.9rem}
+main:focus{outline:none}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--rule);font-size:.82rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="artifact">
+<main id="main" tabindex="-1">
+
+<p class="kicker"><span class="dot"></span>RESEARCH<span class="sep">·</span>LANDSCAPE<span class="sep">·</span>2026-07-11<span class="sep">·</span>GC-D1</p>
+
+<h1>Typo tolerance in keyword search: a spike, a regression, and a fix</h1>
+
+<p class="lede">kb's BM25 arm has never tolerated a typo — a single dropped or transposed letter in a
+search query returns nothing, even though lance's own inverted-index implementation ships fuzzy
+full-text matching out of the box. This spike wires that capability up behind a new,
+default-off <code>[kb.&lt;name&gt;.search] typo_tolerance</code> flag — but the straightforward,
+"just enable it" version measurably <em>wrecked</em> quality on ordinary, typo-free queries in the
+repo's own bench. What shipped instead is a narrower fallback design that the bench confirms is
+quality-neutral.</p>
+
+<div class="meta-strip">
+<span class="tag">kb 0.22-74-gcd2782de</span>
+<span class="tag">waves/gap-closure-2026-07</span>
+<span class="tag">lance-index 4.0.0</span>
+<span class="tag">BM25-only bench</span>
+</div>
+
+<div class="callout callout--warn">
+<span class="callout-label">Headline</span>
+A blanket rewrite — fuzzing every query term unconditionally via
+<code>FullTextSearchQuery::new_fuzzy</code> — dropped Recall@1 from 0.150 to 0.000 and MRR from
+0.378 to 0.076 on the repo's own 20-query keyword-mode gold set, with <strong>zero typos in any of
+those queries</strong>. Fuzzy matching floods the ranked set with weakly-related noise even when an
+exact hit already exists. The shipped design instead runs the exact query first, unchanged, and
+only falls back to a fuzzy pass when the exact arm returns nothing — which bench-measures
+byte-identical quality to the flag being off, for a genuine typo-tolerance win on the queries that
+would otherwise return nothing at all.</p>
+</div>
+
+<h2 id="what-was-there">What's actually under the keyword arm</h2>
+
+<p><code>Storage::bm25_query</code> (<code>crates/kb-core/src/storage/lance.rs</code>) drives lance's
+inverted-index FTS over five text columns (<code>FTS_COLUMNS = [title, body, headings, code,
+prompt]</code>), each with its own lance <code>Index::FTS</code> built by
+<code>ensure_fts_index</code>. This is not a hand-rolled postings list: lance-index 4.0.0 ships a
+real tantivy-style inverted index — a term dictionary backed by an <code>fst::Map</code> (a
+finite-state transducer), postings lists, and a BM25 scorer
+(<code>lance_index::scalar::inverted</code>). Crucially, that same crate already exposes fuzzy
+matching natively: <code>MatchQuery</code> (a leaf FTS query) carries a <code>fuzziness: Option&lt;u32&gt;</code>
+field, and when it's set, the executor runs a genuine <code>fst::automaton::Levenshtein</code> walk
+over the index's own term dictionary to find every term within the given edit distance — no
+separate term-dictionary structure to build or keep in sync ourselves. This changed the shape of the
+spike entirely: the question was never "can we cheaply derive a term dictionary from the existing
+index" (we can — it's already there, and lance already walks it for us) but "does turning this
+existing capability on actually help."</p>
+
+<h2 id="attempt-one">Attempt one: turn it on, unconditionally</h2>
+
+<p>The obvious first cut: when <code>typo_tolerance</code> is set, swap the exact
+<code>FullTextSearchQuery::new(q)</code> for a fuzzy one and always use it. Two library quirks
+surfaced immediately:</p>
+
+<ol>
+<li><strong><code>None</code> ("auto" fuzziness) is a no-op.</strong> <code>MatchQuery::auto_fuzziness</code>
+(0 for tokens &le;2 chars, 1 for 3&ndash;5, 2 for longer) reads as the natural "smart default," but the
+executor's own <code>is_fuzzy</code> gate (<code>fts.rs</code>/<code>index.rs</code>) is
+<code>matches!(fuzziness, Some(n) if n != 0)</code> — which <code>None</code> never satisfies. Asking
+for "auto" silently falls back to an exact match. A fixed distance (we used <code>Some(1)</code>,
+matching this spike's own "edit-distance-1" framing) sidesteps the gate entirely.</li>
+<li><strong>Fuzziness doesn't survive lance's own multi-column auto-fill.</strong> A
+<code>MatchQuery</code> with no explicit <code>column</code> gets expanded, at execution time, by
+<code>fill_fts_query_column</code> — and for &gt;1 indexed columns (title+body alone already
+qualifies) that function rebuilds a <em>fresh</em> <code>MatchQuery::new(...)</code> per column via
+<code>MultiMatchQuery::try_new</code>, discarding the original's <code>fuzziness</code> entirely. A
+naive <code>FullTextSearchQuery::new_fuzzy(q, Some(1))</code> against any real, multi-column-indexed
+kb therefore silently degrades back to an exact match — the opposite of what the flag promises.</li>
+</ol>
+
+<p>Once <code>fuzzy_query</code> was fixed to build the compound multi-column query itself (reading
+which of <code>FTS_COLUMNS</code> currently have a live FTS index via lancedb's
+<code>Table::list_indices</code>, then setting <code>fuzziness</code> on each per-column leaf
+directly), the mechanism worked exactly as advertised: a single-letter typo against a
+single-document fixture now matched. But the bench told a different story at real-corpus scale.</p>
+
+<h2 id="bench-regression">The bench regression</h2>
+
+<p>Evidence gate: <code>kb bench run --modes keyword</code> against <code>docs/research</code> (146
+docs) with the repo's own 20-query gold set (<code>bench/queries/kb-docs.jsonl</code>) — ordinary,
+well-formed natural-language queries, no typos anywhere in the set. Two throwaway daemons, one
+config difference (<code>[kb.kb-docs.search] typo_tolerance = true</code>):</p>
+
+<table>
+<thead><tr><th>variant</th><th class="num">Recall@1</th><th class="num">Recall@5</th><th class="num">Recall@10</th><th class="num">MRR</th><th class="num">nDCG@10</th></tr></thead>
+<tbody>
+<tr><td>off (exact, current default)</td><td class="num">0.150</td><td class="num">0.700</td><td class="num">0.850</td><td class="num">0.378</td><td class="num">0.496</td></tr>
+<tr><td>on &mdash; blanket fuzzy (attempt one)</td><td class="num">0.000</td><td class="num">0.150</td><td class="num">0.400</td><td class="num">0.076</td><td class="num">0.152</td></tr>
+</tbody>
+</table>
+
+<p>Every quality metric collapsed — Recall@1 to zero. The mechanism itself was working correctly
+(fuzziness really was reaching every column); the problem is what fuzzy expansion does to
+<em>ranking</em> once it's live for every term. <code>MatchQuery</code>'s default
+<code>Operator::Or</code> means a document counts as a hit if <em>any</code> expanded token from
+<em>any</em> query term matches — so a query like <code>"embedding bake-off recall comparison
+between bge small base and large"</code> now also weakly matches every document sharing an
+edit-distance-1 neighbor of any of those (very common) words. BM25's IDF weighting can't fully
+compensate: the ranked set is diluted with enough marginal matches that the genuinely relevant
+document's rank-position moves down or off the page entirely. Fuzzing a term that already has a
+perfect exact match earns you nothing and costs you precision.</p>
+
+<h2 id="the-fix">The fix: fallback, not rewrite</h2>
+
+<p>The shipped design in <code>bm25_query</code> runs the ordinary exact query first, always,
+unchanged. Only if that comes back completely empty — and only when <code>typo_tolerance</code> is
+on — does a second, fuzzy pass run and supply the result instead. This has three properties that
+matter:</p>
+
+<ul>
+<li><strong>Every query the exact arm already answers is untouched.</strong> No dilution risk for
+the overwhelming majority of searches, because the fuzzy query never runs for them at all.</li>
+<li><strong>The flag only ever changes the outcome of a query that would otherwise return
+nothing</strong> — which is precisely kb's existing "corpus-gap signal" territory (the zero-hit
+query tracking shipped in GC-B3): a zero-hit search is already a notable event, not a routine one,
+so spending an extra query round-trip there is the right place to pay for typo recovery.</li>
+<li><strong>Determinism (GC-B1) is untouched either way.</strong> <code>false</code> issues the
+exact same single query as before this flag existed, byte-for-byte. <code>true</code> is identical
+to <code>false</code> whenever the exact arm finds anything — and when it doesn't, the fuzzy arm
+still goes through the same <code>rank_sort</code> id tie-break as every other search path.</li>
+</ul>
+
+<h3 id="re-bench">Re-running the bench with the fix</h3>
+
+<table>
+<thead><tr><th>variant</th><th class="num">Recall@1</th><th class="num">Recall@5</th><th class="num">Recall@10</th><th class="num">MRR</th><th class="num">nDCG@10</th><th class="num">p50 ms</th></tr></thead>
+<tbody>
+<tr><td>off</td><td class="num">0.150</td><td class="num">0.700</td><td class="num">0.850</td><td class="num">0.378</td><td class="num">0.496</td><td class="num">9.2</td></tr>
+<tr><td>on &mdash; fallback (shipped)</td><td class="num">0.150</td><td class="num">0.700</td><td class="num">0.850</td><td class="num">0.378</td><td class="num">0.496</td><td class="num">8.6</td></tr>
+</tbody>
+</table>
+
+<p>Quality is bit-for-bit identical (every query in this gold set already has an exact hit, so the
+fuzzy arm never engages); the latency delta is within normal run-to-run noise on shared hardware —
+if anything, marginally faster on this run, not slower. A unit test
+(<code>bm25_typo_tolerance_on_does_not_alter_results_when_exact_arm_already_hits</code>) pins this
+property directly so a future change can't silently reintroduce the blanket-fuzzy regression. A
+second pair of unit tests exercises the actual value proposition:
+<code>bm25_typo_tolerance_off_misses_a_single_letter_typo</code> confirms the exact arm alone finds
+nothing for a one-letter-dropped query against a single fixture doc, and
+<code>bm25_typo_tolerance_on_finds_the_single_letter_typo</code> confirms the same query with the
+flag on recovers the document via the fuzzy fallback.</p>
+
+<h2 id="recommendations">Recommendations</h2>
+
+<ol>
+<li><strong>Ship as opt-in, default off</strong> — done. An operator turns it on per kb via
+<code>[kb.&lt;name&gt;.search] typo_tolerance = true</code>; nothing changes for anyone who
+doesn't.</li>
+<li><strong>Don't extend fuzzy matching to the hybrid arm's BM25 half beyond this fallback
+shape</strong> — it's already wired the same way (same <code>bm25_query</code> call, same
+fallback semantics), so no separate work needed, but any future change to widen fuzzy matching
+(e.g. applying it to <em>partial</em>-hit queries, not just zero-hit ones) needs its own bench
+pass first — this spike's regression shows the failure mode is real and easy to reintroduce.</li>
+<li><strong>Memory recall and <code>kb recollect</code> stay exact-only</strong> — both call sites
+pass <code>typo_tolerance=false</code> explicitly. Recall's ranking is root invariant #10
+(deterministic, LLM-free, rank-position &times; salience &times; decay); introducing a fuzzy fallback
+there is a separate design question this spike didn't investigate, not an oversight.</li>
+</ol>
+
+<details>
+<summary>Method</summary>
+<p>Bench harness: a throwaway loopback daemon per variant (isolated <code>KB_HOME</code>,
+<code>disable_embedder_fallback = true</code> so no embedder/ONNX is ever spawned — BM25-only, per
+this repo's own <code>scripts/bench-nightly.sh</code> pattern), indexing <code>docs/research</code>
+(146 docs including this artifact's siblings) and driving <code>kb bench run --modes keyword</code>
+against the committed 20-query gold set. <code>kb --version</code> at test time:
+<code>kb 0.22-74-gcd2782de-dirty</code>, matching worktree HEAD. Reports are warm-cache end-to-end
+wall-time (the query set runs once untimed first); quality metrics are computed by <code>kb
+bench</code> itself from the gold set's labelled <code>relevant</code> ids, not hand-graded.</p>
+</details>
+
+
+
+<footer>
+<p>Bench artifacts: <code>/tmp/kb-typo-bench/{off,on}/report.{md,json}</code> (scratch, not
+retained). Worktree: <code>kb-waves</code> @ <code>waves/gap-closure-2026-07</code>. GC-D1.</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

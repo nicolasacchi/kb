@@ -1,0 +1,60 @@
+[package]
+name = "kb-server"
+description = "axum daemon — exposes kb-core via HTTP + SSE."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kb-server"
+path = "src/main.rs"
+
+[dependencies]
+kb-core = { path = "../kb-core" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+hyper = { workspace = true }
+mime = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+walkdir = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+mdns-sd = { workspace = true }
+zip = { workspace = true }
+# X1 — the event→webhook bridge POSTs envelopes with the daemon's own
+# HTTP client. Already in the dep graph (lancedb → reqwest); promoting it
+# from a dev-dep to a runtime dep adds no new compile cost.
+reqwest = { workspace = true }
+# TS bindings for the route wire types — see the workspace dep comment
+# + `just types`.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+ts-export = ["dep:ts-rs", "kb-core/ts-export"]
+
+[dev-dependencies]
+reqwest-eventsource = { workspace = true }
+tempfile = { workspace = true }
+# kb-sibling/1 — the boot-guard test fabricates a `refinery_schema_history`
+# row a NEWER binary would have left (migrations are immutable, so the
+# too-new volume has to be synthesised). Already in the dep graph via
+# kb-core; a dev-dep here adds no runtime surface to the daemon.
+rusqlite = { workspace = true }
+pretty_assertions = { workspace = true }
+# tests/api_docs.rs — route-table extraction from router.rs source.
+regex = { workspace = true }

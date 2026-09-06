@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The atlas that could mirror across machines — determinism at the algorithm vs the pipeline</title>
+<meta name="kb-tags" content="fable-frontier, determinism, atlas, reproducibility, lance, pipeline">
+<meta name="kb-category" content="research">
+<meta name="kb-summary" content="Direct test of run #5's open gap: is kb's atlas layout reproducible? Empirically YES on one machine (bit-identical across 4 wiped rebuilds, and invariant to fragment state). But compute_layout is severely order-sensitive (proven: reverse-permutation moves all 40/40 points, delta 0.81; k-means positional seeding flips cluster colors on any reorder), and the pipeline feeds it a non-canonical, filesystem/ingest-dependent input order (unsorted WalkDir → merge_insert order → unordered lance scan). Invariant #3 as written (function-scoped, 'same inputs') is correct + golden-tested; the operator expectation 'same corpus → same atlas everywhere' is not pinned. Low severity (atlas is a visualization). One-line fix: sort the embedding pairs by id. Unifies with run #5: determinism is pinned at the algorithm, not the pipeline input order.">
+
+<style>
+  :root{
+    --bg:#0f1016; --surface:#191b25; --fg:#e7e9f2; --muted:#a3a8c4; --rule:#2a2d3d;
+    --accent:#8b9cf0; --accent-fg:#0f1016; --warn:#e3b657; --danger:#ef8098; --ok:#69ca9c;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace; --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f6f7fc; --surface:#e9ebf6; --fg:#181a28; --muted:#4d5170; --rule:#ccd0e6;
+      --accent:#3d4fb8; --accent-fg:#f6f7fc; --warn:#7f5600; --danger:#a52a44; --ok:#136c4c;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.03rem/1.65 var(--sans)}
+  main{max-width:50rem;margin:0 auto;padding:2.4rem 1.2rem 4rem}
+  h1{font-size:1.68rem;line-height:1.22;margin:.2em 0 .3em;letter-spacing:-.01em}
+  h2{font-size:1.16rem;margin:2.2em 0 .5em;padding-top:1.1em;border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem;margin:1.4em 0 .3em;color:var(--muted)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.6 var(--mono)}
+  .verdict{border:1px solid var(--rule);border-left:5px solid var(--accent);border-radius:10px;
+    background:var(--surface);padding:1em 1.2em;margin:1.4em 0;font-size:1.05rem}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.82rem/1.5 var(--mono);white-space:pre-wrap}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  td.num,th.num{text-align:center;font-family:var(--mono);font-size:.86rem}
+  .yes{color:var(--ok);font-weight:600}.no{color:var(--danger);font-weight:600}
+  .sev{display:inline-block;font:700 .7rem/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;
+    padding:.3em .6em;border-radius:999px;background:var(--warn);color:var(--bg)}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  .fix{border-left-color:var(--ok)}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#verdict">Skip to verdict</a>
+<main>
+<h1>The atlas that could mirror across machines</h1>
+<p class="meta">determinism at the algorithm vs the pipeline · Fable frontier run #6 · 2026-07-07
+15:40–17:10 CEST · isolated daemon, 40-doc corpus · Rust permutation probe + adversarial
+verification (0 fatal flaws) · <span class="sev">severity: low</span> · status: finding, no code changed</p>
+
+<div class="verdict" id="verdict">
+<strong>Verdict.</strong> kb's atlas layout is reproducible <em>on one machine</em> — bit-identical
+across four from-scratch rebuilds, and identical whether the corpus is 40 fragments or 1. But the
+layout function <code>compute_layout</code> is severely <strong>order-sensitive</strong> (a
+reverse-permutation of the input moves <em>all 40/40 points</em>, up to 0.81 on a [0,1] scale;
+k-means seeds centroids by array position, so any reorder can flip cluster colours wholesale), and
+the pipeline feeds it a <strong>non-canonical, filesystem/ingest-dependent input order</strong>
+(unsorted <code>WalkDir</code> → <code>merge_insert</code> insertion order → unordered lance scan
+— all verified in code). The function's invariant #3 ("same inputs → bit-identical across
+machines") is <em>correct and golden-tested</em> — order is part of "the input." What is unpinned
+is the <em>pipeline</em> that produces that order, so the operator-facing expectation "same corpus
+→ same atlas everywhere" is not guaranteed across machines. The atlas is a non-load-bearing
+visualisation, so this is a <strong>latent, low-severity</strong> gap — with a one-line fix.
+</div>
+
+<h2 id="setup">1 · Closing run #5's open gap</h2>
+<p>Run #5 audited search determinism and left one surface explicitly untested: the atlas, because
+its coordinate endpoint looked SPA-only. It is not — <code>GET /api/kb/{kb}/docs?include=atlas</code>
+returns <code>atlas_x/atlas_y/atlas_cluster</code> (lance.rs:1232). Run #5's static hypothesis was
+that the atlas input (<code>list_embeddings</code>, no <code>ORDER BY</code>) rides an unpinned
+scan order and could be non-reproducible. This run tests it empirically, and settles the mechanism.</p>
+
+<h2 id="empirical">2 · What the isolated corpus showed</h2>
+<p>Rig: a private daemon (spare port, own <code>KB_HOME</code>, bge-small), 40 fixed research
+HTML docs; captures = atlas coords per doc (sorted by id for value-comparison) after
+<code>recompute</code>.</p>
+<table>
+<tr><th>Test</th><th class="num">result</th></tr>
+<tr><td>Atlas coords across 2 independent from-scratch rebuilds (state wiped, re-indexed 0→40 each)</td><td class="num yes">BIT-IDENTICAL</td></tr>
+<tr><td>Third independent rebuild vs the first</td><td class="num yes">BIT-IDENTICAL</td></tr>
+<tr><td>Uncompacted (40 fragments) vs compacted (1 fragment), same build</td><td class="num yes">IDENTICAL</td></tr>
+<tr><td>Raw lance scan order across rebuilds</td><td class="num yes">stable — but NOT id- or filename-sorted</td></tr>
+</table>
+<p>So on this machine the atlas <em>is</em> reproducible — a positive result for invariant #3 in
+practice. The surprising part is the scan order: deterministic across rebuilds, yet neither
+id-sorted nor filename-sorted. It is the raw <code>merge_insert</code> insertion order, which is
+the raw <code>readdir</code> walk order — stable here only because one machine's <code>readdir</code>
+is deterministic.</p>
+
+<h2 id="ordersensitive">3 · But the layout is order-sensitive — proven</h2>
+<p>Does the input order actually matter? I injected a permutation probe into <code>atlas.rs</code>
+(run, then reverted — the tree is clean), calling <code>compute_layout</code> on 40 embeddings and
+on their reverse permutation, matching each permuted output back to its original doc by index:</p>
+<pre>FABLE_PROBE order-sensitivity: 40/40 points moved, max coord delta 0.810392</pre>
+<p>Every point moved, by up to 0.81 on the normalised [0,1] canvas — a near-total re-layout. The
+mechanism is in committed code: UMAP init draws RNG per input <em>in array order</em>
+(<code>atlas.rs:253</code>), and k-means seeds centroids <em>by index into the input slice</em>
+(<code>atlas.rs:414</code>, empty-cluster reseed at <code>:454</code>). An <code>f32</code> check
+confirms the same values summed in different orders diverge at single precision (−5.5996265 vs
+−5.5996256), which the power-iteration accumulates. Reverse is a worst case — but note k-means is
+<em>positional</em>, so even a single-file reorder changes the centroid seed set and can renumber
+clusters, <strong>flipping colours wholesale</strong> while geometry barely moves. At the
+invariant's own bit-identical bar, any reorder is a divergence.</p>
+
+<h2 id="chain">4 · The pipeline that leaves order unpinned</h2>
+<p>Verified end to end against the source:</p>
+<pre>unsorted WalkDir (indexer.rs:303, watcher.rs:278 — no .sort_by)
+        ↓  readdir order — filesystem-dependent (ext4 htree ≠ xfs ≠ tmpfs ≠ apfs)
+merge_insert on "id" (lance.rs:526) — insertion/fragment order, NOT id-sorted
+        ↓
+list_embeddings (lance.rs:1392) — select/execute, NO ORDER BY, returns scan order
+        ↓  order-preserving .unzip()
+compute_layout(&embeddings, k, DEFAULT_SEED) (atlas.rs:648) — order-SENSITIVE</pre>
+<div class="callout"><strong>The precise framing (the verification's sharpest correction).</strong>
+Invariant #3 is scoped to <code>compute_layout(embeddings, k, seed)</code> "for the same inputs,"
+and it holds: the function is IEEE-754-deterministic for a fixed input order, and the golden test
+<code>pca_layout_golden_coords_pin_cross_libc_determinism</code> pins its bits across glibc/musl/macOS.
+A <em>permuted</em> slice is a different input, so the function does not break its literal contract.
+The gap is one level up: <code>recompute_for_kb_with</code> never canonicalises input order before
+calling the order-sensitive function. CI never catches it because <strong>no test permutes the
+input</strong> — every determinism test passes the same slice twice. The invariant is right; the
+pipeline around it is unpinned.</div>
+
+<h2 id="synthesis">5 · The synthesis with run #5</h2>
+<p>Runs #5 and #6 are one finding seen twice. <strong>kb pins determinism at the algorithm
+boundary — a fixed seed, IEEE-754 bit-stability, a cross-libc golden test — but leaves the
+<em>pipeline input order</em> to an unsorted lance scan.</strong> Search surfaces it as the
+missing tie-break (tied BM25 scores resolve by physical order); the atlas surfaces it as the
+cross-machine input-order gap (an order-sensitive layout fed a readdir-ordered input). Same root,
+and the same family of one-line fix: <strong>pin the order with an explicit sort.</strong></p>
+
+<h2 id="fix">6 · The fix</h2>
+<div class="callout fix"><strong>One line, kb-controlled, robust.</strong> In
+<code>recompute_for_kb_with</code>, right after <code>let pairs = list_embeddings().await?</code>
+(atlas.rs:609): <code>pairs.sort_by(|a, b| a.0.cmp(&amp;b.0));</code>. Artifact ids are
+source-relative <em>path hashes</em> (root invariant #27) — machine-independent — so sorting by id
+canonicalises the layout input regardless of readdir <em>or</em> lance scan order, making invariant
+#3's "across machines" promise hold end-to-end. (Sorting the <code>WalkDir</code> is weaker: it
+fixes ingest order but still trusts lance to preserve insertion order into an unordered scan, which
+is lance-internal and undocumented — do the sort at the atlas boundary.) The reverted probe should
+land as a permanent test: <code>compute_layout(emb)</code> vs a permuted <code>emb</code>, matched
+by id, asserting equal coords + clusters — which today would fail, and after the fix would pass.</p></div>
+
+<h2 id="bounds">7 · Honest bounds</h2>
+<ul>
+<li><strong>Severity is low.</strong> The atlas is a visualisation, not search/recall/integrity;
+each kb computes its own atlas on its own store; cross-machine atlas comparison is rare. This is
+latent under-enforcement, not an active bug.</li>
+<li><strong>Cross-machine divergence is a code-grounded inference, not 2nd-machine data.</strong>
+I ran on one machine; "readdir is filesystem-dependent" is well-established (the project already
+treats this class as first-class — invariant #3 bans HashMap-iteration order, and a prior cross-libc
+fix exists), but I did not reproduce on a second machine.</li>
+<li><strong>Two candidate causes for the stable order, not isolated.</strong> The scan order could
+be governed by readdir <em>or</em> by the async back-pressured ingest/embed scheduling — both are
+unpinned across machines, both point the same way, and the id-sort fixes either, so the conclusion
+is robust while the exact mechanism is one of two.</li>
+<li><strong>Local reproducibility is code-predicted + observed, not "proven."</strong> The daemon
+restart lifecycle was flaky; I wiped state and confirmed a fresh 0→40 index before each capture, and
+the deterministic-compute + stable-on-disk-scan code predicts the identical results I saw — but treat
+it as strongly-observed, not a formal proof.</li>
+<li><strong>0.81 is a ceiling.</strong> Reverse permutation is worst case; a small real reorder
+moves continuous coords less — the more likely visible symptom of a small reorder is cluster-colour
+renumbering, not big coordinate jumps.</li>
+</ul>
+
+<h2 id="provenance">8 · Provenance</h2>
+<p class="meta">Manual Fable frontier run #6 (on Fable 5; verification subagents ran Opus 4.8).
+Isolated rig /tmp/det-audit (own daemon on a spare port, own KB_HOME, 40 frozen docs); the
+machine's six other kb daemons were never touched; zero writes to any real corpus; the atlas.rs
+permutation probe was injected, run, and reverted (tree diff = 0). Empirical captures b1..b4 +
+raw scan-order dumps + the f32 demo. Verification workflow wf_eb1194d5-20f (2 agents, 133k tokens):
+a mechanism agent that pinned every step to file:line and confirmed CI never permutes inputs, and a
+methodology agent (0 fatal flaws) that corrected the invariant-wording precision, graded severity
+low, and flagged the two-candidate-cause + rig-trust bounds folded in above. Code: WalkDir
+indexer.rs:303 / watcher.rs:278, list_embeddings lance.rs:1392, merge_insert lance.rs:526,
+compute_layout order-sensitivity atlas.rs:253/414, recompute_for_kb_with atlas.rs:609/648, the
+determinism tests atlas.rs:820/1192, invariant #3 kb-core/CLAUDE.md. Related:
+search-determinism-settling-window-2026-07.html (run #5, the sibling finding this unifies with),
+README non-goal #1 + invariant #10.</p>
+</main>
+</body>
+</html>

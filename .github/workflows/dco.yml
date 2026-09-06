@@ -1,0 +1,43 @@
+# Enforces the Developer Certificate of Origin sign-off (see CLA.md /
+# CONTRIBUTING.md): every commit in a PR must carry a `Signed-off-by:`
+# trailer. Implemented as an inline git check rather than a third-party
+# action — no external action to pin/trust, and the only inputs are the
+# PR's base/head commit SHAs (passed via env, never interpolated into the
+# shell), so there is no injection surface.
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dco-check:
+    name: Check DCO sign-off
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so every commit in the PR range is reachable.
+          fetch-depth: 0
+      - name: Verify Signed-off-by on every commit in the PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for sha in $(git rev-list "${BASE_SHA}..${HEAD_SHA}"); do
+            if ! git show -s --format=%B "$sha" \
+                 | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "::error::commit ${sha} is missing a Signed-off-by trailer"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Every commit must be signed off (git commit -s). See CONTRIBUTING.md / CLA.md." >&2
+            exit 1
+          fi
+          echo "All commits carry a DCO sign-off."

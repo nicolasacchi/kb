@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Five Claude Code generation prompts ranked best-to-worst for emitting kb-compatible HTML artifacts instead of markdown, plus a general-purpose baseline.">
+<title>Prompts — kb research</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="index.html">Index</a>
+      <a href="challenges.html">Challenges</a>
+      <a href="discussion.html">Discussion</a>
+      <a href="spikes.html">Spikes</a>
+      <a href="prompts.html" class="is-current">Prompts</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Cross-cuts
+    <span>·</span>
+    <span class="meta">5 prompts + 1 baseline · ranked</span>
+    <span>·</span>
+    <span class="meta">Copy-paste recipes</span>
+  </div>
+  <h1><span class="strike">from markdown to html</span>Five prompts, <em>ranked</em>.<br>One baseline. Pick &amp; paste.</h1>
+  <p class="lede">Five Claude Code prompts that nudge it toward emitting self-contained HTML artifacts instead of markdown — ordered <em>best to worst</em> by my honest read of quality × adoption cost. All five are kb-aware: they reference the <code>kb-*</code> meta tag convention (<a href="surfaces/07-html-effectiveness.html">topic 07</a>), the <code>&lt;template id="kb-prompt"&gt;</code> embedding, and the <code>data-kb-id</code> section slug for comment-anchor stability (<a href="surfaces/09-comments.html">topic 09</a>). A sixth <strong>general-purpose baseline</strong> drops all kb dependencies and keeps just the dogum/html-artifacts-style discipline — portable into any project.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>Start with #1</strong> (skill-based) if <code>dogum/html-artifacts</code> is installable in your Claude Code environment. Otherwise <strong>start with #2</strong> (inline canonical recipe — ~60 lines added to <code>CLAUDE.md</code>). #3 (trigger-conditional) is the right fallback if #2 is too invasive — it preserves markdown for short conversational replies and only switches to HTML when trigger words fire. #4 and #5 are documented for completeness but produce more variance; not recommended for the kb workflow. The baseline (§F) is for non-kb projects that just want "HTML over markdown" without metadata.</p>
+    <div class="badges">
+      <span class="conf conf--high">#1 Skill · HIGH quality · LOW cost</span>
+      <span class="conf conf--high">#2 Inline · HIGH quality · MED cost</span>
+      <span class="conf conf--med">#3 Triggered · MED quality · LOW cost</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. Prompt #1 — Skill-based (RECOMMENDED)</div>
+    <h2>Invoke <code>dogum/html-artifacts</code> + add kb metadata on top</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What it is:</strong> a short CLAUDE.md instruction that delegates HTML-generation discipline to the dogum/html-artifacts skill (or a kb-fork of it) and adds the kb-specific metadata layer on top. The skill already ships the load-bearing rules — anti-patterns, category-specific guidance, system-font discipline, no-externals constraint, file-size target. kb just adds the meta-tag layer.</p>
+    <p><strong>When to use:</strong> the dogum skill is reachable in your Claude Code config (or you've forked it into a kb-namespaced skill). This is the default first choice — highest quality, lowest authoring cost.</p>
+    <p><strong>Tradeoffs:</strong> depends on skill availability; if the skill ever drifts from kb's expectations, the prompt may need an inline override. Mitigate by pinning a known-good version (or forking into your own org).</p>
+
+<pre>You have access to a kb-html-artifacts skill (forked from dogum/html-artifacts,
+with kb-specific metadata conventions). For any response that would be a
+long-form artifact — explainer, write-up, plan, design review, comparison,
+report, slide deck, custom editor — invoke the skill and emit a self-contained
+.html file rather than markdown.
+
+The skill enforces:
+- Real &lt;title&gt; + matching &lt;h1&gt; + first-paragraph TL;DR (dogum convention)
+- System-font stack only; CSS custom properties at :root with dark-mode variants
+- No external scripts, fonts, or stylesheets
+- 10–30 KB target file size
+- No "default AI aesthetic" — no gradient cards, no glass-morphism, no
+  emoji-decorated headings, no four-shades-of-indigo palette
+
+On top of the skill, kb requires:
+- &lt;meta name="kb-id"          content="$(generate ULID)"&gt;
+- &lt;meta name="kb-model"       content="$your-model-id"&gt;
+- &lt;meta name="kb-model-version" content="$model-date-stamp"&gt;
+- &lt;meta name="kb-created"     content="$ISO_8601_UTC_now"&gt;
+- &lt;meta name="kb-category"    content="$one of: exploration | code-review |
+                                              design | prototyping | decks |
+                                              diagrams | reports | research |
+                                              custom-editor"&gt;
+- &lt;meta name="kb-tags"        content="comma,separated,tags"&gt;
+- &lt;template id="kb-prompt"&gt; containing the user's verbatim prompt after a
+  scrub pass: strip system prompt; redact AWS keys (AKIA[0-9A-Z]{16}),
+  GitHub PATs (ghp_[A-Za-z0-9]{36}), Anthropic sk-ant-*, JWT-like strings,
+  generic 32+ char high-entropy tokens; normalise /Users/&lt;name&gt;/ → ~/ and
+  /home/&lt;name&gt;/ → ~/.
+- data-kb-id="stable-slug" on each top-level &lt;section&gt; — kb's comment-
+  anchor feature uses these to survive regenerations (see kb-research
+  topic 09 §B).
+
+Use markdown (not HTML) when:
+- Response is conversational and under ~3 paragraphs
+- Code-only answer (no narrative around it)
+- Three-bullet summary
+- Terminal-style: commands, exit codes, paths</pre>
+
+    <p class="kbd">~25 lines added to CLAUDE.md + skill install. Quality: HIGH. Preserves markdown for short replies: <strong>yes</strong>. kb-aware: <strong>yes</strong>.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">B. Prompt #2 — Inline canonical recipe</div>
+    <h2>Same discipline, no skill dependency, ~60 lines in CLAUDE.md</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What it is:</strong> the dogum/html-artifacts discipline inlined into CLAUDE.md, plus the kb metadata layer. Same output quality as #1, just self-contained — no external skill required.</p>
+    <p><strong>When to use:</strong> the dogum skill isn't installable, or you want explicit control over every rule rather than trusting an upstream skill's version drift. Higher authoring cost (longer CLAUDE.md), same quality ceiling.</p>
+    <p><strong>Tradeoffs:</strong> ~60-line CLAUDE.md addition. You own the rule list — if dogum updates its anti-pattern catalogue (e.g. adds a new "AI aesthetic" to ban), you have to merge it manually.</p>
+
+<pre>When the user requests a long-form artifact — explainer, write-up, plan,
+design review, comparison, report, slide deck, custom editor, "interactive
+something" — emit a self-contained .html file rather than markdown.
+
+Required structure:
+- Real &lt;title&gt; matching the topic
+- &lt;h1&gt; that matches or refines &lt;title&gt;
+- First-paragraph TL;DR or framing sentence immediately under the &lt;h1&gt;
+- &lt;meta name="description"&gt; with a one-sentence summary
+- &lt;meta charset="UTF-8"&gt;, &lt;meta name="viewport"&gt;
+
+kb provenance metadata (required):
+- &lt;meta name="kb-id"            content="$(ULID)"&gt;
+- &lt;meta name="kb-model"         content="$your-model-id"&gt;
+- &lt;meta name="kb-model-version" content="$model-date-stamp"&gt;
+- &lt;meta name="kb-created"       content="$ISO_8601_UTC"&gt;
+- &lt;meta name="kb-category"      content="$one of nine categories"&gt;
+- &lt;meta name="kb-tags"          content="comma,separated,tags"&gt;
+- &lt;template id="kb-prompt"&gt;
+    [verbatim user prompt, after scrubbing system prompt and known secret
+     patterns (AWS keys, GH PATs, sk-ant-*, JWT-like, 32+ char high-entropy
+     tokens), and after normalising /Users/&lt;name&gt;/ → ~/ paths]
+  &lt;/template&gt;
+- data-kb-id="stable-slug" on each top-level &lt;section&gt;
+
+CSS conventions:
+- System font stack only:
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    (monospace stack: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+     serif stack: "Iowan Old Style", "Charter", Georgia, ui-serif, serif;)
+- CSS custom properties at :root, with prefers-color-scheme: dark variants
+- Restrained palette — pick 2–3 accent colours from a real design language,
+  not "four shades of indigo"
+- No gradient cards. No glass-morphism. No emoji-decorated headings.
+
+Hard constraints:
+- ZERO external dependencies: no &lt;script src&gt; to CDNs, no Google Fonts,
+  no external stylesheets. Inline &lt;style&gt; and &lt;script&gt; only.
+- Avoid frameworks (no React, no Vue, no Tailwind via CDN). Use platform
+  primitives: &lt;details&gt;/&lt;summary&gt;, inline SVG, native HTML5 drag,
+  CSS animations, native form controls, &lt;canvas&gt; when truly needed.
+- File size target: 10–30 KB raw HTML.
+
+Use markdown (not HTML) when:
+- Conversational reply under ~3 paragraphs
+- Code-only answer
+- Three-bullet summary
+- Terminal-style answers (commands, exit codes, paths)</pre>
+
+    <p class="kbd">~60 lines in CLAUDE.md, no skill needed. Quality: HIGH. Preserves markdown for short replies: <strong>yes</strong>. kb-aware: <strong>yes</strong>.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. Prompt #3 — Trigger-conditional</div>
+    <h2>HTML only when trigger words fire; markdown otherwise</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What it is:</strong> a CLAUDE.md addition that enumerates trigger words and switches to HTML output <em>only</em> when one of them appears in the user's request. Everything else stays markdown — including ambiguous-length responses.</p>
+    <p><strong>When to use:</strong> you want a clean markdown default for casual chat (the operator types "what's the difference between A and B?" → markdown reply), and HTML only when the request is explicit about artifact intent. Less invasive than #1/#2. Slightly more variance because the trigger list is finite.</p>
+    <p><strong>Tradeoffs:</strong> some long-form requests don't match any trigger word and stay markdown when they probably should have been HTML. Iterate the trigger list as you spot misses.</p>
+
+<pre>When the user's request contains any of these trigger words, emit a
+self-contained .html file rather than markdown:
+
+  artifact  ·  explainer  ·  interactive  ·  diagram  ·  dashboard  ·
+  page      ·  write-up   ·  review       ·  deck     ·  report     ·
+  plan      ·  comparison ·  flowchart    ·  visualis(z)ation         ·
+  side-by-side             ·  prototype
+
+For ALL OTHER requests (including ambiguous-length responses), default to
+markdown.
+
+When emitting HTML, follow this discipline:
+[insert the full structure + CSS + constraints + anti-patterns block from
+ prompt #2, verbatim — or, if the dogum skill is available, invoke it and
+ add only the kb metadata layer per prompt #1]
+
+The default behaviour outside trigger words stays markdown; do not switch
+based on response length or topic alone.</pre>
+
+    <p class="kbd">~15 lines + the inlined block from #2 or the skill ref from #1. Quality: MED-HIGH (depends on triggers covering the operator's actual phrasings). Preserves markdown for short replies: <strong>yes</strong> (and for unmatched long replies too). kb-aware: <strong>yes</strong>.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. Prompt #4 — Output-format hint</div>
+    <h2>Lightest CLAUDE.md addition (~10 lines), looser output</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What it is:</strong> a short note telling Claude that HTML is available as an output format, with brief structural guidance. No enforcement, no mandatory metadata.</p>
+    <p><strong>When to use:</strong> you don't want a long CLAUDE.md addition, and you accept that the output won't always match the kb conventions strictly. Useful for exploratory projects where kb ingestion isn't critical yet.</p>
+    <p><strong>Tradeoffs:</strong> lower quality. Output may be missing <code>kb-*</code> metadata, may use external CDNs, may not match the file-size target. The operator may need to post-process before ingest.</p>
+
+<pre>You can output HTML files when the response would be a long-form artifact —
+an explainer, a comparison, a design review, a plan, an interactive
+illustration. HTML lets you use inline SVG diagrams, &lt;details&gt;/&lt;summary&gt;
+for collapsible sections, native form controls, and CSS for side-by-side
+layout — things markdown can't do.
+
+Default to markdown for short responses. Use HTML when the layout would
+genuinely help the reader.
+
+If you emit HTML, make it self-contained (no external CDN scripts or fonts)
+and aim for 10–30 KB.
+
+For kb integration, include:
+- &lt;meta name="kb-id"&gt;       with a ULID
+- &lt;meta name="kb-model"&gt;    with your model id
+- &lt;meta name="kb-created"&gt;  with ISO 8601 UTC
+- &lt;template id="kb-prompt"&gt; with the user's prompt (after a quick
+  scrub for obvious secrets and pathnames)</pre>
+
+    <p class="kbd">~10 lines in CLAUDE.md. Quality: MED. Preserves markdown for short replies: <strong>yes</strong>. kb-aware: <strong>partial</strong> (suggested, not enforced).</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. Prompt #5 — Per-request opt-in</div>
+    <h2>No CLAUDE.md change. Operator triggers HTML per message.</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What it is:</strong> no project configuration. The operator types a phrase per message when they want HTML output. Default behaviour stays exactly as it was — markdown for everything Claude does normally.</p>
+    <p><strong>When to use:</strong> one-off experiments. Trying out a few HTML artifacts to see if the kb workflow fits your project before committing to a CLAUDE.md addition. Or projects where most output should stay markdown and HTML is the exception.</p>
+    <p><strong>Tradeoffs:</strong> highest friction per artifact (you have to remember to ask). No consistency guarantee — Claude's interpretation of "HTML artifact with kb conventions" may drift between sessions or model upgrades.</p>
+
+<pre>Per-message phrasings the operator can use (no CLAUDE.md change required):
+
+  Full convention reference:
+    "Generate this as an HTML artifact with kb conventions: kb-id ULID,
+     kb-model and kb-created meta, kb-prompt template, system fonts only,
+     no external assets, 10–30 KB target, data-kb-id on top-level
+     sections."
+
+  Once you've internalised the conventions (shorter):
+    "Output as a kb-artifact HTML file."
+
+  When kb conventions aren't needed (non-kb projects):
+    "Reply with a self-contained HTML file (no external assets, 10–30 KB,
+     system fonts, no AI-aesthetic gradients)."
+
+  Quick-and-dirty (lowest quality, lowest friction):
+    "Make this an HTML page instead of markdown."</pre>
+
+    <p class="kbd">Zero CLAUDE.md changes. Quality: variable. Preserves markdown for short replies: <strong>yes</strong> (default behaviour unchanged). kb-aware: <strong>operator-driven</strong>.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">F. Baseline — general-purpose (no kb dependencies)</div>
+    <h2>HTML-over-markdown discipline, portable into any project</h2>
+  </div>
+  <div class="prose">
+    <p><strong>What it is:</strong> the dogum-style HTML discipline (system fonts, no externals, 10–30 KB, anti-patterns called out), without the <code>kb-*</code> metadata layer, the <code>kb-prompt</code> template, or the <code>data-kb-id</code> section slugs. Just "Claude Code outputs good HTML instead of markdown for long-form responses."</p>
+    <p><strong>When to use:</strong> a project that isn't kb-aware. The output won't ingest into kb without post-processing (no <code>kb-id</code>, no provenance metadata), but you get the editorial discipline of the kb-aware prompts. Useful for sharing the recipe with people who don't run kb.</p>
+    <p><strong>Tradeoffs:</strong> portable; doesn't carry kb knowledge.</p>
+
+<pre>For long-form responses — explainers, write-ups, plans, design reviews,
+comparisons, slide decks — emit a self-contained .html file rather than
+markdown.
+
+Required structure:
+- Real &lt;title&gt; matching the topic
+- &lt;h1&gt; matching or refining &lt;title&gt;
+- First-paragraph TL;DR / framing sentence immediately under the &lt;h1&gt;
+- &lt;meta name="description"&gt; with a one-sentence summary
+- &lt;meta charset="UTF-8"&gt;, &lt;meta name="viewport"&gt;
+
+CSS conventions:
+- System font stack only (sans / mono / serif as needed)
+- CSS custom properties at :root with prefers-color-scheme: dark variants
+- Restrained palette — 2–3 accent colours, drawn from a real design
+  language, not "four shades of indigo"
+- No gradient cards. No glass-morphism. No emoji-decorated headings.
+
+Hard constraints:
+- Zero external dependencies (no CDN scripts, no Google Fonts, no
+  external stylesheets). Inline &lt;style&gt; and &lt;script&gt; only.
+- Avoid frameworks. Use platform primitives: &lt;details&gt;/&lt;summary&gt;,
+  inline SVG, native HTML5 drag, CSS animations, native form controls.
+- File size target: 10–30 KB raw.
+
+Use markdown when:
+- Conversational reply under ~3 paragraphs
+- Code-only answer (no narrative around it)
+- Three-bullet summary
+- Terminal-style answers (commands, exit codes, paths)</pre>
+
+    <p class="kbd">~30 lines in CLAUDE.md. Quality: HIGH. Preserves markdown for short replies: <strong>yes</strong>. kb-aware: <strong>no</strong> (drop-in for non-kb projects).</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">G. Decision table</div>
+    <h2>Quick-reference matrix</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Prompt comparison · quality × adoption cost × markdown preservation × kb-awareness</caption>
+      <thead>
+        <tr>
+          <th>Prompt</th>
+          <th>Quality of output</th>
+          <th>CLAUDE.md lines</th>
+          <th>Preserves md default</th>
+          <th>kb-aware</th>
+          <th>External dep</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>#1 Skill-based</strong></td>
+          <td class="center"><span class="y">HIGH</span></td>
+          <td class="center">~25</td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="p">dogum skill</span></td>
+        </tr>
+        <tr>
+          <td><strong>#2 Inline canonical</strong></td>
+          <td class="center"><span class="y">HIGH</span></td>
+          <td class="center">~60</td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="y">none</span></td>
+        </tr>
+        <tr>
+          <td><strong>#3 Trigger-conditional</strong></td>
+          <td class="center"><span class="p">MED-HIGH</span></td>
+          <td class="center">~75 (15 + #2 block)</td>
+          <td class="center"><span class="y">yes</span> (strict)</td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="y">none</span></td>
+        </tr>
+        <tr>
+          <td>#4 Output-format hint</td>
+          <td class="center"><span class="p">MED</span></td>
+          <td class="center">~10</td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="p">partial</span></td>
+          <td class="center"><span class="y">none</span></td>
+        </tr>
+        <tr>
+          <td>#5 Per-request opt-in</td>
+          <td class="center"><span class="n">variable</span></td>
+          <td class="center">0</td>
+          <td class="center"><span class="y">yes</span> (default)</td>
+          <td class="center"><span class="p">operator</span></td>
+          <td class="center"><span class="y">none</span></td>
+        </tr>
+        <tr>
+          <td><strong>Baseline (general)</strong></td>
+          <td class="center"><span class="y">HIGH</span></td>
+          <td class="center">~30</td>
+          <td class="center"><span class="y">yes</span></td>
+          <td class="center"><span class="n">no</span></td>
+          <td class="center"><span class="y">none</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <p><strong>Start with #1 (skill-based)</strong> if <code>dogum/html-artifacts</code> is reachable in your Claude Code environment. The skill is the most carefully-tuned authority on "good HTML artifacts" today (per <a href="surfaces/07-html-effectiveness.html#colophon">topic 07</a>); kb's contribution is the meta-tag layer on top.</p>
+    <p>If the skill is unreachable or you want explicit per-rule control, <strong>fall back to #2 (inline canonical recipe)</strong>. Same quality ceiling, ~35 more lines of CLAUDE.md.</p>
+    <p><strong>#3 (trigger-conditional)</strong> is the right fallback if #2's ~60-line CLAUDE.md addition is too invasive for your project, or if you have a lot of short-form interactions that should stay markdown and only a few long-form requests that benefit from HTML.</p>
+    <p><strong>#4 and #5 are documented for completeness</strong> but not recommended for sustained kb use — output variance hurts ingestion. Use them only for exploration before committing to one of #1–#3.</p>
+    <p>The <strong>baseline (§F)</strong> is the right answer if you want the HTML-over-markdown discipline without kb-specific metadata — e.g. for a project that won't use kb, or for sharing the recipe with people who aren't running kb.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions</span>
+    <ul>
+      <li><strong>Skill version drift.</strong> If you adopt #1, pin a known-good version of <code>dogum/html-artifacts</code> in your project config — or fork it into a kb-owned namespace. Upstream changes to the anti-pattern catalogue or category list could silently change your output.</li>
+      <li><strong>Model upgrades.</strong> Reissue the prompt set when you move to a new Claude generation. The current text is calibrated for the model you tested with; a new model may interpret "no AI aesthetic" differently. Add a smoke test: generate one artifact per category after each model bump and eyeball the output.</li>
+      <li><strong>Fork-and-pin the skill.</strong> Whether to maintain <code>kb-html-artifacts</code> as an actual fork (separate repo, independent versioning) or as a thin overlay on dogum (lookups at install time). Defer until #1 is in production; the answer depends on how often you need to diverge from upstream.</li>
+      <li><strong>Category taxonomy.</strong> kb-category enumerates 9 values from dogum's classification. Are there kb-specific categories worth adding (e.g. <code>commentary</code> for operator-authored artifacts, <code>regen</code> for revisited ones)? Defer to first production use.</li>
+      <li><strong>Multi-language artifacts.</strong> All conventions here assume English. Translated artifacts may want a <code>&lt;meta name="kb-lang"&gt;</code> tag and language-aware system-font stacks. Out of scope for v1.</li>
+      <li><strong>The "Markdown still correct" list.</strong> Each prompt cites four cases (under-3-paragraphs / code-only / three-bullet / terminal-style). Are there others? Quick visual mocks vs full artifacts is a contested case — at what point does the operator want a real artifact vs a few CSS-in-markdown lines?</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="spikes.html"><span class="dir">← Prev</span><span class="ttl">Spikes</span></a>
+  <a class="next" href="index.html"><span class="dir">Back →</span><span class="ttl">Index</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · generation prompts</p>
+      <p>Five ranked recipes plus a portable baseline. Start with #1 if dogum is reachable; otherwise #2. Reissue the prompts after each Claude model bump.</p>
+    </div>
+    <div>
+      <h5>Cross-cuts</h5>
+      <ul>
+        <li><a href="index.html">Index</a></li>
+        <li><a href="challenges.html">Challenges</a></li>
+        <li><a href="discussion.html">Discussion</a></li>
+        <li><a href="spikes.html">Spikes</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Referenced topics</h5>
+      <ul>
+        <li><a href="surfaces/07-html-effectiveness.html">07 HTML thesis &amp; kb-prompt</a></li>
+        <li><a href="surfaces/09-comments.html">09 Comments (data-kb-id anchors)</a></li>
+        <li><a href="surfaces/06-iframe.html">06 Iframe (kb-sandbox meta)</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

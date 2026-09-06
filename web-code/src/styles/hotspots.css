@@ -1,0 +1,175 @@
+/* V3.2-B3 — `/r/:repo/~hotspots` attention table. Neutral accent ramp only;
+ * never red-as-shame (red stays for real errors). */
+
+.kbc-hotspots {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-hotspots__head {
+  margin-bottom: 16px;
+}
+.kbc-hotspots__title {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+.kbc-hotspots__hint {
+  color: var(--ink-mute);
+  margin: 0;
+  font-size: 13px;
+  max-width: 52em;
+}
+.kbc-hotspots__trunc {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-card));
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 12px;
+}
+.kbc-hotspots__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+.kbc-hotspots__search {
+  flex: 1 1 220px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+.kbc-hotspots__limit-lab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-hotspots__limit,
+.kbc-hotspots__scope {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+.kbc-hotspots__muted {
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+.kbc-hotspots__error {
+  color: var(--red);
+  font-size: 13px;
+}
+.kbc-hotspots__table-wrap {
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+.kbc-hotspots__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.kbc-hotspots__table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-mute);
+  font-weight: 500;
+  background: var(--bg-panel);
+  white-space: nowrap;
+}
+.kbc-hotspots__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+  color: var(--ink);
+}
+.kbc-hotspots__row:last-child td {
+  border-bottom: none;
+}
+.kbc-hotspots__path {
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-hotspots__path:hover {
+  text-decoration: underline;
+}
+.kbc-hotspots__dim {
+  color: var(--ink-dim);
+}
+.kbc-hotspots__score {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-pill);
+  color: var(--accent-soft);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.kbc-hotspots__score.is-open {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.kbc-hotspots__score-chev {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.kbc-hotspots__terms {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kbc-hotspots__terms div {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.kbc-hotspots__terms dt {
+  color: var(--ink-dim);
+  margin: 0;
+}
+.kbc-hotspots__terms dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+/* V3.4-C3 — weekly churn sparkline (lazy on expander open). */
+.kbc-hotspots__spark-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.kbc-hotspots__spark-muted {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kbc-hotspots__spark-trunc {
+  font-size: 10px;
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+}

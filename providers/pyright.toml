@@ -1,0 +1,120 @@
+# kb-lip reference provider: pyright (Microsoft's static type checker /
+# language server for Python; there is no widely-used alternative the way
+# ruby has ruby-lsp/solargraph, so this is the only Python provider config
+# kb-lip ships — python-lsp-server/jedi-language-server are real
+# alternatives an operator could wire up the same way, just not shipped
+# here).
+#
+# pyright (https://github.com/microsoft/pyright) ships a `pyright-langserver`
+# binary as its LSP entry point. This config was NOT part of the
+# PRR-L3/L4/L5 live-smoke evidence (providers/README.md) — that was
+# ruby-lsp/Ruby. Validate against your target repo before relying on it; the
+# S2-D live smoke (providers/README.md) is expected to fill this in.
+#
+# Usage:
+#   kb-lip --config providers/pyright.toml
+#
+# Then point kb-code-server at it via [[intel.providers]] in kb-code.toml —
+# see providers/README.md for the exact block and the operator steps.
+#
+# --- Prerequisites -----------------------------------------------------
+#
+# 1. Install pyright (it ships on npm, not PyPI — the LSP binary itself is a
+#    small Node wrapper around pyright's TypeScript implementation). AVOID
+#    `sudo npm install -g` — that writes into a root-owned global prefix and
+#    creates permission headaches later. Point npm's global prefix at a
+#    user-owned directory once instead:
+#
+#      npm config set prefix "$HOME/.local"
+#      export PATH="$HOME/.local/bin:$PATH"   # add this line to your shell rc
+#      npm install -g pyright
+#
+# 2. `workspace_root` below MUST be an ABSOLUTE path to the target repo's
+#    root (where its `pyrightconfig.json`/`pyproject.toml`/venv live) — it
+#    is a PLACEHOLDER; the operator edits it per deployment. kb-lip does not
+#    template/expand `~` or env vars, so write the real absolute path.
+#    pyright resolves the Python interpreter/venv itself (`pyrightconfig.json`
+#    `venvPath`/`venv`, or an auto-detected `.venv`) — kb-lip has no
+#    interpreter-selection knob of its own.
+
+lang_ids = ["python"]
+
+# `pyright-langserver --stdio` is the standard entry point — see
+# `pyright-langserver --help`. Requires a global (or PATH-visible) install
+# (prerequisite #1 above).
+command = ["pyright-langserver", "--stdio"]
+
+# Alternate: no global install at all — `npx` resolves (and, on a cold
+# cache, DOWNLOADS) the package on every kb-lip start. Slower first start —
+# documented here rather than made the default, same tradeoff as
+# typescript-language-server.toml's npx alternate.
+#   command = ["npx", "--yes", "pyright", "--stdio"]
+
+# PLACEHOLDER — the operator must set this to the real repo root before
+# running kb-lip. Example: "/home/user/code/my-python-app".
+workspace_root = "/CHANGE/ME/to/the/repo/root"
+
+port = 4849
+
+# How long POST /lip/diagnostics waits for the FIRST publishDiagnostics on a
+# freshly-opened doc, in milliseconds. Hard-capped at 2000 by kb-lip
+# regardless of what's written here (config can only lower it, never raise
+# it past the ceiling) — see crates/kb-lip/src/config.rs. Meaningless in
+# pyright's pull-diagnostics path (see below) — kb-lip's PRR-L5 pull branch
+# queries `textDocument/diagnostic` directly rather than waiting on a
+# publish that pyright, being pull-mode, never sends. Left at the same
+# default as every other provider for config-shape consistency. NOTE: this
+# key MUST stay above the `[restart_backoff]` table header below — TOML
+# binds a bare `key = value` to the LAST-OPENED table, so written after it,
+# it would silently become a (harmless but meaningless) extra field of that
+# table instead of this top-level `Config::diagnostics_wait_ms`.
+diagnostics_wait_ms = 2000
+
+# initializationOptions passed verbatim in the LSP `initialize` request.
+# pyright's OWN documented settings model splits `python.analysis.*` /
+# top-level `pyright.*` keys (docs/configuration.md in its repo), but its
+# PRIMARY channel for them is the LSP `workspace/configuration` PULL
+# request, not static initializationOptions — and kb-lip's minimal client
+# (crates/kb-lip/src/lsp.rs::handle_incoming) auto-replies `null` to EVERY
+# server-initiated request (a deliberate "never let the server hang"
+# safety net, not a per-method implementation), so a `workspace/
+# configuration` pull from pyright gets an empty answer through kb-lip
+# regardless of what's written here. initializationOptions at boot is a
+# best-effort, secondary channel for pyright, not a substitute.
+#
+# Left EMPTY here (no active keys) — and this is doubly sensible-minimal
+# for pyright specifically: its own default `python.analysis.diagnosticMode`
+# is `"openFilesOnly"`, which is exactly kb-lip's own access pattern (one
+# opened doc per request, never a whole-workspace sweep) — there is nothing
+# to override. Uncomment and tune only if a real target project needs it
+# (bearing in mind the workspace/configuration caveat above — these may not
+# reliably take effect):
+#   [initialization_options]
+#   # python = { analysis = { typeCheckingMode = "basic" } }
+#
+# Diagnostics: pyright is a PULL-diagnostics server (LSP 3.17
+# `textDocument/diagnostic`, `capabilities.diagnosticProvider` advertised at
+# initialize) rather than a push (`publishDiagnostics`) one — kb-lip detects
+# this automatically per-server (`crates/kb-lip/src/lsp.rs::ServerInfo::
+# diagnostics_mode`, PRR-L5) and queries pull-mode accordingly; no config
+# needed here to opt in.
+
+# Capped exponential backoff for restarting the pyright-langserver child if
+# it crashes. The defaults here are kb-lip's own (200ms initial, 30s cap,
+# x2 multiplier) — pyright's own startup (Node process boot + an initial
+# workspace scan) is normally fast (seconds) so these are usually fine
+# unqualified.
+[restart_backoff]
+initial_ms = 200
+max_ms = 30000
+multiplier = 2.0
+
+# --- Position encoding ---------------------------------------------------
+#
+# kb-lip never declares `general.positionEncodings` in its `initialize`
+# capabilities (see crates/kb-lip/src/lsp.rs), so per the LSP spec every
+# server MUST fall back to its mandatory default, UTF-16 code units — which
+# is exactly what kb-lip's own `position.rs` hardcodes throughout. This was
+# confirmed live for ruby-lsp (PRR-L4 §c, providers/README.md); pyright has
+# NOT yet been independently re-confirmed by a live kb-lip handshake —
+# pending the S2-D smoke (providers/README.md "Live smoke evidence").

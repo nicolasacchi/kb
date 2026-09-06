@@ -1,0 +1,262 @@
+# Publishes the two shipping container images (kb, kb-code) to ghcr.io, so a
+# deployment never means compiling from source.
+#
+# THE GATE THIS FILE EXISTS FOR: an image is published ONLY from a commit
+# whose `ci` workflow succeeded on `main` in THIS repository — green ci only,
+# same repo only. Everything below (the `workflow_run` trigger, the job's
+# `if:` clauses, the checkout `ref:`) serves that one sentence.
+#
+# Pushing an image is NOT deploying one: a deploy stays a deliberate, separate
+# act. This job only guarantees the artifact exists and that the commit it was
+# built from passed the full test sweep.
+#
+# SPLIT OUT of ci.yml (2026-08-15). ci.yml's workflow-level
+# `concurrency: cancel-in-progress: true` exists so a stale fmt/clippy/test run
+# is cancelled the moment a newer commit lands on main — correct for that job
+# shape, catastrophic for a multi-hour image build sharing the same workflow
+# (on 2026-08-13, run 31676055072, a build 2h into a cold compile was killed by
+# exactly that cancellation policy). This workflow runs AFTER ci.yml finishes
+# (`workflow_run`) instead of racing inside it, under its own
+# queue-but-never-kill concurrency group (see below).
+#
+# ONE JOB PER IMAGE (matrix, 2026-09-06). The two images used to be two
+# sequential steps in a single job. Splitting them into a `fail-fast: false`
+# matrix buys two things: the kb image no longer waits for the kb-code image
+# to finish before it starts (wall time drops by kb-code's own compile — NOT
+# by half, because each leg now rebuilds the shared lance/datafusion graph in
+# its own ephemeral builder, which is the price of the parallelism and is
+# free on a public repo's 20 concurrent hosted runners), and a failure in one
+# image no longer aborts the other's publish. Everything that makes the
+# publishing gate a gate — the `workflow_run` trigger, the job `if:`, the
+# checkout `ref:` — is job-level and therefore identical on every leg.
+name: build-image
+
+on:
+  workflow_run:
+    # Matches on ci.yml's `name:` (top of that file), NOT its filename —
+    # keep this in lockstep if that name ever changes, since a mismatch
+    # fails silently (this trigger just never fires, no error anywhere).
+    workflows: [ci]
+    types: [completed]
+    # workflow_run's `branches` filter matches the branch the COMPLETED
+    # run happened on. ci.yml runs on both `push` (branch = main) and
+    # `pull_request` (branch = the PR's own head branch) into main, so this
+    # drops most PR-triggered ci runs — but NOT all of them: a fork PR
+    # opened from a branch that happens to be named `main` matches it too.
+    # The filter is a cheap pre-cut, never the gate; the job's `if:` below is.
+    branches: [main]
+
+concurrency:
+  group: build-image-main
+  # NEVER cancel an in-flight build — that's the entire reason this
+  # workflow was split out (see header). cancel-in-progress:false gives
+  # QUEUE semantics: if a second main push completes ci.yml while a build
+  # is running, GitHub holds at most one PENDING run (the newest) and
+  # starts it when the current one finishes; nothing already running is
+  # ever killed. Older queued runs get superseded by the newest pending
+  # one, which is exactly what we want — only the latest main commit's
+  # image is worth building once the current build is done.
+  cancel-in-progress: false
+
+jobs:
+  build-image:
+    # One leg per image. `label` is what shows up in the check name, `target`
+    # is the Dockerfile stage, `suffix` is what distinguishes the two ghcr
+    # packages (`…/kb` and `…/kb-code`). `runtime` IS the Dockerfile's final
+    # stage, so naming it explicitly here is the same build the untargeted
+    # step used to do — just no longer the implicit one.
+    #
+    # ORDER: the legs start together now, so the old "kb-code first, then kb"
+    # sequencing (which existed to put the small ~116 MB image on ghcr.io an
+    # hour before kb's ~1.7 GB one) is simply what happens by default —
+    # kb-code still finishes first, it just no longer HOLDS kb up.
+    name: build-image (${{ matrix.label }} → ghcr.io)
+    strategy:
+      # Never cancel the sibling: these are two independent publishes, and a
+      # kb-code build that fails must not throw away hours of kb compile (or
+      # vice versa). Each leg's tag is self-consistent by construction — both
+      # derive from the same `workflow_run.head_sha`.
+      fail-fast: false
+      matrix:
+        include:
+          - label: kb-code
+            target: kb-code-runtime
+            suffix: "-code"
+          - label: kb
+            target: runtime
+            suffix: ""
+    # workflow_run's `types: [completed]` fires on EVERY conclusion (success,
+    # failure, cancelled, …), and a `workflow_run` run inherits the trigger of
+    # the run it observed. Read together, these clauses admit exactly one
+    # case — a push to THIS repository's own `main` whose ci.yml run passed:
+    #   repository          — a fork of this repo never publishes.
+    #   event_name          — belt-and-braces; this workflow has no
+    #                         pull_request trigger to begin with.
+    #   workflow_run.event  — the observed run was a push, not a pull request,
+    #                         so a fork PR's ci.yml run can never reach this
+    #                         job, and with it this job's `packages: write`
+    #                         and its ghcr.io login.
+    #   head_branch         — that push was to main.
+    #   head_repository     — and it landed in this repo, not in a fork.
+    #   conclusion          — the publishing gate proper. Every ci.yml job
+    #                         (workspace-lint/workspace-test/drift/
+    #                         embedder-lint/embedder-test/code-lint/
+    #                         code-test/code-spa/e2e/code-e2e/web-unit/
+    #                         supply-chain) feeds ci.yml's own
+    #                         conclusion and none of them runs with
+    #                         continue-on-error, so `success` means the whole
+    #                         sweep was green. The tag published here is what
+    #                         a deployment pulls; it should mean "this commit
+    #                         was green", full stop.
+    if: >-
+      github.repository == 'nicolasacchi/kb'
+      && github.event_name != 'pull_request'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    # Every run of every leg is a COLD compile: BuildKit's cache mounts (the
+    # cargo registry/git dirs and target/, declared in the Dockerfile) live in
+    # the ephemeral builder, so nothing carries over between runs — and, since
+    # the split, nothing carries over between the two LEGS either (they no
+    # longer share one builder, so the kb leg now compiles the
+    # lance/datafusion graph that the kb-code leg used to leave warm in the
+    # shared target mount). Per leg that means a full release build at the
+    # Dockerfile's CARGO_BUILD_JOBS=2 plus, for kb, the 1.34 GB model
+    # download. 330 minutes is a deliberately generous ceiling under GitHub's
+    # hard 360-minute per-job cap — this job publishes an artifact, it never
+    # gates a PR, so a long budget costs nothing and a too-tight one throws
+    # away hours of compute. Kept as-is for BOTH legs: the kb leg's work grew
+    # by the shared graph it now builds itself.
+    timeout-minutes: 330
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # THE TRAP: this is a `workflow_run`-triggered run, so a bare
+          # checkout (default `ref:`, resolving to this run's own
+          # GITHUB_SHA) would check out whatever commit happens to sit at
+          # the tip of main RIGHT NOW — not the commit ci.yml just tested
+          # and reported success for. Those two can differ (another push
+          # can land on main in the gap between ci.yml finishing and this
+          # job starting). The only correct commit is
+          # `github.event.workflow_run.head_sha`: the exact sha the
+          # upstream ci.yml run graded. Never substitute GITHUB_SHA here.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Free disk space (drop preinstalled SDKs)
+        # A runner starts with only ~14 GB free on /, and this leg builds the
+        # whole lance/datafusion graph, bakes in the ~1.34 GB embedding model
+        # (kb only), and keeps its image layer tree — a full disk shows up as
+        # a SIGBUS'd linker or an
+        # opaque BuildKit failure, not as a clean ENOSPC. Reclaim ~20 GB of
+        # preinstalled toolchains nothing here uses, plus the preloaded
+        # container images (a few GB more) that this job would otherwise
+        # carry alongside its own layers. Inline on purpose — no third-party
+        # action to pin/trust. Best-effort: missing dirs are ignored.
+        # If this ever still runs dry, the next lever is relocating docker's
+        # data root onto the runner's larger /mnt volume.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Set up Buildx
+        # SHA pins for the three docker/* actions resolved 2026-09-06 from
+        # each repo's own latest release (`gh api repos/<r>/releases/latest`,
+        # then `git/ref/tags/<tag>` — all three are lightweight tags, so the
+        # ref resolves straight to the commit). These are the CURRENT majors:
+        # v3/v3/v6 were superseded in March 2026 by v4/v4/v7, whose only
+        # breaking change is the Node 24 runtime + an ESM rewrite (no input
+        # or behaviour change for the way they're used here).
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to ghcr.io
+        # `packages: write` above grants the push; GITHUB_TOKEN is scoped to
+        # this repository's own packages and expires with the job.
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image name + tag
+        # TAG SHAPE: main-<sha12> only — no moving `main-latest`. Dropped
+        # deliberately (it existed in ci.yml's build-image job before the
+        # split): a deployment resolves `ghcr.io/nicolasacchi/kb:main-$SHA`,
+        # never `:latest`, so no consumer exists. Worse, a moving tag across
+        # TWO separate images (kb, kb-code) pushed by two separate steps is
+        # non-atomic: a reader pulling `main-latest` for both between the two
+        # pushes gets a kb/kb-code pair built from DIFFERENT commits,
+        # silently skewed. main-<sha12> alone can't skew — both images are
+        # unambiguously tied to the one commit that produced them. sha12
+        # matches `git rev-parse --short=12`, so a checkout can ask for
+        # exactly the image built from the commit it has. Deliberately
+        # distinct from release.yml's :<version>/:latest tags, so continuous
+        # main builds never shadow a real versioned release.
+        #
+        # SHA SOURCE: same trap as the checkout `ref:` above — derive the tag
+        # from `github.event.workflow_run.head_sha`, NEVER from
+        # `git rev-parse` / GITHUB_SHA. In a workflow_run-triggered run those
+        # resolve against THIS workflow's own trigger point, not the commit
+        # ci.yml tested; a plain `git rev-parse` here would silently tag the
+        # image with the wrong sha whenever another push lands on main while
+        # this job is queued or running.
+        #
+        # Both expression values arrive via `env:` and are referenced as
+        # shell variables — never interpolated into the command body.
+        id: img
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          SHA="${HEAD_SHA:0:12}"
+          {
+            echo "image=${IMAGE}"
+            echo "sha=${SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The Dockerfile takes KB_GIT_SHA as a build arg because its
+      # .dockerignore drops .git — it cannot probe the sha itself. It also
+      # already carries the OCI labels (title/description/source/licenses/
+      # version), including
+      # org.opencontainers.image.source=https://github.com/nicolasacchi/kb,
+      # which is what links each ghcr package back to this repository; no
+      # `labels:` input is needed here.
+      #
+      # provenance:false — buildx would otherwise attach a provenance
+      # attestation, turning each push into an image index with extra
+      # unknown/unknown manifests. That is noise for these two packages
+      # (ghcr-gc.yml prunes by version) and a change from the plain
+      # `docker build`/`docker push` shape these tags have always had.
+      #
+      # No registry/gha layer cache on purpose: a cache of a full Rust release
+      # build is many GB against the repository's 10 GB Actions-cache cap,
+      # which ci.yml's rust-cache entries already live inside — buying warm
+      # image builds by evicting every PR's compile cache is the wrong trade.
+      - name: Build + push ${{ matrix.label }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          provenance: false
+          build-args: KB_GIT_SHA=${{ steps.img.outputs.sha }}
+          tags: ${{ steps.img.outputs.image }}${{ matrix.suffix }}:main-${{ steps.img.outputs.sha }}
+
+      - name: Report what was published
+        env:
+          IMAGE: ${{ steps.img.outputs.image }}
+          SUFFIX: ${{ matrix.suffix }}
+          SHA: ${{ steps.img.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "pushed ${IMAGE}${SUFFIX}:main-${SHA}" >> "$GITHUB_STEP_SUMMARY"

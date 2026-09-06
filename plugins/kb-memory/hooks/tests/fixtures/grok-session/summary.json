@@ -1,0 +1,17 @@
+{
+  "info": {
+    "id": "01900000-0000-7000-8000-000000000001",
+    "cwd": "/tmp/kb-grok-fixture-cwd"
+  },
+  "session_summary": "Fixture: add a --dry-run flag",
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "updated_at": "2026-01-01T00:05:00.000Z",
+  "num_messages": 7,
+  "num_chat_messages": 4,
+  "current_model_id": "grok-4.5",
+  "chat_format_version": 1,
+  "generated_title": "Add --dry-run flag to export",
+  "agent_name": "grokclaude-builder",
+  "sandbox_profile": "workspace",
+  "reasoning_effort": "high"
+}

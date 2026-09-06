@@ -1,0 +1,69 @@
+# Bake-off bench daemon — DO NOT use this as a production config.
+#
+# Wires three parallel kbs per source corpus, one per embedding model.
+# Each kb gets its own state dir (<state>/<daemon>/<kb_name>/) so the
+# datasets stay isolated. The bench daemon name is `bench` so it
+# doesn't collide with your production daemon's own state.
+#
+# Workflow: see bench/README.md.
+# Source paths below are EXAMPLE paths — adjust them to match your
+# machine (probably `/srv/<corpus>` for a server, or `/home/you/research`
+# for a laptop run). Two example corpora are wired below; add or
+# remove `[kb.<name>-{small,base,large}]` groups for your own corpora.
+
+[daemon]
+name = "bench"
+
+[server]
+addr = "127.0.0.1:4100"
+# No artifact-host-suffix override; defaults to .artifacts.localhost
+# which is fine for a loopback-only bench.
+
+# ============================================================
+# /srv/example-docs — a general-purpose research/reference corpus
+# ============================================================
+
+[kb.example-docs-small]
+path = "/srv/example-docs"
+embedding_model = "bge-small-en-v1.5"
+
+[kb.example-docs-base]
+path = "/srv/example-docs"
+embedding_model = "bge-base-en-v1.5"
+
+[kb.example-docs-large]
+path = "/srv/example-docs"
+embedding_model = "bge-large-en-v1.5"
+
+# ============================================================
+# /srv/example-notes — a second, domain-specific corpus
+# ============================================================
+
+[kb.example-notes-small]
+path = "/srv/example-notes"
+embedding_model = "bge-small-en-v1.5"
+
+[kb.example-notes-base]
+path = "/srv/example-notes"
+embedding_model = "bge-base-en-v1.5"
+
+[kb.example-notes-large]
+path = "/srv/example-notes"
+embedding_model = "bge-large-en-v1.5"
+
+# ============================================================
+# corpus/canon — the frozen 4-artifact smoke fixture in this repo
+# (relative path — works from the repo root, easy local sanity check)
+# ============================================================
+
+[kb.canon-small]
+path = "corpus/canon"
+embedding_model = "bge-small-en-v1.5"
+
+[kb.canon-base]
+path = "corpus/canon"
+embedding_model = "bge-base-en-v1.5"
+
+[kb.canon-large]
+path = "corpus/canon"
+embedding_model = "bge-large-en-v1.5"

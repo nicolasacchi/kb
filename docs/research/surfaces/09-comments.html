@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Commenting feature design for kb — anchor scopes, iframe shim, storage schema, HTTP API, SSE events, web UI, manual export to Claude Code.">
+<title>09 · Comments — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="../foundation/01-lancedb.html">01 · Storage</a>
+      <a href="../foundation/02-fastembed.html">02 · Embeddings</a>
+      <a href="../foundation/03-notify.html">03 · Watcher</a>
+      <a href="../foundation/04-sse-axum.html">04 · SSE</a>
+      <a href="../foundation/05-ratatui.html">05 · TUI</a>
+      <a href="06-iframe.html">06 · Iframe</a>
+      <a href="07-html-effectiveness.html">07 · HTML</a>
+      <a href="08-prior-art.html">08 · Prior art</a>
+      <a href="09-comments.html" class="is-current">09 · Comments</a>
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 09
+    <span>·</span>
+    <span class="meta">Commenting feature</span>
+    <span>·</span>
+    <span class="meta">Confidence MED-HIGH (v1 manual; SPA-aligned)</span>
+  </div>
+  <h1><span class="strike">v1 of comments</span>Talking <em>while reading</em>.<br>Manually exported. Auto-resolved on regen.</h1>
+  <p class="lede">A small feature that changes the writing loop: instead of editing artifacts, the operator <em>annotates</em> them — selections, sections, chapters, whole files — and exports those annotations to Claude Code, which addresses each comment in the next regen. The UX target is "linear and easy" — like talking to someone while reading. v1 is manual: copy-paste from the web UI, or <code>kb comments export &lt;id&gt;</code> from CLI. Future versions push comments to Claude Code in real time; out of scope here.</p>
+</section>
+
+<section class="section section-tight">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Upgrade · v1 → v2 (Web Gallery design integrated 2026-05-11)</span>
+    <p style="margin:0 0 .6rem;font-size:.95rem;line-height:1.55"><strong>The Web Gallery handoff (<a href="10-web-gallery.html">topic 10</a>) supersedes this page's v1 export-only model with a richer v2.</strong> What changed:</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><strong>Threaded replies</strong> — comments now have a <code>replies</code> array with <code>author: you|claude</code>. Round-trip is bi-directional: Claude's reply lands back in the JSON and renders inline with a sparkle mark.</li>
+      <li><strong>Schema name</strong> — <code>kb-comments/1</code>. See <a href="10-web-gallery.html#comments">topic 10 §I</a> for the full shape.</li>
+      <li><strong>Three exports</strong> — Claude prompt (self-contained instruction), kb JSON (the file Claude reads), Markdown (humans). All three available from one modal with copy + download.</li>
+      <li><strong>Daemon path</strong> — <code>kb/{kb}/.review/{id}.json</code> is the canonical persistence location. <strong>Resolved by topic 11 §B</strong> (post deep-review correction): <code>GET</code> + <code>POST /api/kb/{kb}/review/{id}</code>; topic 10 §M-4 is the concern (resolved), topic 11 §B is the endpoint spec.</li>
+      <li><strong>In-iframe annotator</strong> — original design proposes parent-side injection into the iframe's <code>contentDocument</code>. With topic 06's cluster-1 amended sandbox (<em>keep</em> <code>allow-same-origin</code> but iframe is cross-origin from parent), direct DOM access from the parent is blocked. Topic 10 §M-10 specifies the serve-time injection of <code>/_kb/annotate.js</code>. CLI export is <em>deprecated</em> in v2 — the SPA modal owns export.</li>
+    </ul>
+    <p style="margin:.6rem 0 0;font-size:.95rem;line-height:1.55">The technical core of <em>this</em> page — <strong>anchor scopes (§B) and fuzzy-match regen stability (§C)</strong> — stays load-bearing. <strong>Superseded:</strong> §D (kb-comments.js shim mechanism) → see topic 10 §I serve-time injection; §E HTTP API table → see topic 11 §B; §H v2-as-MCP roadmap → v2 is now "topic 10 §I + topic 11 §B.3 round-trip" (MCP wrapper deferred separately to v0.3+).</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>Add commenting to kb's web UI when the SPA milestone ships.</strong> <em>v2 supersede:</em> see the callout above + <a href="10-web-gallery.html#comments">topic 10 §I</a> for the schema (<code>kb-comments/1</code>), threaded replies, three-export modal, and serve-time <code>/_kb/annotate.js</code> injection. The v1 design (preserved below as history) used sqlite + a wrapper-page shim; v2 uses on-disk <code>kb/{kb}/.review/{id}.json</code> files written via <a href="11-daemon-api.html#endpoints">topic 11 §B.3</a> and SSE events <code>comment.created</code> / <code>comment.exported</code> / <code>comment.resolved</code> / <code>comment.anchor_stale</code> plus aggregate <code>comments.updated</code> (canonical taxonomy in <a href="../foundation/04-sse-axum.html#canonical-taxonomy">topic 04</a>). <strong>Load-bearing v1 content that survives:</strong> four anchor scopes (selection / section / chapter / file) and the auto-fuzzy-match regen-stability algorithm (§C below). <em>v2 roadmap (revised):</em> v2 = topic 10 §I + topic 11 §B.3 round-trip with Claude-Code replies; v3 = MCP wrapper / real-time push.</p>
+    <div class="badges">
+      <span class="conf conf--med">Decision · MED-HIGH</span>
+      <span class="conf conf--med">Anchor stability · MED (regen-fragile)</span>
+      <span class="conf conf--high">Roadmap fit · HIGH (with SPA)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. Goal &amp; UX target</div>
+    <h2>Like Hypothesis / Google Docs marginalia, on artifacts the operator owns</h2>
+  </div>
+  <div class="prose">
+    <p>The writing loop today: read an LLM-generated artifact → notice something to change → edit the artifact, breaking its regen-from-prompt invariant. The commenting loop: read → annotate → continue reading → export annotations → Claude Code regenerates the artifact addressing all annotations at once. The artifact's source of truth stays the prompt + model; the operator's notes accumulate alongside without contaminating either.</p>
+    <h4>Frictionless inline commentary</h4>
+    <ul>
+      <li>Anchored popover near the selection (Hypothesis / Google Docs pattern). Inline, not modal.</li>
+      <li>Sidebar list of all comments on the current artifact, grouped by scope.</li>
+      <li>Single-keystroke comment entry (<code>c</code> on current selection); single-keystroke export (<code>e</code>); <code>j</code>/<code>k</code> through sidebar; <code>r</code> to mark resolved; <code>?</code> for help overlay.</li>
+      <li>Status indicators: open (accent), exported (muted), resolved (low-contrast). Stale anchors get a "needs review" pill.</li>
+    </ul>
+    <h4>Constraints</h4>
+    <ul>
+      <li><strong>Comments never modify the artifact HTML directly.</strong> That violates topic 07's "artifact is regen-able from prompt" invariant. Comments live in the kb store; the SPA paints them over the artifact iframe at render time.</li>
+      <li><strong>Artifact iframe is sandboxed</strong> per topic 06 (post deep-review amended): per-artifact subdomain serving <em>with</em> <code>allow-same-origin</code> — the iframe has a real isolated origin but is cross-origin from the parent SPA, so parent-side DOM access is blocked by Same-Origin Policy. Selection events fire inside the iframe; the v2 mechanism is <strong>serve-time-injected <code>/_kb/annotate.js</code></strong> (topic 06 Decisions + topic 10 §M-10), not the v1 wrapper-page shim §D describes.</li>
+      <li><strong>v1 is manual</strong>. Per the operator's stated preference: keep the export trigger explicit. Real-time auto-feed to Claude Code is v3 territory.</li>
+    </ul>
+    <p>Not a wiki. Not a discussion forum. <em>(v2 update: replies have <code>author: you|claude</code> — Claude is now also an author of inline replies, per <a href="10-web-gallery.html#comments">topic 10 §I</a>.)</em> The artifact is the medium.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">B. Anchor scopes</div>
+    <h2>Four scopes, ranked by stability across regen</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Anchor scopes &middot; representation &amp; stability</caption>
+      <thead><tr><th>Scope</th><th>Anchor representation</th><th>Stability across regen</th><th>UX surface</th></tr></thead>
+      <tbody>
+        <tr><td><strong>File</strong></td><td>artifact id (ULID)</td><td><span class="y">Highest</span> — survives any regen</td><td>"Comment on this artifact" button in chrome</td></tr>
+        <tr><td><strong>Chapter</strong></td><td>heading-text path (e.g. <code>Tuning &gt; Virtual nodes</code>)</td><td><span class="y">High</span> — kb-prompt convention encourages stable headings</td><td>Button beside each heading in the artifact-outline sidebar</td></tr>
+        <tr><td><strong>Section</strong></td><td><code>&lt;section&gt;</code> id or <code>data-kb-id</code> attribute if present; fallback to heading + <code>nth-of-type</code></td><td><span class="p">Medium</span></td><td>Same as chapter, finer-grained</td></tr>
+        <tr><td><strong>Selection</strong></td><td><code>{range start/end CSS path + offset}</code> + ~200 char surrounding context</td><td><span class="n">Lowest</span> — fragile on regen</td><td>Inline popover at selection</td></tr>
+      </tbody>
+    </table>
+    <p>The UI surfaces the scope's stability at create-time: a small label next to the comment input — "file-scope, stable" or "selection, may not survive regen" — so the operator chooses the right scope for the right comment. A "what does this even mean across regens?" comment belongs at file-scope; "fix this typo" belongs at selection-scope.</p>
+    <p><strong>Convention to encourage:</strong> the kb-prompt skill (referenced in topic 07) should add <code>data-kb-id="stable-slug"</code> to top-level <code>&lt;section&gt;</code>s in generated artifacts. This makes section-scope anchors as stable as chapter-scope, and gives the regen path a deterministic re-anchor target.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. Anchor stability across regens</div>
+    <h2>Auto-fuzzy-match + needs-review for low confidence</h2>
+  </div>
+  <div class="prose">
+    <p>The hard problem: <code>kb regen &lt;id&gt;</code> writes a new HTML body. Comment anchors may move, change shape, or disappear. The recipe:</p>
+    <ol>
+      <li>On regen complete, kb walks each open / exported comment for that <code>artifact_id</code>:
+        <ul>
+          <li><strong>File scope:</strong> unchanged.</li>
+          <li><strong>Chapter scope:</strong> exact match on heading-text path → re-anchor automatically. Fuzzy match (Jaro-Winkler / token-sort &gt; threshold) → re-anchor with <code>anchor_state='reanchored'</code>. Otherwise → <code>anchor_state='stale'</code>.</li>
+          <li><strong>Section scope:</strong> <code>data-kb-id</code> match if present; fallback to heading + <code>nth-of-type</code>. Same confidence buckets.</li>
+          <li><strong>Selection scope:</strong> fuzzy-match the surrounding 200-char context window against the new body. Above threshold → re-anchor with new range path; below → <code>anchor_state='stale'</code>.</li>
+        </ul>
+      </li>
+      <li>Stale comments emit <code>comment.anchor_stale</code> SSE and surface in the SPA sidebar with a <em>needs review</em> badge.</li>
+      <li>The operator can re-anchor manually (drag-and-drop selection → <code>POST /api/comments/:id/reanchor</code>) or close the comment.</li>
+    </ol>
+    <h4>Tunables</h4>
+    <ul>
+      <li><code>KB_COMMENT_FUZZY_THRESHOLD</code> — default <strong>0.85</strong> (Jaro-Winkler similarity).</li>
+      <li><code>KB_COMMENT_CONTEXT_CHARS</code> — default <strong>200</strong> (surrounding window for selection-scope re-anchor).</li>
+    </ul>
+    <p><strong>Auto-resolve on regen.</strong> Per the user-confirmed flat threading: any comment with status <code>open</code> or <code>exported</code> moves to <code>resolved</code> when its artifact is regenerated, with <code>resolved_by='regen'</code>. The operator can re-open if the regen didn't address the comment. The auto-resolve fires <em>independent</em> of the anchor re-pinning — a stale-anchor resolved comment is still resolved; the stale-anchor signal is a <em>future-readability</em> hint, not a workflow gate.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. Iframe boundary &mdash; postMessage shim <span style="color:var(--accent);font-size:.7em;font-weight:400">(SUPERSEDED · see topic 10 §I)</span></div>
+    <h2>Selection inside the artifact iframe → bridge to the parent SPA</h2>
+  </div>
+  <div class="prose">
+    <div class="note" style="border-left:3px solid var(--accent);padding-left:1rem;margin-bottom:1rem">
+      <p style="margin:0;font-size:.92rem"><strong>Superseded (deep-review 2026-05-11).</strong> The original "wrapper page bundles <code>kb-comments.js</code>" mechanism described below is replaced by <strong>serve-time injection</strong> of <code>/_kb/annotate.js</code> per <a href="06-iframe.html#decisions">topic 06 Decisions</a> + <a href="10-web-gallery.html#concerns">topic 10 §M-10</a>. When the SPA toggles annotate mode, it requests the artifact with <code>?cm=on</code>; the daemon rewrites the response to inject the script before <code>&lt;/body&gt;</code>. The script runs in the artifact's own origin (subdomain) with full DOM access via <code>allow-same-origin</code>; communication with the host uses <code>postMessage</code> with direction-aware <code>targetOrigin</code>. postMessage protocol: <code>cm:add</code>, <code>cm:flash</code>, <code>cm:refresh</code>, <code>cm:mode</code>. The §D content below is preserved as v1 design history.</p>
+    </div>
+    <p>Per <a href="06-iframe.html">topic 06</a>, artifacts run in a sandboxed iframe on a per-artifact subdomain (<code>&lt;id&gt;.artifacts.localhost</code>) without parent-DOM access. The kb SPA can't observe text selections inside the iframe directly. The pattern reuses topic 06's existing <code>postMessage</code> RPC bridge:</p>
+
+    <h4>Shim inside the artifact iframe</h4>
+    <p>kb's existing artifact-wrapper page (the one that loads the raw artifact body — see topic 06's recipe) is extended to include a small <code>kb-comments.js</code> shim. Bundled with the wrapper, ~150 LOC minified. Behaviour:</p>
+<pre>// kb-comments.js (running inside the artifact iframe)
+
+document.addEventListener('selectionchange', () =&gt; {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const anchor = serialiseRange(range); // { startPath, startOffset, endPath, endOffset }
+  const text = sel.toString();
+  const context = surroundingChars(range, 200);
+  const rect = range.getBoundingClientRect();
+  parent.postMessage({
+    type: 'kb.selection',
+    anchor, text, context, rect
+  }, '*');
+});
+
+window.addEventListener('message', (e) =&gt; {
+  if (e.source !== window.parent) return;
+  if (e.data.type === 'kb.comments.list') paintHighlights(e.data.comments);
+  if (e.data.type === 'kb.comment.scrollto') scrollToAnchor(e.data.anchor);
+});</pre>
+
+    <h4>Parent SPA</h4>
+    <ul>
+      <li>On <code>kb.selection</code>: render an inline "Comment ⌘C" popover at the iframe-relative position (translate the iframe-local <code>rect</code> into parent viewport coordinates).</li>
+      <li>On comment submit: <code>POST /api/artifacts/:id/comments</code> with <code>{ anchor_kind:'selection', anchor_payload, anchor_context, body }</code>.</li>
+      <li>For section / chapter / file scope: the SPA chrome owns the affordance — buttons beside each heading in the artifact-outline sidebar; "comment on this artifact" button in the chrome. No shim involvement needed for these.</li>
+      <li>Highlight rendering: parent posts <code>kb.comments.list</code> with the array of comments after fetching <code>GET /api/artifacts/:id/comments</code>; shim paints translucent overlay <code>&lt;div&gt;</code>s at each anchor's bounding rect (clickable, post back <code>kb.comment.focus</code>).</li>
+    </ul>
+
+    <h4>Why this stays inside the topic-06 sandbox model</h4>
+    <p>The shim runs with <code>allow-scripts</code> only. It uses no storage APIs (the comment payload goes to the parent via postMessage). It cannot read the parent SPA's cookies or storage. The artifact subdomain remains opaque from the parent's perspective. <strong>The sandbox properties from topic 06 are preserved.</strong></p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. Storage + HTTP API + SSE events <span style="color:var(--accent);font-size:.7em;font-weight:400">(SUPERSEDED · see topic 11 §B + topic 04 canonical taxonomy)</span></div>
+    <h2>The engineering surface</h2>
+  </div>
+  <div class="prose">
+    <div class="note" style="border-left:3px solid var(--accent);padding-left:1rem;margin-bottom:1rem">
+      <p style="margin:0;font-size:.92rem"><strong>Superseded (deep-review 2026-05-11).</strong> v2 stores comments as <code>kb-comments/1</code> JSON files at <code>kb/{kb}/.review/{id}.json</code> (not sqlite). HTTP API is <code>GET</code>/<code>POST /api/kb/{kb}/review/{id}</code> per <a href="11-daemon-api.html#endpoints">topic 11 §B</a>. SSE events are <code>comment.created</code> / <code>comment.exported</code> / <code>comment.resolved</code> / <code>comment.anchor_stale</code> per <a href="../foundation/04-sse-axum.html#canonical-taxonomy">topic 04 canonical taxonomy</a>. The §E sqlite-and-CRUD content below is v1 design history.</p>
+    </div>
+
+    <h3>SQLite addition</h3>
+    <p>Comments live in kb's existing relational store (per <a href="../foundation/01-lancedb.html">topic 01</a>'s lance + sqlite split). Schema:</p>
+<pre>CREATE TABLE comments (
+  id TEXT PRIMARY KEY,                 -- ULID
+  artifact_id TEXT NOT NULL,           -- ref to docs.id
+  anchor_kind TEXT NOT NULL,           -- 'selection' | 'section' | 'chapter' | 'file'
+  anchor_payload TEXT NOT NULL,        -- JSON, scope-specific (heading path / range / id)
+  anchor_context TEXT,                 -- ~200 chars surrounding (selection scope)
+  anchor_state TEXT NOT NULL DEFAULT 'fresh',
+                                       -- 'fresh' | 'reanchored' | 'stale'
+  body TEXT NOT NULL,                  -- comment text (markdown)
+  status TEXT NOT NULL DEFAULT 'open', -- 'open' | 'exported' | 'resolved'
+  created_at INTEGER NOT NULL,
+  exported_at INTEGER,
+  resolved_at INTEGER,
+  resolved_by TEXT                     -- 'regen' | 'manual'
+);
+
+CREATE INDEX comments_by_artifact ON comments(artifact_id, status, created_at);</pre>
+
+    <h3>HTTP API additions (axum routes)</h3>
+    <table class="alt-table">
+      <thead><tr><th>Method · Path</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>POST   /api/artifacts/:id/comments</code></td><td>Create a comment on an artifact</td></tr>
+        <tr><td><code>GET    /api/artifacts/:id/comments</code></td><td>List per-artifact</td></tr>
+        <tr><td><code>GET    /api/comments?status=open</code></td><td>List all (kb-wide Comments view in SPA)</td></tr>
+        <tr><td><code>PATCH  /api/comments/:id</code></td><td>Update body / status</td></tr>
+        <tr><td><code>DELETE /api/comments/:id</code></td><td>Hard-delete</td></tr>
+        <tr><td><code>GET    /api/comments/export?artifact_id=X&amp;format=text|md|json</code></td><td>Bundled export, marks comments <code>exported</code></td></tr>
+        <tr><td><code>POST   /api/comments/:id/reanchor</code></td><td>Manual re-anchor (drag-to-re-anchor UI)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>SSE event types</h3>
+    <p>Extends the schema from <a href="../foundation/04-sse-axum.html">topic 04</a>. Same envelope <code>{v, id, type, ts, payload}</code>; new <code>comment.*</code> namespace:</p>
+    <ul>
+      <li><code>comment.created</code> &mdash; payload <code>{id, artifact_id, anchor_kind, body_excerpt}</code>. TUI shows in Activity tab.</li>
+      <li><code>comment.exported</code> &mdash; payload <code>{artifact_id, count}</code>.</li>
+      <li><code>comment.resolved</code> &mdash; payload <code>{id, resolved_by}</code>; fires on regen-auto-resolve OR manual close.</li>
+      <li><code>comment.anchor_stale</code> &mdash; payload <code>{id, artifact_id, anchor_kind, prev_context, fuzzy_score}</code>. Surfaces in TUI Errors tab and SPA sidebar with "needs review."</li>
+    </ul>
+    <p>Per <a href="../challenges.html">challenge #4</a>, author per-type JSON Schema files alongside the existing event types — these are part of the v1 contract, version with <code>v=1</code> from day one.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">F. Web UI behaviour</div>
+    <h2>Inline popover · sidebar · cross-artifact view</h2>
+  </div>
+  <div class="prose">
+    <h4>Inline popover</h4>
+    <ul>
+      <li>Appears at the right margin of the iframe near the selection. Vertical alignment to selection top.</li>
+      <li>Auto-dismiss on click-outside, <code>esc</code>, or successful submit.</li>
+      <li>Header shows the scope label ("selection" / "section: Tuning / Virtual nodes" etc.) so the operator can promote the scope before submitting.</li>
+      <li>Body is a small markdown textarea (<code>tui-textarea</code>-equivalent — actual SPA component is React/Svelte, but same UX).</li>
+      <li>Submit posts to <code>POST /api/artifacts/:id/comments</code>, optimistically appends to sidebar, server response confirms or rolls back.</li>
+    </ul>
+
+    <h4>Sidebar (per-artifact comments pane)</h4>
+    <ul>
+      <li>Right-hand pane in the artifact view, toggleable. Shows all comments on the current artifact.</li>
+      <li>Grouped by scope: file → chapter → section → selection.</li>
+      <li>Each card: anchor preview (heading path or text excerpt) + body excerpt (first ~120 chars) + status badge + actions (edit / resolve / delete).</li>
+      <li>Click a card → scroll iframe to the anchor (parent posts <code>kb.comment.scrollto</code> to shim) → flash highlight.</li>
+      <li>Stale anchors get a yellow border + "needs review" pill; clicking opens the manual re-anchor flow.</li>
+    </ul>
+
+    <h4>Cross-artifact view</h4>
+    <ul>
+      <li>kb chrome top-nav has a "Comments" surface listing all open comments across all artifacts.</li>
+      <li>Filterable by status (open / exported / resolved), scope, kb (multi-kb future).</li>
+      <li>Clicking jumps to the artifact + scrolls to the anchor.</li>
+      <li>Bulk-export: select N comments → "Export" button → same modal as per-artifact export, multi-artifact bundle.</li>
+    </ul>
+
+    <h4>Keyboard shortcuts (per topic 05's vim-like convention)</h4>
+    <ul>
+      <li><code>c</code> — start a comment on current selection</li>
+      <li><code>e</code> — open export modal for current artifact's comments</li>
+      <li><code>j</code> / <code>k</code> — navigate the sidebar list</li>
+      <li><code>r</code> — mark current sidebar comment resolved</li>
+      <li><code>x</code> — delete current sidebar comment (with confirm)</li>
+      <li><code>?</code> — help overlay</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">G. Export &amp; Claude Code integration (v1 manual) <span style="color:var(--accent);font-size:.7em;font-weight:400">(SUPERSEDED · see topic 10 §I three-export modal)</span></div>
+    <h2>Two paths, both manual-trigger</h2>
+  </div>
+  <div class="prose">
+
+    <h3>Path 1: copy-paste from web UI</h3>
+    <p>Click "Export comments" in the chrome → modal shows formatted text → copy → paste into Claude Code. Default format is plaintext-block (paste-friendly):</p>
+<pre>## Comments on artifact 01J9X4HZP2 (consistent-hashing-explainer.html)
+
+[c1] CHAPTER · "Tuning &gt; Virtual nodes"
+&gt; 100 virtual nodes per physical node
+COMMENT (operator, 2026-05-10):
+Why 100? Cite the original paper.
+
+[c2] SELECTION · in section "Ring construction"
+&gt; nodes are placed by hashing their identifier
+COMMENT (operator, 2026-05-10):
+Skips over jump consistent hashing as an alternative — add a brief comparison.
+
+— end of comments —</pre>
+    <p>Markdown and JSON formats are toggleable in the modal. Submit marks each comment <code>status='exported'</code>, <code>exported_at=now</code>, fires <code>comment.exported</code> SSE.</p>
+
+    <h3>Path 2: CLI / Claude Code shell</h3>
+    <p>Same data, CLI surface. Claude Code can shell-call this directly during a session:</p>
+<pre>$ kb comments export 01J9X4HZP2 --format=text
+[same output as above, written to stdout]
+
+$ kb comments export 01J9X4HZP2 --format=json
+{ "artifact": "01J9X4HZP2", "comments": [...] }
+
+$ kb comments list --status=open
+01J9X4HZP2 · selection · "Skips over jump…" · 2026-05-10
+01JABCDE   · chapter   · "Tuning &gt; Virtual nodes" · 2026-05-09
+…
+
+$ kb comments resolve c1            # manual close (resolved_by='manual')
+$ kb comments add 01J9X4HZP2 --file --body "Replace with v0.4"</pre>
+
+    <h3>Claude Code workflow</h3>
+    <p>kb's CLAUDE.md (or a kb-specific skill) instructs:</p>
+    <blockquote>"Before regenerating an artifact, run <code>kb comments export &lt;id&gt;</code>. Address each comment in the new generation. After writing the new artifact, kb auto-resolves the comments."</blockquote>
+    <p>The skill / CLAUDE.md addition is a small recipe, not a kb-internal feature. The operator authors it once per project that uses kb.</p>
+
+    <h3>Auto-resolve on regen</h3>
+    <p><code>kb regen &lt;id&gt;</code> writes the new artifact, then for every comment on that <code>artifact_id</code> with status <code>open</code> or <code>exported</code>, sets <code>status='resolved'</code>, <code>resolved_at=now</code>, <code>resolved_by='regen'</code>. Emits <code>comment.resolved</code> SSE for each. Anchor re-pinning runs concurrently per section C — independent of resolution.</p>
+    <p>If the regen didn't actually address the comment, the operator re-opens it (one-click in the sidebar). v2 could add an LLM-based "did this regen address comment X?" check; v1 trusts the operator's review.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">H. v1 → future roadmap <span style="color:var(--accent);font-size:.7em;font-weight:400">(SUPERSEDED · see v1→v2 callout above)</span></div>
+    <h2>Three versions of comments, all on the same architecture</h2>
+  </div>
+  <div class="prose">
+    <ol>
+      <li><strong>v1 (with the SPA milestone) — manual.</strong> Web UI inline popover + sidebar. CLI <code>kb comments {add, list, export, resolve, delete, reanchor}</code>. HTTP API. SQLite schema. SSE events <code>comment.{created, exported, resolved, anchor_stale}</code>. Auto-resolve on regen with anchor fuzzy-match. <strong>This page designs v1.</strong></li>
+      <li><strong>v2 — MCP wrapper.</strong> Builds on <a href="../challenges.html">challenge #7</a>'s MCP-deferral. Expose tools <code>kb_comments_for_artifact(id)</code>, <code>kb_resolve_comment(id, reason)</code>, <code>kb_list_open_comments()</code>. Claude Code (and Cursor / Cline / Aider / Windsurf) can read and resolve comments programmatically without copy-paste. ~150 LOC of <code>tokio</code> + <code>serde_json</code>; daemon stays unchanged.</li>
+      <li><strong>v3 — real-time push.</strong> Claude Code subscribes to <code>comment.created</code> SSE via the MCP bridge. New comments trigger a Claude Code skill that proposes a regen automatically. The operator approves (or edits) the proposal. The "talking to someone" UX becomes "while writing alongside someone."</li>
+    </ol>
+    <p>The architecture supports all three. v1 wires only the manual surfaces; v2 and v3 are additive shims over the same data model. <strong>No re-architecture between versions</strong> — that's the test for a good v1.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH (for v1, given SPA exists)</span> <span style="font-size:.7em;color:var(--accent);margin-left:.4rem">SUPERSEDED by v2 — see callout at top + topic 10 §I + topic 11 §B.3</span></span>
+    <p><strong>Ship v1 with the SPA milestone.</strong> The architecture changes are modest and additive:</p>
+    <ol>
+      <li>Add the <code>comments</code> sqlite table + 7 HTTP routes + 4 SSE event types. ~300 LOC of axum + sqlx.</li>
+      <li>Extend the topic-06 artifact-wrapper page with the <code>kb-comments.js</code> shim. ~150 LOC vanilla JS.</li>
+      <li>SPA components: inline popover, per-artifact sidebar, cross-artifact view, export modal. The bulk of the UX work — defer detailed design to the SPA implementation phase.</li>
+      <li>CLI subcommands <code>kb comments {add, list, export, resolve, delete, reanchor}</code>. Thin wrappers over the HTTP API.</li>
+      <li>Per-event JSON Schemas alongside the existing event taxonomy.</li>
+    </ol>
+    <p><strong>Anchor stability via auto-fuzzy-match</strong> with <code>anchor_stale</code> callout (Jaro-Winkler ≥ 0.85, 200-char context window, both configurable). <strong>Auto-resolve on regen</strong> — flat threading per the operator's confirmed v1 stance. <strong>Export defaults to plaintext</strong> for paste-into-Claude-Code; markdown and JSON behind toggles. <strong>Treat the SSE event additions as a v1 contract</strong> — version with the existing <code>events.schema.json</code>.</p>
+    <p>v2 (MCP wrapper) and v3 (real-time push) are roadmap, not v1 scope. The architecture supports them without changes; design when there's pressure to add them.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions</span>
+    <ul>
+      <li><strong>Cross-kb comments?</strong> Multi-kb is namespaced (briefing, HIGH confidence). Comments live per-kb by default — cleaner mental model, simpler queries. Cross-kb roll-up view in the SPA "Comments" surface is achievable later via <code>?kb=*</code> filter.</li>
+      <li><strong>Comment privacy on export.</strong> A comment may include the operator's private thinking. Apply the same scrub policy as the kb-prompt embedding (<a href="07-html-effectiveness.html">topic 07</a>) before export — opt-in default for shared exports, opt-out for personal. v1 default: no scrub (single-user, local-only).</li>
+      <li><strong>Material restructure on regen.</strong> If the regen removes the chapter the comment was anchored to, fuzzy-match fails. Surface as <code>anchor_stale</code> with the original context preserved; the user re-anchors manually or closes the comment. v2 could surface "the chapter you commented on no longer exists — was the comment addressed?" as an LLM-evaluated prompt.</li>
+      <li><strong>Threading.</strong> Decided: flat in v1 (operator confirmed). Schema migration for v2 threading adds a nullable <code>parent_comment_id</code> column.</li>
+      <li><strong>Mobile / small-screen UX.</strong> SPA is desktop-first; comment popover layout on phone is deferred.</li>
+      <li><strong>Auto-resolve correctness check.</strong> Should auto-resolve fire only if the regen actually addressed the comment, or unconditionally? V1 unconditional (operator can re-open). V2 could attempt LLM-based "did the regen address this?" check.</li>
+      <li><strong>Comment-on-the-prompt-itself.</strong> If the operator wants to comment on the kb-prompt embedded in the artifact (the meta tags, not the body), is that a file-scope comment with a special anchor, or out of scope? Default: file-scope; the regen flow incorporates it as prompt feedback.</li>
+      <li><strong>Conflict resolution on simultaneous regen + comment.</strong> Operator adds comment c5; Claude Code regen completes; c5 was added <em>after</em> the prompt was sent. Should c5 auto-resolve? Default: no — only comments that existed at regen-start are auto-resolved. Track a <code>regen_started_at</code> timestamp on each regen.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="08-prior-art.html"><span class="dir">← Prev</span><span class="ttl">08 · Prior art</span></a>
+  <a class="next" href="../challenges.html"><span class="dir">Next →</span><span class="ttl">Challenges</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · commenting feature</p>
+      <p>v1 design (this page) — historical. v2 (topic 10 §I + topic 11 §B.3 round-trip with Claude-as-replier) supersedes; v3 = MCP wrapper / real-time push. The technical core that survives from v1: anchor scopes (§B) + auto-fuzzy-match regen stability (§C).</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="06-iframe.html">06 Iframe</a></li>
+        <li><a href="../foundation/04-sse-axum.html">04 SSE</a></li>
+        <li><a href="07-html-effectiveness.html">07 HTML</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Cross-cuts</h5>
+      <ul>
+        <li><a href="../challenges.html">Challenges</a></li>
+        <li><a href="../discussion.html">Discussion</a></li>
+        <li><a href="../spikes.html">Spikes</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

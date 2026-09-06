@@ -1,0 +1,53 @@
+[package]
+name = "kb-cli"
+description = "clap-based CLI binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kb"
+path = "src/main.rs"
+
+[dependencies]
+kb-core = { path = "../kb-core" }
+kb-server = { path = "../kb-server" }
+# PF-B1 — the per-commit-changing stamp crate. BIN-ONLY consumers may link
+# this (kb-cli is a pure bin package); a lib linking it would re-cascade
+# the every-commit rebuild kb-buildstamp exists to break.
+kb-buildstamp = { path = "../kb-buildstamp" }
+clap = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+reqwest-eventsource = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+walkdir = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+bytes = "1"
+getrandom = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+# Extract the `.zip` bundle `kb share --local` fetches from the daemon.
+zip = { workspace = true }
+
+# `kb daemon` lifecycle (pid file + SIGTERM stop) uses libc::kill on
+# unix. Cfg-gated in src/commands/daemon.rs so non-unix builds still
+# compile (degraded behaviour: stop is unsupported, double-start check
+# is conservative).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+assert_cmd = "2"
+predicates = "3"
+# Read back the .zip `kb download --folder/--all` produces.
+zip = { workspace = true }

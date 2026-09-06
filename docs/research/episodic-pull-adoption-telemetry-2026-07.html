@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The pull nobody makes — adoption telemetry for kb's episodic-memory verbs</title>
+<meta name="kb-tags" content="fable-frontier, memory, episodic, telemetry, adoption, sessions">
+<meta name="kb-category" content="research">
+<meta name="kb-summary" content="Telemetry over 4,793 real Claude Code transcripts on one operator's machine: kb's deliberate episodic-pull surface (kb why / kb recollect) sees ~12 real invocations across 6 sessions and 2 projects (75% inside the kb repo). Post-ship non-kb adoption is 1 of 13 sessions; 0 of ~4,600 non-kb subagent runs. But the surface is out-competed, not undiscovered: the file-read reflex plus the always-on recall block deliver the same answer more cheaply for repo-local work. Two fixable amplifiers found. Case study, n=1 machine.">
+
+<style>
+  :root{
+    --bg:#0e1418; --surface:#172127; --fg:#e4edf1; --muted:#96b0bd;
+    --rule:#26343c; --accent:#4fb3d9; --accent-fg:#0e1418;
+    --warn:#e5b45a; --danger:#f0897e; --ok:#69c99a;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace;
+    --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f9fb; --surface:#e6eff3; --fg:#132028; --muted:#4a606c;
+      --rule:#cadae1; --accent:#0f6088; --accent-fg:#f4f9fb;
+      --warn:#815600; --danger:#a12a1f; --ok:#186c47;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.03rem/1.65 var(--sans)}
+  main{max-width:50rem;margin:0 auto;padding:2.4rem 1.2rem 4rem}
+  h1{font-size:1.7rem;line-height:1.2;margin:.2em 0 .3em;letter-spacing:-.01em}
+  h2{font-size:1.16rem;margin:2.2em 0 .5em;padding-top:1.1em;border-top:1px solid var(--rule)}
+  h3{font-size:1.02rem;margin:1.4em 0 .3em;color:var(--muted)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.6 var(--mono)}
+  .verdict{border:1px solid var(--rule);border-left:5px solid var(--accent);border-radius:10px;
+    background:var(--surface);padding:1em 1.2em;margin:1.4em 0;font-size:1.05rem}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.82rem/1.5 var(--mono);white-space:pre-wrap}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  td.num,th.num{text-align:right;font-family:var(--mono);font-size:.86rem}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  .lo{color:var(--danger);font-weight:600}
+  .hi{color:var(--ok);font-weight:600}
+  details{border:1px solid var(--rule);border-radius:8px;background:var(--surface);padding:.6em .9em;margin:1em 0}
+  summary{cursor:pointer;font-weight:600}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#verdict">Skip to verdict</a>
+<main>
+<h1>The pull nobody makes</h1>
+<p class="meta">adoption telemetry for kb's episodic-memory verbs · Fable frontier run #4 ·
+2026-07-07 09:52–11:05 CEST · 4,793 real transcripts, one operator's machine · independently
+recounted + adversarially reviewed (survives) · status: finding, no code changed</p>
+
+<div class="verdict" id="verdict">
+<strong>Verdict.</strong> kb's deliberate episodic-pull surface — <code>kb why &lt;file&gt;</code>
+("why is this the way it is") and <code>kb recollect "&lt;task&gt;"</code> ("has this been done
+before"), invariant #11's central "pulled on demand" bet — sees near-zero spontaneous adoption
+outside the repo that builds it. Across 4,793 transcripts: <strong>12 real invocations, 6
+sessions, 2 projects, ~75% inside kb itself.</strong> Post-ship, non-kb adoption is
+<strong>1 of 13 human sessions</strong> and <strong>0 of ~4,600 non-kb subagent runs</strong>.
+But the sharper finding is <em>why</em>: the surface is <strong>out-competed, not
+undiscovered</strong>. The agent knows it exists and is well-designed; for repo-local work the
+file-read reflex and the always-on recall block already answer "how was this done here?" more
+cheaply. The pull verb only wins for cross-project, no-code-trace questions — a narrow slice —
+and its one advertisement is fragile. This is a case study of one machine, not a population.
+</div>
+
+<h2 id="integrity">1 · A number that had to be corrected twice</h2>
+<p>This finding is only as good as "did an agent actually <em>run</em> the verb," and that
+turned out to be genuinely hard to count. Three passes:</p>
+<ol>
+<li><strong>Raw grep</strong> said <code>kb why</code> appears in 394 files — <span
+class="lo">meaningless</span>: the SessionStart <em>wake hook</em> prints "<code>kb why
+&lt;file&gt;</code>" as protocol text into nearly every session. That measures hook presence,
+not use.</li>
+<li><strong>Segment-head parsing</strong> (split each Bash command on <code>;|&amp;&amp;</code>,
+match the verb at a segment's head) cut it to 25 pull calls — <span class="lo">still
+inflated</span>: a <code>git commit</code> heredoc or a <code>kb remember "…"</code> body that
+<em>documents</em> the feature has lines that begin "kb why…", and they were counted as
+invocations.</li>
+<li><strong>An independent recount</strong> with a quote/heredoc-aware shell tokenizer, auditing
+all 45 candidate commands by hand, gave the honest number: <span class="hi">12 real
+invocations, 6 sessions, 75% kb</span>. My "25 / 88%" reproduced exactly as a <em>mentions</em>
+count — 22 of 25 were kb-repo commit messages and remember-bodies describing the work.</li>
+</ol>
+<p>The through-line of this whole frontier program keeps repeating: <strong>the hardest part of
+measuring a memory system is telling the instruction-text about a verb from an invocation of
+it.</strong> Runs #2 and #3 hit the same wall at the title and payload level; here it bit the
+telemetry itself. The corrected numbers are used throughout below.</p>
+
+<h2 id="numbers">2 · What the transcripts say</h2>
+<table>
+<tr><th>Surface</th><th class="num">real invocations</th><th class="num">sessions</th><th class="num">projects</th></tr>
+<tr><td><strong>PULL — <code>kb why</code> / <code>kb recollect</code></strong> (deliberate, episodic)</td><td class="num lo">12</td><td class="num lo">6 / 102</td><td class="num lo">2 / 18</td></tr>
+<tr><td>PUSH — <code>kb remember</code> (deliberate write)</td><td class="num">67</td><td class="num">27</td><td class="num">5</td></tr>
+<tr><td>PUSH — recall block auto-injected (context, zero-cost)</td><td class="num">— </td><td class="num">57</td><td class="num">8</td></tr>
+</table>
+<p>Segmenting the pull surface honestly:</p>
+<ul>
+<li><strong>Ship-date denominator.</strong> The pull verbs shipped ~2026-06-26; 58 of the 102
+top-level sessions predate them and <em>could not</em> have used them. The fair base is the 44
+post-ship sessions, so overall adoption is ~14%, not 6% — I keep the corrected denominator.
+(An earlier draft's "recall-injection is same-era, and it got used constantly" rebuttal is
+<em>false</em>: recall-injection predates the pull verbs and fired in 20 pre-ship sessions, so
+the 57-vs-12 gap is an older automatic feature vs a young manual one, not a clean comparison.)</li>
+<li><strong>Outside kb, it rounds to zero.</strong> Post-ship non-kb human adoption is 1 of 13
+sessions (~3 genuine work-pulls, all in one other project). Of ~4,600 non-kb subagent transcripts:
+<strong>zero</strong> pull invocations.</li>
+<li><strong>The subagent pulls are kb evaluating itself.</strong> Subagents did pull ~78 times —
+but every one is in the kb repo, and they are benchmark and review harness calls: latency probes
+with nonsense queries (<code>kb recollect "zanzibar hovercraft pineapple lattice"</code>), the
+session-memory audit's own deep-review agents. That is dogfooding and self-evaluation, not
+adoption. (So the tempting claim "explicit prompting is the only driver" is unsupported — there
+is no cross-project case where prompting drove pull use at all.)</li>
+</ul>
+
+<h2 id="why">3 · Why a well-designed surface goes unused</h2>
+<p>A reader agent worked through four non-kb sessions where the recall block was injected but no
+pull happened. Its verdict: <strong>out-competed, not undiscovered.</strong></p>
+<p>Two of the four were textbook episodic situations — adding Komga, then huddle, behind
+Traefik + Authelia is a <em>repeated</em> pattern (kb, authelia, huddle all added the same way),
+so <code>kb recollect "add a service to the traefik stack with authelia + cname"</code> would
+have surfaced the exact playbook. The agent instead reverse-engineered it by reading the kb
+service block in <code>docker-compose.yml</code> — and then wrote a <em>new</em> memory rather
+than pulling the existing one. The mechanism, ranked:</p>
+<ol>
+<li><strong>Substitution by the file-read reflex (strongest).</strong> "How is this done here?"
+is answered by opening the self-documenting source (<code>docker-compose.yml</code>,
+<code>CLAUDE.md</code>) that the agent opens by instinct anyway — plus the always-on recall
+block already surfaced the relevant deploy facts. Episodic recall returns the same knowledge
+with more latency. It only wins when the answer is <em>not</em> in the working tree —
+cross-project priors, decisions that left no code trace — and none of these tasks pressed that
+hard.</li>
+<li><strong>Habit, not ignorance.</strong> The agents demonstrably know the memory system
+(<code>kb remember</code>, <code>kb get</code>, <code>kb recall</code> all appear); "read the
+file to understand the code" is an ingrained reflex, "query an external episodic store first"
+is not.</li>
+<li><strong>A fragile advertisement.</strong> Two concrete, fixable defects surfaced: in one
+5,600-message opensim session the SessionStart wake hook was <code>hook_cancelled</code>, so the
+why/recollect advert <em>never appeared</em>; and the per-turn recall block re-surfaces
+<code>kb get</code> (via each hit's <code>id</code>) but <strong>never re-mentions why/recollect
+</strong> — so after its single SessionStart mention, the episodic verbs fade from context for
+the rest of a long session.</li>
+</ol>
+
+<h2 id="place">4 · Where this sits in the memory story</h2>
+<p>Four frontier runs now triangulate kb's memory system from four sides, and they converge:</p>
+<table>
+<tr><th>Run</th><th>Surface</th><th>Finding</th></tr>
+<tr><td>#1</td><td>recall ranking</td><td>salience inverts it — right memory buried below top-5 for ~half of on-topic queries</td></tr>
+<tr><td>#2</td><td>recall injection</td><td>a pointer, not a payload — transmits little at turn zero; production ≈ no injection</td></tr>
+<tr><td>#3</td><td>the memory channel</td><td>an unmitigated injection vector; only guard is model judgment</td></tr>
+<tr><td>#4</td><td>episodic pull</td><td>the deliberate alternative to auto-push is ~unused outside its own repo</td></tr>
+</table>
+<p>The push surface fires constantly but ranks wrong (#1), barely lands (#2), and is unsafe (#3);
+the pull surface is safe and well-shaped but out-competed by a cheaper reflex (#4). One root
+runs under all four: <strong>kb's memory is architecturally rich and behaviorally thin</strong> —
+the system does far more than agents actually exercise. The value is not "tear it out"; it is
+that the next investment should go to <em>behavioral footprint</em>, not more capability.</p>
+
+<h2 id="mitigations">5 · What would move the needle (proposals — triage-gated)</h2>
+<ol>
+<li><strong>Re-surface the episodic verbs contextually.</strong> The per-turn recall block should
+add a one-line why/recollect nudge <em>when the prompt smells episodic</em> — "add another…",
+"like the other services here", "why is…", "publish/export v<em>N</em>", "same as…" — instead of
+a single static SessionStart paragraph that fades. This is a <code>kb-recall.sh</code> change,
+deterministic, no daemon LLM.</li>
+<li><strong>Make the advert resilient.</strong> One cancelled SessionStart hook blinded the verbs
+for a 5,600-message session; the protocol should survive hook cancellation and context
+compaction (re-inject on compaction, or carry a compact reminder in the recall block).</li>
+<li><strong>Position for the slice where it wins.</strong> Episodic recall's real edge is the
+cross-project / no-code-trace question. Adoption will stay low as long as it competes with the
+file read on repo-local tasks; surface it where the working tree <em>can't</em> answer.</li>
+<li><strong>Don't over-invest in pull ranking yet.</strong> Run #1's ranking fix matters for the
+push surface that actually fires; the pull surface's problem is reach, not ranking. Sequence
+accordingly.</li>
+</ol>
+
+<h2 id="bounds">6 · Honest bounds</h2>
+<ul>
+<li><strong>One machine, n=1.</strong> This is a case study of one operator's transcripts, not a
+population. Every rate is descriptive of this deployment; "adoption is low" generalizes no
+further than "here."</li>
+<li><strong>Unused ≠ useless.</strong> Non-use is consistent with both under-adoption of a useful
+surface <em>and</em> tasks that genuinely didn't need episodic recall. The reader judged ~2.5 of
+4 sampled sessions as plausible missed opportunities, but the true base rate — "sessions where
+episodic recall would have helped" — was not measured, so even the post-ship 14% is a floor on
+would-have-helped adoption, not the adoption rate of a needed feature.</li>
+<li><strong>Recency is real.</strong> A ~2-week-old feature with low adoption is partly just
+young; the finding is "as of the first two weeks on this machine," and the trend, not the level,
+is what a re-run would test.</li>
+<li><strong>Counting is noisy at the edges.</strong> The independent recount (12) is quote-aware
+and hand-audited, but heredocs and <code>$()</code>/<code>xargs</code> forms remain hard; the
+kb-vs-non-kb <em>direction</em> is robust, the last digit is not.</li>
+<li><strong>Dropped as unsound:</strong> an "injection→pull funnel" (7 of 57) — the semantic
+recall store and the episodic session store are orthogonal, so their overlap is not a drop-off.</li>
+</ul>
+
+<h2 id="provenance">7 · Provenance</h2>
+<p class="meta">Scheduled Fable frontier run #4 (09:52 CEST fire; all agents ran Opus 4.8 /
+Haiku 4.5 — Fable unavailable). Read-only over ~/.claude/projects/**/*.jsonl (4,793 transcripts,
+1.3 GB); zero writes to any corpus. Extraction /tmp/pull-telemetry/{extract2.py, telemetry2.json};
+independent recount + methodology attack + qualitative read = workflow wf_5e2d98ca-135 (3 agents,
+214k tokens) — its recount corrected the headline number and its methodology pass forced the
+denominator, recency, and subagent-framing fixes folded in above. Code: kb-recall.sh (recall
+block, no why/recollect re-surface), kb-wake.sh (single SessionStart advert), invariant #11 (pull
+-only episodic memory). Related: recall-salience-inversion-eval-2026-07.html (run #1),
+turn-zero-injection-efficacy-2026-07.html (run #2), memory-as-injection-vector-redteam-2026-07.html
+(run #3), sessions-as-episodic-memory-design.html (the surface under test).</p>
+</main>
+</body>
+</html>

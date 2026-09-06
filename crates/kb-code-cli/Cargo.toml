@@ -1,0 +1,71 @@
+[package]
+name = "kb-code-cli"
+description = "clap-based CLI binary for kb-code (Wave 1 scaffold)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kb-code"
+path = "src/main.rs"
+
+[dependencies]
+# Per the decided architecture, kb-code-cli reuses kb-core's events/paths/
+# embed-IPC plumbing rather than reimplementing it — not yet wired in
+# W1.1 (scaffold only), lands starting W1.2.
+kb-core = { path = "../kb-core" }
+clap = { workspace = true }
+tokio = { workspace = true }
+# W1.2 — `kb-code identity` is a real HTTP client against a running
+# kb-code-server daemon (mirrors kb-cli's `kb fleet status` GET
+# /api/identity pattern).
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+# V70-A2 — `kb-code audit --since <iso|dur>` resolves its window to a unix
+# instant, and renders each row's `ts`. Already in this binary's dependency
+# graph transitively (kb-code-server, kb-core), same workspace pin — no new
+# supply-chain surface, just a direct edge for a direct use.
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# W1.3 — `refs`/`tree`/`cat` are DIRECT library calls against
+# `kb_code_server::git` (in-process, no HTTP) — the daemon HTTP wiring for
+# this surface is W1.6's job. A real (non-dev) dependency because main.rs
+# itself calls it now; tests also reuse it to boot an in-process daemon for
+# the `identity` round-trip (was a [dev-dependencies]-only entry before
+# W1.3 — see crates/kb-code-cli/tests/identity.rs).
+kb-code-server = { path = "../kb-code-server" }
+# W1.6 — daemon HTTP wiring: `repos`/`tree`/`cat`/`symbols`/`events` gain a
+# `--daemon` mode alongside the existing in-process `--repo <PATH>` form.
+# base64 decodes `GET /api/file`'s binary-content fallback for `cat`;
+# futures backs the `sse` module's own SSE byte-stream tail (kb-cli's
+# `src/sse.rs` isn't reusable here — kb-cli ships bin-only, no lib target
+# — so this is a trimmed, self-contained port; see that module's doc).
+base64 = { workspace = true }
+futures = { workspace = true }
+# S1 — `kb-code scip ingest` parses a `.scip` index (protobuf). Sourcegraph's
+# own `scip` crate (generated protobuf bindings + a `symbol::parse_symbol`
+# helper) — a kb-code-cli-ONLY dependency, deliberately NOT added to
+# kb-code-server: the phase brief keeps the daemon dependency-free of the
+# SCIP/protobuf surface, so parsing lives entirely here, and the CLI POSTs
+# already-mapped `{name, role, line, col_start, col_end}` rows to the daemon
+# instead (`crates/kb-code-server/src/scip.rs`'s own module doc).
+scip = "0.9"
+# `scip::types::Index` implements `protobuf::Message` — parsing a `.scip`
+# file needs `Message::parse_from_bytes` in scope, which isn't re-exported
+# by the `scip` crate itself (only its own `write_message_to_file` helper
+# is). Pinned to the EXACT version `scip 0.9.0` itself depends on
+# (`=3.7.2`) so the `Message` trait impl this crate sees is the SAME one
+# `scip`'s generated types implement — a mismatched protobuf version would
+# be a different (incompatible) trait.
+protobuf = "=3.7.2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = { workspace = true }

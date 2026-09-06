@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Session memory under the microscope — 12 real sessions vs their digests, 36 confirmed defects, and the repair portfolio (2026-07)</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:open, project:kb, sessions, episodic-memory, recollect, digest-fidelity, defect-census, improvement-portfolio, ultracode, fable">
+<meta name="kb-summary" content="Dogfooding evaluation of kb's session/episodic memory: 12 real sessions compared against their raw transcripts, 36 code-verified defects (subagent blindness hides 79–94% of work, commit subjects destroyed, recollect can't find sessions by their own titles, prod linkage dead on container paths), plus a 3-judge-ranked repair portfolio of 45 ideas clustered into five now-tier programs.">
+
+<style>
+:root{
+  --bg:#fbfaf7; --surface:#f2f0ea; --fg:#211d19; --muted:#5d574f;
+  --rule:#ddd9d0; --accent:#8a3d10; --accent-fg:#ffffff;
+  --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:47rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#181410; --surface:#211c17; --fg:#eae5de; --muted:#aba39a;
+    --rule:#332c25; --accent:#f0a56e; --accent-fg:#221105;
+    --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
+  font-size:var(--fs-body);line-height:var(--lh)}
+main{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 5rem}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+h1{font-family:var(--sans);font-size:1.85rem;line-height:1.25;letter-spacing:-.01em;margin:.2em 0 .3em}
+h2{font-family:var(--sans);font-size:1.3rem;margin:2.4em 0 .5em;padding-top:.6em;
+  border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-family:var(--sans);font-size:1.02rem;margin:1.6em 0 .35em;scroll-margin-top:1rem}
+p{margin:.7em 0}
+.kicker{font:600 .78rem/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.meta-line{color:var(--muted);font-family:var(--sans);font-size:var(--fs-small);margin-bottom:2rem}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.85rem 1rem;overflow:auto;font-size:.83rem;line-height:1.55;white-space:pre-wrap}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.42em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.num{text-align:right;font-family:var(--mono);font-size:.82rem;white-space:nowrap}
+.badge{display:inline-block;font:700 .66rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;
+  border-radius:999px;padding:.26em .6em;margin-right:.45em;vertical-align:middle}
+.badge--high{background:var(--danger);color:var(--bg)}
+.badge--medium{background:var(--warn);color:var(--bg)}
+.badge--low{background:var(--muted);color:var(--bg)}
+.badge--ok{background:var(--ok);color:var(--bg)}
+.defect{margin:.85em 0 .85em 0;padding:.6em .8em;border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface)}
+.defect p{margin:.3em 0;font-size:.94rem}
+.defect .did{font-family:var(--mono);font-size:.76rem;color:var(--muted)}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 8%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.program{border:1px solid var(--rule);border-radius:var(--radius);padding:.9rem 1.05rem;margin:1rem 0;background:var(--surface)}
+.program h3{margin:.1em 0 .4em}
+.program p{font-size:.95rem;margin:.45em 0}
+.score{font:700 .78rem/1 var(--mono);color:var(--accent)}
+ul{padding-left:1.3em}
+li{margin:.32em 0}
+.small{font-size:var(--fs-small);color:var(--muted);font-family:var(--sans)}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<p class="kicker">Dogfooding review · episodic memory</p>
+<h1>Session memory under the microscope — 12 real sessions vs their digests, 36 confirmed defects, and the repair portfolio (2026-07)</h1>
+<p class="meta-line">2026-07-06 · ultracode workflow wf_1c23d6c7 (65 agents, 3.99M subagent tokens, 1,299 tool calls; 12 fidelity readers · 5 code reviewers · infra prober · prior-art reader · 38 adversarial verifiers · 5 ideation lenses · 3-judge panel) · companion: <a href="/a/kb-docs/research/kb-review-coverage-gaps-2026-07.html">coverage-gap analysis</a></p>
+
+<section id="verdict">
+<h2 id="verdict-h">Verdict</h2>
+<p>The architecture is right and the implementation is dishonest. Invariant #11's core rulings — transcripts as pull-only episodic memory, a deterministic LLM-free digest as the indexed surface, canonical id from the JSONL — all survived adversarial review; the canonical-id recovery even worked around a live capture bug exactly as designed. But measured against raw-transcript ground truth, the digests of the 12 most recent kb sessions score a <strong>mean 2.6/5 for usefulness to a future agent</strong>, and the review confirmed <strong>36 defects</strong> (10 high) across every layer:</p>
+<ul>
+<li><strong>The subagent iceberg.</strong> Every ultracode session hides 79–94% of its real work: the digest reads only the main-thread transcript, so a 140-agent, 12.8M-token workflow session digests to "12 tool calls, 0 files edited" (B3). The sessions where the most work happens are recorded worst.</li>
+<li><strong>Provenance is fabricated or destroyed.</strong> Commit subjects are stored as the literal strings <code>commit</code> or <code>$(cat &lt;&lt;'EOF'</code> for the two dominant Claude Code commit forms (B5); a read-only <code>git tag -l</code> becomes a fake "tag" record; 21 pr-link events across 4 PRs produced zero records.</li>
+<li><strong>Retrieval's front door fails on its own names.</strong> A session is not findable by its own exact title in 7 of 12 cases; <code>kb recollect</code> misses the kb project's directly-on-topic sessions while 37-day-old cross-project hits outrank them at opaque ~0.013 scores (B8), and <code>kb sessions search</code> is a single LIKE-substring that can't match "episodic memory" against "sessions-episodic-memory" (B9).</li>
+<li><strong>Prod linkage is structurally dead.</strong> In the containerized deployment, transcript host paths (<code>~/…</code>) never match container corpus mounts (<code>/srv/…</code>), so <code>in_corpus=0</code> forever, the funnel's "commented" stage is permanently zero, and the R5 session↔comments join has never fired (B7).</li>
+</ul>
+<p>Bottom line for the question asked: <strong>as a catalog, yes — as memory, not yet.</strong> <code>kb sessions list/show</code> and <code>kb why</code> genuinely accelerated this very review; <code>kb recollect</code> and <code>kb sessions search</code> failed at their one job and the analysis fell back to raw-JSONL archaeology. The fix portfolio below is ranked and mostly small: the top five programs are S/M-effort, deterministic, and invariant-#11-compatible.</p>
+</section>
+
+<section id="the-iceberg">
+<h2 id="the-iceberg-h">The headline: the subagent iceberg</h2>
+<p>Multi-agent orchestration became the dominant working style in July (7 of the 12 sessions are ultracode), and it is precisely the style the digest cannot see. Task/Agent subagents and Workflow fleets write their transcripts to sibling files (<code>&lt;sid&gt;/subagents/agent-*.jsonl</code>); <code>kb-capture.sh</code> reads only the main transcript, and the usage totals that Claude Code hands back in task-notification blocks are discarded by the parser. Ground truth from the raw transcripts:</p>
+<table>
+<tr><th>Session</th><th>Digest says</th><th>Transcript ground truth</th><th>Hidden</th></tr>
+<tr><td>e1b3277a code-craft review</td><td class="num">12 tools · 222,810 tok</td><td class="num">140 agents · 2,215 tools · 12.81M tok</td><td class="num">98% (57× tokens)</td></tr>
+<tr><td>06368f51 perf program</td><td class="num">163 tools · 525,914 tok</td><td class="num">147 agents · 2,802 tools · 8.89M tok</td><td class="num">~94%</td></tr>
+<tr><td>31c9abc9 architecture review</td><td class="num">— · 472,342 tok</td><td class="num">64 agents · 1,543 tools · 5.76M tok</td><td class="num">~92%</td></tr>
+<tr><td>8585d697 AX review</td><td class="num">26 tools · 303,721 tok</td><td class="num">43 agents · 821 tools · 2.61M tok</td><td class="num">~90%</td></tr>
+<tr><td>345f7c8f web-UI research</td><td class="num">61 tools · 325,534 tok</td><td class="num">28 agents · 409 tools · 1.94M tok</td><td class="num">~86%</td></tr>
+<tr><td>bd54e196 security audit</td><td class="num">37 tools · 463,536 tok</td><td class="num">26 agents · 524 tools · 2.20M tok</td><td class="num">~85%</td></tr>
+<tr><td>efcd11cb install/CI research</td><td class="num">— · 490,132 tok</td><td class="num">26 agents · 573 tools · 1.81M tok</td><td class="num">~79%</td></tr>
+</table>
+<p>The damage is not just vanity metrics. <code>kb why &lt;file&gt;</code> misses every file only subagents touched — the security audit's finders read the whole auth/scrub/quarantine surface and none of it is attributed; the showcase-corpus session's 25 subagents wrote all 7 deliverable files, recorded nowhere. Subagent failures (a spend-limit death, a StructuredOutput retry-cap kill, a musl link failure that was a spike's central finding) are invisible because <code>error_count</code> counts only main-thread tool friction. And the sidechain JSONLs are perishable — every day of delay loses attribution data permanently.</p>
+</section>
+
+<section id="fidelity">
+<h2 id="fidelity-h">Digest fidelity, session by session</h2>
+<p>Each of the 12 sessions was read by a dedicated agent that pulled the stored digest (<code>kb sessions show --json</code>, <code>resume</code>) and compared it against the raw JSONL and <code>git log</code>. Usefulness = "would this digest save a future agent from re-deriving the work?" (1–5).</p>
+<table>
+<tr><th>Session</th><th>Score</th><th>Biggest miss vs ground truth</th></tr>
+<tr><td>e1b3277a code-craft review</td><td class="num">2</td><td>140-agent workflow + its 442 KB of findings invisible; started_at is the capture-hook wall clock, 11h after the true start; ended_at &lt; started_at by 18s</td></tr>
+<tr><td>bd54e196 security audit</td><td class="num">3</td><td>26 finders' whole-codebase reads unattributed — <code>kb why quarantine.rs</code> misses the session that found its headline issue</td></tr>
+<tr><td>efcd11cb install/CI research</td><td class="num">3</td><td>error_count=0 while a workflow agent died and the spike's central finding was a musl link failure</td></tr>
+<tr><td>345f7c8f web-UI research</td><td class="num">2</td><td>memory_count=0 despite the session running <code>kb remember</code> — the produced memory carries the actual outcome and isn't linked</td></tr>
+<tr><td>8585d697 AX review</td><td class="num">3</td><td>the session's entire substance (43 agents, 2.6M tok) uncounted; its <code>kb remember</code> memory unlinked</td></tr>
+<tr><td>31c9abc9 architecture review</td><td class="num">3</td><td>fabricated commit: a read-only <code>git tag -l | sort</code> stored as a "tag" action on someone else's commit sha</td></tr>
+<tr><td>90112cae v0.24 assessment</td><td class="num">2</td><td>all 3 commit subjects stored as <code>$(cat &lt;&lt;'EOF'</code>; 8 Agent spawns + 4 Workflows + 17 background tasks invisible</td></tr>
+<tr><td>3068409e HTML-standard session</td><td class="num">3</td><td>primary deliverable (7 showcase files written by 25 subagents) recorded nowhere; heredoc commit subjects garbled</td></tr>
+<tr><td>06368f51 perf program</td><td class="num">2</td><td>captured 2 of 5 PS-commits (&amp;&amp;-chained ones missed); both subjects garbled; 147 subagents invisible</td></tr>
+<tr><td>82315ef7 session-portability</td><td class="num">3</td><td>all 4 commit subjects = "commit" — the single most informative field destroyed; digest sha 86d61f21 is a dangling amended commit</td></tr>
+<tr><td>ae3afd3d Release Zero planning</td><td class="num">2</td><td>subjects destroyed; 40a007ba recorded as kind "tag" — it is the Z5 feature commit, no tag exists</td></tr>
+<tr><td>0e99f123 CI migration (~50h)</td><td class="num">3</td><td>session "ends" 12s before it starts (real span 49.7h, duration_ms=0); 21 pr-link events / 4 PRs — the principal deliverables — produced zero records</td></tr>
+</table>
+<div class="callout callout--ok"><span class="callout-label">What the digest gets right</span>
+Where the main thread is the whole story, the mechanics are solid: canonical session-id recovery from the JSONL worked in all 12 (including around the live trailing-dash capture bug — invariant #11's guard proven in production); first prompts are verbatim; main-thread tool_calls and token_total are exact; commits=[] and decisions=[] are correct when nothing happened; the one deliverable that WAS main-thread-authored (the security review HTML) is properly recorded with write+edit rows. The failure is systematic under-scope, not randomness.</div>
+</section>
+
+<section id="defects">
+<h2 id="defects-h">The defect census — 36 confirmed, 2 refuted</h2>
+<p>38 candidates (15 from live dogfooding, the rest from code review) were each handed to an independent adversarial verifier instructed to refute. 36 survived with file:line mechanisms or live reproductions. Grouped by layer:</p>
+
+<h3 id="defects-capture">Capture layer</h3>
+<div class="defect"><p><span class="badge badge--high">high</span><span class="did">B2</span> <code>started_at</code> is the capture-hook's wall clock (the filename timestamp), not the transcript's first event — so every single-capture session stores <code>ended_at &lt; started_at</code> and <code>duration_ms=0</code>. A ~50-hour session reads as 0ms; recollect's recency decay and R8's temporal windows all ride these corrupted numbers. Fix point: track MIN/MAX event timestamps in <code>parse_session_activity</code> (sessions.rs:534-538).</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">B14</span> Sessions with no aiTitle get the opaque "session &lt;8hex&gt;" name even at 1,203 messages, and synthetic "[Request interrupted by user]" markers pass the wrapper filter into titles/prompts.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">B13 / NEW-sid-trailing-dash</span> The sid sanitiser (<code>jq -r | tr -c 'a-zA-Z0-9' '-'</code>) converts jq's trailing newline to <code>-</code>: 86 of 138 live capture files end <code>-.html</code> and every plugin-era <code>&lt;meta name="kb-session"&gt;</code> carries a trailing dash. Low on its own — but it is the detonator for B8 below.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-capture-hook-fails-silently</span> All 6 failure paths in kb-capture.sh exit 0 with zero logging (jq/mv stderr explicitly suppressed) — a broken jq or full disk halts all capture with no trace (kb-capture.sh:12,16,18,41,43,55).</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">lifecycle gap</span> Capture fires only on Stop. A session that ends in a background-workflow completion, abort, or spend-limit death keeps its launch-time snapshot forever — e1b3277a's digest predates the entire 71-minute review it launched.</p></div>
+
+<h3 id="defects-enrichment">Digest / enrichment</h3>
+<div class="defect"><p><span class="badge badge--high">high</span><span class="did">B3</span> Main-thread-only parsing: all subagent/Workflow activity invisible (the iceberg above). Sidechain JSONLs sit next to the transcript and are never read.</p></div>
+<div class="defect"><p><span class="badge badge--high">high</span><span class="did">B5</span> <code>extract_commit_message</code> cannot parse the two dominant commit forms: <code>git commit -F -</code> heredoc → subject "commit"; <code>-m "$(cat &lt;&lt;'EOF'…)"</code> → literal <code>$(cat &lt;&lt;'EOF'</code>. Every July session's commit provenance is garbage; the repo is local at capture time, so <code>git show -s --format=%s &lt;sha&gt;</code> would resolve truth for free.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">B4</span> The touches heuristic substring-scans the whole transcript (including hook-injected recall/MEMORY.md quotes) against every doc id and path across all kbs — hence "39 fuzzy touches" on a session that read 0 files, printed as bare unexplained hex.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">B6</span> No (kind, sha) dedup in <code>extract_commits</code> plus a first-hex-token fallback that re-captures already-seen shas — <code>kb why</code> prints the same commit twice.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-git-tag-readonly</span> Read-only <code>git tag</code>/<code>-l</code>/<code>--list</code> invocations are classified as VCS "tag" write actions — fabricated provenance (31c9abc9, ae3afd3d).</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-error-count-semantics</span> <code>error_count</code> is a main-thread tool-friction tally: subagent deaths, spend-limit kills, and user interruptions all invisible.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">PR blindness</span> 21 structured pr-link events across 4 PRs in one session → zero records; PRs are the principal deliverable of multi-repo work and have no digest representation at all.</p></div>
+
+<h3 id="defects-prod">Prod deployment</h3>
+<div class="defect"><p><span class="badge badge--high">high</span><span class="did">B7 / NEW-in-corpus</span> The dockerized daemon's corpus mounts are container paths (<code>/srv/*</code>) while transcript file paths are host paths (<code>~/*</code>): <code>resolve_corpus_path</code> can never match, so <code>session_files.in_corpus=0</code> for every row since the container deploy — permanently zeroing the funnel's "commented" stage, the R5 session→comments join, and the A4/A7 in-corpus file links. Fix: per-kb <code>host_path</code> aliases pushed as extra CorpusMounts + one reindex.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-kb-cat-split-brain</span> <code>kb cat</code> resolves ids only against the host-local lance store with no daemon fallback — ids returned by the containerized daemon's own API error "not found" with no hint (this is the B12 mystery's root).</p></div>
+
+<h3 id="defects-retrieval">Retrieval</h3>
+<div class="defect"><p><span class="badge badge--high">high</span><span class="did">B8</span> <code>kb recollect</code> misses the kb project's own directly-on-topic sessions. Sharpest cause: the trailing-dash bug gives every plugin-era capture a dash-suffixed <code>kb-session</code> meta that lance stores verbatim while sqlite holds the canonical id — the join silently drops them; compounding: the embedded digest text doesn't reliably contain the title or any outcome text. 7 of 12 sessions are unreachable via their own exact titles.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">B9</span> <code>kb sessions search</code> = one case-insensitive <code>LIKE '%&lt;whole query&gt;%'</code> over title/prompt/cwd. "episodic memory" can't match "sessions-episodic-memory"; zero matches misreport as "no sessions captured yet".</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-recollect-legacy-hybrid</span> recollect retrieves via the legacy blind top-60 RRF <code>hybrid_query</code> — none of the SQ2 fusion/title-boost, SQ4 reranker, or relevance-floor work applies to episodic search. The 2026-06 search-quality program never reached the sessions surface.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-recollect-latency</span> Full hybrid fan-out to every corpus with no session-digest pre-filter: ~4.5s observed cold.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-digest-not-pullable</span> The verbatim R1 digest (the exact text that gets embedded and ranked) is unretrievable through any CLI/HTTP path — recollect shows a 400-char excerpt truncated mid-word; <code>kb cat</code> dumps the multi-MB raw transcript instead.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-no-category-escape-hatch</span> The documented R0 opt-in (<code>?category=memory-session</code>) is HTTP-only: <code>kb search</code> has no <code>--category</code>, so <code>kb search --kb sessions</code> silently returns 0 hits (B12's other half — intended exclusion, missing escape hatch).</p></div>
+
+<h3 id="defects-cli">CLI ergonomics</h3>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">B1</span> <code>list</code>/<code>threads</code> human output omits the session id — the one key every follow-up verb requires. Chaining means re-running with <code>--json</code> + jq.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-limit-not-forwarded</span> <code>kb sessions list --limit</code> is never forwarded to the API: DEFAULT_LIMIT=50 caps every response silently (80 sessions exist; the coverage-gap companion had to work around this).</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">scripting shape</span> <code>list --json</code> wraps rows in <code>{"sessions":[…]}</code>, <code>show --json</code> in <code>{"session":{…}}</code>; epoch timestamps with no ISO twin and no sanity flags — every scripted consumer trips once.</p></div>
+
+<h3 id="defects-aggregates">Aggregate views</h3>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">B10</span> Threads = exact-cwd + fixed 2-day transitive gap (<code>THREAD_GAP_SECS</code>), nothing else — near-daily work on one project collapses into a 28-session/12-day mega-thread (a 43-session/19-day one exists elsewhere). The design's edited-set-overlap and prompt-similarity signals were never implemented.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">B11</span> The "top research queries" rollup aggregates every <code>session_research</code> kind including skill invocations and plan_spans — output is dominated by <code>kb-artifact ×11</code>, <code>deep-review ×10</code>.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-folders-rollup-scope</span> <code>sessions_folders</code> aggregates COUNT/SUM over all capture rows with no newest-capture scoping — an invariant-#11 violation, currently latent only because the prod DB happens to hold zero duplicate rows.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-session-files-bare-join</span> <code>session_files_for_basename</code> (kb why's file→sessions join) is a bare <code>WHERE basename = ?</code> with none of its siblings' newest-capture subquery — the exact pattern architecture-invariants.md:220 names as "the bug".</p></div>
+
+<h3 id="defects-spa">SPA surface</h3>
+<div class="defect"><p><span class="badge badge--high">high</span><span class="did">NEW-focus-deeplink-miss</span> Every <code>/sessions?focus=&lt;sid&gt;</code> deep link (PreviewInspector.tsx:1214, memory.tsx:308, AtlasInspector.tsx:170) resolves only against loaded cursor pages (PAGE_SIZE 50) with no by-id fallback — any target beyond page 1 silently renders the empty "select a session" rail.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-stale-detail-rail</span> The <code>["session", sid]</code> detail query has <code>staleTime: Infinity</code> but is covered by neither the SSE bridge nor per-hook wiring — after each Stop capture the header shows fresh counts while every body section stays stale (an unrecorded invariant-#23 exception).</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-raised-comments-dead</span> R8's "raised-during-session" comments are computed, serialized, and e2e-tested server-side — and rendered by no client: the SPA card early-returns on the structural-only <code>total</code>, the CLI drops the field from both outputs. A raised-only session shows no comments anywhere.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-touches-fetched-discarded</span> Every session selection fires the expensive <code>/touches</code> endpoint (transcript scan + up-to-50k-doc index build on cache miss) whose result has been dead code since commit d6d2cf1a removed its render; the 300ms hover prefetch issues 3 raw <code>fetch()</code> calls that warm neither cache the click path reads.</p></div>
+<div class="defect"><p><span class="badge badge--medium">medium</span><span class="did">NEW-save-thread-errors</span> SaveThreadButton swallows HTTP failure (null, no toast — invariant #32 violation) and leaves the button stuck at "saving…" on network rejection; save-thread also stamps every entry with one kb while threads legally span corpora.</p></div>
+<div class="defect"><p><span class="badge badge--low">low</span><span class="did">NEW-why-hook-dead-code</span> <code>useWhy</code>/<code>fetchWhy</code>/<code>EMPTY_WHY</code> survive as zero-consumer dead code from the AS2 panel replacement (useSessions.ts:316-338, api/sessions.ts:235-247).</p></div>
+
+<h3 id="defects-refuted">Refuted / intended (the honest column)</h3>
+<div class="defect"><p><span class="badge badge--ok">refuted</span> Stale duplicate capture artifacts poisoning recollect: no pre-fix duplicates remain on disk — all 138 session ids are unique.</p></div>
+<div class="defect"><p><span class="badge badge--ok">intended</span> "The digest has no outcomes" is true as described but is R1's intent-only design working as ruled; the fix is an additive outcome field (portfolio P3), not a bug fix. Likewise the tiny-digest search surface and R0's default exclusion were confirmed as intended (invariant #11), with the CLI escape hatch as the real gap.</p></div>
+</section>
+
+<section id="did-it-help">
+<h2 id="did-it-help-h">Did episodic memory help this review? (the dogfooding answer)</h2>
+<p>This review is itself the best test case: a task squarely about past sessions, run with the tool under review.</p>
+<ul>
+<li><strong>Worked:</strong> <code>kb sessions list --folder</code> instantly framed the working set; <code>show</code>/<code>resume</code> gave real per-session substance (decisions, files, first prompts); <code>kb why sessions.rs</code> surfaced the four design decisions and commit trail that shaped the file — provenance no other tool has. Capture is firing reliably (7 captures that day, including this session's own).</li>
+<li><strong>Failed:</strong> <code>kb recollect "session memory episodic improvements"</code> returned five cross-project sessions at ~0.013–0.016 and none of the three directly-on-topic kb sessions; <code>kb sessions search "episodic memory"</code> returned a wrong "no sessions captured yet"; every digest of the July review sessions hid the actual work behind the subagent blindness, forcing raw-transcript archaeology (jq over multi-MB JSONLs) for ground truth.</li>
+</ul>
+<p>So the honest current state: <strong>the catalog verbs are load-bearing; the memory verbs are not.</strong> An agent that already knows which session it wants is well served; an agent asking "has something like this been done?" — the R3 promise — is not.</p>
+</section>
+
+<section id="portfolio">
+<h2 id="portfolio-h">The repair portfolio — 45 ideas, 3-judge ranked</h2>
+<p>Five ideation lenses (agent-UX, digest-fidelity, retrieval, product-workflow, first-principles) generated 45 ideas from the confirmed evidence; a 3-judge panel (agent-value · feasibility-in-this-codebase · strategic fit) scored each 0–10. Cross-lens convergence was strong — four lenses independently proposed the subagent rollup and the exact-title arm — so the now-tier collapses into <strong>five programs</strong>:</p>
+
+<div class="program" id="p1-prod-linkage">
+<h3 id="p1-prod-linkage-h"><span class="score">8.7 · S effort</span> · P1 — Resurrect prod linkage: per-kb host-path aliases</h3>
+<p>Add optional <code>host_path</code>/<code>path_aliases</code> to <code>[kb.*]</code> config; <code>install_corpus_mounts</code> pushes each alias as an extra CorpusMount deriving the same ArtifactId (existing longest-prefix sort handles specificity). Set aliases in the daemon's kb.toml, <code>kb reindex</code> the sessions corpus. Un-deadens <code>in_corpus</code>, the funnel's commented stage, R5 joins, and file links in one small change. Highest score in the portfolio; pure fix-class.</p>
+</div>
+
+<div class="program" id="p2-truthful-lifecycle">
+<h3 id="p2-truthful-lifecycle-h"><span class="score">8.3 · S/M effort</span> · P2 — Truthful lifecycle: transcript timestamps + end_reason + terminal capture</h3>
+<p>Derive <code>started_at</code>/<code>ended_at</code> from MIN/MAX transcript event timestamps (the loop already exists at sessions.rs:534-538); flag rather than silently zero inversions; add <code>active_duration</code> beside wall span for multi-day marathons. Add a deterministic <code>end_reason</code> (clean-stop | interrupted | spend-limit | abort) from tail markers, and register capture on SessionEnd/task-notification turns so background-workflow sessions aren't frozen at their launch snapshot. Existing rows self-heal on reindex. Every recency-dependent feature (recollect decay, R8 windows, staleness labels) becomes truthful for free.</p>
+</div>
+
+<div class="program" id="p3-findability">
+<h3 id="p3-findability-h"><span class="score">8.2 · M effort</span> · P3 — Findability: outcome field + exact-title arm + --explain</h3>
+<p>Three deterministic pieces: (1) store the tail of the final substantive assistant message (~1–2 KB, verbatim) as an <code>outcome</code> digest field — indexed into the R1 surface, shown in show/resume; (2) add an exact/near-exact lexical arm over <code>display_name + first_user_prompt</code> to recollect's RRF (same 1/(60+rank) grammar, submission order per invariant #28) so a query that IS the title can never miss; (3) <code>kb recollect --explain [--expect &lt;sid&gt;]</code> printing per-arm ranks — turning every future retrieval miss from a mystery into a bug report. Also fold the B8 dash-suffix reconciliation in here: normalize the lance-stored kb-session meta to the canonical id at index time.</p>
+</div>
+
+<div class="program" id="p4-subagent-rollup">
+<h3 id="p4-subagent-rollup-h"><span class="score">7.9 · L effort · transformative</span> · P4 — The subagent rollup</h3>
+<p>Two deterministic layers: (1) parse task-notification <code>&lt;usage&gt;</code> blocks (agent_count, tool_uses, subagent_tokens, duration, failures, workflow name) into a <code>subagents</code> digest section — cheap, immediate, fixes the headline counters; (2) have kb-capture.sh append sibling <code>subagents/agent-*.jsonl</code> content so subagent Reads/Edits/commits flow into files/research/commits tagged <code>via_subagent:true</code>, kept out of main counters. The feasibility judge flagged the real risk — concatenating multi-MB sidechains into the capture <code>&lt;pre&gt;</code> could balloon lance — so layer 2 should extract tool_use lines only, not full transcripts. Do layer 1 immediately; sidechains are perishable.</p>
+</div>
+
+<div class="program" id="p5-commit-truth">
+<h3 id="p5-commit-truth-h"><span class="score">7.5 · M effort</span> · P5 — Commit truth + deliverable ledger</h3>
+<p>Rework <code>extract_commits</code> into a verify-against-git pass: emit rows only for mutating commands with success results, scan all <code>[branch sha]</code> output lines (catching &amp;&amp;-chained commits), resolve every subject via <code>git -C &lt;cwd&gt; show -s --format=%s</code>, dedupe on (kind, sha), stop classifying read-only <code>git tag</code> as writes, and record repo/branch so multi-repo sessions attribute correctly. Ingest pr-link events as first-class deliverable rows, and link in-session <code>kb remember</code> ids + kb-artifact skill outputs to the session so <code>kb why &lt;deliverable&gt;</code> finally resolves.</p>
+</div>
+
+<h3 id="next-tier">Next tier (7.3–6.3)</h3>
+<ul>
+<li><strong>Resume block v2</strong> (7.3) — goal + branch + <em>outcome</em> + verified commits + open loose ends; today's 3-line block would not save a resuming agent one minute.</li>
+<li><strong>Capture hygiene</strong> (7.3) — fix the sid trailing dash at the source, add stderr logging to the hook's failure paths, a captures-enumeration verb (invariant #11 makes multi-capture invisible even to debugging).</li>
+<li><strong>Agent scripting contract</strong> (7.0) — uniform <code>--json</code> envelopes, ISO timestamps beside epochs, sanity flags, ids in human output (B1), forward <code>--limit</code>/cursor (the 50-cap bug).</li>
+<li><strong>/kb-distill</strong> (7.0) — agent-layer LLM memo written back as a linked memory; the daemon stays deterministic, the episodic→semantic bridge gets built where LLMs are allowed. <em>(Shipped 2026-07-06, commit db7ce381 — see the next-prompts playbook F1 entry.)</em></li>
+<li><strong>Recollect latency + affinity</strong> (6.7) — category-prefiltered session search; folder/cwd affinity tier in ordering.</li>
+<li><strong>R0-safe reachability</strong> (6.7) — <code>--include-sessions</code> opt-in on search + a redirect hint when an excluded row would have matched.</li>
+<li><strong>Error taxonomy</strong> (6.3) — typed error rows (kind + first-line excerpt + subagent failures) instead of a bare count.</li>
+</ul>
+
+<h3 id="later-tier">Later / probation</h3>
+<ul>
+<li><strong>Delete the funnel and research rollups; threads on probation</strong> (6.0) — the strategy judge rewarded this: both aggregates are broken in ways nobody noticed (commented=0 forever, skill-dominated "research"), which is usage evidence. Repair P1/P5 first; if the funnel still isn't consulted after its inputs become truthful, remove it.</li>
+<li><strong>One query surface / revisit pull-only</strong> (5.3) — giving <code>kb recall</code> an opt-in episodic arm, or one-line episodic hints in the recall hook. The panel ruled the R3 pull-only decision stays until the pull verbs actually work — retrieval quality, not the ruling, is the bottleneck today.</li>
+<li><strong>Week-in-review rollup</strong> (4.7), <strong>threads from shared work-product</strong> (4.3) — real ideas, wrong quarter; both depend on P2/P4/P5 data being truthful first.</li>
+</ul>
+</section>
+
+<section id="phasing">
+<h2 id="phasing-h">Suggested phasing</h2>
+<p>The five now-programs are one coherent milestone track ("truthful sessions"): P1 and P2 are small and unblock everything recency- and linkage-dependent; P3 makes the memory verbs earn their names; P4 layer 1 is a parser change; P5 turns provenance from fiction to fact. Acceptance test: <strong>re-run this review's fidelity harness</strong> (12 newest sessions, digest vs transcript, same rubric) and require mean usefulness ≥4/5, zero fabricated provenance, and recollect hitting an exact-title query at rank 1 in 12/12. The harness prompt is in this artifact's kb-prompt template; the workflow scripts are resumable (wf_1c23d6c7).</p>
+<div class="callout"><span class="callout-label">Relation to prior rulings</span>
+Nothing here reopens a recorded refusal: every program is deterministic and LLM-free in the daemon (the one LLM idea, /kb-distill, lives in the agent layer like /kb-reflect); the digest-not-JSONL and pull-only rulings are strengthened, not revised — the review's sharpest finding is that the rulings were right and the plumbing under them was never held to their standard.</div>
+</section>
+
+<section id="appendix-promises">
+<h2 id="appendix-promises-h">Appendix — design promises vs observed behavior</h2>
+<p>The prior-art reader extracted what the R0–R10 and follow-the-work designs promised; the verifiers checked what shipped. The ten sharpest divergences:</p>
+<table>
+<tr><th>Promised (design doc)</th><th>Observed (verified)</th></tr>
+<tr><td>A6/S3: "a summary of files read &amp; edited, including files outside any kb corpus"</td><td>Subagent files invisible; an 86-msg ultracode session digests to 0 files read/edited (B3)</td></tr>
+<tr><td>Fuzzy matches "labelled rather than asserted"</td><td>"39, fuzzy" bare hex ids with no titles or per-hit confidence (B4)</td></tr>
+<tr><td>S9/P5: session_commits "answers what shipped from this work"</td><td>Every subject is the literal "commit" or heredoc garbage (B5)</td></tr>
+<tr><td>Invariant #11: every per-session read scopes to newest capture</td><td>kb why duplicates commits; folders facet and file-basename join skip the scoping (B6, NEW-folders)</td></tr>
+<tr><td>R5/R8/R9: a working funnel incl. session↔comments linkage</td><td>commented = 0 events, 0 sessions, ever — the join structurally cannot fire in prod (B7)</td></tr>
+<tr><td>R1 as "the retrieval-quality win"; R3 as "genuine semantic search"</td><td>7/12 sessions unfindable by their own titles; on-topic sessions lose to cross-project noise (B8)</td></tr>
+<tr><td>P6: "sessions-scoped keyword search" riding the hybrid index</td><td>A single LIKE-substring over three columns (B9)</td></tr>
+<tr><td>P7 threads: cwd + time + edited-set overlap + prompt similarity</td><td>cwd + 2-day gap only; 28-session mega-threads (B10)</td></tr>
+<tr><td>R9 rollups: "top research queries per folder"</td><td>Output dominated by skill invocations and plan_spans (B11)</td></tr>
+<tr><td>"Every feature has CLI parity"; sessions are ordinary artifacts</td><td>Digest ids from the daemon's own API are unreachable via kb cat/search (B12)</td></tr>
+</table>
+<p class="small">Full evidence: workflow journal at the session transcript dir (wf_1c23d6c7, 65 agent results); per-defect file:line citations live in the journal's verifier records. Companion: <a href="/a/kb-docs/research/kb-review-coverage-gaps-2026-07.html">What kb's 50 review sessions never covered</a>.</p>
+</section>
+</main>
+</body>
+</html>

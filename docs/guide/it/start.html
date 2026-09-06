@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Installa kb e fai la prima ricerca in pochi minuti.">
+<meta name="kb-category" content="guide">
+<meta name="kb-tags" content="kb, guide, install, quickstart, daemon">
+<title>Avvio · guida kb</title>
+<link rel="stylesheet" href="../_assets/guide.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Vai al contenuto</a>
+<nav class="docnav" aria-label="guida utente kb">
+  <a class="home" href="index.html">guida kb</a>
+  <span class="lang"><a href="../start.html">EN</a><span class="sep">·</span><a href="start.html" aria-current="page">IT</a></span>
+  <span class="sep">·</span>
+  <a href="start.html" aria-current="page">Avvio</a>
+  <a href="concepts.html">Concetti</a>
+  <a href="search.html">Ricerca</a>
+  <a href="web.html">Reader web</a>
+  <a href="comments.html">Commenti</a>
+  <a href="agent.html">Memoria e sessioni</a>
+  <a href="organize.html">Liste e note</a>
+  <a href="operate.html">Operare</a>
+</nav>
+
+<div class="wrap">
+<header class="doc">
+  <p class="eyebrow">01 · Per iniziare</p>
+  <h1>Installazione e primo avvio</h1>
+  <p class="lede">Due binari, una cartella di file, un daemon in loopback — ricercabile in meno di un minuto dopo la prima build.</p>
+</header>
+
+<main id="main">
+
+<nav class="toc" aria-label="In questa pagina">
+  <p>In questa pagina</p>
+  <ol>
+    <li><a href="#install">Installazione</a></li>
+    <li><a href="#first-run">Primo avvio in 60 secondi</a></li>
+    <li><a href="#embeddings">Embedding opzionali</a></li>
+    <li><a href="#web-ui">Aprire l’interfaccia web</a></li>
+    <li><a href="#beyond-loopback">Oltre il loopback</a></li>
+    <li><a href="#claude">Collegare Claude Code</a></li>
+  </ol>
+</nav>
+
+<section id="install">
+<h2>Installazione</h2>
+<p>Scegliere un canale. Tutti installano <strong>due</strong> binari affiancati: <code>kb</code> (CLI + daemon) e <code>kb-embedder</code> (sidecar di embedding). Tenerli nella stessa directory così il daemon trova il fratello.</p>
+
+<pre><code># one-liner (Linux / WSL2)
+curl -fsSL https://raw.githubusercontent.com/nicolasacchi/kb/main/scripts/install.sh | sh
+
+# Docker (both binaries + SPA + baked model)
+docker pull ghcr.io/nicolasacchi/kb
+# minimal run — mount config, state, and a corpus the container can see:
+docker run -d --name kb -p 4000:4000 \
+  -v "$PWD/config:/var/lib/kb/config:ro" \
+  -v "$PWD/state:/var/lib/kb/state" \
+  -v "$PWD/corpus:/corpus:ro" \
+  ghcr.io/nicolasacchi/kb
+# Paths inside kb.toml must match container mounts; non-loopback clients need a token.</code></pre>
+
+<h3>Da sorgente</h3>
+<p>Servono <strong>rustc</strong> (fissato da <code>rust-toolchain.toml</code>), <strong>protoc</strong> e, opzionalmente, <strong>node 22+</strong> per il bundle web. Compilare i due package in invocazioni cargo <em>separate</em> così ONNX Runtime resta isolato all’embedder:</p>
+<pre><code>git clone https://github.com/nicolasacchi/kb && cd kb
+cargo build --release -p kb-cli        # → target/release/kb
+cargo build --release -p kb-embedder   # → target/release/kb-embedder
+install target/release/kb target/release/kb-embedder ~/.local/bin/
+
+# web reader bundle (gitignored; daemon serves web/dist)
+# just ci-spa   # or: cd web && npm ci && npm run build</code></pre>
+
+<div class="note warn">
+  <strong>Soglia glibc dei prebuilt.</strong> I binari curl richiedono <strong>glibc ≥ 2.39</strong> (Debian 13+, Ubuntu 24.04+, Fedora 40+). Su glibc più vecchie o Alpine/musl, usare l’immagine Docker o compilare da sorgente. <code>install.sh</code> rileva una libc incompatibile e lo comunica invece di fallire in silenzio.
+</div>
+</section>
+
+<section id="first-run">
+<h2>Primo avvio in 60 secondi</h2>
+<pre><code>kb daemon                         # binds 127.0.0.1:4000 — no token on loopback
+kb add ~/notes --kb notes         # register a folder as a corpus
+kb search "the thing I wrote" --kb notes
+kb status                         # health
+curl -s http://127.0.0.1:4000/healthz</code></pre>
+<p>Lasciare il daemon in primo piano (o avviarlo sotto systemd / Docker in seguito). Aprire un secondo terminale per i verbi della CLI. Le modifiche sotto la cartella registrata vengono reindicizzate automaticamente dopo un breve debounce.</p>
+<div class="note ok">
+  <strong>In loopback non serve un token.</strong> CLI locale, curl e browser funzionano subito su <code>127.0.0.1</code>. L’auth interviene solo quando il socket è raggiungibile dall’esterno.
+</div>
+</section>
+
+<section id="embeddings">
+<h2>Embedding opzionali (consigliati)</h2>
+<p>Senza un modello, la ricerca <strong>keyword (BM25)</strong> resta pienamente operativa. Le modalità hybrid e semantic richiedono un embedder. Aggiungere un modello quando si registra il corpus (al primo avvio scarica ~130&nbsp;MB una sola volta nella cache):</p>
+<pre><code>kb add ~/notes --kb notes --embedding-model bge-small-en-v1.5
+# or later:
+kb model set bge-small-en-v1.5 --kb notes</code></pre>
+<p>Il modello di default del registry è <code>bge-small-en-v1.5</code> (384-dim). Modelli più grandi possono migliorare il recall sull’inglese tecnico; un mismatch di dimensioni all’avvio fallisce in modo esplicito invece di corrompere l’indice — vedi <a href="search.html#models">Ricerca → modelli</a>.</p>
+</section>
+
+<section id="web-ui">
+<h2>Aprire l’interfaccia web</h2>
+<p>Aprire <strong><a href="http://127.0.0.1:4000/">http://127.0.0.1:4000/</a></strong>. Si ottengono galleria, ricerca, reader sandboxato, atlante, liste, sessioni e commenti. Se si è compilato da sorgente senza <code>just ci-spa</code>, API e CLI restano utilizzabili; manca solo lo shell della SPA.</p>
+</section>
+
+<section id="beyond-loopback">
+<h2>Oltre il loopback</h2>
+<p>Il bind di default è sicuro. Non appena si espone un indirizzo raggiungibile (<code>0.0.0.0</code> o un IP di LAN), fare tutte e tre le cose:</p>
+<ol>
+  <li><strong>Generare un token bearer</strong> — il daemon <em>rifiuta</em> un bind pubblico senza token (override solo con <code>KB_ALLOW_NO_AUTH=1</code> quando il gate è un proxy a monte):
+    <pre><code>kb token generate     # ~/.config/kb/token, mode 0600
+kb token path</code></pre>
+    Riavviare il daemon dopo generate/rotate.
+  </li>
+  <li><strong>Mettere TLS davanti</strong> — Traefik, Caddy o nginx terminano TLS e impostano <code>X-Forwarded-For</code>. Non esporre HTTP in chiaro su Internet pubblico.</li>
+  <li><strong>Impostare i campi di produzione <code>[server]</code></strong> in <code>~/.config/kb/kb.toml</code>:
+    <pre><code>[server]
+addr                 = "127.0.0.1:4000"            # keep daemon on loopback
+artifact_host_suffix = ".artifacts.example.com"
+parent_origin        = "https://kb.example.com"
+# trusted_proxies    = ["172.17.0.1"]              # only if proxy is off-loopback</code></pre>
+  </li>
+</ol>
+<div class="note danger">
+  <strong>Schema sicuro:</strong> tenere il daemon su <code>127.0.0.1</code> e lasciare che il reverse proxy possieda l’indirizzo pubblico. Un bind pubblico senza token è a cielo aperto — ecco perché il daemon rifiuta di avviarsi così.
+</div>
+<p>Lo scrubbing outbound opzionale per-kb (<code>[kb.NAME.outbound] strip_kb_prompt = true</code> più pattern di redazione) rimuove il template privato del prompt e applica redazioni regex sulle richieste di artefatto in <strong>non-loopback</strong> (es. quando un proxy imposta <code>X-Forwarded-For</code>). Lo sviluppo in loopback resta intatto. <code>kb share</code> strippa sempre il prompt in export, indipendentemente da questa impostazione — vedi <a href="operate.html#share">Operare → share</a>.</p>
+</section>
+
+<section id="claude">
+<h2>Collegare Claude Code (opzionale)</h2>
+<pre><code># in Claude Code
+/plugin marketplace add nicolasacchi/kb
+# install kb-memory, then:
+/kb-setup</code></pre>
+<p>Gli hook di capture e recall invocano <code>kb</code> da shell; nulla esegue un LLM dentro il daemon. Altri harness (Codex, OpenCode, …) guidano la stessa CLI via shell e file di istruzioni — vedi la pagina agente per <a href="agent.html">memoria e sessioni</a>.</p>
+</section>
+
+</main>
+
+<nav class="pagenav" aria-label="Pagina">
+  <a href="index.html"><span class="dir">Precedente</span>Panoramica</a>
+  <a class="next" href="concepts.html"><span class="dir">Successivo</span>Concetti — cinque nomi</a>
+</nav>
+
+<footer class="site">guida utente kb · <a href="index.html">home</a></footer>
+</div>
+</body>
+</html>

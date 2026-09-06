@@ -1,0 +1,793 @@
+/* V4.D1 — split-grid + header-toggle styles. Unified hunk rules stay in
+ * reader.css this phase (do not move them). Tokens only. */
+
+.kbc-diff__header-end {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+
+.kbc-diff__modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-hi);
+}
+
+.kbc-diff__mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color 0.2s var(--ease), background-color 0.2s var(--ease);
+}
+
+.kbc-diff__mode:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+
+.kbc-diff__mode.is-active,
+.kbc-diff__mode[aria-pressed="true"] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kbc-diff__mode {
+    transition: none;
+  }
+}
+
+/* Mobile is unified-only: hide the split toggle (DiffFile also forces
+ * unified via useIsMobile at the same 860px breakpoint). */
+@media (max-width: 860px) {
+  [data-kbc-diff-mode-toggle="split"],
+  .kbc-diff__modes {
+    display: none;
+  }
+}
+
+/* --- Side-by-side grid -------------------------------------------------- */
+
+.kbc-sdiff {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+
+.kbc-sdiff__hunk,
+.kbc-sdiff__thread {
+  grid-column: 1 / -1;
+}
+
+.kbc-sdiff__hunk {
+  padding: var(--pad-1) 14px;
+  color: var(--accent-soft);
+  background: var(--bg-panel-2);
+}
+
+.kbc-sdiff__row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  grid-column: 1 / -1;
+}
+
+.kbc-sdiff__gutter {
+  text-align: right;
+  padding-right: var(--pad-2);
+  color: var(--ink-dim);
+  user-select: none;
+  font-size: var(--fs-sm);
+}
+
+.kbc-sdiff__cell {
+  min-width: 0;
+}
+
+.kbc-sdiff__cell--del {
+  /* V70-A7 — the same diff-lane role the unified renderer uses, so the two
+   * layouts can never drift apart on a theme. */
+  background: var(--diff-del-bg);
+}
+
+.kbc-sdiff__cell--add {
+  background: var(--diff-add-bg);
+}
+
+.kbc-sdiff__spacer {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--rule) 45%, transparent) 0 4px,
+      transparent 4px 8px
+    ),
+    color-mix(in srgb, var(--bg-card-hi) 80%, transparent);
+}
+
+.kbc-sdiff__text {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* V4.D2 — color only. `.kbc-hl-comment` is italic in the reader; that
+ * would shift line metrics in the diff. Neutralize so highlighted and
+ * plain lines share the same font. */
+.kbc-diff .kbc-hl-comment {
+  font-style: inherit;
+}
+
+/* --- V4.C4 — review threads + both-gutter compose ---------------------- */
+
+.kbc-diff__gutter-old--commentable,
+.kbc-sdiff__gutter--commentable {
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  padding-right: var(--pad-2);
+  color: var(--ink-dim);
+  text-align: right;
+}
+
+.kbc-diff__gutter-old--commentable:hover,
+.kbc-sdiff__gutter--commentable:hover {
+  color: var(--accent-soft);
+  text-decoration: underline;
+}
+
+.kbc-rcompose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  padding: var(--pad-2) 14px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+}
+
+.kbc-rcompose__label {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.kbc-rcompose__body {
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: var(--pad-1) var(--pad-2);
+  font-size: var(--fs-md);
+  font-family: var(--font-sans);
+  resize: vertical;
+}
+
+.kbc-rcompose__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+}
+
+.kbc-rcompose__intent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+
+.kbc-rcompose__intent select {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px 6px;
+}
+
+.kbc-rcompose__actions {
+  display: flex;
+  gap: var(--pad-1);
+  margin-left: auto;
+}
+
+.kbc-rcompose__actions button {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.kbc-rcompose__actions button:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.kbc-rcompose__actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-rthread {
+  padding: var(--pad-2) 14px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+}
+
+.kbc-rthread--resolved {
+  opacity: 0.85;
+}
+
+.kbc-rthread--orphaned {
+  border-left: 2px solid var(--rule);
+}
+
+.kbc-rthread__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1);
+}
+
+.kbc-rthread__meta {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-rthread__was {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-rthread__body {
+  margin: var(--pad-1) 0 0;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.kbc-rthread__badge,
+.kbc-rthread__collapse,
+.kbc-rthread__actions button,
+.kbc-rthread__reply-row button {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.kbc-rthread__badge:hover,
+.kbc-rthread__collapse:hover,
+.kbc-rthread__actions button:hover,
+.kbc-rthread__reply-row button:hover {
+  color: var(--ink);
+}
+
+.kbc-rthread__reply {
+  margin-top: var(--pad-1);
+  padding-left: var(--pad-2);
+  border-left: 2px solid var(--rule);
+}
+
+.kbc-rthread__reply-row {
+  display: flex;
+  gap: var(--pad-1);
+  margin-top: var(--pad-2);
+}
+
+.kbc-rthread__reply-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 3px 8px;
+}
+
+.kbc-rthread__actions {
+  display: flex;
+  gap: var(--pad-1);
+  margin-top: var(--pad-1);
+}
+
+.kbc-rthread__suggest {
+  margin-top: var(--pad-1);
+  padding: var(--pad-1);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.kbc-rthread__suggest-pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+
+.kbc-rthread__applied,
+.kbc-rthread__outdated {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  margin-bottom: var(--pad-1);
+  font-size: var(--fs-sm);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  color: var(--ink-mute);
+}
+
+.kbc-rthread__outdated {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
+}
+
+.kbc-suggestion {
+  margin-top: var(--pad-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+}
+
+.kbc-suggestion__cm {
+  min-height: 4.5rem;
+  max-height: 16rem;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.kbc-suggestion__cm .cm-editor {
+  height: auto;
+}
+
+.kbc-suggestion__preview {
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.kbc-suggestion__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1);
+}
+
+.kbc-suggestion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1);
+}
+
+.kbc-suggestion__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.kbc-suggestion__actions button:hover {
+  color: var(--ink);
+}
+
+.kbc-suggestion__actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-suggestion__loopback {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-suggestion__hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-suggestion__hint--err {
+  color: var(--warn);
+}
+
+.kbc-suggestion__resolve {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-1);
+  margin-top: var(--pad-1);
+  font-size: var(--fs-sm);
+}
+
+.kbc-rthread-orphans {
+  padding: var(--pad-2) 14px;
+  background: var(--bg-card);
+  border-top: 1px dashed var(--rule);
+  font-family: var(--font-sans);
+}
+
+.kbc-rthread-orphans__head {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--pad-1);
+}
+
+/* --- PRR-U3 — DiffThread finding variant (design-ui.md §3) --------------
+ * One thread system, two voices: `.kbc-rthread--finding` is an ADDITIVE
+ * modifier on the same `.kbc-rthread` card, never a forked component. */
+
+.kbc-rthread--finding {
+  border-left: 3px solid var(--rule);
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--rule) 10%, transparent), transparent 40%),
+    var(--bg-card);
+}
+
+.kbc-rthread--sev-blocker {
+  border-left-color: var(--red);
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--red) 12%, transparent), transparent 40%),
+    var(--bg-card);
+}
+
+.kbc-rthread--sev-concern {
+  border-left-color: var(--warn);
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--warn) 12%, transparent), transparent 40%),
+    var(--bg-card);
+}
+
+.kbc-rthread--sev-ok {
+  border-left-color: var(--green);
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--green) 12%, transparent), transparent 40%),
+    var(--bg-card);
+}
+
+.kbc-rthread__sev-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--bg);
+  background: var(--ink-dim);
+}
+
+.kbc-rthread__sev-chip--blocker {
+  background: var(--red);
+}
+
+.kbc-rthread__sev-chip--concern {
+  background: var(--warn);
+}
+
+.kbc-rthread__sev-chip--ok {
+  background: var(--green);
+}
+
+.kbc-rthread__category {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.kbc-rthread__slug {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.kbc-rthread__slug:hover {
+  color: var(--ink);
+  border-color: var(--ink-mute);
+}
+
+.kbc-rthread__meta svg {
+  vertical-align: -2px;
+  margin-right: 2px;
+  color: var(--accent-soft);
+}
+
+.kbc-rthread__finding-title {
+  margin: var(--pad-1) 0 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.kbc-rthread__finding-evidence {
+  margin: var(--pad-1) 0 0;
+  padding: var(--pad-1) var(--pad-2);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.kbc-rthread__finding-recommendation {
+  margin: var(--pad-1) 0 0;
+  padding-left: var(--pad-2);
+  border-left: 2px solid var(--rule);
+  color: var(--ink-mute);
+}
+
+.kbc-rthread__disposition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1);
+  margin-top: var(--pad-1);
+  padding-top: var(--pad-1);
+  border-top: 1px solid var(--rule);
+}
+
+.kbc-rthread__disposition-chip {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.kbc-rthread__disposition-chip:hover {
+  color: var(--ink);
+}
+
+.kbc-rthread__disposition-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.kbc-rthread__disposition-loopback {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-rthread__view-in-report {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+  color: var(--accent-soft);
+}
+
+/* --- PRR-U3 — gutter finding/comment marks (S3) -------------------------- */
+
+.kbc-diff__thread-mark {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  margin-right: 4px;
+  vertical-align: middle;
+  background: var(--ink-dim);
+}
+
+.kbc-diff__thread-mark--comment {
+  background: var(--blue);
+}
+
+.kbc-diff__thread-mark--blocker {
+  background: var(--red);
+}
+
+.kbc-diff__thread-mark--concern {
+  background: var(--warn);
+}
+
+.kbc-diff__thread-mark--ok {
+  background: var(--green);
+}
+
+/* --- PRR-U3 — file header worst-severity dot + count --------------------- */
+
+.kbc-diff__finding-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-diff__finding-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ink-dim);
+}
+
+.kbc-diff__finding-badge--blocker .kbc-diff__finding-dot {
+  background: var(--red);
+}
+
+.kbc-diff__finding-badge--concern .kbc-diff__finding-dot {
+  background: var(--warn);
+}
+
+.kbc-diff__finding-badge--ok .kbc-diff__finding-dot {
+  background: var(--green);
+}
+
+/* --- PRR-U9 — diagnostics chip + gutter marks (design-addendum-2.md §D) -- */
+
+.kbc-diff__diag-chip {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: none;
+}
+/* S2-C — clickable when `onDiagnosticsClick` is provided (`DiffFileHeader`'s
+ * own doc); same button-vs-span split `.kbc-diff__impact-chip` already
+ * establishes (`styles/reviews.css`). */
+button.kbc-diff__diag-chip {
+  cursor: pointer;
+}
+button.kbc-diff__diag-chip:hover {
+  color: var(--ink);
+  border-color: var(--ink-mute);
+}
+span.kbc-diff__diag-chip {
+  cursor: default;
+}
+
+.kbc-diff__diag-mark {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.kbc-diff__diag-mark--error {
+  background: var(--red);
+}
+
+.kbc-diff__diag-mark--warning {
+  background: var(--warn);
+}
+
+.kbc-diff__diag-mark--info {
+  background: var(--blue);
+}
+
+.kbc-diff__diag-mark--hint,
+.kbc-diff__diag-mark--unknown {
+  background: transparent;
+  border: 1.5px solid var(--ink-dim);
+}
+
+/* --- PRR-U3 — composer mode segment (addendum §E) ------------------------ */
+
+.kbc-rcompose__mode {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  width: fit-content;
+}
+
+.kbc-rcompose__mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.kbc-rcompose__mode-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.kbc-rcompose__hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-rcompose__category,
+.kbc-rcompose__title {
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: var(--pad-1) var(--pad-2);
+  font: inherit;
+  font-size: var(--fs-md);
+}
+
+.kbc-rcompose__category {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── PRR-U4 (§4 — "the question/answer loop") — DiffThread's ❓ chip.
+ * Same amber/blue split `reviews.css`'s `.kbc-rthreads__qstate*` uses for
+ * the side-panel row variant — kept as two small independent rules (not a
+ * shared class across stylesheets) since the two host elements sit in
+ * different flex contexts. ── */
+
+.kbc-rthread__qstate {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.kbc-rthread__qstate--awaiting-agent {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.kbc-rthread__qstate--awaiting-you {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+}

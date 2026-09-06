@@ -1,0 +1,62 @@
+# Rust
+/target
+/spikes/*/target
+**/*.rs.bk
+*.pdb
+
+# Local kb state (production paths kb will use at runtime)
+/.kb-state/
+.cache/
+
+# v0.9 agent-memory: per-project memory corpus (bind-mounted into
+# the docker daemon as the [kb.memory-kb] corpus). Memories are
+# generated dynamically by `kb remember`; don't commit them.
+/.kb-memory/
+
+# Node (Playwright e2e + future SPA)
+/node_modules
+/tests/e2e/node_modules
+/tests/e2e/test-results
+/tests/e2e/playwright-report
+# tests/e2e/package-lock.json IS tracked — `npm ci` (CI + `just ci-e2e`)
+# requires a committed lockfile; a clean clone otherwise fails to install.
+/dist
+/.vite
+
+# Spike artifacts (Cargo.lock is committed per-spike for reproducibility)
+/spikes/lance/dataset/
+/spikes/sse/*.log
+/spikes/fastembed/.fastembed_cache/
+/docs/spike-findings/*.tmp
+
+# Playwright MCP artifacts
+/.playwright-mcp/
+
+# Operator-local Claude Code guidance, never committed
+/CLAUDE.local.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+.zed/
+
+# Direnv
+.envrc
+.direnv/
+/spikes/ratatui/*.log
+.claude/
+__pycache__/
+.grokclaude/
+.grokclaude-worktrees/
+crates/kb-core/bindings/
+
+# kb slate SL6 — the recall order-probe's local artefacts: the filler is the
+# first <pre> of a REAL captured session (private), the run dirs hold model
+# answers over real memory packs. Regenerate per plugins/kb-memory/bench/README.md.
+plugins/kb-memory/bench/probe-filler.txt
+plugins/kb-memory/bench/run/
+plugins/kb-memory/bench/run-reduced/

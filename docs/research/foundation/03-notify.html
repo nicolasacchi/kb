@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="File-watcher choice for kb — notify + notify-debouncer-full, atomic-write semantics, inotify limits, FSEvents quirks.">
+<title>03 · File watcher — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="01-lancedb.html">01 · Storage</a>
+      <a href="02-fastembed.html">02 · Embeddings</a>
+      <a href="03-notify.html" class="is-current">03 · Watcher</a>
+      <a href="04-sse-axum.html">04 · SSE</a>
+      <a href="05-ratatui.html">05 · TUI</a>
+      <a href="../surfaces/06-iframe.html">06 · Iframe</a>
+      <a href="../surfaces/07-html-effectiveness.html">07 · HTML</a>
+      <a href="../surfaces/08-prior-art.html">08 · Prior art</a>
+      <a href="../surfaces/09-comments.html">09 · Comments</a>
+      <a href="../surfaces/10-web-gallery.html">10 · Web Gallery</a>
+      <a href="../surfaces/11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 03
+    <span>·</span>
+    <span class="meta">File watcher</span>
+    <span>·</span>
+    <span class="meta">Confidence HIGH</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>notify</em> + debouncer-full,<br>400 ms window, ENOSPC fallback.</h1>
+  <p class="lede">The proposed 250 ms debounce was a guess. The right number for "Claude Code drops a finished <code>.html</code>" + occasional <code>cp -r</code> bursts is closer to <em>400 ms</em>. notify + notify-debouncer-full ≥ 0.7.0 is the canonical primitive — every comparable Rust project uses it.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>notify 8.2.0 + notify-debouncer-full 0.7.0</strong>. Don't roll your own debouncer — rename-stitching alone justifies it. Pin <code>≥ 0.7.0</code> (older versions had a real dedup bug, fixed in #711). <strong>400 ms debounce window</strong>, configurable via <code>KB_DEBOUNCE_MS</code>. <code>RecommendedWatcher</code> first; on <code>ENOSPC</code> (errno 28), log an actionable message and fall back to <code>PollWatcher</code> (2 s interval). Initial directory walk is your responsibility — neither inotify nor FSEvents replays history. <strong>Skip <code>watchexec</code> as a library</strong> — solves a different problem (process supervision).</p>
+    <div class="badges">
+      <span class="conf conf--high">Decision · HIGH</span>
+      <span class="conf conf--high">Crate maturity · HIGH</span>
+      <span class="conf conf--high">Cross-OS coverage · HIGH (linux+macos)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. notify · current state</div>
+    <h2>Stable, multi-maintainer, broadly adopted</h2>
+  </div>
+  <div class="prose">
+    <p>Repo: <code>notify-rs/notify</code>. Versions: 8.0.0 (2025-01-10) → 8.1.0 (2025-07-03) → <strong>8.2.0 (2025-08-03, latest stable)</strong>. 9.0.0-rc.1/2/4 shipped Jan–Apr 2026; debouncer-full 0.8.0-rc tracks it. <strong>Wait for 9.0 GA before considering.</strong></p>
+    <p>Default backends, confirmed: Linux/Android → inotify; macOS → FSEvents (kqueue behind <code>macos_kqueue</code> feature); Windows → ReadDirectoryChangesW; BSDs/iOS → kqueue. <code>RecommendedWatcher</code> is a compile-time alias resolving to the platform native impl. <code>PollWatcher</code> is the universal fallback — works everywhere, no kernel limits, but burns CPU.</p>
+    <h4>Fall back to PollWatcher when</h4>
+    <ul>
+      <li>inotify ENOSPC</li>
+      <li>NFS / SMB mounts (events silently not delivered)</li>
+      <li>WSL on Windows paths</li>
+      <li>Docker on Apple Silicon (FSEvents unavailable inside Rosetta — "os error 38")</li>
+      <li>macOS files you don't own</li>
+    </ul>
+    <div class="note"><b>Cross-OS event consistency is not clean.</b> <code>Modify(Name(Both))</code> is the cross-platform "rename" signal but only when notify can pair From/To. Linux pairs via inotify cookies; macOS by path; Windows via file IDs. Linux monitors <em>inodes</em>, macOS monitors <em>paths</em>. Linux has <code>Access(Close(Write))</code> (CLOSE_WRITE); macOS does not. Renaming a watched directory on macOS emits <em>no</em> event; renaming a file does. <strong>Net: don't consume raw <code>notify::Event</code> — use the debouncer.</strong></div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">B. notify-debouncer-full</div>
+    <h2>What it adds over raw notify</h2>
+  </div>
+  <div class="prose">
+    <p>Latest <strong>0.7.0 (2026-01-23)</strong>. 0.8.0-rc.2 (2026-05-02) tracks notify 9.x RC. The value-add over raw notify:</p>
+    <ul>
+      <li>Pairs Rename From/To across OSes — emits a single <code>Modify(Name(Both))</code> with both paths.</li>
+      <li>Tracks file-system IDs (inode on Linux/macOS, fileId on Windows) via <code>FileIdCache</code> so renames stitch even when the OS misses the cookie.</li>
+      <li>Updates queued event paths when an enqueued path is renamed before flush.</li>
+      <li>Collapses duplicate <code>Create</code> and post-<code>Create</code> <code>Modify</code> events.</li>
+      <li>Emits a single <code>Remove</code> when a directory is recursively deleted (inotify otherwise spams one per child).</li>
+    </ul>
+    <h4>API</h4>
+    <p><code>new_debouncer(timeout: Duration, tick_rate: Option&lt;Duration&gt;, handler: F)</code>. Timeout is <strong>global</strong>, not per-path. <code>new_debouncer_opt</code> lets you swap the file-id cache. Handler receives <code>DebounceEventResult = Result&lt;Vec&lt;DebouncedEvent&gt;, Vec&lt;Error&gt;&gt;</code>.</p>
+    <h4>-mini vs -full</h4>
+    <p>The mini variant is simpler — no rename stitching, no file-id tracking. Fine for "rerun a build on any change", <strong>insufficient for kb</strong> because batch reindexing wants to know "this path moved" vs "this is a new file".</p>
+    <h4>Notable fixes in recent versions</h4>
+    <ul>
+      <li><strong>0.6.0 (2025-08-03):</strong> skips <code>Modify</code> events fired immediately after <code>Create</code> (#701) — directly improves atomic-write handling.</li>
+      <li><strong>0.7.0 (2026-01-23):</strong> fixed deduplication so events within the timeout actually merge (#711). Before this, the handler could be called multiple times for one save — <strong>pin ≥ 0.7</strong>.</li>
+      <li><strong>0.8.0-rc:</strong> perf for large watch sets, futures/tokio handler impls, <code>Debouncer::watched_paths</code>, emits Remove even after Create+Remove inside one window.</li>
+    </ul>
+    <h4>Window for kb</h4>
+    <p>Docs example uses 2 s; community guidance is <strong>100–500 ms for editor reload</strong>, <strong>500 ms for "any save settles"</strong>. For Claude Code dropping a finished <code>.html</code> (single atomic rename) plus occasional <code>cp -r</code> bursts, <strong>400 ms</strong> balances responsiveness with batching. Below ~150 ms you risk re-firing inside one editor save sequence; above ~1 s the user notices lag.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. Atomic writes &amp; rename semantics</div>
+    <h2>The cases that actually fire in production</h2>
+  </div>
+  <div class="prose">
+    <h3>Linux <code>tmpfile + rename(tmp, target)</code></h3>
+    <p>Raw inotify yields, in order: <code>IN_CREATE</code> (tmp) → <code>IN_MODIFY</code>/<code>IN_CLOSE_WRITE</code> (tmp) → <code>IN_MOVED_FROM</code> (tmp) + <code>IN_MOVED_TO</code> (target) sharing one cookie. Notify maps these to <code>Create(File)</code>, <code>Modify(Data)</code>, <code>Access(Close(Write))</code>, <code>Modify(Name(From))</code>, <code>Modify(Name(To))</code>. <strong>If both ends fall in the watch tree</strong>, debouncer-full collapses to one <code>Modify(Name(Both))</code> with <code>paths = [tmp, target]</code>.</p>
+    <h3>macOS via FSEvents</h3>
+    <p>Typically just a <code>Modify(Name)</code> on the target with file-event flags; FSEvents may not surface the tmp file individually. The debouncer's file-id (inode) stitching covers this.</p>
+    <h3>Editor "save = rename" (neovim, Helix, IntelliJ)</h3>
+    <p>Same atomic-rename dance. Debouncer-full coalesces correctly as long as timeout exceeds the editor's save sequence (a few tens of ms). 400 ms is generous. Some editors <code>unlink</code>-then-write instead → <code>Remove</code> + <code>Create</code> with no rename pairing; with debouncer 0.6.0+'s "skip Modify after Create" plus file-id tracking, it still ends up as one logical "file at this path changed" event.</p>
+    <h3>Symlink target swaps</h3>
+    <p>notify does <strong>not</strong> follow symlinks recursively — it watches the link path. <code>ln -sfn newtarget link</code> shows up as <code>Modify(Name)</code> on the link itself, not on what it points to. To react to swaps of a symlinked html directory, watch the <em>real</em> target.</p>
+    <h3><code>mv</code> from outside the watched dir</h3>
+    <p>Linux yields a single <code>Create</code> (no MOVED_FROM was visible since source wasn't watched); debouncer v6+ relabels as rename-to. macOS yields <code>Create</code> too. kb should treat these as "new file, index it"; debouncer does not invent a phantom From-side.</p>
+    <h3><code>cp -r</code> of 100 files</h3>
+    <p>Linux inotify yields ~3–5 events per file (CREATE/OPEN/MODIFY/CLOSE_WRITE) → ~300–500 raw events streamed; with a 400 ms window debouncer-full collapses to ~100 <code>DebouncedEvent</code>s, one per final path. macOS FSEvents already coalesces in-kernel. Either way kb should treat the debounced flush as "here is a batch — index every path".</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. Linux inotify limits</div>
+    <h2>Per-directory, not per-file — kb won't hit it</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong><code>fs.inotify.max_user_watches</code>:</strong> Arch <strong>524288</strong> (since 2018, confirmed default — relevant on a Linux desktop). Ubuntu/Debian 524288 (Linux 5.11+ auto-tunes by RAM, often ~1048576). Fedora same.</li>
+      <li><strong><code>fs.inotify.max_user_instances</code>:</strong> 128 across all distros. Per-user limit on inotify FDs (one per <code>inotify_init()</code>). kb only needs one — never your problem.</li>
+      <li><strong><code>fs.inotify.max_queued_events</code>:</strong> 16384. Burst overflow surfaces as a notify error.</li>
+      <li><strong>inotify is per-directory:</strong> recursive watching adds one watch per <em>subdirectory</em>. 10k files in one folder = 1 watch. 1k files in 10 nested folders = 10 watches. 100k subdirs = 100k watches → trips the limit. kb's flat-ish html corpus will <strong>not</strong> hit this organically.</li>
+    </ul>
+    <h4>Detecting the limit</h4>
+    <p>notify surfaces as <code>notify::Error</code> with <code>kind = ErrorKind::Io(io)</code> where <code>io.raw_os_error() == Some(28)</code> (ENOSPC). The default OS message says "No space left on device" — translate it.</p>
+    <div class="note"><b>User-facing log when fallback triggers:</b> <code>inotify watch budget exhausted (errno 28). Falling back to polling. To restore native watching, run sudo sysctl fs.inotify.max_user_watches=1048576</code>.</div>
+    <h4>Workarounds, in order</h4>
+    <ol>
+      <li>Helpful error + auto-fallback to <code>PollWatcher</code> (poll interval 2 s, no <code>compare_contents</code> unless missed writes are observed on tmpfs/network mounts).</li>
+      <li>Document sysctl tuning in README.</li>
+      <li>Advise non-recursive watching if a corpus grows pathological.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. macOS FSEvents quirks</div>
+    <h2>Path-level, leading vs trailing edge, no historical replay</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Coalescing window</strong> = the FSEvents <code>latency</code> parameter. notify exposes via <code>Config::with_latency</code>; default ≈ 0 (deliver ASAP). For kb, leave default and let debouncer-full's timeout do all coalescing — single source of truth.</li>
+      <li><strong>Leading vs trailing edge:</strong> notify defaults to trailing (no <code>kFSEventStreamCreateFlagNoDefer</code>) — what you want for a debouncer.</li>
+      <li><strong>Historical events replay:</strong> FSEvents <em>can</em> replay from before stream start using event IDs and the on-disk <code>.fseventsd</code> log. notify does <strong>not</strong> expose this — always a fresh stream. <strong>kb must do its own initial directory walk on startup.</strong> Matches Linux (inotify has no replay either).</li>
+      <li><strong>Path-level vs inode-level:</strong> FSEvents tracks paths; inotify tracks inodes. Don't rename the watch root while the daemon runs.</li>
+      <li><strong>Known FSEvents+notify bug</strong> (#240): in some configs, events for a continuously-written file aren't delivered until close; may delay up to 10 s. Claude Code closes its file before the rename, so this is fine for kb.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">F. Production patterns</div>
+    <h2>Everyone uses notify directly</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>notify is the default primitive</strong>, used by alacritty, deno, mdBook, rust-analyzer, watchexec, zed, dioxus, and (formerly) cargo-watch.</li>
+      <li><strong><code>cargo-watch</code> was archived January 2025.</strong> The maintainer points to <strong>bacon</strong> as the successor — bacon uses notify directly. Strongest production signal.</li>
+      <li><strong><code>watchexec</code> library</strong> is split into <code>watchexec</code> (orchestrator), <code>-events</code>, <code>-signals</code>, <code>-supervisor</code>, <code>-filterer-*</code>. Wraps notify and adds Tokio runtime, glob/gitignore filterers, signal handling, process supervisor. Default debounce 50 ms, trailing edge. <strong>Don't use it for kb</strong>: optimised for "watch files, run a process"; you want "watch files, call an in-process function". Overkill, ties you to Tokio + miette.</li>
+      <li>dioxus dev server and mdBook serve both use notify directly.</li>
+      <li>No newer general-purpose crate has displaced notify.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <h4>Architecture</h4>
+    <ol>
+      <li><strong>Initial walk first.</strong> On startup, <code>walkdir</code> the watch root, index every <code>.html</code>, record <code>(path, mtime, size, content_hash)</code>. Neither notify nor the debouncer replays history.</li>
+      <li><strong>Construct the debouncer next</strong>, then re-walk once after it's armed (cheap; deduplicates by content hash). Closes the race between initial walk and watcher arming.</li>
+      <li><strong>Dispatch on <code>DebouncedEvent.kind</code></strong> for each batch:
+        <ul>
+          <li><code>Create(_)</code> or <code>Modify(Name(To|Both))</code> → reindex destination path.</li>
+          <li><code>Modify(Data(_))</code> or <code>Modify(Metadata(_))</code> → reindex path.</li>
+          <li><code>Remove(_)</code> or unmatched <code>Modify(Name(From))</code> → drop from index.</li>
+          <li><code>Modify(Name(Both))</code> with two paths → rename in-index by file-id, no re-read.</li>
+        </ul>
+      </li>
+      <li><strong>Fsync the index after each batch.</strong> The debounce window already gave you "burst settled".</li>
+    </ol>
+
+<pre>use notify::RecursiveMode;
+use notify_debouncer_full::new_debouncer;
+use std::time::Duration;
+
+let (tx, rx) = std::sync::mpsc::channel();
+let mut debouncer = new_debouncer(Duration::from_millis(400), None, tx)?;
+debouncer.watch(&amp;kb_root, RecursiveMode::Recursive)
+    .or_else(|e| if is_enospc(&amp;e) { fallback_poll(...) } else { Err(e) })?;</pre>
+
+    <h4>Configuration knobs</h4>
+    <ul>
+      <li><code>KB_DEBOUNCE_MS</code> — default <strong>400</strong>. Lower (~150) for snappier reload; higher (~1000) for noisy network mounts.</li>
+      <li><code>KB_WATCHER_MODE</code> — <code>auto</code> (default: native + ENOSPC fallback), <code>native</code>, <code>poll</code>.</li>
+      <li><code>KB_POLL_INTERVAL_MS</code> — default <strong>2000</strong> in poll mode.</li>
+    </ul>
+
+    <h4>Verification (for the executor)</h4>
+    <ul>
+      <li><strong>Burst test:</strong> <code>for i in $(seq 1 100); do echo '&lt;p&gt;hi&lt;/p&gt;' &gt; /tmp/kb/$i.html; done</code> → expect <strong>one</strong> index batch flush logged, not 100.</li>
+      <li><strong>Atomic-rename:</strong> small Python snippet using <code>os.replace(tmp, target)</code> → expect a single <code>Modify(Name(Both))</code> debounced event with both paths.</li>
+      <li><strong>ENOSPC:</strong> <code>sudo sysctl fs.inotify.max_user_watches=8</code> then start kb on a tree with &gt;8 directories → expect actionable error message and successful poll-mode operation.</li>
+      <li><strong>macOS smoke:</strong> same atomic-rename test → equivalent single-event behaviour.</li>
+    </ul>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open questions</span>
+    <ul>
+      <li>Whether to add a static prefix-skip filter for <code>node_modules</code>/<code>.git</code> inside the watch root, or just document "don't watch noisy folders".</li>
+      <li>Whether to expose the file-id cache backend choice (in-memory vs sqlite-backed) — defer to v2 unless restart-after-many-renames becomes a real problem.</li>
+      <li>9.0 GA timing — debouncer-full 0.8 will track it; plan one upgrade pass after notify 9.0 lands.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="02-fastembed.html"><span class="dir">← Prev</span><span class="ttl">02 · Embeddings</span></a>
+  <a class="next" href="04-sse-axum.html"><span class="dir">Next →</span><span class="ttl">04 · SSE in axum</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · file watcher</p>
+      <p>If cargo-watch — the most opinionated rust-watcher tool — uses notify directly via bacon, kb should too.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="04-sse-axum.html">04 SSE</a></li>
+        <li><a href="05-ratatui.html">05 TUI</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://github.com/notify-rs/notify">notify</a></li>
+        <li><a href="https://docs.rs/notify-debouncer-full">debouncer-full</a></li>
+        <li><a href="https://github.com/notify-rs/notify/issues/240">#240 (FSEvents bug)</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

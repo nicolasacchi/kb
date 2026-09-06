@@ -1,0 +1,743 @@
+/* RL-track (v0.18) — reading lists.
+ *
+ * /lists index: .kb-lists* (header + new-list form + card grid),
+ * .kb-list-card*, .kb-list-progress*.
+ * /lists/:kb/:id detail (RLs3): .kb-listd*.
+ * Trail queue bar (RLs5): .kb-queuebar*.
+ * Tokens only — no hardcoded palette. */
+
+/* ── /lists index ─────────────────────────────────────────────────── */
+
+.kb-lists {
+  padding: var(--pad-3);
+  max-width: 980px;
+}
+.kb-lists__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+  margin-bottom: var(--pad-3);
+}
+.kb-lists__title {
+  font-size: 18px;
+  margin: 0;
+  margin-right: auto;
+}
+.kb-lists__new {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-1);
+}
+.kb-lists__new-title {
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 8px;
+  font: inherit;
+  min-width: 220px;
+}
+.kb-lists__new-kb {
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 6px;
+  font: inherit;
+}
+.kb-lists__new-btn {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 5px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.kb-lists__new-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.kb-lists__new-btn:not(:disabled):hover {
+  color: var(--accent-fg);
+}
+.kb-lists__new-err {
+  color: var(--warn);
+  font-size: 11.5px;
+}
+.kb-lists__error {
+  color: var(--warn);
+  margin-bottom: var(--pad-2);
+}
+.kb-lists__section {
+  margin-bottom: var(--pad-3);
+}
+.kb-lists__section-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 0 0 var(--pad-2);
+}
+.kb-lists__archived {
+  margin-top: var(--pad-3);
+}
+.kb-lists__archived summary {
+  cursor: pointer;
+  list-style: revert;
+}
+.kb-lists__archived[open] summary {
+  margin-bottom: var(--pad-2);
+}
+.kb-lists__archived .kb-list-card {
+  opacity: 0.7;
+}
+.kb-lists__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: var(--gap);
+}
+
+/* ── list card ────────────────────────────────────────────────────── */
+
+.kb-list-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2) var(--pad-3);
+}
+.kb-list-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-1);
+  min-width: 0;
+}
+.kb-list-card__title {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-list-card__title:hover {
+  color: var(--accent-soft);
+}
+.kb-list-card__kb {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: 0 7px;
+}
+.kb-list-card__spacer {
+  flex: 1;
+}
+.kb-list-card__act {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--ink-dim);
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.kb-list-card__act:hover,
+.kb-list-card__act.is-on {
+  color: var(--accent-soft);
+}
+.kb-list-card__desc {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-list-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-1);
+}
+.kb-list-card__stats {
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+.kb-list-card__continue {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 11.5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.kb-list-card__continue:not(:disabled):hover {
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kb-list-card__continue:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── segmented progress bar (read | in-progress | unread) ─────────── */
+
+.kb-list-progress {
+  display: flex;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--rule) 55%, transparent);
+}
+.kb-list-progress__read {
+  background: var(--accent);
+}
+.kb-list-progress__inprog {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ── /lists/:kb/:id detail ────────────────────────────────────────── */
+
+.kb-listd {
+  padding: var(--pad-3);
+  max-width: 880px;
+}
+.kb-listd__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin-bottom: var(--pad-3);
+}
+.kb-listd__back {
+  color: var(--ink-dim);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kb-listd__back:hover {
+  color: var(--accent-soft);
+}
+.kb-listd__titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-listd__title {
+  font-size: 18px;
+  margin: 0;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-listd__title-edit,
+.kb-listd__desc-edit {
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  padding: 3px 6px;
+  min-width: 50%;
+}
+.kb-listd__title-edit {
+  font-size: 18px;
+  font-weight: 600;
+}
+.kb-listd__delete:hover {
+  color: var(--warn);
+}
+.kb-listd__desc {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: var(--ink-dim);
+  font-size: 12.5px;
+  cursor: text;
+}
+.kb-listd__desc.is-empty {
+  opacity: 0.55;
+  font-style: italic;
+}
+.kb-listd__progressrow {
+  display: grid;
+  /* W2.4 added a 4th (optional-preceding) slot for the quiet
+     "open as board" link — see .kb-listd__board-link below. */
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: var(--pad-2);
+  margin-top: var(--pad-1);
+}
+.kb-listd__progressrow .kb-list-card__continue {
+  text-decoration: none;
+}
+/* W2.4 — quiet, no-ceremony link: same visual weight as the stats
+   text next to it, not a button (creating nothing here — the board
+   route's GET default makes a fresh board implicit). */
+.kb-listd__board-link {
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.kb-listd__board-link:hover {
+  color: var(--accent-soft);
+  text-decoration: underline;
+}
+.kb-listd__error {
+  padding: var(--pad-3);
+  color: var(--warn);
+}
+
+/* add-entry */
+.kb-listd__add {
+  margin-bottom: var(--pad-2);
+}
+.kb-listd__add-row {
+  display: flex;
+  gap: var(--pad-1);
+}
+.kb-listd__add-input {
+  flex: 1;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 5px 8px;
+  font: inherit;
+}
+.kb-listd__add-btn {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 5px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.kb-listd__add-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.kb-listd__add-err {
+  color: var(--warn);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.kb-listd__add-picker {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+  overflow: hidden;
+}
+.kb-listd__add-cand {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  background: var(--bg-panel);
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.kb-listd__add-cand:last-child {
+  border-bottom: 0;
+}
+.kb-listd__add-cand:hover {
+  background: var(--accent-bg);
+}
+.kb-listd__add-cand-path {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+/* entry rows */
+.kb-listd__entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kb-listd__row {
+  display: grid;
+  grid-template-columns: 22px 22px 1fr auto;
+  align-items: start;
+  gap: var(--pad-1);
+  padding: var(--pad-1) var(--pad-1);
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 60%, transparent);
+}
+.kb-listd__row:focus-visible {
+  outline: 1px solid var(--accent-bor);
+  outline-offset: -1px;
+}
+.kb-listd__row.is-tombstone {
+  opacity: 0.55;
+}
+.kb-listd__idx {
+  color: var(--ink-dim);
+  font-size: 11px;
+  padding-top: 3px;
+  text-align: right;
+}
+.kb-listd__dot {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+  padding: 0;
+}
+.kb-listd__dot.is-read {
+  color: var(--accent);
+}
+/* P8 — session-transcript entry: a neutral, non-interactive marker (no read
+   state, invariant #25). */
+.kb-listd__dot.is-session {
+  cursor: default;
+  color: var(--ink-dim);
+}
+.kb-listd__dot.is-in_progress {
+  color: var(--accent-soft);
+}
+.kb-listd__dot.is-override {
+  text-shadow: 0 0 0 currentColor;
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: var(--radius-pill);
+}
+.kb-listd__body {
+  min-width: 0;
+}
+.kb-listd__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-1);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.kb-listd__title.is-dead {
+  color: var(--ink-dim);
+}
+a.kb-listd__title {
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+a.kb-listd__title:hover {
+  color: var(--accent-soft);
+}
+span.kb-listd__title.is-dead {
+  font-size: 13.5px;
+}
+.kb-listd__chip {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--accent-soft);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+}
+.kb-listd__folder {
+  color: var(--ink-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kb-listd__min {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kb-listd__stale {
+  color: var(--warn);
+  font-size: 10.5px;
+}
+.kb-listd__note {
+  display: block;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-top: 1px;
+  text-align: left;
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  cursor: text;
+  max-width: 100%;
+}
+.kb-listd__note.is-empty {
+  opacity: 0;
+  font-style: italic;
+}
+.kb-listd__row:hover .kb-listd__note.is-empty {
+  opacity: 0.5;
+}
+.kb-listd__note-edit {
+  width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 6px;
+  margin-top: 2px;
+  resize: vertical;
+}
+.kb-listd__acts {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+}
+.kb-listd__row:hover .kb-listd__acts,
+.kb-listd__row:focus-within .kb-listd__acts {
+  opacity: 1;
+}
+.kb-listd__act {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-dim);
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.kb-listd__act:hover {
+  color: var(--ink);
+  border-color: var(--accent-bor);
+}
+.kb-listd__act--rm:hover {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+/* footer */
+.kb-listd__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-1);
+  margin-top: var(--pad-3);
+  font-size: 11.5px;
+}
+.kb-listd__export-lbl {
+  color: var(--ink-dim);
+}
+.kb-listd__export {
+  color: var(--accent-soft);
+}
+
+/* ── add-to-list popover (ContextBar / inspector / TocSpy rows) ───── */
+
+.kb-atl {
+  position: relative;
+  display: inline-flex;
+}
+.kb-atl__btn--on {
+  color: var(--accent-soft);
+}
+.kb-atl__iconbtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+  opacity: 0;
+}
+.kb-toc-spy__row:hover .kb-atl__iconbtn,
+.kb-atl__iconbtn:focus-visible,
+.kb-atl__iconbtn[aria-expanded="true"] {
+  opacity: 1;
+}
+.kb-atl__iconbtn:hover {
+  color: var(--accent);
+}
+.kb-atl__pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-popover);
+  min-width: 230px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  /* SH.A1 — theme-aware float shadow (static popover; was a hardcoded
+     dark-mode black). */
+  box-shadow: var(--shadow);
+  padding: var(--pad-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* TocSpy rows sit at the right edge — open leftward instead. */
+.kb-toc-spy__row .kb-atl__pop {
+  top: 0;
+  right: calc(100% + 6px);
+}
+.kb-atl__scope {
+  font-size: 10.5px;
+  color: var(--accent-soft);
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 2px;
+}
+.kb-atl__empty {
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  padding: 4px 6px;
+}
+.kb-atl__row {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-1);
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.kb-atl__row:hover {
+  background: var(--accent-bg);
+}
+.kb-atl__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-atl__count {
+  color: var(--ink-dim);
+  font-size: 10.5px;
+}
+.kb-atl__new {
+  display: flex;
+  gap: 4px;
+  border-top: 1px solid var(--rule);
+  margin-top: 2px;
+  padding-top: 4px;
+}
+.kb-atl__new input {
+  flex: 1;
+  background: var(--bg-deep, transparent);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.kb-atl__new button {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.kb-atl__new button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── trail queue bar (detail view, when opened from a list) ───────── */
+
+.kb-queuebar {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: 4px var(--pad-2);
+  background: color-mix(in srgb, var(--accent-bg) 70%, transparent);
+  border-bottom: 1px solid var(--accent-bor);
+  font-size: 12px;
+  min-height: 26px;
+}
+.kb-queuebar__list {
+  color: var(--accent-soft);
+  text-decoration: none;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 32ch;
+}
+.kb-queuebar__list:hover {
+  color: var(--accent-fg);
+}
+.kb-queuebar__pos,
+.kb-queuebar__left {
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.kb-queuebar__gone {
+  color: var(--warn);
+}
+.kb-queuebar__mark {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kb-queuebar__mark.is-read {
+  color: var(--accent);
+  border-color: var(--accent-bor);
+}
+.kb-queuebar__mark:hover {
+  border-color: var(--accent-bor);
+}
+.kb-queuebar__spacer {
+  flex: 1;
+}
+.kb-queuebar__nav {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 11.5px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kb-queuebar__nav:not(:disabled):hover {
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kb-queuebar__nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.kb-queuebar__exit {
+  background: none;
+  border: 0;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+}
+.kb-queuebar__exit:hover {
+  color: var(--warn);
+}

@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kb decomposition research — evidence appendix (2026-08)</title>
+<meta name="description" content="Curated reference tables from an 8-agent research program on decomposing the kb daemon into plugins, crates, or sibling daemons: coupling map, route/SSE inventory, build economics, measured build times, cross-feature coupling, external precedents, deploy record, co-change stats, red-team verdicts.">
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:reference, project:kb, plugins, architecture, decomposition, evidence, appendix">
+
+<style>
+:root{
+  --bg:#f7f6f2;--surface:#ece6d9;--fg:#1f241f;--muted:#52594f;
+  --rule:#d7cfb9;--accent:#5b3f96;--accent-fg:#ffffff;
+  --warn:#7a4c0a;--danger:#8f2a37;--ok:#175f3f;
+  --fs-body:17px;--lh:1.55;--maxw:64rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:8px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#15181a;--surface:#1f2326;--fg:#eef1ec;--muted:#a9b0a6;
+    --rule:#33383b;--accent:#b79cf0;--accent-fg:#1a1130;
+    --warn:#e3ac52;--danger:#f18a82;--ok:#7fd6ab;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:var(--fs-body);line-height:var(--lh)}
+.skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.6em 1em;z-index:100;border-radius:0 0 var(--radius) 0;font-weight:600}
+.skip-link:focus{left:0}
+a{color:var(--accent)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:3px}
+header.masthead{background:var(--surface);border-bottom:1px solid var(--rule);padding:2rem 1.5rem 1.6rem}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 1.5rem}
+header.masthead .wrap{padding:0}
+.kicker{font-family:var(--mono);font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 .5rem}
+h1{font-size:clamp(1.6rem,3vw,2.3rem);line-height:1.2;margin:0 0 .5rem;letter-spacing:-.01em}
+.dek{color:var(--muted);font-size:1.02rem;max-width:52rem;margin:0}
+.meta-row{display:flex;flex-wrap:wrap;gap:.4rem .6rem;margin-top:1rem;font-family:var(--mono);font-size:.8rem}
+.pill{border:1px solid var(--rule);border-radius:999px;padding:.2rem .7rem;color:var(--muted);background:var(--bg)}
+nav.toc{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:1rem 1.2rem;margin:1.4rem auto 0;max-width:var(--maxw)}
+nav.toc h2{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 .6rem;border:0;padding:0}
+nav.toc ol{margin:0;padding-left:1.2rem;columns:2;column-gap:2rem}
+nav.toc li{margin:0 0 .3rem;break-inside:avoid}
+nav.toc a{text-decoration:none}
+nav.toc a:hover{text-decoration:underline}
+main{max-width:var(--maxw);margin:0 auto;padding:2.2rem 1.5rem 3.5rem}
+section{margin:0 0 2.6rem}
+section > h2{font-size:1.42rem;border-bottom:2px solid var(--rule);padding-bottom:.45rem;margin:0 0 1rem;scroll-margin-top:1.2rem}
+h3{font-size:1.08rem;margin:1.6rem 0 .6rem;scroll-margin-top:1.2rem}
+p{margin:.65rem 0}
+ul,ol{padding-left:1.35rem}
+li{margin:.28rem 0}
+code{font-family:var(--mono);font-size:.89em;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05em .35em}
+pre{font-family:var(--mono);font-size:.85rem;background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.9rem 1.1rem;overflow-x:auto;line-height:1.5}
+pre code{background:none;border:0;padding:0}
+.table-wrap{overflow-x:auto;margin:.9rem 0 1.3rem;border:1px solid var(--rule);border-radius:var(--radius)}
+table{width:100%;border-collapse:collapse;font-size:.9rem;min-width:30rem}
+caption{text-align:left;font-family:var(--mono);font-size:.76rem;color:var(--muted);padding:.55rem .85rem;border-bottom:1px solid var(--rule);background:var(--surface)}
+th,td{padding:.5rem .75rem;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+thead th{background:var(--surface);font-size:.76rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+tbody tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+.grade{display:inline-block;font-family:var(--mono);font-weight:700;border-radius:4px;padding:.05em .5em;font-size:.85em}
+.grade-a{background:color-mix(in srgb, var(--ok) 18%, var(--surface));color:var(--ok)}
+.grade-b{background:color-mix(in srgb, var(--accent) 16%, var(--surface));color:var(--accent)}
+.grade-c{background:color-mix(in srgb, var(--warn) 20%, var(--surface));color:var(--warn)}
+.grade-d{background:color-mix(in srgb, var(--danger) 18%, var(--surface));color:var(--danger)}
+.verdict{font-family:var(--mono);font-weight:700;font-size:.85em}
+.v-lands{color:var(--ok)}
+.v-partial{color:var(--warn)}
+.v-fails,.v-implausible{color:var(--danger)}
+.callout{border:1px solid var(--rule);border-left-width:5px;border-radius:var(--radius);padding:.85rem 1.05rem;margin:1rem 0;background:var(--surface)}
+.callout p:first-child{margin-top:0}
+.callout p:last-child{margin-bottom:0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout .label{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:.3rem}
+.callout--warn .label{color:var(--warn)}
+.callout--danger .label{color:var(--danger)}
+.callout--ok .label{color:var(--ok)}
+.src{font-family:var(--mono);font-size:.84em;color:var(--muted)}
+blockquote{margin:.9rem 0;padding:.15rem 1rem;border-left:3px solid var(--accent);color:var(--muted);font-style:italic}
+footer{border-top:1px solid var(--rule);padding:1.8rem 1.5rem 2.6rem;color:var(--muted);font-size:.87rem}
+footer .wrap{max-width:var(--maxw);margin:0 auto;padding:0}
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;scroll-behavior:auto !important}
+}
+@media (max-width:640px){nav.toc ol{columns:1}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="wrap">
+    <p class="kicker">kb research — evidence appendix</p>
+    <h1>kb decomposition research — evidence appendix (2026-08)</h1>
+    <p class="dek">Curated raw evidence from an 8-agent research program (2026-08-16) on whether
+    kb should decompose into plugins, separate crates, or sibling daemons. This document takes
+    no position — it is the reference-table companion to
+    <a href="kb-decomposition-vs-plugins-2026-08.html">kb-decomposition-vs-plugins-2026-08.html</a>.</p>
+    <div class="meta-row">
+      <span class="pill">gathered 2026-08-16</span>
+      <span class="pill">8 agents · 2 workflows</span>
+      <span class="pill">4 grok-worker lanes + 4 sonnet lanes</span>
+      <span class="pill">status: reference</span>
+    </div>
+  </div>
+</header>
+<nav class="toc" aria-label="Sections">
+  <h2 id="toc-heading">Contents</h2>
+  <ol>
+    <li><a href="#how-this-evidence-was-gathered">How this evidence was gathered</a></li>
+    <li><a href="#kb-core-coupling-map">kb-core coupling map</a></li>
+    <li><a href="#server-routes-spa-footprint-and-the-four-existing-seams">Server routes, SPA footprint, and the four existing seams</a></li>
+    <li><a href="#build-economics">Build economics</a></li>
+    <li><a href="#measured-incremental-builds">Measured incremental builds</a></li>
+    <li><a href="#cross-feature-coupling-found">Cross-feature coupling found</a></li>
+    <li><a href="#external-precedents">External precedents</a></li>
+    <li><a href="#deploy-and-operational-record">Deploy and operational record</a></li>
+    <li><a href="#co-change-and-decision-record-evidence">Co-change and decision-record evidence</a></li>
+    <li><a href="#red-team-verdicts">Red-team verdicts</a></li>
+    <li><a href="#incidental-defects-found">Incidental defects found</a></li>
+  </ol>
+</nav>
+
+<main id="main">
+<article>
+
+<section>
+<h2 id="how-this-evidence-was-gathered">1. How this evidence was gathered</h2>
+<p>On 2026-08-16 two orchestration workflows ran eight research agents against
+<code>~/project/kb</code>. Workflow 1 (task <code>wl8til801</code>) ran five lanes:
+<strong>coupling-map</strong>, <strong>seams-server-spa</strong>, <strong>build-economics</strong>,
+<strong>precedents</strong>, <strong>rulings-cochange</strong>. Workflow 2 (task
+<code>wjli4icg7</code>) ran three: <strong>modular-monolith</strong> (measured build times),
+<strong>sibling-daemon-contract</strong>, <strong>red-team</strong>. Four lanes (coupling-map,
+seams-server-spa, precedents, sibling-daemon-contract) were dispatched as
+<code>grokclaude research run</code> jobs — separate Grok-driven worker processes with their own job
+ids and turn budgets. The other four ran directly as Sonnet agents against local <code>git</code>,
+<code>rg</code>, <code>cargo tree</code>, and filesystem tools, no external job dispatch.</p>
+
+<div class="callout callout--warn">
+<span class="label">Verification caveats — two grok jobs unverified</span>
+<p>The coupling-map job (<code>01M05AXYA9B418Q2N8G23EF0P8</code>) hit its 40-turn cap mid
+self-verification — its own <code>meta.json</code> records <code>status: "failed"</code>,
+<code>stop_class: "cancelled"</code>, <code>"Error: max turns reached"</code> — but it had already
+written a complete, cited <code>report.md</code> (264 lines, 47 findings, each with an evidence
+selector) beforehand. Content relayed into §2 is that report, unedited: real, cited evidence that
+never received a formal <code>verify</code> pass. The sibling-daemon-contract job
+(<code>01M05DSDAR66DAZHJZRBCYTK20</code>) likewise produced no <code>verify.status</code> — the
+installed <code>grokclaude</code> CLI has no <code>--verify</code> flag at all; it finished cleanly
+(<code>end_turn</code>) after an earlier attempt hit the 600s default timeout. Same limitation for
+the seams-server-spa and precedents jobs. Treat all four grok-sourced sections (§2, §3, §7, §8) as
+high-confidence-but-unverified.</p>
+</div>
+
+<p class="src">Lane→section map: §2 coupling-map (grok) · §3 seams-server-spa (grok) · §4/§9
+build-economics/rulings-cochange (sonnet) · §5/§6 modular-monolith (sonnet) · §7 precedents (grok) ·
+§8 sibling-daemon-contract (grok) · §10 red-team (sonnet).</p>
+
+<div class="callout callout--warn">
+<span class="label">Cross-lane discrepancy — SSE type enum count</span>
+<p>The coupling-map lane counted kb-server's <code>V0_0_1_TYPES</code> SSE schema enum
+(<code>crates/kb-server/src/routes/schema.rs</code>) at <strong>57</strong> entries; the
+seams-server-spa lane counted it independently at <strong>59</strong>. Both agree on the substance —
+a double-digit set of production-emitted kinds is absent from the enum (§3.2, §11) — but the exact
+denominator differs. Treat exact counts here as approximate; re-count against the live source before
+citing one downstream.</p>
+</div>
+</section>
+
+<section>
+<h2 id="kb-core-coupling-map">2. kb-core coupling map</h2>
+<p><code>crates/kb-core/src/lib.rs</code> declares <strong>59</strong> public modules. Lance's
+<code>artifacts</code> schema declares <strong>50</strong> <code>Field::new</code> columns on
+<code>Doc</code>; sqlite carries <strong>31</strong> <code>CREATE TABLE</code> names across
+<strong>36</strong> refinery migrations. The brief's assumed names <em>search</em>,
+<em>boards</em>, and <em>timeline/daycard</em> are not <code>pub mod</code> entries — search is
+composed from <code>query.rs</code>+<code>fusion.rs</code>+<code>docs_query.rs</code>+actor query
+methods; "boards" is two unrelated things (corkboard in kb-core, canvas boards as a kb-server
+sidecar file); timeline/daycard are kb-server read-only views with no kb-core module at all.</p>
+
+<h3 id="shared-kernel">2.1 Shared kernel — assumed by every subsystem</h3>
+<ol>
+<li><strong>Storage actor is the only writer</strong> — one lance <code>Storage</code> + one sqlite
+<code>Db</code> per kb, single-writer via <code>mpsc</code> (<code>CHANNEL_CAPACITY = 1024</code>),
+not a mutex; per-process only, no filesystem lock on <code>index.db</code>/<code>lance/</code>.</li>
+<li><strong>Index generation memo</strong> — bumped only on row-set/edge mutations
+(<code>UpsertDoc(s)</code>, <code>DeleteDoc</code>, <code>CascadeDeleteDoc</code>,
+<code>RelocateDoc</code>, <code>SweepOrphans</code> if rows removed, <code>RecordEdges</code> if
+changed, <code>DropKbData</code>); chunks/code_refs/lists/reading/atlas-coords/snapshots/compaction
+do <strong>not</strong> bump it.</li>
+<li><strong>Artifact ids</strong> — 12-hex SHA-256 prefix of the source-relative path; relocate is
+the only sanctioned id change.</li>
+<li><strong>EventBus</strong> — envelope <code>{v,id,type,ts,payload}</code>, ring 1024, live 1024,
+<code>Last-Event-ID</code> resume. The storage actor has no bus of its own.</li>
+<li><strong>Config</strong> — one TOML file, daemon-wide sections plus per-kb
+<code>[kb.&lt;name&gt;]</code>.</li>
+<li><strong>Paths</strong> — <code>KB_HOME</code>/<code>KB_STATE_DIR</code>/<code>KB_CONFIG_DIR</code>/
+<code>KB_CACHE_DIR</code> over XDG; per-kb state at <code>&lt;state&gt;/&lt;kb&gt;/</code>.</li>
+<li><strong>Three lifecycle registries, not one</strong> — see §2.2; a table missing from any strands
+rows under a dead id.</li>
+<li><strong>Enrichment is in-process</strong> — after <code>upsert_docs</code>,
+<code>indexer::finish_indexed_doc</code> runs <code>enrich::default_hooks()</code>; hooks are
+best-effort, ordered by registration.</li>
+</ol>
+
+<h3 id="three-lifecycle-registries">2.2 Three lifecycle registries — differing membership</h3>
+<div class="table-wrap">
+<table>
+<caption>Table 2.1 — CASCADE_STEPS vs SWEEP_TABLES vs cascade_relocate_doc</caption>
+<thead><tr><th>Registry</th><th class="num">Count</th><th>Tables</th></tr></thead>
+<tbody>
+<tr><td><code>CASCADE_STEPS</code> (delete)</td><td class="num">16</td><td>edges, corkboard,
+doc_first_seen, pinned_memories, memory_links, memory_links_seeded, artifact_snapshots, code_refs,
+code_refs_docs, sessions, session_files, session_decisions, session_commits, session_research,
+reading_sections, history</td></tr>
+<tr><td><code>SWEEP_TABLES</code> (orphan)</td><td class="num">7</td><td>edges, corkboard,
+pinned_memories, reading_sections, history, code_refs, code_refs_docs</td></tr>
+<tr><td><code>cascade_relocate_doc</code> (rekey)</td><td class="num">20</td><td>the cascade set
+plus <code>list_entries</code>, <code>atlas_snapshot_points</code>, <code>excluded_files</code>,
+<code>moves</code>, plus <code>session_files.target_artifact_id</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>list_entries</code> is <strong>deliberately absent</strong> from CASCADE/SWEEP
+(tombstone-at-read-time for reading lists) but <strong>is</strong> rekeyed on relocate so
+<code>kb mv</code> doesn't strand list rows. <code>doc_first_seen</code>, session child tables,
+<code>memory_links*</code>, <code>artifact_snapshots</code> are on CASCADE+relocate but not SWEEP.
+<code>atlas_snapshot_points</code>/<code>excluded_files</code> are relocate-only.</p>
+
+<h3 id="subsystem-coupling-table">2.3 Subsystem coupling table</h3>
+<p>Grades: <span class="grade grade-a">A</span> separate process today, narrow interface;
+<span class="grade grade-b">B</span> separable with moderate work; <span class="grade grade-c">C</span>
+deeply entangled with storage/indexer; <span class="grade grade-d">D</span> <em>is</em> the kernel.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 2.2 — kb-core module coupling grades</caption>
+<thead><tr><th>Module</th><th>Grade</th><th>Role + justification</th></tr></thead>
+<tbody>
+<tr><td>storage (actor)</td><td><span class="grade grade-d">D</span></td><td>Single-writer-per-kb
+owner of lance+sqlite; all tables + all 3 registries; 45 files ref it. <em>Is</em> the kernel.</td></tr>
+<tr><td>indexer</td><td><span class="grade grade-c">C</span></td><td>Watch→parse→embed→upsert→
+enrich→SSE. Every enricher/watcher hangs off it; drives cascade+sweep.</td></tr>
+<tr><td>watcher</td><td><span class="grade grade-b">B</span></td><td><code>notify</code>/poll. No
+tables; already "events in, ingest messages out."</td></tr>
+<tr><td>parser</td><td><span class="grade grade-a">A</span></td><td>HTML/MD→<code>Fields</code>,
+pure. extending.md's 2nd-subprocess template.</td></tr>
+<tr><td>embed + embed_ipc</td><td><span class="grade grade-a">A</span></td><td>ONNX only in
+kb-embedder. <strong>Already a plugin</strong> (§3.5).</td></tr>
+<tr><td>search (query+fusion+docs_query)</td><td><span class="grade grade-c">C</span></td>
+<td>DSL→<code>DocsQuery</code>; RRF fuse. C as a product (needs actor+embedder+edges); the 3
+modules alone are A-grade pure functions.</td></tr>
+<tr><td>memory</td><td><span class="grade grade-b">B</span></td><td>Pure ranking; 4 sqlite tables.
+Depends on review+sessions+lists — high for a "leaf."</td></tr>
+<tr><td>sessions (incl. view)</td><td><span class="grade grade-c">C</span></td><td>parse/view/replay
+are A; capture writes 5 tables in lock-step + a live filesystem tail.</td></tr>
+<tr><td>atlas</td><td><span class="grade grade-b">B</span></td><td><code>compute_layout</code>
+pure/CI-pinned; coord writes never bump generation.</td></tr>
+<tr><td>review (comments)</td><td><span class="grade grade-b">B</span></td><td>kb-comments/1,
+<code>.review/&lt;id&gt;.json</code> under a lock — already a separate store, not sqlite.</td></tr>
+<tr><td>lists</td><td><span class="grade grade-c">C</span></td><td>Tombstone + relocate rekey +
+enrich hook over history/reading_sections — entangled despite refusing CASCADE/SWEEP.</td></tr>
+<tr><td>boards — corkboard</td><td><span class="grade grade-c">C</span></td><td>On all 3 registries
++ generation bump.</td></tr>
+<tr><td>boards — canvas</td><td><span class="grade grade-b">B</span></td><td>JSON Canvas sidecar, no
+lance row, no gen bump — keyed by <code>list_id</code>, cannot leave lists.</td></tr>
+<tr><td>notes</td><td><span class="grade grade-b">B</span></td><td>Engine is A; persistence is
+"write a file" — the kernel.</td></tr>
+<tr><td>links (wikilinks)</td><td><span class="grade grade-b">B</span></td><td>Parser is A; write is
+one more producer of <code>edges</code>, the most-coupled sqlite table.</td></tr>
+<tr><td>coderefs (DCB)</td><td><span class="grade grade-b">B</span></td><td>Extract is A;
+<code>code_refs</code>+<code>code_refs_docs</code> must never be <code>edges</code>; on all 3
+registries.</td></tr>
+<tr><td>share</td><td><span class="grade grade-b">B</span></td><td>Fs walk→scrub→relativize→zip,
+explicit <code>ShareCtx</code>; no lifecycle registry.</td></tr>
+<tr><td>resurface</td><td><span class="grade grade-a">A</span></td><td>No queue table; pure
+<code>(signals, now_unix, weights)</code>.</td></tr>
+<tr><td>timeline / daycard</td><td><span class="grade grade-a">A</span></td><td>No new storage, no
+<code>StorageMsg</code>, no SSE — not even a kb-core module.</td></tr>
+<tr><td>events (SSE bus)</td><td><span class="grade grade-d">D</span></td><td>The notification
+kernel; already "one bus per daemon process."</td></tr>
+<tr><td>config</td><td><span class="grade grade-d">D</span></td><td>Boot kernel; 82 files ref it.</td></tr>
+<tr><td>paths</td><td><span class="grade grade-d">D</span></td><td>XDG/<code>KB_*</code> resolver;
+125 files ref it.</td></tr>
+<tr><td>identity</td><td><span class="grade grade-b">B</span></td><td>Helpers are A; columns sit on
+kernel tables, ladder in kb-server.</td></tr>
+<tr><td>iframe</td><td><span class="grade grade-a">A</span></td><td>Pure HTML/host functions; no
+tables.</td></tr>
+<tr><td>enrich <span class="src">(glue)</span></td><td><span class="grade grade-c">C</span></td>
+<td>The only first-party in-process extension seam — 7 hooks, ordered, best-effort.</td></tr>
+<tr><td>cascade</td><td><span class="grade grade-c">C</span></td><td>Delete engine wrapping actor +
+filesystem review/attachments.</td></tr>
+<tr><td>relocate</td><td><span class="grade grade-c">C</span></td><td>Only sanctioned path/id
+change — one actor tx + sidecar rename.</td></tr>
+<tr><td>reading</td><td><span class="grade grade-b">B</span></td><td>Pure classifier; state is
+<code>reading_sections</code> (CASCADE/SWEEP/relocate); no gen bump.</td></tr>
+<tr><td>ids</td><td><span class="grade grade-d">D</span></td><td>Path→12-hex; every store keys on
+it.</td></tr>
+<tr><td>chunk</td><td><span class="grade grade-c">C</span></td><td>SQ5 sibling lance table; no gen
+bump; search vector-queries it.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="separability-summary">2.4 Separability summary</h3>
+<div class="table-wrap">
+<table>
+<caption>Table 2.3 — grade rollup</caption>
+<thead><tr><th>Grade</th><th>Subsystems</th></tr></thead>
+<tbody>
+<tr><td><span class="grade grade-a">A</span></td><td>parser, embed/embed_ipc (already a process),
+resurface, timeline/daycard (not even in-core), iframe</td></tr>
+<tr><td><span class="grade grade-b">B</span></td><td>watcher, memory (ranker), atlas (layout),
+review, canvas boards, notes, links, coderefs, share, identity, reading</td></tr>
+<tr><td><span class="grade grade-c">C</span></td><td>indexer, search-as-product, sessions
+(capture+tables), lists, corkboard, enrich, cascade, relocate, chunk</td></tr>
+<tr><td><span class="grade grade-d">D</span></td><td>storage actor, events, config, paths, ids</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Cross-checked by invariant #5, which the lane found stale by one hook — §11.</p>
+</section>
+
+<section>
+<h2 id="server-routes-spa-footprint-and-the-four-existing-seams">3. Server routes, SPA footprint, and the four existing seams</h2>
+
+<h3 id="route-inventory-by-area">3.1 Route inventory by area</h3>
+<p>kb-server registers <strong>199</strong> endpoints across <strong>178</strong>
+<code>.route()</code> blocks in <code>crates/kb-server/src/router.rs</code>, classified by path
+prefix; <code>docs/gallery</code> is an explicit grab-bag, not a clean feature boundary.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 3.1 — endpoints by feature area (sums to 199)</caption>
+<thead><tr><th>Area</th><th class="num">Endpoints</th><th>Notable</th></tr></thead>
+<tbody>
+<tr><td>config / settings / ops</td><td class="num">34</td><td>largest by count — identity, users,
+kbs, metrics, sources, exclusions, quarantine, <code>DELETE /kb/&lt;kb&gt;</code>,
+<code>POST /shutdown</code></td></tr>
+<tr><td>sessions</td><td class="num">32</td><td>largest single feature area, almost all GET;
+<code>/live</code>/<code>/presence</code> are loopback-only HARD and polled, not SSE</td></tr>
+<tr><td>docs / gallery <em>(grab-bag)</em></td><td class="num">31</td><td>core CRUD plus inbox,
+anchors, proposals, capture</td></tr>
+<tr><td>comments / review</td><td class="num">24</td><td>rate-limited review tree; attachments share
+the limiter</td></tr>
+<tr><td>memory</td><td class="num">16</td><td>cross-kb recall/census/dupes/triage + per-artifact
+pin/promote/salience/lineage/links</td></tr>
+<tr><td>lists / boards</td><td class="num">14</td><td>lists CRUD + entries + canvas board GET/PUT</td></tr>
+<tr><td>atlas</td><td class="num">13</td><td>reads on the main tree; writes on the atlas rate-limit
+bucket</td></tr>
+<tr><td>notes</td><td class="num">11</td><td>cross-kb list; per-kb CRUD + toggle + backlinks +
+wikilink suggest</td></tr>
+<tr><td>history / reading</td><td class="num">9</td><td>own 600/min POST limiter; admin purge</td></tr>
+<tr><td>search</td><td class="num">5</td><td>own rate-limit bucket; gallery/docs list is separate</td></tr>
+<tr><td>share</td><td class="num">5</td><td>create/export-zip/export-page/list/delete; no
+<code>share.*</code> SSE kind exists</td></tr>
+<tr><td>events / SSE</td><td class="num">3</td><td>this <em>is</em> the firehose (§3.2)</td></tr>
+<tr><td>coderefs</td><td class="num">2</td><td>smallest — DCB hint feed for kb-code (invariant #2)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="sse-taxonomy-and-enum-drift">3.2 SSE taxonomy and enum drift</h3>
+<p><code>V0_0_1_TYPES</code> advertises 57–59 kinds depending on lane (§1). Both lanes agree
+production emits kinds the schema enum omits. The seams-server-spa lane's fuller list (14 items):</p>
+<div class="table-wrap">
+<table>
+<caption>Table 3.2 — emitted SSE kinds absent from V0_0_1_TYPES</caption>
+<thead><tr><th>Kind</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><code>board.updated</code>, <code>memory.linked</code>, <code>memory.unlinked</code>,
+<code>note.created/updated/deleted</code></td><td>real production emits</td></tr>
+<tr><td><code>daemon.restarting</code>, <code>maintenance.logs.pruned</code>,
+<code>maintenance.retention.pruned</code>, <code>quarantine.restored</code></td><td>config/ops area</td></tr>
+<tr><td><code>proposal.created</code>, <code>proposal.resolved</code></td><td>docs/gallery area</td></tr>
+<tr><td><code>session.memory_recalls</code></td><td>indexer-owned</td></tr>
+<tr><td><code>comment.added</code></td><td>caveat: only appears in <code>lib.rs</code> webhook tests
++ the extending.md example — production comment mutations emit <code>comments.updated</code> instead</td></tr>
+</tbody>
+</table>
+</div>
+<p>The coupling-map lane's shorter, independent list overlaps on <code>note.*</code>,
+<code>memory.linked/unlinked</code>, <code>board.updated</code>. Notably the SPA invalidation bridge
+<strong>already subscribes</strong> to all of these — the live client contract is already wider than
+the advertised schema enum. A new SSE kind needs both the emitter edited and
+<code>V0_0_1_TYPES</code> updated; several emitters already skip the second step.</p>
+
+<h3 id="spa-closed-sets">3.3 SPA closed sets a feature cannot grow on its own</h3>
+<ul>
+<li><strong>NAV_ITEMS</strong> — closed 10-entry list: grid, list, atlas, press, search, memory,
+lists, notes, sessions, history. Settings/inbox/replay/ambient/anchors are chrome or deep-links.</li>
+<li><strong>Inspector rail</strong> (invariant #30) — closed 6 tabs: <code>all</code> (About),
+<code>meta</code>, <code>links</code>, <code>folder</code>, <code>sessions</code>, <code>story</code>.
+Session replay deliberately kept off it.</li>
+<li><strong>One SSE connection per daemon per browser</strong> (invariant #24) — a SharedWorker hosts
+the connection; tabs are MessagePort clients. Subscriptions to existing kinds are free; a second
+<code>/api/events</code> stream is not allowed.</li>
+</ul>
+<p>A plugin UI can call <code>sse.subscribeEvent("my.kind", ...)</code> on the existing facade. It
+cannot: open a second stream, add a 7th inspector tab, register a new router path, add a nav tab, or
+skip the TanStack invalidation bridge without becoming a new hand-written invariant #23 exception
+(sessions/note/stale-anchors/doclens are the only four so far).</p>
+
+<h3 id="four-extension-patterns-ranked-by-isolation">3.4 Four extension patterns, ranked by isolation</h3>
+<div class="table-wrap">
+<table>
+<caption>Table 3.3 — extension patterns already shipping</caption>
+<thead><tr><th>#</th><th>Pattern</th><th>Example</th><th>Compiles separately?</th><th>Adds routes/SPA?</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Agent-layer plugins</td><td><code>plugins/</code> Claude Code marketplace</td>
+<td>Never compiles with daemon</td><td>No — drives the existing CLI</td></tr>
+<tr><td>2</td><td>Subprocess sidecar</td><td>kb-embedder</td><td>Yes — own crate, own CI</td><td>No
+routes, no UI</td></tr>
+<tr><td>3</td><td>Sibling daemon + own SPA</td><td>kb-code-server + web-code</td><td>Yes — own crate,
+CI, store, SSE</td><td>Own router; own SPA; nothing added to kb's</td></tr>
+<tr><td>4</td><td>In-tree feature</td><td>search/memory/sessions/lists/notes/atlas</td><td>No — same
+crate/router/SPA build</td><td>Yes — routes, lazy SPA route, NAV_ITEMS, SSE enum + bridge</td></tr>
+</tbody>
+</table>
+</div>
+<p>Explicitly off the table: a generic plugin SDK, a WASM runtime, native <code>.so</code> loading,
+plugin-injected routes/middleware, a second storage writer, a pluggable atlas engine.
+<code>docs/extending.md</code>: route contribution is not a seam.</p>
+
+<h3 id="embedder-ipc-protocol">3.5 The embedder IPC protocol (pattern 2, in detail)</h3>
+<p>kb-embedder is the only crate linking ONNX Runtime; daemon and CLI stay ORT-free. Spawn lifecycle:
+locate the binary (<code>$KB_EMBEDDER_BIN</code> → sibling of <code>current_exe()</code> →
+<code>PATH</code>); spawn with piped stdio, Unix <code>nice</code> in <code>pre_exec</code>; a bounded
+<strong>Ready handshake</strong> (default 60s, <code>KB_EMBEDDER_HANDSHAKE_TIMEOUT_SECS</code>) where
+the child must echo the model name or get killed; one NDJSON line per request, correlated by
+<code>req_id</code>; a 1&nbsp;Hz <code>ensure_alive</code> probe respawns a dead/wedged child in
+place (falls back to keyword-only search on failed respawn).</p>
+<pre><code>Request  = Embed { req_id, texts } | Rerank { req_id, query, documents } | Shutdown
+Response = Ready { model, dim } | EmbedOk { req_id, vectors } | RerankOk { req_id, scores } | Error { req_id, msg }</code></pre>
+<p>NDJSON framing; <code>Rerank</code> returns scores in input order, daemon sorts/top-n's. Embedding
+dim must match the lance vector column or the call fails <code>Err</code>, never panics — "one bad
+plugin can't kill the storage actor." Generalising into a reusable <code>plugin_ipc</code> module is
+deferred until a second concrete subprocess use case demands it.</p>
+</section>
+
+<section>
+<h2 id="build-economics">4. Build economics</h2>
+
+<h3 id="dependency-weight-per-member">4.1 Dependency weight per workspace member</h3>
+<p>Method: <code>cargo tree -p &lt;member&gt; --prefix none -e normal | sort -u | wc -l</code>. The
+raw count double-counts via cargo's <code>(*)</code> repeat marker on diamond deps; a true-dedup
+count (marker stripped, re-<code>sort -u</code>) was measured directly for two members, extrapolated
+at the same ~1.36–1.39× ratio for the rest.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 4.1 — dependency counts per workspace member</caption>
+<thead><tr><th>Member</th><th class="num">Raw</th><th class="num">True-dedup</th><th>Measured?</th></tr></thead>
+<tbody>
+<tr><td>kb-core</td><td class="num">675</td><td class="num">~497</td><td>est.</td></tr>
+<tr><td>kb-server</td><td class="num">697</td><td class="num">512</td><td>measured</td></tr>
+<tr><td>kb-cli</td><td class="num">714</td><td class="num">~525</td><td>est.</td></tr>
+<tr><td>kb-code-server</td><td class="num">829</td><td class="num">595</td><td>measured</td></tr>
+<tr><td>kb-code-cli</td><td class="num">845</td><td class="num">~625</td><td>est.</td></tr>
+<tr><td>kb-embedder</td><td class="num">716</td><td class="num">~527</td><td>est.</td></tr>
+<tr><td>kb-core <code>--features local-embedder</code></td><td class="num">715</td><td class="num">~526</td><td>est.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The whole-workspace <code>Cargo.lock</code> has 829 <code>[[package]]</code> entries; kb-code-server's
+true-dedup graph (595) touches ~72% of that, kb-server (512) ~62%. Counterintuitively kb-code-server/
+kb-code-cli have <em>more</em> transitive deps than kb-server/kb-cli, because kb-code-server depends
+on kb-core <em>and</em> kb-server, then adds its own gix/tree-sitter/grep/nucleo stack (84 gix crates
+alone — the single biggest kb-code-only addition) plus its own second lance dataset.</p>
+
+<h3 id="heavy-dependency-families">4.2 The lance/arrow/datafusion floor</h3>
+<div class="callout callout--danger">
+<span class="label">No split avoids this</span>
+<p>lancedb/lance-*/arrow-*/datafusion-* is ~<strong>103–104 crates</strong>, non-optional at
+<code>crates/kb-core/Cargo.toml:51–55</code> (invariant #1 pins arrow to lance's exact version).
+Every crate depending on kb-core inherits it. <strong>kb-code-server declares its own second direct
+copy</strong> (<code>Cargo.toml:121–134</code>) for its own semantic-search lance dataset — even a
+sibling daemon cannot drop this family, only duplicate it at the locked version (cargo unifies it, so
+no extra compile cost, but a genuine second consumer). The one family kb-core does firewall behind a
+feature flag is fastembed/ONNX — zero <code>onnx|ort|fastembed</code> hits confirmed in kb-server's
+and kb-code-server's trees — because it has a genuine swap point (in-process vs. IPC-to-kb-embedder)
+that lance/arrow/datafusion lacks.</p>
+</div>
+
+<h3 id="binary-sizes">4.3 Binary sizes</h3>
+<div class="table-wrap">
+<table>
+<caption>Table 4.2 — target/release binary sizes (LTO=thin, codegen-units=1, strip=symbols)</caption>
+<thead><tr><th>Binary</th><th class="num">Bytes</th><th class="num">≈ MB</th></tr></thead>
+<tbody>
+<tr><td>kb (kb-cli)</td><td class="num">133,467,664</td><td class="num">133</td></tr>
+<tr><td>kb-server</td><td class="num">127,921,296</td><td class="num">128</td></tr>
+<tr><td>kb-code-server</td><td class="num">128,688,056</td><td class="num">129</td></tr>
+<tr><td>kb-code (kb-code-cli)</td><td class="num">9,146,008</td><td class="num">9</td></tr>
+</tbody>
+</table>
+</div>
+<p>Both CLIs nominally embed their sibling daemon as a library, but <code>kb-cli</code>'s
+<code>daemon</code> subcommand actually <em>calls</em> <code>kb_server::serve_loop</code>
+(<code>crates/kb-cli/src/commands/daemon.rs:86</code>), booting the whole axum router so LTO can't
+drop anything, while <code>kb-code-cli</code> only reaches a narrow git-helper slice of
+kb-code-server and is otherwise a thin <code>reqwest</code> client — hence 9MB vs ~130MB despite an
+identically-shaped Cargo edge. (<code>target/fast</code> binaries are <em>larger</em> than release —
+kb 190MB fast vs 133MB release — because fast disables LTO.)</p>
+
+<h3 id="lines-of-code">4.4 Lines of code</h3>
+<div class="table-wrap">
+<table>
+<caption>Table 4.3 — LOC by crate/package (find + wc -l, .rs/.ts/.tsx, excl. node_modules/dist/generated)</caption>
+<thead><tr><th>Path</th><th class="num">LOC</th></tr></thead>
+<tbody>
+<tr><td>crates/kb-core</td><td class="num">97,929</td></tr>
+<tr><td>crates/kb-server</td><td class="num">64,661</td></tr>
+<tr><td>crates/kb-cli</td><td class="num">41,795</td></tr>
+<tr><td>crates/kb-embedder</td><td class="num">262</td></tr>
+<tr><td>crates/kb-code-server</td><td class="num">96,384</td></tr>
+<tr><td>crates/kb-code-cli</td><td class="num">16,804</td></tr>
+<tr><td>web/ (TS/TSX)</td><td class="num">76,393</td></tr>
+<tr><td>web-code/ (TS/TSX)</td><td class="num">52,268</td></tr>
+</tbody>
+</table>
+</div>
+<p>Rust total: 317,835 LOC. TS/TSX total: 128,661 LOC. kb-code-server (96,384) is nearly as large as
+kb-core (97,929) — not a small satellite.</p>
+<p class="src">Discrepancy: the red-team lane, from a separate ad hoc grep, cites kb-core at
+96,856/76 files and kb-server at 41,938 — noticeably lower for kb-server. Both are reproduced as
+measured; the gap is most likely differing test/fixture exclusions, unreconciled by either lane.</p>
+
+<h3 id="ci-job-split-and-image-build">4.5 CI job split and image build</h3>
+<p><code>ci-workspace</code> excludes kb-embedder, kb-code-server, kb-code-cli — for two reasons:
+kb-embedder because unifying <code>local-embedder</code> would pull ONNX into every binary sharing
+the kb-core rlib; kb-code-* purely for build-time isolation. <code>ci.yml</code> runs 7 jobs, all on
+the CI runner:</p>
+<div class="table-wrap">
+<table>
+<caption>Table 4.4 — CI job split (.github/workflows/ci.yml)</caption>
+<thead><tr><th>Job</th><th>Timeout</th><th>Scope</th></tr></thead>
+<tbody>
+<tr><td>workspace</td><td>120min</td><td>excludes kb-embedder/kb-code-*, serial
+<code>--test-threads=1</code></td></tr>
+<tr><td>e2e</td><td>90min</td><td>races <code>workspace</code>, <code>--profile fast</code></td></tr>
+<tr><td>embedder</td><td>90min</td><td><code>needs: workspace</code>; the ORT surface</td></tr>
+<tr><td>code / code-e2e</td><td>60min each</td><td>path-filtered to kb-code diffs; step-level
+<code>if:</code> so the required check never pends</td></tr>
+<tr><td>web-unit</td><td>20min</td><td>pure TS, no <code>needs:</code></td></tr>
+<tr><td>supply-chain</td><td>20min</td><td><code>cargo-deny</code>, reads <code>Cargo.lock</code> only</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every Rust job installs <code>protobuf-compiler</code> ("lancedb transitive dep") — even
+<code>code</code> pays this "via kb-core." <code>build-image.yml</code> (split from <code>ci.yml</code>
+2026-08-13 after a <code>cancel-in-progress</code> killed a 2-hour build) runs on the same CI
+runner, under a <strong>hard memory cap</strong>. <code>CARGO_BUILD_JOBS</code>
+walked 4→2→1 to fix an OOM, then back to 2 on 2026-08-16 (commit <code>10890afc</code>) after that
+cap was raised. Warm image build was ≈103min (kb ≈58min + kb-code ≈44min; cold
+est. ≈160min) until commit <code>c46fd184</code> (2026-08-15) introduced a shared
+<code>workspace</code> Dockerfile stage that both <code>builder</code> and <code>kb-code-builder</code>
+branch <code>FROM</code> — kb-code's build now skips kb's embedder+1.34GB-model tail, cutting the
+combined build to <strong>51m23s</strong>. The closest thing to a build-isolation boundary the repo
+has today, and it lives at the Docker layer, not the Cargo workspace layer.</p>
+</section>
+
+<section>
+<h2 id="measured-incremental-builds">5. Measured incremental builds</h2>
+<p>Machine: 8 cores, 62GiB RAM. Profile <code>fast</code> (release-derived, <code>lto=false</code>,
+<code>codegen-units=16</code>, incremental). Real stopwatch measurements, not estimates.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 5.1 — measured touch-and-rebuild wall time</caption>
+<thead><tr><th>Action</th><th class="num">Wall time</th><th>What recompiled</th></tr></thead>
+<tbody>
+<tr><td>Warm two-crate build (kb-core+kb-server, deps prebuilt)</td><td class="num">2m 22s</td>
+<td>full kb-core + kb-server</td></tr>
+<tr><td>touch <code>kb-core/src/memory.rs</code> (3,220 LOC)</td><td class="num">19.73s</td>
+<td>kb-core, then kb-server</td></tr>
+<tr><td>touch <code>kb-core/src/storage/mod.rs</code> (11-line re-export)</td><td class="num">16.63s</td>
+<td>kb-core, then kb-server</td></tr>
+<tr><td>touch <code>kb-server/src/routes/memory.rs</code> (2,250 LOC, kb-server only)</td>
+<td class="num">9.65s</td><td>kb-server only — the fixed floor</td></tr>
+</tbody>
+</table>
+</div>
+<p>The 9.65s floor is unavoidable regardless of any kb-core split — kb-server's own recompile +
+relink against the prebuilt lance/arrow/datafusion tree. The crate-boundary tax is
+<strong>not proportional to touched-file size</strong>: an 11-line non-logic file cost ~6.98s of
+kb-core recompile, a 3,220-line file cost only ~3s more (~10.08s). Touching any kb-core file pays a
+largely fixed ~7–10s tax dominated by whole-crate metadata/codegen bookkeeping, not code volume —
+exactly what a crate split fixes structurally, since cargo's recompile unit is the crate, not the
+file. Today's incremental cache already amortizes ~85–90% of a full rebuild; the dev inner loop is
+not currently broken.</p>
+<p>Extrapolating, a split's per-edit cost would be one small feature crate (est. 1–3s for ~3k LOC) +
+the 9.65s kb-server relink floor ≈ <strong>10–12s, down from ~17–20s today — a 35–50% cut (6–10s
+saved per edit)</strong>. Real, but modest against an already sub-20s baseline.</p>
+<div class="callout callout--warn">
+<span class="label">Cold and CI builds mostly don't benefit</span>
+<p>Cold builds (fresh checkout, <code>cargo clean</code>, branch switch, CI) pay close to the full
+2m22s regardless of crate boundaries, unless cargo parallelizes the independent feature crates across
+free cores. CI is memory-capped — <code>cargo -j2</code> was capped this
+month (commit <code>10890afc</code>) specifically because higher parallelism OOM'd the image build.
+More crates building in parallel means more concurrent memory pressure on an already-throttled
+build — the CI benefit is speculative, plausibly a net regression.</p>
+</div>
+</section>
+
+<section>
+<h2 id="cross-feature-coupling-found">6. Cross-feature coupling found</h2>
+
+<h3 id="feature-to-feature-import-edges">6.1 Feature→feature import edges</h3>
+<div class="table-wrap">
+<table>
+<caption>Table 6.1 — cross-feature imports (rg '^use crate::' + inline scan)</caption>
+<thead><tr><th>From</th><th>Imports</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td><code>memory.rs</code></td><td><code>review::{Anchor,Author}</code>,
+<code>sessions::MEMORY_SESSION_CATEGORY</code>, <code>lists::anchor_to_json</code></td>
+<td>memory.rs:1,47,947,1892,2887</td></tr>
+<tr><td><code>attachments.rs</code></td><td><code>review::{Attachment,Author}</code></td><td>attachments.rs:1</td></tr>
+<tr><td><code>lists.rs</code></td><td><code>reading::{ReadingSummary,SectionState}</code>,
+<code>review::Anchor</code></td><td>top-of-file</td></tr>
+<tr><td><code>share/mod.rs</code></td><td><code>attachments::{is_inline_image, rewrite_attachment_refs,
+sanitize_filename}</code>, <code>review::{Anchor,Attachment,Author,CommentStatus,ReviewFile}</code></td>
+<td>share/mod.rs</td></tr>
+<tr><td><code>notes.rs</code></td><td><code>docs_query::DocRow</code>,
+<code>markdown::FrontMatter</code></td><td>kernel-level, fine</td></tr>
+<tr><td><code>graph_report.rs</code>, <code>capture.rs</code></td><td><code>links::*</code>,
+<code>attachments::*</code></td><td>expected</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>atlas.rs</code>/<code>atlas_field.rs</code>/<code>atlas_labels.rs</code>/<code>procrustes.rs</code>
+have <strong>zero</strong> inbound references from any other feature module — the cleanest leaf
+group. <code>reading.rs</code>/<code>history.rs</code>/<code>notes.rs</code>/<code>links.rs</code>
+are near-leaves too.</p>
+
+<h3 id="storage-actor-dto-cycle">6.2 The storage-actor DTO cycle — the hardest blocker</h3>
+<div class="callout callout--danger">
+<span class="label">Genuine cycle, not just an inversion</span>
+<p>The storage kernel bakes feature DTOs into its message enum: <code>reading::{ReadingSectionRow,
+VisitRollup, ReadRollup}</code> (<code>actor.rs:636-699,4064-4155</code> — 12 hits;
+<code>sqlite.rs:1348-1732</code> — 17 hits); <code>lists::{ImportMode, NewListEntry, Patch,
+PositionSpec, ResolutionUpdate, ReadState}</code> (<code>actor.rs:18,5470-5488</code> — 11 hits;
+<code>sqlite.rs:12,1731</code> — 8 hits); <code>sessions::ProjectFilter</code>
+(<code>actor.rs:1023,1053,4683,4733</code> — 4 hits). Meanwhile <code>lists.rs</code> itself imports
+<code>storage::sqlite::ListEntryRow</code> + <code>StorageHandle</code> — <code>storage → lists</code>
+and <code>lists → storage</code> simultaneously, an actual cycle Cargo will refuse to compile. Same
+shape for <code>reading</code> and <code>sessions</code>. Sits inside kb-core's two largest files:
+<code>storage/actor.rs</code> (6,295 LOC), <code>storage/sqlite.rs</code> (12,404 LOC) — home of the
+CASCADE_STEPS/SWEEP_TABLES registries. The only clean fix is pulling each feature's plain wire-DTOs
+into a shared kernel types crate — the classic "DTO crate" pattern.</p>
+</div>
+
+<h3 id="enrich-hook-relocation-list">6.3 enrich.rs — right pattern, wrong placement</h3>
+<p>Invariant #5 documents a real <code>trait EnrichmentHook</code> + <code>default_hooks()</code>
+registry (<code>enrich.rs:102-132</code>), called from <code>indexer.rs:2175</code> — the
+registration mechanism a split needs already exists in production. The concrete hooks live inline
+and call directly into feature modules: <code>SessionCaptureHook</code> → <code>crate::sessions::</code>
+(enrich.rs:98,173-2391, many refs); <code>EdgeRecordHook</code> → <code>crate::links::</code>
+(833-866); <code>CodeRefHook</code> → <code>crate::coderefs::</code> (922-1032); review-related hooks
+→ <code>crate::review::</code> (1169-1175); <code>ListAnchorHook</code> → <code>crate::lists::</code>
+(1180-1202). A split needs each hook relocated into its owning feature crate, registered by a
+composition root instead of a hardcoded <code>vec![...]</code>.</p>
+
+<h3 id="pre-upsert-indexer-gap">6.4 The pre-upsert indexer gap</h3>
+<p><code>prepare_doc</code> (<code>indexer.rs:1558</code>), at lines <strong>1747-1791</strong>,
+calls <code>sessions::{parse_session_html_full, session_digest, session_digest_excerpt,
+truncate_code_field}</code> to compute <code>body</code>/<code>body_text_excerpt</code>/<code>code</code>
+<em>before</em> the row is written — earlier than any <code>EnrichmentHook</code>, which only fires
+post-upsert. Splitting sessions out needs a new pre-upsert <code>FieldDerivationHook</code>, not just
+code motion. Separately, <code>finish_indexed_doc</code> (<code>indexer.rs:2069</code>), lines
+<strong>2235-2381</strong>, directly calls <code>review::{migrate_legacy_id, load,
+fuzzy_resolve_anchor_with}</code>, <code>sessions::view::*</code>, and <code>anchors::{...}</code> —
+~150 lines of bespoke, never-hookified review-anchor resolution next to the
+<code>enrich::default_hooks()</code> loop, structurally identical to the existing
+<code>ListAnchorHook</code> but never migrated into that pattern.</p>
+
+<h3 id="parser-percent-decode-inversion">6.5 parser.rs:845 — a real kernel→feature inversion</h3>
+<p><code>crate::share::percent_decode</code> is called from <code>parse_artifact_link</code>
+(<code>parser.rs:836</code>, call site <code>parser.rs:845</code>) — a real production
+kernel-depends-on-feature edge. Percent-decoding is generic and misplaced inside <code>share</code>;
+the cheap fix is moving it to the existing <code>strutil.rs</code>. <code>notes::checklist_counts</code>
+(parser.rs:1260) and session render helpers (parser.rs:1546-1591) are test-only
+(<code>#[cfg(test)]</code>, from parser.rs:1142) — not build-blocking, but the kernel parser's own
+test suite would need dev-deps on notes/sessions.</p>
+
+<h3 id="atlas-group-pilot-candidate">6.6 The zero-inbound pilot candidate</h3>
+<div class="callout callout--ok">
+<span class="label">Cleanest split candidate found</span>
+<p><code>atlas.rs</code>+<code>atlas_field.rs</code>+<code>atlas_labels.rs</code>+<code>procrustes.rs</code>
+— <strong>4,756 LOC</strong> (4.9% of kb-core) — zero inbound refs, no appearance in enrich.rs or
+indexer.rs, no storage-actor DTO entanglement. Essentially a free split, ~1–2 days of work, that
+would validate the DAG/registration/CI-leg mechanics before the much harder sessions/lists/reading/
+storage cycle. Sessions (~13,600 LOC, 14% of kb-core, largest single feature) would capture the
+biggest per-edit win if split, but is also the worst-coupled candidate — it should follow the atlas
+pilot, not lead it.</p>
+</div>
+</section>
+
+<section>
+<h2 id="external-precedents">7. External precedents</h2>
+<p>Web research, 2026-08-16; the installed grokclaude CLI has no <code>--verify</code> support (§1
+caveat) though this lane's own job completed <code>end_turn</code>.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 7.1 — plugin/extension mechanisms in comparable tools</caption>
+<thead><tr><th>Tool</th><th>Mechanism</th><th>ABI / skew handling</th><th>Cost / regret</th></tr></thead>
+<tbody>
+<tr><td>Nushell</td><td>Separate <code>nu_plugin_*</code> exes; stdio/local socket; msgpack/JSON by
+first bytes</td><td><code>Hello{protocol,version,features}</code>; differing major/0.x minor ⇒ engine
+ends communication</td><td>0.93.0 rewrote the registry to compressed msgpack; <code>dataframe</code>
+extracted to <code>nu_plugin_polars</code> in 0.94</td></tr>
+<tr><td>Zellij</td><td>Wasm/WASI plugins; a plugin is a first-class pane</td><td>Guest is Wasm, not
+rustc ABI; 2025-06-29 discussion tracks wasip2 migration</td><td>2023-06-27 plugin system was a full
+rewrite</td></tr>
+<tr><td>Zed</td><td>Rust <code>cdylib</code>→<code>wasm32-wasip2</code>, Wasmtime, WIT
+(<code>zed_extension_api</code>)</td><td><code>extension.toml</code> records
+<code>wasm_api_version</code>; wasip1→wasip2 target migration</td><td>Maintainer: the git-submodule
+registry "will likely have to go... doesn't scale"</td></tr>
+<tr><td>Helix</td><td>No shipped plugin system as of 2026-08-16</td><td>PR #8675 (Steel) unmerged as
+of 2026-05-23; author tried a C ABI "with little success"</td><td>Multi-year wait, 360+ PR comments,
+still unshipped</td></tr>
+<tr><td>Caddy / xcaddy</td><td>Compile-time Go recompilation, <code>xcaddy --with</code></td>
+<td>Compile-time module graph; no runtime dylib loading</td><td>Every module needs a custom binary;
+<code>caddy upgrade</code> re-downloads one</td></tr>
+<tr><td>Vector</td><td>Single binary; new components are PRs, <code>inventory</code>-crate
+compile-time registration (RFC 9481)</td><td>None at runtime</td><td>Binary grows per integration; no
+third-party install path</td></tr>
+<tr><td>cargo / git</td><td>PATH-subcommand dispatch (<code>cargo-foo</code>, <code>git-foo</code>)</td>
+<td>None — CLI contract only; linking cargo as a library is discouraged</td><td>Near-zero host cost;
+subcommand shares no types/memory with host</td></tr>
+<tr><td>SQLite</td><td>C-ABI dylibs, <code>sqlite3_extension_init</code></td>
+<td><code>SQLITE_EXTENSION_INIT2</code> copies the host's function-pointer table — the skew
+mechanism</td><td>Loading disabled by default; version-mismatch errors persist in practice</td></tr>
+<tr><td>rust-analyzer</td><td>Proc-macro dylibs use rustc's unstable ABI; a bundled-with-rustc helper
+speaks a versioned JSON protocol to RA</td><td>Multiple JSON versions; ABI churn often doesn't force
+a JSON bump</td><td>2026-05-09: JSON v6-vs-v5 skew broke expansion for days while
+<code>cargo build</code> stayed green — closest analogue to kb-embedder</td></tr>
+<tr><td>VS Code / Obsidian</td><td>In-process JS/TS; separate Node Extension Host (VS Code) or the
+app's own Electron runtime (Obsidian)</td><td><code>engines.vscode</code> semver check — the "ABI" is
+the shipped V8/Node runtime</td><td>Cheap because the host already ships a JS runtime; not portable
+to Rust without embedding one</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="rust-abi-state-2026">7.1 State of in-process Rust ABI, 2026</h3>
+<p>Rust Reference: "The Rust ABI offers no stability guarantees" for <code>extern "Rust"</code>; only
+<code>extern "C"</code> is stable. <a href="https://docs.rs/abi_stable/latest/abi_stable/">abi_stable</a>
+is stale at crates.io v0.11.3 (2023-10-12), no unloading support.
+<a href="https://github.com/ZettaScaleLabs/stabby">stabby</a> uses rustc-version/opt-level/target
+"canary" markers to fail closed on a layout mismatch.
+<a href="https://component-model.bytecodealliance.org/introduction.html">WASI 0.2.0</a> (2024-01-25)
+established a pin-able stable WIT world underpinning
+<a href="https://extism.org/docs/concepts/plug-in-system/">Extism</a> and Zed's own wasip2 stack.
+crABI remains an unshipped RFC proposal.</p>
+
+<h3 id="cross-cutting-observations">7.2 Cross-cutting observations</h3>
+<ol>
+<li>Every shipped Rust tool that added plugins did so without a stable Rust ABI — subprocess
+(nushell, cargo, rust-analyzer) or Wasm (Zellij, Zed).</li>
+<li>Compile-time composition is the other proven pattern (Vector, Caddy) — "plugin" = "crate linked
+into this binary," not a runtime file drop.</li>
+<li>Every runtime plugin system paid a real versioning tax: Nushell's Hello + registry rewrite, Zed's
+target migration, rust-analyzer's JSON skew, SQLite's thunk.</li>
+<li>In-process Rust dylib plugins remain research-grade in 2026 — Helix's own maintainer abandoned a
+C-ABI attempt.</li>
+<li>In-process JS ergonomics are a property of already-being-a-JS-host — porting means embedding Wasm
+or JS as a second runtime.</li>
+</ol>
+<p class="src">Primary sources include
+<a href="https://www.nushell.sh/contributor-book/plugin_protocol_reference.html">nushell plugin protocol</a>,
+<a href="https://zed.dev/blog/zed-decoded-extensions">"Life of a Zed Extension"</a>,
+<a href="https://github.com/helix-editor/helix/pull/8675">Helix PR #8675</a>,
+<a href="https://sqlite.org/loadext.html">SQLite loadext.html</a>,
+<a href="https://rust-analyzer.github.io/blog/2021/12/30/2021-recap.html">rust-analyzer 2021 recap</a>,
+<a href="https://code.visualstudio.com/api/advanced-topics/extension-host">VS Code Extension Host docs</a>.</p>
+</section>
+
+<section>
+<h2 id="deploy-and-operational-record">8. Deploy and operational record</h2>
+
+<h3 id="kb-kb-code-integration-inventory">8.1 kb ↔ kb-code integration inventory</h3>
+<p>Service discovery is exactly two hand-edited TOML keys — no registry, mDNS, or
+<code>/api/siblings</code>: kb's <code>[kb.*] code_url</code> is inert, browser-facing only (kb-core's
+own comment: "kb NEVER opens an HTTP client to it"); kb-code's <code>[kb_daemon]</code> carries
+<code>enabled</code>, <code>url</code> (daemon-to-daemon), <code>token_file</code>,
+<code>public_url</code>. kb-code makes 9 HTTP calls to kb, 8 via a pooled <code>KbClient</code> (1.5s
+timeout, optional bearer): <code>/api/sessions/by-commit</code>, <code>/{id}/commits</code>,
+<code>/{id}</code>, <code>/commit-map</code>, <code>/api/why</code>,
+<code>/api/kb/{kb}/docs/{doc}/code-refs</code>, <code>/api/kb/{kb}/code-refs</code>,
+<code>/docs/by-path/{*path}</code>, <code>/api/sessions/recollect</code>. No handshake precedes any
+call; failures degrade to <code>unavailable_reason</code>. <code>GET /api/identity</code> today
+carries <code>name</code>/<code>version</code>/<code>repos</code>/<code>started_at</code>/
+<code>kb_public_url</code> but <strong>no</strong> <code>build_sha</code>, protocol id, or schema
+epoch — <code>KbClient</code> never queries it before use.</p>
+
+<h3 id="the-13-5-hour-outage-corrected-root-cause">8.2 The 13.5-hour kbc.example.com outage — corrected root cause</h3>
+<div class="callout callout--danger">
+<span class="label">Intra-service, not cross-daemon</span>
+<p>Refinery migrations apply forward-only at boot for both kb and kb-code. A deploy rollback retagged
+kb-code-server's <strong>own binary alone</strong> back to a pre-DCB build, while its
+<strong>own</strong> volume had already forward-migrated. <code>/healthz</code> is liveness-only and
+stayed green through the multi-minute on-boot backfill, so a naive health check declared victory.
+This is an intra-service deploy-safety bug — <strong>not</strong> a cross-daemon kb-to-kb-code
+protocol-version-skew bug. A version handshake would not have caught this specific incident; the
+missing check was "may this binary open this volume" (schema-epoch), not "same git sha" (already
+pinned via <code>main-&lt;sha12&gt;</code>).</p>
+</div>
+<p>Post-outage fixes: <code>redeploy-kbc.sh</code> has no auto-rollback branch at all (stop-and-ask);
+<code>redeploy-kb.sh</code> kept its rollback but added a migration-advance guard (refuses to retag
+back to an old sha if <code>refinery_schema_history.version</code> rose during the attempt); kbc-state
+backups switched from <code>gzip -t</code> to <code>tar tzf</code> (a truncated backup once passed
+<code>gzip -t</code> on 2026-08-15); deploy now waits for "on-boot backfill complete" log lines
+(20-min budget) instead of trusting <code>/healthz</code>. There is no script that deploys kb and
+kb-code atomically — they share only the <code>main-&lt;sha12&gt;</code> tagging convention.</p>
+
+<h3 id="proposed-kb-sibling-1-handshake-spec">8.3 Proposed kb-sibling/1 handshake spec</h3>
+<p>Extend <code>GET /api/identity</code> on both daemons with: <code>build_sha</code> (humans/deploy
+scripts only, never a compat gate); <code>sibling_protocol</code> (literal
+<code>"kb-sibling/1"</code>, exact match — unknown ⇒ refuse the peer); <code>sibling_major</code>
+(integer, must match — nushell's differing-major rule); <code>schema_epoch</code> (persisted on the
+volume after migration) vs <code>schema_epoch_min</code> (on the binary): if volume epoch exceeds the
+binary's max, <strong>refuse to boot</strong> — the exact gap the outage exposed.
+<code>/healthz</code> stays unauthenticated pure liveness and must never double as readiness/compat. A
+sibling client's first request must be <code>GET /api/identity</code>, cached for process lifetime,
+failing closed on mismatch — distinct from degrade-to-unavailable (genuinely unreachable peers).
+Precedent for mandatory-not-advisory: rust-analyzer's handshake was only advisory ("expansion will not
+work," <code>cargo build</code> still succeeded, editor stayed red for days) — the same "process up,
+contract dead" shape as the kbc outage.</p>
+
+<h3 id="extraction-candidates-verdict-table">8.4 Extraction-candidates verdict table</h3>
+<p>Constraint: a sibling cannot open kb's <code>index.db</code> or <code>lance/</code> — the storage
+actor is single-writer per process; any artifact-id-storing feature must be hand-added to all three
+lifecycle registries (§2.2) or strand rows.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 8.1 — sibling-daemon extraction candidates, all IMPLAUSIBLE</caption>
+<thead><tr><th>Candidate</th><th>Verdict</th><th>Dominant reason</th></tr></thead>
+<tbody>
+<tr><td>Atlas (+procrustes/field/labels)</td><td class="verdict v-implausible">IMPLAUSIBLE</td>
+<td>Input is kb's own embedding matrix — moving the math doesn't move the data; a sibling API needs
+bulk export + coord write-back, hammering the single writer</td></tr>
+<tr><td>Share engine</td><td class="verdict v-implausible">IMPLAUSIBLE</td><td>A library function over
+the source tree, not a daemon; the RFC already prescribes <code>ShareBackend::Subprocess</code> for a
+foreign host, not a sibling</td></tr>
+<tr><td>Resurface / timeline / daycard</td><td class="verdict v-implausible">IMPLAUSIBLE</td><td>No
+store of its own — a "VIEW over existing state"; extraction means re-fetching everything kb already
+has, then fighting invariant #24 with no degrade-when-kb-is-down story</td></tr>
+<tr><td>Memory (+proposals)</td><td class="verdict v-implausible">IMPLAUSIBLE</td><td>Memories
+<em>are</em> the index — recall needs <code>list_docs</code> + embeddings + the memory_recalls
+ledger; a sibling that can't open lance can't recall</td></tr>
+<tr><td>Sessions</td><td class="verdict v-implausible">IMPLAUSIBLE</td><td>The other half of kb's
+memory system; kb-code already does the correct sibling pattern in reverse (HTTP-pull with
+degrade-to-unavailable) — extracting would invert DCB and force the sibling to own lance</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section>
+<h2 id="co-change-and-decision-record-evidence">9. Co-change and decision-record evidence</h2>
+
+<h3 id="400-commit-co-change-numbers">9.1 400-commit co-change numbers</h3>
+<p>Method: <code>git log --name-only -n 400</code> (2026-07-10 → 2026-08-16, ~5 weeks of a
+1,294-commit/~3-month history — dominated by the kb-code-server v2→v4 build-out, born 2026-07-18,
+almost exactly at the window's start).</p>
+<ul>
+<li><strong>25.7%</strong> of feat commits (53 of 206) touch ≥3 named areas.</li>
+<li><strong>9.25%–13.1%</strong>, method-dependent: rulings-cochange found 27/206 feat commits
+(<strong>13.1%</strong>, feat-only denominator) touch kb-core+kb-server+web/ together; red-team's
+independent resample, using an all-400-commits denominator, found 37 (<strong>9.25%</strong>). Both
+real, by different methods — report the range, name the method, don't average.</li>
+<li><strong>kb-code ↔ kb: 6.2%</strong> — of 129 commits touching kb-code-server/kb-code-cli/web-code,
+only 8 also touch kb-core/kb-server/kb-cli/kb-embedder/web, clustered in two episodes: the v0.34
+identity-ladder work (<code>44b9a83a</code>, <code>4d0ff78d</code>) and the DCB milestone
+(<code>b70d165e</code>, <code>c9a03075</code>, <code>5a9eca7a</code>, <code>b4be9e60</code>,
+<code>41d65321</code>, <code>e67bc6d6</code>) — not steady-state coupling.</li>
+<li><strong>web/ ↔ web-code/: 0/400</strong> — never co-changed in the sample; the frontend split is
+genuinely clean by this measure.</li>
+<li><strong>kb-embedder: 2 commits ever</strong>, of 1,294 total — creation (<code>380ee08d</code>,
+2026-05-19) and the ORT-isolation hardening (<code>0165d106</code>, 2026-06-09, invariant #26). Zero
+further commits in the 10+ weeks since — the strongest "isolation held" data point in the program.</li>
+</ul>
+<div class="callout callout--ok">
+<span class="label">Counter-evidence for keeping things together</span>
+<p>Red-team spot-checked <code>b0ef6f34</code> ("W1.B review follow-ups"): a genuinely atomic
+single-intent bugfix (<code>never_scanned</code> semantics) landed simultaneously in
+<code>kb-core/src/enrich.rs</code>, <code>kb-server/src/routes/coderefs.rs</code>,
+<code>kb-cli/src/commands/refs.rs</code>, and a <code>web/</code> TS fixture — exactly the kind of
+change that would become an awkward multi-repo staged rollout if those areas were split.</p>
+</div>
+
+<h3 id="prior-rulings">9.2 Prior rulings — already asked and answered in-repo</h3>
+<p><code>docs/extending.md</code>: "kb deliberately has <strong>no generic plugin SDK</strong>. It is
+a single-author / small-fleet daemon whose value rests on three correctness invariants —
+single-writer-per-kb storage, a deterministic atlas, and a fail-closed security stack — that a
+generic framework would fight." Four named, already-shipping mechanisms ranked by isolation:
+subprocess IPC (the embedder), event-bus/webhook, declarative <code>&lt;meta&gt;</code>/config,
+in-process enrichment hook (first-party only).</p>
+<blockquote>WASM — DEFERRED. "kb has no untrusted-code threat model, and a WASM runtime is a heavy
+dependency on top of the already-pinned arrow/lance graph. Subprocess IPC gives ~90% of the
+isolation for ~5% of the complexity, and kb already runs it."</blockquote>
+<blockquote>Dynamic native <code>.so</code> — REJECTED. "Rust has no stable ABI, and the exact
+<code>arrow = 57.3.1</code> pin means a plugin built against a different arrow is undefined
+behaviour, not a load error... Both reasons are disqualifying."</blockquote>
+<p>The RFC (<a href="kb-plugins-extensibility-rfc.html">kb-plugins-extensibility-rfc.html</a>,
+2026-05-31): do not build a generic plugin framework; ADOPT the three existing mechanisms + a
+formalized hook registry + webhook bridge + generic meta registry; DEFER WASM; REJECT dylib; ADOPT
+Claude-Code packaging; MCP server merely optional. Predates kb-code-server (born 2026-07-18) — its
+"sibling daemon" reasoning was written before kb had a live example.</p>
+<p>README non-goals reinforcing the same posture: no in-daemon LLM ever; one trust tier (no ACLs); no
+in-daemon visibility ("the corpus mount is the ACL... a live public mirror is a dedicated daemon");
+the TUI retired once every data source it rendered had an SPA/CLI home; the desktop app archived as a
+git tag; no MCP server yet, with three explicit trigger conditions and a stated preference for "a
+thin facade over the existing HTTP API... never in-daemon."</p>
+<p>CLAUDE.md: "Invariant budget — 35 is the cap... Adding a new architecture invariant requires
+retiring or merging an existing one." Practiced twice — slot #2 opened at kb-tui's retirement
+(v0.24), refilled by v0.34 (kb-users), then merged into #4 during DCB. Commit <code>f6071d7a</code>
+performed that merge; a follow-up commit <code>1fca43d2</code> had to repair stale bookkeeping about
+the merge itself — evidence the constraint is real and its own tracking has already drifted once.</p>
+
+<h3 id="spikes-as-disposable-crate-precedent">9.3 spikes/ as the disposable-crate precedent</h3>
+<p>Six spike crates (<code>walker</code>, <code>fastembed</code>, <code>sse</code>,
+<code>iframe</code>, <code>ratatui</code>, <code>lance</code>) were built outside the main workspace,
+proved a library choice, then were deleted entirely once captured in
+<code>docs/spike-findings.md</code> — "the architecture decisions in
+<code>docs/research/*.html</code> are never edited; this file is the delta." A lightweight existing
+precedent for a disposable, never-workspace-member crate.</p>
+<p class="src">Cross-checked by red-team's resample (§9.1, §10).</p>
+</section>
+
+<section>
+<h2 id="red-team-verdicts">10. Red-team verdicts</h2>
+<p>An adversarial pass attacked the emerging thesis ("kb should not become a plugin system") against
+primary repo evidence — git log, Cargo.toml graphs, source greps, CI/deploy memory files. No builds
+run.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 10.1 — attack vectors and verdicts</caption>
+<thead><tr><th>Vector</th><th>Verdict</th><th>Reason</th></tr></thead>
+<tbody>
+<tr><td>Outage-attribution correction</td><td class="verdict v-lands">LANDS</td><td>The thesis's
+citation of the 13.5h outage as proof "a handshake is the missing piece" is factually wrong about its
+own root cause — intra-service rollback/migration mismatch (§8.2), not cross-daemon protocol
+skew.</td></tr>
+<tr><td>Sibling-library-coupling ("fig leaf")</td><td class="verdict v-partial">PARTIAL</td>
+<td>kb-code-server reuses kb-server as a path-dependency library on the security-critical surface —
+recompile coupling, not a wire boundary; its own SSE vocabulary has zero schema documentation. But
+<code>web/</code>↔<code>web-code/</code> (0/400) is the cleanest genuinely-decoupled signal in the
+dataset — the frontend split is clean, the backend isn't.</td></tr>
+<tr><td>Single-operator framing</td><td class="verdict v-partial">PARTIAL</td><td>The repo is public,
+MIT, ships a 5-plugin marketplace, 4 non-Claude harness adapters, and a DCO gate — "single-operator"
+is overstated. But PR-review-gated, human-merged contribution is a different threat model from
+unreviewed runtime plugin execution — the WASM-deferral conclusion survives.</td></tr>
+<tr><td>features.ts drift ("the betrayal")</td><td class="verdict v-fails">FAILS</td>
+<td><code>features.ts</code> has 4 flags, 2 dead; kb-core has 2 Cargo features, both build-isolation
+toggles. Opposite of "the monolith quietly becoming configurable."</td></tr>
+<tr><td>Thin-CLI steelman</td><td class="verdict v-partial">PARTIAL</td><td>50+ of kb-cli's 61 command
+modules already exclusively use the shared HTTP client — thin-client shaped like kb-code-cli's 9MB
+precedent. But kb-core has no <code>optional=true</code> on lancedb/arrow — splitting kb-cli today,
+before splitting kb-core's types from its storage engine, would produce N binaries each still paying
+the full lance tax.</td></tr>
+<tr><td>Vertical-slice-commits-are-atomic (<code>b0ef6f34</code>)</td><td class="verdict v-lands">LANDS
+(for the thesis)</td><td>A genuinely atomic bugfix landed across kb-core/kb-server/kb-cli/web/ in one
+commit — argues for keeping things together, reversing how the vector originally framed it.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="amendments-adopted">10.1 Amendments the red-team lane recommends adopting</h3>
+<ol>
+<li>Correct the outage citation (§8.2) — don't cite it as proof a handshake is "the missing piece";
+justify any handshake independently.</li>
+<li>Name the kb-cli split concretely: split kb-core into types/wire vs. lance-linked storage first,
+<em>then</em> promote the ~50-of-61 already-thin kb-cli modules to <code>kb-&lt;verb&gt;</code>
+binaries on PATH.</li>
+<li>Stop calling kb-code-server's kb-server coupling "one call direction, formalized" — it's a
+path-dependency library reuse on the security surface, a deliberate accepted tradeoff, not yet a
+loosely-coupled sibling.</li>
+<li>Extend SSE schema discipline to kb-code-server; consider a machine-checked "every
+<code>.emit()</code> literal is in a schema list" test on both sides.</li>
+<li>Retire "single-operator tool" for "no unreviewed-third-party-code execution surface today,"
+flagged for re-examination if kb ever ships install-from-URL plugins.</li>
+<li>Drop "features.ts betrayal" as supporting evidence entirely — checked against the repo, it's
+minimal and disciplined.</li>
+<li>Caveat co-change numbers as a young sample — kb-code is ~29 days old vs. the repo's ~97, and it
+produced the 13.5h outage within ~4 weeks; re-measure at 6–12 months.</li>
+</ol>
+</section>
+
+<section>
+<h2 id="incidental-defects-found">11. Incidental defects found</h2>
+<p>Concrete doc/code drift surfaced along the way, for triage — not findings about the plugin
+question, but real inconsistencies worth fixing regardless of which decomposition path (if any) the
+companion decision doc recommends.</p>
+<div class="table-wrap">
+<table>
+<caption>Table 11.1 — defects for triage</caption>
+<thead><tr><th>Defect</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td>SSE schema enum under-counts emitted kinds</td><td><code>V0_0_1_TYPES</code> is missing ~14
+production kinds: <code>note.*</code>, <code>memory.linked/unlinked</code>, <code>board.updated</code>,
+<code>session.memory_recalls</code>, <code>quarantine.restored</code>, <code>daemon.restarting</code>,
+maintenance.* pruned kinds, <code>proposal.*</code> (plus test/doc-only <code>comment.added</code> —
+see §3.2 caveat). Two lanes counted the enum's own total size differently (57 vs 59) — see §1.</td></tr>
+<tr><td>kb-core/CLAUDE.md hook list stale by one</td><td>Invariant #5 documents 6 enrichment hooks;
+live <code>enrich::default_hooks()</code> registers 7, with <code>CodeRefHook</code> not named in the
+doc.</td></tr>
+<tr><td>docs/extending.md's plugin count is wrong</td><td>Its table says "three self-contained
+plugins," lists 4, and the live <code>.claude-plugin/marketplace.json</code> actually has 5
+(<code>kb-memory</code>, <code>kb-research</code>, <code>kb-comments</code>, <code>kb-reflect</code>,
+<code>kb-code</code>). <code>kb-code</code> is the one omitted, added ~2026-07-22.</td></tr>
+<tr><td>kb-code-server has no SSE schema documentation at all</td><td>Emits its own kinds
+(<code>annotation.changed</code>, <code>bookmark.changed</code>, <code>review.changed</code>,
+<code>set.changed</code>, <code>suggestion.applied</code>) with no <code>schema.rs</code> equivalent
+anywhere in the crate — unlike kb-server's <code>V0_0_1_TYPES</code>, built after being burned by
+this exact drift twice. <code>kb-code-cli/src/watch.rs</code> (~lines 310, 654) hardcodes these as
+raw string literals.</td></tr>
+<tr><td>parser.rs:845 kernel→feature inversion</td><td><code>crate::share::percent_decode</code>
+called from the kernel parser (§6.5) — a generic string op misplaced inside <code>share</code>; cheap
+fix is moving it to <code>strutil.rs</code>.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+</article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>This appendix curates raw evidence from an 8-agent research program; it draws no conclusion
+    on whether kb should decompose. For the recommendation, see
+    <a href="kb-decomposition-vs-plugins-2026-08.html">kb-decomposition-vs-plugins-2026-08.html</a>.
+    For the prior, still-standing extensibility ruling this program re-examined, see
+    <a href="kb-plugins-extensibility-rfc.html">kb-plugins-extensibility-rfc.html</a> (2026-05-31).
+    Gathered 2026-08-16 against <code>~/project/kb</code> at commit <code>10890afc</code> and
+    its immediate history.</p>
+  </div>
+</footer>
+</body>
+</html>

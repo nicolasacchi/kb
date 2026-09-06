@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Defect: kb cat / kb read can't resolve artifacts on a shared-daemon topology</title>
+<meta name="kb-tags" content="status:shipped, cli, defect, daemon, sessions, fix-plan">
+<!-- kb-audit 2026-07-11: added status:shipped (doc had no status token) -- fix verified at a8dd891f (GC-B5): kb cat/read now port the search.rs daemon-first ladder (--daemon/--offline; GET /api/kb/{kb}/artifact/{id} for cat, SPA permalink from /docs/{id} source_relative for read), not-found errors name which store was consulted, and the zero-local-kbs arm no longer mis-reports "multiple kbs are configured" (daemon path surfaces the daemon's kb count). All three "Needed fix" items + acceptance covered by kb-cli integration tests (KB_OPENER seam). -->
+<meta name="kb-category" content="review">
+<meta name="kb-summary" content="kb cat and kb read resolve ids against the LOCAL lance state only — on the documented docker/shared-daemon topology they see nothing the daemon serves. kb get works (HTTP). Fix: port the search.rs daemon-first ladder.">
+
+<style>
+  :root{
+    --bg:#faf7f2; --surface:#f1ece2; --fg:#2b2620; --muted:#63594d;
+    --rule:#d8d0c2; --accent:#8a3d10; --accent-fg:#faf7f2;
+    --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace;
+    --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#16130f; --surface:#211c16; --fg:#ece5d8; --muted:#b3a893;
+      --rule:#3a332a; --accent:#e8a15c; --accent-fg:#16130f;
+      --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.02rem/1.62 var(--sans);}
+  main{max-width:46rem;margin:0 auto;padding:2.2rem 1.2rem 4rem}
+  h1{font-size:1.55rem;line-height:1.25;margin:.2em 0 .4em}
+  h2{font-size:1.12rem;margin:2em 0 .5em;padding-top:1em;border-top:1px solid var(--rule)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.5 var(--mono);letter-spacing:.02em}
+  .badge{display:inline-block;font:700 .68rem/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;
+    border-radius:999px;padding:.3em .7em;margin-right:.5em;vertical-align:middle}
+  .badge--open{background:var(--danger);color:var(--bg)}
+  .badge--fixed{background:var(--ok);color:var(--bg)}
+  .shipped-note{display:inline-block;font:600 .72rem/1.4 var(--sans);border-radius:4px;padding:.1em .5em;margin:.1rem 0 .3rem;border:1px solid var(--ok);color:var(--ok);background:var(--surface)}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.85rem/1.5 var(--mono)}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.92rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .65em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  .callout strong:first-child{color:var(--accent)}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#symptom">Skip to symptom</a>
+<main>
+<h1><code>kb cat</code> / <code>kb read</code> can't resolve artifacts on a shared-daemon topology</h1>
+<p class="meta"><span class="badge badge--fixed">status: fixed</span> <span class="shipped-note">fixed a8dd891f 2026-07-11 (GC-B5)</span> found 2026-07-06 during the /kb-distill acceptance run · kb-cli · severity: medium (silent capability gap + misleading errors)</p>
+
+<h2 id="symptom">Symptom</h2>
+<p>Against the live shared daemon (docker, <code>127.0.0.1:4000</code> — the documented
+default for the memory rig), id resolution disagrees between verbs for the
+<em>same artifact</em>:</p>
+<pre><code>$ kb cat ad8dfcf6576d --kb sessions
+Error: artifact ad8dfcf6576d not found in kb sessions   # exit 1
+
+$ kb cat ad8dfcf6576d
+Error: must specify --kb when multiple kbs are configured   # zero kbs configured locally!
+
+$ kb find ad8dfcf6576d --kb sessions
+ad8dfcf6576d                                            # daemon lookup: exists
+
+$ kb get ad8dfcf6576d --kb sessions --format html | wc -c
+1757635                                                 # daemon fetch: works</code></pre>
+<p><code>kb read</code> fails identically (same resolution path). Memory-corpus ids
+(<code>kb cat &lt;id&gt; --kb memory-kb</code>) fail the same way.</p>
+
+<h2 id="root-cause">Root cause</h2>
+<p><code>kb cat</code> and <code>kb read</code> are <strong>local-state-only</strong>: they load
+<code>kb.toml</code> (or an empty default when none exists) and open the <em>host's</em>
+lance state dir directly — they never talk to the daemon and accept no
+<code>--daemon</code> flag.</p>
+<table>
+<tr><th>Site</th><th>What it does</th></tr>
+<tr><td><code>crates/kb-cli/src/commands/cat.rs:34</code></td><td><code>Storage::open(&amp;paths.kb_lance(&amp;kb_name), …)</code> — host XDG state (<code>~/.local/state/kb/default/…</code>), which is empty when the daemon runs in docker with its own bind-mounted state.</td></tr>
+<tr><td><code>cat.rs:17-25</code> (and the same match in <code>read.rs</code>)</td><td>kb-name resolution reads the <em>local</em> config; with no local <code>kb.toml</code> the zero-kb case falls into the "multiple kbs configured" error arm — misleading twice over.</td></tr>
+<tr><td><code>crates/kb-cli/src/commands/read.rs:26</code></td><td>Same local <code>KbPaths</code>/<code>Storage::open</code> pattern.</td></tr>
+</table>
+<p>The intended behaviour exists elsewhere: <code>search.rs:1-3</code> documents the
+canonical ladder — <em>"try the daemon first, fall back to a lance read-only open
+if the daemon isn't reachable; <code>--offline</code> forces lance, <code>--daemon URL</code>
+forces HTTP"</em> — via <code>http::detect_daemon</code>. <code>cat</code>/<code>read</code> simply
+predate it and were never ported.</p>
+
+<h2 id="blast-radius">Blast radius</h2>
+<ul>
+<li>On any docker / shared-daemon setup (the default in
+    <code>plugins/kb-memory/hooks/README.md</code>), <code>kb cat</code> and <code>kb read</code>
+    are dead verbs — every id the daemon serves is invisible to them.</li>
+<li>Agent workflows inherit the confusion: <code>/kb-reflect</code> Step 3 claimed
+    <code>kb cat &lt;artifact_id&gt;</code> dumps the session digest — wrong on both counts
+    (it can't resolve, and it dumps raw source bytes, not the digest). Corrected to
+    <code>kb get --format html|md</code> in the same commit as this report.</li>
+<li>The composability promise in the CLI docs (<code>kb find … | xargs kb cat</code>)
+    breaks exactly where <code>kb find</code> works, since <code>find</code> resolves via the
+    daemon.</li>
+</ul>
+
+<h2 id="fix">Needed fix</h2>
+<p>Port the <code>search.rs</code> ladder to both verbs:</p>
+<ol>
+<li><strong><code>kb cat</code></strong> — add <code>--daemon</code>/<code>--offline</code>; default =
+    <code>http::detect_daemon</code>, then <code>GET /api/kb/{kb}/artifact/{id}</code> raw bytes
+    (the same route <code>kb get --format html</code> uses) → stdout; unreachable daemon →
+    existing local-lance path (keep the offline promise in the module doc).</li>
+<li><strong><code>kb read</code></strong> — same detection; in daemon mode open the artifact's
+    served URL (SPA permalink or artifact-subdomain URL) in the browser instead of the
+    local file path; offline mode unchanged.</li>
+<li><strong>Error copy</strong> — the no-<code>--kb</code> arm must distinguish
+    <em>zero</em> kbs configured ("no local kb.toml — pass --kb and let the daemon
+    resolve, or --config") from <em>many</em>; and the not-found error should say
+    <em>which store</em> was consulted ("not found in LOCAL lance state for kb X;
+    daemon not consulted — pass --daemon or check kb.toml") so the failure is
+    self-diagnosing.</li>
+</ol>
+<div class="callout"><strong>Non-goal guard:</strong> this is CLI plumbing only — no daemon
+route changes needed; both HTTP endpoints already exist and are what <code>kb get</code>
+uses today.</div>
+
+<h2 id="acceptance">Acceptance</h2>
+<ul>
+<li>On this host (docker daemon, no local <code>kb.toml</code>):
+    <code>kb find &lt;file&gt; --kb sessions | xargs -I{} kb cat {} --kb sessions</code>
+    streams the artifact; <code>kb read</code> opens it.</li>
+<li>With the daemon stopped and a local single-kb <code>kb.toml</code>: both verbs still
+    work offline (regression guard for the original design).</li>
+<li><code>kb cat &lt;id&gt;</code> with zero local kbs produces the zero-kb error message,
+    not "multiple kbs configured".</li>
+</ul>
+</main>
+</body>
+</html>

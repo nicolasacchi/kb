@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>kb · terminal</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&display=swap"/>
+<style>
+  :root {
+    --bg: #0c0c0e;
+    --panel: #131418;
+    --border: #1f2127;
+    --text: #d8d8db;
+    --dim: #6e6f76;
+    --dimmer: #44464d;
+    --accent: oklch(0.82 0.18 145);  /* phosphor green */
+    --warn: oklch(0.82 0.16 80);
+    --error: oklch(0.72 0.2 25);
+    --link: oklch(0.78 0.13 240);
+    --selection: color-mix(in oklch, oklch(0.82 0.18 145) 30%, transparent);
+  }
+  * { box-sizing: border-box; }
+  ::selection { background: var(--selection); color: var(--accent); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; line-height: 1.5; overflow: hidden; }
+  body { display: grid; grid-template-rows: auto 1fr auto; }
+  .nav-back {
+    position: fixed; top: 12px; right: 16px;
+    font-family: 'Geist Mono', monospace; font-size: 11px;
+    color: var(--dim); text-decoration: none;
+    z-index: 50;
+  }
+  .nav-back:hover { color: var(--accent); }
+
+  /* TITLEBAR */
+  .titlebar {
+    display: flex; gap: 12px; align-items: center;
+    padding: 8px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+  .titlebar .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .titlebar .dot.r { background: oklch(0.7 0.18 25); }
+  .titlebar .dot.y { background: oklch(0.85 0.16 80); }
+  .titlebar .dot.g { background: oklch(0.78 0.16 145); }
+  .titlebar .path { color: var(--text); }
+  .titlebar .right { margin-left: auto; display: flex; gap: 16px; }
+  .titlebar .right span { display: inline-flex; gap: 6px; }
+  .titlebar .blink { animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+
+  /* MAIN */
+  main {
+    overflow-y: auto;
+    padding: 18px 24px 24px;
+    scroll-behavior: smooth;
+  }
+  pre { margin: 0; white-space: pre; }
+  .row { display: grid; grid-template-columns: auto 1fr; gap: 14px; padding: 1px 0; }
+  .prompt { color: var(--accent); user-select: none; }
+  .out { color: var(--text); white-space: pre-wrap; }
+  .out.dim { color: var(--dim); }
+  .gap { height: 14px; }
+
+  /* TABLE */
+  .ls-table {
+    display: grid;
+    grid-template-columns: 28px 24px 1fr 90px 120px 110px;
+    column-gap: 18px;
+    row-gap: 2px;
+    margin-top: 6px;
+  }
+  .ls-table > div { padding: 4px 0; }
+  .ls-row { display: contents; cursor: pointer; }
+  .ls-row > div { transition: background 0.05s; }
+  .ls-row:hover > div, .ls-row.is-focus > div { background: color-mix(in oklch, var(--accent) 14%, transparent); color: var(--accent); }
+  .ls-head { display: contents; }
+  .ls-head > div { color: var(--dim); border-bottom: 1px solid var(--border); padding-bottom: 6px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .col-id { color: var(--dimmer); }
+  .col-icon { color: var(--accent); }
+  .col-title { color: var(--text); }
+  .col-tags { color: var(--link); }
+  .col-meta { color: var(--dim); text-align: right; }
+  .col-age { color: var(--dim); text-align: right; }
+  .ls-row .col-bar {
+    color: var(--accent);
+    letter-spacing: 1px;
+    grid-column: 4;
+  }
+
+  .meter { letter-spacing: 0; }
+  .meter .on { color: var(--accent); }
+  .meter .off { color: var(--dimmer); }
+
+  /* PROMPT INPUT */
+  .promptbar {
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .promptbar .ps { color: var(--accent); }
+  .promptbar input {
+    flex: 1; background: transparent; border: 0;
+    color: var(--text);
+    font-family: inherit; font-size: 13px;
+    outline: none;
+  }
+  .promptbar input::placeholder { color: var(--dimmer); }
+  .promptbar .help { color: var(--dim); font-size: 11px; }
+  .promptbar kbd { color: var(--accent); font-size: 11px; }
+
+  /* DETAIL VIEW */
+  body.is-detail .gallery-pane { display: none; }
+  body:not(.is-detail) .detail-pane { display: none; }
+  .detail-pane { display: grid; grid-template-rows: auto 1fr; height: 100%; overflow: hidden; }
+  .detail-head {
+    padding: 14px 24px; border-bottom: 1px solid var(--border);
+  }
+  .detail-head .crumbs { color: var(--dim); }
+  .detail-head .crumbs .a { color: var(--accent); cursor: pointer; }
+  .detail-head h1 { font-size: 19px; margin: 6px 0 4px; color: var(--text); font-weight: 500; }
+  .detail-head .meta { color: var(--dim); font-size: 11.5px; display: flex; gap: 18px; flex-wrap: wrap; }
+  .detail-head .meta span { display: inline-flex; gap: 6px; }
+  .detail-head .meta b { color: var(--text); font-weight: 400; }
+  .detail-body {
+    display: grid; grid-template-columns: 1fr 280px;
+    overflow: hidden;
+  }
+  .iframe-wrap { background: var(--bg); border-right: 1px solid var(--border); overflow: hidden; }
+  .iframe-wrap iframe { width: 100%; height: 100%; border: 0; background: white; }
+  .side-pane { overflow-y: auto; padding: 16px 18px; }
+  .side-pane h3 { color: var(--dim); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 8px; font-weight: 500; }
+  .side-pane h3:not(:first-child) { margin-top: 22px; }
+  .kv { display: grid; grid-template-columns: 70px 1fr; padding: 3px 0; gap: 6px; font-size: 12px; }
+  .kv span:first-child { color: var(--dim); }
+  .side-pane a { color: var(--link); text-decoration: none; display: block; padding: 4px 0; font-size: 12px; }
+  .side-pane a:hover { color: var(--accent); }
+  .side-pane a::before { content: '→ '; color: var(--dimmer); }
+</style>
+</head>
+<body>
+<a class="nav-back" href="../Layouts.html">[esc] layouts</a>
+
+<header class="titlebar">
+  <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+  <span class="path">~/kb/work</span>
+  <span class="dim">— kb 0.4.2 (read-only)</span>
+  <span class="right">
+    <span><span class="blink">●</span> watching</span>
+    <span>89 artifacts</span>
+    <span>3 kbs</span>
+  </span>
+</header>
+
+<main>
+  <!-- ========== GALLERY ========== -->
+  <section class="gallery-pane">
+    <div class="row"><span class="prompt">$</span><span class="out">kb status</span></div>
+    <div class="row"><span></span><span class="out dim">  watching · /work · 89 artifacts · 3 sources · last index 4m ago</span></div>
+
+    <div class="gap"></div>
+
+    <div class="row"><span class="prompt">$</span><span class="out">kb ls --recent --color</span></div>
+    <div class="row"><span></span><div style="width: 100%">
+      <div class="ls-table">
+        <div class="ls-head"><div>#</div><div></div><div>title</div><div>signal</div><div>tags</div><div>age</div></div>
+
+        <div class="ls-row" data-id="s01">
+          <div class="col-id">01</div><div class="col-icon">▤</div>
+          <div class="col-title">Visualizing the Borrow Checker</div>
+          <div class="col-bar meter"><span class="on">●●●●●</span></div>
+          <div class="col-tags">rust async memory</div>
+          <div class="col-age">3h ago</div>
+        </div>
+        <div class="ls-row" data-id="s02">
+          <div class="col-id">02</div><div class="col-icon">▤</div>
+          <div class="col-title">A Field Guide to Rust Errors</div>
+          <div class="col-bar meter"><span class="on">●●●●</span><span class="off">○</span></div>
+          <div class="col-tags">rust errors</div>
+          <div class="col-age">1d ago</div>
+        </div>
+        <div class="ls-row" data-id="s03">
+          <div class="col-id">03</div><div class="col-icon">▤</div>
+          <div class="col-title">Everything HTML Can Do, in One Page</div>
+          <div class="col-bar meter"><span class="on">●●●●●</span></div>
+          <div class="col-tags">html systems</div>
+          <div class="col-age">5h ago</div>
+        </div>
+        <div class="ls-row" data-id="o1">
+          <div class="col-id">04</div><div class="col-icon">▤</div>
+          <div class="col-title">Notes on the unreasonable effectiveness of HTML</div>
+          <div class="col-bar meter"><span class="on">●●●</span><span class="off">○○</span></div>
+          <div class="col-tags">html philosophy</div>
+          <div class="col-age">2d ago</div>
+        </div>
+        <div class="ls-row" data-id="o2">
+          <div class="col-id">05</div><div class="col-icon">▤</div>
+          <div class="col-title">Async error propagation, the ergonomic version</div>
+          <div class="col-bar meter"><span class="on">●●●●</span><span class="off">○</span></div>
+          <div class="col-tags">async errors</div>
+          <div class="col-age">4d ago</div>
+        </div>
+        <div class="ls-row" data-id="o3">
+          <div class="col-id">06</div><div class="col-icon">▤</div>
+          <div class="col-title">The Tokio runtime, stripped to its frame</div>
+          <div class="col-bar meter"><span class="on">●●●●●</span></div>
+          <div class="col-tags">async tokio</div>
+          <div class="col-age">1w ago</div>
+        </div>
+        <div class="ls-row" data-id="o4">
+          <div class="col-id">07</div><div class="col-icon">▤</div>
+          <div class="col-title">Pin, in fewer than fifteen sentences</div>
+          <div class="col-bar meter"><span class="on">●●</span><span class="off">○○○</span></div>
+          <div class="col-tags">async pin</div>
+          <div class="col-age">2w ago</div>
+        </div>
+        <div class="ls-row" data-id="o5">
+          <div class="col-id">08</div><div class="col-icon">▤</div>
+          <div class="col-title">BTreeMap, drawn at 50× zoom</div>
+          <div class="col-bar meter"><span class="on">●●●</span><span class="off">○○</span></div>
+          <div class="col-tags">data visual</div>
+          <div class="col-age">3w ago</div>
+        </div>
+        <div class="ls-row" data-id="o6">
+          <div class="col-id">09</div><div class="col-icon">▤</div>
+          <div class="col-title">Every smart pointer, charted</div>
+          <div class="col-bar meter"><span class="on">●●●●</span><span class="off">○</span></div>
+          <div class="col-tags">memory pointers</div>
+          <div class="col-age">1mo ago</div>
+        </div>
+        <div class="ls-row" data-id="o7">
+          <div class="col-id">10</div><div class="col-icon">▤</div>
+          <div class="col-title">How the executor came to be</div>
+          <div class="col-bar meter"><span class="on">●●●●</span><span class="off">○</span></div>
+          <div class="col-tags">async history</div>
+          <div class="col-age">1mo ago</div>
+        </div>
+        <div class="ls-row" data-id="o8">
+          <div class="col-id">11</div><div class="col-icon">▤</div>
+          <div class="col-title">The macro system, in one page</div>
+          <div class="col-bar meter"><span class="on">●●●</span><span class="off">○○</span></div>
+          <div class="col-tags">macros</div>
+          <div class="col-age">2mo ago</div>
+        </div>
+      </div>
+    </div></div>
+
+    <div class="gap"></div>
+    <div class="row"><span></span><span class="out dim">  11 of 89 shown · pipe to <span style="color:var(--accent)">--all</span> for the rest</span></div>
+
+    <div class="gap"></div>
+    <div class="row"><span class="prompt">$</span><span class="out">kb tags --top</span></div>
+<div class="row"><span></span><pre class="out dim">  rust    ████████████████████ 42
+  async   █████████████        28
+  memory  ████████             17
+  errors  ██████               12
+  tokio   ████                  8</pre></div>
+
+    <div class="gap"></div>
+    <div class="row"><span class="prompt">$</span><span class="out blink" style="color:var(--accent)">_</span></div>
+  </section>
+
+  <!-- ========== DETAIL ========== -->
+  <section class="detail-pane">
+    <div class="detail-head">
+      <div class="crumbs"><span class="a" id="back">~/kb/work</span> <span class="dim">›</span> <span id="d-id">—</span></div>
+      <h1 id="d-title">—</h1>
+      <div class="meta">
+        <span><b id="d-age">—</b> ago</span>
+        <span><b id="d-words">—</b> words</span>
+        <span>links: <b id="d-bl">—</b> in / <b id="d-ol">—</b> out</span>
+        <span>tags: <span id="d-tags" style="color: var(--link)">—</span></span>
+      </div>
+    </div>
+    <div class="detail-body">
+      <div class="iframe-wrap"><iframe id="d-iframe" src="about:blank"></iframe></div>
+      <aside class="side-pane">
+        <h3>actions</h3>
+        <div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px;">
+          <a href="#"><span style="color:var(--accent)">o</span>pen in editor</a>
+          <a href="#"><span style="color:var(--accent)">y</span> copy id</a>
+          <a href="#"><span style="color:var(--accent)">g</span>raph from here</a>
+          <a href="#"><span style="color:var(--accent)">/</span> search</a>
+        </div>
+        <h3>backlinks</h3>
+        <div id="d-related"></div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<footer class="promptbar">
+  <span class="ps">kb&gt;</span>
+  <input id="cmdline" placeholder="search · :ls · :tag rust · :open 03 · :graph · :help"/>
+  <span class="help"><kbd>↵</kbd> run · <kbd>esc</kbd> back · <kbd>↑↓</kbd> select · <kbd>?</kbd> help</span>
+</footer>
+
+<script>
+  const ART = {
+    s01: { title: 'Visualizing the Borrow Checker', src: '../artifacts/fullscreen-viz.html', age: '3h', words: 240, bl: 6, ol: 2, tags: 'rust async memory' },
+    s02: { title: 'A Field Guide to Rust Errors', src: '../artifacts/multi-page.html', age: '1d', words: 6800, bl: 14, ol: 22, tags: 'rust errors' },
+    s03: { title: 'Everything HTML Can Do, in One Page', src: '../artifacts/kitchen-sink.html', age: '5h', words: 3200, bl: 4, ol: 1, tags: 'html systems' },
+    o1:  { title: 'Notes on the unreasonable effectiveness of HTML', age: '2d', words: 1400, bl: 9, ol: 4, tags: 'html philosophy' },
+    o2:  { title: 'Async error propagation, the ergonomic version', age: '4d', words: 2100, bl: 11, ol: 6, tags: 'async errors' },
+    o3:  { title: 'The Tokio runtime, stripped to its frame', age: '1w', words: 3600, bl: 18, ol: 12, tags: 'async tokio' },
+    o4:  { title: 'Pin, in fewer than fifteen sentences', age: '2w', words: 580, bl: 7, ol: 3, tags: 'async pin' },
+    o5:  { title: 'BTreeMap, drawn at 50× zoom', age: '3w', words: 0, bl: 4, ol: 2, tags: 'data visual' },
+    o6:  { title: 'Every smart pointer, charted', age: '1mo', words: 2800, bl: 22, ol: 9, tags: 'memory pointers' },
+    o7:  { title: 'How the executor came to be', age: '1mo', words: 4400, bl: 6, ol: 18, tags: 'async history' },
+    o8:  { title: 'The macro system, in one page', age: '2mo', words: 1900, bl: 5, ol: 7, tags: 'macros' },
+  };
+  const order = Object.keys(ART);
+
+  function syntheticSrcDoc(t, words) {
+    return `<!doctype html><html><head><style>
+      body{font-family:'Geist Mono',ui-monospace,monospace;background:#0c0c0e;color:#d8d8db;padding:32px 48px;line-height:1.55;font-size:13px;}
+      h1{font-size:22px;color:oklch(0.82 0.18 145);margin:0 0 16px;font-weight:500;}
+      .lede{color:#6e6f76;margin:0 0 28px;}
+      p{max-width:680px;margin:0 0 14px;}
+      pre{background:#131418;border:1px solid #1f2127;padding:12px 14px;border-radius:4px;color:oklch(0.82 0.18 145);overflow-x:auto;}
+    </style></head><body>
+      <h1>${t}</h1>
+      <p class="lede">// synthetic placeholder · ${words ? words.toLocaleString() + ' words' : 'interactive'}</p>
+      <p>The real artifact lives at the file path; the daemon serves it under /api/v1/raw/&lt;id&gt;. The chrome around this iframe stays out of the way.</p>
+      <pre>$ kb cat ${t.toLowerCase().replace(/\\s+/g,'-').slice(0,30)}
+# loaded · 0.4ms · cached
+# 14 backlinks · 22 outgoing</pre>
+    </body></html>`;
+  }
+
+  function open(id) {
+    const a = ART[id]; if (!a) return;
+    document.body.classList.add('is-detail');
+    document.getElementById('d-title').textContent = a.title;
+    document.getElementById('d-id').textContent = id;
+    document.getElementById('d-age').textContent = a.age;
+    document.getElementById('d-words').textContent = a.words ? a.words.toLocaleString() : 'interactive';
+    document.getElementById('d-bl').textContent = a.bl;
+    document.getElementById('d-ol').textContent = a.ol;
+    document.getElementById('d-tags').textContent = a.tags;
+    const ifr = document.getElementById('d-iframe');
+    if (a.src) { ifr.removeAttribute('srcdoc'); ifr.src = a.src; }
+    else { ifr.removeAttribute('src'); ifr.srcdoc = syntheticSrcDoc(a.title, a.words); }
+    const rel = document.getElementById('d-related');
+    rel.innerHTML = '';
+    order.filter(o => o !== id).slice(0, 5).forEach(o => {
+      const e = document.createElement('a'); e.href = '#'; e.textContent = ART[o].title;
+      e.onclick = (ev) => { ev.preventDefault(); open(o); };
+      rel.appendChild(e);
+    });
+  }
+
+  document.querySelectorAll('.ls-row').forEach(r => r.addEventListener('click', () => open(r.dataset.id)));
+  document.getElementById('back').onclick = () => { document.body.classList.remove('is-detail'); };
+
+  // Command line
+  const cmd = document.getElementById('cmdline');
+  cmd.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { document.body.classList.remove('is-detail'); cmd.value = ''; }
+    if (e.key === 'Enter') {
+      const v = cmd.value.trim();
+      if (!v) return;
+      if (v.startsWith(':open ')) {
+        const n = parseInt(v.slice(6).trim(), 10);
+        const id = order[n - 1]; if (id) open(id);
+      } else if (v === ':ls' || v === ':back') {
+        document.body.classList.remove('is-detail');
+      } else {
+        // search: open first matching
+        const hit = order.find(o => ART[o].title.toLowerCase().includes(v.toLowerCase()) || ART[o].tags.includes(v.toLowerCase()));
+        if (hit) open(hit);
+      }
+      cmd.value = '';
+    }
+  });
+  // Auto-focus prompt
+  setTimeout(() => cmd.focus(), 100);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== cmd) { e.preventDefault(); cmd.focus(); }
+    if (e.key === 'Escape' && document.body.classList.contains('is-detail')) document.body.classList.remove('is-detail');
+  });
+</script>
+</body>
+</html>

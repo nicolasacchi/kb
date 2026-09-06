@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Surfaces — review · kb research</title>
+<meta name="description" content="Audit of the eight `surfaces/` research docs (06-13) against the kb codebase at HEAD — what shipped, what got rewritten, what's still on the page only.">
+<meta name="kb-tags" content="review, surfaces, audit">
+<meta name="kb-category" content="review">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  /* Lightweight status badges layered on top of the research stylesheet. */
+  .status-shipped,
+  .status-partial,
+  .status-superseded,
+  .status-not-shipped {
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    padding: .2rem .55rem;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    font-weight: 700;
+    display: inline-block;
+    margin-right: .55rem;
+    vertical-align: 2px;
+  }
+  .status-shipped       { color: var(--low); }
+  .status-partial       { color: var(--med); }
+  .status-superseded    { color: var(--ink-3); }
+  .status-not-shipped   { color: var(--high); }
+  .status-tally {
+    font-family: var(--mono);
+    font-size: .85rem;
+    color: var(--ink-2);
+    margin: .6rem 0 1.4rem;
+  }
+  .status-tally span { margin-right: 1.2rem; }
+  .ev { font-family: var(--mono); font-size: .85rem; color: var(--ink-2); }
+  .ev code { font-size: .82rem; }
+  .doc-header { margin-top: 2.2rem; }
+</style>
+</head>
+<body>
+
+<header class="top-nav">
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">&larr; kb · research</a>
+    <nav class="nav-links" aria-label="Surfaces">
+      <a href="06-iframe.html">06 · Iframe</a>
+      <a href="07-html-effectiveness.html">07 · HTML</a>
+      <a href="08-prior-art.html">08 · Prior art</a>
+      <a href="09-comments.html">09 · Comments</a>
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+      <a href="12-mobile-redesign.html">12 · Mobile</a>
+      <a href="13-multi-daemon-architecture.html">13 · Multi-daemon</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<p class="note"><strong>Superseded note (2026-07-02):</strong> doc&nbsp;12&rsquo;s
+&ldquo;not-shipped&rdquo; verdict below is out of date. Extensive mobile work has
+since shipped: the v0.12 mobile pass and the v0.20&ndash;v0.23 reader work,
+culminating in v0.23&rsquo;s one-button, one-merged-sheet mobile reader. Treat
+the doc&nbsp;12 section as historical context, not current state.</p>
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Surfaces &mdash; audit
+    <span>&middot;</span>
+    <span class="meta">Eight docs vs HEAD</span>
+    <span>&middot;</span>
+    <span class="meta">2026-05-24</span>
+  </div>
+  <h1>Most of the surfaces design shipped. <br>The two newest docs (mobile, multi-daemon) are still spec.</h1>
+  <p class="lede">This page reviews the eight docs in <code>docs/research/surfaces/</code> against the current state of the kb codebase. For each doc: a one-paragraph verdict and one or two code citations. Docs 06&ndash;11 are the v0.1&ndash;v0.5 design cluster; they shipped or got cleanly superseded by later milestones. Docs 12 and 13 are 2026-05-19 design reviews proposing work that hasn&rsquo;t happened yet.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR &mdash; per-doc verdicts</span>
+    <p class="status-tally">
+      <span><strong class="status-shipped">shipped</strong> 06, 07, 08, 09, 11</span>
+      <span><strong class="status-partial">partial</strong> 10</span>
+      <span><strong class="status-not-shipped">not-shipped</strong> 12, 13</span>
+    </p>
+    <p>The cross-cutting surprises: (1) doc&nbsp;11&rsquo;s <code>POST /api/kb/{kb}/review/{id}</code> whole-document write &mdash; the original comments wire shape &mdash; was <em>retired</em> in v0.7 R8 in favour of fine-grained endpoints under <code>review_lock</code>. (2) doc&nbsp;13&rsquo;s multi-daemon SPA proposal landed only at the SSE-aggregation layer; the cross-origin REST switcher (CORS, per-daemon bearer, <code>?daemon=</code> URL state, host-side <code>/api/daemons</code>) was never built.</p>
+  </div>
+</section>
+
+<h2 id="doc-06-iframe" class="doc-header">06 &middot; Iframe (sandboxing + injection + scroll)</h2>
+
+<p><strong class="status-shipped">shipped</strong> The doc&rsquo;s amended post-deep-review recommendation &mdash; permissive sandbox flags <em>plus</em> per-artifact subdomain serving &mdash; is what the daemon does today. Probe + annotator are both serve-time injected. SPA + daemon agree on the flag string.</p>
+<ul class="ev">
+  <li><code>crates/kb-core/src/iframe.rs:28&ndash;30</code> &mdash; <code>SANDBOX_FLAGS = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"</code>, exactly the §G recommendation.</li>
+  <li><code>crates/kb-server/src/routes/artifact.rs:28&ndash;29</code> defines <code>PROBE_PATH = "/_kb/probe.js"</code> and <code>ANNOTATE_PATH = "/_kb/annotate.js"</code>; the <code>?cm=on</code> rewriter at line 446+ injects the annotator. The runtime invariant <em>&laquo;<code>artifact_host_suffix</code> is runtime, not a const&raquo;</em> in CLAUDE.md captures the v0.6 lift of the suffix out of <code>iframe.rs</code> into <code>[server] artifact_host_suffix</code>.</li>
+</ul>
+
+<h2 id="doc-07-html-effectiveness">07 &middot; HTML effectiveness (BM25 field-aware indexing, kb-prompt template)</h2>
+
+<p><strong class="status-shipped">shipped</strong> Five-field BM25 (title / body / headings / code / prompt) lives in lance; <code>&lt;template id="kb-prompt"&gt;</code> with the 8&nbsp;KB cap is parsed and stored; the &laquo;path-specific four-path decomposition&raquo; (embed body only, BM25 the prompt, never modify bytes on read, scrub only on outbound) is the daemon&rsquo;s current policy. Hybrid search uses lance RRF (k=60), the doc&rsquo;s recommended pattern.</p>
+<ul class="ev">
+  <li><code>crates/kb-core/src/storage/lance.rs:26</code> &mdash; <code>FTS_COLUMNS = &amp;["title", "body", "headings", "code", "prompt"]</code>, exactly the five fields the doc requested.</li>
+  <li><code>crates/kb-core/src/parser.rs:26</code> &mdash; <code>PROMPT_MAX_BYTES: usize = 8 * 1024</code> with the truncate-on-overflow path at line 293+; the §G &laquo;<code>&lt;template id="kb-prompt"&gt;</code>&raquo; recommendation is also load-bearing per CLAUDE.md invariant&nbsp;8 (id is reserved).</li>
+  <li>Outbound scrub: <code>crates/kb-core/src/scrub.rs:6&ndash;73</code> implements <code>strip_kb_prompt</code> via lol-html; the doc&rsquo;s &laquo;deferred to v0.2+&raquo; line is satisfied (it landed in v0.3, per CLAUDE.md history).</li>
+</ul>
+
+<h2 id="doc-08-prior-art">08 &middot; Prior art survey</h2>
+
+<p><strong class="status-shipped">shipped</strong> This doc is a positioning argument, not an engineering spec. Its conclusion &mdash; &laquo;one daemon + thin clients&raquo; with HTML-as-snapshot &mdash; is exactly what the kb workspace embodies: a Rust daemon (<code>kb-server</code>) plus three thin clients (<code>kb-cli</code>, <code>kb-tui</code>, the SPA in <code>web/</code>). No alternative architecture was reopened.</p>
+<ul class="ev">
+  <li><code>crates/</code> workspace layout: <code>kb-core/</code> + <code>kb-server/</code> (the daemon) + <code>kb-cli/</code> + <code>kb-tui/</code> + <code>web/</code> &mdash; literally the four-client shape the doc argued for.</li>
+  <li>The CLAUDE.md project guide opens with &laquo;A Rust daemon that indexes, searches, and serves a personal collection of LLM-generated HTML artifacts. Ships a CLI, a 5-tab fleet-monitor TUI, and a single-page web UI&raquo; &mdash; the wedge is the product description.</li>
+</ul>
+
+<h2 id="doc-09-comments">09 &middot; Comments / kb-comments/1 protocol</h2>
+
+<p><strong class="status-shipped">shipped</strong> The four anchor scopes (File / Chapter / Section / Selection) and the auto-fuzzy-match with <code>stale</code>/<code>reanchored</code> states are exactly what ships. The doc itself acknowledged supersedes for §D (wrapper-page shim &rarr; serve-time <code>/_kb/annotate.js</code>) and §E (HTTP API &rarr; topic 11). Both supersedes are reflected in code. The R8 / R9 endpoint reshape (fine-grained mutations, explicit <code>reanchor</code>) is a refinement on top, not a contradiction.</p>
+<ul class="ev">
+  <li><code>crates/kb-core/src/review.rs:150&ndash;232</code> &mdash; <code>enum Anchor</code> with File / Chapter / Section / Selection; <code>fuzzy_resolve_anchor</code> implements the Jaccard / Jaro-Winkler scoring the doc&rsquo;s §C described. <code>Resolution</code> at L195+ encodes the stale-vs-reanchored states.</li>
+  <li>The SSE event <code>comment.anchor_stale</code> the doc names lives at <code>crates/kb-core/src/indexer.rs:925</code>; the v0.7 R9 explicit-reanchor flow (<code>PATCH .../comments/{cid}/anchor</code>) is wired at <code>crates/kb-server/src/router.rs:196&ndash;199</code>.</li>
+</ul>
+
+<h2 id="doc-10-web-gallery">10 &middot; SPA / Web Gallery spec</h2>
+
+<p><strong class="status-partial">partial</strong> The visual contract, three views (Grid / List / Atlas), iframe detail, Cmd+K search, FloatingPill, annotator bridge, status pill &mdash; all shipped. Atlas with UMAP shipped in v0.3. What didn&rsquo;t ship cleanly: the doc&rsquo;s §O″ promised maximalist polish &laquo;all in v0.1&raquo; (j/k vim-nav, empty/loading/error panels, print stylesheet, Cmd+K result preview pane). Most landed by v0.5 polish but some (e.g. dedicated print stylesheet) only show up as a single <code>@media print</code> block.</p>
+<ul class="ev">
+  <li>SPA structure under <code>web/src/components/</code> matches the doc 1:1: <code>FloatingPill.tsx</code>, <code>CommentsPanel.tsx</code>, <code>AtlasView.tsx</code>, <code>Cmdk.tsx</code>, <code>StatusPill.tsx</code>, <code>LeftRail.tsx</code>, <code>TopBar.tsx</code>.</li>
+  <li>iframe contract verified: <code>web/src/routes/detail.tsx:32</code> uses the same SANDBOX string as <code>kb_core::iframe</code> (cited in the source comment at L24&ndash;28); per-artifact subdomain rendering is real in production.</li>
+  <li>Print stylesheet: a single block at <code>web/src/styles/app.css:2433</code> &mdash; tiny vs the doc&rsquo;s ambition. Mobile responsiveness is also thin (see doc 12 below).</li>
+</ul>
+
+<h2 id="doc-11-daemon-api">11 &middot; HTTP API surface</h2>
+
+<p><strong class="status-shipped">shipped</strong> (with one notable retirement) The 28-endpoint contract, the <code>/api/kb/{kb}/...</code> nesting, the Origin allowlist, the <code>202 + run id + filter</code> async shape, RFC&nbsp;7807 problem+json &mdash; all in the daemon today. v0.4 added bearer auth + rate-limiting (a layer above this doc); cluster-4 additions (<code>/api/identity</code>, <code>/api/settings</code> PATCH) shipped. The one retirement: <code>POST /api/kb/{kb}/review/{id}</code> (the whole-document write) is <em>gone</em> &mdash; v0.7 R8 split it into fine-grained <code>routes::comments</code> endpoints (add / reply / resolve / edit / anchor / delete + <code>resolve-all</code>) running under a single <code>review_lock</code>. GET stays.</p>
+<ul class="ev">
+  <li><code>crates/kb-server/src/router.rs:61&ndash;215</code> &mdash; the full router. Cross-kb flat routes (<code>/identity</code>, <code>/kbs</code>, <code>/search</code>, <code>/stats</code>, <code>/events</code>, <code>/events.schema.json</code>) and the kb-scoped tree under <code>/kb/{kb}/...</code> mirror §B.1&ndash;B.5.</li>
+  <li>Problem+JSON is everywhere: <code>crates/kb-server/src/routes/review.rs:15,44,47,50,57</code> uses <code>error_to_problem_json</code>; the middleware exposes it workspace-wide. <code>routes::errors::apply_fix</code> is still a 202 stub (doc 11 §B.3 &laquo;<code>POST .../apply-fix</code>&raquo;) at <code>crates/kb-server/src/routes/errors.rs:99</code>.</li>
+</ul>
+
+<h2 id="doc-12-mobile-redesign">12 &middot; Mobile redesign</h2>
+
+<p><strong class="status-not-shipped">not-shipped</strong> Dated 2026-05-19 as a &laquo;design review · open&raquo;. None of P1 (tablet CSS-only) or P2 (FloatingPill bottom-sheet rebuild) landed. The CSS files have a handful of <code>max-width</code> media queries on <code>gallery.css</code> only, none on <code>app.css</code> or component-specific styles. No <code>FloatingPillMobile.tsx</code>, no <code>CommentsPanel</code> &laquo;variant&raquo; prop, no <code>spa-mobile.spec.ts</code>. The atlas placeholder for narrow widths isn&rsquo;t there.</p>
+<ul class="ev">
+  <li><code>web/src/styles/</code> has exactly five <code>@media</code> blocks (per <code>grep -rn '@media' web/src/styles/</code>): four <code>max-width</code> rules in <code>gallery.css</code> (720, 1280, 900, 600 px) and one each in <code>tokens.css</code> (prefers-color-scheme) and <code>app.css</code> (prefers-reduced-motion + print). No 768-px tablet breakpoint, no 375-px phone breakpoint.</li>
+  <li><code>web/src/components/FloatingPill.tsx</code> still exists as the single desktop-shaped component; no <code>FloatingPillMobile.tsx</code> sibling; <code>CommentsPanel.tsx</code> has no <code>variant</code> prop.</li>
+</ul>
+
+<h2 id="doc-13-multi-daemon-architecture">13 &middot; Multi-daemon (fleet) architecture</h2>
+
+<p><strong class="status-partial">partial</strong> Dated 2026-05-19. The fleet <em>TUI</em> shipped years ago and is the v0.6 redesign&rsquo;s centrepiece. The SPA D7-prep groundwork landed (<code>web/src/api/base.ts</code> with the daemon-base getter/setter; <code>sse.ts</code> daemon-aware multi-EventSource). The user-facing surface that <em>did</em> ship is the SSE-aggregation pattern: a <code>DaemonsManager</code> in Settings lets the user enroll peer daemons, and the SPA opens one SSE per daemon. The cross-origin REST switcher proposed in §B2 &mdash; <code>/api/daemons</code> on the host, <code>?daemon=</code> URL state, per-daemon bearer in <code>api/bearer.ts</code>, a <code>DaemonPicker</code> component, <code>tower-http::cors</code>, <code>cross_daemon_origins</code> in <code>kb.toml</code> &mdash; was <strong>not</strong> built. Today the SPA still data-fetches from one daemon (the one that served it).</p>
+<ul class="ev">
+  <li><code>web/src/api/base.ts</code> ships the D7-prep primitive (the doc names this file), but the production code path keeps the base as <code>""</code> &mdash; no boot path calls <code>setDaemonBase</code>. There is no <code>web/src/api/bearer.ts</code>, no <code>web/src/api/daemons.ts</code>, no <code>web/src/components/DaemonPicker.tsx</code> (grep across <code>web/src/</code> finds zero hits for any of those).</li>
+  <li>Server-side: no <code>crates/kb-server/src/routes/daemons.rs</code>; <code>router.rs</code> has no <code>tower-http::cors</code> layer; <code>config.rs</code> has no <code>cross_daemon_origins</code>. The TUI&rsquo;s <code>DaemonPicker</code> overlay (<code>crates/kb-tui/src/app.rs:168</code>) is the only daemon-switcher in the fleet.</li>
+  <li>What did land: <code>web/src/components/DaemonsManager.tsx</code> + <code>web/src/api/sse.ts::saveDaemonUrls</code> &mdash; a localStorage-backed list of peer SSE URLs the SPA subscribes to. This is the &laquo;pattern A&raquo; / fleet-aware-SSE shape, not the &laquo;B2 true multi-origin&raquo; the doc proposed.</li>
+</ul>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Net findings <span class="conf conf--med">audit · 2026-05-24</span></span>
+    <p><strong>Surfaces 06&ndash;11 are basically done.</strong> The five oldest docs in this folder (iframe sandbox + serve-time injection, BM25 + kb-prompt template, daemon-as-product, kb-comments/1 anchor protocol, daemon HTTP contract) describe the kb daemon as it exists. Where they got rewritten &mdash; e.g. doc 11&rsquo;s monolithic <code>POST /review/{id}</code> &rarr; the R8 fine-grained mutations &mdash; the change is in the direction of more discipline, not less.</p>
+    <p><strong>Surfaces 12 + 13 are still open.</strong> The mobile redesign is unstarted; the multi-daemon SPA shipped only its fleet-SSE half (B2 baseline never landed). Both are recent (2026-05-19) and tagged <code>kb-status=open</code>, so they read as the current backlog more than as accepted-but-undone work. If multi-daemon SPA federation becomes a v0.10+ ambition, doc 13&rsquo;s impl hit-list is the starting plan.</p>
+  </div>
+</section>
+
+</main>
+
+</body>
+</html>

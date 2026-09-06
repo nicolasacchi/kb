@@ -1,0 +1,20 @@
+{"query":"how does kb store artifacts and run BM25 full-text search","relevant":["ad2319e828e4"],"notes":"foundation/01-lancedb.html — storage + FTS"}
+{"query":"which embedding model does kb use and how is fastembed wired in","relevant":["6a9fd62962fc"],"notes":"foundation/02-fastembed.html"}
+{"query":"how does the file watcher detect artifact changes on disk","relevant":["f72eff2032c4"],"notes":"foundation/03-notify.html"}
+{"query":"server-sent events streaming over HTTP in axum for live updates","relevant":["c4e5467634b0"],"notes":"foundation/04-sse-axum.html"}
+{"query":"ratatui terminal dashboard design for the fleet monitor TUI","relevant":["b86378b73d68"],"notes":"foundation/05-ratatui.html"}
+{"query":"embedding bake-off recall comparison between bge small base and large","relevant":["d1cc9a52c9cb"],"notes":"foundation/14-embedding-bakeoff"}
+{"query":"iframe sandboxing and cross-origin isolation for served artifacts","relevant":["7716830811ee"],"notes":"surfaces/06-iframe.html"}
+{"query":"comment review workflow with stable anchors that survive regeneration","relevant":["c1b1f6e8f4d0"],"notes":"surfaces/09-comments.html"}
+{"query":"daemon HTTP API endpoints for search and documents","relevant":["4d7e6e880e04"],"notes":"surfaces/11-daemon-api.html"}
+{"query":"running many kb daemons side by side multi-daemon architecture","relevant":["77e9788eae66"],"notes":"surfaces/13-multi-daemon-architecture.html"}
+{"query":"making the web gallery responsive on mobile screens","relevant":["a36feb5a4707"],"notes":"surfaces/12-mobile-redesign.html"}
+{"query":"using kb as persistent memory for a Claude Code agent","relevant":["dff11904a382"],"notes":"memory/19-kb-as-claude-code-memory.html"}
+{"query":"memory recall ranking with salience and recency decay build spec","relevant":["f221313a08e7","4ab08739b34c"],"notes":"memory/23-implementation-spec + 22-native-subsystem"}
+{"query":"publish kb artifacts behind Cloudflare Access authentication","relevant":["695824e51e1d"],"notes":"publishing/16-cloudflare-access-publishing.html"}
+{"query":"Authelia single sign-on integration for gated artifact sharing","relevant":["ada756f8c639"],"notes":"publishing/17-authelia-kb-integration.html"}
+{"query":"ephemeral localhost sharing via tunnels or funnel","relevant":["800a1330d581"],"notes":"publishing/18-ephemeral-localhost-sharing.html"}
+{"query":"plugin and extensibility architecture for the kb daemon","relevant":["e66e1d34ab94"],"notes":"kb-plugins-extensibility-rfc.html"}
+{"query":"improving search relevance ranking and fixing embedding truncation of long docs","relevant":["ee2265ba7f05"],"notes":"search-quality-options.html"}
+{"query":"kb versus Obsidian head to head feature comparison matrix","relevant":["44c1aa552ba5"],"notes":"obsidian-competitive/kb-vs-obsidian-matrix.html"}
+{"query":"codebase-grounded roadmap of features where kb beats Obsidian","relevant":["43f8cf9eb194"],"notes":"obsidian-competitive/kb-feature-roadmap.html"}

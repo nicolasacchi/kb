@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turn-zero memory injection — an A/B/C behavioral test of the recall hook</title>
+<meta name="kb-tags" content="fable-frontier, memory, recall, hooks, experiment, injection">
+<meta name="kb-category" content="research">
+<meta name="kb-summary" content="36-agent A/B/C test: production recall injection is statistically indistinguishable from NO injection at turn zero (1/10 vs 0/10 fact transmission, p=1.0); content-ranked titles transmit (5/10, p=0.033 vs none); 80% of exposed titles steer agents to plan reading the memory — the block is a POINTER system whose binding constraint is exposure, i.e. the run-1 ranking inversion. Titles truncate before payloads; a stale ambient MEMORY.md line measurably misled an agent.">
+
+<style>
+  :root{
+    --bg:#171310; --surface:#221c16; --fg:#efe7dc; --muted:#c2ab8e;
+    --rule:#3b322a; --accent:#e8b464; --accent-fg:#171310;
+    --warn:#e8b464; --danger:#f29a8a; --ok:#8fd0a5;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace;
+    --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#faf6f0; --surface:#f0e8dc; --fg:#292018; --muted:#6b573f;
+      --rule:#dbcfbc; --accent:#8a5a10; --accent-fg:#faf6f0;
+      --warn:#8a5a10; --danger:#a03227; --ok:#1d6b47;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.03rem/1.65 var(--sans)}
+  main{max-width:50rem;margin:0 auto;padding:2.4rem 1.2rem 4rem}
+  h1{font-size:1.7rem;line-height:1.2;margin:.2em 0 .3em;letter-spacing:-.01em}
+  h2{font-size:1.16rem;margin:2.2em 0 .5em;padding-top:1.1em;border-top:1px solid var(--rule)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.6 var(--mono)}
+  .verdict{border:1px solid var(--rule);border-left:5px solid var(--accent);border-radius:10px;
+    background:var(--surface);padding:1em 1.2em;margin:1.4em 0;font-size:1.05rem}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.84rem/1.55 var(--mono)}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  td.num,th.num{text-align:right;font-family:var(--mono);font-size:.86rem}
+  .hit{color:var(--ok);font-weight:600}
+  .miss{color:var(--danger);font-weight:600}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--warn);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  details{border:1px solid var(--rule);border-radius:8px;background:var(--surface);
+    padding:.6em .9em;margin:1em 0}
+  summary{cursor:pointer;font-weight:600}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#verdict">Skip to verdict</a>
+<main>
+<h1>Turn-zero memory injection: pointers, not payloads</h1>
+<p class="meta">an A/B/C behavioral test of the kb recall hook · Fable frontier run #2 ·
+2026-07-07 01:52–02:45 CEST · 36 plan agents + 12 blind judges + 3 verifiers (~1.7M tokens) ·
+sequel to <a href="recall-salience-inversion-eval-2026-07.html">run #1 (the salience inversion)</a> ·
+status: finding, no code changed</p>
+
+<div class="verdict" id="verdict">
+<strong>Verdict.</strong> At turn zero, the production recall hook's injected block is
+<strong>statistically indistinguishable from injecting nothing</strong> (fact transmission
+1/10 vs 0/10, Fisher p=1.0). Swap the block's contents for content-ranked titles and
+transmission appears (5/10 lenient, p=0.033 vs none) — the behavioral reproduction of run #1's
+ranking inversion. But the sharpest result is <em>what</em> a title block transmits when it
+works: <strong>a pointer, not a payload</strong>. In 12 of 15 exposed cells the agent's plan
+explicitly schedules reading the named memory (80% pointer-uptake), while the 80-char truncated
+title delivers the actionable fact itself far less often (6/15 lenient, ~3/15 strict). The
+hook's real product is attention direction — and its binding constraint is whether the right
+title is in the block at all, which is exactly the ranking bug run #1 measured.
+</div>
+
+<h2 id="design">1 · Design</h2>
+<p>Twelve first-person task briefs, each with a ground-truth fact recorded in kb memory (6
+briefs where run #1 showed recall surfacing the fact, 6 where it buries it). For each brief,
+three arms: <strong>A</strong> — the live production recall top-5, formatted exactly as
+<code>kb-recall.sh</code> injects it (titles + kb + id, nothing else); <strong>B</strong> —
+the top-5 by corpus-direct content ranking (<code>kb search --kb memory-kb</code>), same
+format; <strong>C</strong> — no injected block. 36 plan-only agents (no tools, one message)
+wrote first-steps plans; 12 judges each graded their task's three plans blind (labels shuffled,
+seed 20260707) against the recorded fact:
+<code>SPECIFIC / GENERIC / ABSENT / WRONG_DIRECTION</code>, quoting the earning phrase.
+Actual exposure (target memory's title present in the arm's block) was string-verified per
+cell (24/24 flags). An audit agent independently re-derived every count (36/36 cells, zero
+discrepancies; label→arm mapping quote-traced), and a hostile methodology agent graded the
+claims — its three forced corrections are folded into everything below.</p>
+
+<div class="callout"><strong>The ambient-context discovery (a finding, not a flaw):</strong>
+subagents always carry the project's CLAUDE.md and the harness's file-based
+<code>MEMORY.md</code> index. Two tasks' facts live in MEMORY.md — and in those two tasks
+<em>every arm including no-injection scored SPECIFIC</em>. They were quarantined from the
+analysis (n=10 clean tasks). Two lessons ride along free: (1) where the two memory systems
+overlap, the kb injection is redundant — MEMORY.md is doing that transmission today; (2)
+ambient memory also <em>misleads</em>: one wrong-direction plan traced verbatim to a stale
+legacy MEMORY.md one-liner (the <code>curl 127.0.0.1:4000</code> deploy check — a port prod
+now owns), not to any injected content. Stale index lines are live steering inputs.</div>
+
+<h2 id="results">2 · Results (clean tasks, n=10 per arm)</h2>
+<table>
+<tr><th>Arm</th><th class="num">SPECIFIC (lenient)</th><th class="num">SPECIFIC (strict re-grade)</th><th class="num">target exposed</th></tr>
+<tr><td><strong>A — production recall titles</strong></td><td class="num miss">1/10</td><td class="num miss">0/10</td><td class="num">6/10</td></tr>
+<tr><td><strong>B — content-ranked titles</strong></td><td class="num hit">5/10</td><td class="num">2–3/10</td><td class="num">9/10</td></tr>
+<tr><td><strong>C — no injection</strong></td><td class="num">0/10</td><td class="num">0/10</td><td class="num">—</td></tr>
+</table>
+<p class="meta">Lenient = the shipped judges' verdicts (title-echo + planning around the memory
+counts). Strict = the methodology agent's re-grade (payload actually incorporated). The honest
+statistics: A-vs-C <strong>p=1.0</strong> (null — production injection transmits nothing
+detectable), B-vs-C <strong>p=0.033</strong> (lenient), A-vs-B p=0.14 (directional only),
+within-arm exposure necessity 0/5 vs 6/15 (directional). n=10, single judge per task,
+±1–2 cells of noise on every rate — orderings are the result, point rates are not.</p>
+
+<h3 id="funnel">The transmission funnel, measured stage by stage</h3>
+<table>
+<tr><th>Stage</th><th class="num">Production (A)</th><th class="num">Content-ranked (B)</th><th>Meaning</th></tr>
+<tr><td>1 · right memory in the block</td><td class="num miss">6/12</td><td class="num hit">11/12</td><td>run #1's inversion, reproduced on fresh briefs</td></tr>
+<tr><td>2 · plan schedules reading it (pointer)</td><td class="num" colspan="2">12/15 exposed cells (80%)</td><td>titles work as attention directors</td></tr>
+<tr><td>3 · fact lands turn-zero (payload)</td><td class="num" colspan="2">6/15 lenient · ~3/15 strict</td><td>80-char truncation drops the payload</td></tr>
+<tr><td>4 · end-to-end turn-zero transmission</td><td class="num miss">1/10 (≈C)</td><td class="num">5/10 lenient</td><td>ranking is the binding constraint</td></tr>
+</table>
+<p>Stage 3's texture matters: the glibc-floor title truncates at "…via faithful container
+build" — before <em>2.39</em> and <em>ubuntu-24.04</em> ever appear — and the exposed agent
+committed to ubuntu-22.04, exactly what the memory forbids (its no-injection twin made the
+same error from priors, so this is truncation <em>failing to rescue</em>, not causing).
+The CI-hang memory's title cuts at "CORRECTION to the earlier o…" — a correction whose
+content is the payload is worthless truncated. The one preference memory whose title
+<em>does</em> carry its payload ("don't limit scope to the literal ask…") was still ignored
+by one exposed agent and honored by another: uptake is stochastic even with perfect titles.</p>
+
+<h2 id="cuts">3 · Claims the adversarial pass killed or bounded</h2>
+<ul>
+<li><strong>Killed: "noisy injection actively harms."</strong> All four WRONG_DIRECTION cells
+trace to ambient priors or the stale MEMORY.md line — constant across arms — or to judge
+variance (one near-identical option set graded WD in one arm, GENERIC in the other). No
+causal harm from the injected block is demonstrated at n=1 per cell.</li>
+<li><strong>Bounded: this is a turn-zero floor, not end-to-end efficacy.</strong> Plan-only
+agents can't execute the <code>kb get</code> they schedule; in production, a truncated title
+plus 80% pointer-uptake likely converts to full payload one tool-call later. The verdict
+grammar lacked a PLANS_TO_RETRIEVE category — the 12/15 pointer count was recovered post-hoc
+and is this experiment's most optimistic honest number.</li>
+<li><strong>Bounded: exposure ≠ independent stage.</strong> B's within-block rank advantage
+(target at rank 1 in 6/9 exposed cells vs A's 2/6) leaks ranking quality into the uptake
+stage; sibling titles in coherent blocks also carry payload. The funnel is the right
+decomposition; its stage boundaries need within-block rank as a mediator next time.</li>
+<li><strong>Bounded: rates are conditional</strong> on memory-targeted tasks, judge leniency,
+and prompt demand characteristics (the plan prompt solicits "prior facts you rely on" —
+symmetric across arms, but it inflates absolute transmission).</li>
+</ul>
+
+<h2 id="implications">4 · What follows (proposals — all gated on triage)</h2>
+<ol>
+<li><strong>The ranking fix is a prerequisite, now with behavioral evidence.</strong> Run #1
+showed the inversion in metrics; this run shows the same inversion deciding whether the
+injection block does anything at all. Stage 1 is the funnel's choke point.</li>
+<li><strong>Inject payloads, not truncated titles.</strong> The recall JSON already carries
+the RA4 <code>summary</code> field per hit; <code>kb-recall.sh</code> formats title-only.
+One hook change — append the summary gloss when present — attacks stage 3 directly. Related
+write-side hygiene: outcome-first titles (the distill rubric already mandates this; this run
+measured why) and never letting a CORRECTION memory's title truncate before the correction.</li>
+<li><strong>Prune stale MEMORY.md legacy lines.</strong> A [STALE]-marked one-liner measurably
+misdirected an agent. The ambient index is a live steering surface, not documentation.</li>
+<li><strong>The two memory systems should divide labor, not duplicate it.</strong> Where
+MEMORY.md carries a fact, injection is redundant; where it doesn't, injection is currently the
+only channel and it is broken at stage 1. A deliberate split (MEMORY.md = curated evergreen
+index; kb recall = long-tail + per-kb) beats the accidental overlap.</li>
+<li><strong>Next experiment (run-3 candidate):</strong> tool-enabled arms measuring end-to-end
+task outcomes — does the 80% pointer-uptake actually convert? — plus a PLANS_TO_RETRIEVE
+verdict class and 2–3 plan samples per cell for variance.</li>
+</ol>
+
+<h2 id="provenance">5 · Provenance</h2>
+<p class="meta">Scheduled Fable frontier run #2 (01:52 CEST fire). Plan/judge workflow
+wf_03b53914-3c9 (48 agents, 1.38M tokens, 0 errors); verification workflow wf_1dbd010e-5a4
+(audit + methodology, 160k tokens). Data: /tmp/inject-eval/{tasks-armed.json, judged.json,
+cells.json, wf-inject.js} (volatile; the full per-task verdict table is in the details block
+below). Arm blocks fetched live from daemon 127.0.0.1:4000 against each brief. Judged seed
+20260707. Related: recall-salience-inversion-eval-2026-07.html (run #1),
+memory 7cf6ee58f673 (run #1's outcome), evolving-the-kb-memory-system.html (the 06-29
+baseline both runs revise).</p>
+
+<details>
+<summary>Per-task verdicts (clean tasks; * = target title present in that arm's block)</summary>
+<table>
+<tr><th>Task (target memory)</th><th>A</th><th>B</th><th>C</th></tr>
+<tr><td>e2e suite green on Arch (9e3bf714ce1c)</td><td>GENERIC</td><td class="hit">SPECIFIC*</td><td>GENERIC</td></tr>
+<tr><td>migrate acme-app CI (b55398c2ff56)</td><td class="miss">WRONG_DIR</td><td class="hit">SPECIFIC*</td><td>GENERIC</td></tr>
+<tr><td>palette rules for a new report (5d237c495d8a)</td><td>GENERIC</td><td>GENERIC*</td><td>GENERIC</td></tr>
+<tr><td>manual SPA verification fallback (cf6a22330895)</td><td class="miss">WRONG_DIR</td><td>GENERIC*</td><td>GENERIC</td></tr>
+<tr><td>kb.example.com slow again (0a9c3288baaa)</td><td class="hit">SPECIFIC*</td><td class="hit">SPECIFIC*</td><td>GENERIC</td></tr>
+<tr><td>re-enable CI parallelism (39fb962129bc)</td><td>GENERIC*</td><td class="miss">WRONG_DIR*</td><td class="miss">WRONG_DIR</td></tr>
+<tr><td>take kb public (429abfc721be)</td><td>GENERIC*</td><td>GENERIC</td><td>GENERIC</td></tr>
+<tr><td>Linux release legs (681b519d71d9)</td><td class="miss">WRONG_DIR*</td><td>GENERIC*</td><td class="miss">WRONG_DIR</td></tr>
+<tr><td>Settings spacing scope (0a207a163f8f)</td><td>ABSENT*</td><td class="hit">SPECIFIC*</td><td>ABSENT</td></tr>
+<tr><td>pick up another project (d1dadfd36c06)</td><td>GENERIC*</td><td class="hit">SPECIFIC*</td><td>GENERIC</td></tr>
+</table>
+</details>
+</main>
+</body>
+</html>

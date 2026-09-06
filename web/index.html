@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/logomark.svg" />
+    <!-- interactive-widget=resizes-content (Chrome/Android; harmless no-op
+         elsewhere) keeps 100dvh/fixed-position layouts — the reader-tools
+         sheet's .kb-pinsp, the new .kb-selact--bar — sized to the visible
+         viewport when the virtual keyboard opens, instead of the default
+         resizes-visual, which leaves fixed elements positioned against the
+         LAYOUT viewport and hidden behind the keyboard (the mobile comment
+         composer this sheet raises would be unreachable otherwise). -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <!-- Installable PWA: the daemon serves the SPA over loopback (a secure
+         context), so a manifest alone makes kb installable as a windowed,
+         dock/Start-icon app. No service worker (a PWA can't start the daemon;
+         offline-shell caching would only risk the SharedWorker SSE + shell
+         staleness). See docs/research/kb-desktop-packaging-pake-tauri.html. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fbfbfa" media="(prefers-color-scheme: light)" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="kb" />
+    <!-- A-w4/X1 — fonts are self-hosted (tokens.css @font-face, files under
+         public/fonts/); no Google Fonts CDN to preconnect to. -->
+    <title>kb</title>
+  </head>
+  <body>
+    <!-- A-w3 — the skip-link is now rendered from app.tsx (first child of
+         .app) so its text/markup lives with the rest of the shell instead of
+         being duplicated here as static HTML (this static copy predated
+         `<main id="main">` on every route and would have doubled the tab
+         stop once the React one landed). -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

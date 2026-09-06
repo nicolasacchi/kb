@@ -1,0 +1,131 @@
+/*
+ * ScoreExplain — the shared scorechip popover (W1.chip).
+ * Cross-surface primitive: resurface strip, search cards, related-memories
+ * rows, atlas label terms. The popover rides the native Popover API when
+ * available (top layer) and otherwise a fixed div at --z-popover.
+ */
+
+.kb-scx {
+  display: inline-flex;
+  align-items: center;
+}
+
+.kb-scx__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.kb-scx__chip:hover {
+  color: var(--ink);
+}
+.kb-scx__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.kb-scx__pop {
+  /* position + width are set inline from the trigger rect */
+  z-index: var(--z-popover);
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--rule-hi);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  /* SH.A1 — theme-aware float shadow (static popover; was a hardcoded
+     dark-mode black). */
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.45;
+}
+/* Popover-API path: the UA applies its own defaults in the top layer. */
+.kb-scx__pop:popover-open {
+  position: fixed;
+}
+
+.kb-scx__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  margin-bottom: 6px;
+}
+.kb-scx__title {
+  color: var(--ink-mute);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.kb-scx__total {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.kb-scx__bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-card);
+  margin-bottom: 8px;
+}
+.kb-scx__seg {
+  display: block;
+  height: 100%;
+}
+
+.kb-scx__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.kb-scx__row {
+  display: grid;
+  grid-template-columns: 8px auto 1fr;
+  grid-template-areas:
+    "dot label val"
+    ".   detail detail";
+  align-items: baseline;
+  column-gap: 6px;
+}
+.kb-scx__dot {
+  grid-area: dot;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  align-self: center;
+}
+.kb-scx__label {
+  grid-area: label;
+  color: var(--ink-mute);
+}
+.kb-scx__val {
+  grid-area: val;
+  justify-self: end;
+  font-family: var(--font-mono);
+}
+.kb-scx__detail {
+  grid-area: detail;
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.kb-scx__foot {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}

@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Thariq's HTML-effectiveness thesis applied to kb — pattern table for the 20 reference artifacts, sandbox implications, indexing strategy, kb-prompt embedding.">
+<title>07 · HTML effectiveness — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="../foundation/01-lancedb.html">01 · Storage</a>
+      <a href="../foundation/02-fastembed.html">02 · Embeddings</a>
+      <a href="../foundation/03-notify.html">03 · Watcher</a>
+      <a href="../foundation/04-sse-axum.html">04 · SSE</a>
+      <a href="../foundation/05-ratatui.html">05 · TUI</a>
+      <a href="06-iframe.html">06 · Iframe</a>
+      <a href="07-html-effectiveness.html" class="is-current">07 · HTML</a>
+      <a href="08-prior-art.html">08 · Prior art</a>
+      <a href="09-comments.html">09 · Comments</a>
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 07
+    <span>·</span>
+    <span class="meta">HTML-as-medium</span>
+    <span>·</span>
+    <span class="meta">Confidence HIGH</span>
+  </div>
+  <h1><span class="strike">verdict</span>Thesis confirmed.<br>Permissive sandbox baseline, per topic 06.</h1>
+  <p class="lede">Thariq's <em>Unreasonable Effectiveness of HTML</em> is the design thesis. We grepped all 20 reference artifacts: <strong>every one</strong> is 10–29 KB, zero external scripts, zero external fonts (post fix-pass; kb-research-extended canon also conforms), zero <code>localStorage</code>, zero <code>fetch()</code>. The "rich" capabilities are achieved entirely with platform primitives. The kb-research-extended canon (5 sample artifacts incl. <code>kitchen-sink.html</code> with <code>&lt;dialog&gt;.showModal()</code>) needs <code>allow-modals</code> — so v0.1 ships <strong>topic 06's permissive baseline</strong> (<code>allow-scripts allow-same-origin allow-popups…allow-modals allow-downloads</code> + subdomain serving). The strict <code>allow-scripts</code>-only minimum survives as a v0.2+ option behind <code>&lt;meta name="kb-sandbox"&gt;</code> opt-in.</p>
+</section>
+
+<section class="section section-tight">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Canon extended · Web Gallery handoff (2026-05-11)</span>
+    <p style="margin:0 0 .5rem;font-size:.95rem;line-height:1.55">The <a href="10-web-gallery.html">Web Gallery design handoff (topic 10)</a> ships five additional reference artifacts. They live verbatim at <code><a href="../sample-artifacts/">kb-research/sample-artifacts/</a></code> and extend Thariq's 20 with three patterns the upstream didn't include:</p>
+    <ul style="margin:0;padding-left:1.4rem;font-size:.92rem;line-height:1.55">
+      <li><strong>Multi-file artifacts</strong> — <a href="../sample-artifacts/pm/00-summary.html"><code>pm/</code></a> (SEV-1 postmortem, 4 files + shared <code>style.css</code>). New dimension to the canon: a <code>pages: [{label, src, file}]</code> data shape + <code>pm:page</code> postMessage handshake. Reference for everything multi-file in <a href="10-web-gallery.html#multi-file">topic 10 §F</a>.</li>
+      <li><strong>Full-screen interactive</strong> — <a href="../sample-artifacts/fullscreen-viz.html"><code>fullscreen-viz.html</code></a>. Drag-to-resolve borrow checker. Confirms the thesis at the high end — interactivity is load-bearing, not decorative.</li>
+      <li><strong>Component-showcase stress test</strong> — <a href="../sample-artifacts/kitchen-sink.html"><code>kitchen-sink.html</code></a>. Every HTML primitive in one page: <code>&lt;details&gt;</code>, <code>&lt;dialog&gt;</code>, native sliders, sortable tables, drag-to-reorder, image zoom, popovers, copy buttons. <strong>Use as the iframe sandbox v0.0.1 smoke test</strong> — if anything in here breaks, the sandbox is too tight.</li>
+    </ul>
+    <p style="margin:.5rem 0 0;font-size:.95rem;line-height:1.55">The other two (<a href="../sample-artifacts/multi-page.html"><code>multi-page.html</code></a>, <a href="../sample-artifacts/cost-of-abstraction.html"><code>cost-of-abstraction.html</code></a>) demonstrate single-file long-reads with internal navigation and a cross-artifact backlink — both within the existing canon's range.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="decisions">
+  <div class="open-q" style="border-style:solid;border-color:var(--accent)">
+    <span class="lbl">Decisions · 2026-05-11 (cluster: privacy scrub for kb-prompt)</span>
+    <p style="margin:0 0 .55rem;font-size:.95rem;line-height:1.55">Open-points cluster 3 of 4. The "scrub the kb-prompt template by default vs preserve everything" framing turned out to be the wrong shape — the right answer is path-specific. The kb-prompt convention from §E stays as-is (preserve verbatim inside the artifact's <code>&lt;template id="kb-prompt"&gt;</code>). What changes is how each downstream path treats it.</p>
+    <table class="alt-table" style="margin:.4rem 0;font-size:.88rem">
+      <thead><tr><th>Path</th><th>v0.1 behaviour</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Embedding input</strong></td><td>body only — <em>exclude</em> <code>&lt;template id="kb-prompt"&gt;</code></td><td>Prompt is metadata, not content; including it pollutes the semantic space and can dominate short artifacts. See <a href="../foundation/02-fastembed.html#decisions">topic 02 Decisions</a>.</td></tr>
+        <tr><td><strong>BM25 index</strong></td><td>include prompt as a <em>separate filterable field</em></td><td>Searchable when the user wants (<code>kb search "claude-code" field:prompt</code>); isolatable when not. See <a href="../foundation/01-lancedb.html#decisions">topic 01 Decisions</a>.</td></tr>
+        <tr><td><strong>Bytes on disk / iframe rendering</strong></td><td>never modify</td><td>The artifact is the user's file; kb doesn't rewrite. Regenerate from prompt stays trivial (§F).</td></tr>
+        <tr><td><strong>Outbound</strong> (share / export / non-loopback permalink)</td><td>no scrubbing in v0.1 — deferred to v0.2+</td><td>Real attack surface materializes only when share endpoints land. Until then, the daemon is loopback-only and the iframe subdomain is part of the trust zone (cluster 1 + 2 decisions).</td></tr>
+      </tbody>
+    </table>
+    <p style="margin:.4rem 0 0;font-size:.92rem;line-height:1.55"><strong>v0.2+ outbound scrubbing layer.</strong> A configurable transformation applied at the daemon's response-writer stage when the destination is not loopback (or when the user opts in for loopback too). Two knobs in <code>~/.config/kb/kb.toml</code>: a list of regex redactions, and a <code>strip_kb_prompt</code> boolean. Defaults to "strip prompt + redact common secret patterns (API keys, tokens, emails)" once the share / permalink endpoints from <a href="11-daemon-api.html">topic 11 §B.4</a> are wired.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR</span>
+    <p><strong>Thesis confirmed; sandbox decisions live in <a href="06-iframe.html#decisions">topic 06</a>.</strong> Thariq's 20 reference artifacts are tiny (10–29 KB), self-contained, use only platform primitives (inline SVG, <code>&lt;details&gt;</code>, native HTML5 drag-drop, CSS animations, system fonts). The kb-research-extended canon adds five more (<a href="../sample-artifacts/">sample-artifacts/</a>) including <code>kitchen-sink.html</code> with <code>&lt;dialog&gt;.showModal()</code>, which broke the strict <code>allow-scripts</code>-only minimum. <strong>v0.1 sandbox is topic 06's permissive baseline</strong> (<code>allow-scripts allow-same-origin allow-popups…allow-modals allow-downloads</code> + subdomain serving). Strict <code>allow-scripts</code>-only via <code>&lt;meta name="kb-sandbox"&gt;</code> per-artifact opt-in remains an open question for v0.2+. Indexing: titles reliably descriptive, first paragraphs are TL;DRs (per the dogum skill), code in <code>&lt;pre&gt;&lt;code&gt;</code>. <strong>kb-prompt embedding</strong>: <code>&lt;template id="kb-prompt"&gt;</code> + <code>&lt;meta name="kb-*"&gt;</code>; privacy decomposition lives in §Decisions (path-specific, not a blanket scrub). <strong>Regenerate flow in scope for v0.0.1</strong> — trivial when prompt is inline.</p>
+    <div class="badges">
+      <span class="conf conf--high">Thesis · HIGH</span>
+      <span class="conf conf--med">Sandbox · permissive baseline (topic 06)</span>
+      <span class="conf conf--med">Metadata convention · NOVEL (kb defines it)</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">A. The thesis</div>
+    <h2>Markdown's default era is over</h2>
+  </div>
+  <div class="prose">
+    <p>Thariq's argument: markdown became the default LLM output for an outdated reason — the GPT-4-era 8K-token context window punished HTML's tag overhead. With 200K–1M context windows, that constraint is gone; the question becomes <em>which format conveys the content best</em>, not <em>which is cheapest</em>. He argues HTML wins for any output longer than a few sentences because markdown can only describe linearly: it cannot lay out two options side-by-side, draw a real diagram, animate a transition, expose a parameter slider, or round-trip a structured edit back to text. HTML can.</p>
+    <p>The "unreasonable" wins fall into three buckets:</p>
+    <ol>
+      <li><strong>Spatial</strong> content — diffs, call-graphs, flowcharts — where markdown flattens information that has positional meaning.</li>
+      <li><strong>Interactive</strong> content — animations, easing tuners, prompt editors — that "can't be described, only felt."</li>
+      <li><strong>Navigational</strong> content — tabbed code, collapsible sections, glossary-in-the-margin — where the same words read very differently when structured.</li>
+    </ol>
+    <p>His one explicit caveat: markdown is still right for short conversational replies, code-only outputs, terminal-style answers, three-bullet summaries.</p>
+    <blockquote>"Twenty self-contained <code>.html</code> files an agent produced instead of a wall of markdown. Each one trades a document you'd skim for one you'd actually read." — Thariq Shihipar, gallery intro</blockquote>
+    <blockquote>"Motion and interaction can't be described, only felt. A throwaway page with the real easing curve or the real click-through tells you in five seconds what a paragraph of prose never could." — Thariq Shihipar, gallery intro</blockquote>
+    <blockquote>"Asking Claude for an explanation in HTML means it can drop in SVG diagrams, interactive widgets, in-page navigation and all sorts of other neat ways of making the information more pleasant to navigate." — Simon Willison, 2026-05-08</blockquote>
+  </div>
+</section>
+
+<section class="section-wide section section-tight">
+  <div class="section-head">
+    <div class="num">B. The 20 example artifacts</div>
+    <h2>Pattern table — what they actually use</h2>
+    <p class="deck">Scanned by grepping each downloaded source from <code>ThariqS/html-effectiveness</code>. Sizes in KB (raw, ungzipped).</p>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>20 reference artifacts · primitives used</caption>
+      <thead><tr><th>#</th><th>File</th><th>KB</th><th>Category</th><th>SVG</th><th>Det</th><th>Form</th><th>Drag</th><th>Anim</th><th>JS</th></tr></thead>
+      <tbody>
+        <tr><td>01</td><td>exploration-code-approaches</td><td>14.5</td><td>Exploration</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>02</td><td>exploration-visual-designs</td><td>14.0</td><td>Exploration</td><td>•</td><td>—</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>03</td><td>code-review-pr</td><td>26.2</td><td>Code Review</td><td>—</td><td>•</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>04</td><td>code-understanding</td><td>17.9</td><td>Code Review</td><td>•</td><td>•</td><td>—</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>05</td><td>design-system</td><td>18.1</td><td>Design</td><td>—</td><td>—</td><td>•</td><td>—</td><td>•</td><td>—</td></tr>
+        <tr><td>06</td><td>component-variants</td><td>16.6</td><td>Design</td><td>—</td><td>—</td><td>•</td><td>•</td><td>•</td><td>•</td></tr>
+        <tr><td>07</td><td>prototype-animation</td><td>12.5</td><td>Prototyping</td><td>•</td><td>—</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>08</td><td>prototype-interaction</td><td>10.8</td><td>Prototyping</td><td>—</td><td>—</td><td>—</td><td>•</td><td>•</td><td>•</td></tr>
+        <tr><td>09</td><td>slide-deck</td><td>16.5</td><td>Decks</td><td>•</td><td>—</td><td>—</td><td>—</td><td>—</td><td>•</td></tr>
+        <tr><td>10</td><td>svg-illustrations</td><td>18.4</td><td>Diagrams</td><td>•</td><td>—</td><td>•</td><td>—</td><td>—</td><td>•</td></tr>
+        <tr><td>11</td><td>status-report</td><td>16.4</td><td>Reports</td><td>•</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>12</td><td>incident-report</td><td>15.5</td><td>Reports</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>13</td><td>flowchart-diagram</td><td>15.3</td><td>Diagrams</td><td>•</td><td>—</td><td>—</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>14</td><td>research-feature-explainer</td><td>12.3</td><td>Research</td><td>—</td><td>•</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>15</td><td>research-concept-explainer</td><td>13.6</td><td>Research</td><td>•</td><td>—</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>16</td><td>implementation-plan</td><td>28.6</td><td>Exploration</td><td>•</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>17</td><td>pr-writeup</td><td>24.5</td><td>Code Review</td><td>—</td><td>•</td><td>—</td><td>—</td><td>•</td><td>—</td></tr>
+        <tr><td>18</td><td>editor-triage-board</td><td>18.6</td><td>Custom Editor</td><td>—</td><td>—</td><td>•</td><td>•</td><td>•</td><td>•</td></tr>
+        <tr><td>19</td><td>editor-feature-flags</td><td>18.9</td><td>Custom Editor</td><td>—</td><td>—</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+        <tr><td>20</td><td>editor-prompt-tuner</td><td>21.2</td><td>Custom Editor</td><td>—</td><td>—</td><td>•</td><td>—</td><td>•</td><td>•</td></tr>
+      </tbody>
+    </table>
+    <h4>Aggregates</h4>
+    <ul>
+      <li><strong>File size:</strong> min 10.8, max 28.6, mean 17.4 KB, total 332 KB. Every artifact is "tiny." No 500 KB outliers.</li>
+      <li><strong>Inline SVG:</strong> 11/20.</li>
+      <li><strong><code>&lt;details&gt;</code>/<code>&lt;summary&gt;</code>:</strong> 6/20 (mostly research and PR writeups).</li>
+      <li><strong>JS:</strong> 14/20 — but small. Decks are "twenty lines of JS"; the triage board's drag-drop is ~60 lines of native HTML5 DnD; <strong>no artifact uses a framework</strong>.</li>
+      <li><strong>Form controls:</strong> 11/20.</li>
+      <li><strong>CSS animation:</strong> 13/20 — overwhelmingly transitions/keyframes, not <code>requestAnimationFrame</code> loops.</li>
+      <li><strong>Drag-and-drop:</strong> 3/20 (06, 08, 18) — all native HTML5 DnD, no library.</li>
+      <li><strong><code>canvas</code>, MathML, custom elements, nested <code>&lt;iframe&gt;</code>:</strong> 0/20 across the board.</li>
+      <li><strong>External resources:</strong> <strong>0/20.</strong> No <code>&lt;script src&gt;</code>, no external <code>&lt;link&gt;</code>, no Google Fonts, no CDN.</li>
+      <li><strong>Storage APIs:</strong> <code>localStorage</code>, <code>sessionStorage</code>, <code>indexedDB</code> — 0/20.</li>
+      <li><strong>Popup / top-frame:</strong> <code>window.open</code>, <code>target="_blank"</code>, <code>window.top</code> — 0/20.</li>
+      <li><strong>Font stack:</strong> every artifact uses <code>system-ui, -apple-system, ...</code>; zero external font files.</li>
+      <li><strong>Color:</strong> CSS custom properties at <code>:root</code> with <code>prefers-color-scheme: dark</code>. Restrained palettes — the dogum skill explicitly bans gradient-and-emoji "default-AI aesthetic."</li>
+      <li><strong>Meta tags:</strong> every file has <code>charset</code> and <code>viewport</code>. <strong>Zero</strong> have <code>description</code>, <code>keywords</code>, OG/Twitter, canonical. <strong>This is the gap kb fills.</strong></li>
+      <li><strong>Title:</strong> every file has a real, descriptive <code>&lt;title&gt;</code>. Reliable for indexing.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">C. Implications for kb's iframe rendering</div>
+    <h2>The most restrictive viable sandbox covers everything</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Capability → sandbox flag mapping (Thariq's set)</caption>
+      <thead><tr><th>Capability</th><th>Sandbox requirement</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td>Inline <code>&lt;script&gt;</code></td><td><code>allow-scripts</code></td><td>14/20</td></tr>
+        <tr><td>Native HTML5 drag-drop</td><td><code>allow-scripts</code></td><td>06, 08, 18</td></tr>
+        <tr><td><code>&lt;details&gt;</code>/<code>&lt;summary&gt;</code></td><td>none</td><td>6/20</td></tr>
+        <tr><td>Inline SVG</td><td>none</td><td>11/20</td></tr>
+        <tr><td><code>&lt;input&gt;</code> typing/clicks</td><td>none beyond <code>allow-scripts</code></td><td>11/20</td></tr>
+        <tr><td>CSS animations</td><td>none</td><td>13/20</td></tr>
+        <tr><td><code>localStorage</code></td><td><code>allow-same-origin</code></td><td><strong>0/20</strong></td></tr>
+        <tr><td>External fetch / CDN</td><td>network access</td><td><strong>0/20</strong></td></tr>
+        <tr><td><code>window.open</code>, popups</td><td><code>allow-popups</code></td><td><strong>0/20</strong></td></tr>
+        <tr><td>Top-frame nav</td><td><code>allow-top-navigation</code></td><td><strong>0/20</strong></td></tr>
+      </tbody>
+    </table>
+    <p><strong>Recommended kb default (post cluster-1 amendment):</strong> <code>&lt;iframe sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads" src="http://&lt;id&gt;.artifacts.localhost:4000/..."&gt;</code> — topic 06's permissive baseline. The earlier <code>sandbox="allow-scripts" srcdoc=""</code> minimum still covers Thariq's 20 but breaks the kb-research-extended canon (kitchen-sink modal); deferred to v0.2+ as a per-artifact opt-in.</p>
+    <p><strong>Specific examples that would break under that sandbox:</strong> zero from Thariq's set.</p>
+    <h4>kb policy</h4>
+    <ol>
+      <li>Default sandbox is <code>allow-scripts</code> only. Covers 100% of the canonical reference set.</li>
+      <li><em>Proposed (not v0.1):</em> per-artifact escape hatch via <code>&lt;meta name="kb-sandbox" content="allow-scripts allow-same-origin"&gt;</code>. Topic 06 cluster-1 decision shipped a permissive baseline instead; the meta-pragma escape hatch is deferred until v0.2+ if per-artifact tightening becomes desirable.</li>
+      <li><strong>Do not</strong> default to <code>allow-same-origin</code> <em>without subdomain isolation</em>. The cluster-1 amendment keeps <code>allow-same-origin</code> paired with serving from a different origin (subdomain), so cross-artifact contamination is prevented by the origin boundary (each artifact gets its own subdomain origin), not by the sandbox flag. The dogum skill's universal-rules ban on <code>localStorage</code> still applies as authorial convention.</li>
+      <li>CDN access: not required. If a future v0.2 wants it, use <code>&lt;meta name="kb-csp" content="connect-src https://cdn.jsdelivr.net"&gt;</code> translated to a CSP header.</li>
+      <li>Fonts: kb does not need to allow Google Fonts. The system-font stack is a feature, not a deficit.</li>
+    </ol>
+    <div class="note"><b>Reconciliation with topic 06 (cluster 1, amended post deep-review):</b> v0.1 ships the <strong>permissive baseline</strong> from <a href="06-iframe.html#decisions">topic 06 Decisions</a> — <code>sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"</code>, served from <code>&lt;id&gt;.artifacts.localhost:4000</code>. The kitchen-sink artifact's <code>&lt;dialog&gt;.showModal()</code> needs <code>allow-modals</code>; future artifacts may use storage which needs <code>allow-same-origin</code>. The strict <code>allow-scripts</code>-only minimum survives as a v0.2+ option behind <code>&lt;meta name="kb-sandbox"&gt;</code>, but is not the v0.1 default.</div>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">D. Indexing implications</div>
+    <h2>What's reliably extractable</h2>
+  </div>
+  <div class="prose">
+    <h4>Reliable signals</h4>
+    <ul>
+      <li><strong>Title.</strong> <code>document.title</code> is filled and descriptive in 20/20.</li>
+      <li><strong>First <code>&lt;h1&gt;</code>.</strong> Present in 20/20, often duplicates <code>&lt;title&gt;</code> but sometimes more verbose. Use as fallback heading.</li>
+      <li><strong>First paragraph.</strong> Most artifacts open with a TL;DR per the dogum skill mandate.</li>
+      <li><strong>Body text.</strong> DOM-walk excluding <code>&lt;script&gt;</code>, <code>&lt;style&gt;</code>, <code>&lt;template&gt;</code>. Preserve <code>&lt;code&gt;</code>/<code>&lt;pre&gt;</code> but tag separately for code-search facet.</li>
+      <li><strong>Code blocks.</strong> Index in a separate "code" field for prefix/regex search.</li>
+      <li><strong><code>alt</code>, <code>aria-label</code>, <code>title=</code>.</strong> SVG figures often label parts via <code>aria-label</code>.</li>
+      <li><strong><code>&lt;details&gt;</code> summary text.</strong> High-signal — deliberate section headers in non-linear documents. Index as separate "outline" tokens.</li>
+    </ul>
+    <div class="spike-update" style="margin:.6rem 0;padding:.55rem .8rem;border-left:3px solid var(--accent);background:rgba(0,0,0,.03);font-size:.92em"><strong>Spike update · 2026-05-11</strong> · <code>spike-walker</code> measured <code>scraper</code> (html5ever-backed) extraction over a 104-file synthetic blow-up of the canon corpus: <strong>parse μs/file mean = 159, p50 = 155, p95 = 294</strong>; total wallclock 17.55 ms. That's ~17× under the 5 ms-per-file budget and ~57× under the 1 s-for-100-files target — extraction is essentially free, and adding more fields has no perf cost worth worrying about. <strong>Gotcha:</strong> "first <code>&lt;p&gt;</code>" returned <code>None</code> for <code>fullscreen-viz.html</code> (SVG-only body, no top-level <code>&lt;p&gt;</code>). Production extractor should add a <code>body_text_excerpt</code> field via a depth-first walk that skips <code>&lt;script&gt;</code>/<code>&lt;style&gt;</code> and concatenates the first ~400 chars of visible text — that's the reliable body-excerpt for SVG-heavy and non-prose artifacts. Field-distribution on the 8 canon artifacts (1/8 SVG, 1/8 <code>&lt;details&gt;</code>, 8/8 <code>&lt;script&gt;</code>) is corpus-specific — production should resample against the user's ≥50-artifact curated corpus before making density-based claims. Full context: <a href="../../spike-findings.md#spike-walker--2026-05-11">docs/spike-findings.md</a>.</div>
+    <h4>Missing across the reference set (kb mandates)</h4>
+    <ul>
+      <li><code>&lt;meta name="description"&gt;</code> — 0/20. Should be required in kb's output prompt.</li>
+      <li><code>&lt;meta name="keywords"&gt;</code> — 0/20. Optional but cheap.</li>
+      <li>OG / Twitter — 0/20. Out of scope unless kb publishes.</li>
+    </ul>
+    <h4>Facets to surface</h4>
+    <ul>
+      <li><code>has_svg</code>, <code>svg_count</code>; <code>has_details</code>, <code>details_count</code>; <code>has_form</code>; <code>has_drag</code>; <code>has_animation</code>; <code>has_canvas</code>, <code>has_math</code> (future-proof); <strong><code>has_prompt</code></strong> (true when <code>&lt;template id="kb-prompt"&gt;</code> is present — gates the regen flow); <strong><code>prompt_size_bytes</code></strong> (for the size-cap rule in §D below).</li>
+      <li><code>js_loc</code> bucketed: <code>static</code> (0), <code>light</code> (1–50), <code>interactive</code> (51–200), <code>rich</code> (200+).</li>
+      <li><code>css_loc</code> same bucketing.</li>
+      <li><code>kb_category</code> from <code>&lt;meta name="kb-category"&gt;</code>: Exploration / Code-Review / Design / Diagram / Report / Research / Deck / Editor.</li>
+      <li><code>size_kb</code>.</li>
+    </ul>
+    <h4>Thumbnails</h4>
+    <ol>
+      <li><strong>Synthetic icon collage.</strong> Compose a small SVG from facets. Cheap; informative for kind, poor for content.</li>
+      <li><strong>Real screenshot via headless Chromium.</strong> True fidelity, but 100 ms+ per artifact, 100 KB+ PNGs.</li>
+      <li><strong>DOM-painted thumbnail.</strong> <code>html2canvas</code> in a tiny iframe.</li>
+    </ol>
+    <p><strong>Recommendation:</strong> ship (1) as fallback; (2) as default — cache at write-time, free at read-time. Thariq's 20 are visually distinct enough that screenshots dominate.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">E. The kb-prompt embedding convention</div>
+    <h2><code>&lt;template id="kb-prompt"&gt;</code> + <code>&lt;meta&gt;</code> tags</h2>
+  </div>
+  <div class="prose">
+    <table class="alt-table">
+      <caption>Embedding option comparison</caption>
+      <thead><tr><th>Option</th><th>Renders</th><th>Indexable</th><th>Multi-line</th><th>Survives copy-paste</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td><code>&lt;meta name="kb-prompt"&gt;</code></td><td>no</td><td>yes (attr)</td><td>awkward (escape newlines)</td><td>yes</td><td>OK for short prompts</td></tr>
+        <tr><td><code>&lt;!-- kb-prompt: ... --&gt;</code></td><td>no</td><td>requires custom parser</td><td>yes</td><td>yes</td><td>Dropped by some HTML minifiers</td></tr>
+        <tr><td>Sidecar <code>.prompt</code> file</td><td>n/a</td><td>yes</td><td>yes</td><td><span class="n">no — breaks single-file</span></td><td>rejected</td></tr>
+        <tr><td><strong><code>&lt;template id="kb-prompt"&gt;</code></strong></td><td>no</td><td>yes (parser-visible)</td><td>yes</td><td>yes</td><td><strong>recommended</strong></td></tr>
+      </tbody>
+    </table>
+    <p><strong>Recommendation:</strong> <code>&lt;template&gt;</code> for the prompt body, <code>&lt;meta&gt;</code> tags for the structured fields.</p>
+<pre>&lt;head&gt;
+  &lt;title&gt;Consistent hashing — an interactive explainer&lt;/title&gt;
+  &lt;meta name="kb-id" content="01J9X4..."&gt; &lt;!-- ULID --&gt;
+  &lt;meta name="kb-model" content="claude-opus-4-7"&gt;
+  &lt;meta name="kb-model-version" content="2026-04-15"&gt;
+  &lt;meta name="kb-temperature" content="1.0"&gt;
+  &lt;meta name="kb-created" content="2026-05-10T14:32:11Z"&gt;
+  &lt;meta name="kb-category" content="research"&gt;
+  &lt;meta name="kb-tags" content="distributed-systems,hashing,explainer"&gt;
+  &lt;meta name="kb-sandbox" content="allow-scripts"&gt; &lt;!-- optional override --&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;!-- artifact content --&gt;
+  &lt;template id="kb-prompt"&gt;
+Explain consistent hashing as an interactive explainer.
+Include a live ring the reader can add and remove nodes from,
+a comparison table vs. modulo hashing, and a hover-linked glossary.
+  &lt;/template&gt;
+&lt;/body&gt;</pre>
+    <h4>Why this shape</h4>
+    <ul>
+      <li><code>&lt;template&gt;</code> content is parsed but not rendered, accessible programmatically as <code>document.getElementById('kb-prompt').content.textContent</code>. Long prose prompts retain newlines without escaping.</li>
+      <li>Structured fields go in <code>&lt;meta&gt;</code> — single-line, easy to extract, survives any HTML minifier.</li>
+      <li>The <code>kb-sandbox</code> meta is the per-artifact escape hatch from section C.</li>
+      <li>A ULID-style <code>kb-id</code> makes <code>kb regen &lt;id&gt;</code> unambiguous and is monotonic — handy for chronological listing without a separate timestamp index.</li>
+    </ul>
+    <h4>Privacy: scrub-before-embed pass</h4>
+    <p>The prompt may contain the system prompt (often considered confidential), pasted file contents the user didn't realise were sensitive, API keys, customer data. kb must scrub before writing:</p>
+    <ol>
+      <li><strong>Strip the system prompt by default.</strong> Store only user turns. Add <code>&lt;meta name="kb-prompt-system-included" content="false"&gt;</code>.</li>
+      <li><strong>Pattern-redact:</strong> AWS keys (<code>AKIA[0-9A-Z]{16}</code>), GitHub PATs (<code>ghp_[A-Za-z0-9]{36}</code>), Anthropic keys (<code>sk-ant-[...]</code>), JWT-looking strings, generic high-entropy 32+ char tokens. Replace with <code>&lt;redacted:type&gt;</code>.</li>
+      <li><strong>Path scrub:</strong> replace <code>/Users/&lt;name&gt;/...</code> and <code>/home/&lt;name&gt;/...</code> with <code>~/...</code>.</li>
+      <li><strong>Confirmation gate:</strong> if prompt &gt; 1000 chars, prompt the user once: "Embed full prompt? (y/n/edit)". Default <strong>n</strong> for shared/published artifacts.</li>
+      <li><strong>Audit hook:</strong> every regenerate writes the new prompt's diff to <code>~/.kb/audit.log</code>.</li>
+    </ol>
+    <h4>Reproducibility fields</h4>
+    <p>Beyond <code>kb-prompt</code>: <code>kb-model</code>, <code>kb-model-version</code>, <code>kb-temperature</code>, <code>kb-top-p</code>, <code>kb-max-tokens</code>, <code>kb-skill</code> (e.g. "html-artifacts" + version), <code>kb-tool-version</code> (kb itself), <code>kb-source-files</code> (input file SHAs for "regenerate the PR review when the diff changes" flows).</p>
+    <h4>Prior art for prompt embedding</h4>
+    <p><strong>There is no industry convention.</strong> Claude Artifacts: no inline metadata, prompt lives only in the conversation. ChatGPT Canvas: same. v0.app: prompt in the web UI, not the file. Simon Willison's <code>tools.simonwillison.net</code>: prompt in the GitHub commit message. <strong>kb's <code>&lt;template&gt;</code> + <code>&lt;meta&gt;</code> pattern is novel-but-cheap.</strong></p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">F. Regenerate flow</div>
+    <h2>In scope for v0.0.1, trivial when prompt is inline</h2>
+  </div>
+  <div class="prose">
+<pre>$ kb regen 01J9X4HZP2  # ULID from kb-id meta
+  ↳ extracted prompt (134 tokens)
+  ↳ original model: claude-opus-4-7 (2026-04-15)
+  ↳ regenerate with: [Enter for same / number to pick]
+        1) claude-opus-4-7
+        2) claude-opus-5
+  &gt; 2
+  ↳ generating...
+  ↳ wrote: 15-research-concept-explainer.html (was 13.6 KB, now 14.2 KB)
+  ↳ previous version saved: .kb/history/01J9X4HZP2/2026-05-10T14-32.html</pre>
+    <h4>Versioning policy</h4>
+    <ul>
+      <li><strong>Default: keep prior version</strong> under <code>.kb/history/&lt;id&gt;/&lt;timestamp&gt;.html</code>. Disk is cheap; lost-work pain real. GC older than N (<code>kb config history.keep=5</code>).</li>
+      <li><strong><code>--replace</code></strong>: don't keep history.</li>
+      <li><strong><code>--diff</code></strong>: show unified diff of rendered text content (DOM-walk minus scripts/styles), not raw HTML.</li>
+      <li><strong><code>--keep-prompt</code></strong>: regenerate but force the new artifact to embed the <em>original</em> prompt verbatim (model upgrade A/B).</li>
+    </ul>
+    <p><strong>Edge case:</strong> if the original prompt was scrubbed (secrets redacted), the regenerated artifact will be missing context. Surface: <code>warning: prompt contains 2 redacted tokens, regen may diverge.</code></p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <div class="section-head">
+    <div class="num">G. Compete check</div>
+    <h2>No one has built kb itself</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Simon Willison</strong> has been adjacent for a year — Dec 2025 <em>Useful patterns for building HTML tools</em> treats single-file HTML as natural LLM-tool format, but framed as <em>user-built tools with LLM help</em>, not <em>LLM-as-author</em>. After Thariq, Simon explicitly updates: "this has caused me to reconsider, especially for output."</li>
+      <li><strong>Claude Artifacts (2024–2026)</strong> ships exactly this technique — sandboxed HTML/React produced by an LLM. But Anthropic never <em>argued</em> the thesis publicly; Thariq's contribution is the articulation.</li>
+      <li><strong>v0.app</strong> ships HTML/React from prompts but pitches as "AI app builder," not "richer-than-markdown artifact medium."</li>
+      <li><strong><code>dogum/html-artifacts</code></strong> is the first packaged operationalisation — recognition heuristic, 9 categories, "matching-your-style" anti-AI-aesthetic ruleset. <strong>Generation-side only.</strong> kb should ship a fork-or-reference.</li>
+      <li><strong><code>tools.simonwillison.net</code></strong> is browse-and-host for one author's manually-curated tools. Closest existing thing to kb but materially different scope.</li>
+      <li><strong><code>claude-artifact-runner</code></strong>: takes Claude Artifacts and turns them into Vite apps — orthogonal: deploy, not gallery.</li>
+    </ul>
+    <p><strong>No project framed as "html-artifact gallery for LLM outputs with regenerate-from-prompt."</strong> This is open territory.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <ol>
+      <li><strong>Ship topic 06's permissive baseline sandbox</strong> — <code>allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads</code> + per-artifact subdomain serving. The strict <code>allow-scripts</code>-only minimum survives as a v0.2+ per-artifact opt-in.</li>
+      <li><strong>Mandate <code>&lt;meta name="description"&gt;</code></strong> in kb's generation prompt; index it as the search blurb.</li>
+      <li><strong>Adopt <code>&lt;template id="kb-prompt"&gt;</code> + <code>&lt;meta name="kb-*"&gt;</code></strong> for provenance.</li>
+      <li><strong>Implement scrub-before-embed</strong> (system prompt strip, regex-based secret redaction, path normalisation, length-gate confirmation).</li>
+      <li><strong>Surface 10 facets</strong>: <code>has_svg</code>, <code>has_form</code>, <code>has_drag</code>, <code>has_animation</code>, <code>has_prompt</code>, <code>prompt_size_bytes</code>, <code>js_loc</code> bucket, <code>css_loc</code> bucket, <code>kb_category</code>, <code>size_kb</code>. BM25 indexes <em>title</em>, <em>body</em>, <em>headings</em>, <em>code</em>, <em>prompt</em> as separate fields (see <a href="../foundation/01-lancedb.html#decisions">topic 01 §Decisions</a>); the <code>prompt</code> field is capped at 8 k tokens (truncate-with-ellipsis above) to bound storage.</li>
+      <li><strong>Thumbnails: headless screenshot at write-time + synthetic-collage fallback.</strong></li>
+      <li><strong><code>kb regen &lt;id&gt;</code> in v0.0.1.</strong> Default keep-history with N=5 GC.</li>
+      <li><strong>Reference dogum/html-artifacts skill</strong> as the canonical "how to write a good HTML artifact" doc.</li>
+    </ol>
+  </div>
+  <div class="open-q">
+    <span class="lbl">Open questions</span>
+    <ul>
+      <li>Whether to ship a <code>kb-skill</code> meta value taxonomy (canonical names like <code>html-artifacts</code>, <code>code-review</code>) or treat it as free-form.</li>
+      <li>Whether to fork <code>dogum/html-artifacts</code> as <code>kb/html-artifacts</code> with kb-specific generation rules (mandatory <code>kb-*</code> metas), or maintain a separate addendum.</li>
+      <li>Whether kb-prompt extraction should be opt-out (default-include) or opt-in (default-exclude). Privacy default favours opt-in for shared artifacts; reproducibility favours opt-out for personal.</li>
+    </ul>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="06-iframe.html"><span class="dir">← Prev</span><span class="ttl">06 · Iframe</span></a>
+  <a class="next" href="08-prior-art.html"><span class="dir">Next →</span><span class="ttl">08 · Prior art</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · html-effectiveness</p>
+      <p>The thesis is right. Twenty 17 KB files prove it. The sandbox can be tighter than the brief assumed.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="06-iframe.html">06 Iframe</a></li>
+        <li><a href="08-prior-art.html">08 Prior art</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://thariqs.github.io/html-effectiveness/">Thariq's gallery</a></li>
+        <li><a href="https://github.com/dogum/html-artifacts">dogum/html-artifacts skill</a></li>
+        <li><a href="https://simonwillison.net/2026/May/8/unreasonable-effectiveness-of-html/">Simon's amplification</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

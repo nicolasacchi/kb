@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Cross-harness memory exchange &mdash; codex &#8646; Claude Code through kb (2026-07)</title>
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, cross-harness, codex, opencode, episodic-memory, recall, sessions, adapters, hooks, agents-md, idea-board, fable">
+<meta name="kb-summary" content="Idea board for kb as the shared memory plane between Claude Code and OpenAI Codex (and opencode/gemini later): a verified unified episodic plane (kb why answers across harnesses today via the codex capture adapter), recall injection through codex's Claude-shaped hooks, an AGENTS.md memory protocol from kb tools, resume-in-the-right-harness dispatch, cross-harness second opinions, a codex-native-memories bridge, watcher-pull capture for hookless harnesses, and harness-tagged provenance. Each idea carries evidence from this machine and an effort estimate; guardrails keep every LLM step in the agent layer.">
+
+<style>
+:root {
+  --bg: #f6f4ef; --surface: #fdfcf8; --fg: #22261e; --muted: #4c5342;
+  --rule: #d9d5c7; --accent: #1f6a4d; --accent-fg: #ffffff;
+  --warn: #7a5200; --danger: #96271f; --ok: #1f6a43;
+  --code-bg: #eceade;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171a14; --surface: #21251c; --fg: #e8e6db; --muted: #abae9b;
+    --rule: #3b4034; --accent: #82d6ab; --accent-fg: #0e2a1c;
+    --warn: #e6b96e; --danger: #ffa198; --ok: #93d9b1;
+    --code-bg: #262b21;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 17px/1.65 ui-serif, Georgia, "Times New Roman", serif;
+}
+main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+h1, h2, h3 { font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.25; }
+h1 { font-size: 1.9rem; margin: .5rem 0 .4rem; letter-spacing: -.01em; }
+h2 { font-size: 1.35rem; margin: 2.6rem 0 .6rem; scroll-margin-top: 1rem; }
+h3 { font-size: 1.08rem; margin: 1.8rem 0 .4rem; scroll-margin-top: 1rem; }
+p, ul, ol { margin: .6rem 0; }
+li { margin: .25rem 0; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+}
+.skip-link {
+  position: absolute; left: -999px; top: 0; background: var(--accent);
+  color: var(--accent-fg); padding: .5rem .9rem; z-index: 9;
+}
+.skip-link:focus { left: .5rem; top: .5rem; }
+.kicker {
+  font: 600 .78rem/1 ui-sans-serif, system-ui, sans-serif;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+}
+.kicker .dot {
+  display: inline-block; width: .55em; height: .55em; border-radius: 50%;
+  background: var(--accent); margin-right: .45em;
+}
+.lede { font-size: 1.12rem; color: var(--muted); margin: .3rem 0 1rem; }
+.meta-strip { font: .82rem/1.6 ui-sans-serif, system-ui, sans-serif; color: var(--muted); }
+.meta-strip .sep { margin: 0 .4em; }
+code, pre {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .86em; background: var(--code-bg); border-radius: 4px;
+}
+code { padding: .08em .35em; }
+pre { padding: .8rem 1rem; overflow-x: auto; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+table {
+  border-collapse: collapse; width: 100%; margin: 1rem 0;
+  font: .88rem/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+th, td { border: 1px solid var(--rule); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+.callout {
+  background: var(--surface); border-left: 4px solid var(--accent);
+  padding: .7rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+}
+.callout-label {
+  display: block; font: 700 .78rem/1.6 ui-sans-serif, system-ui, sans-serif;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--accent);
+}
+.callout--warn { border-left-color: var(--warn); }
+.callout--warn .callout-label { color: var(--warn); }
+.callout--ok { border-left-color: var(--ok); }
+.callout--ok .callout-label { color: var(--ok); }
+.idea {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 8px; padding: .9rem 1.1rem; margin: 1.1rem 0;
+}
+.idea h3 { margin-top: 0; }
+.idea .facts {
+  font: .8rem/1.6 ui-sans-serif, system-ui, sans-serif; color: var(--muted);
+  margin-top: .6rem; border-top: 1px solid var(--rule); padding-top: .5rem;
+}
+footer { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: 1rem;
+  font: .82rem/1.6 ui-sans-serif, system-ui, sans-serif; color: var(--muted); }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker"><span class="dot"></span>design &middot; idea board &middot; project:kb</div>
+  <h1>Cross-harness memory exchange &mdash; codex &#8646; Claude Code through kb</h1>
+  <p class="lede">Once a capture adapter translates a foreign transcript into Claude-shaped JSONL, every kb memory surface &mdash; <code>why</code>, <code>recollect</code>, sessions, recall &mdash; works across harnesses unchanged. That was proven on this machine today; this board maps what it opens up.</p>
+  <div class="meta-strip">
+    <span>2026-07-06</span><span class="sep">&middot;</span>
+    <span>status:open</span><span class="sep">&middot;</span>
+    <span>companion to the foreign-harness evaluation artifact</span>
+  </div>
+</header>
+
+<section>
+<h2 id="the-unlock">The unlock, in one paragraph</h2>
+<p>kb&rsquo;s episodic pipeline has a narrow waist: everything downstream of <code>parse_session_activity</code> (<code>crates/kb-core/src/sessions.rs:472</code>) &mdash; the R1 digest, the five sqlite tables, <code>kb why</code>, <code>kb recollect</code>, the SPA session panels, cross-kb fan-out &mdash; reads <em>derived rows</em>, never the raw transcript. So the only Claude-specific piece is the JSONL shape the parser consumes. The codex adapter (<code>plugins/kb-memory/hooks/kb-capture-codex.sh</code>, ~150 lines of bash+jq, deterministic, LLM-free) translates an OpenAI Codex rollout into that shape at capture time. Verified end-to-end on a scratch daemon on 2026-07-06: three real rollouts in, <code>kb sessions show</code> printed 49 commits with SHAs and subjects, 63 edited files, 18 web-research rows, model <code>gpt-5.5</code>, 4,793 tool calls; <code>kb why renderer.ts</code> answered with the codex session that created the file; <code>kb recollect</code> ranked all three with staleness and error signals. Nothing in the daemon changed.</p>
+<div class="callout callout--ok"><span class="callout-label">Verified</span>Cross-harness episodic memory is an <em>adapter</em> problem, not a daemon feature. The daemon stayed at v0.20-50-g838eaa1e throughout; every result below that says &ldquo;verified&rdquo; ran against unmodified kb.</div>
+</section>
+
+<section>
+<h2 id="what-each-side-holds">What each side holds today</h2>
+<table>
+<tr><th></th><th>Claude Code</th><th>OpenAI Codex CLI 0.139</th></tr>
+<tr><td>Transcript</td><td><code>~/.claude/projects/*/&lt;uuid&gt;.jsonl</code> (3,895 files since June)</td><td><code>~/.codex/sessions/Y/M/D/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl</code> (30 files, up to 36&nbsp;MB)</td></tr>
+<tr><td>Session id</td><td><code>sessionId</code> on every line</td><td>UUIDv7 in <code>session_meta.payload.id</code> + filename</td></tr>
+<tr><td>Hooks</td><td>UserPromptSubmit / Stop / SessionStart &hellip;</td><td>Same event set, Claude-shaped payloads (<code>hooks</code> feature flag: stable)</td></tr>
+<tr><td>Native memory</td><td>kb (via kb-memory plugin)</td><td><code>memories_1.sqlite</code>: per-thread <code>raw_memory</code> + <code>rollout_summary</code>, phase-2 selection &mdash; empty on this machine, LLM-generated, opaque</td></tr>
+<tr><td>Instructions file</td><td>CLAUDE.md</td><td>AGENTS.md</td></tr>
+<tr><td>Agent-initiated shell</td><td>unsandboxed (permission-gated)</td><td>sandboxed; loopback blocked by default, two config lines open it</td></tr>
+</table>
+<p>Codex on this machine is not a toy: 30 sessions across several other projects, research and the kb repo itself, <code>model = "gpt-5.5"</code> at <code>xhigh</code> reasoning, 21 trusted project dirs. It is the second harness the MCP deferral trigger contemplated &mdash; the companion evaluation artifact rules on that; this board assumes the adapter exists and asks <em>what else</em>.</p>
+</section>
+
+<section>
+<h2 id="ideas">The ideas</h2>
+
+<div class="idea">
+<h3 id="i1-unified-episodic-plane">I1 &mdash; One episodic plane: <code>kb why</code> answers across harnesses</h3>
+<p><strong>Shipped today.</strong> With codex captures in the sessions corpus, <code>kb why &lt;file&gt;</code> reconstructs provenance regardless of which harness did the work. Claude, about to refactor <code>renderer.ts</code>, learns codex wrote it, from which prompt, through which 49 commits &mdash; before touching it. The inverse holds once codex is taught to call kb (I3): codex sees Claude&rsquo;s decisions and commit trail for the file it&rsquo;s editing.</p>
+<p class="facts">Evidence: <code>kb why renderer.ts</code> against the scratch daemon returned the codex simcity session with prompt + commits. Effort: zero &mdash; backfill + hook registration only. Risk: none; R0 keeps transcripts out of default search/recall.</p>
+</div>
+
+<div class="idea">
+<h3 id="i2-recall-injection-into-codex">I2 &mdash; Ambient recall injection into codex turns</h3>
+<p>Codex&rsquo;s <code>UserPromptSubmit</code> hook carries <code>prompt</code> and accepts <code>additionalContext</code> output &mdash; the same contract kb-recall.sh already speaks (both names confirmed in the codex binary&rsquo;s hook schema). A <code>kb-recall-codex.sh</code> is kb-recall.sh with the payload field names checked and the daemon URL passed explicitly. Every codex turn then starts with the same top-k curated memories a Claude turn gets: one memory store, two harnesses, no divergence in what the user&rsquo;s agents &ldquo;know.&rdquo;</p>
+<p class="facts">Evidence: hook event + field names in <code>/usr/bin/codex</code> strings (<code>user_prompt_submit</code>, <code>additionalContext</code>), confirmed against the official codex hooks docs &mdash; the output JSON is deliberately Claude-Code-wire-compatible, config in <code>~/.codex/hooks.json</code>, stable + default-on since v0.124. And it generalises: opencode&rsquo;s <code>chat.message</code> plugin hook and gemini-cli&rsquo;s <code>BeforeAgent</code> &rarr; <code>additionalContext</code> give every harness a first-party injection point. Effort: ~1 hour incl. hook registration.</p>
+</div>
+
+<div class="idea">
+<h3 id="i3-agents-md-memory-protocol">I3 &mdash; The AGENTS.md memory protocol, generated by <code>kb tools</code></h3>
+<p>kb already ships the teaching surface: <code>kb tools</code> emits a prompt-ready markdown manifest of every verb. A trimmed &ldquo;memory protocol&rdquo; block &mdash; <code>kb recall</code> before re-deriving, <code>kb remember</code> after decisions, <code>kb why</code> before rewriting, <code>kb recollect</code> before re-doing &mdash; dropped into a project&rsquo;s AGENTS.md gives codex (and opencode, and gemini via GEMINI.md) the same discipline CLAUDE.memory.md gives Claude. The protocol is harness-neutral prose; only the file name differs per harness.</p>
+<p class="facts">Evidence: <code>kb tools</code> exists (CLI v0.20); CLAUDE.memory.md is the proven template. Effort: an afternoon &mdash; write once, symlink or generate per harness. Guardrail: sandbox note per harness (codex needs <code>network_access = true</code> or approval-escalation for agent-initiated calls).</p>
+</div>
+
+<div class="idea">
+<h3 id="i4-resume-in-the-right-harness">I4 &mdash; Resume-in-the-right-harness dispatch</h3>
+<p>The adapter stamps every capture with <code>&lt;meta name="kb-harness" content="codex"&gt;</code> and an <code>adapter-meta</code> JSONL line carrying <code>rollout_path</code>. <code>kb sessions resume</code> today shells <code>claude -r &lt;session_id&gt;</code> unconditionally; with the harness meta it can dispatch &mdash; <code>codex resume &lt;uuid&gt;</code> for codex sessions (the verb exists: <code>codex resume / fork --last</code>), <code>claude -r</code> otherwise. &ldquo;Continue that Tuesday session&rdquo; then works from one command regardless of where the session happened, from recollect hit to live prompt in the right tool.</p>
+<p class="facts">Evidence: adapter-meta line verified in captures; <code>codex resume</code> in <code>codex --help</code>. Effort: small kb-cli patch (read kb-harness from the artifact meta or sessions row) &mdash; the one idea on this board that touches kb code. Alternative without code: print the right command as a hint.</p>
+</div>
+
+<div class="idea">
+<h3 id="i5-cross-harness-second-opinions">I5 &mdash; Second opinions with provenance</h3>
+<p>The user already runs multi-model reviews (the 2026-07-06 code-craft review was dual-model by design). Cross-harness memory upgrades this: ask codex to review what Claude shipped <em>with the episodic record in hand</em> &mdash; <code>kb recollect "the milestone"</code> surfaces the sessions, <code>kb sessions show</code> yields the decision log and commit list, <code>kb why</code> explains each contested file. The reviewer critiques the <em>reasoning trail</em>, not just the diff. Symmetrically, Claude can audit codex&rsquo;s 180-error marathon session and say why it went sideways.</p>
+<p class="facts">Evidence: all query surfaces verified on codex captures today; decision rows populate once codex&rsquo;s <code>request_user_input</code> tool is mapped (seen in one rollout &mdash; a natural adapter v2). Effort: zero infra; a prompt pattern. This is agent-layer LLM work, exactly where the non-goals put it.</p>
+</div>
+
+<div class="idea">
+<h3 id="i6-codex-memories-bridge">I6 &mdash; Bridge codex&rsquo;s native memories &mdash; carefully, one-way</h3>
+<p>Codex is growing its own memory (<code>memories_1.sqlite</code>: <code>stage1_outputs.raw_memory</code> / <code>rollout_summary</code> per thread, a phase-2 selection pass &mdash; an LLM distillation pipeline, currently empty here). When it populates, a read-only exporter could mirror selected summaries into kb as <code>kb remember --tags harness:codex,distilled</code> facts, making them recallable in Claude turns and inspectable in the SPA. The inverse direction (writing kb facts into codex&rsquo;s store) should be refused: kb is the canonical, deterministic, operator-inspectable store; feeding a second opaque store creates split-brain memory.</p>
+<p class="facts">Evidence: schema read from <code>~/.codex/memories_1.sqlite</code> (0 rows today). Effort: blocked until the feature activates; revisit when <code>stage1_outputs</code> is non-empty. Decision to record now: one-way, codex&rarr;kb, provenance-tagged.</p>
+</div>
+
+<div class="idea">
+<h3 id="i7-watcher-pull-capture">I7 &mdash; Watcher-pull capture for hookless or flaky-hook harnesses</h3>
+<p>Push capture needs a hook, and all three harnesses now have one (codex <code>Stop</code>, opencode <code>session.status</code>, gemini <code>AfterAgent</code> &mdash; gemini&rsquo;s <code>SessionEnd</code> is explicitly not awaited, and its transcripts self-delete after 30 days by default, so a pull sweep doubles as the backfill/retention escape). Hooks also regress. The pull alternative: a systemd path unit (or a 5-minute timer) watching <code>~/.codex/sessions/**</code> and running the adapter in CLI mode on changed rollouts. The adapter is already idempotent &mdash; one file per session id, overwritten on re-capture, atomic <code>mv</code> &mdash; so pull and push can coexist as belt-and-suspenders. The same pattern generalises: any harness that persists transcripts anywhere becomes capturable by pointing a unit at its directory and writing one translator.</p>
+<p class="facts">Evidence: adapter CLI mode processed 39&nbsp;MB of rollouts in 2.3&nbsp;s; overwrite semantics inherited from kb-capture.sh (the 47&nbsp;GB lance-bloat lesson of 2026-07-03). Effort: a 10-line unit file. Trade-off: pull captures mid-session snapshots only as often as it runs; the Stop hook stays the primary path where hooks exist.</p>
+</div>
+
+<div class="idea">
+<h3 id="i8-opencode-adapter">I8 &mdash; The opencode adapter: plugin event, not file watcher</h3>
+<p>opencode 1.17 stores sessions in sqlite (<code>opencode.db</code>: session / message / part tables, JSON in <code>data</code> columns &mdash; 482 sessions here), so there is no transcript file to watch. But its plugin API is richer than a hook: a JS plugin in <code>~/.config/opencode/plugin</code> gets lifecycle events plus an SDK <code>client</code> and can read the full session, then either shell out to the same envelope logic or POST the translated capture itself. Message/part JSON is closer to Claude&rsquo;s shape than codex&rsquo;s (roles, typed parts with <code>text</code>/tool types), so the translation is thinner. Alternative zero-plugin path: <code>opencode export &lt;sessionID&gt;</code> emits session JSON &mdash; a cron sweep over recently-updated sessions works like I7.</p>
+<p class="facts">Evidence: schema + <code>@opencode-ai/plugin</code> Hooks interface read locally (<code>event</code>, <code>chat.message</code>, <code>tool.execute.after</code>&hellip;); <code>opencode export --help</code>. Effort: ~half day. Priority: low until opencode re-enters real use here (444 of its 482 sessions were a March experiment).</p>
+</div>
+
+<div class="idea">
+<h3 id="i9-cross-harness-stats">I9 &mdash; Comparative harness telemetry from the funnel</h3>
+<p>Sessions rows already carry <code>message_count</code>, <code>tool_calls</code>, <code>error_count</code>, <code>token_total</code>, <code>model</code>, and commit counts per session; with <code>kb-harness</code> attribution the existing per-project rollups become comparative: commits-per-session, errors-per-kilotoken, decision density by harness on the same repo. Not a benchmark arms race (recorded non-goal) &mdash; an operator&rsquo;s own telemetry over their own work, answering &ldquo;which tool do I actually ship with?&rdquo; with provenance instead of vibes. The simcity data point is already spicy: 393&nbsp;M input tokens, 180 errors, 49 commits in one codex session.</p>
+<p class="facts">Evidence: effort line in <code>kb sessions show</code> (verified on codex capture). Effort: needs harness attribution in the sessions row first (I10); then it&rsquo;s a query, maybe a <code>kb sessions stats --by harness</code> flag. Guardrail: stays descriptive; no leaderboard scoring in the daemon.</p>
+</div>
+
+<div class="idea">
+<h3 id="i10-harness-provenance-surfaces">I10 &mdash; Harness-tagged provenance in list/show/SPA</h3>
+<p>Small, load-bearing plumbing: teach the sessions enrichment to surface which harness produced a capture &mdash; either parse the <code>adapter-meta</code> first line, or (zero-parse) read the <code>kb-harness</code> meta already in <code>parser::Fields</code> reach. Then <code>kb sessions list</code> grows a harness column, <code>kb recollect</code> hits show <code>[codex]</code> badges, and the SPA session panel says whose transcript it renders (its Claude-shaped renderer currently shows translated codex sessions without saying so). This is the one schema-adjacent change on the board; everything else rides existing columns.</p>
+<p class="facts">Evidence: kb-harness meta already written by the adapter; unknown metas are ignored today (verified &mdash; captures indexed cleanly). Effort: small kb-core patch + one migration or a computed field. Sequencing: do this before I4/I9; both dispatch on it.</p>
+</div>
+</section>
+
+<section>
+<h2 id="guardrails">Guardrails &mdash; what this board must not become</h2>
+<ul>
+<li><strong>No in-daemon LLM.</strong> Every translation above is deterministic (jq mappings); every distillation (I5, I6&rsquo;s upstream) happens in the agent layer or in codex&rsquo;s own pipeline. The daemon indexes what adapters write &mdash; nothing more.</li>
+<li><strong>One daemon, one operator.</strong> Cross-harness is many <em>tools</em>, one human. Nothing here introduces a second identity; codex uses the same bearer, same mounts, same authority as Claude. (A colleague&rsquo;s codex is <em>their</em> daemon&rsquo;s problem.)</li>
+<li><strong>Adapters live in <code>plugins/</code>, not <code>crates/</code>.</strong> The daemon&rsquo;s contract is the capture envelope + Claude-shaped JSONL; if a third harness needs a fourth adapter, that&rsquo;s a new script, not a new parser branch &mdash; until real usage justifies a <code>parse_session_activity</code> dialect (the codex adapter deliberately chose translation over a parser fork to honour this).</li>
+<li><strong>Lossy is fine, silent isn&rsquo;t.</strong> The adapter caps tool outputs at 2,000 chars and drops reasoning traces; the raw rollout stays in <code>~/.codex/sessions</code> and its path rides <code>adapter-meta</code>. Any future adapter must keep a pointer to its ground truth.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="sequencing">Sequencing, if this gets pulled</h2>
+<ol>
+<li><strong>Now (zero code):</strong> register the codex Stop hook + backfill 30 rollouts (I1); add the AGENTS.md protocol block to one shared project (I3); use I5 as a prompt pattern on the next review.</li>
+<li><strong>Next (hours):</strong> kb-recall-codex.sh (I2); watcher-pull unit as backstop (I7).</li>
+<li><strong>Then (small kb patches, only after a week of real dual-harness data):</strong> harness attribution (I10) &rarr; resume dispatch (I4) &rarr; comparative stats (I9).</li>
+<li><strong>Later / trigger-gated:</strong> opencode adapter when opencode re-enters real use (I8); codex-memories bridge when <code>stage1_outputs</code> populates (I6).</li>
+</ol>
+<div class="callout"><span class="callout-label">Note</span>The MCP question is deliberately absent from this board: none of these ideas need it. The formal trigger evaluation lives in the companion artifact <a href="kb-memory-for-foreign-harnesses-2026-07.html">kb as memory for non-Claude harnesses</a>.</div>
+</section>
+
+<section>
+<h2 id="evidence-ledger">Evidence ledger</h2>
+<table>
+<tr><th>Claim</th><th>Evidence (verified 2026-07-06)</th></tr>
+<tr><td>Retrieval is shape-agnostic downstream of the parser</td><td><code>crates/kb-core/src/sessions.rs:472-672</code> (<code>parse_session_activity</code>), <code>:305-387</code> (<code>session_digest</code>); consumers read sqlite rows via <code>crates/kb-server/src/routes/sessions.rs</code> fan-out</td></tr>
+<tr><td>Codex adapter e2e</td><td><code>plugins/kb-memory/hooks/kb-capture-codex.sh</code>; 3 rollouts (700&nbsp;KB / 1.7&nbsp;MB / 36&nbsp;MB) &rarr; 10,697-line capture, 49 commits, 63 edited files, 18 research rows; scratch daemon <code>127.0.0.1:4977</code>, kb v0.20-50-g838eaa1e</td></tr>
+<tr><td>Codex hooks are Claude-shaped, stable</td><td><code>codex features</code> &rarr; <code>hooks stable true</code>; binary strings: <code>hook_event_name</code>, <code>transcript_path</code>, <code>user_prompt_submit</code>, <code>additionalContext</code> (codex-cli 0.139.0)</td></tr>
+<tr><td>Codex sandbox blocks loopback by default</td><td><code>codex sandbox -- kb recall &hellip;</code> &rarr; daemon unreachable; opens with <code>sandbox_mode="workspace-write"</code> + <code>network_access=true</code> (curl 200)</td></tr>
+<tr><td>opencode storage + plugin surface</td><td><code>~/.local/share/opencode/opencode.db</code> (482 sessions; 444 from 2026-03); <code>@opencode-ai/plugin</code> 1.17.9 <code>Hooks</code> interface; <code>opencode export --help</code></td></tr>
+<tr><td>Codex native memory pipeline exists, empty</td><td><code>~/.codex/memories_1.sqlite</code>: <code>stage1_outputs(raw_memory, rollout_summary, selected_for_phase2)</code>, 0 rows</td></tr>
+</table>
+<p>Related artifacts: <a href="kb-memory-for-foreign-harnesses-2026-07.html">foreign-harness evaluation + MCP ruling</a> (companion) &middot; <a href="session-memory-deep-review-2026-07.html">session-memory deep review</a> (digest-fidelity defects the adapter inherits) &middot; <a href="agent-experience-review-2026-07.html">agent-experience review</a> (first flagged cross-harness + MCP territory) &middot; <a href="kb-second-operator-territory-2026-07.html">second-operator territory</a> (the one-operator boundary I1&ndash;I10 respect). External: <a href="https://github.com/openai/codex">openai/codex</a> &middot; <a href="https://opencode.ai/docs/plugins/">opencode plugin docs</a>.</p>
+</section>
+
+<footer>
+<p>Written 2026-07-06 by Claude (Fable 5) from same-day empirical work on this machine: codex 0.139.0 binary + 30 rollouts, opencode 1.17.9 db + plugin types, kb v0.20-50-g838eaa1e scratch-daemon e2e. Companion: the foreign-harness evaluation artifact (adapter design, digest contract, MCP ruling).</p>
+</footer>
+</article>
+</main>
+</body>
+</html>

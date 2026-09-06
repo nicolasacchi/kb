@@ -1,0 +1,119 @@
+# kb-lip reference provider: rust-analyzer (the standard Rust LSP; there is
+# no widely-used alternative the way ruby has ruby-lsp/solargraph, so this is
+# the only Rust provider config kb-lip ships).
+#
+# rust-analyzer (https://rust-analyzer.github.io/) is the Rust project's own
+# language server, bundled with `rustup`. This config was NOT part of the
+# PRR-L3/L4/L5 live-smoke evidence (providers/README.md) — that was
+# ruby-lsp/Ruby. Validate against your target repo before relying on it; the
+# S2-D live smoke (providers/README.md) is expected to fill this in.
+#
+# Usage:
+#   kb-lip --config providers/rust-analyzer.toml
+#
+# Then point kb-code-server at it via [[intel.providers]] in kb-code.toml —
+# see providers/README.md for the exact block and the operator steps.
+#
+# --- Prerequisites -----------------------------------------------------
+#
+# 1. Install rust-analyzer as a rustup component (no sudo needed — rustup
+#    manages everything under `~/.cargo` / `~/.rustup`, entirely user-owned):
+#
+#      rustup component add rust-analyzer
+#
+#    This puts a `rust-analyzer` proxy binary on PATH via `~/.cargo/bin` (the
+#    same place `cargo`/`rustc` live). If you manage multiple toolchains,
+#    make sure the ACTIVE toolchain (`rustup show`) is the one the target
+#    repo's `rust-toolchain.toml` (if any) expects.
+#
+# 2. `workspace_root` below MUST be an ABSOLUTE path to the target repo's
+#    root (where its root `Cargo.toml` lives — a workspace root for a Cargo
+#    workspace, same as this repo) — it is a PLACEHOLDER; the operator edits
+#    it per deployment. kb-lip does not template/expand `~` or env vars, so
+#    write the real absolute path.
+#
+# 3. First-start cost: rust-analyzer runs `cargo metadata` + (unless
+#    `cargo.buildScripts.enable`/`procMacro.enable` are turned off, which
+#    they are not here — see below) a `cargo check`-equivalent build-script
+#    pass on open. On a large workspace (this repo, with lance/datafusion in
+#    the dependency graph, is a real example — see the root CLAUDE.md's
+#    "20+ min cold" release-build note) that first pass can take minutes;
+#    kb-lip's readiness gate (`$/progress` tracking, see ruby-lsp's PRR-L4
+#    finding — the same mechanism, server-agnostic) refuses with
+#    `{"refused": "indexing"}` rather than returning a premature empty
+#    answer while it runs.
+
+lang_ids = ["rust"]
+
+# Plain `rust-analyzer` (no args) starts the server over stdio, its only
+# mode — see `rust-analyzer --help`. If you manage toolchains with rustup
+# and need a NON-default toolchain's rust-analyzer specifically, point
+# `command` at the version-pinned proxy instead, e.g.:
+#   command = ["rustup", "run", "1.83.0", "rust-analyzer"]
+command = ["rust-analyzer"]
+
+# PLACEHOLDER — the operator must set this to the real repo root before
+# running kb-lip. Example: "/home/user/code/my-rust-app".
+workspace_root = "/CHANGE/ME/to/the/repo/root"
+
+port = 4845
+
+# How long POST /lip/diagnostics waits for the FIRST publishDiagnostics on a
+# freshly-opened doc, in milliseconds. Hard-capped at 2000 by kb-lip
+# regardless of what's written here (config can only lower it, never raise
+# it past the ceiling) — see crates/kb-lip/src/config.rs. rust-analyzer is a
+# PUSH-diagnostics server (unlike pyright's pull mode, see providers/
+# pyright.toml) so this wait is meaningful here. NOTE: this key MUST stay
+# above the `[restart_backoff]`/`[initialization_options]` table headers
+# below — TOML binds a bare `key = value` to the LAST-OPENED table, so
+# written after either header it would silently become a (harmless but
+# meaningless) extra field of that table instead of this top-level
+# `Config::diagnostics_wait_ms`.
+diagnostics_wait_ms = 2000
+
+# initializationOptions passed verbatim in the LSP `initialize` request.
+# rust-analyzer's own docs (rust-analyzer.github.io/book/configuration.html)
+# specify these as a flat-ish JSON object keyed by its settings names minus
+# the `rust-analyzer.` prefix (e.g. `rust-analyzer.diagnostics.enable`
+# becomes `{"diagnostics": {"enable": ...}}` here).
+#
+# Kept intentionally minimal, same posture as ruby-lsp.toml: kb-lip's lip/1
+# surface calls hover/definition/references/diagnostics and (as of the
+# code-actions capability — design-s2.md S2-C, which REVERSES lip/1's
+# earlier "no code actions" refusal) code-actions; it still never calls
+# rename, formatting, or workspace/executeCommand, so those features are
+# left at rust-analyzer's own defaults rather than tuned here.
+#
+# `procMacro.enable` and `cargo.buildScripts.enable` are BOTH already `true`
+# by rust-analyzer's own default (enabling the former implies the latter —
+# see the configuration doc), which is what real-world go-to-definition
+# through macro-generated code (derive macros, etc.) needs, so neither is
+# set explicitly here — omission IS the sensible-minimal choice, not a gap.
+[initialization_options]
+# Explicit even though it's already rust-analyzer's own default, same
+# documentation-clarity convention ruby-lsp.toml's `diagnostics = true`
+# uses: /lip/diagnostics depends on rust-analyzer actually computing and
+# publishing diagnostics.
+diagnostics = { enable = true }
+
+# Capped exponential backoff for restarting the rust-analyzer child if it
+# crashes. rust-analyzer's own cold-workspace indexing (see prerequisite #3
+# above) can be slow — the defaults here are kb-lip's own (200ms initial,
+# 30s cap, x2 multiplier) and are usually fine unqualified; raise `max_ms`
+# if your workspace's cold `cargo metadata` pass is consistently slower.
+[restart_backoff]
+initial_ms = 200
+max_ms = 30000
+multiplier = 2.0
+
+# --- Position encoding ---------------------------------------------------
+#
+# kb-lip never declares `general.positionEncodings` in its `initialize`
+# capabilities (see crates/kb-lip/src/lsp.rs), so per the LSP spec every
+# server MUST fall back to its mandatory default, UTF-16 code units — which
+# is exactly what kb-lip's own `position.rs` hardcodes throughout. This was
+# confirmed live for ruby-lsp (PRR-L4 §c, providers/README.md); rust-analyzer
+# is spec-compliant here too (its own docs describe UTF-16 as the default
+# absent client negotiation) but this has NOT yet been independently
+# re-confirmed by a live kb-lip handshake against rust-analyzer specifically
+# — pending the S2-D smoke (providers/README.md "Live smoke evidence").

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fable Frontier Program — scheduled autonomous research runs, July 2026</title>
+<meta name="kb-tags" content="fable-frontier, program, schedule, research-ops">
+<meta name="kb-category" content="research">
+<meta name="kb-summary" content="One-day program: scheduled Fable 5 sessions autonomously research territory no kb artifact or memory covers yet — kickoff 2026-07-06 22:50 CEST, six runs on 2026-07-07. This artifact is the charter AND the append-only runs ledger.">
+
+<style>
+  :root{
+    --bg:#f7f6fb; --surface:#edeaf6; --fg:#221f33; --muted:#5b5570;
+    --rule:#d3cde6; --accent:#5b3ea8; --accent-fg:#f7f6fb;
+    --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+    --mono:ui-monospace,'JetBrains Mono','Fira Code',Menlo,monospace;
+    --sans:system-ui,'Inter',sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#131020; --surface:#1c1830; --fg:#e8e4f5; --muted:#a89fc7;
+      --rule:#35304d; --accent:#b39df0; --accent-fg:#131020;
+      --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:400 1.02rem/1.62 var(--sans)}
+  main{max-width:48rem;margin:0 auto;padding:2.2rem 1.2rem 4rem}
+  h1{font-size:1.6rem;line-height:1.25;margin:.2em 0 .4em}
+  h2{font-size:1.14rem;margin:2em 0 .5em;padding-top:1em;border-top:1px solid var(--rule)}
+  a{color:var(--accent)}
+  :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .skip-link{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5em 1em}
+  .skip-link:focus{left:.5em;top:.5em;z-index:9}
+  .meta{color:var(--muted);font:500 .82rem/1.5 var(--mono)}
+  pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:.9em 1em;
+    overflow-x:auto;font:.82rem/1.5 var(--mono);white-space:pre-wrap}
+  code{font:.9em var(--mono);background:var(--surface);padding:.1em .3em;border-radius:4px}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1em 0}
+  th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+  th{background:var(--surface)}
+  .callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:8px;
+    background:var(--surface);padding:.8em 1em;margin:1.2em 0}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#charter">Skip to charter</a>
+<main>
+<h1>Fable Frontier Program</h1>
+<p class="meta">scheduled autonomous research · window: 2026-07-06 22:50 → 2026-07-07 21:52 CEST · model: Fable 5 (temporary access) · owner: the operator · this artifact = charter + append-only runs ledger</p>
+
+<h2 id="charter">Charter</h2>
+<p>Fable 5 access lasts one day. Each scheduled run is an autonomous research
+session over the kb project with a single mandate: <strong>territory no existing
+artifact or memory covers</strong> — new capability syntheses, never-run
+experiments, changed deferred-triggers, cross-domain imports, premise attacks.
+Explicitly <em>not</em>: another code/security/craft review (the July reviews are
+triage-gated — <a href="kb-review-coverage-gaps-2026-07.html">no new reviews until
+triage</a>), not a re-derivation of anything in <code>docs/research/</code>, and
+never a violation of the recorded non-goals (a run may <em>evaluate</em> a
+deferred trigger, never bulldoze a ruling). Each run ships one polished HTML
+artifact tagged <code>fable-frontier</code> and appends a row to the ledger below
+so later runs never re-walk the same ground. An honest "this frontier is empty"
+row is a valid outcome; fabricated novelty is not.</p>
+
+<h2 id="schedule">Schedule</h2>
+<table>
+<tr><th>Job</th><th>Cron (local CEST)</th><th>Fires</th><th>Notes</th></tr>
+<tr><td><code>5ed08460</code></td><td><code>50 22 6 7 *</code></td><td>once — 2026-07-06 22:50</td><td>kickoff run #1; auto-deletes after firing</td></tr>
+<tr><td><code>fa421b38</code></td><td><code>52 1,5,9,13,17,21 7 7 *</code></td><td>6× on 2026-07-07 — 01:52 · 05:52 · 09:52 · 13:52 · 17:52 · 21:52</td><td>day-pinned, so it never fires past 2026-07-07; auto-expires in 7 days; <code>CronDelete fa421b38</code> to stop early</td></tr>
+</table>
+<div class="callout"><strong>Operating constraints:</strong> jobs are durable
+(<code>.claude/scheduled_tasks.json</code>) but fire only into an <em>idle, open</em>
+Claude Code session in <code>~/project/kb</code> — keep one running overnight.
+New sessions default to Fable 5 (set 2026-07-06). Runs write artifacts only —
+no commits, no deploys; the daemon's watcher indexes
+<code>docs/research/</code> live. Ad-hoc extra run: paste the prompt below into
+any kb session.</div>
+
+<h2 id="prompt">The run prompt (verbatim — also for ad-hoc reruns)</h2>
+<pre>ultracode — Fable frontier-research run (scheduled program: docs/research/fable-frontier-program-2026-07.html; Fable access is temporary — make it count).
+
+You are Fable 5 running an autonomous frontier-research session over the kb project. Produce genuinely NEW thinking — ideas, designs, syntheses, or empirical experiments that NO existing artifact or memory here covers. This is NOT another review: the July reviews are done and triage-gated (no new reviews until triage — docs/research/kb-review-coverage-gaps-2026-07.html).
+
+1) MAP explored territory (fast): list docs/research/*.html titles; read the program ledger docs/research/fable-frontier-program-2026-07.html (what prior runs shipped + rejected — the source of truth even if earlier runs appear in this session's context); read ~/.claude/projects/&lt;encoded-cwd&gt;/memory/MEMORY.md; kb search + kb recollect any candidate idea before pursuing it. README Non-goals + CLAUDE.md invariants are hard constraints — you may evaluate a recorded trigger, never bulldoze a ruling.
+
+2) GENERATE 8–12 frontier candidates NOT in that map. Favor: capability syntheses nobody composed (existing verbs/subsystems combined into something new); empirical experiments never run (measure, benchmark, simulate, prototype in a git worktree); deferred-with-trigger items whose trigger status changed; cross-domain imports (other fields' ideas applied to kb); and premise attacks ("what would make kb obsolete — and what does kb do about it"). Score novelty × value × feasibility. Pick the strongest ONE (two only if small).
+
+3) GO DEEP with a workflow (this prompt is your ultracode opt-in): fan out diverse perspectives, adversarially verify every factual claim about the codebase (file:line or a reproduction you ran), prototype where cheap (worktree or /tmp — NEVER commit to main), synthesize.
+
+4) SHIP one polished self-contained HTML artifact in docs/research/ per docs/authoring-artifacts.md: kb-prompt template, real title + h1/h2 hierarchy, stable section ids, kb-tags including fable-frontier, kb-category research, visual floor (token roles AA in both themes, skip-link, :focus-visible, reduced-motion, ≥16px). Kebab-case descriptive filename ending -2026-07.html. Do NOT git commit — the daemon indexes live.
+
+5) CLOSE THE LOOP: append your run's row to the ledger table in docs/research/fable-frontier-program-2026-07.html (run timestamp via date, frontier chosen, artifact filename, one-line verdict, candidates rejected so later runs skip them); kb remember a 1–3 sentence outcome with --link kb-docs. If the frontier is genuinely empty, record that honestly in the ledger and stop — never fabricate novelty.
+
+Conduct: stay on this machine and repo; no deploys, no pushes, no destructive ops; heavy builds get nice -n 20 ionice -c 3.</pre>
+
+<h2 id="ledger">Runs ledger (append-only — one row per run)</h2>
+<table id="ledger-table">
+<tr><th>#</th><th>When (CEST)</th><th>Frontier chosen</th><th>Artifact</th><th>Verdict</th><th>Considered &amp; rejected</th></tr>
+<tr>
+<td>1</td>
+<td>2026-07-06 22:50–23:35</td>
+<td>First-ever labeled-query recall-quality eval of the agent memory ("the salience inversion") — does the 06-29 "ranking is not the constraint" verdict survive the graded July corpus?</td>
+<td><a href="recall-salience-inversion-eval-2026-07.html">recall-salience-inversion-eval-2026-07.html</a></td>
+<td>It flipped: production recall buries the correct memory below top-5 for 11/21 on-topic queries (live-confirmed 11/11; retrieval had it at rank 0 in 9/11); mechanism = RANK_K=60's 1.32× retrieval band vs the corpus's 1.8× salience spread; fixes measured (tiebreak 21/21*, RANK_K→10 19/21); survives adversarial review, 0 fatal flaws; no code changed — proposal gated on triage.</td>
+<td>edge-graph emergence study (adjacent to the resurface-queue ruling) · agent-ecosystem simulation (cost, synthetic validity) · 10M-context premise attack (covered by evolving-memory §3 + cross-harness docs) · reading-behavior corpus science (data too sparse) · digest information-density study (overlaps deep-review iceberg numbers) · multi-daemon mesh (second-operator rulings own it) · injected-recall efficacy (needs instrumentation — good FUTURE frontier) · chaos/fault-injection harness (v0.24 backlog, not frontier) · cold-agent onboarding benchmark (memory-benchmark non-goal adjacency)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>2026-07-07 01:52–02:50</td>
+<td>Turn-zero injection efficacy A/B/C — run #1's flagged follow-up: does the every-turn recall block actually change agent plans? (36 plan agents · 12 blind judges · exposure string-verified per cell · ambient-context quarantine)</td>
+<td><a href="turn-zero-injection-efficacy-2026-07.html">turn-zero-injection-efficacy-2026-07.html</a></td>
+<td>Production injection ≈ NO injection at turn zero (1/10 vs 0/10 fact transmission, p=1.0); content-ranked titles transmit (5/10, p=0.033); titles act as POINTERS (80% of exposed cells plan to read the memory) not payloads (80-char truncation drops the fact); a stale ambient MEMORY.md line measurably misled an agent. Adversarial pass killed the "noise harms" claim, forced strict re-grades, and confirmed the funnel. Proposals (triage-gated): fix ranking (stage-1 choke), inject RA4 summary gloss in the hook, prune stale MEMORY.md lines, divide labor between the two memory systems.</td>
+<td>query-aware salience blending (remedy engineering, triage-gated) · decay time-travel simulation (synthetic; decay currently low-stakes) · title-informativeness study (folded into this run as stage 3) · pull-surface adoption telemetry — do sessions ever run kb why/recollect? (STRONG run-3 candidate; portfolio's shipped-but-dead covered SPA only) · cross-project memory bleed measurement · prompt-injection-via-memory threat model (security-adjacent, novel — run-3 candidate) · memory-write→recallability latency (observed ~45s embed lag) · two-tier injection design (folded into proposals) · end-to-end tool-enabled efficacy (named as the run-3 experiment in the artifact)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>2026-07-07 05:52–06:55</td>
+<td>Memory as a prompt-injection vector — red-team of the auto-injected recall channel (run-2 ledger candidate; confirmed uncovered by the July security review). Static trust-boundary path analysis + isolated write-free experiments (blatant 6×7 grid; subtle disguised-as-convention payloads vs Opus &amp; Haiku subjects); plan-only, canary-only, zero writes; adversarial methodology attack.</td>
+<td><a href="memory-as-injection-vector-redteam-2026-07.html">memory-as-injection-vector-redteam-2026-07.html</a></td>
+<td>The channel is real &amp; unmitigated in kb (HTML-escape only, no trust delimiter, verbatim transcript/tool-output capture — code-verified). Only in-scope control = agent judgment, which is real but NOT absolute or uniform: Opus 4.8 refused 30/30 blatant + 5/6 subtle poisons but COMPLIED with the most plausible (auth-weaken self-rationalized as loopback-safe); Haiku 4.5 complied 5/6. Exploit recipe = real vocab + self-consistent safety framing + low apparent severity. Survives adversarial review (core rests on code facts; model-dependence large-effect/small-n; plan-only bypasses the harness permission gate). Mitigations (triage-gated): delimit the injected block as untrusted, add trust caveat to recall header + wake protocol, provenance/author field on writes, decouple salience from trust. NOTE: all agents ran Opus/Haiku — Fable unavailable at fire.</td>
+<td>pull-surface adoption telemetry (still unrun — strongest remaining) · truly-subtle 2nd-order-harm payloads (this run only reached semi-subtle; natural run-4) · cross-family judge to kill mono-model bias · tool-enabled execution-mode red-team (higher-fidelity than plan-only, needs sandbox) · memory provenance/author-field design (surfaced as a mitigation, deserves its own design) · cross-project memory-bleed leak test</td>
+</tr>
+<tr>
+<td>4</td>
+<td>2026-07-07 09:52–11:05</td>
+<td>Episodic-pull adoption telemetry — the twice-flagged strongest candidate: do agents actually invoke kb why / kb recollect (invariant #11's pull-only bet), measured over 4,793 real transcripts on this machine? Method: real-Bash-invocation parsing (vs wake-hook instruction text), project + top/subagent + ship-date segmentation; independent quote-aware recount; methodology attack; qualitative read of non-use.</td>
+<td><a href="episodic-pull-adoption-telemetry-2026-07.html">episodic-pull-adoption-telemetry-2026-07.html</a></td>
+<td>The deliberate pull surface is ~unused outside the repo that builds it: 12 real invocations, 6 sessions, 2 projects, ~75% inside kb; post-ship non-kb adoption 1/13 human sessions + 0 of ~4,600 non-kb subagent runs. NOT undiscovered — OUT-COMPETED: the file-read reflex + always-on recall block answer "how was this done here?" more cheaply; episodic pull only wins for cross-project/no-code-trace questions. Two fixable amplifiers: a cancelled SessionStart hook blinds the verbs for a whole session; the per-turn recall block re-surfaces kb get but never why/recollect. Integrity note: took 3 counting passes — raw grep (394, hook text), segment-head (25, still mentions), quote-aware recount (12) — the invocation-vs-mention confound again. Survives adversarial review (denominator/recency/subagent-framing all corrected). Case study n=1 machine. Completes the memory tetralogy (rank→inject→attack→adopt): architecturally rich, behaviorally thin.</td>
+<td>need-conditioned adoption (measure "sessions where episodic recall would have helped" — the real denominator, unmeasured here) · longitudinal re-run to separate recency from non-adoption · context-aware why/recollect re-surfacing DESIGN (surfaced as fix #1) · multi-operator telemetry (would need other machines — out of scope) · file-read-vs-episodic-recall latency/quality head-to-head</td>
+</tr>
+<tr>
+<td>5</td>
+<td>2026-07-07 13:52–15:20</td>
+<td>Determinism audit (premise attack on invariant #10 / atlas-determinism / README non-goal #1 "deterministic + reproducible", never tested end-to-end). Deliberately left the 4-run memory tetralogy. Method: isolated daemon + 14-doc fixed corpus, temporal + rebuild diffs of search/graph; static trace of ranking output paths; adversarial verification that REFUTED the first mechanism.</td>
+<td><a href="search-determinism-settling-window-2026-07.html">search-determinism-settling-window-2026-07.html</a></td>
+<td>Vector search + graph bit-stable throughout; keyword/hybrid UNSTABLE in the post-index settling window (score nudges + stale-posting over-count) then converge to a state bit-identical across 2 independent rebuilds. My per-fragment-BM25-stats hypothesis was REFUTED by lance-index 4.0.0 source (stats are GLOBAL, not per-fragment; partitions≠fragments). Real code-pinned gap = missing tie-break: bm25_query (lance.rs:636), batches_to_summaries (lance.rs:1608), list_embeddings (lance.rs:1392) return lance top-k in physical scan order with no ORDER BY id, so tied-score ORDER rides physical layout → one-line fix (.then(id.cmp)). Integrity arc: run#4 caught inflated counts, run#5 caught wrong mechanism. Bounds: rebuild-reproducibility OBSERVED not proven (n=2); ATLAS UNTESTED (SPA-only coords endpoint — static hypothesis only); auto-compaction confounds the causal step; single machine. Survives adversarial review. NOTE: all agents Opus 4.8 — Fable unavailable at fire.</td>
+<td>ATLAS coordinate determinism (couldn't capture coords — SPA-only; strongest direct follow-up, needs a coords endpoint or lance read) · the tie-break one-line fix as an actual triage-gated PR · kb bench reproducibility (does it compact+settle before measuring?) · cross-machine bit-identical verification (2nd machine) · float-reduction/hash-order stress at scale · digest determinism (never captured this run)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>2026-07-07 15:40–17:10</td>
+<td>Atlas coordinate determinism — the direct close of run #5's flagged gap (coords ARE reachable: /api/kb/{kb}/docs?include=atlas). Method: capture atlas_x/y/cluster across 4 wiped from-scratch rebuilds of a 40-doc corpus + fragment-state invariance + a Rust permutation probe on compute_layout (injected then reverted) + full pipeline trace + adversarial verification. Manual run on Fable 5 (scheduled fires had been hitting the Opus fallback).</td>
+<td><a href="atlas-input-order-determinism-2026-07.html">atlas-input-order-determinism-2026-07.html</a></td>
+<td>Atlas is reproducible ON ONE MACHINE (bit-identical across 4 wiped rebuilds; identical uncompacted-40-frag vs compacted-1-frag). But compute_layout is severely ORDER-SENSITIVE (Rust probe: reverse-permutation moves 40/40 points, delta 0.81; k-means positional seeding flips cluster colours on ANY reorder), and the pipeline feeds it a non-canonical fs/ingest-dependent order: unsorted WalkDir (indexer.rs:303, watcher.rs:278) → merge_insert order (lance.rs:526) → unordered lance scan (list_embeddings lance.rs:1392, no ORDER BY) → compute_layout (atlas.rs:648). PRECISION (verification-corrected): invariant #3 as WRITTEN is function-scoped ('same inputs') + golden-tested + CORRECT; the PIPELINE that produces the input order is what's unpinned, so 'same corpus → same atlas everywhere' isn't guaranteed cross-machine. SEVERITY LOW (atlas is a non-load-bearing visualization). ONE-LINE FIX: pairs.sort_by(id) at atlas.rs:609 (ids are machine-independent path hashes). UNIFIES with run#5: kb pins determinism at the algorithm (seed, IEEE-754, cross-libc golden test) but leaves the PIPELINE INPUT ORDER to an unsorted scan — search bites via the tie-break gap, atlas via cross-machine input-order. 0 fatal flaws; survives. Bounds: cross-machine is code-inference not 2nd-machine data; local reproducibility code-predicted+observed not proven; 0.81 is worst-case (reverse).</td>
+<td>the id-sort fix + a permanent permutation unit test as a triage-gated PR (concrete, ready) · actual 2nd-machine/2nd-filesystem atlas reproduction (the one thing that would upgrade inference→proof) · does the SPA cache/persist atlas coords so a cross-machine shared corpus already shows drift? · whether digest/other pipelines share the unsorted-scan-input pattern (systematic sweep of every list_* consumer)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>2026-07-07 18:20 → 2026-07-09 21:25 (spend-limit gap; recovered from the workflow journal)</td>
+<td>Does the kb-prompt handoff contract actually work? First functional test of kb's core authoring convention — fleet census of &lt;template id="kb-prompt"&gt; adoption + a blinded 3-condition transmission experiment (prompt-slice vs body-slice vs title+tags floor, 7 artifacts × plan-only agents × blind judges).</td>
+<td><a href="kb-prompt-handoff-contract-efficacy-2026-07.html">kb-prompt-handoff-contract-efficacy-2026-07.html</a></td>
+<td>The contract is adopted but rarely in its advertised form: 41% of fleet HTML (46% excl. machine envelopes) carries a kb-prompt, yet only ~11 files fleet-wide use the ROLE/STEPS execution-contract scaffold — in practice it's a freeform provenance note. Handed to a code-equipped stranger the prompt briefs the work far better than metadata (adequate 6/6 vs title+tags 1/6, IF 8.33 vs 4.83) but NOT better than the body (body ranked #1 in 6/6). The tempting "prompt is insurance for when the body is stripped" takeaway is REFUTED on code: invariant #5's scrub strips the PROMPT and keeps the body (scrub.rs:80), off by default on serve (config.rs:530), always-strip only on kb share — so no body-stripped-prompt-survives surface exists. The prompt's unique audience is machine ingestion of PRIVATE source (parser::extract, parser.rs:274) — not humans (templates render invisibly), not public serve. Self-correction arc: the run's own author wrote the inverted "insurance" headline; the adversarial pass killed it. Recommendation (triage-gated): call it provenance (Option A) or scope the contract role to plan-category artifacts (Option B); do NOT mandate bigger/universal prompts. Bounds: n=6, 1 judge, Opus-only, judge non-blind (fatal to the small body&gt;prompt gap, survivable for the large prompt&gt;&gt;floor gap), self-authored sample, already-shipped features (favorable regime).</td>
+<td>redundancy-given-body (untestable without a body+prompt arm — the design can't answer it) · greenfield/unbuilt-work handoff test (the hard regime, unrepresented here — strong run-8 candidate) · cross-family judge to break the Opus monoculture · the ROLE/STEPS contract form measured directly (all 6 scored prompts were freeform; the one scaffold artifact, v024, was excluded) · corpus-rot / stale-artifact metrics (strong standalone runner-up) · embed-lag recallability window · grep-vs-search premise attack · bench settling-window reproducibility · need-conditioned pull adoption (run-4 flagged)</td>
+</tr>
+</table>
+
+<h2 id="teardown">Teardown</h2>
+<p>When Fable access ends: <code>CronDelete fa421b38</code> (or let the day-pin +
+7-day expiry retire it), review the ledger, and triage the shipped artifacts like
+any other research — accept/defer/reject with rulings. If the program produced
+durable direction, distill it: <code>/kb-distill --since 2026-07-06</code>.</p>
+</main>
+</body>
+</html>

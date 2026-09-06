@@ -1,0 +1,626 @@
+/* V70-A4 — the Desk shell (`src/desk/`).
+ *
+ * Scoped entirely under `.kbc-desk`, so nothing here can leak into the
+ * routes this milestone deliberately did NOT migrate. Every colour
+ * reaches for a `tokens.css` variable; every z-index uses the shared
+ * 9-rung ladder.
+ *
+ * THE HEIGHT CHAIN is the load-bearing part of this file. CodeMirror's
+ * `.cm-scroller` computes a wrong height unless every wrapper between
+ * the sized box and it carries an explicit one (the other half of the
+ * `ResizeObserver` note in `components/CodeView.tsx`). The chain is:
+ *
+ *   .kbc-desk (100%)
+ *     └ .kbc-desk__group (flex:1 1 auto, min-height:0)
+ *        └ [data-panel] > div            (library: max-height 100%)
+ *           └ .kbc-desk__main (100%, flex column, min-height:0)
+ *              └ .kbc-reader__main (flex:1 1 auto, min-height:0)
+ *                 └ .kbc-reader__panes → .kbc-reader__pane
+ *                    └ .kbc-codeview-wrap (100%) → .kbc-codeview (100%)
+ *                       └ .cm-editor (100%) → .cm-scroller
+ *
+ * Breaking any link makes the buffer render at zero height or overflow
+ * the shell — both have been shipped bugs in this codebase before.
+ */
+
+:root {
+  /* The icon stripes: the collapsed FORM of the docks, never resized. */
+  --desk-stripe-w: 40px;
+  /* Must equal `DRAWER_STRIP_PX` in `desk/Drawer.tsx` — the drawer's
+   * collapsed size IS its tab bar's height. */
+  --desk-drawer-strip: 32px;
+  --desk-sep-w: 5px;
+}
+
+.kbc-desk {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+.kbc-desk__group {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The library applies `display:flex` + `flex-basis:0` to its own panel
+ * element and `max-height:100%` to the inner one; these fill the rest of
+ * the chain in. */
+.kbc-desk__panel {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* --- regions ----------------------------------------------------------- */
+
+.kbc-desk__dock {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel-2);
+  /* The separator draws the boundary now — a border here would double it. */
+  border-right: 0;
+  /* The pre-Desk `.kbc-reader__tree` rule is a fixed 260px column; this
+   * class rides alongside it (both are on the same element so the tree's
+   * own internals keep their styling) and has to undo that sizing. */
+  width: auto;
+  flex: 1 1 auto;
+}
+
+.kbc-desk__center {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.kbc-desk__main {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.kbc-desk__rail {
+  height: 100%;
+  min-height: 0;
+  /* Same undo as the dock: `.kbc-reader__outline` is a fixed 220px
+   * column pre-Desk, and both classes sit on this one element so the
+   * mobile sheet promotion in `mobile.css` keeps working untouched. */
+  width: auto;
+  flex: 1 1 auto;
+  border-left: 0;
+  overflow: hidden;
+}
+
+/* --- separators -------------------------------------------------------- */
+
+.kbc-desk__sep {
+  flex: 0 0 auto;
+  background: var(--rule);
+  position: relative;
+  transition: background 0.12s var(--ease);
+}
+.kbc-desk__sep--v {
+  width: var(--desk-sep-w);
+  cursor: col-resize;
+}
+.kbc-desk__sep--h {
+  height: var(--desk-sep-w);
+  cursor: row-resize;
+}
+.kbc-desk__sep:hover,
+.kbc-desk__sep[data-active] {
+  background: var(--accent);
+}
+.kbc-desk__sep:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* The ONE element that carries a resize cursor during a drag. Never
+ * `document.body` — see `desk/Desk.tsx`'s header (the Lumino/Chromium
+ * global-selector trap). */
+.kbc-desk__cursor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-hint);
+  background: transparent;
+}
+.kbc-desk__cursor-overlay--horizontal {
+  cursor: col-resize;
+}
+.kbc-desk__cursor-overlay--vertical {
+  cursor: row-resize;
+}
+
+/* --- stripes ----------------------------------------------------------- */
+
+.kbc-desk__stripe {
+  flex: 0 0 var(--desk-stripe-w);
+  width: var(--desk-stripe-w);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  gap: 6px;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.kbc-desk__stripe--left {
+  border-right: 1px solid var(--rule);
+}
+.kbc-desk__stripe--right {
+  border-left: 1px solid var(--rule);
+}
+.kbc-desk__stripe-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.kbc-desk__stripe-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 0;
+}
+.kbc-desk__stripe-btn:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kbc-desk__stripe-btn.is-on {
+  color: var(--accent);
+  border-color: var(--rule-hi);
+  background: var(--bg-card-hi);
+}
+.kbc-desk__stripe-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.kbc-desk__stripe-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-fg, var(--bg));
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  font-weight: 600;
+}
+
+/* --- the bottom drawer -------------------------------------------------- */
+
+.kbc-desk__drawer {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel-2);
+  border-top: 1px solid var(--rule);
+}
+.kbc-desk__drawer-bar {
+  flex: 0 0 var(--desk-drawer-strip);
+  height: var(--desk-drawer-strip);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.kbc-desk__drawer-empty-tab {
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.kbc-desk__drawer-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  max-width: 22em;
+}
+.kbc-desk__drawer-tab.is-on {
+  border-color: var(--accent);
+  background: var(--bg-card-hi);
+}
+.kbc-desk__drawer-tab.is-evicted {
+  opacity: 0.55;
+  border-style: dashed;
+}
+.kbc-desk__drawer-tab-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+.kbc-desk__drawer-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-desk__drawer-tab-count {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.kbc-desk__drawer-tab-note {
+  color: var(--ink-dim);
+  font-style: italic;
+  white-space: nowrap;
+}
+.kbc-desk__drawer-tab-act {
+  border: none;
+  background: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 2px 3px;
+  display: grid;
+  place-items: center;
+}
+.kbc-desk__drawer-tab-act:hover {
+  color: var(--ink);
+}
+.kbc-desk__drawer-tab.is-pinned .kbc-desk__drawer-tab-act:first-of-type {
+  color: var(--accent);
+}
+.kbc-desk__drawer-bar-spacer {
+  flex: 1 1 auto;
+}
+.kbc-desk__drawer-toggle {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 2px 4px;
+  display: grid;
+  place-items: center;
+}
+.kbc-desk__drawer-toggle:hover {
+  color: var(--ink);
+}
+.kbc-desk__drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px 10px;
+}
+.kbc-desk__drawer-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.kbc-desk__drawer-caption {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+.kbc-desk__drawer-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-mute);
+}
+.kbc-desk__drawer-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-desk__drawer-row:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-desk__drawer-row.is-cursor {
+  background: var(--bg-card-hi);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+.kbc-desk__drawer-row-loc {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-desk__drawer-row-line {
+  color: var(--ink-dim);
+}
+.kbc-desk__drawer-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+
+/* The viewport golden's escape hatch: when docking the drawer would
+ * squeeze the code region under its readable floor, it floats over main
+ * instead. Captioned in the body — a panel that silently changes
+ * behaviour is worse than one that says why. */
+.kbc-desk__drawer-ghost {
+  height: 100%;
+}
+.kbc-desk__drawer-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: min(50%, 320px);
+  z-index: var(--z-float);
+  box-shadow: var(--shadow-lift);
+}
+.kbc-desk__drawer-float > .kbc-desk__drawer {
+  height: 100%;
+}
+
+/* --- chips: preset, resize submode, focus-mode status ------------------- */
+
+.kbc-desk__preset-chip {
+  position: absolute;
+  right: calc(var(--desk-stripe-w) + 8px);
+  bottom: 8px;
+  z-index: var(--z-popover);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kbc-desk__preset-btn {
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.kbc-desk__preset-btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+/* V70-A10 — "Save workspace," beside the preset chip (D26: "a button near
+ * the preset control"). */
+.kbc-desk__save-workspace-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.kbc-desk__save-workspace-btn:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-desk__save-workspace-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.kbc-desk__preset-dirty {
+  color: var(--accent);
+}
+.kbc-desk__preset-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-hi);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lift);
+  overflow: hidden;
+  z-index: var(--z-popover-hi);
+}
+.kbc-desk__preset-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.kbc-desk__preset-item:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-desk__preset-item.is-on {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+.kbc-desk__preset-item-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+.kbc-desk__preset-item-hint {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.kbc-desk__mode-chip {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 10px;
+  z-index: var(--z-hint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg, var(--bg));
+  font-size: 11px;
+  box-shadow: var(--shadow-lift);
+}
+.kbc-desk__mode-hint {
+  font-family: var(--font-mono);
+}
+
+.kbc-desk__status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--rule);
+  font-size: 11px;
+  color: var(--ink-mute);
+  z-index: var(--z-bar);
+}
+
+/* Present enlarges the reading type — a multiplier over the operator's
+ * own `readerFontSize` pref, never a replacement for it. */
+.kbc-desk[data-desk-chrome="present"] .cm-content,
+.kbc-desk[data-desk-chrome="present"] .cm-gutters {
+  font-size: 1.25em;
+}
+
+/* --- the rail's V70-A4 subject chip ------------------------------------- */
+
+.kbc-inspector__subject {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+.kbc-inspector__subject-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.kbc-inspector__subject-segs {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.kbc-inspector__subject-seg {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  color: var(--ink-dim);
+  background: var(--bg-panel-2);
+}
+.kbc-inspector__subject-seg.is-on {
+  color: var(--accent);
+  background: var(--bg-card-hi);
+  font-weight: 600;
+}
+.kbc-inspector__pin {
+  border: none;
+  background: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+.kbc-inspector__pin:hover {
+  color: var(--ink);
+}
+.kbc-inspector__pin.is-on {
+  color: var(--accent);
+  background: var(--bg-card-hi);
+}
+.kbc-inspector__subject-name {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-inspector__subject-caption {
+  margin-top: 1px;
+  font-size: 10px;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+
+/* Stacked sections — the All tab's grammar. */
+.kbc-inspector__section + .kbc-inspector__section {
+  border-top: 1px solid var(--rule);
+  margin-top: 6px;
+}
+.kbc-inspector__section-head {
+  margin: 8px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* --- the peek panel's drawer hand-off ----------------------------------- */
+
+.kbc-peek__keep {
+  flex: 0 0 auto;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kbc-peek__keep:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}

@@ -1,0 +1,300 @@
+/* PRR-U1 — kb v0.39 "The PR Room," unit U1 (Review Room landing,
+ * design-ui.md §2 S1). NEW FILE — `reviews.css` is already well past the
+ * "at capacity" budget note U2 left in `review-room.css`'s own header, and
+ * this unit's rows are visually distinct enough (a dot + risk + reason
+ * chips) to warrant their own small stylesheet rather than growing either
+ * existing one. Token discipline matches the rest of this app: tokens only,
+ * `color-mix` for washes, no raw hex. */
+
+/* ── landing header additions (kept OUT of reviews.css — a shared file
+   both U2 and U3 also touch concurrently; these two classes are new, not a
+   restyle of anything reviews.css already owns) ─────────────────────── */
+.kbc-reviews__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.kbc-reviews__all-prs {
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-decoration: none;
+}
+.kbc-reviews__all-prs:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* ── inbox section ────────────────────────────────────────────────────── */
+.kbc-inbox {
+  margin: 0 0 24px;
+}
+.kbc-inbox__title {
+  margin: 0 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+.kbc-inbox__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.kbc-inbox__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  text-decoration: none;
+  color: inherit;
+}
+.kbc-inbox__row:last-child {
+  border-bottom: 0;
+}
+.kbc-inbox__row:hover {
+  background: var(--bg-card-hi);
+}
+
+.kbc-inbox__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--rule-hi);
+  border: 2px solid transparent;
+}
+.kbc-inbox__dot--red {
+  background: var(--red);
+}
+.kbc-inbox__dot--warn {
+  background: var(--warn);
+}
+.kbc-inbox__dot--green {
+  background: var(--green);
+}
+.kbc-inbox__dot--hollow {
+  background: transparent;
+  border-color: var(--rule-hi);
+}
+
+.kbc-inbox__body {
+  min-width: 0;
+  grid-column: 2;
+}
+.kbc-inbox__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-inbox__pr {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+  font-size: var(--fs-sm);
+}
+.kbc-inbox__row-title {
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-inbox__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  margin-top: 2px;
+}
+.kbc-inbox__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.kbc-inbox-chip {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+}
+.kbc-inbox-chip[data-kbc-inbox-reason="awaiting"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-soft);
+  border-color: var(--accent-bor);
+}
+.kbc-inbox-chip[data-kbc-inbox-reason="unresolved"] {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--rule));
+}
+.kbc-inbox-chip[data-kbc-inbox-reason="head_drift"],
+.kbc-inbox-chip[data-kbc-inbox-reason="verdict_stale"] {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 35%, var(--rule));
+}
+
+.kbc-inbox__risk {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.kbc-inbox__open {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+/* PRR-U8 mobile pass — the row's 3rd real grid column (dot | body | open
+ * button; the CSS's 4th `auto` track has never had a matching 4th child —
+ * `InboxList.tsx` only renders three) crowds `body`'s already-wrapping
+ * title/meta/chips against the "Open room" pill at 390px. Drop to a
+ * 2-column (dot, body) grid and let the button fall to its own row, right-
+ * aligned under the body — same "stack rather than crush" call
+ * `.kbc-review__file-row`'s own SH.C2 fix made (mobile.css), just via
+ * `grid-column` instead of flex `order` (this row is a CSS grid). */
+@media (max-width: 860px) {
+  .kbc-inbox__row {
+    grid-template-columns: auto 1fr;
+  }
+  .kbc-inbox__open {
+    grid-column: 1 / -1;
+    justify-self: end;
+    margin-top: 2px;
+  }
+}
+@media (max-width: 860px) and (pointer: coarse) {
+  .kbc-inbox__open {
+    min-height: 44px;
+  }
+}
+
+/* ── demoted "all sessions" <details> ────────────────────────────────── */
+.kbc-inbox-browse {
+  margin-top: 8px;
+}
+.kbc-inbox-browse__summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-dim);
+  padding: 6px 0;
+}
+
+/* ── unreviewed-PR strip (Reviews landing + Prs page) ────────────────── */
+.kbc-unreviewed {
+  margin: 8px 0 24px;
+}
+.kbc-unreviewed__title {
+  margin: 0 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+.kbc-unreviewed__caption {
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+  margin: 0 0 8px;
+}
+.kbc-unreviewed__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-unreviewed__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: var(--fs-sm);
+}
+.kbc-unreviewed__number {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+  flex: 0 0 auto;
+}
+.kbc-unreviewed__title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.kbc-unreviewed__cta {
+  flex: 0 0 auto;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.kbc-unreviewed__cta:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Prs.tsx row CTA cluster (Open room / Start review / Compare) ───────── */
+.kbc-prs__cta-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.kbc-prs__room-link {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.kbc-prs__compare-btn {
+  background: none;
+  border: 1px solid var(--rule-hi);
+  color: var(--ink-mute);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-prs__compare-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

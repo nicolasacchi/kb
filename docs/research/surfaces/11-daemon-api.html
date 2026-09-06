@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="kb daemon HTTP API contract — v0.0.1 endpoint surface, auth/CSRF model, async command shape, error shape. Cross-cuts TUI + SPA consumers.">
+<title>11 · Daemon API — kb research</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="../index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="../foundation/01-lancedb.html">01 · Storage</a>
+      <a href="../foundation/02-fastembed.html">02 · Embeddings</a>
+      <a href="../foundation/03-notify.html">03 · Watcher</a>
+      <a href="../foundation/04-sse-axum.html">04 · SSE</a>
+      <a href="../foundation/05-ratatui.html">05 · TUI</a>
+      <a href="06-iframe.html">06 · Iframe</a>
+      <a href="07-html-effectiveness.html">07 · HTML</a>
+      <a href="08-prior-art.html">08 · Prior art</a>
+      <a href="09-comments.html">09 · Comments</a>
+      <a href="10-web-gallery.html">10 · Web Gallery</a>
+      <a href="11-daemon-api.html" class="is-current">11 · Daemon API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Topic 11
+    <span>·</span>
+    <span class="meta">Daemon HTTP API contract</span>
+    <span>·</span>
+    <span class="meta">Open-points cluster 2 of 4 · 2026-05-11</span>
+  </div>
+  <h1><span class="strike">verdict</span><em>Flat</em> for cross-kb, <em>nested</em> for scoped.<br>Origin allowlist. 202 + run id. No version segment.</h1>
+  <p class="lede">Every prior integration (topics 04 / 05 / 10) pointed at concrete endpoints; none enumerated the whole shape or resolved the design forks. This page is that contract. <strong>28 endpoints across five groups</strong>: cross-kb reads, kb-scoped reads, kb-scoped writes, and per-artifact subdomain serving. CSRF via Origin allowlist. Async commands return <code>202 Accepted</code> + run id + filter hint. JSON in / out, RFC 7807 problem+json for errors. Same axum process serves the API, the SPA shell, and the artifact subdomains.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">TL;DR — what the daemon exposes</span>
+    <p><strong>Same axum process binds <code>127.0.0.1:4000</code></strong> and routes by <code>Host:</code> header: <code>localhost</code> for API + SPA, <code>&lt;id&gt;.artifacts.localhost</code> for artifact bytes. All paths nest under <code>/api/...</code>; kb-scoped operations use <code>/api/kb/{kb}/...</code>, cross-kb use flat <code>/api/...</code>. <strong>No version segment for v0.1</strong> — break/add when needed via <code>/api/v2</code> alongside, Sunset header for v1. <strong>Origin header allowlist</strong> on POSTs (reject browser cross-site CSRF); non-browser callers (TUI, CLI, Claude Code) have no Origin header and pass. <strong>Async commands</strong> (<code>reindex</code>, <code>apply-fix</code>, <code>stats/export</code>) return <code>202 Accepted</code> + <code>{run, events}</code>; progress flows over the SSE firehose with run-id filter. Errors: <code>application/problem+json</code> (RFC 7807).</p>
+    <div class="badges">
+      <span class="conf conf--high">Contract · HIGH</span>
+      <span class="conf conf--med">v0.0.1 surface · 28 endpoints</span>
+      <span class="conf conf--high">Forks · resolved 2026-05-11</span>
+    </div>
+  </div>
+</section>
+
+<section class="section section-tight" id="anchor">
+  <div class="section-head">
+    <div class="num">A. Anchor</div>
+    <h2>Cluster 2 of the open-points discussion. One contract, three consumers.</h2>
+  </div>
+  <div class="prose">
+    <p>Three client surfaces speak this API:</p>
+    <ul>
+      <li><strong>TUI</strong> (<a href="../foundation/05-ratatui.html">topic 05</a>) — subscribes to <code>/api/events</code>; POSTs commands; reads stats, sources, errors.</li>
+      <li><strong>SPA</strong> (<a href="10-web-gallery.html">topic 10</a>) — fetches docs, runs Cmd+K search, posts review JSON, consumes the same SSE stream for the status pill.</li>
+      <li><strong>Claude Code / CLI</strong> — reads <code>kb/{kb}/.review/{id}.json</code> from disk (written by the SPA POST), edits it, kb's file watcher picks up the change and emits <code>comments.updated</code> SSE.</li>
+    </ul>
+    <p>The cross-cutting nature is why this page exists. Each consumer's research page (topics 04, 05, 10) describes <em>its</em> piece; topic 11 is the whole picture.</p>
+  </div>
+</section>
+
+<section class="section-wide section section-tight" id="endpoints">
+  <div class="section-head">
+    <div class="num">B. Endpoint reference</div>
+    <h2>28 endpoints across five groups.</h2>
+  </div>
+  <div class="prose">
+
+    <h3>B.1 · Multi-kb (no kb in path)</h3>
+    <table class="alt-table">
+      <thead><tr><th>Method · Path</th><th>Purpose</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /api/identity</code></td><td>daemon self-description</td><td>Added cluster 4. Returns <code>{name, version, host, kbs:[…], started_at}</code>. The <code>kbs</code> list is a snapshot of what <em>this</em> daemon serves. Source-of-truth for the SPA's daemon-list is the user's <code>~/.config/kb/daemons.toml</code> (client-side); the SPA pings <code>/api/identity</code> on each configured daemon to surface up/down state in the daemon switcher.</td></tr>
+        <tr><td><code>GET /api/kbs</code></td><td>list configured kbs</td><td>Returns <code>[{name, path, doc_count, last_index_at, embedding_model}]</code>. Per-kb embedding model from <code>kb.toml [kb.&lt;name&gt;]</code>; see topic 02 §Decisions.</td></tr>
+        <tr><td><code>GET /api/settings</code></td><td>user UI prefs (this daemon)</td><td>Added cluster 4. Returns <code>{theme, accent, density}</code> from <code>kb.toml [ui]</code>. Per-kb UI prefs at <code>[kb.&lt;name&gt;.ui]</code> are returned in <code>/api/kbs</code>. SPA reconciles against localStorage cache on load.</td></tr>
+        <tr><td><code>PATCH /api/settings</code></td><td>update prefs</td><td>Added cluster 4. JSON body merges into <code>[ui]</code>. To target a per-kb sub-table, send <code>{kb: "&lt;name&gt;", ui: {…}}</code>. SPA debounces to 500 ms after a change. Last-write-wins on conflict.</td></tr>
+        <tr><td><code>GET /api/search?q=&amp;mode=&amp;kb=&amp;tag=&amp;since=</code></td><td>cross-kb search</td><td><code>mode</code> ∈ <code>hybrid</code> (default; RRF k=60) · <code>keyword</code> (BM25 only) · <code>semantic</code> (vector cosine only). See <a href="10-web-gallery.html#cmdk">10 · §H</a> + <a href="../foundation/02-fastembed.html#decisions">02 §Decisions</a>. <code>kb</code> is comma-list or absent (all kbs). Debounced 150 ms from the SPA's Cmd+K.</td></tr>
+        <tr><td><code>GET /api/stats</code></td><td>cross-kb stats snapshot</td><td>For the SPA stats board / TUI V4 cross-kb mode</td></tr>
+        <tr><td><code>GET /api/events</code></td><td>SSE firehose</td><td>Last-Event-ID replay (1024-event ring). NDJSON shape per <a href="../foundation/04-sse-axum.html#canonical-taxonomy">topic 04 canonical taxonomy</a>. Filter grammar: <code>?types=&lt;glob,…&gt;&amp;filter=&lt;key:value,…&gt;</code>, AND-composed. Synthetic transport events (<code>connection</code>, <code>lag</code>, <code>gap</code>) bypass both filters.</td></tr>
+        <tr><td><code>GET /api/events?filter=run:r-2c1</code></td><td>run-scoped subset</td><td>Convenience example. Same stream filtered by <code>run</code> id (paired with <code>202</code> command responses). If the run id has been evicted from the ring, the server emits a synthetic <code>event: gap</code> before any matching events.</td></tr>
+        <tr><td><code>GET /api/events.schema.json</code></td><td>master event schema bundle</td><td>v0.0.1 deliverable. Enum from <a href="../foundation/04-sse-axum.html#canonical-taxonomy">topic 04 canonical taxonomy</a>.</td></tr>
+        <tr><td><code>GET /api/events/schema/{type}/v1.json</code></td><td>per-type JSON schema</td><td><code>type</code> ∈ <code>index.start</code>, <code>index.file</code>, <code>index.complete</code>, <code>artifact.indexed</code>, <code>artifact.removed</code>, <code>watch.create</code>, <code>watch.modify</code>, <code>watch.delete</code>, <code>query</code>, <code>error</code>, <code>comment.created</code>, <code>comment.exported</code>, <code>comment.resolved</code>, <code>comment.anchor_stale</code>, <code>connection</code>, <code>lag</code>, <code>gap</code>, <code>atlas.recompute.start</code>, <code>atlas.recompute.complete</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>B.2 · kb-scoped reads</h3>
+    <table class="alt-table">
+      <thead><tr><th>Method · Path</th><th>Purpose</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /api/kb/{kb}/docs/{id}</code></td><td>artifact metadata JSON</td><td>title, tags, age, indicators, pages array if multi-file, backlinks/outlinks count</td></tr>
+        <tr><td><code>GET /api/kb/{kb}/graph/{id}?depth=1</code></td><td><code>{nodes, edges}</code></td><td>Powers TUI V3/V6 graph modal + SPA Atlas view + cost-of-abstraction's inline backlink card. Concern from <a href="../foundation/05-ratatui.html#concerns">05 · §I-4</a></td></tr>
+        <tr><td><code>GET /api/kb/{kb}/stats</code></td><td>per-kb stats</td><td>KPI snapshot</td></tr>
+        <tr><td><code>GET /api/kb/{kb}/sources</code></td><td>list of indexed source paths</td><td>For TUI V2 (Sources table) and the SPA settings page</td></tr>
+        <tr><td><code>GET /api/kb/{kb}/review/{id}</code></td><td>kb-comments/1 JSON</td><td>The SPA refreshes from this to pick up Claude-authored replies (concern from <a href="10-web-gallery.html#concerns">10 · §M-4</a>)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>B.3 · kb-scoped writes</h3>
+    <table class="alt-table">
+      <thead><tr><th>Method · Path</th><th>Returns</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>POST /api/kb/{kb}/sources/{src}/reindex</code></td><td><code>202</code> + <code>{run, events}</code></td><td>Async; client subscribes to <code>events</code> URL for progress</td></tr>
+        <tr><td><code>POST /api/kb/{kb}/sources/{src}/pause</code></td><td><code>200</code></td><td>Synchronous; toggles indexer state for the source</td></tr>
+        <tr><td><code>POST /api/kb/{kb}/sources/{src}/resume</code></td><td><code>200</code></td><td>Synchronous</td></tr>
+        <tr><td><code>POST /api/kb/{kb}/errors/{err}/dismiss</code></td><td><code>200</code></td><td>Removes from the error queue</td></tr>
+        <tr><td><code>POST /api/kb/{kb}/errors/{err}/apply-fix</code></td><td><code>202</code> + <code>{run, events}</code></td><td>Daemon applies the patch from the <code>error</code> event's <code>fix</code> payload (see <a href="../foundation/05-ratatui.html#concerns">05 · §I-7</a>)</td></tr>
+        <tr><td><code>POST /api/kb/{kb}/review/{id}</code></td><td><code>200</code></td><td>Writes the body verbatim to <code>kb/{kb}/.review/{id}.json</code>; file watcher then emits <code>watch.modify</code> + (if structure matches) <code>comments.updated</code></td></tr>
+        <tr><td><code>POST /api/kb/{kb}/stats/export</code></td><td><code>200</code> + <code>{path}</code></td><td>Writes a snapshot JSON to <code>~/.local/state/kb/exports/</code>; response includes the file path</td></tr>
+        <tr><td><code>POST /api/kb/{kb}/atlas/recompute</code></td><td><code>202</code> + <code>{run, events}</code></td><td>Added cluster 4. Triggers UMAP re-projection over the kb's embeddings; cached 2-D coordinates land in the lance store. Auto-fires on +10 % artifact delta from the indexer; manual via TUI <code>:atlas recompute</code> or SPA settings.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>B.4 · SPA shell + permalink (same origin)</h3>
+    <table class="alt-table">
+      <thead><tr><th>Method · Path</th><th>Purpose</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /</code></td><td>SPA index</td><td>HTML shell; React bundle loads from <code>/assets</code></td></tr>
+        <tr><td><code>GET /a/{kb}/{id}</code></td><td>permalink</td><td>Serves the SPA index with route pre-set to detail view for the artifact</td></tr>
+        <tr><td><code>GET /a/{kb}/{id}?page=N</code></td><td>multi-file permalink</td><td>Page selector inside the detail view's Pages panel</td></tr>
+        <tr><td><code>GET /assets/*</code></td><td>SPA static</td><td>Bundles, fonts. Long cache, content-hashed filenames</td></tr>
+      </tbody>
+    </table>
+
+    <h3>B.5 · Per-artifact subdomain (<code>&lt;id&gt;.artifacts.localhost:4000</code>)</h3>
+    <table class="alt-table">
+      <thead><tr><th>Method · Path</th><th>Purpose</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /</code></td><td>artifact entry</td><td>Serves <code>realSrc</code> or <code>pages[0].src</code> if multi-file</td></tr>
+        <tr><td><code>GET /{path}</code></td><td>artifact static</td><td>Bytes within the artifact's own bundle (relative paths inside the artifact resolve here)</td></tr>
+        <tr><td><code>GET /?cm=on</code> / <code>GET /{path}?cm=on</code></td><td>annotate-mode serve</td><td>Daemon injects <code>&lt;script src="/_kb/annotate.js" defer&gt;&lt;/script&gt;</code> + inline <code>window.__KB_COMMENTS</code> JSON before <code>&lt;/body&gt;</code>. Cache key includes <code>?cm=on</code>. Decisions: <a href="06-iframe.html#decisions">topic 06</a></td></tr>
+        <tr><td><code>GET /_kb/annotate.js</code></td><td>annotator script</td><td>~3 KB; runs in artifact origin; posts to parent with <code>targetOrigin="http://localhost:4000"</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section section-tight" id="auth">
+  <div class="section-head">
+    <div class="num">C. Auth + CSRF model</div>
+    <h2>Origin allowlist. No tokens for v0.1.</h2>
+  </div>
+  <div class="prose">
+    <h4>Threat model</h4>
+    <p>The daemon binds <code>127.0.0.1:4000</code> — already isolated from the network. The one remaining attack surface: <strong>any browser tab the user opens can <code>fetch()</code> against localhost</strong>. A malicious site could fire <code>fetch('http://localhost:4000/api/kb/work/sources/X/reindex', {method:'POST'})</code> and trigger work on the user's behalf.</p>
+
+    <h4>Rule</h4>
+    <p>On every <code>POST</code> / <code>PATCH</code> / <code>DELETE</code> / <code>PUT</code> request, the daemon enforces:</p>
+    <ol>
+      <li>If <code>Origin:</code> header is present, it must equal <code>http://localhost:4000</code> or <code>http://&lt;something&gt;.artifacts.localhost:4000</code>. Otherwise <code>403 Forbidden</code>.</li>
+      <li>If <code>Origin:</code> is absent (curl, TUI, CLI, Claude Code — none are browsers), the request passes. Loopback binding already restricts these to the trust zone.</li>
+    </ol>
+    <p>Reads (<code>GET</code>) are not Origin-checked; they're either public-on-localhost or pulled into iframes by intent. The cost of a malicious page <em>reading</em> kb data is low (and they'd hit CORS preflights anyway for anything beyond simple requests).</p>
+
+    <h4>Why not a token</h4>
+    <ul>
+      <li>Adds a setup step (<code>~/.config/kb/token</code> generation, distribution to clients) for negligible v0.1 security gain on a loopback service.</li>
+      <li>The Origin check accomplishes the same thing for the realistic threat (browser-mounted CSRF) with zero ceremony.</li>
+      <li>Self-host (when the daemon binds a public IP) is a different threat model. Tokens land then.</li>
+    </ul>
+
+    <h4>Identifier conventions in URL paths</h4>
+    <ul>
+      <li><strong><code>{kb}</code>:</strong> the kb's name from <code>kb.toml</code> — lowercase, <code>[a-z0-9-]</code> only. Daemon validates and rejects with 400 if invalid.</li>
+      <li><strong><code>{src}</code>:</strong> the slugified absolute source path. <em>Slug rule:</em> lowercase, leading <code>/</code> stripped, remaining <code>/</code> → <code>-</code>, non-<code>[a-z0-9-]</code> → <code>_</code>. The daemon maintains a slug ↔ absolute-path map; <code>GET /api/kb/{kb}/sources</code> returns both fields (<code>{src, slug, path}</code>) so clients can construct the URL without re-slugifying.</li>
+      <li><strong><code>{id}</code> for artifacts:</strong> opaque hash, content-addressed (sha256-prefix-12 of canonicalized HTML bytes), stable across regen-in-place. Format: <code>a-&lt;12-hex&gt;</code>. Surfaced in <code>artifact.indexed</code> events.</li>
+      <li><strong><code>{err}</code> for errors:</strong> daemon-assigned UUID, <code>e-&lt;6-base32&gt;</code>. Returned in <code>error</code> events (the event schema gained an <code>id</code> field post deep-review; see <a href="../foundation/04-sse-axum.html#canonical-taxonomy">topic 04 canonical taxonomy</a>). Stable for the lifetime of the daemon process; cleared on restart.</li>
+      <li><strong><code>{run}</code> for indexing runs:</strong> <code>r-&lt;6-base32&gt;</code>, daemon-assigned, returned in 202 responses + <code>index.*</code> events.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight" id="async">
+  <div class="section-head">
+    <div class="num">D. Async command shape</div>
+    <h2>202 + run id + filter hint.</h2>
+  </div>
+  <div class="prose">
+    <p>Indexing and fix-apply can take minutes. Synchronous POSTs would tie up an HTTP connection and starve other callers. The contract:</p>
+
+    <h4>Request</h4>
+<pre>POST /api/kb/work/sources/home-me-rust/reindex HTTP/1.1
+Host: localhost:4000
+Origin: http://localhost:4000
+Content-Length: 0</pre>
+
+    <h4>Response</h4>
+<pre>HTTP/1.1 202 Accepted
+Content-Type: application/json
+
+{
+  "run": "r-2c1",
+  "events": "/api/events?filter=run:r-2c1",
+  "started_at": "2026-05-11T14:31:58Z"
+}</pre>
+
+    <h4>Progress</h4>
+    <p>The caller subscribes (or stays subscribed) to <code>/api/events</code> with the supplied filter. Events tagged with the same <code>run</code> id flow through:</p>
+<pre>event: index.start
+data: {"t":"index.start","run":"r-2c1","kb":"work","src":"/home/me/rust","total":67}
+
+event: index.file
+data: {"t":"index.file","run":"r-2c1","path":"futures.html","ms":188,"edges":5,"ok":true}
+
+event: index.complete
+data: {"t":"index.complete","run":"r-2c1","ok_count":65,"err_count":2,"duration_ms":12400}</pre>
+
+    <p>Callers without an open SSE connection can poll <code>/api/events?filter=run:r-2c1&amp;since=&lt;Last-Event-ID&gt;</code> for the same effect (ring buffer up to topic 04's configured size).</p>
+
+    <p><strong>Bare-202 (no body) rejected</strong> because it forces clients to pattern-match events to commands by source path / kb, which fails when two reindexes overlap. <strong>Synchronous rejected</strong> because indexing routinely runs &gt;1 minute and would hold an HTTP connection.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="errors">
+  <div class="section-head">
+    <div class="num">E. Error shape</div>
+    <h2>RFC 7807 problem+json.</h2>
+  </div>
+  <div class="prose">
+    <p>All 4xx / 5xx responses set <code>Content-Type: application/problem+json</code> and a body of the form:</p>
+<pre>{
+  "type":   "urn:kb:errors:source-not-found",
+  "title":  "source not indexed",
+  "status": 404,
+  "detail": "no source matches id 'home-me-rust' in kb 'work'",
+  "instance": "/api/kb/work/sources/home-me-rust/reindex"
+}</pre>
+    <p>The <code>type</code> is a URN (RFC 7807 §3.1 — absolute URI or URN; URN avoids the base-URL ambiguity on self-host). Catalog: <code>urn:kb:errors:&lt;kebab-name&gt;</code>. Clients match on <code>type</code>; <code>title</code> is the user-facing string (TUI error pill); <code>detail</code> is the diagnostic (SPA toast).</p>
+    <p>Standard HTTP status codes always: <code>200</code> sync OK, <code>202</code> async accepted, <code>400</code> bad request, <code>403</code> CSRF / Origin rejected, <code>404</code> not found, <code>409</code> conflict (e.g. concurrent review edit), <code>422</code> validation, <code>500</code> internal, <code>503</code> daemon shutting down.</p>
+    <p>The <code>type</code> URI is the canonical machine identifier; clients should match on it. The TUI surfaces <code>title</code> in the error pill; the SPA surfaces <code>detail</code> in the toast.</p>
+  </div>
+</section>
+
+<section class="section section-tight" id="misc">
+  <div class="section-head">
+    <div class="num">F. Miscellaneous defaults</div>
+    <h2>Compression, content negotiation, body shapes.</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Compression.</strong> <code>tower-http</code> gzip middleware on responses &gt; 1 KB. <strong>Disabled for <code>/api/events*</code></strong> — SSE buffering breaks streaming.</li>
+      <li><strong>Content types.</strong> JSON in / out for the API. HTML for <code>/</code>, <code>/a/...</code>, and artifact subdomain pages. JS for <code>/_kb/annotate.js</code>. No XML, no form-urlencoded.</li>
+      <li><strong>Permalink shape.</strong> <code>/a/{kb}/{id}</code> for single-file artifacts; <code>/a/{kb}/{id}?page=N</code> for multi-file. Path form (<code>/a/{kb}/{id}/p/N</code>) rejected — query is friendlier to React routing.</li>
+      <li><strong>Cache headers.</strong> Long-cache the SPA's content-hashed bundles in <code>/assets/*</code>; <code>no-cache</code> for HTML shells (<code>/</code>, <code>/a/...</code>); subdomain artifact bytes get the file's mtime as <code>Last-Modified</code> + a short max-age (kb regenerates frequently).</li>
+      <li><strong>HEAD requests.</strong> Supported on all GETs.</li>
+      <li><strong>CORS.</strong> Same-origin only by default. The subdomain origins (<code>&lt;id&gt;.artifacts.localhost:4000</code>) and the parent (<code>localhost:4000</code>) are <em>different</em> origins; they communicate only via postMessage (concern <a href="06-iframe.html#decisions">topic 06 decisions</a>). The daemon does not send any <code>Access-Control-Allow-*</code> headers, and the SPA does not need to call the API from any other origin.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section section-tight" id="impl">
+  <div class="section-head">
+    <div class="num">G. Implementation pointers</div>
+    <h2>One axum process. Virtual-host routing. Standard middleware.</h2>
+  </div>
+  <div class="prose">
+    <ul>
+      <li><strong>Routing.</strong> One <code>axum::Router</code>. A small extractor branches on <code>Host:</code> — <code>localhost</code> goes to the API + SPA tree; anything matching <code>*.artifacts.localhost</code> goes to the artifact subtree. <code>axum::extract::Host</code> already exposes this without ceremony.</li>
+      <li><strong>Origin allowlist.</strong> A <code>tower::Layer</code> on the write routes. Reject if <code>Origin:</code> is present and not in the allowlist; pass otherwise. ~15 LOC.</li>
+      <li><strong>Async commands.</strong> <code>tokio::spawn</code> the work, mint a <code>run_id</code>, send the response, push <code>index.*</code> events into the broadcast channel as the work progresses. The ring buffer from <a href="../foundation/04-sse-axum.html">topic 04</a> already handles replay; <code>?filter=run:&lt;id&gt;</code> is a server-side filter applied before sending each event to the consumer.</li>
+      <li><strong>Annotator injection.</strong> A response-rewriter layer on the artifact subdomain. Triggered only when <code>?cm=on</code>; finds the last <code>&lt;/body&gt;</code> in the stream, inserts the script + JSON payload before it. The injection is reversible (drop <code>?cm=on</code> → cached vanilla bytes).</li>
+      <li><strong>Comment write.</strong> <code>POST /api/kb/{kb}/review/{id}</code> validates the body against the <code>kb-comments/1</code> schema, writes atomically (tmpfile + rename) to <code>kb/{kb}/.review/{id}.json</code>. The file watcher (<a href="../foundation/03-notify.html">topic 03</a>) picks up the change and emits <code>comments.updated</code>.</li>
+      <li><strong>Schema serving.</strong> <code>/api/events.schema.json</code> and per-type schemas are static files compiled into the binary via <code>include_str!</code>. Cache hint: <code>ETag</code> = build timestamp.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Recommendation <span class="conf conf--high">Confidence · HIGH</span></span>
+    <h4>v0.0.1 ship subset</h4>
+    <p>Not all 28 endpoints land in v0.0.1. The vertical slice in <a href="../index.html#open">index.html's "v0.0.1 vertical slice"</a> covers:</p>
+    <ul>
+      <li><code>GET /api/search</code> · BM25 only at v0.0.1, hybrid by v0.2.</li>
+      <li><code>GET /api/kb/{kb}/docs/{id}</code> · metadata.</li>
+      <li><code>GET /api/events</code> + the schema serves · transport + taxonomy.</li>
+      <li><code>POST /api/kb/{kb}/sources/{src}/reindex</code> · proves the async pattern.</li>
+      <li>Subdomain serving · proves the iframe sandbox recipe.</li>
+    </ul>
+    <p>v0.1 (TUI + SPA ship together — cluster 4 ambition): the rest of the kb-scoped commands (<code>pause</code>, <code>resume</code>, <code>dismiss</code>, <code>apply-fix</code>, <code>stats/export</code>) + the full event taxonomy + the cluster-4 additions: <code>GET /api/identity</code> (multi-daemon), <code>GET</code> / <code>PATCH /api/settings</code> (hybrid persistence).</p>
+    <p>v0.2 (comments ship): <code>review</code> endpoints + <code>comments.updated</code> event + the annotator injection + the permalink routes.</p>
+    <p>v0.3 (Atlas + graph ship): <code>GET /api/kb/{kb}/graph/{id}</code> + <code>POST /api/kb/{kb}/atlas/recompute</code>. UMAP build step from <a href="10-web-gallery.html#decisions-ux">topic 10 §O″</a> precomputes 2-D coordinates at index time.</p>
+  </div>
+
+  <div class="open-q">
+    <span class="lbl">Open follow-ups</span>
+    <ul>
+      <li><strong>JSON schemas per endpoint body.</strong> Each request/response shape needs a schema in the v0.0.1 deliverable. Out of scope for this discussion; tracked as a topic 04 sub-task.</li>
+      <li><strong>Concurrent review edits.</strong> If the user POSTs review JSON while Claude Code is editing the on-disk file, the <code>POST</code> wins (overwrite). <code>If-Match</code> + ETag would do optimistic concurrency. Defer to v0.3 if it becomes a real problem.</li>
+      <li><strong>Self-host auth.</strong> When the daemon binds a public IP, the Origin allowlist is insufficient. Token + per-kb ACLs land then. Not v0.1.</li>
+      <li><strong>Rate limiting.</strong> Not needed on loopback. Add <code>tower::limit</code> if self-host happens.</li>
+    </ul>
+  </div>
+
+  <p style="margin-top:1.5rem;font-size:.9rem;color:var(--ink-3)"><em>Resolved by this discussion:</em> auth model (Origin allowlist), async shape (202 + run id), path scoping (nested + flat hybrid), versioning (none for v0.1), permalink shape (<code>/a/{kb}/{id}</code>), annotator security (target-origin lockdown), error shape (RFC 7807), compression policy (gzip except SSE).</p>
+</section>
+
+<nav class="page-nav section">
+  <a href="10-web-gallery.html"><span class="dir">← Prev</span><span class="ttl">10 · Web Gallery</span></a>
+  <a class="next" href="../index.html"><span class="dir">Up →</span><span class="ttl">Index</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · daemon HTTP API contract</p>
+      <p>Cluster 2 of 4 from the open-points discussion, landed 2026-05-11. 28 endpoints across five groups. Origin allowlist. 202 + run id + filter. No version segment. Same axum process; virtual-host routing.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="../index.html">Index</a></li>
+        <li><a href="../foundation/04-sse-axum.html">04 SSE</a></li>
+        <li><a href="../foundation/05-ratatui.html">05 TUI</a></li>
+        <li><a href="06-iframe.html">06 Iframe</a></li>
+        <li><a href="10-web-gallery.html">10 Web Gallery</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://docs.rs/axum/latest/axum/">axum</a></li>
+        <li><a href="https://datatracker.ietf.org/doc/html/rfc7807">RFC 7807</a></li>
+        <li><a href="https://docs.rs/tower-http/latest/tower_http/">tower-http</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

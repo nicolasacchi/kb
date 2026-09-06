@@ -1,0 +1,87 @@
+# kb-lip reference provider: solargraph (ALTERNATIVE, not the default)
+#
+# solargraph (https://github.com/castwide/solargraph) is the operator's
+# previously-named tool for Ruby language intelligence. It is offered here
+# as an alternative to providers/ruby-lsp.toml (the RECOMMENDED default —
+# see that file's header for why). Reach for solargraph instead when:
+#   - a repo already has a maintained `.solargraph.yml` / YARD-documented
+#     codebase solargraph handles well, or
+#   - ruby-lsp's composed-bundle bootstrap (see ruby-lsp.toml's prerequisite
+#     #2) is impractical for a given repo (e.g. no network access to
+#     rubygems.org from the box running kb-lip) and solargraph's own
+#     `bundle exec solargraph` mode is already working there.
+#
+# This config was NOT part of the L3 live-smoke evidence (providers/
+# README.md) — ruby-lsp was. Validate solargraph's own handshake against
+# your target repo before relying on it.
+#
+# --- Install ------------------------------------------------------------
+#
+#   gem install solargraph
+#
+# Or, better, add it to the target repo's Gemfile development group so its
+# version tracks the repo (avoids solargraph parsing a codebase written
+# against a newer/older Ruby than solargraph itself expects):
+#
+#   group :development do
+#     gem "solargraph", require: false
+#   end
+#
+# Then, from inside the repo:
+#
+#   bundle install
+#   bundle exec yard gems          # optional: pre-build stdlib/gem docs,
+#                                   # speeds up solargraph's first index
+#
+# --- Usage ----------------------------------------------------------------
+#
+#   kb-lip --config providers/solargraph.toml
+#
+# See providers/README.md for the [[intel.providers]] block to add to
+# kb-code.toml once this is running.
+
+lang_ids = ["ruby"]
+
+# `solargraph stdio` is solargraph's LSP-over-stdio entry point (its `--help`
+# lists `stdio`, `socket`, and `port` subcommands — kb-lip always speaks
+# stdio JSON-RPC to the child, so `stdio` is the only valid choice here).
+# If solargraph is a Gemfile dev dependency rather than a global gem, run it
+# through bundler instead:
+#   command = ["bundle", "exec", "solargraph", "stdio"]
+command = ["solargraph", "stdio"]
+
+# PLACEHOLDER — the operator must set this to the real repo root before
+# running kb-lip. Example: "/home/user/code/my-rails-app".
+workspace_root = "/CHANGE/ME/to/the/repo/root"
+
+# A DIFFERENT default port than ruby-lsp.toml's 4841 so both configs can be
+# copy-pasted into sibling [[intel.providers]] entries (one per language, or
+# one per alternative-for-the-same-language during evaluation) without a
+# port collision.
+port = 4843
+
+# solargraph's own initializationOptions — see
+# https://solargraph.dev/guides/configuration for the full set.
+# `diagnostics = true` is required for /lip/diagnostics to receive anything;
+# solargraph diagnostics are off by default.
+[initialization_options]
+diagnostics = true
+completion = true
+hover = true
+definitions = true
+references = true
+rename = false      # kb-lip never calls rename; left off to reduce solargraph's
+                     # own indexing workload.
+formatting = false   # kb-lip has no formatting endpoint (design-lip.md: "no
+                     # code actions, no rename, no formatting" — SUPERSEDE
+                     # NOTE, operator ratified 2026-08-28, design-s2.md
+                     # §S2-C: the "no code actions" half is REVERSED, kb-lip
+                     # now also speaks POST /lip/code-actions; rename/
+                     # formatting/workspace-executeCommand remain refused).
+
+[restart_backoff]
+initial_ms = 200
+max_ms = 30000
+multiplier = 2.0
+
+diagnostics_wait_ms = 2000

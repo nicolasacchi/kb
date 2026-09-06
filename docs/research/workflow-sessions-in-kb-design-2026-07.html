@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Workflow sessions inside kb — collecting, digesting, visualizing, and searching multi-agent work (2026-07)</title>
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, sessions, workflows, subagents, episodic-memory, design, data-model, spa, cli, ultracode, fable">
+<meta name="kb-summary" content="Full design for making ultracode/multi-agent workflow sessions first-class inside kb: the three-layer collection ladder (usage blocks → journal+script → sidechain tool-line extraction), a two-table data model with via-agent attribution, deterministic digest changes, CLI verbs, SPA workflow card + drill-down + concurrency timeline, search integration, size math, retention, and phasing W1–W5 with acceptance criteria — all grounded in the real on-disk structures and invariant #11.">
+
+<style>
+:root{
+  --bg:#fbf8fa; --surface:#f2ecf0; --fg:#211a1f; --muted:#5d5359;
+  --rule:#ded3da; --accent:#7c2d5e; --accent-fg:#ffffff;
+  --warn:#8a5a00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.62; --maxw:47rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#171217; --surface:#211a20; --fg:#e9e3e7; --muted:#a89fa5;
+    --rule:#342a32; --accent:#e39ac2; --accent-fg:#260f1e;
+    --warn:#e0b45a; --danger:#f08a80; --ok:#79caa2;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--serif);
+  font-size:var(--fs-body);line-height:var(--lh)}
+main{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 5rem}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+h1{font-family:var(--sans);font-size:1.85rem;line-height:1.25;letter-spacing:-.01em;margin:.2em 0 .3em}
+h2{font-family:var(--sans);font-size:1.3rem;margin:2.4em 0 .5em;padding-top:.6em;
+  border-top:1px solid var(--rule);scroll-margin-top:1rem}
+h3{font-family:var(--sans);font-size:1.02rem;margin:1.6em 0 .35em;scroll-margin-top:1rem}
+p{margin:.7em 0}
+.kicker{font:600 .78rem/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.meta-line{color:var(--muted);font-family:var(--sans);font-size:var(--fs-small);margin-bottom:2rem}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:.85rem 1rem;overflow:auto;font-size:.8rem;line-height:1.55}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.45em .6em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+td.num{text-align:right;font-family:var(--mono);font-size:.8rem;white-space:nowrap}
+.decision{border:1px solid var(--rule);border-radius:var(--radius);padding:.8rem 1rem;margin:.9rem 0;background:var(--surface)}
+.decision p{font-size:.95rem;margin:.35em 0}
+.decision .did{font:700 .72rem/1 var(--mono);color:var(--accent);letter-spacing:.05em}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+ul,ol{padding-left:1.3em}
+li{margin:.32em 0}
+.small{font-size:var(--fs-small);color:var(--muted);font-family:var(--sans)}
+.mock{font-family:var(--mono);font-size:.78rem;line-height:1.5;background:var(--surface);
+  border:1px solid var(--rule);border-radius:8px;padding:.85rem 1rem;overflow:auto;white-space:pre}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<p class="kicker">Design · sessions subsystem</p>
+<h1>Workflow sessions inside kb — collecting, digesting, visualizing, and searching multi-agent work (2026-07)</h1>
+<p class="meta-line">2026-07-06 · grounded in the <a href="/a/kb-docs/research/session-memory-deep-review-2026-07.html">session-memory deep review</a> (defect B3 + portfolio P4) and direct inspection of the on-disk workflow structures · implementation prompt: M2 in the <a href="/a/kb-docs/research/kb-next-prompts-playbook-2026-07.html">next-prompts playbook</a></p>
+
+<section id="thesis">
+<h2 id="thesis-h">Thesis</h2>
+<p>Multi-agent workflows became the dominant unit of serious work in July 2026 — 7 of the last 12 kb sessions are ultracode orchestrations — and they are precisely what kb records worst: 79–94% of their tokens, tool calls, file touches, and failures are invisible to the digest (defect B3), because everything interesting happens in sidechain transcripts the capture pipeline never reads. Meanwhile the durable raw material is <em>already sitting on disk, structured, deterministic, and richer than anyone is using</em>: every workflow persists a journal with each agent's full structured result, every agent's complete transcript, its meta, and the orchestration script itself.</p>
+<p>The design goal is therefore not new instrumentation — it is <strong>promotion</strong>: lift what already exists into kb's episodic model as first-class, queryable, visualizable records, under the same rulings that govern sessions (deterministic digest, pull-only retrieval, LLM-free daemon, newest-capture scoping). A workflow is to a session what a chapter is to a book — never a free-floating entity.</p>
+</section>
+
+<section id="ground-truth">
+<h2 id="ground-truth-h">Ground truth — what is on disk today</h2>
+<p>Inspected live on this machine (session <code>90086c87</code>, the deep-review run):</p>
+<pre>&lt;project&gt;/&lt;session-id&gt;/
+├── subagents/
+│   ├── agent-&lt;17hex&gt;.jsonl          # direct Agent-tool spawns (isSidechain:true,
+│   ├── agent-&lt;17hex&gt;.meta.json      #   agentId, full JSONL message grammar)
+│   └── workflows/
+│       └── wf_&lt;runid&gt;/
+│           ├── journal.jsonl        # {type:"started",key:"v2:&lt;sha256&gt;",agentId}
+│           │                        # {type:"result",key,agentId,result:&lt;FULL structured return&gt;}
+│           ├── agent-*.jsonl        # one full transcript per workflow agent (65 here)
+│           └── agent-*.meta.json    # {"agentType":"workflow-subagent","spawnDepth":1}
+└── workflows/
+    └── scripts/
+        └── &lt;name&gt;-wf_&lt;runid&gt;.js    # the persisted script; meta = {name, description, phases[]}</pre>
+<p>Plus, inside the <em>main</em> transcript: one task-notification block per completed workflow carrying <code>&lt;usage&gt;</code> (<code>agent_count</code>, <code>agents_done</code>, <code>agents_error</code>, <code>subagent_tokens</code>, <code>tool_uses</code>, <code>duration_ms</code>), a size-capped copy of the workflow's return value, and the journal path.</p>
+<table>
+<tr><th>Source</th><th>Durability</th><th>What it uniquely holds</th><th>Size (65-agent run)</th></tr>
+<tr><td>task-notification <code>&lt;usage&gt;</code></td><td>durable (main transcript)</td><td>fleet totals, failure count, workflow summary + capped result</td><td class="num">~2–20 KB</td></tr>
+<tr><td><code>journal.jsonl</code></td><td>durable while the session dir lives</td><td><strong>every agent's full structured result</strong> — the workflow's true output</td><td class="num">~1–3 MB</td></tr>
+<tr><td>workflow script <code>.js</code></td><td>durable</td><td>name, description, <strong>phase titles</strong>, the orchestration logic itself</td><td class="num">~10–30 KB</td></tr>
+<tr><td><code>agent-*.jsonl</code> sidechains</td><td>durable but prunable by Claude Code</td><td>per-agent prompts, tool_use lines (Reads/Edits/git/kb-CLI), errors</td><td class="num">14 MB (25 MB for 147 agents)</td></tr>
+<tr><td><code>agent-*.meta.json</code></td><td>durable</td><td>agentType, spawnDepth (nesting)</td><td class="num">tiny</td></tr>
+<tr><td>task-output progress records</td><td><strong>perishable</strong> (<code>/tmp</code>, lost on reboot)</td><td>the only source of per-agent <em>label, phase, model, tokens, toolCalls, durationMs</em></td><td class="num">~0.5 MB</td></tr>
+</table>
+<div class="callout callout--warn"><span class="callout-label">The perishability asymmetry</span>
+The richest per-agent metadata (labels like <code>verify:B7</code>, phase assignment, per-agent token counts) lives only in <code>/tmp</code> task outputs. Two consequences shape the design: (1) capture must grab it opportunistically at Stop time while it may still exist; (2) the durable schema must tolerate its absence — label/phase/model become nullable, with the agent's first user message (always durable in its sidechain) as the fallback identity. Long-term fix is upstream: Claude Code writing label/phase into <code>agent-*.meta.json</code> would make this lossless — worth filing.</div>
+</section>
+
+<section id="decisions">
+<h2 id="decisions-h">Resolved positions</h2>
+<div class="decision"><p><span class="did">D1 — Workflows are children of sessions, not a new top-level entity.</span> A workflow row always hangs off a session (its spawning turn); the sessions surface stays the anchor for navigation, capture, and multi-capture scoping. No new nav section, no separate corpus. Direct Agent-tool spawns are modeled as a degenerate workflow (<code>wf_id = NULL</code> group) so one attribution path serves both.</p></div>
+<div class="decision"><p><span class="did">D2 — Three-layer collection ladder, each layer independently shippable.</span> L1 parses what the main transcript already contains (usage blocks — zero new I/O); L2 captures the journal + script (small, structured, the workflow's real output); L3 extracts tool-lines from sidechains (attribution). Each layer is deterministic, additive, and degrades gracefully when its source is missing. No layer blocks another.</p></div>
+<div class="decision"><p><span class="did">D3 — Extract, never index raw.</span> Sidechain transcripts never enter lance verbatim (the feasibility judge's bloat warning: 14–25 MB per big session would swamp the index and bury recollect). Bulk payloads embedded in the capture HTML ride inside <code>&lt;template class="kb-wf-raw"&gt;</code> blocks — the parser already excludes template content from BM25/embedding (parser.rs:498, the same mechanism that protects kb-prompt), while enrichment still reads it from <code>raw_source</code>. What gets <em>indexed</em> is a compact deterministic digest section; what gets <em>stored</em> in sqlite is structured rows.</p></div>
+<div class="decision"><p><span class="did">D4 — Search surface = names and labels, not transcripts.</span> Workflow name, description, phase titles, and agent labels join the session digest text (meaning-dense, tiny — "kb-code-craft-review · Review · Verify · verify:quarantine.rs" is exactly what a future query matches). Per-agent results are pull-only drill-down via CLI/HTTP, consistent with R0's exclusion of raw transcripts from default search.</p></div>
+<div class="decision"><p><span class="did">D5 — Attribution rows carry provenance.</span> Files/commits/research extracted from sidechains land in the existing <code>session_files</code>/<code>session_commits</code>/<code>session_research</code> tables with two new nullable columns: <code>wf_id</code>, <code>agent_ref</code> (label if known, else agentId). They are excluded from main-thread counters (message_count, token_total stay main-thread-truthful) but included in files/commits listings and <code>kb why</code> — which finally answers "who touched this file" for delegated work: <em>"edited by verify:B7 in wf_1c23d6c7 (session 90086c87)"</em>.</p></div>
+<div class="decision"><p><span class="did">D6 — Visualization is post-hoc archaeology, not live monitoring.</span> The SPA renders completed workflow records. No live fleet view (the TUI is the frozen fleet monitor; live orchestration UI is Claude Code's job, and a half-live view would demand SSE plumbing invariant #24 doesn't owe it). The one live concession: the session card refreshes on the next Stop capture like everything else.</p></div>
+<div class="decision"><p><span class="did">D7 — Invariant #11 absorbs workflows; the budget stays at 35.</span> Workflow rows key on (session artifact, wf_id) and every read scopes to the newest capture exactly like sibling tables. The invariant's text gains one sentence ("workflow/agent rows are digest-derived, extraction-only — raw sidechains never indexed") rather than minting invariant #36.</p></div>
+</section>
+
+<section id="data-model">
+<h2 id="data-model-h">Data model</h2>
+<pre>-- one row per workflow per capture (newest-capture scoped like all #11 tables)
+CREATE TABLE session_workflows (
+  artifact_id     TEXT NOT NULL,      -- capture artifact (joins sessions row)
+  session_id      TEXT NOT NULL,
+  wf_id           TEXT NOT NULL,      -- "wf_1c23d6c7-b45"
+  name            TEXT,               -- meta.name from the script
+  description     TEXT,               -- meta.description
+  phases_json     TEXT,               -- ["Evidence","Verify","Ideate","Judge"]
+  script_rel      TEXT,               -- workflows/scripts/&lt;file&gt;.js (source-relative in capture)
+  agent_count     INTEGER,            -- from &lt;usage&gt;
+  agents_done     INTEGER,
+  agents_error    INTEGER,
+  subagent_tokens INTEGER,
+  tool_uses       INTEGER,
+  duration_ms     INTEGER,
+  status          TEXT,               -- completed | failed | killed | unknown
+  result_head     TEXT,               -- capped excerpt of the workflow return value
+  journal_layer   INTEGER DEFAULT 0,  -- 0=L1 only, 2=journal captured, 3=sidechains extracted
+  PRIMARY KEY (artifact_id, wf_id)
+);
+
+-- one row per agent per workflow per capture
+CREATE TABLE session_workflow_agents (
+  artifact_id  TEXT NOT NULL,
+  wf_id        TEXT NOT NULL,          -- NULL-group "direct" for bare Agent-tool spawns
+  agent_id     TEXT NOT NULL,          -- 17-hex from filenames/journal
+  label        TEXT,                   -- "verify:B7" — nullable (perishable source)
+  phase        TEXT,                   -- nullable
+  model        TEXT,                   -- nullable
+  prompt_head  TEXT,                   -- first ~300 chars of first user msg (durable, from sidechain)
+  result_head  TEXT,                   -- first ~2 KB of journal result (durable)
+  tokens       INTEGER,                -- nullable
+  tool_calls   INTEGER,                -- nullable
+  duration_ms  INTEGER,                -- nullable
+  state        TEXT,                   -- done | error | skipped | unknown
+  spawn_depth  INTEGER DEFAULT 1,      -- from meta.json (nesting)
+  PRIMARY KEY (artifact_id, wf_id, agent_id)
+);
+
+-- additive columns on the existing attribution tables
+ALTER TABLE session_files    ADD COLUMN wf_id TEXT;   -- NULL = main thread
+ALTER TABLE session_files    ADD COLUMN agent_ref TEXT;
+ALTER TABLE session_commits  ADD COLUMN wf_id TEXT;
+ALTER TABLE session_commits  ADD COLUMN agent_ref TEXT;
+ALTER TABLE session_research ADD COLUMN wf_id TEXT;
+ALTER TABLE session_research ADD COLUMN agent_ref TEXT;</pre>
+<p>Notes: everything nullable-by-design where the source is perishable (D2's graceful degradation); <code>journal_layer</code> records how much was captured so the UI can say "counters only — sidechains were gone" honestly instead of rendering emptiness as absence of work (the exact dishonesty B3 taught us to avoid). This schema lands via the versioned-migration framework the coverage-gap analysis already demands — the two efforts should share one migration.</p>
+</section>
+
+<section id="collection">
+<h2 id="collection-h">Collection — the three-layer ladder</h2>
+
+<h3 id="l1-usage">L1 — usage blocks (small effort; fixes the lying counters)</h3>
+<p>Parse task-notification blocks in the main transcript inside <code>parse_session_activity</code> (it currently discards them): extract <code>&lt;usage&gt;</code> fields, the workflow name from the summary line, wf_id/runId from the result text, status from agents_error + the notification status. Persist as <code>session_workflows</code> rows (agent rows absent at this layer). Zero new file I/O; existing captures self-heal on reindex because the blocks are already inside stored transcripts. <em>This layer is P4-layer-1 in the repair portfolio and ships with the truthful-sessions milestone.</em></p>
+
+<h3 id="l2-journal">L2 — journal + script (the workflow's true output becomes durable)</h3>
+<p>In <code>kb-capture.sh</code>, after reading the main transcript, glob the session's workflow dirs and embed two things per workflow into the capture HTML:</p>
+<ol>
+<li><code>workflows/scripts/&lt;name&gt;-&lt;wfid&gt;.js</code> — verbatim (10–30 KB, carries name/description/phases in its meta block);</li>
+<li><code>subagents/workflows/wf_*/journal.jsonl</code> — with each <code>result</code> value capped (~2 KB per agent) at embed time; full results stay in the filesystem journal, whose path is recorded.</li>
+</ol>
+<p>Both go inside <code>&lt;template class="kb-wf-raw" data-wf="&lt;wfid&gt;"&gt;</code> so they are enrichment-visible but index-invisible (D3). At Stop time the hook also checks whether the <code>/tmp</code> task-output file still exists (its path appears in the task-notification) and, if so, harvests the per-agent progress records (label/phase/model/tokens) into a compact JSON block — opportunistic, best-effort, nullable downstream. Enrichment then populates <code>session_workflow_agents</code> by joining journal (agent_id → result) + script meta (phases) + harvested progress (labels) + <code>meta.json</code> (spawn_depth).</p>
+
+<h3 id="l3-sidechains">L3 — sidechain tool-line extraction (attribution, not archiving)</h3>
+<p>Stream each <code>agent-*.jsonl</code> once at capture time and keep only:</p>
+<ul>
+<li>the first user message head (~300 chars — the agent's durable identity),</li>
+<li><code>tool_use</code> lines for Edit/Write/Read (file paths), Bash (git + kb CLI commands), WebSearch/WebFetch (queries/URLs),</li>
+<li>paired error tool_results,</li>
+<li>the final assistant text tail (~500 chars).</li>
+</ul>
+<p>Everything else is discarded. Extracted lines feed the existing extraction passes (files → <code>session_files</code>, commits → <code>session_commits</code>, searches/skills → <code>session_research</code>) with <code>wf_id</code>/<code>agent_ref</code> stamped (D5). Per-agent extraction is capped (~8 KB); a 65-agent workflow yields ≤ 0.5 MB of extract versus 14 MB raw. Sidechains are perishable (Claude Code may prune them), which is the argument for running L3 at <em>capture</em> time, not lazily at query time.</p>
+
+<table>
+<tr><th>Layer</th><th>Source read</th><th>Adds</th><th>Cost per big session</th><th>If source missing</th></tr>
+<tr><td>L1</td><td>main transcript (already read)</td><td>workflow rows, honest totals</td><td class="num">~0</td><td>—</td></tr>
+<tr><td>L2</td><td>journal + script (~1–3 MB)</td><td>agent rows, results, phases</td><td class="num">+~150–300 KB in capture</td><td>row stays L1-only, flagged</td></tr>
+<tr><td>L3</td><td>sidechains (14–25 MB, streamed)</td><td>attribution (files/commits/research)</td><td class="num">+~0.3–0.5 MB in capture</td><td>attribution absent, flagged</td></tr>
+</table>
+</section>
+
+<section id="digest">
+<h2 id="digest-h">Digest changes (the indexed surface)</h2>
+<p>The deterministic <code>session_digest</code> gains one section per workflow — compact, meaning-dense, truncation-resistant (placed before the files line, like the planned outcome field):</p>
+<pre>workflows:
+  kb-code-craft-review (wf_57bfcaac) — 140 agents / 4 phases
+    (Survey · Grade · Verify · Synthesize), 12.8M tok, 2 failed
+    failed: grade:storage-actor (retry cap), lens:security (spend limit)
+    wrote: docs/research/kb-code-craft-review-2026-07.html (via synthesize:final)</pre>
+<p>What enters the <em>embedded/BM25 text</em>: workflow name, description, phase titles, agent labels, failure labels, deliverable paths. What stays out: prompts, results, transcripts (D4). This single change makes queries like "security audit workflow", "code craft review", or even "verify quarantine" land on the right session — today they land nowhere.</p>
+</section>
+
+<section id="cli">
+<h2 id="cli-h">CLI surface</h2>
+<table>
+<tr><th>Verb</th><th>Behavior</th></tr>
+<tr><td><code>kb sessions show &lt;sid&gt;</code></td><td>gains a <code>workflows</code> block: name, agents (done/error), tokens, phases, layer flag ("counters only — sidechains unavailable at capture" when journal_layer=0)</td></tr>
+<tr><td><code>kb sessions agents &lt;sid&gt; [--wf &lt;id&gt;] [--json]</code></td><td>agent table: label (or prompt_head), phase, model, tokens, duration, state; errors first</td></tr>
+<tr><td><code>kb workflows show &lt;wf_id&gt; [--json]</code></td><td>phase tree with per-agent rows + result_head excerpts; <code>--agent &lt;id&gt;</code> prints one agent's full journal result (pull-only drill-down, D4)</td></tr>
+<tr><td><code>kb why &lt;file&gt;</code></td><td>attribution lines gain provenance: <code>edit  via verify:B7 (wf_1c23d6c7)  Session-memory deep review…</code></td></tr>
+<tr><td><code>kb recollect</code></td><td>hits on workflow-name/label text get a fleet badge in output: <code>⚙ 140 agents · 2 failed</code>; <code>--workflows</code> filters to sessions that ran one</td></tr>
+</table>
+<p>All <code>--json</code> outputs follow the uniform-envelope contract from the repair portfolio's agent-scripting program (ISO timestamps beside epochs, ids always present) — workflow verbs should be born compliant rather than retrofitted.</p>
+</section>
+
+<section id="spa">
+<h2 id="spa-h">SPA — visualizing a fleet after the fact</h2>
+<p>Three additions, all inside the existing sessions route master-detail (no new nav, D1; mobile renders everything read-only, per the mobile-is-a-reader refusal; server state rides TanStack Query + SSE invalidation per invariant #23 — one <code>["workflow", wfId]</code> query, invalidated by the same <code>session.captured</code> event as the detail rail).</p>
+
+<h3 id="spa-card">1 · The workflow card (session detail rail)</h3>
+<div class="mock">⚙ kb-code-craft-review                    wf_57bfcaac
+  ████████████░ Survey 42 · Grade 42 · Verify 51 · Synth 5
+  140 agents · 138 done · 2 failed        12.8M tok · 71 min
+  ⚠ grade:storage-actor (retry cap) · lens:security (spend limit)
+  → wrote kb-code-craft-review-2026-07.html          [open ▸]</div>
+<p>Phase segments are proportional to agent counts; failures always named (never just a count — B3's lesson is that hidden failures cost the most); the deliverable line links to the artifact when L3 attribution found one. Card collapsed by default under the existing effort stats; absent entirely for workflow-less sessions.</p>
+
+<h3 id="spa-drilldown">2 · The drill-down (expands in the main pane)</h3>
+<div class="mock">▾ Verify (38 agents · 1.9M tok · 24 min)
+    ✓ verify:B7            fable   62k tok   3.9m   "confirmed — in_corpus…"
+    ✓ verify:B5            fable   48k tok   3.1m   "confirmed — heredoc…"
+    ✗ verify:B9            fable   12k tok   0.8m   StructuredOutput retry cap
+    … 35 more
+  ▸ Ideate (5 agents · 289k tok)
+  ▸ Judge (3 agents · 156k tok)</div>
+<p>Agent rows sort errors-first, then tokens. Clicking an agent opens its detail: prompt_head, pretty-printed journal result (client-side <code>JSON.parse</code> attempt, fall back to text), files it touched (L3), its model/duration when known. When labels are null (perishable source lost), rows show <code>prompt_head</code> — honest degradation, visibly flagged by <code>journal_layer</code>.</p>
+
+<h3 id="spa-timeline">3 · The concurrency strip (progressive enhancement)</h3>
+<p>When per-agent <code>startedAt/durationMs</code> survived harvesting, render a deterministic horizontal strip — one thin bar per agent, colored by phase, laid on the workflow's time axis — showing the fan-out/barrier shape at a glance (16-wide waves are instantly visible). When timing data is absent: omit the strip entirely. Never interpolate; a fabricated timeline is worse than none. This satisfies the long-deferred "timeline view" ask in the one place a timeline has dense data.</p>
+<p class="small">Also: sessions <em>list</em> rows gain a small <code>⚙ N</code> badge when workflows exist — the list is where "which session was the big fleet run?" gets asked first.</p>
+</section>
+
+<section id="search">
+<h2 id="search-h">Search behavior spec</h2>
+<table>
+<tr><th>Query</th><th>Today</th><th>After</th></tr>
+<tr><td><code>kb recollect "security audit workflow"</code></td><td>misses (nothing in digest text)</td><td>hits bd54e196 via wf name in digest; badge ⚙ 26 agents</td></tr>
+<tr><td><code>kb recollect "code craft review"</code></td><td>misses</td><td>hits e1b3277a rank 1 (wf name + M1's exact-title arm reinforce each other)</td></tr>
+<tr><td><code>kb sessions search "verify:B7"</code></td><td>misses</td><td>hits via agent label in digest text (post-M1 tokenized search)</td></tr>
+<tr><td><code>kb why crates/kb-server/src/routes/quarantine.rs</code></td><td>misses the security audit entirely</td><td>lists it with <code>via find:auth-surface (wf_…)</code> provenance</td></tr>
+<tr><td>"show me what the judges said"</td><td>impossible</td><td><code>kb workflows show wf_1c23d6c7 --agent judge:strategy</code> (pull-only, not indexed)</td></tr>
+</table>
+</section>
+
+<section id="risks">
+<h2 id="risks-h">Size math, retention, risks</h2>
+<ul>
+<li><strong>Lance bloat (the killer risk):</strong> naive sidechain embedding would add 14–25 MB per big session to the index. D3's extraction ladder bounds capture growth to ~0.3–0.8 MB per big session, and the <code>&lt;template&gt;</code> trick keeps even that out of the embedded/BM25 surface. Budget check in acceptance: sessions-corpus lance size grows &lt; 5% after reindexing all 138 captures with W2+W3.</li>
+<li><strong>Retention:</strong> kb copies extracts at capture; raw sidechains remain Claude Code's property (prunable). An optional <code>kb sessions archive-raw &lt;sid&gt;</code> tars the full wf dirs into the kb state dir for sessions worth preserving verbatim — explicit, per-session, never default.</li>
+<li><strong>Dedup across multi-capture:</strong> workflow/agent rows key on (artifact_id, wf_id[, agent_id]) and reads scope to newest capture (D7). A workflow captured mid-run at one Stop and complete at the next simply has a fuller newest row.</li>
+<li><strong>Nesting:</strong> <code>spawn_depth &gt; 1</code> (subagent-spawned agents) renders indented in the drill-down; totals roll up to the workflow, not double-counted (usage blocks already aggregate).</li>
+<li><strong>Cross-session resume:</strong> <code>resumeFromRunId</code> lets a later session resume an earlier session's workflow. Model as a new workflow row carrying <code>resumed_from</code> (wf_id) — a breadcrumb, not a merge; threads already group the sessions temporally.</li>
+<li><strong>Schema migration:</strong> two new tables + six columns — must ride the versioned-migration framework (coverage gap "schema-migration path"), not another <code>CREATE TABLE IF NOT EXISTS</code> accretion.</li>
+</ul>
+</section>
+
+<section id="phasing">
+<h2 id="phasing-h">Phasing — W1–W5</h2>
+<table>
+<tr><th>Phase</th><th>Scope</th><th>Effort</th><th>Acceptance</th></tr>
+<tr><td><strong>W1</strong> (= M1/S4)</td><td>L1 usage-block parse → <code>session_workflows</code> rows, show/resume display</td><td class="num">S</td><td>e1b3277a-class sessions stop reporting "12 tool calls" for 140-agent work; totals match the <code>&lt;usage&gt;</code> blocks exactly</td></tr>
+<tr><td><strong>W2</strong></td><td>L2 journal+script capture, <code>session_workflow_agents</code>, <code>kb workflows show</code>, opportunistic /tmp harvest</td><td class="num">M</td><td><code>kb workflows show wf_1c23d6c7</code> lists 65 agents with results; a reboot-orphaned run still yields rows (nulls flagged)</td></tr>
+<tr><td><strong>W3</strong></td><td>L3 sidechain extraction → via-agent attribution on files/commits/research; <code>kb why</code> provenance</td><td class="num">M/L</td><td><code>kb why quarantine.rs</code> lists the security-audit session via its finder agent; capture growth ≤ 0.8 MB/big session; lance growth &lt; 5% on full reindex</td></tr>
+<tr><td><strong>W4</strong></td><td>SPA card + drill-down + concurrency strip + list badge</td><td class="num">M</td><td>e2e: open session → workflow card → drill to a failed agent → see its error; mobile renders read-only; byte-identical DOM for workflow-less sessions</td></tr>
+<tr><td><strong>W5</strong></td><td>Digest text integration + recollect badges + <code>--workflows</code> filter</td><td class="num">S</td><td>the five search-spec queries above all pass; digest section survives truncation for short sessions</td></tr>
+</table>
+<div class="callout"><span class="callout-label">Sequencing with the repair portfolio</span>
+W1 ships inside the truthful-sessions milestone (it IS P4 layer 1). W2–W5 are their own milestone, after M1 — they build on truthful timestamps (P2) for the strip, tokenized search (P3/S3) for label queries, and honest counters (S4) for the card. The M2 prompt in the <a href="/a/kb-docs/research/kb-next-prompts-playbook-2026-07.html">playbook</a> encodes this.</div>
+</section>
+
+<section id="open-questions">
+<h2 id="open-questions-h">Open questions</h2>
+<ul>
+<li><strong>Upstream label durability:</strong> the clean fix for the perishable label/phase metadata is Claude Code writing them into <code>agent-*.meta.json</code>. File the request; design assumes it never lands.</li>
+<li><strong>Result size policy:</strong> 2 KB per-agent result_head is a guess; the deep review's verifier results averaged ~1.4 KB of JSON and truncated acceptably. Revisit after W2 with real distribution data.</li>
+<li><strong>Direct Agent-tool spawns without workflows:</strong> the NULL-group modeling works, but their usage totals have no <code>&lt;usage&gt;</code> block — L3 extraction is their only counter source. Accept partial totals, flag them, or leave them un-totaled? (Current lean: flag.)</li>
+<li><strong>Should <code>kb sessions resume</code> quote the workflow result?</strong> A resuming agent probably wants the last workflow's return value verbatim (it is the state). Leaning yes, capped — belongs to the Resume-v2 program either way.</li>
+</ul>
+</section>
+</main>
+</body>
+</html>

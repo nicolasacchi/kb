@@ -1,0 +1,347 @@
+/* W3.R-c — the session-replay reader (`routes/replay.tsx`).
+   Imported from the route module, NOT main.tsx, so it rides the lazy
+   replay chunk instead of the initial bundle. Tokens only (see
+   styles/tokens.css) — no literal colours. */
+
+/* Fills the RailShell `.view` cell (which already supplies the page padding
+   and is itself `height: 100%`), so the rail and the stage each own their own
+   scroller instead of the whole page scrolling. */
+.kb-replay {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  height: 100%;
+  min-height: 0;
+}
+
+.kb-replay__error {
+  padding: var(--pad-4);
+  color: var(--err);
+}
+
+/* ── header ─────────────────────────────────────────────────────────── */
+
+.kb-replay__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+}
+
+.kb-replay__back {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.kb-replay__back:hover {
+  color: var(--text);
+}
+
+.kb-replay__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.kb-replay__sid {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.kb-replay__kb {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.kb-replay__counts {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* ── honesty strip ──────────────────────────────────────────────────── */
+
+.kb-replay__caveats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+}
+
+.kb-replay__caveat {
+  margin: 0;
+  padding: var(--pad-1) var(--pad-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--elev);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.kb-replay__caveat--scrub {
+  border-color: var(--warn);
+  color: var(--text);
+}
+
+.kb-replay__caveat--quiet {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--muted-2);
+}
+
+/* ── scrubber (INDEX-space: one stop per beat) ──────────────────────── */
+
+.kb-replay__scrub {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+
+.kb-replay__range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.kb-replay__stop {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-replay__stop strong {
+  color: var(--text);
+}
+
+.kb-replay__gap {
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+}
+
+/* ── two panes ──────────────────────────────────────────────────────── */
+
+.kb-replay__body {
+  display: grid;
+  grid-template-columns: minmax(280px, 30%) 1fr;
+  gap: var(--pad-2);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kb-replay__rail {
+  overflow-y: auto;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--pad-2);
+}
+
+.kb-replay__seg {
+  margin-bottom: var(--pad-3);
+}
+
+.kb-replay__seg-head {
+  display: flex;
+  gap: var(--pad-1);
+  align-items: baseline;
+  margin: 0 0 var(--pad-1);
+  font-size: 0.8rem;
+  font-weight: 600;
+  position: sticky;
+  top: calc(-1 * var(--pad-2));
+  background: var(--surface);
+  padding: var(--pad-1) 0;
+  z-index: 1;
+}
+
+.kb-replay__seg-n {
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+}
+
+.kb-replay__seg-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-replay__beats {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--pad-2);
+  border-left: 1px solid var(--border);
+}
+
+.kb-replay__beat {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-1);
+  width: 100%;
+  padding: 2px var(--pad-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kb-replay__beat:hover {
+  background: var(--elev-hi);
+  color: var(--text);
+}
+
+.kb-replay__beat--now {
+  background: var(--accent-bg);
+  color: var(--text);
+  outline: 1px solid var(--accent-bor);
+}
+
+.kb-replay__beat--resolved .kb-replay__path {
+  color: var(--accent-soft);
+}
+
+.kb-replay__glyph {
+  flex: 0 0 auto;
+  width: 1em;
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+}
+
+.kb-replay__kind {
+  flex: 0 0 auto;
+  min-width: 4.2em;
+  color: var(--muted-2);
+  font-size: 0.7rem;
+  text-transform: lowercase;
+}
+
+.kb-replay__detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-replay__count {
+  flex: 0 0 auto;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+}
+
+.kb-replay__dt {
+  flex: 0 0 auto;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-replay__path {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.kb-replay__path--raw {
+  font-style: italic;
+}
+
+.kb-replay__range-lbl {
+  color: var(--muted-2);
+}
+
+/* ── the artifact stage ─────────────────────────────────────────────── */
+
+.kb-replay__stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.kb-replay__stage-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-1) var(--pad-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.76rem;
+}
+
+.kb-replay__stage-link {
+  color: var(--text);
+  text-decoration: none;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-replay__stage-link:hover {
+  color: var(--accent-soft);
+}
+
+.kb-replay__stage-kb,
+.kb-replay__stage-stale,
+.kb-replay__stage-grain {
+  flex: 0 0 auto;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+}
+
+.kb-replay__stage-grain {
+  margin-left: auto;
+}
+
+.kb-replay__frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--paper);
+}
+
+.kb-replay__stage-empty,
+.kb-replay__stage-path,
+.kb-replay__stage-note {
+  margin: 0;
+  padding: var(--pad-2);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.kb-replay__stage-path code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* ── narrow screens: rail above the stage ───────────────────────────── */
+
+@media (max-width: 860px) {
+  .kb-replay__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(140px, 32vh) 1fr;
+  }
+
+  .kb-replay__counts {
+    margin-left: 0;
+  }
+}

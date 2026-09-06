@@ -1,0 +1,393 @@
+/* V3.4-C2 — `/r/:repo/~canvas` working-set canvas (Code Bubbles-style). */
+
+.kbc-canvas {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--topbar-h));
+  min-height: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.kbc-canvas__head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 16px 16px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.kbc-canvas__title {
+  font-size: 20px;
+  margin: 0;
+}
+
+.kbc-canvas__hint {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-mute);
+  max-width: 48em;
+}
+
+.kbc-canvas__save {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+}
+
+.kbc-canvas__save--dirty {
+  color: var(--warn);
+}
+
+.kbc-canvas__save--ok {
+  color: var(--green);
+}
+
+.kbc-canvas__body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  min-height: 0;
+}
+
+@media (max-width: 860px) {
+  .kbc-canvas__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+}
+
+.kbc-canvas__sidebar {
+  border-right: 1px solid var(--rule);
+  padding: 12px;
+  overflow: auto;
+  background: var(--bg-panel);
+  min-height: 0;
+}
+
+.kbc-canvas__create {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.kbc-canvas__create input {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink);
+}
+
+.kbc-canvas__create button,
+.kbc-canvas__toolbar button,
+.kbc-canvas__card-actions button,
+.kbc-canvas__row-actions button,
+.kbc-canvas__search-hit {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.kbc-canvas__create button:disabled,
+.kbc-canvas__toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kbc-canvas__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kbc-canvas__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.kbc-canvas__row--active {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+
+.kbc-canvas__row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kbc-canvas__row-meta {
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+}
+
+.kbc-canvas__row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kbc-canvas__main {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.kbc-canvas__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+
+.kbc-canvas__toolbar input[type="search"] {
+  flex: 1 1 160px;
+  min-width: 120px;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--ink);
+}
+
+.kbc-canvas__search-hits {
+  position: absolute;
+  z-index: 5;
+  top: 48px;
+  left: 12px;
+  right: 12px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kbc-canvas__search-hit {
+  text-align: left;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+}
+
+.kbc-canvas__search-hit:hover,
+.kbc-canvas__search-hit:focus {
+  background: var(--accent-bg);
+}
+
+.kbc-canvas__search-hit-path {
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+.kbc-canvas__surface {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  background:
+    radial-gradient(circle at 1px 1px, var(--rule) 1px, transparent 0) 0 0 / 24px 24px;
+  touch-action: none;
+  user-select: none;
+}
+
+.kbc-canvas__surface--panning {
+  cursor: grabbing;
+}
+
+.kbc-canvas__world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.kbc-canvas__edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.kbc-canvas__edge {
+  fill: none;
+  stroke: var(--ink-dim);
+  stroke-width: 1.5;
+}
+
+.kbc-canvas__edge--exact {
+  stroke: var(--green);
+}
+
+.kbc-canvas__edge--likely {
+  stroke: var(--blue);
+}
+
+.kbc-canvas__edge--candidate {
+  stroke: var(--ink-dim);
+  stroke-dasharray: 4 3;
+}
+
+.kbc-canvas__card {
+  position: absolute;
+  width: 320px;
+  min-height: 120px;
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.kbc-canvas__card--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-card-hover);
+}
+
+.kbc-canvas__card--stale {
+  border-color: var(--warn);
+  opacity: 0.92;
+}
+
+.kbc-canvas__card-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+  cursor: grab;
+}
+
+.kbc-canvas__card-head:active {
+  cursor: grabbing;
+}
+
+.kbc-canvas__card-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--accent-soft);
+  text-decoration: none;
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kbc-canvas__card-link:hover {
+  text-decoration: underline;
+}
+
+.kbc-canvas__card-actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.kbc-canvas__card-actions button {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.kbc-canvas__card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink);
+  white-space: pre;
+  tab-size: 2;
+  user-select: text;
+  cursor: text;
+}
+
+.kbc-canvas__card-stale {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.kbc-canvas__card-loading {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.kbc-canvas__empty-main {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-align: center;
+}
+
+.kbc-canvas__muted {
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+
+.kbc-canvas__error {
+  color: var(--red);
+  font-size: 13px;
+  padding: 8px 12px;
+}

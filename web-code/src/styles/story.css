@@ -1,0 +1,251 @@
+/* Phase C7 ("kb-code v2 — The Operable Reader") — story mode: replay a
+ * file's evolution commit by commit. Same token discipline as `history.css`/
+ * `provenance.css` — every color reaches for a `tokens.css` variable. */
+
+.kbc-story {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.kbc-story__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+.kbc-story__path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-story__exit {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.kbc-story__exit:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+
+.kbc-story__stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.kbc-story__narration {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+.kbc-story__narration-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kbc-story__narration-subject {
+  font-size: 13px;
+  color: var(--ink);
+}
+.kbc-story__narration-meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.kbc-story__narration-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.kbc-story__open-commit {
+  font-size: 12px;
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-story__open-commit:hover {
+  text-decoration: underline;
+}
+
+/* --- Scrubber bar ---------------------------------------------------------
+ * The last flex child of `.kbc-story` — sits at the bottom of the reader
+ * main area by construction (no `position: fixed` needed, unlike the peek
+ * panel's dock fallback), never overlapping the tree/topbar either side. */
+.kbc-story__scrubber {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+}
+.kbc-story__step-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.kbc-story__step-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-story__step-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.kbc-story__dots {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  min-width: 0;
+}
+.kbc-story__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--rule-hi);
+  cursor: pointer;
+}
+.kbc-story__dot:hover {
+  background: var(--accent-bor);
+}
+.kbc-story__dot.is-current {
+  background: var(--accent);
+  width: 10px;
+  height: 10px;
+}
+.kbc-story__slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.kbc-story__counter {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  min-width: 3.5em;
+  text-align: center;
+}
+.kbc-story__autoplay {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.kbc-story__autoplay:hover {
+  color: var(--ink);
+  border-color: var(--rule-hi);
+}
+.kbc-story__autoplay.is-on {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border-color: var(--accent-bor);
+}
+
+/* --- History tab entry affordances (Wave C's `HistoryPanel`) -------------- */
+
+.kbc-history__head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-history__story-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-history__story-btn:hover {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+.kbc-history__row-story {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+.kbc-history__row-story:hover {
+  color: var(--accent-soft);
+}
+
+/* --- CM6 changed-line tint (the current step's story overlay) ------------
+ * A distinct `--accent`-based tint from the Provenance "age" heatmap
+ * (`.kbc-age-line--N`, warm→cold on `--warn`/`--blue`) — story mode never
+ * renders the Provenance toggle at all, but the two overlays are visually
+ * similar enough (a line-background tint) to deserve an unmistakably
+ * different hue. `--flash` is a stronger first-second pulse that settles
+ * into the steady tint via `animation` with no `fill-mode: forwards` — once
+ * the keyframe ends, the cascade falls back to `.kbc-story-line`'s own
+ * steady background, no JS timer needed to "turn it off". */
+.kbc-story-line {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+@keyframes kbc-story-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  to {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+}
+.kbc-story-line--flash {
+  animation: kbc-story-flash 900ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kbc-story-line--flash {
+    animation: none;
+  }
+}

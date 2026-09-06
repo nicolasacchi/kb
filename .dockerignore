@@ -1,0 +1,29 @@
+target/
+.git/
+.github/
+docs/
+web/node_modules/
+web/dist/
+web-code/node_modules/
+web-code/dist/
+web-code/e2e/
+spikes/
+# Test sources + the sample corpus aren't part of the image build; excluding
+# them shrinks the build context and avoids cache busts on test/doc churn.
+tests/
+corpus/
+*.log
+*.md
+.cargo/
+.idea/
+.vscode/
+.claude/
+.claude-plugin/
+plugins/
+# Repo tooling not used by any build stage.
+justfile
+deny.toml
+about.toml
+about.hbs
+Dockerfile
+.dockerignore

@@ -1,0 +1,210 @@
+/* kb markdown reading theme — self-contained (no external fetches), served
+ * into the sandboxed cross-origin artifact iframe. Mirrors the
+ * session_render.css house style: own tokens, system-font stacks with the
+ * kb families preferred. The slim top "markdown" bar signals the source
+ * format while the body reads as polished long-form prose. */
+
+:root {
+  --md-bg: #fbfaf7;          /* warm paper */
+  --md-surface: #ffffff;
+  --md-ink: #1f2530;
+  --md-ink-soft: #4a5260;
+  --md-ink-dim: #7b8493;
+  --md-rule: #e7e3da;
+  --md-rule-soft: #f0ece3;
+  --md-accent: #6d5ae6;      /* kb purple */
+  --md-accent-soft: #efecff;
+  --md-code-bg: #f5f3ee;
+  --md-code-ink: #2b313c;
+  --md-font-serif: "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+  --md-font-sans: "Inter Tight", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --md-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--md-bg);
+  color: var(--md-ink);
+}
+
+body.kb-md-prose {
+  font-family: var(--md-font-serif);
+  font-size: 17px;
+  line-height: 1.68;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Slim top bar: the unmistakable "this is markdown" signal. */
+.kb-md-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 16px;
+  font-family: var(--md-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--md-accent);
+  background: var(--md-accent-soft);
+  border-bottom: 1px solid var(--md-rule);
+  user-select: none;
+}
+.kb-md-bar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--md-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-accent) 22%, transparent);
+}
+
+/* Reading column. */
+.kb-md-doc {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 28px 96px;
+}
+
+/* Headings — serif, tight top margin, airy below. */
+.kb-md-doc h1, .kb-md-doc h2, .kb-md-doc h3,
+.kb-md-doc h4, .kb-md-doc h5, .kb-md-doc h6 {
+  font-family: var(--md-font-serif);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--md-ink);
+  margin: 1.6em 0 0.5em;
+  scroll-margin-top: 44px;       /* clears the sticky bar on anchor jump */
+}
+.kb-md-doc h1 { font-size: 2.0em; margin-top: 0.2em; letter-spacing: -0.01em; }
+.kb-md-doc h2 { font-size: 1.5em; padding-bottom: 0.2em; border-bottom: 1px solid var(--md-rule-soft); }
+.kb-md-doc h3 { font-size: 1.24em; }
+.kb-md-doc h4 { font-size: 1.06em; }
+.kb-md-doc h5, .kb-md-doc h6 { font-size: 0.95em; color: var(--md-ink-soft); }
+/* comrak emits no heading ids (the in-iframe runtime assigns them); if a
+ * raw-HTML heading carries an anchor link, keep it unobtrusive. */
+.kb-md-doc .anchor { float: left; margin-left: -0.8em; padding-right: 0.2em; opacity: 0; }
+.kb-md-doc h1:hover .anchor, .kb-md-doc h2:hover .anchor,
+.kb-md-doc h3:hover .anchor { opacity: 0.4; }
+
+.kb-md-doc p { margin: 0 0 1.05em; }
+.kb-md-doc a { color: var(--md-accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+.kb-md-doc a:hover { text-decoration-thickness: 2px; }
+
+.kb-md-doc ul, .kb-md-doc ol { margin: 0 0 1.05em; padding-left: 1.5em; }
+.kb-md-doc li { margin: 0.2em 0; }
+.kb-md-doc li::marker { color: var(--md-ink-dim); }
+/* GFM task lists. */
+.kb-md-doc li input[type="checkbox"] { margin-right: 0.5em; transform: translateY(1px); accent-color: var(--md-accent); }
+.kb-md-doc ul:has(> li > input[type="checkbox"]) { list-style: none; padding-left: 0.3em; }
+
+.kb-md-doc blockquote {
+  margin: 0 0 1.05em;
+  padding: 0.2em 1.1em;
+  border-left: 3px solid var(--md-accent);
+  background: var(--md-rule-soft);
+  color: var(--md-ink-soft);
+  border-radius: 0 4px 4px 0;
+}
+.kb-md-doc blockquote p:last-child { margin-bottom: 0; }
+
+/* Inline code + fenced blocks. syntect supplies inner token colours; we own
+ * the container chrome + mono font. */
+.kb-md-doc code {
+  font-family: var(--md-font-mono);
+  font-size: 0.86em;
+  background: var(--md-code-bg);
+  color: var(--md-code-ink);
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+  border: 1px solid var(--md-rule);
+}
+.kb-md-doc pre {
+  margin: 0 0 1.2em;
+  padding: 14px 16px;
+  background: var(--md-code-bg);
+  border: 1px solid var(--md-rule);
+  border-radius: 8px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.kb-md-doc pre code {
+  font-size: 0.85em;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* GFM tables. */
+.kb-md-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.2em;
+  font-size: 0.92em;
+  font-family: var(--md-font-sans);
+}
+.kb-md-doc th, .kb-md-doc td { padding: 7px 11px; border: 1px solid var(--md-rule); text-align: left; }
+.kb-md-doc thead th { background: var(--md-rule-soft); font-weight: 600; }
+.kb-md-doc tbody tr:nth-child(even) { background: color-mix(in srgb, var(--md-rule-soft) 50%, transparent); }
+
+.kb-md-doc hr { border: none; border-top: 1px solid var(--md-rule); margin: 2em 0; }
+.kb-md-doc img { max-width: 100%; height: auto; border-radius: 6px; }
+.kb-md-doc strong { font-weight: 600; }
+.kb-md-doc del { color: var(--md-ink-dim); }
+.kb-md-doc sup { font-size: 0.75em; }
+
+/* Footnotes (GFM). */
+.kb-md-doc .footnotes { margin-top: 2.4em; padding-top: 0.6em; border-top: 1px solid var(--md-rule); font-size: 0.9em; color: var(--md-ink-soft); }
+
+.kb-md-doc ::selection { background: var(--md-accent-soft); }
+
+/* Obsidian-style callouts: `> [!type] …` blockquotes rewritten server-side by
+ * markdown::rewrite_callouts into <div class="kb-callout kb-callout--TYPE">.
+ * Per-type accent flows through one --cal custom property; an unknown type
+ * falls back to the kb accent so the base style always applies. */
+.kb-md-doc .kb-callout {
+  --cal: var(--md-accent);
+  margin: 0 0 1.05em;
+  padding: 0.65em 1.1em;
+  border-left: 4px solid var(--cal);
+  background: color-mix(in srgb, var(--cal) 8%, var(--md-surface));
+  border-radius: 0 6px 6px 0;
+}
+.kb-md-doc .kb-callout__title {
+  font-family: var(--md-font-sans);
+  font-weight: 700;
+  font-size: 0.78em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cal);
+  margin-bottom: 0.35em;
+}
+.kb-md-doc .kb-callout > :last-child { margin-bottom: 0; }
+.kb-md-doc .kb-callout--note, .kb-md-doc .kb-callout--info { --cal: #2f7fc9; }
+.kb-md-doc .kb-callout--abstract, .kb-md-doc .kb-callout--summary,
+.kb-md-doc .kb-callout--tldr { --cal: #1196a8; }
+.kb-md-doc .kb-callout--tip, .kb-md-doc .kb-callout--hint,
+.kb-md-doc .kb-callout--important { --cal: #1aa17e; }
+.kb-md-doc .kb-callout--success, .kb-md-doc .kb-callout--check,
+.kb-md-doc .kb-callout--done { --cal: #2ea043; }
+.kb-md-doc .kb-callout--question, .kb-md-doc .kb-callout--help,
+.kb-md-doc .kb-callout--faq { --cal: #c99a06; }
+.kb-md-doc .kb-callout--warning, .kb-md-doc .kb-callout--caution,
+.kb-md-doc .kb-callout--attention { --cal: #d97914; }
+.kb-md-doc .kb-callout--danger, .kb-md-doc .kb-callout--error,
+.kb-md-doc .kb-callout--failure, .kb-md-doc .kb-callout--fail,
+.kb-md-doc .kb-callout--bug, .kb-md-doc .kb-callout--missing { --cal: #d83a3a; }
+.kb-md-doc .kb-callout--example { --cal: #8a63d2; }
+.kb-md-doc .kb-callout--quote, .kb-md-doc .kb-callout--cite { --cal: var(--md-ink-dim); }
+
+@media (max-width: 640px) {
+  .kb-md-doc { padding: 28px 18px 72px; }
+  body.kb-md-prose { font-size: 16px; }
+}

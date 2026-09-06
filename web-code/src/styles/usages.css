@@ -1,0 +1,432 @@
+/* V71-E2 — the Usages dock (in the drawer) and the ONE action menu.
+ *
+ * Both live here rather than in reader.css/desk.css because they are new
+ * surfaces with their own vocabulary, and because the menu is a top-layer
+ * overlay whose z-index has to be read next to the ladder it joins
+ * (tokens.css's `--z-*`), not buried in a 2,000-line reader sheet. */
+
+/* --- the Usages dock --------------------------------------------------- */
+
+.kbc-usages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  font-size: 12px;
+}
+
+.kbc-usages__census {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.kbc-usages__title {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.kbc-usages__total {
+  color: var(--fg);
+}
+
+.kbc-usages__census-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-dim);
+}
+
+.kbc-usages__census-shown {
+  margin-left: auto;
+  color: var(--fg-dim);
+}
+
+/* Every hidden row has a line here — that IS the "a count never changes
+ * without an on-screen reason" rule, rendered. */
+.kbc-usages__reasons {
+  margin: 0;
+  padding: 0 8px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kbc-usages__reason {
+  color: var(--fg-dim);
+}
+
+.kbc-usages__reason.is-hiding {
+  color: var(--warn, var(--fg));
+}
+
+.kbc-usages__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 4px;
+}
+
+.kbc-usages__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.kbc-usages__chip:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.kbc-usages__chip.is-on {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--fg);
+}
+
+.kbc-usages__chip-count {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.kbc-usages__chip-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 4px;
+}
+
+.kbc-usages__chip-more,
+.kbc-usages__scope-label {
+  color: var(--fg-dim);
+}
+
+.kbc-usages__scope,
+.kbc-usages__axis {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kbc-usages__scope-input {
+  width: 9ch;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.kbc-usages__axis-select {
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.kbc-usages__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+.kbc-usages__tree {
+  overflow: auto;
+  min-height: 0;
+  padding: 0 8px 8px;
+}
+
+.kbc-usages__group-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 2px;
+  padding: 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+  color: var(--fg-dim);
+  background: var(--bg);
+}
+
+.kbc-usages__group-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.kbc-usages__row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kbc-usages__row:hover {
+  background: var(--bg-hover, color-mix(in oklab, var(--fg) 6%, transparent));
+}
+
+.kbc-usages__row.is-cursor {
+  background: color-mix(in oklab, var(--accent) 20%, transparent);
+}
+
+.kbc-usages__row-kind {
+  color: var(--fg-dim);
+}
+
+.kbc-usages__row-loc {
+  font-family: var(--font-mono);
+}
+
+.kbc-usages__row-encl {
+  color: var(--fg-dim);
+}
+
+.kbc-usages__row-text {
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kbc-usages__preview {
+  overflow: auto;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+}
+
+.kbc-usages__preview-hint {
+  margin: 8px;
+  color: var(--fg-dim);
+}
+
+@media (max-width: 860px) {
+  .kbc-usages__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kbc-usages__preview {
+    display: none;
+  }
+}
+
+/* --- the action menu --------------------------------------------------- */
+
+.kbc-actions {
+  position: fixed;
+  z-index: var(--z-popover-hi);
+  min-width: 260px;
+  max-width: 380px;
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev, var(--bg));
+  box-shadow: var(--shadow-2, 0 8px 28px rgb(0 0 0 / 35%));
+  font-size: 12px;
+}
+
+.kbc-actions__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The SEGMENTED control: the whole ordered target list, visible — never a
+ * hidden cycle (D5). */
+.kbc-actions__targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.kbc-actions__target {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.kbc-actions__target.is-on {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--fg);
+}
+
+.kbc-actions__target-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+}
+
+.kbc-actions__target-label {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-actions__target-note,
+.kbc-actions__note {
+  margin: 2px 0;
+  color: var(--fg-dim);
+}
+
+.kbc-actions__note.is-error {
+  color: var(--danger, var(--fg));
+}
+
+.kbc-actions__filter {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.kbc-actions__group-head {
+  margin: 6px 0 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-dim);
+}
+
+.kbc-actions__row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kbc-actions__row.is-cursor {
+  background: color-mix(in oklab, var(--accent) 20%, transparent);
+}
+
+.kbc-actions__row[aria-disabled="true"] {
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+.kbc-actions__row-key {
+  min-width: 1.4em;
+  text-align: center;
+  color: var(--fg-dim);
+}
+
+.kbc-actions__row-title {
+  flex: 1;
+}
+
+/* The mutating group is VISUALLY separate — it is the only family that can
+ * touch the working tree, and it is absent entirely for a caller the server
+ * did not clear. */
+.kbc-actions__row.is-mutating {
+  border-left: 2px solid var(--warn, var(--accent));
+}
+
+.kbc-actions__row-flag,
+.kbc-actions__row-why {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.kbc-actions__browser {
+  margin: 6px 0 0;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.kbc-actions__close {
+  align-self: flex-end;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Mobile: ONE bottom sheet (root CLAUDE.md #30), never a second one. */
+.kbc-actions--sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: var(--z-drawer);
+  max-width: none;
+  max-height: 70vh;
+  border-radius: 12px 12px 0 0;
+}
+
+.kbc-actions__pill {
+  position: fixed;
+  z-index: var(--z-popover-hi);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev, var(--bg));
+  box-shadow: var(--shadow-2, 0 6px 20px rgb(0 0 0 / 30%));
+  font-size: 12px;
+}
+
+.kbc-actions__pill-row,
+.kbc-actions__pill-more {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.kbc-actions__pill-row:hover,
+.kbc-actions__pill-more:hover {
+  background: color-mix(in oklab, var(--accent) 20%, transparent);
+}

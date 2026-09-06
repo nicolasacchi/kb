@@ -1,0 +1,1374 @@
+/* v0.14 S5 — /sessions view. Mirrors kb-mem grammar (.kb-mem*) with
+   a chronological list + right inspector rail. Tokens come from
+   tokens.css; this file only owns layout + the few session-specific
+   accents (confidence chip, memories badge). */
+
+.kb-ses {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--gap-2, 16px);
+  height: 100%;
+  min-height: 0;
+}
+
+.kb-ses__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kb-ses__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 12px 16px 4px;
+}
+.kb-ses__head h1 {
+  font: 600 18px/1.2 var(--font-sans, system-ui);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.kb-ses__head-meta {
+  /* SH.B2 — this container was never actually a flex row (missing
+   * `display: flex`), so its children (the folder/harness facets, search
+   * box, hide-trivial checkbox, the view-toggle segmented control, and the
+   * trailing result-count span) had no gap between them at all — JSX
+   * siblings on their own lines render with zero whitespace in the DOM, so
+   * the view-toggle and the count literally ran together ("projects1
+   * session"). mobile.css's `.kb-ses__head, .kb-ses__head-meta {
+   * flex-wrap: wrap }` rule already assumed this was a flex container; this
+   * makes that assumption true instead of a no-op. Gap matches the route's
+   * other facet-row rhythm (`.kb-ses__project`'s own 10px). */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--ink-mute, #999);
+  font: 500 12px/1 var(--font-mono, ui-monospace);
+}
+
+.kb-ses__empty {
+  padding: 24px 16px;
+  color: var(--ink-mute, #999);
+  font-size: 13px;
+}
+.kb-ses__empty--err {
+  color: var(--ink-warn, #c44);
+}
+
+/* LSC-4 — the "Now" band: three live lanes rendered above the day-buckets
+   (design §7 "the human interface"). Each lane collapses entirely when
+   empty (`LiveSessionsNowBand` omits its `<section>`, or returns null
+   outright when every lane is empty), so a quiet fleet costs zero visual
+   noise — this block only ever lays out what's actually mounted. Grid
+   auto-fits so 1-3 lanes each get a reasonable column width; mobile.css
+   forces a single column below the page's 860px breakpoint. */
+.kb-now {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  padding: 10px 16px 14px;
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+}
+.kb-now__lane {
+  min-width: 0;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.kb-now__lane-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 10px;
+  font: 650 10.5px/1.2 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+}
+/* In progress = accent (the agent is actively working); waiting = warn
+   (the "you are the bottleneck" color, matching the design doc's own
+   mockup); finished = muted — the same three-color grammar the design's
+   own lane sketches use. */
+.kb-now__lane--progress .kb-now__lane-head {
+  color: var(--accent, #8a7fff);
+}
+.kb-now__lane--waiting .kb-now__lane-head {
+  color: var(--warn, #d8a04b);
+}
+.kb-now__lane--finished .kb-now__lane-head {
+  color: var(--ink-mute, #8a857d);
+}
+.kb-now__lane-count {
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  opacity: 0.75;
+}
+.kb-now__lane-caption {
+  padding: 4px 10px 0;
+  font: 400 10.5px/1.3 var(--font-sans, system-ui);
+  color: var(--ink-dim, #726c65);
+}
+.kb-now__rows {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.kb-now__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px dotted var(--rule, #2a2a2a);
+  font-size: 12px;
+}
+.kb-now__row:last-child {
+  border-bottom: none;
+}
+.kb-now__row-harness {
+  flex: none;
+  color: var(--accent, #8a7fff);
+  line-height: 1.4;
+}
+.kb-now__row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.kb-now__row-line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.kb-now__row-time {
+  font: 600 11px/1.2 var(--font-mono, ui-monospace);
+  color: var(--ink, inherit);
+  flex: none;
+}
+.kb-now__row-project {
+  font: 500 11.5px/1.3 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-now__row-line2 {
+  font: 400 11px/1.35 var(--font-sans, system-ui);
+  color: var(--ink-mute, #8a857d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Doubt markers (stalled? / long wait / presumed ended) — decoration on
+   the SECOND axis (design §3), never a lane change. */
+.kb-now__row-doubt {
+  font: 600 9.5px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn, #d8a04b);
+  border: 1px solid color-mix(in oklab, var(--warn, #d8a04b) 45%, var(--rule, #2a2a2a));
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+/* CT-E3 idiom — the honest-staleness marker for a presumed-confidence or
+   capture-sourced row: never rendered indistinguishably from a hook-
+   observed one. Dashed border reads as "unconfirmed", distinct from the
+   solid-bordered doubt marker above. */
+.kb-now__row-honesty {
+  font: 500 9.5px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-dim, #726c65);
+  border: 1px dashed var(--rule, #2a2a2a);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+.kb-now__row-resume {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--rule, #2a2a2a);
+  background: transparent;
+  color: var(--ink-mute, #8a857d);
+  font: 500 10.5px/1 var(--font-mono, ui-monospace);
+  cursor: pointer;
+}
+.kb-now__row-resume:hover {
+  color: var(--ink, inherit);
+  border-color: var(--accent, #8a7fff);
+}
+.kb-now__row-resume svg {
+  width: 11px;
+  height: 11px;
+}
+
+.kb-ses__buckets {
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 16px;
+}
+
+.kb-ses__bucket-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 16px 4px;
+  background: var(--bg, #1a1a1a);
+  font: 600 11px/1.2 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute, #999);
+  border-bottom: 1px solid var(--rule-soft, rgba(255, 255, 255, 0.05));
+}
+.kb-ses__bucket-count {
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  opacity: 0.7;
+}
+
+.kb-ses__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kb-ses__more {
+  text-align: center;
+  padding: 12px 16px 24px;
+}
+.kb-ses__more-btn {
+  background: transparent;
+  border: 1px solid var(--rule, #2a2a2a);
+  color: var(--ink-mute, #999);
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  padding: 6px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.kb-ses__more-btn:hover:not(:disabled) {
+  color: var(--ink, inherit);
+  border-color: var(--accent, #b9a6ff);
+}
+.kb-ses__more-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.kb-ses__row {
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+}
+.kb-ses__row.is-selected {
+  background: var(--accent-bg, rgba(120, 90, 200, 0.08));
+}
+
+/* A2/A3 — two-line row: bold name line, dimmed prompt line, stats line. */
+.kb-ses__row-btn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 16px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.kb-ses__row-btn:hover {
+  background: var(--row-hover, rgba(255, 255, 255, 0.03));
+}
+
+.kb-ses__row-line1 {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+.kb-ses__row-time {
+  color: var(--ink-mute, #999);
+  font: 500 12px/1.2 var(--font-mono, ui-monospace);
+  white-space: nowrap;
+  flex: none;
+}
+.kb-ses__row-name {
+  font: 600 13.5px/1.3 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.kb-ses__row-preview {
+  font: 400 12.5px/1.35 var(--font-sans, system-ui);
+  color: var(--ink-mute, #999);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: calc(120px - 96px); /* light indent under the time column */
+}
+.kb-ses__row-preview em {
+  color: var(--ink-mute, #999);
+  font-style: italic;
+}
+
+.kb-ses__row-stats {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+.kb-ses__row-mem {
+  color: var(--accent, #b9a6ff);
+}
+.kb-ses__row-folder {
+  padding: 2px 6px;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 3px;
+  color: var(--ink, #ccc);
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ses__row-kb {
+  padding: 2px 6px;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 3px;
+}
+
+/* S9 — decisions log in the inspector. */
+.kb-ses__decisions {
+  margin: 0;
+}
+.kb-ses__decision {
+  border-left: 2px solid var(--rule, #2a2a2a);
+  padding: 2px 0 4px 10px;
+  margin: 0 0 6px;
+}
+.kb-ses__decision--plan {
+  border-left-color: var(--ok, #5bb98b);
+}
+.kb-ses__decision--question {
+  border-left-color: var(--accent, #b9a6ff);
+}
+.kb-ses__decision dt {
+  font: 600 12px/1.35 var(--font-sans, system-ui);
+  color: var(--ink, #ddd);
+}
+.kb-ses__decision dd {
+  margin: 1px 0 0;
+  font: 400 12px/1.35 var(--font-sans, system-ui);
+  color: var(--ink-mute, #999);
+}
+
+/* P5 — commits list in the inspector. */
+.kb-ses__commits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kb-ses__commit {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  min-width: 0;
+}
+.kb-ses__commit-sha {
+  flex: none;
+  font: 600 11px/1.4 var(--font-mono, ui-monospace);
+  color: var(--ok, #5bb98b);
+}
+.kb-ses__commit-kind {
+  flex: none;
+  font: 500 10px/1.4 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__commit-subject {
+  font: 400 12px/1.4 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* R4 — research card. */
+.kb-ses__research-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  min-width: 0;
+}
+.kb-ses__research-kind {
+  flex: none;
+  min-width: 56px;
+  font: 500 10px/1.4 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  color: var(--accent, #6ea8fe);
+}
+.kb-ses__research-q {
+  font: 400 12px/1.4 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* R5 — comments card. */
+.kb-ses__cmt-group {
+  padding: 4px 0;
+  min-width: 0;
+}
+.kb-ses__cmt-artifact {
+  display: block;
+  font: 600 12px/1.4 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ses__cmt-act {
+  font: 500 10px/1.4 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__cmt {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0 2px 10px;
+  min-width: 0;
+}
+.kb-ses__cmt-author {
+  flex: none;
+  font: 500 10px/1.4 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__cmt-body {
+  font: 400 12px/1.4 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.kb-ses__cmt-file {
+  flex: none;
+  font: 400 10.5px/1.4 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+
+/* S10 — resume-context block. */
+.kb-ses__resume {
+  font: 400 11.5px/1.5 var(--font-mono, ui-monospace);
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+  color: var(--ink, #ccc);
+}
+.kb-ses__resume-copy {
+  float: right;
+  font: 600 10px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute, #999);
+  background: transparent;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 3px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.kb-ses__resume-copy:hover {
+  color: var(--accent, #b9a6ff);
+  border-color: var(--accent, #b9a6ff);
+}
+
+/* The `claude -r <id>` resume command — a copyable terminal command, distinct
+ * from the LLM-free resume-context summary. */
+.kb-ses__resume-cmd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 4px;
+  padding: 7px 10px;
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 6px;
+  min-width: 0;
+}
+.kb-ses__resume-cmd-prompt {
+  flex: none;
+  color: var(--ink-mute, #999);
+  font: 600 12px/1 var(--font-mono, ui-monospace);
+  user-select: none;
+}
+.kb-ses__resume-cmd-text {
+  flex: 1;
+  min-width: 0;
+  font: 400 12px/1.4 var(--font-mono, ui-monospace);
+  color: var(--accent, #b9a6ff);
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}
+.kb-ses__resume-cmd .kb-ses__resume-copy {
+  float: none;
+  flex: none;
+}
+.kb-ses__ins-errors {
+  color: var(--danger, #f08079);
+}
+
+/* A4/A6 — file-activity manifest in the inspector. */
+.kb-ses__ins-grouplabel {
+  font: 600 10.5px/1.4 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute, #999);
+  margin: 8px 0 2px;
+}
+/* CT-B3 — the files-touched / memories-recalled gallery-pivot chip row
+   (`.kb-idschip`, `components/IdsGalleryChip.tsx`). */
+.kb-ses__pivot-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 2px 0 6px;
+}
+.kb-ses__files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kb-ses__file {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  min-width: 0;
+}
+.kb-ses__file > a,
+.kb-ses__file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.kb-ses__file-act {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 10px/1 var(--font-mono, ui-monospace);
+  color: var(--bg, #111);
+}
+.kb-ses__file-act--edit {
+  background: var(--warn, #d6a740);
+}
+.kb-ses__file-act--write {
+  background: var(--ok, #5bb98b);
+}
+.kb-ses__file-act--read {
+  background: var(--rule, #3a3a3a);
+  color: var(--ink, #ccc);
+}
+.kb-ses__file-path {
+  color: var(--ink-mute, #999);
+}
+/* CT-F6 — "as it stood" (the session-end Memento link). A quiet trailing
+   affordance: it must never compete with the artifact's own name, and it
+   must never be the thing that gets ellipsised when the row is tight —
+   hence the specificity bump over `.kb-ses__file > a` above. */
+.kb-ses__file > a.kb-ses__file-asof {
+  flex: none;
+  margin-left: auto;
+  overflow: visible;
+  text-overflow: clip;
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  border-bottom: 1px dotted currentColor;
+  text-decoration: none;
+}
+.kb-ses__file > a.kb-ses__file-asof:hover {
+  color: var(--ink, #ccc);
+}
+
+/* P7 — view toggle (list ↔ threads) + the threads view. */
+.kb-ses__viewtoggle {
+  display: inline-flex;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.kb-ses__viewtoggle button {
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute, #999);
+  background: transparent;
+  border: 0;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.kb-ses__viewtoggle button.is-active {
+  background: var(--accent, #b9a6ff);
+  color: var(--bg, #111);
+}
+.kb-ses__threads {
+  display: flex;
+  flex-direction: column;
+}
+.kb-ses__thread {
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+}
+.kb-ses__thread-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px 4px;
+  margin: 0;
+}
+.kb-ses__thread-title {
+  font: 650 13.5px/1.3 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ses__thread-meta {
+  font: 500 11px/1.3 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+.kb-ses__thread-save {
+  margin-left: 8px;
+  font: 600 10px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute, #999);
+  background: transparent;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 3px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.kb-ses__thread-save:hover:not([disabled]) {
+  color: var(--accent, #b9a6ff);
+  border-color: var(--accent, #b9a6ff);
+}
+.kb-ses__thread-save[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* P6 — sessions search input + per-project timeline header. */
+.kb-ses__search {
+  font: 400 12.5px/1.3 var(--font-sans, system-ui);
+  color: inherit;
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 4px;
+  padding: 3px 8px;
+  min-width: 16ch;
+}
+/* A-w2 — the activity-funnel + research-rollup header strip (R9, wired but
+   never rendered before). One quiet mono line, same rhythm as
+   .kb-ses__project below it; no cards, no charts. */
+.kb-ses__funnel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+  font: 500 11.5px/1.3 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+.kb-ses__funnel-stage b {
+  color: var(--ink, #eee);
+  font-weight: 650;
+}
+.kb-ses__funnel-sep {
+  margin-right: 6px;
+  opacity: 0.5;
+}
+.kb-ses__funnel-link {
+  font: inherit;
+  color: var(--accent, #6cf);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.kb-ses__funnel-link:hover {
+  color: var(--ink, #eee);
+}
+
+.kb-ses__project {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--rule, #2a2a2a);
+  background: var(--surface, rgba(255, 255, 255, 0.02));
+}
+.kb-ses__project-name {
+  font: 650 13.5px/1.3 var(--font-sans, system-ui);
+}
+.kb-ses__project-stats {
+  font: 500 11.5px/1.3 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+
+/* A1 — folder facet dropdown in the header. */
+.kb-ses__folder-facet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-ses__folder-facet-label {
+  color: var(--ink-mute, #999);
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.kb-ses__folder-select {
+  font: 500 12px/1.2 var(--font-sans, system-ui);
+  color: inherit;
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 4px;
+  padding: 3px 6px;
+  max-width: 22ch;
+}
+
+/* W5/I — harness facet dropdown, same shape as the folder facet. */
+.kb-ses__harness-facet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-ses__harness-facet-label {
+  color: var(--ink-mute, #999);
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.kb-ses__harness-select {
+  font: 500 12px/1.2 var(--font-sans, system-ui);
+  color: inherit;
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: 4px;
+  padding: 3px 6px;
+  max-width: 18ch;
+}
+
+/* W5/R9b/LF-1 Tier 0 — the derived-only presence/staleness dot on a list
+   row. A static dot (never pulsing — the pulse is reserved for Tier-1
+   writer-activity evidence, W7 — see --live below). */
+.kb-ses__row-presence {
+  color: var(--accent, #4caf50);
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* W7 (R15/LF-1) — Tier-1 evidence (a writer touched the live transcript
+   within `live_window_secs`): the ONE pulsing variant, reserved for actual
+   evidence rather than the honest-but-hedged Tier-0 "active" chip above.
+   `prefers-reduced-motion` drops the animation (still shows solid). */
+.kb-ses__row-presence--live {
+  animation: kb-ses-presence-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kb-ses__row-presence--live {
+    animation: none;
+  }
+}
+
+@keyframes kb-ses-presence-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.kb-ses__rail {
+  border-left: 1px solid var(--rule, #2a2a2a);
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px;
+}
+
+.kb-ses__rail-empty {
+  color: var(--ink-mute, #999);
+  font-size: 12px;
+}
+
+.kb-ses__ins-head h2 {
+  font: 600 14px/1.3 var(--font-sans, system-ui);
+  margin: 0 0 4px;
+}
+.kb-ses__ins-sub,
+.kb-ses__ins-sid,
+.kb-ses__ins-subagents {
+  margin: 0 0 4px;
+  color: var(--ink-mute, #999);
+  font: 500 11px/1.4 var(--font-mono, ui-monospace);
+}
+.kb-ses__ins-sid code {
+  color: var(--ink, inherit);
+  font-size: 10px;
+}
+
+.kb-ses__ins-actions {
+  margin: 8px 0 16px;
+  font-size: 12px;
+}
+.kb-ses__ins-actions a {
+  color: var(--accent, #b9a6ff);
+  text-decoration: none;
+}
+.kb-ses__ins-actions a:hover {
+  text-decoration: underline;
+}
+.kb-ses__ins-actions-mem {
+  margin-left: 12px;
+}
+/* W3.R-c — "replay this session" sits beside the transcript link. */
+.kb-ses__ins-actions-replay {
+  margin-left: 12px;
+}
+
+.kb-ses__ins-section {
+  margin-top: 16px;
+}
+.kb-ses__ins-section h3 {
+  font: 600 11px/1.2 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute, #999);
+  margin: 0 0 6px;
+}
+.kb-ses__ins-loading,
+.kb-ses__ins-empty,
+.kb-ses__ins-note {
+  font-size: 12px;
+  color: var(--ink-mute, #999);
+  margin: 0;
+}
+
+.kb-ses__ins-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+.kb-ses__ins-list li {
+  padding: 4px 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  border-bottom: 1px solid var(--rule-soft, rgba(255, 255, 255, 0.05));
+}
+.kb-ses__ins-list a {
+  color: inherit;
+  text-decoration: none;
+}
+.kb-ses__ins-list a:hover {
+  color: var(--accent, #b9a6ff);
+}
+.kb-ses__ins-list code {
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+.kb-ses__ins-list-meta {
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+
+.kb-ses__ins-confidence {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__conf {
+  padding: 1px 5px;
+  border-radius: 2px;
+  font: 500 10px/1.2 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+}
+.kb-ses__conf--exact {
+  color: var(--ok, #6c6);
+  border: 1px solid currentColor;
+}
+.kb-ses__conf--fuzzy {
+  color: var(--warn, #c93);
+  border: 1px solid currentColor;
+}
+
+/* v0.14 S6 — /memory session lens chip. Sits between the head and the
+   scope tabs; reads as "the table below is filtered to one session".
+   Uses kb-mem* token grammar so it nests under .kb-mem__main. */
+
+.kb-mem__lens {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 16px 0;
+  padding: 4px 8px;
+  background: var(--accent-bg, rgba(120, 90, 200, 0.08));
+  border: 1px solid var(--accent, #b9a6ff);
+  border-radius: 3px;
+  width: max-content;
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+}
+.kb-mem__lens-label {
+  color: var(--ink-mute, #999);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.kb-mem__lens-id {
+  color: var(--accent, #b9a6ff);
+  font-size: 11px;
+}
+.kb-mem__lens-clear {
+  background: transparent;
+  border: 0;
+  color: var(--ink-mute, #999);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+.kb-mem__lens-clear:hover {
+  color: var(--ink, inherit);
+}
+
+/* v0.14 T1 — "from session" sub-line on memory rows. The row's
+   title column becomes a two-line cell when the memory carries a
+   kb_session; clicking the sub-line jumps to /sessions?focus=<sid>.
+   Stays a no-op when session_id is absent (most pre-S1 memories). */
+
+.kb-mem__titlecell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+/* RA4 — one-line summary gloss beneath a memory's title. */
+.kb-mem__summary {
+  font: 400 12px/1.35 var(--font-sans, system-ui);
+  color: var(--ink-soft, #b8b8b8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* CT-E4 — agent-hot-human-cold tension badge, the CT-B6 dossier wording
+   inline on the row ("Recalled N× by agents · never opened by you"). Same
+   sub-line slot as .kb-mem__from-session below; warn-toned like
+   .kb-prov__tension. */
+.kb-mem__tension {
+  font: 500 10.5px/1.2 var(--font-mono, ui-monospace);
+  color: var(--warn, #e0b050);
+}
+.kb-mem__from-session {
+  font: 500 10px/1.2 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  text-decoration: none;
+}
+.kb-mem__from-session:hover {
+  color: var(--accent, #b9a6ff);
+}
+.kb-mem__from-session code {
+  color: inherit;
+  font-size: 10px;
+}
+
+/* CT-A1 (U3 parse-back) — "Lifted from …" provenance chip, same sub-line
+   slot/shape as .kb-mem__from-session above (mutually exclusive rows —
+   a memory carries an origin session OR a highlight origin, not usually
+   both). BEST-EFFORT deep link only; absent when the origin doc hasn't
+   resolved yet. */
+.kb-mem__provchip {
+  font: 500 10px/1.2 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-mem__provchip:hover {
+  color: var(--accent, #b9a6ff);
+}
+
+/* v0.14 T4 — atlas sessions overlay legend. Mirrors atlas-regions
+   visually (pill row, color swatch, label) but the color comes from
+   `sessionColorFor(sid)` and clicking a chip toggles focused-session
+   highlighting (dim others to 8%). */
+
+.atlas-sessions-legend {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px 14px;
+  background: var(--bg-panel-2);
+  border-bottom: 1px solid var(--rule);
+  scrollbar-width: thin;
+}
+/* CT-A6 — join-tier honesty note, first in the row. Same treatment as
+   `.atlas-cluster-legend__source` (chrome.css): muted + `cursor: help`
+   signals "hover for the full explanation" without a dedicated icon. */
+.atlas-sessions-legend__note {
+  flex-shrink: 0;
+  align-self: center;
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+  color: var(--ink-mute);
+  cursor: help;
+  white-space: nowrap;
+}
+.atlas-sessions-legend__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: var(--bg-panel);
+  color: var(--ink);
+  font: 500 11px/1 var(--font-mono);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.atlas-sessions-legend__chip:hover {
+  border-color: var(--ses-color, var(--accent));
+}
+.atlas-sessions-legend__chip.is-focused {
+  border-color: var(--ses-color, var(--accent));
+  background: var(--bg-card-hi, rgba(120, 90, 200, 0.08));
+}
+.atlas-sessions-legend__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--ses-color, var(--accent));
+  flex-shrink: 0;
+}
+.atlas-sessions-legend__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* v0.14 U2 — atlas inspector "Sessions" list. Renders when the
+   sessions overlay is on AND the selected dot is in one of the
+   drawn polyline's touches sets. */
+
+.kb-atlas-insp__sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+.kb-atlas-insp__sessions li {
+  border-bottom: 1px solid var(--rule-soft, rgba(255, 255, 255, 0.05));
+}
+.kb-atlas-insp__session-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.kb-atlas-insp__session-link:hover {
+  color: var(--accent, #b9a6ff);
+}
+.kb-atlas-insp__session-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.kb-atlas-insp__session-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* W3.C/P6 — the project pill (#33 kb-select precedent: dims to "click to
+   pin" outside a project scope). */
+.kb-ses__project-pill {
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  background: transparent;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: var(--radius-pill, 999px);
+  padding: 3px 10px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.kb-ses__project-pill:hover {
+  color: var(--ink, #eee);
+  border-color: var(--accent, #b9a6ff);
+}
+.kb-ses__project-pill.is-pinned {
+  color: var(--accent, #b9a6ff);
+  border-color: var(--accent, #b9a6ff);
+}
+.kb-ses__project-pill-clear {
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.kb-ses__project-pill-clear:hover {
+  color: var(--ink, #eee);
+}
+
+/* W3.C/S1 — husk triage checkbox. */
+.kb-ses__hide-trivial {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* W3.C/S1 — the row-1 harness glyph + chip cluster (sessionChips.ts's ONE
+   vocabulary). Glyphs only render when the caller's badge fn returns
+   non-null, so a row with nothing to report has no empty chip slots. */
+.kb-ses__row-harness {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__row-chips {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  flex: none;
+  font: 600 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  margin-left: auto;
+}
+.kb-ses__row-husk-badge {
+  opacity: 0.6;
+}
+/* R4/S7 — a trivial-husk row stays visible (never hidden by default) but
+   reads as visually secondary, same "dimmed, badged, never gone" contract
+   as the S7 gallery card. */
+.kb-ses__row--husk .kb-ses__row-name,
+.kb-ses__row--husk .kb-ses__row-preview {
+  opacity: 0.55;
+}
+.kb-ses__row-outcome-mark {
+  color: var(--accent, #b9a6ff);
+  font-weight: 700;
+}
+
+/* W3.C/P6 — the projects home. */
+.kb-ses__projects {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 12px 16px;
+  overflow-y: auto;
+}
+.kb-ses__project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule, #2a2a2a);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-panel, #171717);
+}
+.kb-ses__project-card:has(.kb-ses__project-card-link:hover) {
+  border-color: var(--accent, #b9a6ff);
+}
+/* W6 — the Link is now a sibling of the ledger disclosure below (an <a>
+   can't legally contain another interactive element), so the card's
+   visual chrome (border/padding/background) moved to the wrapper above;
+   this carries only the link's own layout + text styling. */
+.kb-ses__project-card-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.kb-ses__project-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kb-ses__project-card-head strong {
+  font: 650 14px/1.3 var(--font-sans, system-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.kb-ses__project-card-src {
+  flex: none;
+  font: 500 9.5px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__project-card-src--registry {
+  color: var(--accent, #b9a6ff);
+}
+.kb-ses__project-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font: 500 11px/1.4 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+.kb-ses__project-card-harness {
+  display: flex;
+  gap: 8px;
+  font: 500 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+
+/* W6 (moonshots M4) — the per-project ledger disclosure. */
+.kb-ses__project-ledger {
+  margin-top: 6px;
+  border-top: 1px solid var(--rule, #2a2a2a);
+  padding-top: 6px;
+}
+.kb-ses__project-ledger-toggle {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: 500 10.5px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  cursor: pointer;
+}
+.kb-ses__project-ledger-toggle:hover { color: var(--accent, #b9a6ff); }
+.kb-ses__project-ledger-body {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.kb-ses__project-ledger-days {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kb-ses__project-ledger-day {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-ses__project-ledger-date {
+  font: 600 10px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+}
+.kb-ses__project-ledger-sessions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.kb-ses__project-ledger-session {
+  color: var(--ink, #ddd);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--rule, #2a2a2a);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ses__project-ledger-session:hover {
+  color: var(--accent, #b9a6ff);
+  border-bottom-color: var(--accent, #b9a6ff);
+}
+
+/* P5 — lane B of the two-lane search: "in content — ranked". */
+.kb-ses__deep {
+  border-top: 1px solid var(--rule, #2a2a2a);
+  padding-top: 4px;
+  margin-top: 8px;
+}
+.kb-ses__deep-head {
+  margin: 0;
+  padding: 6px 16px;
+  font: 600 11px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute, #999);
+}
+.kb-ses__row-stale {
+  font: 500 10px/1 var(--font-mono, ui-monospace);
+  text-transform: uppercase;
+  color: var(--ink-warn, #c44);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+/* W3.C/S1 — the inspector's outcome block. */
+.kb-ses__ins-outcome-text {
+  margin: 0;
+  font: 400 12.5px/1.5 var(--font-sans, system-ui);
+  color: var(--ink, #ddd);
+  white-space: pre-wrap;
+}
+
+/* W3.D/S2 — mobile sessions rules moved OUT of this file and into
+   mobile.css's `@media (max-width: 860px)` block (its header comment: "every
+   rule lives inside max-width:860px or pointer:coarse" — ONE home for mobile
+   rules, breakpoint unified with the app-wide 860px used everywhere else).
+   The old rail-below-the-list layout is GONE — mobile now raises the rail as
+   the ONE bottom sheet (`.kb-ses__inspector--sheet`, mirrors the v0.23
+   `.kb-pinsp` reader-tools sheet); see mobile.css. */

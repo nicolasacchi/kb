@@ -1,0 +1,23 @@
+# EXPERIMENT profile for the in-container hang investigation.
+# ci.yml's required `workspace` job still runs
+# `cargo test -- --test-threads=1` (see that step's comment); this file is
+# not used by default anywhere. Flip the required step only after this
+# profile stays green for 3 consecutive manual
+# `.github/workflows/nextest-experiment.yml` runs.
+
+[profile.ci]
+test-threads = 4
+retries = 0
+slow-timeout = { period = "120s", terminate-after = 3 }
+
+[test-groups]
+lance-heavy = { max-threads = 1 }
+
+[[profile.ci.overrides]]
+# PF-C1 — the three standalone binaries this filter originally named
+# (atlas_backfill / atlas_points_memo / facets_memo) were consolidated
+# into the crates/kb-server/tests/memo/ dir-harness (one link unit,
+# binary name `memo`); the old names matched NOTHING, so the lance-heavy
+# serialization silently stopped applying to them.
+filter = 'binary(memo) | test(atlas)'
+test-group = 'lance-heavy'

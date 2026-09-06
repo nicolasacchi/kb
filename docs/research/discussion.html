@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Discussion topics for kb — workflow, prompt embedding, multi-kb identity, schema versioning, self-hosting, observability, packaging, thumbnails, SSE schema, error budget.">
+<title>Discussion — kb research</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="index.html">Index</a>
+      <a href="challenges.html">Challenges</a>
+      <a href="discussion.html" class="is-current">Discussion</a>
+      <a href="spikes.html">Spikes</a>
+      <a href="prompts.html">Prompts</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Cross-cuts
+    <span>·</span>
+    <span class="meta">11 discussion topics</span>
+    <span>·</span>
+    <span class="meta">Framing + recommendation per topic</span>
+  </div>
+  <h1><span class="strike">to align before locking</span>Open questions<br>that need <em>operator input</em>.</h1>
+  <p class="lede">Each topic frames the question, lists tradeoffs, and ends with a recommended default plus dissent. These are the negotiations the operator should have <em>before</em> the v0.0.1 vertical slice begins. Some have clear defaults; some genuinely depend on the operator's preference.</p>
+</section>
+
+<section class="section section-tight">
+  <ol class="findings">
+    <li class="finding">
+      <div>
+        <div class="tag"><b>1</b> · Workflow · claude-code ↔ kb integration loop</div>
+        <h3>What does "look up before producing new" actually look like?</h3>
+        <p><strong>Frame:</strong> the briefing wants Claude Code to consult kb before generating new artifacts. Two flows are possible:</p>
+        <ul>
+          <li><strong>Pull (operator-initiated):</strong> CLAUDE.md instructs "before generating an artifact, run <code>kb search '&lt;topic&gt;'</code>." The operator sees the search; can correct.</li>
+          <li><strong>Push (automatic):</strong> a hook in <code>.claude/settings.json</code> intercepts artifact generation and pre-injects search results. Cleaner UX, less transparent.</li>
+        </ul>
+        <p><strong>Tradeoff:</strong> pull respects "transparency over magic" (briefing's HIGH-confidence stance, ties into challenge #7); push reduces friction but creates a black-box feel.</p>
+        <p><strong>Where do new artifacts land?</strong> Three options: (a) <code>_staging/</code> folder watched by kb, auto-added on debounce settle (matches topic 03's file watcher recipe); (b) explicit <code>kb add &lt;path&gt;</code>; (c) Claude Code skill that calls <code>kb add</code> programmatically when finishing a generation. <strong>Recommendation:</strong> watched <code>_staging/</code> by default, <code>kb add</code> for explicit ingest from anywhere else. Skill option as v0.2 polish.</p>
+        <p><strong>Default:</strong> pull-style search, watched staging folder.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>2</b> · Provenance · prompt-as-comment in artifacts</div>
+        <h3>Format, reproducibility, privacy</h3>
+        <p>Topic 07 ran the analysis. Recommendation: <code>&lt;template id="kb-prompt"&gt;</code> for the prompt body + <code>&lt;meta name="kb-*"&gt;</code> for structured fields (<code>kb-id</code>, <code>kb-model</code>, <code>kb-model-version</code>, <code>kb-temperature</code>, <code>kb-created</code>, <code>kb-category</code>, <code>kb-tags</code>, <code>kb-sandbox</code>). <code>&lt;template&gt;</code> wins because it's parser-visible, doesn't render, multi-line, survives minifiers.</p>
+        <p><strong>Privacy scrub pass mandatory:</strong> strip system prompt by default; regex-redact known secret formats (AWS keys, GitHub PATs, Anthropic <code>sk-ant-*</code>, JWT-like, generic high-entropy 32+ char tokens); path-normalise <code>/Users/&lt;name&gt;</code> → <code>~/</code>; confirmation gate when prompt &gt; 1000 chars. Audit log under <code>~/.kb/audit.log</code>.</p>
+        <p><strong>Reproducibility fields beyond the prompt:</strong> <code>kb-skill</code> (which generation skill, e.g. <code>html-artifacts</code>), <code>kb-tool-version</code>, <code>kb-source-files</code> (hashes of inputs that informed the artifact). Useful for "regenerate when the source diff changes" flows.</p>
+        <p><strong>Default:</strong> <code>&lt;template&gt;</code> + <code>&lt;meta&gt;</code>, scrub-on by default, opt-out per-artifact via <code>kb add --no-scrub</code> (with a confirmation prompt).</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>3</b> · Multi-kb · visual identity</div>
+        <h3>Accent color? Subdomain? Glyph?</h3>
+        <p><strong>Frame:</strong> kb is namespace-not-federation — one daemon serves multiple kbs (per the briefing's HIGH-confidence stance). The risk is the operator getting confused about which kb they're in.</p>
+        <p>Three signals worth combining:</p>
+        <ul>
+          <li><strong>Accent colour</strong> per kb. Cheap, instantly recognisable. Pulled from a fixed palette of ~8 colours (avoid AI-aesthetic gradients — see dogum/html-artifacts ruleset).</li>
+          <li><strong>Glyph / icon</strong> per kb. A single Unicode character (📚, 🛠, 🧪, 📐) or a short emoji. Less subtle but works in tight TUI rows.</li>
+          <li><strong>Subdomain in SPA</strong>: <code>code.localhost</code>, <code>research.localhost</code>. Most rigorous, requires wildcard cert + DNS work for self-hosting.</li>
+        </ul>
+        <p><strong>Default:</strong> accent colour + glyph, both stored in kb config. Subdomain SPA scoped is a self-hosting v0.2 — not v0.0.1 (single user on localhost).</p>
+        <p><strong>Where the colour appears:</strong> top-nav stripe in the SPA, status-line accent in the TUI, prefix in CLI output (<code>[code]</code>, <code>[research]</code> tags).</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>4</b> · Schema versioning + migration</div>
+        <h3>How does the schema evolve?</h3>
+        <p><strong>Frame:</strong> schemas always change. lance + sqlite split (topic 01) means two schemas to evolve.</p>
+        <ul>
+          <li><strong>SQLite</strong>: standard <code>schema_migrations</code> table (Rails convention) tracking sequential migration IDs. Tools: <code>refinery</code>, <code>sqlx::migrate!</code>, <code>rusqlite-migration</code>. Pick one, never write hand-rolled <code>ALTER TABLE</code> in prod code.</li>
+          <li><strong>Lance</strong>: <code>add_columns</code>, <code>alter_columns</code>, <code>drop_columns</code> are exposed (topic 01). Bug #3136 (2026-03) on schema evolution past embedding columns is live — pin known-good. Dimension changes (384 → 768) are <strong>not</strong> a compatible cast; require add-new + drop-old + rename.</li>
+          <li><strong>Full reindex on schema bump:</strong> the brutalist option. Acceptable at &lt;50k docs (a few minutes), unacceptable past 1M.</li>
+        </ul>
+        <p><strong>Export format for portability:</strong> <code>kb export --format=tar</code> produces <code>artifacts/*.html</code> + <code>kb.db</code> (sqlite) + <code>lance/</code> dir. Tar/untar across machines works (lance uses relative paths). Schema migrations on import: re-apply sqlite migrations idempotently; lance schema is the source of truth from the dataset itself.</p>
+        <p><strong>Default:</strong> <code>refinery</code> for sqlite migrations + lance schema captured in dataset itself. Full reindex acceptable in v1; revisit at 1M+ scale.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>5</b> · Self-hosting story</div>
+        <h3>Smallest delta from local to remote</h3>
+        <p><strong>Frame:</strong> on the briefing's roadmap, not v0.0.1. But planning the seam now is cheap.</p>
+        <ul>
+          <li><strong>Tier 0 — localhost only.</strong> Bind to <code>127.0.0.1:7000</code>. v0.0.1 default.</li>
+          <li><strong>Tier 1 — Tailscale + LAN.</strong> Bind to <code>0.0.0.0:7000</code>, rely on Tailscale ACLs for access. Zero auth required, but the daemon must trust the network. The simplest "self-hosting" path; matches Syncthing's ergonomics.</li>
+          <li><strong>Tier 2 — public VPS with auth.</strong> TLS via Caddy (auto-issuance), basic auth or oauth-proxy in front. Requires schema for users + sessions; meaningful surface area.</li>
+        </ul>
+        <p><strong>The seam to design now:</strong> auth middleware. Design <code>kb-server</code>'s axum middleware so authentication is pluggable (no-op locally, Tailscale-auth-key check on Tier 1, oauth-proxy header on Tier 2). Every endpoint requires <code>RequireAuth</code> extractor; the no-op extractor is a development convenience that doesn't ship in release builds without an explicit flag.</p>
+        <p><strong>Default for v0.0.1:</strong> localhost only. Plan auth middleware seam. Document Tailscale path; defer oauth to v0.2+.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>6</b> · Observability of the daemon itself</div>
+        <h3>Logs, metrics, traces — what's actually load-bearing?</h3>
+        <p><strong>Frame:</strong> kb's TUI <em>is</em> the user-facing observability surface. But the daemon also needs internal observability for debugging.</p>
+        <ul>
+          <li><strong>Structured logs (<code>tracing</code> crate):</strong> mandatory. Default: <code>info</code> to stderr, <code>debug</code> to <code>~/.local/state/kb/log</code> rotating (<code>tracing-appender</code>). Spans per request, per indexer-batch.</li>
+          <li><strong>Metrics:</strong> Prometheus-format <code>/metrics</code> endpoint behind a feature flag. Useful only for self-hosting tier; don't ship enabled by default. Cardinality cheap (counters per event type, gauges for queue depths).</li>
+          <li><strong>Traces:</strong> overkill for v0.0.1. <code>opentelemetry</code> is heavy; defer.</li>
+        </ul>
+        <p><strong>Reading observability state from sqlite (briefing suggestion):</strong> good for "indexer state at a point in time" via <code>kb status</code> CLI. Don't conflate with metrics — sqlite is for state, Prometheus is for time-series.</p>
+        <p><strong>Default:</strong> <code>tracing</code> structured logs, sqlite-backed <code>kb status</code>, metrics endpoint behind feature flag. No tracing/OTLP in v1.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>7</b> · Release packaging</div>
+        <h3>How does the operator actually install kb?</h3>
+        <p><strong>Frame:</strong> distribution is downstream of "single binary" (challenge #6 confirms). The question is which channels.</p>
+        <ul>
+          <li><strong>cargo install</strong> — for Rust developers. Free with the workspace. Default for first-mile testing.</li>
+          <li><strong>GitHub Releases prebuilt binaries</strong> — macOS arm64/x86_64, Linux x86_64/arm64. Use <code>cargo-dist</code> to automate. Mandatory for non-Rust users.</li>
+          <li><strong>Homebrew tap</strong> — <code>brew install kb-app/kb</code>. Half a day to set up, biggest UX win for Mac users.</li>
+          <li><strong>AUR package</strong> — for Arch users (relevant since the dev environment here is a Linux desktop). Trivial maintenance: <code>kb-bin</code> PKGBUILD pointing at GH releases.</li>
+          <li><strong>Snap / Flatpak</strong> — heavy ceremony; defer.</li>
+          <li><strong>Deb / RPM</strong> — defer to v0.2 unless a user asks.</li>
+        </ul>
+        <p><strong>Auto-update:</strong> <code>kb self-update</code> via <code>self-update</code> crate (downloads from GH releases). Check on startup with a <code>--check-update</code> flag, never auto-install. <strong>Don't</strong> use cargo-install upgrade as the canonical path — it's slow and Rust-only.</p>
+        <p><strong>Default:</strong> cargo-dist for releases, GH releases first, Homebrew + AUR within a week of v0.0.1, <code>kb self-update</code> opt-in.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>8</b> · Artifact thumbnails (gallery cards)</div>
+        <h3>Synthetic vs real screenshots vs DOM-painted</h3>
+        <p>Topic 07 lands on the answer: <strong>real screenshots via headless Chromium as default, synthetic icon-collage as fallback</strong>.</p>
+        <ul>
+          <li><strong>Synthetic icon-collage</strong> — fast, lightweight (no browser dependency), informative for <em>kind</em> (has-svg, has-form, has-drag) but poor for <em>content</em>. Two flowcharts look identical.</li>
+          <li><strong>Real headless screenshot</strong> — Playwright/Puppeteer dependency adds ~150 MB runtime. Generate at write-time, cache as 320×240 WebP (~20 KB each). For 10k artifacts: ~200 MB cache. Acceptable.</li>
+          <li><strong>DOM-painted client-side (<code>html2canvas</code>)</strong> — slower than synthetic, less accurate than headless, no extra runtime. Worth shipping in the SPA as a degraded-mode fallback.</li>
+        </ul>
+        <p><strong>Lazy capture:</strong> synthetic immediately on ingest (free, runs in-process). Headless screenshot in the background queue. Show synthetic first, swap to screenshot when ready. UX: thumbnails appear instantly; refine on second visit.</p>
+        <p><strong>Default:</strong> synthetic-immediate + headless-background, <code>--no-screenshots</code> flag for users without Playwright.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>9</b> · SSE event schema (formal contract)</div>
+        <h3>JSON Schema, where to publish, versioning rules</h3>
+        <p>Topic 04 + challenge #4 cover this. Summary:</p>
+        <ul>
+          <li>Single envelope: <code>{v, id, type, ts, payload}</code>. <code>id</code> mirrors SSE <code>id:</code> field for free Last-Event-ID. <code>type</code> mirrors SSE <code>event:</code> field for browser <code>addEventListener("index.progress")</code>.</li>
+          <li>Reserved top-level <code>type</code> namespaces: <code>index.*</code>, <code>file.*</code>, <code>query.*</code>, <code>error.*</code>, <code>system.*</code>.</li>
+          <li>Per-type JSON Schema files in repo (<code>events/v1/index.progress.json</code>, etc.); served live at <code>/events/schema/{type}/v1.json</code>.</li>
+          <li>Publishing rule: schemas in repo are dev-time mirrors; the running daemon's schema endpoint is canonical. CI checks the two match.</li>
+          <li>Versioning: bump <code>v</code> on breaking change only. Add fields freely (consumers ignore unknown). Renames/removals run two endpoints side-by-side through a deprecation window.</li>
+          <li>One firehose <code>/events</code> with <code>?types=index.*,error.*</code> filter. Don't split by domain or by direction.</li>
+        </ul>
+        <p><strong>Default:</strong> author <code>events.schema.json</code> as part of the v0.0.1 vertical slice, before any client subscribes. Treat as public API.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>10</b> · Error budget for indexing</div>
+        <h3>Skip + log + continue, or hard-fail?</h3>
+        <p><strong>Frame:</strong> the briefing asks: if a single HTML file fails to parse, do we skip / log / hard-fail?</p>
+        <ul>
+          <li><strong>Hard-fail the run:</strong> wrong. One malformed artifact shouldn't break ingest of 999 healthy ones. Rejected.</li>
+          <li><strong>Skip + log + continue:</strong> right default. Failed files emit an <code>error.parse</code> event with file path + parser error. The TUI surfaces these in the Errors tab.</li>
+          <li><strong>Quarantine:</strong> move failed file to <code>~/.local/state/kb/quarantine/</code> with a <code>.error.txt</code> sidecar. Optional; nice for debugging without re-tripping every reindex.</li>
+        </ul>
+        <p><strong>Retry policy:</strong> retry on next index run (cheap, idempotent). Never retry inside one run — if the parser failed once, it'll fail again. Track retry count per file in sqlite; after 3 consecutive failures, demote to quarantine.</p>
+        <p><strong>Bad-artifact poisoning:</strong> sqlite <code>errors</code> table per file, scoped by content hash. If the file's content changes (hash differs), the error is cleared. <strong>Index is never poisoned</strong> — failed files are absent from the search index, present in the errors view.</p>
+        <p><strong>Default:</strong> skip + log + continue + retry-on-next-run + quarantine after 3.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>11</b> · Backup model · "HTML is source, rebuild the rest"</div>
+        <h3>The principle is right for derived data, incomplete for user-authored state</h3>
+        <p><strong>Frame:</strong> the operator proposed: <em>HTML files on disk are the source of truth; everything else (lance index, sqlite tables, vector embeddings) can be rebuilt by re-indexing.</em> Sound architectural instinct — aligns with the briefing's "html as source of truth, never markdown" stance. The question is how far the principle extends.</p>
+
+        <p><strong>What's right (derivable from HTML alone):</strong></p>
+        <ul>
+          <li>BM25 / FTS index (lance native or sqlite-FTS5 per <a href="foundation/01-lancedb.html">topic 01</a>)</li>
+          <li>Vector embeddings (re-embed body chunks with the same model per <a href="foundation/02-fastembed.html">topic 02</a>)</li>
+          <li>Title / heading path / first-paragraph / code-block extraction</li>
+          <li>Facets — <code>has_svg</code>, <code>has_form</code>, <code>has_drag</code>, <code>has_animation</code>, <code>js_loc</code> bucket, <code>kb_category</code> (full list in <a href="surfaces/07-html-effectiveness.html">topic 07</a> §D)</li>
+          <li>All <code>kb-*</code> meta tags (<code>kb-id</code>, <code>kb-model</code>, <code>kb-tags</code>, <code>kb-prompt</code> — they live in the HTML by design per topic 07)</li>
+          <li>Edges of kind "link" and "embed" (extracted from <code>&lt;a&gt;</code> / <code>&lt;img&gt;</code> / <code>&lt;iframe&gt;</code>)</li>
+        </ul>
+        <p>An HTML-only backup is sufficient to rebuild the entire <em>retrieval surface</em>.</p>
+
+        <p><strong>What's lost on an HTML-only restore:</strong></p>
+        <ol>
+          <li><strong>Comments</strong> (<a href="surfaces/09-comments.html">topic 09</a>). Sqlite-stored; anchored by selector + context. <em>Not in HTML.</em></li>
+          <li><strong>Sources config</strong> — which folders kb watches, multi-kb names + accent colours (topic 3). <em>Not in HTML.</em></li>
+          <li><strong>Audit log</strong> (topic 07's <code>~/.kb/audit.log</code> for scrub events). <em>Lost.</em></li>
+          <li><strong>Manually-curated tags / aliases / edges</strong> — if added via kb UI rather than embedded as <code>kb-tags</code> in HTML. <em>Lost.</em></li>
+          <li><strong>Errors table</strong> (topic 10) — per-file retry counts, quarantine flags. Re-runnable but transient state is gone.</li>
+          <li><strong>Index_runs metadata</strong> — when each run happened. Fine to lose.</li>
+          <li><strong>View counts / last-opened</strong> (briefing's open question). If implemented, lost.</li>
+          <li><strong>Regen history</strong> at <code>.kb/history/&lt;id&gt;/&lt;timestamp&gt;.html</code> (topic 07). These <em>are</em> HTML files but they're an archive set — whether to back them up is a policy choice.</li>
+        </ol>
+
+        <p><strong>Other concerns:</strong></p>
+        <ul>
+          <li><strong>Rebuild cost.</strong> 50k artifacts × 5 chunks × ~30 ms embed ≈ <strong>2 hours</strong> on CPU (per topic 02's latency numbers). Acceptable for disaster recovery; painful for casual sync between machines.</li>
+          <li><strong>Atomicity.</strong> A regen in progress at backup time could capture half-written HTML. Mitigate by writing artifacts via <code>tmp + rename</code> (matches <a href="foundation/03-notify.html">topic 03</a>'s debouncer pattern); back up during a quiescent moment.</li>
+          <li><strong>Sensitive content.</strong> If <code>kb-prompt</code> is embedded per topic 07, the operator's prompts (potentially including secrets the scrub regex missed) are now in every backup copy. Encrypt at rest if <code>kb-prompt</code> is preserved verbatim.</li>
+          <li><strong>Anchor stability.</strong> Comments anchor to selectors / ranges in the artifact body. A fresh rebuild produces the same <code>kb-id</code> (it's the ULID from the meta tag) but selector positions are byte-identical only if the HTML was restored byte-for-byte. Comment anchors survive <em>iff</em> the HTML round-trips exactly.</li>
+        </ul>
+
+        <p><strong>Recommendation — two backup modes, named explicitly:</strong></p>
+        <ul>
+          <li><strong>Minimal (HTML-only):</strong> <code>tar czf kb-min.tgz artifacts/*.html</code>. Restore = drop in place + <code>kb reindex</code>. <em>You lose comments, sources config, manually-curated tags, audit log, view stats.</em> Acceptable for "I just want my artifacts back."</li>
+          <li><strong>Complete (default):</strong> <code>kb export</code> produces a tarball with <code>artifacts/*.html</code> + <code>kb.toml</code> (config) + <code>comments.jsonl</code> + <code>sources.jsonl</code> + <code>tags.jsonl</code> (manually-curated tags only — embedded <code>kb-tags</code> live in HTML) + optionally <code>.kb/history/</code>. Restore = <code>kb import</code> + reindex. <em>Everything user-authored is preserved.</em> Sidecars are KB-class, not GB-class — overhead is negligible.</li>
+        </ul>
+        <p>Optional third mode: include the lance index too (just files) to skip the ~2-hour rebuild on sync-across-machines. Trade ~GB of storage at destination for a no-wait restore.</p>
+
+        <p><strong>Default:</strong> ship <code>kb export</code> in complete mode (opt down to <code>--mode=minimal</code>). The operator's HTML-as-source principle stands as the <em>minimum</em>; the doc names the gap so they pick consciously rather than discovering at restore-time that comments are gone.</p>
+
+        <p>Cross-refs: <a href="discussion.html#summary">topic 4 (schema migration)</a> covers the existing <code>kb export</code> mention — this topic adds the minimal-vs-complete distinction; <a href="discussion.html#summary">topic 5 (self-hosting)</a> for backup placement on a Tailscale or VPS-hosted instance.</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Summary table</span>
+    <table class="alt-table">
+      <thead><tr><th>Topic</th><th>Default</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>1 · Workflow</td><td>Pull-style <code>kb search</code> + watched staging folder</td><td>Decided</td></tr>
+        <tr><td>2 · Prompt embedding</td><td><code>&lt;template&gt;</code> + <code>&lt;meta&gt;</code> + scrub-on-by-default</td><td>Decided</td></tr>
+        <tr><td>3 · Multi-kb identity</td><td>Accent colour + glyph; subdomain v0.2+</td><td>Decided</td></tr>
+        <tr><td>4 · Schema migration</td><td><code>refinery</code> + lance dataset is its own truth; full reindex acceptable &lt; 1M</td><td>Decided</td></tr>
+        <tr><td>5 · Self-hosting</td><td>Tier 0 v0.0.1; Tailscale tier 1 documented; auth middleware seam designed</td><td>Decided</td></tr>
+        <tr><td>6 · Daemon observability</td><td><code>tracing</code> + sqlite-backed <code>kb status</code>; metrics behind feature flag</td><td>Decided</td></tr>
+        <tr><td>7 · Release packaging</td><td>cargo-dist + GH Releases + Homebrew + AUR; <code>kb self-update</code> opt-in</td><td>Decided</td></tr>
+        <tr><td>8 · Thumbnails</td><td>Synthetic-immediate + headless-background + DOM-paint fallback</td><td>Decided</td></tr>
+        <tr><td>9 · SSE schema</td><td>One envelope, per-type schemas, served live, versioned by <code>v</code></td><td>Decided</td></tr>
+        <tr><td>10 · Error budget</td><td>Skip + log + continue; retry next run; quarantine after 3</td><td>Decided</td></tr>
+        <tr><td>11 · Backup model</td><td><code>kb export</code> ships in complete mode (HTML + sidecars: comments / sources / tags / optional history); minimal mode (HTML-only) is opt-down with documented loss</td><td>Decided</td></tr>
+      </tbody>
+    </table>
+    <p>Each "Decided" above is a <em>recommended default</em> — the operator can override any of them. The point of this page is that none should be left implicit when the v0.0.1 milestone doc is written.</p>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="challenges.html"><span class="dir">← Prev</span><span class="ttl">Challenges</span></a>
+  <a class="next" href="spikes.html"><span class="dir">Next →</span><span class="ttl">Spikes</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · discussion</p>
+      <p>None of these should be left implicit when the v0.0.1 milestone doc is written.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="index.html">Index</a></li>
+        <li><a href="spikes.html">Spikes</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Tooling</h5>
+      <ul>
+        <li><a href="https://docs.rs/refinery">refinery</a></li>
+        <li><a href="https://docs.rs/tracing">tracing</a></li>
+        <li><a href="https://opensource.axo.dev/cargo-dist/">cargo-dist</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

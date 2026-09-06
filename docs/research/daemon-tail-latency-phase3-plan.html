@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="plan">
+<meta name="kb-tags" content="status:applied, project:kb, plan, performance, tail-latency, storage-actor, compaction, embedder, ipc-timeout, lane, lance">
+<title>kb daemon tail-latency Phase 3 — read bypass, embed IPC timeout, query-priority lanes</title>
+<style>
+:root{
+  --bg:#faf8f5;--surface:#f0ede7;--fg:#221f1b;--muted:#5d574e;
+  --rule:#d8d3ca;--accent:#155e56;--accent-fg:#ffffff;
+  --warn:#7a5300;--danger:#96312a;--ok:#22603f;
+  --fs-body:1.0625rem;--fs-small:.85rem;--lh:1.62;--maxw:47rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px;--focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#14161a;--surface:#1d2026;--fg:#e9e7e2;--muted:#a9a49a;
+    --rule:#2e3138;--accent:#7cc9bf;--accent-fg:#0d1f1c;
+    --warn:#d9a94a;--danger:#e2837c;--ok:#7fc79a}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:400 var(--fs-body)/var(--lh) var(--sans)}
+main{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 5rem}
+h1{font-size:1.7rem;line-height:1.25;margin:.4rem 0 .6rem}
+h2{font-size:1.25rem;margin:2.4rem 0 .7rem;padding-top:.6rem;border-top:1px solid var(--rule)}
+h3{font-size:1.05rem;margin:1.6rem 0 .5rem}
+h2,h3{scroll-margin-top:1rem}
+p,li{max-width:65ch}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:var(--focus);outline-offset:2px}
+code{font-family:var(--mono);font-size:.9em;background:var(--surface);padding:.1em .35em;border-radius:4px}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding: .85rem 1rem;overflow-x:auto}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-size:var(--fs-small)}
+th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--rule);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.kicker{font-size:var(--fs-small);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.lede{font-size:1.12rem;color:var(--muted);margin:.2rem 0 1rem}
+.meta-strip{font-size:var(--fs-small);color:var(--muted)}
+.tag{background:var(--surface);border:1px solid var(--rule);border-radius:999px;padding:.1em .6em}
+.callout{background:var(--surface);border-left:3px solid var(--accent);border-radius:var(--radius);padding:.7rem .9rem;margin:1rem 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout-label{display:block;font-size:var(--fs-small);font-weight:700;color:var(--muted);margin-bottom:.15rem}
+.skip-link{position:absolute;left:-9999px;background:var(--accent);color:var(--accent-fg);padding:.5rem 1rem;border-radius:var(--radius)}
+.skip-link:focus{left:.75rem;top:.75rem;z-index:10}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article class="artifact">
+<header>
+  <div class="kicker">plan &middot; project:kb</div>
+  <h1>kb daemon tail-latency Phase 3 — read bypass, embed IPC timeout, query-priority lanes</h1>
+  <p class="lede">Three code-level changes that remove the daemon's remaining multi-second tail: reads that no longer queue behind compaction, embeds that can time out instead of hanging the shared mutex, and queries that jump the indexer's embed batches.</p>
+  <div class="meta-strip">
+    <span>2026-07-03</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">status:open</span>
+    <span class="sep">&middot;</span>
+    <span class="tag">project:kb</span>
+  </div>
+</header>
+
+<section>
+<h2 id="status">Status — 2026-07-10</h2>
+<div class="callout callout--ok"><span class="callout-label">Implemented</span>
+<strong>Fix 1 (embedder IPC timeout)</strong> and <strong>Fix 2 (query-priority embed lane)</strong> are implemented and tested. <strong>Fix 3 (compaction off the read path) was superseded before this plan was executed</strong>: the <code>perf(kb-core): ingest + storage engine sweep (PS1)</code> commit (<code>26619b54</code>, 2026-07-10) added <code>compact_off_loop</code> (<code>storage/actor.rs</code>), which runs <code>Table::optimize</code> on a spawned task and keeps servicing reads (and non-lance writes) inline while parking only lance mutations — the plan's goal, achieved <em>without</em> the riskier full read-bypass (a second lance handle + a read-only <code>!Sync</code> sqlite connection + version-refresh). Its test <code>compact_in_flight_defers_writes_and_serves_reads</code> proves reads are served during a compaction.</div>
+<p>What changed relative to this plan's original design:</p>
+<ul>
+<li><strong>Fix 1</strong> landed env-tuned (<code>KB_EMBED_TIMEOUT_SECS</code>, default 60 s) rather than a <code>[indexer]</code> TOML key — mirroring the existing <code>KB_EMBEDDER_HANDSHAKE_TIMEOUT_SECS</code> sibling and keeping the change inside <code>embed_ipc.rs</code> (no config-struct plumbing).</li>
+<li><strong>Fix 2</strong> uses a process-global, per-model pending-query counter keyed on the <code>&amp;'static str</code> model name (<code>crate::embed::QueryLaneGuard</code> / <code>pending_query_count</code>), instead of wrapping the shared <code>Arc&lt;Mutex&lt;Embedder&gt;&gt;</code> in a new type at its ~15 call sites. Same behaviour, far smaller blast radius. The indexer embeds chunk vectors in <code>INDEX_EMBED_MINI_BATCH</code>-sized mini-batches and yields the mutex between them while a query is waiting (bounded so a query storm never indefinitely starves indexing).</li>
+<li><strong>Fix 3</strong> — the broader "route all reads off the actor" ambition is deferred as unnecessary: the measured problem was compaction (now off-loop), and post-ops-fix latency is already 0.24–0.43 s. Reopen only if <code>/api/metrics</code> shows read queue-wait climbing behind non-compaction write bursts.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="context">Context — the 2026-07-03 incident</h2>
+<p>kb.example.com intermittently answered in multiple seconds (occasionally &gt;10&nbsp;s — the per-turn memory-recall hook blew its 15&nbsp;s budget). The investigation found a three-layer feedback loop; the ops layers were fixed the same day (Phases 0&ndash;2), and this plan is the third, code-level layer.</p>
+<table>
+<tr><th>Evidence</th><th>Measured</th></tr>
+<tr><td>Recall-class routes, 30&nbsp;min after a redeploy (daemon's own histogram)</td><td>p50 250&nbsp;ms, p95 &gt;10&nbsp;s (3 of 16 requests &ge;2.5&nbsp;s)</td></tr>
+<tr><td>Sessions corpus lance state vs source</td><td>47&nbsp;GB state for 1.5&nbsp;GB source (31&times; bloat, 63k files — caused the 2026-07-02 nofile outage)</td></tr>
+<tr><td>Startup auto-compact of the <code>platform</code> corpus, observed live</td><td>10.3&nbsp;s — during which every read for that kb queued</td></tr>
+<tr><td>After Phase 0&ndash;2 fixes, settled</td><td>recall 0.24&ndash;0.43&nbsp;s; sessions state 13&nbsp;MB; host IO pressure 88%&rarr;5%</td></tr>
+</table>
+<p>Phases already applied (deployment repo <code>~/deploy</code>, plugin repo <code>~/project/kb/plugins/kb-memory</code>): capture hook now overwrites one file per session instead of appending cumulative snapshots; sessions corpus pruned 392&rarr;129 files and re-indexed on a dedicated <code>bge-small-en-v1.5</code> embedder; <code>reconcile_secs</code> 60&rarr;300; <code>trusted_proxies</code> corrected with a drift guard in the deploy script; compress + in-flight-cap middlewares; kb capped at 6 CPUs / 12&nbsp;GiB.</p>
+<div class="callout"><span class="callout-label">Why Phase 3 still matters</span>The ops fixes shrank the <em>frequency</em> of contention windows. The mechanisms remain: any large corpus edit, operator reindex, or slow embed still serializes reads behind writes and queries behind indexer embeds. Phase 3 removes the mechanisms.</div>
+</section>
+
+<section>
+<h2 id="mechanisms">The three mechanisms, with code anchors</h2>
+<h3 id="inline-compaction">1. Compaction blocks reads for its whole duration</h3>
+<p>Each kb has a single-writer storage actor (<code>crates/kb-core/src/storage/actor.rs</code>, run loop ~line 871) that processes one message at a time; <strong>reads serialize through the same queue as writes</strong> — the module doc says "v0.1+ may add bypass-for-read handles if query latency requires it". <code>compact_all</code> is handled inline in the actor (~line 1059); <code>crates/kb-server/src/lib.rs</code> (~line 825) documents plainly that "a compaction pass briefly blocks search for this kb while it runs", and records a prior pathology of 5&ndash;10&nbsp;s hybrid queries at 2,592 fragments. Compaction fires at startup and on every reconcile tick once a corpus crosses 32 small fragments.</p>
+<h3 id="untimed-ipc">2. Embed IPC has no per-request timeout</h3>
+<p><code>crates/kb-core/src/embed_ipc.rs</code> <code>send_recv</code> (~line 346) does a blocking <code>read_line</code> on the kb-embedder subprocess with no timeout — only the spawn handshake is bounded (line 128, 300&nbsp;s). The 1&nbsp;Hz liveness probe (<code>lib.rs:648</code>) only catches a subprocess that <em>exited</em>. A wedged-but-alive embedder (swap stall, ONNX hang) blocks forever <em>while holding the shared per-model mutex</em> — every embed-dependent query on that model hangs with it.</p>
+<h3 id="shared-mutex">3. Indexer and queries embed through one mutex</h3>
+<p>All kbs on the same model share one <code>Arc&lt;Mutex&lt;Embedder&gt;&gt;</code> and one subprocess (<code>crates/kb-server/src/lib.rs:300</code>). The query path locks it in <code>embed_cache.rs</code> (~line 227); the indexer locks the same mutex for doc vectors (<code>indexer.rs:1153</code>) and whole chunk batches (<code>indexer.rs:1217</code>). During a reindex burst, an uncached query waits behind arbitrarily large indexer batches. This is why slowness tracked cache misses — cached queries never touched the mutex.</p>
+</section>
+
+<section>
+<h2 id="design">Design decisions</h2>
+<h3 id="fix-order">Order: smallest blast radius first</h3>
+<p>IPC timeout (localized, pure win) &rarr; query-priority lane (small, no architectural change) &rarr; read bypass (touches the storage invariant). Each lands as an independent, revertable commit.</p>
+<h3 id="ipc-timeout-design">IPC timeout: reader thread + recv_timeout, then kill-and-respawn</h3>
+<p>The stdout pipe read moves to a dedicated reader thread per subprocess feeding an <code>mpsc</code>; <code>send_recv</code> waits with <code>recv_timeout</code> (default 60&nbsp;s; config <code>[indexer] embed_timeout_secs</code>). On timeout the client kills the child and marks the transport dead — the existing respawn-on-transport-death path recovers, and <code>embedder_respawn_count</code> records it. Rejected: async pipes (kb-embedder IPC is deliberately sync/blocking under <code>spawn_blocking</code>; converting the transport to tokio is a bigger change for no additional safety).</p>
+<h3 id="priority-lane-design">Query priority: a fairness gate, not a second subprocess</h3>
+<p>Default fix is an <code>AtomicUsize</code> pending-queries counter beside the mutex: queries increment before locking; indexer embed work splits into mini-batches of &le;8 texts and yields between mini-batches whenever the counter is non-zero. Worst-case query wait becomes one mini-batch (&asymp;8 &times; ~50&ndash;170&nbsp;ms) instead of a whole document. Rejected as default: a dedicated query-lane subprocess per model — bge-large costs ~1.3&nbsp;GB on disk and comparable RSS per process; doubling that for every model is too heavy for the 12&nbsp;GiB container cap. It can be offered later as an opt-in (<code>dedicated_query_embedder = true</code>) for RAM-rich hosts. Note the ops layer already achieves subprocess isolation <em>per corpus</em> where it matters most: the high-churn sessions corpus runs its own <code>bge-small</code> embedder as of 2026-07-03.</p>
+<h3 id="read-bypass-design">Read bypass: reads leave the actor; writes and compaction stay</h3>
+<p>Lance is MVCC — <a href="https://lancedb.github.io/lance/format/">the Lance format versions every commit</a>, so concurrent readers against the last committed version are safe while a writer commits; sqlite in <a href="https://www.sqlite.org/wal.html">WAL mode</a> supports concurrent readers alongside one writer. So the fix is a <code>ReadHandle</code> owning read-only lance <code>Dataset</code> handles (refreshed on version bump) plus a read-only sqlite connection, serving <code>vector_query</code>, <code>bm25_query</code>, and doc/list reads. Writes, index-ensure, and <code>compact_all</code> remain serialized on the actor — lance still wants a single writer, and that invariant is load-bearing (docs/architecture-invariants.md #2, which this change must update, not silently break). Rejected: moving compaction off the actor to a side task — it is a writer, so it belongs on the writer lane; once reads bypass the actor, an inline 10&nbsp;s compaction is harmless to queries and merely delays queued <em>writes</em>, which are already asynchronous to users.</p>
+<div class="callout callout--warn"><span class="callout-label">Invariant discipline</span>The single-writer actor is a deliberate design recorded in <code>crates/kb-core/CLAUDE.md</code> and <code>docs/architecture-invariants.md</code> (invariant #2: "embed work serialises through the actor on purpose"). Step 3 must land with the invariant text updated to describe the read/write split — a code change that contradicts the invariant doc is worse than no change.</div>
+</section>
+
+<section>
+<h2 id="steps">Steps</h2>
+<p>The executable step list — each with its verify command — lives in this artifact's kb-prompt (the handoff contract). Summary:</p>
+<ol>
+<li><strong>Embedder IPC timeout</strong> — <code>embed_ipc.rs</code>: reader thread + <code>recv_timeout</code>, kill-and-respawn on expiry, config knob, mock-embedder hang test.</li>
+<li><strong>Query-priority lane</strong> — <code>embed_cache.rs</code> + <code>indexer.rs</code>: pending-query counter, &le;8-text indexer mini-batches, saturation test asserting query p95 &lt; 500&nbsp;ms during a 500-chunk ingest.</li>
+<li><strong>Storage read bypass</strong> — <code>actor.rs</code> + <code>lance.rs</code>: <code>ReadHandle</code> for query/list reads, version-bump refresh, invariant-doc update, e2e test asserting search p95 &lt; 300&nbsp;ms during a &ge;2&nbsp;s compaction.</li>
+<li><strong>Gate</strong> — <code>cargo test --workspace</code> + clippy clean (remember: cargo test regenerates the ts-rs bindings in <code>web/src/api/gen</code>).</li>
+<li><strong>Deploy</strong> — run the deploy script; no state wipe (no id-scheme or index-format change).</li>
+</ol>
+</section>
+
+<section>
+<h2 id="verification">Verification after deploy</h2>
+<p>Detailed metrics are already enabled in prod (<code>[server] metrics = true</code> since 2026-07-03). Watch <code>GET /api/metrics</code> / <code>kb metrics</code> for:</p>
+<ul>
+<li>storage-actor queue-wait for reads &asymp; 0 while <code>maintenance.compact.*</code> events fire (fix 3 proof);</li>
+<li>search/recall p95 &lt; 1&nbsp;s during an operator <code>kb reindex --kb platform</code> (fix 2 proof — platform is the 791-doc bge-large corpus);</li>
+<li><code>embedder_respawn_count</code> incrementing instead of latency flat-lining if an embed ever stalls past the timeout (fix 1 proof);</li>
+<li>the per-turn recall hook (15&nbsp;s budget) producing zero timeout warnings across a week of normal use — the original user-visible symptom.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="rollback">Rollback</h2>
+<p>Three independent commits; <code>git revert</code> individually. The read bypass keeps the actor's read API routed rather than removed, so reverting restores full serialization with no data migration. State volumes are untouched by all three fixes.</p>
+</section>
+
+<section>
+<h2 id="related">Related</h2>
+<ul>
+<li>Ops-layer fixes and incident evidence: session capture hook (<code>plugins/kb-memory/hooks/kb-capture.sh</code>, stable per-session filename since 2026-07-03), deployment config (<code>~/deploy/kb/kb.toml</code>, <code>~/deploy/docker-compose.yml</code>).</li>
+<li>Model cost basis for the lane decision: <code>docs/research/foundation/14-embedding-bakeoff-2026-05-19.html</code> (bge-large +15.6pp Recall@1 over bge-small; why the default stays bge-large for document corpora).</li>
+<li>Compaction rationale and fragment thresholds: <code>crates/kb-server/src/lib.rs</code> (~lines 758&ndash;836); lance table maintenance: <a href="https://lancedb.github.io/lancedb/concepts/storage/">LanceDB storage &amp; compaction docs</a>.</li>
+<li>Embed cache design note: <code>crates/kb-server/src/embed_cache.rs</code> (header comment: "~50&ndash;100&nbsp;ms per IPC call&hellip; dominant cost in /api/search and /api/memory/recall").</li>
+</ul>
+</section>
+
+</article>
+</main>
+</body>
+</html>

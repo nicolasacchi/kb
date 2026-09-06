@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="design">
+<meta name="kb-tags" content="status:open, project:kb, roadmap, improvement-portfolio, rulings, adversarial-verification, v0.25, reliability, ultracode, fable">
+<meta name="kb-summary" content="22 clustered improvement proposals, each adversarially verified by two independent skeptics, with per-proposal rulings, three urgent operational flags, the big-picture synthesis, and a concrete v0.25/v0.26 recommendation. Companion to the full architecture review.">
+<title>The kb improvement portfolio — verified proposals, rulings, and the road after v0.24 (2026-07)</title>
+<style>
+:root{
+  --bg:#f6faf8; --surface:#eaf1ed; --fg:#1f2b26; --muted:#54635c;
+  --rule:#cfdbd4; --accent:#0e6b4f; --accent-fg:#ffffff;
+  --warn:#8a5800; --danger:#a5233d; --ok:#166a43;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121815; --surface:#1a221e; --fg:#e4e9e6; --muted:#a6b3ac;
+    --rule:#35413b; --accent:#5ecfa6; --accent-fg:#082017;
+    --warn:#e0b35c; --danger:#f08a9b; --ok:#6fce9f;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} *{animation:none!important;transition:none!important} }
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:56rem;margin:0 auto;padding:2rem 1.25rem 5rem}
+h1{font-size:1.85rem;line-height:1.25;margin:.4rem 0 .6rem;letter-spacing:-.015em}
+h2{font-size:1.35rem;margin:3rem 0 .8rem;padding-top:1.2rem;border-top:2px solid var(--rule);scroll-margin-top:1rem}
+h3{font-size:1.05rem;margin:1.8rem 0 .4rem;scroll-margin-top:1rem}
+p{margin:.6rem 0}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--accent);color:var(--accent-fg);padding:.5rem 1rem;z-index:10}
+.skip-link:focus{left:0}
+.kicker{font-size:.8rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:.2rem}
+.lede{font-size:1.12rem;color:var(--muted);max-width:46rem}
+.meta-strip{font-size:.85rem;color:var(--muted);margin:.6rem 0 0}
+.meta-strip .sep{margin:0 .4rem}
+.tag{border:1px solid var(--rule);border-radius:999px;padding:.05rem .55rem;background:var(--surface)}
+table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.9rem}
+th,td{border:1px solid var(--rule);padding:.45rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+.chip{display:inline-block;border-radius:999px;padding:.02rem .5rem;font-size:.75rem;font-weight:600;border:1px solid var(--rule);background:var(--surface);white-space:nowrap;vertical-align:middle}
+.chip--ok{color:var(--ok);border-color:var(--ok)}
+.chip--warn{color:var(--warn);border-color:var(--warn)}
+.chip--danger{color:var(--danger);border-color:var(--danger)}
+.chip--k{color:var(--muted)}
+.verdicts{font-size:.85rem;color:var(--muted);margin:.15rem 0 .4rem}
+.callout{border:1px solid var(--rule);border-left:4px solid var(--accent);background:var(--surface);padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:1rem 0}
+.callout--warn{border-left-color:var(--warn)}
+.callout--danger{border-left-color:var(--danger)}
+.callout--ok{border-left-color:var(--ok)}
+.callout-label{display:block;font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:.25rem;color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.05rem .3rem}
+ul,ol{padding-left:1.3rem}
+li{margin:.35rem 0}
+footer{margin-top:4rem;padding-top:1rem;border-top:2px solid var(--rule);color:var(--muted);font-size:.88rem}
+</style>
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">architecture review &middot; decision volume &middot; project:kb</div>
+  <h1>The kb improvement portfolio — verified proposals, rulings, and the road after v0.24 (2026-07)</h1>
+  <p class="lede">One hundred twenty reviewer proposals, clustered to twenty-two, each attacked by two independent skeptics. Twelve survived. This volume records what to adopt, what to salvage, what to refuse — and three urgent flags that precede all of it. The evidence lives in the companion reference review (private).</p>
+  <div class="meta-strip">
+    <span>2026-07-05</span><span class="sep">&middot;</span>
+    <span class="tag">status:open</span><span class="sep">&middot;</span>
+    <span class="tag">project:kb</span><span class="sep">&middot;</span>
+    <span class="tag">120 → 22 → 12 survivors</span>
+  </div>
+</header>
+
+<section>
+<h2 id="tl-dr">TL;DR</h2>
+<ul>
+<li><strong>The architecture is sound; nothing warrants a rewrite.</strong> Across 178 graded decisions: 79 sound, 38 sound-but-dated, 56 questionable, 5 wrong. The five <em>wrong</em> are specific and fixable — none is structural.</li>
+<li><strong>Three urgent flags come before any roadmap:</strong> the v0.24 overnight run is stalled mid-R2; the R2 cascade policy contradicts the repo's own documented design for history/lists (an operator decision, not a unilateral fix); and the per-Stop capture defect behind the 47&thinsp;GB outage is fixed only in an unlanded WIP file.</li>
+<li><strong>The top engineering priority is one small fix:</strong> a per-request timeout on the embed IPC read (<code>crates/kb-core/src/embed_ipc.rs:346,437</code>) — today a hung-but-alive embedder wedges every search on that model, forever, across all kbs.</li>
+<li><strong>The dual-store question is settled for now:</strong> keep lancedb + sqlite, harden the seams, and record the swap trigger (~50k real docs; the largest real corpus is ~288). The single-store spike is an option on file, not a project.</li>
+<li><strong>The public flip changes the security math</strong> — fork-PR isolation in CI and a default-config scrub gap for future self-hosters both belong in the Z6 gate, not the backlog.</li>
+<li><strong>The meta-system passed its own audit:</strong> nine of twenty-two proposals died because a skeptic could cite a recorded ruling. The decision-record architecture is kb's real moat — and its maintenance debt (invariant-index bloat, four untagged milestones, a frozen narrative home) is now the cheapest high-leverage work in the repo.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="urgent-flags">Three urgent flags</h2>
+
+<div class="callout callout--danger">
+<span class="callout-label">U1 · The overnight run is stalled</span>
+<p>The v0.24 autonomous run (started 2026-07-04 ~02:00) committed R1 at 12:16, finished writing R2 by ~13:15, and has been idle since — roughly 34 hours at review time, with phases 3–13 unstarted and R2 complete but uncommitted in the working tree alongside the three frozen operator files. Safe resume: decide U2 below, adjust <code>CASCADE_STEPS</code>/<code>SWEEP_TABLES</code> if needed, commit R2 with explicit paths only, then continue the phase sequence.</p>
+</div>
+
+<div class="callout callout--danger">
+<span class="callout-label">U2 · R2's cascade policy contradicts the repo's own design record — decide before it lands</span>
+<p>As implemented, Full-mode cascade (which fires on <em>every</em> watcher unlink and reconcile-detected vanish, not just explicit deletes) removes <code>history</code> and <code>reading_sections</code>, and <code>list_entries</code> die in <em>both</em> modes; the orphan sweep runs every reconcile tick and would mass-delete pre-R2 rows on its first pass — a silent one-time destructive migration over months of reading activity. The plan text does specify this (operator-locked D3), and the plan's own risk register names the scenario with observability as the accepted mitigation. But the repo's prior record encodes the opposite as deliberate: V0014 (&ldquo;history is append-only and outlives artifact deletion&rdquo;), V0015's tombstone-rejoin, invariants #8/#19, the <code>crates/kb-core/src/storage/sqlite.rs:1379</code> comment, and the <code>purge_kb_data_leaves_lists</code> test. One of these is wrong, and only the operator can say which. My recommendation: history, reading_sections, and list_entries leave <code>CASCADE_STEPS</code> and <code>SWEEP_TABLES</code> entirely (activity log and tombstones are not leaks); if D3 stands instead, the first sweep must be dry-run/loud and T3 must rewrite the contradicted invariants. Either way: the two API delete routes (<code>crates/kb-server/src/routes/artifacts.rs:219</code> forget, <code>crates/kb-server/src/routes/notes.rs:726</code> delete-note) were never rewired through the cascade — &ldquo;systematic delete&rdquo; currently isn't.</p>
+</div>
+
+<div class="callout callout--warn">
+<span class="callout-label">U3 · The capture defect behind the 47 GB outage is fixed only in an unlanded WIP file</span>
+<p>The committed <code>kb-capture.sh</code> writes a new file every Stop; one long session accreted 392 captures and 47&thinsp;GB of lance data, causing the 2026-07-02 fd-exhaustion outage. The one-file-overwrite fix sits uncommitted (frozen by the v0.24 dirty-files protocol). Land it right after v0.24 tags, then dedup the 392-file legacy corpus and retire the newest-capture scoping ceremony that invariant #11 threads through five sqlite reads.</p>
+</div>
+</section>
+
+<section>
+<h2 id="method">Method</h2>
+<p>Ultracode workflow <code>wf_775c8c02-acf</code> (2026-07-05, 64 agents, 5.76M subagent tokens, 56 min): 13 Opus subsystem reviewers + 5 Opus whole-system lenses produced 120 raw proposals; an Opus portfolio editor clustered them to 22; each of the 22 was then independently attacked by two Sonnet skeptics — a <em>reality</em> skeptic (does the problem exist in this codebase? does the fix break any of the 35 invariants? is the effort honest? is there a simpler 80% version?) and a <em>fit</em> skeptic (does it collide with a recorded refusal or operator ruling? is the payoff real for one operator? what competes for the effort?). A proposal &ldquo;survives&rdquo; only if neither skeptic rejects. Twelve survived; several rejections still yielded salvageable slices, recorded below. Every ruling that follows is mine, made after weighing both verdicts against the full report set.</p>
+<p>Effort scale: S &lt;1d · M 1–3d · L 1–2w · XL &gt;2w. Verdict shorthand: <span class="chip chip--ok">endorse</span> <span class="chip chip--warn">endorse-with-changes</span> <span class="chip chip--danger">reject</span>.</p>
+</section>
+
+<section>
+<h2 id="adopted-engineering-core">Adopted — the engineering core</h2>
+
+<h3 id="p02-embed-ipc-timeout">P02 · Bound every embed/rerank IPC round-trip <span class="chip chip--k">incremental</span> <span class="chip chip--k">effort S–M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt — the single highest-value fix in the portfolio.</strong> <code>send_recv</code>/<code>send_recv_rerank</code> read the sidecar's stdout with no time bound while holding the shared per-model mutex; a hung-but-alive ORT child therefore wedges all search on that model, across every kb, permanently — and the liveness probe uses <code>try_wait()</code>, which only catches exited children. Both skeptics verified it in code; the handshake path was already hardened for exactly this failure class after a production wedge. Take the reality skeptic's simplification (a lightweight kill-by-pid watchdog rather than duplicating the reader-thread dance per call), size the default timeout for uncapped chunk batches, and add the missing hung-after-handshake test.</p>
+
+<h3 id="p11-empty-digest-and-parse-health">P11 · Fix the empty-digest fallback; add minimal parse-health <span class="chip chip--k">new-capability</span> <span class="chip chip--k">effort S + M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt, split in two.</strong> At <code>crates/kb-core/src/indexer.rs:1153</code> an empty session digest silently falls through to embedding and FTS-indexing the raw multi-MB JSONL — defeating invariant #11's digest-not-JSONL contract precisely in the format-drift case it exists for (and drift has already happened twice: the sessionId truncation, the AskUserQuestion prose flip that broke ~70/100 decision cards). Ship the deterministic stub substitution immediately with a regression test. The parse-health counter rides the existing <code>doctor</code>/Verdict idiom over columns that already exist; the cc_version pin/registry is cut — no capture-hook version field exists and the evidence doesn't support pre-building one.</p>
+
+<h3 id="p03-artifact-size-cap">P03 · Cap artifact size before read/parse <span class="chip chip--k">incremental</span> <span class="chip chip--k">effort S–M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (medium) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt, with the corrected framing.</strong> Not a public-DoS fix (the API write path already has axum's 2&thinsp;MB default body limit, and the watcher only ingests operator-controlled directories) — it is filesystem-ingest hardening against the mundane case: one oversized page-save or runaway transcript OOMing the daemon and taking every co-hosted kb with it. The reality skeptic found it's worse than proposed: there are <em>two</em> unconditional full reads (<code>crates/kb-core/src/indexer.rs:867</code> pre-gate — which runs on every reconcile pass — and <code>:1010</code>). Gate both via a shared stat-first check on a new <code>KbSection.max_artifact_bytes</code> (the attachments-cap pattern), quarantine immediately on first detection.</p>
+
+<h3 id="p22-fleet-resilience">P22 · Fleet fan-out resilience: compaction semaphore, reconcile jitter, fan-out deadline <span class="chip chip--k">incremental</span> <span class="chip chip--k">effort S–M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt, split.</strong> All three sub-claims verified: <code>spawn_startup_compact</code> (<code>crates/kb-server/src/lib.rs:924</code>) spawns one unbounded task per kb (a ~20-corpus box IO-storms at boot — the incident's 88% host-IO signature), reconcile intervals phase-align from a serial boot loop, and <code>buffered_join</code> has no per-corpus deadline so one compacting actor drags every federated query to the slowest arm. Ship the semaphore + jitter as-is (S, sequenced after R3 lands since R3 extends the same function); scope the deadline to the search and recall routes with a degraded-corpus signal in the response; file parallel boot separately.</p>
+
+<h3 id="p15-pre-public-supply-chain">P15 · Pre-public hardening: fork-PR isolation, rc dry-run, attestation <span class="chip chip--k">incremental</span> <span class="chip chip--k">effort S–M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt leg 1 as a Z6-gate item; the rest is mostly done or downsized.</strong> Every CI job runs its <code>pull_request</code> leg on whatever runner CI is pointed at; the moment the repo flips public, a fork PR executes there. Routing every pull-request leg to GitHub-hosted runners (see <a href="https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions">GitHub’s own hardening guidance</a>) goes into the Z6-final checklist <em>before</em> &ldquo;flip public&rdquo;. The rc dry-run already exists as checklist TODOs — execute it (x86_64 + macOS pre-flip; the aarch64 leg needs public-repo ARM runners, so it smokes immediately post-flip). For signing, skip the cosign ceremony: <a href="https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds">GitHub's native build-provenance attestation</a> is one workflow line and matches the project's own &ldquo;provenance passports = theater&rdquo; ruling.</p>
+
+<h3 id="p20-invariant-diet">P20 · Slim the invariant registry <span class="chip chip--k">simplification</span> <span class="chip chip--k">effort S–M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt.</strong> The always-loaded index is ~3,560 tokens — 59% of CLAUDE.md — and fifteen entries exceed a 40-word budget; #30 alone is 3,003 characters of v0.20→v0.23 UI narration whose full text already exists in architecture-invariants.md, so trimming loses nothing. Scope to entries #28–35 plus #30/#29 (entries 1–27 are already terse; the &ldquo;#11 is 735 words&rdquo; claim measured the wrong file — the index line is a fine 148). Make the CI length check warn-only. This work compounds with the U2 aftermath, since #8/#14/#19 need text reconciliation anyway.</p>
+</section>
+
+<section>
+<h2 id="adopted-quality-and-experiments">Adopted — quality gates and bench-gated experiments</h2>
+
+<h3 id="p13-docker-dep-caching">P13 · Build speed: Docker dependency-compile caching only <span class="chip chip--k">simplification</span> <span class="chip chip--k">effort S</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (high)</p>
+<p><strong>Ruling: adopt lever 2, reject lever 1.</strong> The Dockerfile's stub layer only runs <code>cargo fetch</code> — dependencies are downloaded but never compiled into a cacheable layer, so every source change pays the full datafusion+lance graph (~20 min). Fix with a two-pass stub build mirroring release.yml's ORT-isolation split (or <a href="https://github.com/LukeMathWalker/cargo-chef">cargo-chef</a>). The other lever — pointing <code>just redeploy</code> at the fast profile — was killed by both skeptics: it silently contradicts the recorded CLAUDE.md ruling reserving <code>--release</code> for the binary the daemon runs, on a codepath with a live tail-latency program. If that ruling is ever revisited, it takes a bench and a CLAUDE.md edit, not a build-speed rider.</p>
+
+<h3 id="p14-embedder-ci-smoke">P14 · Hybrid/embedder end-to-end smoke in CI <span class="chip chip--k">incremental</span> <span class="chip chip--k">effort M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (medium)</p>
+<p><strong>Ruling: adopt the 80% slice.</strong> Real embedding, real IPC-against-ONNX, and reranking have zero CI coverage — the live-model tests exist but are <code>#[ignore]</code>d, and the e2e suite is keyword-only. Cut the full daemon-spawning HTTP harness (L work, new flakiness axis); instead un-ignore the live-model tests inside the existing embedder job as a scheduled, non-blocking leg, pointing the ~127&thinsp;MB model download at a persistent cache dir on the runner, plus one small integration: spawn kb-embedder, embed into a scratch lance table, run one hybrid query and one rerank.</p>
+
+<h3 id="p16-eslint">P16 · ESLint + react-hooks + jsx-a11y in web CI <span class="chip chip--k">incremental</span> <span class="chip chip--k">effort M</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (medium) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (medium)</p>
+<p><strong>Ruling: adopt, two-step.</strong> A 38K-LOC, largely AI-authored SPA runs no linter while carrying nine inert <code>eslint-disable</code> comments and 158 <code>useEffect</code> sites governed by manual discipline — an automated <a href="https://www.npmjs.com/package/eslint-plugin-react-hooks">hooks-deps</a> gate is a passive backstop against exactly the stale-closure bug class the invariants worry about. Step 1: flat-config with both rule sets at warn, non-blocking, ignoring <code>web/src/api/generated</code>. Step 2: promote <code>exhaustive-deps</code> to error once the audit commit lands. jsx-a11y stays warn permanently — right tier for a personal tool. Pair with the SPA report's focus-trap fix for <code>role=dialog</code> surfaces.</p>
+
+<h3 id="p21-reader-chrome-reducer">P21 · Reader-chrome state machine in detail.tsx <span class="chip chip--k">simplification</span> <span class="chip chip--k">effort L</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (medium) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (medium)</p>
+<p><strong>Ruling: adopt for a future SPA milestone, precursor first.</strong> detail.tsx is the most-edited SPA file (62+ commits, three consecutive IA re-architectures) with 33 setter call sites hand-synchronizing panel exclusivity across two near-duplicate render branches — invariant #30 literally documents the missed-edit bug class. Do the low-risk extraction first (the ~150-line duplicated right-column JSX both branches carry), then the narrow reducer over <code>{rightColumn, sheetOpen, annotate}</code> only — immersive stays URL-derived per the project's own URL-as-truth convention. Declare the v0.23 chrome the terminal design while at it, and let #30 shrink to its three load-bearing rules (which is P20's job).</p>
+
+<h3 id="p05-multilingual-model">P05 · Register BGE-M3, bench-gated on the Italian corpus <span class="chip chip--k">new-capability</span> <span class="chip chip--k">effort S</span></h3>
+<p class="verdicts">Reality: <span class="chip chip--warn">endorse-with-changes</span> (high) · Fit: <span class="chip chip--warn">endorse-with-changes</span> (medium)</p>
+<p><strong>Ruling: adopt as an experiment, not a fix.</strong> Both skeptics converged on the same correction: the measured Italian failure (semantic-only R@1 0.583) is the arm the fusion already routes around — hybrid, the actual default, scores 0.792 and ties keyword. So: register <a href="https://huggingface.co/BAAI/bge-m3">BGE-M3</a> (verified present in fastembed 5.13.4, pairs with the already-registered v2-m3 reranker), run <code>kb bench</code> on corpus-b in semantic <em>and</em> hybrid modes, and adopt only if hybrid beats 0.792 — the project's own &ldquo;ship only when relevance is at least flat&rdquo; rule. The MultilingualE5 option is cut: its query/passage prefixes are a separate plumbing project mispriced as free.</p>
+</section>
+
+<section>
+<h2 id="salvage-yard">The salvage yard — rejected as proposed, one slice worth keeping</h2>
+
+<h3 id="p06-fts-language">P06 · FTS stemming/folding <span class="chip chip--danger">reality: reject</span></h3>
+<p><strong>Ruling: the premise was false — and the investigation still paid for itself.</strong> Against the pinned lance-index 4.0.0, <code>FtsIndexBuilder::default()</code> already sets stem, ascii-folding, <em>and</em> stop-word removal (English). Salvage two things: a per-kb <code>language</code> config threaded into the one <code>create_index</code> call site, bench-gated on corpus-b; and a fresh flag nobody had raised — stop-word removal is silently ON for the code-heavy corpora, worth its own bench. The &ldquo;retire the title-boost hack&rdquo; claim dies: that hack was tuned against an already-stemmed index.</p>
+
+<h3 id="p07-private-serve">P07 · Gate artifact serve for session/memory corpora <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: the headline threat was misread, the small slice is real.</strong> Authelia gates the artifact subdomains on kb.example.com too (verified in the deployment docs) — the &ldquo;world-readable transcripts&rdquo; framing re-litigates a documented, reviewed ruling. But the reality skeptic found the piece that matters for everyone <em>else</em>: with default config (<code>[outbound]</code> unset), served artifact bytes get zero scrub. After the public flip, self-hosters without an edge gate inherit that silently. Ship the cheap slice: force the session_scrub secrets floor on non-loopback serve of memory-session (and <code>?raw</code>) bytes, add a boot WARN for a token-less non-loopback bind hosting such corpora, and one sentence in self-host.md. The per-corpus <code>serve="private"</code> flag waits for a real cross-origin auth primitive.</p>
+
+<h3 id="p08-backup-scheduler">P08 · Scheduled fleet-wide backup <span class="chip chip--danger">both: reject</span></h3>
+<p><strong>Ruling: decline — <code>kb backup</code>/<code>restore</code> already exist, and v0.24 scoped this out one commit ago.</strong> The salvage is documentation: a systemd-timer recipe wrapping the existing verb with rotation, plus the completeness critic's point nobody else raised — backups outlive <code>kb forget</code> and the delete cascade, so a purged secret persists in old tarballs; the recipe should say so and rotate accordingly. The mid-commit lance caveat can close as its own small fix (enumerate fragments from the open manifest) if it ever bites.</p>
+
+<h3 id="p09-write-time-dedup">P09 · Write-time near-duplicate guard on kb remember <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: decline the mechanism, adopt the prompt line.</strong> The fit skeptic is right: <code>kb recall --no-floor</code> is already documented as the dedup oracle, /kb-reflect already reconciles with judgment a cosine threshold cannot fake (duplicate vs same-topic-contradicts), and invariant #10's write-only ingest is a recorded decision. The corpus is write-starved, not duplicate-flooded. Salvage: one recall-before-remember step added to CLAUDE.memory.md, mirroring kb-reflect's own Step 5 — zero code, testable immediately.</p>
+
+<h3 id="p10-eval-spine">P10 · Grow the search eval spine <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: agree with both skeptics simultaneously.</strong> The reality skeptic is right that the gold set is saturated (Recall@10 ≈ 1.0 — it cannot measure further tuning) and that one named mining source doesn't exist (recollect logs; the queries ring is a 256-entry in-memory buffer, not a log). The fit skeptic is right that building 50–100 labels ahead of demand is speculative. Resolution: search tuning is <em>done</em> until a concrete ranking change wants testing; when one does, build the set to its size. Cheap prep now: snapshot <code>GET /api/kb/{kb}/queries</code> periodically to a file.</p>
+
+<h3 id="p12-write-starvation">P12 · Candidate-fact queue + reflect-debt + scheduled reflect <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: decline the daemon-side mining (it resurrects the explicitly-rejected D5 direction and duplicates /kb-reflect); adopt the visibility slice.</strong> A <code>reflect-debt</code> count (sessions with <code>memory_count==0</code> — the exact signal /kb-reflect already sweeps), a one-line SessionStart nudge in kb-wake.sh, and a documented nightly <code>claude -p '/kb-reflect'</code> cron leaving dry-run proposals for morning approval. That S-sized slice attacks the real bottleneck — the dream not being scheduled — without new machinery.</p>
+
+<h3 id="p17-search-snippets">P17 · Query snippets + match highlighting <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: re-litigate properly at the next SPA/search milestone — and here is the re-litigation.</strong> The prior deferral (the full-search-page plan) was a scoping call, not a principle, and the gap is admitted in the code itself (<code>web/src/components/search/SearchResultCard.tsx</code>: &ldquo;the server has no match-highlighted snippet&rdquo;) — any match past character 400 of a longread never highlights at all, while retrieval quality now outruns the ability to show <em>why</em> a hit matched. What changed since the deferral: the reality skeptic designed the contract that removes the original cost concern — a plain-text <code>snippet</code> field under <code>detail=full</code> only, windowed to the real match, highlighted client-side by the existing <code>highlight()</code>; no server HTML, no new escaping surface. Scope to the non-chunked body path (chunking is off everywhere in prod). Honest effort: M–L, because <code>body</code> must join the projection conditionally.</p>
+
+<h3 id="p19-config-apply">P19 · kb config apply <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: agree — this is the already-recorded CLI-hygiene backlog item, not a high-payoff standalone.</strong> The gap is real (the CLI prints &ldquo;restart the daemon or use Settings&rdquo; while the SPA gets restart-with-rollback), the plumbing exists, and it ships as <code>ConfigAction::Apply</code> whenever the CLI-hygiene bucket clears — alongside the uniform <code>--json</code> error envelope (the actual biggest CLI-vs-agent gap, per the <a href="agent-experience-review-2026-07.html">AX review</a>), <code>--daemon</code> name resolution, and the push→events convergence.</p>
+
+<h3 id="p04-cascade-policy">P04 · Fix the R2 cascade policy <span class="chip chip--danger">fit: reject</span></h3>
+<p><strong>Ruling: superseded by urgent flag U2.</strong> The fit skeptic correctly caught that P04-as-written asks an agent to unilaterally reverse an operator-locked decision (D3). The reality skeptic equally correctly verified every technical claim — and sharpened them (the sweep runs every tick, not just first-run; list_entries should leave the registry entirely, not flip modes). Both are right, which is why this graduates from &ldquo;proposal&rdquo; to &ldquo;decision the operator must make before R2 commits&rdquo;, with my recommendation recorded in U2.</p>
+</section>
+
+<section>
+<h2 id="deferred-with-trigger">Deferred with trigger</h2>
+
+<h3 id="p18-single-store-swap">P18 · <a href="https://github.com/asg017/sqlite-vec">sqlite-vec</a>/usearch + FTS5 single-store spike <span class="chip chip--warn">both: endorse-with-changes</span> <span class="chip chip--k">effort XL</span></h3>
+<p><strong>Ruling: keep it on file, don't schedule it.</strong> The pain is real (126&thinsp;MB binary, 20-min cold links, the arrow pin freezing two years of upstream fixes, the entire cascade apparatus as two-store consistency tax) — but it is DX pain, not user pain, and the project's own frozen research set a re-spike trigger (~50k docs/kb) that no real corpus approaches (largest: ~288). Recorded triggers for reopening: a real corpus nearing the threshold; lance forcing a breaking re-validation anyway; or build/binary cost actually blocking work. The optional near-term slice — formalizing a <code>StorageBackend</code> trait at the StorageMsg seam — is a fine post-v0.24 testability cleanup, but it touches exactly the files R1–R4 are rewriting, so not before the tag. Meanwhile, do the S-sized dependabot ignore rule for the arrow/lance group and stop the un-mergeable-PR treadmill.</p>
+
+<h3 id="p01-read-bypass">P01 · Storage read-bypass (ReadHandle) <span class="chip chip--danger">fit: reject</span> <span class="chip chip--k">effort XL</span></h3>
+<p><strong>Ruling: it remains the end-state — on the phase-3 plan's own sequencing, not as a standalone rearchitecture.</strong> The single read/write lane is the #1 structural tail-latency source and the actor header has carried the TODO since v0.0.1. But the acute incident is ops-fixed, the uncommitted tail-latency plan explicitly sequences the smaller, higher-certainty fixes first (P02 timeout, query-priority lane), and the reality skeptic corrected the scope: a full bypass of the ~120-message surface is XL and the fan-out payoff claim overpromises. Gate the read-bypass on queue-wait evidence from the metrics the L-track just wired, scope it to the doc/search read path, and fight the invariant-budget slot question when it's actually scheduled.</p>
+</section>
+
+<section>
+<h2 id="adopted-from-the-critic">Adopted from the completeness critic</h2>
+<ul>
+<li><strong>Recall-hook timeout (adopt now, trivially small):</strong> kb-recall.sh runs on <em>every turn in every project machine-wide</em> with no internal timeout — a degraded daemon silently adds up to 15s per prompt. Wrap the call in <code>timeout ~2s</code> and distinguish &ldquo;no memories&rdquo; from &ldquo;recall timed out&rdquo; in the injected context. The single best latency-per-line fix available.</li>
+<li><strong>One second-platform CI leg</strong> (default-features build+test) as a portability canary — every current job runs on the same single Linux image while the docs promise macOS/WSL support; the glibc/ORT incident class is exactly what a second platform catches. Full OS matrix: no.</li>
+<li><strong>Two scheduled cargo-fuzz targets</strong> — <code>parser::extract</code> and the session digest parse — the two hand-rolled parsers fed by the least-trusted bytes. Scheduled, not per-push.</li>
+<li><strong>Record the refusal on multi-human identity:</strong> one shared bearer is correct until a second human actually appears; write it into the non-goals so the next reviewer stops asking.</li>
+<li><strong>Alerting recipe, not alerting feature:</strong> document healthz + uptime-kuma (or a systemd OnFailure unit) in self-host.md. The daemon stays pull-only.</li>
+<li><strong>Backup ⊃ forget note</strong> and <strong>plugin-marketplace pinning</strong>: one paragraph each, in the backup recipe and the packaging checklist respectively.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="the-big-picture">The big picture</h2>
+
+<h3 id="stack-scorecard">The stack scorecard</h3>
+<p>The technology-refresh lens graded every pillar against a mid-2026 greenfield; the verdicts double as a vaccination card against fashion-driven rewrites.</p>
+<table>
+<thead><tr><th>Pillar</th><th>Verdict</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>axum / tokio / hyper</td><td><span class="chip chip--ok">keep</span></td><td>Zero pain evidence in git or invariants.</td></tr>
+<tr><td>SSE (not WebSocket)</td><td><span class="chip chip--ok">keep</span></td><td>Unidirectional + native cursor resume is exactly the need; the SharedWorker host has been stable since landing.</td></tr>
+<tr><td>ts-rs (not OpenAPI)</td><td><span class="chip chip--ok">keep</span></td><td>The only consumers are the SPA and a Rust CLI sharing kb-core types natively. Revisit only if the MCP trigger fires.</td></tr>
+<tr><td>fastembed + static ORT sidecar</td><td><span class="chip chip--ok">keep</span></td><td>Best-reasoned choice in the stack. Optional candle spike exists purely to delete ORT and its build-time CDN fetch.</td></tr>
+<tr><td>React 18 + Vite 6 + TanStack</td><td><span class="chip chip--ok">keep</span></td><td>React 19 offers nothing a single-user reader needs; bump opportunistically.</td></tr>
+<tr><td>comrak, notify, rusqlite</td><td><span class="chip chip--ok">keep</span></td><td>Boring and correct.</td></tr>
+<tr><td>lancedb + arrow pin</td><td><span class="chip chip--warn">keep-with-triggers</span></td><td>Survives on migration cost, not merit, at this scale: IVF-PQ never trains below 256 rows, datafusion is never called directly, and the pin freezes upstream fixes. Triggers recorded under P18.</td></tr>
+</tbody>
+</table>
+
+<h3 id="the-strategic-fault-line">The strategic fault line</h3>
+<p>Every deep structural finding in this review traces to one decision: two stores with two transaction boundaries behind one single-writer actor. The cascade engine, the orphan sweep, the compaction babysitter, the ensure-columns ladder beside refinery, the error-string idempotency gates, invariant #1 itself — all of it is the dual store's consistency tax, being paid in perpetuity. And yet the review's verdict is to <em>keep paying it for now</em>: the migration is XL, the quality-parity risk is real, and the scale that would force it does not exist. What matters is that the decision is now explicit and instrumented — triggers recorded, seams hardened, an optional trait boundary sketched — instead of implicit and drifting. This is the difference between a fault line you monitor and one that surprises you.</p>
+
+<h3 id="finish-the-reliability-arc">Finish the reliability arc</h3>
+<p>v0.24 (supervision, cascade, retention, logging) plus the uncommitted phase-3 tail-latency plan plus this portfolio's P02/P03/P11/P22 are one arc, not three efforts. The reliability lens independently converged on the phase-3 sequencing: bound the embed IPC first (the only failure mode that is <em>permanent</em> rather than slow), then the query-priority lane, then the read-bypass when queue-wait numbers demand it. The remaining observability gap is precise: a slow-query ring and histogram resolution above the 10-second bucket — the exact regime the 2026-07-03 incident lived in, invisible to a bucket whose top reads &ldquo;&gt;10s&rdquo;.</p>
+
+<h3 id="the-public-flip-changes-the-math">The public flip changes the security math</h3>
+<p>Today's trust model is coherent because the edge is the gate and the operator is the only tenant. Both assumptions break at Z6: fork PRs reach CI (route every pull-request leg to GitHub-hosted runners before the flip), and future self-hosters inherit a default config in which auth-free artifact bytes get zero scrub. The P15 leg-1 toggle, the P07 scrub-floor slice, the boot WARN, and the scrub shape-list refresh (Stripe/GitLab/npm patterns with a dated review anchor) are all small — and they are the difference between &ldquo;secure for me&rdquo; and &ldquo;secure by default&rdquo;.</p>
+
+<h3 id="stop-tuning-search-start-showing-it">Stop tuning search; start showing it</h3>
+<p>The search-quality program did its job: hybrid is the right default, the reranker and chunking correctly sit off, and the gold set is saturated — which means every further ranking idea is unmeasurable until a concrete change justifies a harder eval set. The user-visible frontier is presentational: query snippets and match highlighting (P17's re-litigation), one filter grammar instead of two, one <code>since</code> vocabulary instead of three. Retrieval already outruns explanation; close that gap first.</p>
+
+<h3 id="schedule-the-dream-protect-the-record">Schedule the dream; protect the record</h3>
+<p>Memory and sessions tell one story from opposite ends. The curated side is write-starved (13 facts vs 196 sessions) and its inert machinery — floors that never fire, pins never used, scope tiers never exercised — is over-built for a corpus this size; the fix is a scheduled nightly reflect, a visible debt counter, and a recall-before-remember habit, all agent-layer, all S-sized. The episodic side has the opposite problem: capture works <em>too</em> well (the per-Stop defect, U3) and the differentiator — digest-not-JSONL with provenance — is undermined by exactly one code path (P11). Protect the record, schedule the dream, and resist every proposal to automate judgment into the daemon; the fit skeptics killed three of those this review, correctly, each time by citing a ruling the project had already written down.</p>
+
+<h3 id="the-product-frontier">The product frontier: synthesis on rails already laid</h3>
+<p>The genuinely new capabilities worth building all consume infrastructure that already exists and stays deterministic: <strong>topic pages</strong> (<code>kb topic &lt;cluster|tag&gt;</code> scaffolding a durable artifact from atlas cluster membership + edges + backlinks, with a slot for agent-written synthesis); <strong>resurfacing</strong> (<code>kb resurface</code> ranking by inbound-edge importance × attention-staleness from reading progress — the library is currently write-only after first read); and a <strong>staleness pair report</strong> (KNN neighbors sharing a tag but diverging sharply on mtime — the deterministic seed of the contradiction-surfacing the memory-evolution research asked for). Each has an S/M first slice; none violates the no-in-daemon-LLM line. And two refusals deserve recording so future reviews stop relitigating them: no generic web-clipper, and no multi-human identity until a second human exists.</p>
+
+<h3 id="the-meta-system-passed-its-audit">The meta-system passed its own audit</h3>
+<p>The most consequential finding of this review is about the process, not the code: nine of twenty-two proposals were rejected because a skeptic could cite a recorded decision — the non-goals constitution, an operator-locked plan, a prior deferral, a CLAUDE.md ruling. That is the decision-record architecture doing exactly what it was built for, at adversarial-review scale. The corollary cuts both ways: the records only work when maintained, and the audit found the maintenance drifting — a ~3,560-token invariant index (P20), four untagged milestones, the narrative home frozen at v0.19, and no recorded rationale for choosing v0.24 over fresh-eyes' Release Zero pick. All S-effort fixes. A system whose reviews are only as sharp as its records should treat record hygiene as engineering, because here it demonstrably is.</p>
+</section>
+
+<section>
+<h2 id="the-road-after-v024">The road after v0.24</h2>
+<h3 id="v025-finish-the-reliability-arc">v0.25 — finish the reliability arc (recommended)</h3>
+<ol>
+<li>Resolve U2, land R2, run v0.24 to its tag (prerequisite, not a phase).</li>
+<li>U3: land the one-file capture fix; dedup the 392-file legacy sessions; retire newest-capture scoping.</li>
+<li>P02: embed-IPC per-request timeout + hung-after-handshake test.</li>
+<li>P11: empty-digest stub + regression test; parse-health counter via doctor.</li>
+<li>P03: <code>max_artifact_bytes</code> at both read sites, immediate quarantine.</li>
+<li>P22: startup-compaction semaphore + reconcile jitter; fan-out deadline on search/recall.</li>
+<li>Phase-3 step 2 (query-priority embed lane); read-bypass stays evidence-gated.</li>
+<li>Recall-hook timeout + degraded signal in kb-recall.sh.</li>
+<li>P20: invariant-index diet + tag backfill + pick the narrative home + record milestone-selection provenance.</li>
+<li>Z6 gate (before the public flip, whenever that is): P15 leg 1, rc dry-run, P07 scrub-floor slice + boot WARN, scrub shape refresh.</li>
+</ol>
+<h3 id="v026-candidates">v0.26 — candidates by appetite</h3>
+<ul>
+<li><strong>SPA quality:</strong> P16 (lint two-step), P21 (extraction then reducer), P17 (snippets, re-litigated), focus traps, Firefox e2e project.</li>
+<li><strong>Search experiments:</strong> P05 (BGE-M3, bench-gated), P06 slice (per-kb language; stop-word bench on code corpora).</li>
+<li><strong>CLI hygiene bucket:</strong> uniform <code>--json</code> error envelope, <code>--daemon</code> name resolution, config apply, push→events convergence.</li>
+<li><strong>Server hygiene bucket:</strong> ApiError newtype (326 sites), extractor-rejection problem+json, iframe JS to build-checked TS, per-asset trampoline skip.</li>
+<li><strong>Product frontier:</strong> nightly dream + reflect-debt (S), topic pages (M), <code>kb resurface</code> (M), staleness pair report (M).</li>
+<li><strong>Simplification sweep</strong> (each gated on one usage answer): atlas PCA-only, reading-telemetry collapse, sessions-analytics trim, versions git-primary, corkboard→pins, enrich freeze, D7 seam resolution, publish-backend freeze.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="what-not-to-do">What not to do</h2>
+<ul>
+<li><strong>No storage rewrite now.</strong> The triggers are recorded under P18; until one fires, the spike is a distraction with an XL price tag.</li>
+<li><strong>Don't move the daemon off <code>--release</code>.</strong> Recorded ruling, live latency program; revisiting it takes a bench, not a rider.</li>
+<li><strong>Don't build the MCP server.</strong> The trigger (a second agent harness in real use, or credible inbound demand) has not fired; the CLI-is-the-protocol stance holds. Keep the one-day adapter sketch on file.</li>
+<li><strong>No write-time gates on <code>kb remember</code>.</strong> Ingest stays write-only (#10); reconciliation stays in /kb-reflect where judgment lives.</li>
+<li><strong>Don't build the 100-query gold set speculatively.</strong> Eval effort follows a concrete ranking change, sized to it.</li>
+<li><strong>Don't grow the sessions analytics surface</strong> until something proves the funnel/rollup cards get consulted.</li>
+<li><strong>Skip signing ceremony.</strong> GH-native attestation over cosign; the project already ruled provenance passports are theater when nobody verifies them.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="provenance">Provenance</h2>
+<p>Ultracode workflow <code>wf_775c8c02-acf</code>, 2026-07-05, orchestrated and synthesized by Claude Fable 5; Opus reviewers, Sonnet skeptics: 64 agents, 5,757,485 subagent tokens, 1,543 tool calls, 56 minutes. Baseline main @ <code>2ff019da</code>; all agents read-only against a working tree carrying the live v0.24 run. Companion reference volume with all 18 full reports: kb under the microscope (2026-07) (private). Related prior work this builds on: fresh-eyes next-iteration review (private) (product/positioning), <a href="agent-experience-review-2026-07.html">agent-experience review</a> (agent ergonomics, same day, different session), and the v0.24 plan artifact.</p>
+</section>
+
+</article>
+</main>
+</body>
+</html>

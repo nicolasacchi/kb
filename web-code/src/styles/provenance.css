@@ -1,0 +1,1556 @@
+/* W4.4 (blame gutter + why-panel + session-diff), W4.5 (live-mirror
+ * toast/banner), W4.6 (annotations gutter + panel), W4.7 (checkout dialog)
+ * — the LAST SPA styling pass. Every color reaches for a `tokens.css`
+ * variable, same discipline `reader.css`/`search.css` document; the
+ * inspector rail's tabbed-icon-row idiom deliberately echoes kb's own
+ * merged-inspector-rail convention (root CLAUDE.md invariant #30) scaled
+ * down to plain text tabs (kb-code has no icon set of its own yet). */
+
+/* --- Provenance toggle (top bar) ----------------------------------------
+ * Superseded by Wave C's 3-state segmented control (`.kbc-provenance-
+ * toggle` is now the GROUP wrapper, `.kbc-provenance-toggle__opt` each
+ * button) — see `styles/history.css`, which owns this selector now. */
+
+/* --- Line gutters (shared dot/plus chrome, editor/lineGutter.ts) -------- */
+
+.cm-gutter.kbc-blame-gutter,
+.cm-gutter.kbc-annot-gutter,
+.cm-gutter.kbc-diag-gutter {
+  width: 14px;
+  cursor: pointer;
+}
+/* PRR-U9 — no click handler on the diagnostics gutter (see CodeView.tsx's
+ * `diagHandlersRef` doc): default cursor, not the clickable-gutter pointer
+ * the other two use. */
+.cm-gutter.kbc-diag-gutter {
+  cursor: default;
+}
+.kbc-linegutter-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: 5px auto 0;
+  border-radius: 50%;
+}
+
+/* Blame dots: trailer/exact = solid fill, fuzzy = outlined ring, none =
+ * absent entirely (no marker rendered at all — see `lib/blameGutter.ts`). */
+.kbc-blame-dot--solid {
+  background: var(--accent);
+}
+.kbc-blame-dot--outline {
+  background: transparent;
+  border: 1.5px solid var(--accent-soft);
+}
+.kbc-linegutter-dot.kbc-blame-dot--hover {
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+/* Annotation markers: an existing annotation, and the hover-only "+"
+ * add-annotation affordance (`ANNOTATION_PLUS` in `CodeView.tsx`). */
+.kbc-annot-dot {
+  background: var(--warn);
+}
+.kbc-annot-plus {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: transparent;
+  border: 1px dashed var(--ink-dim);
+  position: relative;
+}
+.kbc-annot-plus::before,
+.kbc-annot-plus::after {
+  content: "";
+  position: absolute;
+  background: var(--ink-mute);
+}
+.kbc-annot-plus::before {
+  left: 1px;
+  right: 1px;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.kbc-annot-plus::after {
+  top: 1px;
+  bottom: 1px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+/* PRR-U9 — diagnostics gutter marks (design-addendum-2.md §D). One dot
+ * per `DiagnosticSeverityLabel`; a line with multiple diagnostics shows
+ * the WORST severity's color only (`lib/diagnostics.ts`'s
+ * `diagnosticGutterMarks`). */
+.kbc-diag-dot--error {
+  background: var(--red);
+}
+.kbc-diag-dot--warning {
+  background: var(--warn);
+}
+.kbc-diag-dot--info {
+  background: var(--blue);
+}
+.kbc-diag-dot--hint,
+.kbc-diag-dot--unknown {
+  background: transparent;
+  border: 1.5px solid var(--ink-dim);
+}
+
+/* --- R12 originating-change (why-panel) --------------------------------- */
+
+.kbc-why__origin {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+}
+.kbc-why__origin-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  margin-bottom: 6px;
+}
+.kbc-why__origin-diff {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.kbc-why__origin-diff .kbc-diff__header {
+  display: none; /* path already known from the why-panel head */
+}
+.kbc-why__origin-more {
+  font-size: 12px;
+  color: var(--ink-mute);
+  margin: 6px 0 0;
+}
+
+/* --- R12 line-history popup (`gh`) -------------------------------------- */
+
+.kbc-line-history {
+  max-width: 560px;
+}
+.kbc-line-history__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1 1 auto;
+}
+.kbc-line-history__note {
+  font-weight: 400;
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-line-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow: auto;
+}
+.kbc-line-history__row {
+  display: grid;
+  grid-template-columns: 5.5em 11em 1fr;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-line-history__row:hover,
+.kbc-line-history__row--active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.kbc-line-history__date {
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.kbc-line-history__subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Blame hover chip (disclosure ladder step 2) ------------------------ */
+
+.kbc-blame-chip {
+  z-index: var(--z-popover-hi);
+  max-width: 280px;
+  padding: 5px 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.kbc-blame-chip--solid {
+  border-left: 2px solid var(--accent);
+}
+.kbc-blame-chip--outline {
+  border-left: 2px dashed var(--accent-soft);
+}
+
+/* --- Inspector rail (Outline / Provenance / Annotations tabs) ----------- */
+
+.kbc-inspector {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+/* F3b — icon rail (was a text-tab strip): mirrors kb's own
+ * `.kb-pinsp__icons`/`.kb-pinsp__itab`/`.kb-pinsp__itab-badge` (root
+ * CLAUDE.md invariant #30), kbc-prefixed. */
+.kbc-inspector__icons {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-inspector__itab {
+  flex: 1;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+.kbc-inspector__itab:hover {
+  color: var(--ink);
+}
+.kbc-inspector__itab.is-on {
+  background: var(--accent-bg);
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kbc-inspector__itab-badge {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 9px;
+  display: grid;
+  place-items: center;
+}
+.kbc-inspector__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.kbc-inspector__hint {
+  padding: 16px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+
+/* --- Cited-by strip (DCB W3.B, CitedBy.tsx) — always visible above the
+ * tab body, rendered between `.kbc-inspector__icons` and
+ * `.kbc-inspector__body` regardless of which tab is selected; nothing at
+ * all when the open file has zero claims. */
+.kbc-inspector__citedby {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-inspector__citedby-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-inspector__citedby-toggle:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-inspector__citedby-label--rotted {
+  color: var(--warn);
+}
+.kbc-inspector__citedby-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* m4 (W3.B.R review): the rail itself is overflow:hidden by design, so an
+   * unbounded expanded list (many citing docs) would clip rather than
+   * scroll on mobile. Cap + scroll locally instead. */
+  max-height: 40vh;
+  overflow: auto;
+}
+.kbc-inspector__citedby-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-inspector__citedby-title {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+a.kbc-inspector__citedby-title:hover {
+  text-decoration: underline;
+}
+.kbc-inspector__citedby-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-inspector__citedby-group {
+  color: var(--accent-soft);
+}
+.kbc-inspector__citedby-hint {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* --- Framework card (T1, design-ui.md §9.4a, FrameworkCard.tsx) — mounted
+ * the SAME always-visible way `.kbc-inspector__citedby` is: between
+ * `.kbc-inspector__icons` and `.kbc-inspector__body`, regardless of tab.
+ * Renders NOTHING until its own fetch lands (see that component's doc), so
+ * there is no "loading" treatment here to style. */
+.kbc-framework {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-framework__head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.kbc-framework__title {
+  color: var(--ink-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.kbc-framework__absence {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-framework__group + .kbc-framework__group {
+  margin-top: 8px;
+}
+.kbc-framework__group-title {
+  color: var(--ink-mute);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+.kbc-framework__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-framework__row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kbc-framework__kind {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.kbc-framework__link {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.kbc-framework__link:hover {
+  text-decoration: underline;
+  color: var(--accent-soft);
+}
+.kbc-framework__plain {
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.kbc-framework__detail {
+  color: var(--ink-mute);
+  font-size: 10px;
+}
+
+/* --- Diagnostics card (PRR-U9, design-addendum-2.md §D, DiagnosticsCard.tsx)
+ * — mounted the SAME always-visible way `.kbc-framework`/`.kbc-inspector__
+ * citedby` are: between `.kbc-inspector__icons` and `.kbc-inspector__body`.
+ * Renders nothing at all when no provider covers the file's language (see
+ * that component's doc) — no "absent" state to style here. */
+.kbc-diagnostics {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-diagnostics__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.kbc-diagnostics__title {
+  color: var(--ink-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.kbc-diagnostics__summary {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-diagnostics__hint,
+.kbc-diagnostics__reason,
+.kbc-diagnostics__clean {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-diagnostics__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.kbc-diagnostics__jump {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 2px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+.kbc-diagnostics__jump:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-diagnostics__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border-radius: 50%;
+}
+.kbc-diagnostics__loc {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.kbc-diagnostics__message {
+  flex: 1 1 auto;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.kbc-diagnostics__meta {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+}
+
+/* --- Quick fixes (S2-C, design-s2.md §S2-C, QuickFixes.tsx) — the "Fixes"
+ * affordance every `DiagnosticsCard` row carries. Shared by BOTH the
+ * Reader inspector and the review-diff diagnostics inspector, since both
+ * mount the SAME `DiagnosticsCard` component. */
+.kbc-quickfixes {
+  margin-top: 2px;
+}
+.kbc-quickfixes__trigger {
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: 10px;
+  cursor: pointer;
+}
+.kbc-quickfixes__trigger:hover {
+  background: var(--bg-card-hi);
+  color: var(--ink);
+}
+.kbc-quickfixes__panel {
+  margin-top: 4px;
+  padding-left: 4px;
+  border-left: 2px solid var(--rule);
+}
+.kbc-quickfixes__hint,
+.kbc-quickfixes__reason {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-quickfixes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-quickfixes__action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 3px 6px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+.kbc-quickfixes__action:hover:not(:disabled) {
+  background: var(--bg-card-hi);
+}
+.kbc-quickfixes__action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.kbc-quickfixes__title {
+  font-size: 11px;
+}
+.kbc-quickfixes__meta {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+/* --- Why-panel (disclosure ladder step 3) ------------------------------- */
+
+.kbc-why {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.kbc-why--loading {
+  color: var(--ink-mute);
+}
+.kbc-why__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.kbc-why__line {
+  color: var(--ink);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.kbc-why__confidence {
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.kbc-why__confidence--trailer,
+.kbc-why__confidence--exact {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-why__confidence--fuzzy {
+  background: transparent;
+  border: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kbc-why__confidence--none {
+  background: var(--bg-card-hi);
+  color: var(--ink-dim);
+}
+.kbc-why__commit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.kbc-why__sha {
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+}
+.kbc-why__subject {
+  color: var(--ink);
+}
+.kbc-why__meta {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-why__absence {
+  color: var(--ink-mute);
+  font-style: italic;
+  margin: 0 0 8px;
+}
+.kbc-why__context {
+  margin-bottom: 8px;
+}
+.kbc-why__prompt {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--rule-hi);
+  color: var(--ink-mute);
+  font-style: italic;
+}
+.kbc-why__decisions {
+  margin: 0;
+  padding-left: 16px;
+}
+.kbc-why__decision-kind {
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.kbc-why__siblings {
+  margin-bottom: 8px;
+}
+.kbc-why__siblings-title {
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.kbc-why__siblings ul {
+  margin: 0;
+  padding-left: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-why__memories {
+  margin-bottom: 8px;
+}
+.kbc-why__memories-title {
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.kbc-why__memories ul {
+  margin: 0;
+  padding-left: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-why__timeline-toggle {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.kbc-why__timeline-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-why__open-session {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--accent-soft);
+  text-decoration: none;
+  font-size: 12px;
+}
+.kbc-why__open-session:hover {
+  text-decoration: underline;
+}
+
+/* --- File story (CT-E2 — session timeline + attention-gap beats) --------- */
+
+.kbc-story-timeline {
+  padding: 10px 12px;
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-story-timeline__title {
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.kbc-story-timeline__hint {
+  color: var(--ink-mute);
+}
+.kbc-story-timeline__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-story-timeline__beat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.kbc-story-timeline__when {
+  color: var(--ink-dim);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.kbc-story-timeline__label {
+  color: var(--ink);
+}
+.kbc-story-timeline__meta {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+/* The attention-gap beat — a MUTED DIVIDER row, not a session row: dashed
+   rules either side of the count + date-range label. */
+.kbc-story-timeline__gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-mute);
+  font-style: italic;
+  font-size: 11px;
+}
+.kbc-story-timeline__gap::before,
+.kbc-story-timeline__gap::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed var(--rule-hi);
+}
+.kbc-story-timeline__gap-label {
+  white-space: nowrap;
+}
+
+/* --- Annotations panel --------------------------------------------------- */
+
+.kbc-annotations {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.kbc-annotations__composer {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-annotations__composer-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.kbc-annotations__line-input {
+  width: 52px;
+  flex: 0 0 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.kbc-annotations__body-input {
+  flex: 1 1 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  resize: vertical;
+}
+.kbc-annotations__save {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-annotations__save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.kbc-annotations__empty {
+  padding: 16px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-annotations__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-annotations__item {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-annotations__goto {
+  flex: 0 0 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  height: fit-content;
+  cursor: pointer;
+}
+.kbc-annotations__item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kbc-annotations__text {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 12px;
+  word-break: break-word;
+}
+.kbc-annotations__text--resolved {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+}
+.kbc-annotations__item-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kbc-annotations__badge {
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.kbc-annotations__badge--stale {
+  background: color-mix(in srgb, var(--warn) 25%, transparent);
+  color: var(--warn);
+}
+.kbc-annotations__badge--resolved {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--green);
+}
+.kbc-annotations__item-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-annotations__item-actions button {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.kbc-annotations__delete:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* --- Phase D — composer v2: range badge / symbol toggle / intent select - */
+
+.kbc-annotations__range-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbc-annotations__composer-options {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-annotations__symbol-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.kbc-annotations__symbol-toggle input:disabled {
+  cursor: default;
+}
+.kbc-annotations__intent-select {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+/* --- Phase D — intent chips (shared: reader panel items + the Commit/
+ * Compare diff-comment strip, `components/annotations/IntentChip.tsx`) --- */
+
+.kbc-intent-chip {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.kbc-intent-chip--note {
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+}
+.kbc-intent-chip--question {
+  background: color-mix(in srgb, var(--blue) 20%, transparent);
+  color: var(--blue);
+}
+.kbc-intent-chip--todo {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.kbc-intent-chip--tour-stop {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent-soft);
+}
+/* flag-for-agent is an INSTRUCTION TO THE AGENT, not a passive note — the
+ * one intent that gets a SOLID (not tinted) fill + bold weight, so it reads
+ * as an imperative at a glance rather than blending in with the others.
+ * Fill/foreground ride dedicated tokens (tokens.css) because the shared
+ * --red is tuned as a TEXT color per theme: white-on---red measured 3.05:1
+ * in dark mode (F5's audit residual, fixed here) while light mode's
+ * darkened red carries white fine — the pair is per-theme by necessity. */
+.kbc-intent-chip--flag-for-agent {
+  background: var(--intent-flag-bg);
+  color: var(--intent-flag-fg);
+  border-color: var(--intent-flag-bg);
+  font-weight: 600;
+}
+
+/* --- Phase D — intent filter row (All | Flagged | Questions | Todos) ---- */
+
+.kbc-annotations__filters {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-annotations__filter {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.kbc-annotations__filter.is-on {
+  background: var(--accent-bg);
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+
+/* --- Phase D — anchor-kind badges (range / symbol / diff-sha) ----------- */
+
+.kbc-annotations__goto--range {
+  color: var(--accent-soft);
+}
+.kbc-annotations__sha-chip {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* --- Phase D — threads: parent row + indented replies + reply composer - */
+
+.kbc-annotations__thread {
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-annotations__thread .kbc-annotations__item {
+  border-bottom: none;
+}
+.kbc-annotations__thread.is-resolved > .kbc-annotations__item .kbc-annotations__text {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+}
+.kbc-annotations__replies {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 8px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-annotations__reply {
+  border-left: 2px solid var(--rule);
+  padding-left: 8px;
+}
+.kbc-annotations__reply .kbc-annotations__text {
+  font-size: 12px;
+  margin: 0 0 2px;
+}
+.kbc-annotations__reply-meta {
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kbc-annotations__reply-composer {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px 34px;
+}
+.kbc-annotations__reply-input {
+  flex: 1 1 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 3px 6px;
+  font-size: 11px;
+}
+.kbc-annotations__reply-composer button {
+  flex: 0 0 auto;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-annotations__reply-composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- V70-A10 ("Workspaces v0") — the rail's "Workspace notes" section ---
+ * Deliberately mirrors `.kbc-annotations__*` field-for-field (same
+ * composer/thread/reply shape, a note IS an annotation) rather than a
+ * second design; only the section headers (general notes vs. per-file
+ * groups) and the attach-to-current-line toggle are new. */
+
+.kbc-ws-notes {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.kbc-ws-notes__composer {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-ws-notes__body-input {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  resize: vertical;
+}
+.kbc-ws-notes__attach-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+.kbc-ws-notes__save {
+  align-self: flex-start;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kbc-ws-notes__save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.kbc-ws-notes__empty {
+  padding: 16px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.kbc-ws-notes__section {
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-ws-notes__section-head {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+  background: var(--bg-card-hi);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbc-ws-notes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-ws-notes__thread {
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-ws-notes__thread:last-child {
+  border-bottom: none;
+}
+.kbc-ws-notes__item {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.kbc-ws-notes__goto {
+  flex: 0 0 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  height: fit-content;
+  cursor: pointer;
+}
+.kbc-ws-notes__item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kbc-ws-notes__text {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 12px;
+  word-break: break-word;
+}
+.kbc-ws-notes__text--resolved {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+}
+.kbc-ws-notes__item-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kbc-ws-notes__badge {
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--green);
+}
+.kbc-ws-notes__item-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-ws-notes__item-actions button {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.kbc-ws-notes__delete:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.kbc-ws-notes__replies {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 8px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-ws-notes__reply {
+  border-left: 2px solid var(--rule);
+  padding-left: 8px;
+}
+.kbc-ws-notes__reply .kbc-ws-notes__text {
+  font-size: 12px;
+  margin: 0 0 2px;
+}
+.kbc-ws-notes__reply-meta {
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kbc-ws-notes__reply-composer {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px 34px;
+}
+.kbc-ws-notes__reply-input {
+  flex: 1 1 auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 3px 6px;
+  font-size: 11px;
+}
+.kbc-ws-notes__reply-composer button {
+  flex: 0 0 auto;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-ws-notes__reply-composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Live-mirror toast + banner (W4.5) ----------------------------------- */
+
+.kbc-livemirror-toast {
+  position: sticky;
+  top: 0;
+  /* SH.C1 — was an off-ladder literal `15`; this is a sticky banner that
+   * only needs to clear the reader's component-local sticky rows (z 3-4),
+   * so the app-level `--z-bar` rung (bars, 5) is the right home on the
+   * ladder. */
+  z-index: var(--z-bar);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+  font-size: 12px;
+}
+.kbc-livemirror-toast__refresh {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-livemirror-toast__dismiss,
+.kbc-headmoved-banner__dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.kbc-headmoved-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border-bottom: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.kbc-headmoved-banner code {
+  font-family: var(--font-mono);
+}
+.kbc-headmoved-banner button:not(.kbc-headmoved-banner__dismiss) {
+  background: none;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* --- Watcher-state chip (F1 — repo pill's dropdown, was the repo picker's,
+ * W4.5) ------------------------------------------------------------------ */
+
+.kbc-repopopover__badge--watching {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+  color: var(--green);
+}
+.kbc-repopopover__badge--polling {
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+}
+.kbc-repopopover__badge--gated {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+}
+
+/* --- Ref picker "Switch" action + checkout dialog (W4.7) ---------------- */
+
+.kbc-refpicker__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.kbc-refpicker__row > button:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbc-refpicker__switch {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-dim);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.kbc-refpicker__switch:hover {
+  color: var(--accent-soft);
+  border-color: var(--accent-bor);
+}
+
+/* Ported confirm dialog chrome (invariant #32: `.confirm`/`.confirm__go`) —
+ * kb-code had no destructive-action dialog before W4.6/W4.7, so this is the
+ * FIRST definition of these classes in this crate (kb's own `web/` owns the
+ * canonical version this mirrors). */
+.confirm {
+  width: min(420px, 92vw);
+  padding: 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  box-shadow: var(--shadow-lift);
+}
+.confirm::backdrop {
+  /* F5 light-theme audit — see search.css's `.kbc-omnibox-backdrop` doc;
+   * same fix, same token. */
+  background: var(--backdrop);
+}
+.confirm__title {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.confirm__body {
+  font-size: 13px;
+  color: var(--ink-mute);
+  margin-bottom: 16px;
+}
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.confirm__cancel {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.confirm__go {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.confirm__go.is-danger {
+  background: var(--red);
+}
+.confirm__go:disabled,
+.confirm__cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-checkout__dirty-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--warn);
+}
+.kbc-checkout__error {
+  color: var(--red);
+}
+
+/* --- Session diff page (/session/:sid/diff, W4.4) ------------------------ */
+
+.kbc-sessiondiff {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.kbc-sessiondiff__title {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+.kbc-sessiondiff__totals {
+  color: var(--ink-mute);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.kbc-sessiondiff__degraded {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 12px;
+}
+.kbc-sessiondiff__segments {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.kbc-sessiondiff__segment--prompt {
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+}
+.kbc-sessiondiff__prompt-header {
+  font-size: 14px;
+  margin: 0 0 2px;
+  font-weight: 500;
+}
+.kbc-sessiondiff__ts {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-sessiondiff__commit {
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+.kbc-sessiondiff__commit-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+.kbc-sessiondiff__sha {
+  font-family: var(--font-mono);
+  color: var(--accent-soft);
+}
+.kbc-sessiondiff__author {
+  margin-left: auto;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.kbc-sessiondiff__files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kbc-sessiondiff__files li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.kbc-sessiondiff__filestat {
+  color: var(--ink-dim);
+}
+.kbc-sessiondiff__undiffed {
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-style: italic;
+}
+.kbc-sessiondiff__uncommitted-label {
+  color: var(--warn);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.kbc-sessiondiff--loading,
+.kbc-sessiondiff--error {
+  padding: 40px 16px;
+  color: var(--ink-mute);
+  max-width: 560px;
+  margin: 0 auto;
+  text-align: center;
+}

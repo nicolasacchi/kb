@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>14 · Embedding bake-off (2026-05-19) — kb research</title>
+  <meta name="kb-category" content="research">
+  <meta name="kb-tags" content="kb, embeddings, bge, bench, retrieval, recall, mrr, ndcg, bake-off">
+  
+  <style>
+    :root {
+      --bg: #fafaf7;
+      --fg: #1a1a1a;
+      --dim: #5a5a55;
+      --accent: #b6532a;
+      --line: #d8d8d2;
+      --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+      --serif: "Iowan Old Style", "Charter", Georgia, serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#181715; --fg:#e8e6e0; --dim:#9a9690; --line:#2e2c29; --accent:#e2814f; }
+    }
+    html, body { background: var(--bg); color: var(--fg); }
+    body {
+      font-family: var(--serif);
+      font-size: 17px;
+      line-height: 1.55;
+      max-width: 64ch;
+      margin: 3rem auto;
+      padding: 0 1.25rem 4rem;
+    }
+    h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .25rem; letter-spacing: -.01em; }
+    .subtitle { color: var(--dim); margin: 0 0 2rem; font-style: italic; }
+    h2 { font-size: 1.2rem; margin: 2.5rem 0 .75rem; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+    h3 { font-size: 1rem; margin: 1.5rem 0 .5rem; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+    p, li { color: var(--fg); }
+    code, kbd, samp { font-family: var(--mono); font-size: .92em; background: rgba(0,0,0,0.04); padding: 1px 4px; border-radius: 3px; }
+    @media (prefers-color-scheme: dark) { code, kbd, samp { background: rgba(255,255,255,0.06); } }
+    pre {
+      font-family: var(--mono); font-size: .85em;
+      background: rgba(0,0,0,0.04); padding: 1rem; border-radius: 4px;
+      overflow-x: auto; line-height: 1.4;
+    }
+    @media (prefers-color-scheme: dark) { pre { background: rgba(255,255,255,0.04); } }
+    pre code { background: none; padding: 0; }
+    table {
+      border-collapse: collapse; width: 100%; margin: 1rem 0; font-family: var(--mono); font-size: .85em;
+    }
+    th, td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    thead th { font-weight: 600; border-bottom: 2px solid var(--fg); }
+    tbody tr:last-child td { border-bottom: 2px solid var(--fg); }
+    .win { color: var(--accent); font-weight: 600; }
+    .lede {
+      font-size: 1.05em; padding: .85rem 1rem; margin: 1.5rem 0;
+      border-left: 3px solid var(--accent);
+      background: rgba(182, 83, 42, 0.06);
+    }
+    @media (prefers-color-scheme: dark) { .lede { background: rgba(226, 129, 79, 0.08); } }
+    .meta-line { color: var(--dim); font-size: .9em; font-family: var(--mono); }
+    ul { padding-left: 1.25rem; }
+    li { margin: .3rem 0; }
+    .delta-up { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <h1>14 · Embedding bake-off (2026-05-19)</h1>
+  <p class="subtitle">Does a larger BGE help on kb's own design corpus? — yes, but only the jump to bge-large pays off.</p>
+
+  <section id="tldr">
+    <h2>TL;DR</h2>
+    <p class="lede">
+      Three BGE models indexed kb's <code>docs/research/</code> corpus (49 HTML files) into parallel
+      kbs on one local daemon. 32 hand-curated queries × 3 modes (hybrid, semantic, keyword)
+      were scored against each kb. In hybrid mode (the production default),
+      <strong>bge-large beat bge-small by +15.6pp Recall@1 (0.812 vs 0.656)</strong>
+      and +12.6pp MRR. <strong>bge-base is essentially a wash vs bge-small</strong> on this
+      corpus — Recall@1 identical, MRR +2.1pp. The recommendation is straight to bge-large or
+      stay on bge-small; bge-base is not the answer here.
+    </p>
+  </section>
+
+  <section id="setup">
+    <h2>Setup</h2>
+    <ul>
+      <li><strong>Corpus:</strong> <code>docs/research/</code> — 49 HTML files (~1.9 MB), kb's own technical English prose.</li>
+      <li><strong>Daemon:</strong> a throwaway <code>bench-local</code> daemon on <code>127.0.0.1:4100</code>, config at <code>bench/kb.local.toml</code>. Production daemon untouched.</li>
+      <li><strong>Models:</strong>
+        bge-small-en-v1.5 (384-dim, 127 MB),
+        bge-base-en-v1.5 (768-dim, 440 MB),
+        bge-large-en-v1.5 (1024-dim, 1.34 GB).
+        All MIT-licensed BGE family, all served via <code>kb-embedder</code> subprocesses.
+      </li>
+      <li><strong>Index time:</strong> 2.5 min total for all three kbs (i7 Kaby Lake).</li>
+      <li><strong>Modes:</strong> <em>hybrid</em> = BM25 + vector via lance RRF (k=60), <em>semantic</em> = cosine on the embedding column, <em>keyword</em> = BM25 only.</li>
+      <li><strong>Queries:</strong> 32, hand-curated by reading each doc's title + structure and asking what the operator would actually search for. JSON-lined at <code>bench/queries/kb-docs.jsonl</code>.</li>
+    </ul>
+  </section>
+
+  <section id="results">
+    <h2>Results</h2>
+
+    <h3>Mode: hybrid (production default)</h3>
+    <table>
+      <thead>
+        <tr><th>model</th><th>Recall@1</th><th>Recall@5</th><th>Recall@10</th><th>MRR</th><th>nDCG@10</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>bge-small</td><td>0.656</td><td>0.938</td><td>1.000</td><td>0.749</td><td>0.779</td></tr>
+        <tr><td>bge-base</td><td>0.656</td><td>0.938</td><td>0.969</td><td>0.770</td><td>0.796</td></tr>
+        <tr><td>bge-large</td><td class="win">0.812</td><td class="win">0.938</td><td>0.969</td><td class="win">0.875</td><td class="win">0.868</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Mode: semantic (vector-only)</h3>
+    <table>
+      <thead>
+        <tr><th>model</th><th>Recall@1</th><th>Recall@5</th><th>Recall@10</th><th>MRR</th><th>nDCG@10</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>bge-small</td><td>0.438</td><td>0.750</td><td>0.875</td><td>0.578</td><td>0.620</td></tr>
+        <tr><td>bge-base</td><td>0.406</td><td>0.812</td><td>0.938</td><td>0.547</td><td>0.605</td></tr>
+        <tr><td>bge-large</td><td class="win">0.562</td><td class="win">0.906</td><td>0.938</td><td class="win">0.693</td><td class="win">0.731</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Mode: keyword (BM25 only — sanity check)</h3>
+    <table>
+      <thead>
+        <tr><th>model</th><th>Recall@1</th><th>Recall@5</th><th>Recall@10</th><th>MRR</th><th>nDCG@10</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>bge-small</td><td>0.594</td><td>0.906</td><td>0.969</td><td>0.727</td><td>0.762</td></tr>
+        <tr><td>bge-base</td><td>0.594</td><td>0.906</td><td>0.969</td><td>0.727</td><td>0.762</td></tr>
+        <tr><td>bge-large</td><td>0.594</td><td>0.906</td><td>0.969</td><td>0.727</td><td>0.762</td></tr>
+      </tbody>
+    </table>
+    <p>Identical across kbs — the sanity check passes. BM25 doesn't read the embedding column; if any row differed, the indexer would be non-deterministic. It isn't.</p>
+  </section>
+
+  <section id="interpretation">
+    <h2>What the numbers say</h2>
+
+    <h3>Hybrid: bge-large is the win</h3>
+    <p>
+      Recall@1 jumps from <code>0.656</code> → <code>0.812</code>
+      (<span class="delta-up">+15.6pp</span>),
+      MRR from <code>0.749</code> → <code>0.875</code>
+      (<span class="delta-up">+12.6pp</span>),
+      nDCG@10 from <code>0.779</code> → <code>0.868</code>
+      (<span class="delta-up">+8.9pp</span>).
+      All three production-relevant metrics move together. <strong>bge-base barely moves the
+      needle vs small</strong>: Recall@1 identical, MRR +2.1pp, nDCG +1.7pp. The meaningful
+      upgrade on this corpus is straight to large, not the intermediate step.
+    </p>
+
+    <h3>Semantic: where embedding quality lives in isolation</h3>
+    <p>
+      Stripping BM25 out exposes the embedding alone. bge-small Recall@1 is
+      <code>0.438</code>; bge-large is <code>0.562</code>
+      (<span class="delta-up">+12.4pp</span>).
+      Notably, <strong>bge-base is slightly worse than bge-small on Recall@1</strong>
+      (<code>0.406</code> vs <code>0.438</code>) but better at Recall@5 — the base model finds
+      the right neighborhood but doesn't rank the single best result as crisply. This pattern
+      shows up in published BEIR/MTEB scores for short-prose corpora with low doc counts;
+      bge-base's gains typically appear at scale (>1000 docs, multi-domain) where bge-small's
+      384-dim space starts to feel crowded.
+    </p>
+
+    <h3>Hybrid &gt; semantic for every model</h3>
+    <p>
+      BM25 contributes real signal the embedding alone can't match. The lance RRF fusion
+      (k=60) is doing useful work, not just smoothing — every row in the hybrid table is
+      higher than its semantic counterpart by 15–25pp on Recall@1. This validates the
+      design decision in <a href="01-lancedb.html">01 · Storage</a> to keep BM25 in the
+      hybrid pipeline rather than going pure-vector.
+    </p>
+  </section>
+
+  <section id="recommendation">
+    <h2>Recommendation</h2>
+    <p>
+      For this corpus class (technical English design docs, single domain, ~50 docs),
+      <strong>bge-large is worth the storage cost</strong>: 1.34 GB on disk plus 4 KB/doc
+      embedding payload (vs 1.5 KB/doc for bge-small). The +15.6pp Recall@1 in hybrid mode
+      is the largest jump in the table.
+    </p>
+    <p>
+      <strong>bge-base is not the answer.</strong> If the operator is bandwidth- or
+      memory-constrained, stay on bge-small; otherwise skip directly to large. Spending
+      440 MB of disk + 768-dim embeddings for a +2.1pp MRR improvement is not a good
+      trade.
+    </p>
+    <p>
+      A follow-up sweep on larger corpora (a few thousand documents each) is the natural next step. Hypothesis:
+      bge-base pulls ahead of bge-small once the corpus crosses ~1000 docs and the
+      384-dim space saturates. Until that's measured, this report only covers the
+      kb-docs corpus and similar small technical sets.
+    </p>
+  </section>
+
+  <section id="caveats">
+    <h2>Caveats</h2>
+    <ul>
+      <li><strong>32 queries × 1 labeller.</strong> The numbers are comparative, not
+        absolute. A different labeller's notion of "relevant" would shift Recall ±5pp.</li>
+      <li><strong>Single corpus, 49 docs.</strong> Recall@10 saturates near 1.0 across the
+        board; the real discrimination is at Recall@1 and MRR. A larger corpus would let
+        Recall@10 differentiate too.</li>
+      <li><strong>Hand-curated queries lean toward exact-topic phrasings</strong> (mostly
+        one doc per query). A real-user query mix would have more vague, multi-doc-relevant
+        queries where the bigger model's semantic reach matters more.</li>
+      <li><strong>kb-docs is heavily lexical</strong> — every doc has a strong matching
+        title. BM25 carries a lot of weight here. Corpora with weak titles (synthetic
+        prose, blog-style content) would put more pressure on the embedding model and
+        likely widen the bge-large gap.</li>
+      <li><strong>Hybrid Recall@10 actually drops slightly for the bigger models</strong>
+        (1.000 → 0.969). The drop is one query out of 32 — within noise. Bigger models
+        compete with BM25 for slots in the RRF top-10 window, and a small number of
+        queries get a relevant lexical hit displaced by an irrelevant vector hit. Worth
+        watching at scale.</li>
+    </ul>
+  </section>
+
+  <section id="reproduce">
+    <h2>Reproduce</h2>
+<pre><code class="language-bash"># Download models (~2 GB one-time)
+kb model download bge-small-en-v1.5
+kb model download bge-base-en-v1.5
+kb model download bge-large-en-v1.5
+
+# Boot bench daemon (three parallel kbs against docs/research/)
+kb daemon --config bench/kb.local.toml &amp;
+# Wait until all three kbs hit 49 docs (~2.5 min)
+
+# Run
+kb bench run \
+  --queries bench/queries/kb-docs.jsonl \
+  --kbs kb-docs-small,kb-docs-base,kb-docs-large \
+  --modes hybrid,semantic,keyword \
+  --k 1 --k 5 --k 10 \
+  --daemon http://127.0.0.1:4100 \
+  --output docs/bench/kb-docs-bakeoff-2026-05-19.md \
+  --json docs/bench/kb-docs-bakeoff-2026-05-19.json
+</code></pre>
+    <p>Source artifacts in this repo:</p>
+    <ul>
+      <li><code>bench/kb.local.toml</code> — three-kb daemon config.</li>
+      <li><code>bench/queries/kb-docs.jsonl</code> — 32 labelled queries.</li>
+      <li><code>docs/bench/kb-docs-bakeoff-2026-05-19.md</code> — readable report.</li>
+      <li><code>docs/bench/kb-docs-bakeoff-2026-05-19.json</code> — raw per-cell metrics.</li>
+    </ul>
+  </section>
+
+  <section id="related">
+    <h2>Related</h2>
+    <ul>
+      <li><a href="01-lancedb.html">01 · Storage</a> — the hybrid retrieval pipeline this report measures.</li>
+      <li><a href="02-fastembed.html">02 · Embeddings</a> — the model registry + cache design.</li>
+      <li><a href="../surfaces/08-prior-art.html">08 · Prior art</a> — comparable retrieval systems.</li>
+    </ul>
+    <p class="meta-line">
+      bench-local daemon · 49 docs · 32 queries · 288 search calls · ~10 minutes wall clock end-to-end
+    </p>
+  </section>
+</body>
+</html>

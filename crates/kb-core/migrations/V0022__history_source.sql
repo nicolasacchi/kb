@@ -1,0 +1,12 @@
+-- GC-B5 — distinguish who opened an artifact. Historically every `open`
+-- row came from the SPA's `POST …/history/open` (a human scroll session);
+-- `kb cat`/`kb get`/`kb read` now record agent/CLI reads through the same
+-- route, and the two populations shouldn't be silently conflated (invariant
+-- #19: touched != read — a CLI dump of raw bytes is neither).
+--
+-- Nullable, no backfill: existing rows predate the distinction and stay
+-- NULL, which the server treats as "web" (the original, still-default
+-- caller). New rows carry 'web' or 'cli' explicitly. Additive only — no
+-- rewrite of existing rows, consistent with the append-only history
+-- contract (invariant #8).
+ALTER TABLE history ADD COLUMN source TEXT;

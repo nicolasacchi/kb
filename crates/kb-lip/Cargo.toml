@@ -1,0 +1,79 @@
+[package]
+name = "kb-lip"
+description = "lip/1 — a generic LSP-to-HTTP adapter (Language Intelligence Provider). Spawns and supervises ONE language server as a stdio child process and speaks a small closed HTTP surface (hover/definition/references/symbols/diagnostics) with a blob-hash freshness guard. Zero heavy deps by design (docs/research design-lip.md + design-addendum-2.md §D, Track L1) — never links kb-core/kb-server/ONNX/tree-sitter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kb-lip"
+path = "src/main.rs"
+
+# Test-only fixture: a minimal stdio LSP server (Content-Length-framed
+# JSON-RPC) driven exclusively by this crate's integration tests via
+# `env!("CARGO_BIN_EXE_kb-lip-fake-lsp")` — the same CARGO_BIN_EXE_*
+# spawned-binary pattern kb-server/kb-cli already use for their own
+# process-lifecycle tests (crates/kb-server/tests/process/log_level.rs,
+# crates/kb-cli/tests/cli_spawn/*.rs), applied to a fixture binary instead
+# of the real daemon. No real language server runs in CI (design doc,
+# Phase L1: "unit tests with a FAKE LSP server ... no real language server
+# in CI").
+[[bin]]
+name = "kb-lip-fake-lsp"
+path = "src/bin/fake_lsp.rs"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# Git-compatible blob content hash (`sha1("blob {len}\0" + content)`,
+# hex-encoded) — the SAME formula and the SAME pinned sha1 crate/version as
+# kb-code-server's `ingest::git_blob_hash` (see the root Cargo.toml's sha1
+# comment: gix-hash's own "sha1" feature already pulls this exact version
+# into the workspace's supply-chain surface, so reusing it here adds none).
+# kb-lip does NOT depend on kb-code-server (independent crate, invariant:
+# never linked into kb-code-server) — the formula is duplicated on purpose,
+# pinned by kb-lip's own `git_blob_sha1_matches_git_hash_object` test.
+sha1 = { workspace = true }
+hex = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# SIGTERM handling: graceful shutdown of the adapter itself (own process)
+# AND graceful shutdown of the child LSP process (`shutdown`/`exit` LSP
+# messages, then SIGTERM if it doesn't exit on its own — `tokio::process::
+# Child::start_kill` sends SIGKILL on unix, not SIGTERM, so the graceful
+# path needs a direct signal send). Same crate + version kb-cli already
+# uses for its own `libc::kill` daemon-stop path
+# (crates/kb-cli/src/commands/daemon.rs) — NOT a workspace.dependencies
+# entry there either, so this mirrors that crate's own direct pin rather
+# than inventing a new workspace-shared one.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# HTTP round-trip tests drive the real axum router over 127.0.0.1 with a
+# real client, mirroring kb-server's own integration-test convention
+# (crates/kb-server/tests/process/log_level.rs uses `reqwest::Client`
+# against `serve_on_random_port_with_paths`). Dev-only — the shipped
+# `kb-lip` binary never makes outbound HTTP calls.
+reqwest = { workspace = true }
+# The restart-after-crash integration test kills the fake LSP child
+# directly by its pid (exposed on `GET /lip/identity`) rather than
+# inventing a debug-only backdoor — same `libc::kill` used by the real
+# `[target.'cfg(unix)'.dependencies]` entry above (and by kb-cli's own
+# daemon-stop path), just also needed from `tests/` since a package's own
+# dependencies aren't automatically visible to its integration test
+# binaries.
+libc = "0.2"

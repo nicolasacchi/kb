@@ -1,0 +1,41 @@
+# cargo-about configuration — drives `just licenses` (THIRD-PARTY-LICENSES.md).
+# `accepted` is the set of SPDX ids cargo-about gathers license text for; a
+# crate whose expression isn't satisfiable from this list makes generation
+# FAIL (mirror of deny.toml's allow-list — keep the two in sync). Ordering is
+# the PREFERENCE for OR-expressions: MIT/Apache first so `MIT OR Apache-2.0`
+# crates report under MIT (one canonical block instead of two).
+
+# The shipped bundle reflects what we DISTRIBUTE: runtime deps only. Build- and
+# dev-dependencies (proptest, insta, ts-rs codegen, build scripts) don't end up
+# in the kb binaries, so exclude them from the NOTICE file.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Only the targets we ship for (keeps windows-only license blocks out of the
+# NOTICE). WSL2 == linux. Mirror the platforms in self-host.md / packaging.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+# Preference-ordered accepted license set (superset == deny.toml allow-list).
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "BSL-1.0",
+    "Unlicense",
+    "MIT-0",
+    "WTFPL",
+    "zlib-acknowledgement",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]

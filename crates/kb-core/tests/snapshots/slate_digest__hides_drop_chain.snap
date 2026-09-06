@@ -1,0 +1,24 @@
+---
+source: crates/kb-core/tests/slate_digest.rs
+expression: hides
+---
+[
+    HideEntry {
+        hide: 3,
+        by: 5,
+        reason: Dropped,
+        who: "claude/4b7e",
+        why: Some(
+            "wrong file, that retry lives in the parser",
+        ),
+    },
+    HideEntry {
+        hide: 4,
+        by: 7,
+        reason: Dropped,
+        who: "codex/8f2a",
+        why: Some(
+            "not in play any more",
+        ),
+    },
+]

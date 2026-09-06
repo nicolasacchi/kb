@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"sub0000-0000-0000-0000-000000000001","timestamp":"2026-08-24T11:05:00.000Z","cwd":"/tmp/kb-omp-fixture"}
+{"type":"message","id":"s1","parentId":null,"timestamp":"2026-08-24T11:05:01.000Z","message":{"role":"user","content":[{"type":"text","text":"delegate: investigate the widget module"}]}}
+{"type":"message","id":"s2","parentId":"s1","timestamp":"2026-08-24T11:05:02.000Z","message":{"role":"assistant","model":"openrouter/stealth/ox-alpha","content":[{"type":"toolCall","id":"sfc_1","name":"read","arguments":{"path":"/tmp/widget.py"}}],"usage":{"input":40,"output":8,"cacheRead":0,"cacheWrite":0}}}
+{"type":"message","id":"s3","parentId":"s2","timestamp":"2026-08-24T11:05:03.000Z","message":{"role":"toolResult","toolCallId":"sfc_1","toolName":"read","isError":false,"content":[{"type":"text","text":"widget contents..."}]}}
+{"type":"message","id":"s4","parentId":"s3","timestamp":"2026-08-24T11:05:04.000Z","message":{"role":"assistant","model":"openrouter/stealth/ox-alpha","content":[{"type":"text","text":"Investigated, widget looks fine."}]}}

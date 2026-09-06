@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Challenges to the kb design — seven push-back tasks with evidence: storage, language, packaging, sandbox, SSE schema, MCP, mis-framed-as-daemon.">
+<title>Challenges — kb research</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="top-nav">
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="nav-inner">
+    <a class="nav-mark" href="index.html">kb · research</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="index.html">Index</a>
+      <a href="challenges.html" class="is-current">Challenges</a>
+      <a href="discussion.html">Discussion</a>
+      <a href="spikes.html">Spikes</a>
+      <a href="prompts.html">Prompts</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="btn-ghost" data-action="toggle-theme" aria-label="Toggle theme">Theme<kbd>T</kbd></button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="kicker">
+    <span class="dot"></span>
+    Cross-cuts
+    <span>·</span>
+    <span class="meta">7 push-back tasks</span>
+    <span>·</span>
+    <span class="meta">Evidence required</span>
+  </div>
+  <h1><span class="strike">Don't be polite</span>Where the briefing<br>is <em>wrong, weak, or premature</em>.</h1>
+  <p class="lede">The briefing invites three challenges. We do all seven. Each names the decision being pushed back on, the specific evidence, and a concrete alternative position. Some recommend kept-as-is; some recommend changed. The most substantive bug caught is <em>push-back #3</em> — the proposed iframe sandbox is storage-broken without a subdomain-per-artifact serving model.</p>
+</section>
+
+<section class="section">
+  <div class="tldr">
+    <span class="lbl">Headline pushbacks</span>
+    <p><strong>#3 — The proposed iframe sandbox is storage-broken.</strong> <code>allow-scripts allow-popups</code> + own origin = no localStorage at all. Fix: subdomain-per-artifact + tighter flags. <strong>#4 — The SSE event taxonomy needs a published JSON Schema</strong>; the proposal mentions one envelope shape but no formal contract. <strong>#1 — Plugin / extension alternatives to the daemon were considered and rejected</strong> — Obsidian, Karakeep-fork, TiddlyWiki — each fails on at least one load-bearing requirement (observability, agent-ingest HTTP API, headless self-host, HTML-as-primary-unit). <strong>#7 — The "no MCP" decision is defensible</strong> but worth re-examining once kb's HTTP API exists; an MCP wrapper is small.</p>
+  </div>
+</section>
+
+<section class="section section-tight">
+  <ol class="findings">
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #1</b> · Architecture · alternatives to the daemon</div>
+        <h3>Plugin / extension reframings considered and rejected — daemon is the right path</h3>
+        <p>The briefing locks in "one daemon + thin clients" with HIGH confidence. Three alternative paths were evaluated against that — each promising fewer lines of code by reusing an existing tool — and each rejected on the same set of load-bearing requirements:</p>
+        <ol>
+          <li><strong>kb-as-Obsidian-plugin.</strong> Register <code>.html</code> as first-class, render in a sandboxed iframe pane, store prompt metadata in YAML frontmatter, lean on Smart Connections for vector search. <em>Fails on:</em> Obsidian plugins can't expose an HTTP API for other Claude Code sessions to ingest into; can't run headless on a self-host server; the markdown-vault model fights HTML-as-primary-unit; and there is no streaming surface a TUI can subscribe to for live observability.</li>
+          <li><strong>kb-as-Karakeep-fork.</strong> Karakeep ships self-host + FTS + AI tagging + multi-client. Add an "artifact ingest" endpoint accepting inline HTML + prompt instead of a URL. <em>Fails on:</em> Karakeep's data model is "URL + captured snapshot," not "authored artifact + prompt"; reshaping it is invasive. No SSE event stream for a TUI. Long-term fork-maintenance burden owns the merge conflicts forever.</li>
+          <li><strong>kb-as-TiddlyWiki-extension.</strong> TiddlyWiki takes "everything in HTML" seriously; a plugin could treat each artifact as a tiddler. <em>Fails on:</em> TiddlyWiki's quine architecture (one self-modifying file = the whole stack) is incompatible with kb's external-indexer + thin-clients model. No daemon, no agent ingest, no remote thin clients.</li>
+        </ol>
+        <p><strong>The four load-bearing requirements that decide it:</strong></p>
+        <ul>
+          <li><strong>Observability surface.</strong> Ratatui TUI live-watching SSE during indexing/generation is part of the product.</li>
+          <li><strong>Programmatic agent ingest.</strong> kb's HTTP API hit by other Claude Code sessions and external tools.</li>
+          <li><strong>Headless server-side use.</strong> Self-host on a personal server with thin browser/CLI/TUI clients hitting it remotely.</li>
+          <li><strong>HTML files on disk as primary unit.</strong> One self-contained <code>.html</code> per artifact — not markdown-with-html-guest, not capture-snapshot, not single-file-quine.</li>
+        </ul>
+        <p><strong>Verdict:</strong> the daemon path is confirmed. The plugin / extension alternatives stay documented in <a href="surfaces/08-prior-art.html#topics">topic 08</a> as "considered, rejected" — they shouldn't be reopened without new evidence that one of these requirements has changed. The fact that all four exist together is precisely the wedge that justifies the bespoke daemon.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #2</b> · Storage · alternatives not considered</div>
+        <h3>FAUST / FoundationDB-style "one log, many materialised views" was missing</h3>
+        <p>The briefing considered lance vs sqlite vs surrealdb vs duckdb-vss vs sqlite-vec — all <em>state stores</em>. None of the alternatives consider <strong>append-only event-log architecture</strong>: every ingest is an event, all state derived deterministically by replaying. In Rust, this would be:</p>
+        <ul>
+          <li><strong><code>fjall</code></strong> (LSM kv store, 2024–2026 active) — appendable log + secondary indexes by reduce.</li>
+          <li><strong><code>redb</code></strong> (1.x stable, BSL-then-Apache, single-file ACID) — pair with <code>tantivy</code> for FTS and a flat-file vector store.</li>
+          <li><strong><code>SlateDB</code></strong> + S3 — overkill for single-user, but interesting for the self-hosting roadmap.</li>
+        </ul>
+        <p><strong>Why this matters for kb specifically:</strong> the briefing says "every cross-store write is idempotent. retries are safe." That's hard with a lance + sqlite split (two stores, two transaction boundaries). Trivial with an event-log: each event is the only source of truth; the rebuild is deterministic. <strong>And</strong> it solves the schema-versioning question (replay with new code → new schema, no migrations).</p>
+        <p><strong>Honest counter:</strong> event-sourcing for a 50k-doc personal app is over-engineering. The bytes-on-disk argument also evaporates — sqlite-vec gets you to ~3–8 MB binary, an event log doesn't beat that. The only reason to pursue this is if you want "deterministic rebuild from disk" as a principle, which is a luxury for kb's scale.</p>
+        <p><strong>Recommended action:</strong> note the pattern, defer to v2 unless schema migrations become painful. Topic 01's recommendation to spike sqlite-vec first stands.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #3</b> · Iframe sandbox · the proposed flags are storage-broken</div>
+        <h3>"allow-scripts allow-popups" without same-origin = SecurityError on every storage call</h3>
+        <p>Topic 06's research is unambiguous: without <code>allow-same-origin</code>, the iframe is treated as an opaque origin. <code>localStorage.setItem()</code>, <code>indexedDB.open()</code>, <code>document.cookie</code> all throw <code>SecurityError</code>. The proposed flag string would silently break any artifact that tries to persist anything.</p>
+        <p>Adding <code>allow-same-origin</code> is the trap: combined with same-origin serving, the iframe sandbox is trivially escapable (<code>parent.document.querySelector('iframe').removeAttribute('sandbox')</code>). MDN, WHATWG, the W3C HTML validator all warn.</p>
+        <p><strong>The right answer is the CodePen / Observable / Claude pattern:</strong> serve each artifact from a separate subdomain (<code>&lt;id&gt;.artifacts.localhost</code>, wildcard DNS+TLS). Then <code>allow-scripts</code> without <code>allow-same-origin</code> still leaves the artifact with a real, persistent, isolated origin. Storage works. Sandbox-removal attack is neutered (subdomain ≠ parent).</p>
+        <p><strong>When shadow DOM IS the right call:</strong> for the JS-free artifact subclass — pure HTML/CSS/SVG, no <code>&lt;script&gt;</code>, no external libraries. Detect at ingest. Render those without the iframe overhead. Everything else: iframe. Topic 07's grep of all 20 reference artifacts confirms ~6/20 are JS-free and would benefit from shadow-DOM rendering.</p>
+        <p><strong>Recommended action:</strong> adopt topic 06's recipe. Subdomain serving is non-negotiable.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #4</b> · SSE event taxonomy · no published schema</div>
+        <h3>The brief mentions "structured events" but ships no JSON Schema</h3>
+        <p>Two clients (TUI, SPA) plus the CLI all subscribe to SSE. The current proposal: dotted event names (<code>index.progress</code>, <code>file.added</code>, etc.) and an envelope shape. <strong>No JSON Schema, no field-level docs, no version semantics.</strong> Fragile contract.</p>
+        <p>Topic 04's research lands on a baseline envelope: <code>{v, id, type, ts, payload}</code>. That's the right shape. The work that's missing:</p>
+        <ol>
+          <li>Per-<code>type</code> JSON Schema files. Author once, validate on producer (server) and consumers (TUI/SPA).</li>
+          <li>Public schema endpoint: <code>/events/schema/{type}/v1.json</code>. Schemas served from the running server are the source of truth, not in-repo files (those are dev-time mirrors).</li>
+          <li>Versioning rules: <code>v</code> bump only on breaking change. Renames/removals run <code>?v=1</code> and <code>?v=2</code> side by side through a deprecation window.</li>
+          <li>A <code>kb events introspect</code> CLI subcommand that returns the live schema set, so external agents can self-describe.</li>
+        </ol>
+        <p><strong>Anti-pattern to avoid:</strong> splitting endpoints by domain (<code>/events/index</code>, <code>/events/files</code>) or by direction (the dual-endpoint trap MCP rolled back in 2025). Keep one firehose <code>/events</code> with a server-side glob filter <code>?types=index.*,error.*</code>.</p>
+        <p><strong>Recommended action:</strong> author <code>events.schema.json</code> as part of the v0.0.1 vertical slice — <em>before</em> the TUI subscribes to anything. Treat the schema as a public API.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #5</b> · Language · is Rust really the right call?</div>
+        <h3>Honestly evaluated: Go is closer than the briefing implies; Rust still wins on net</h3>
+        <p>The briefing flags "rust as primary language" with HIGH confidence and forbids language switches without evidence. Here's the honest evidence comparing the three plausible alternatives:</p>
+        <ul>
+          <li><strong>Go:</strong> almost every reference in the prior-art scan is Go (Syncthing, Tailscale, Karakeep deps, k9s, lazygit, gh-dash, readeck). Faster compile, simpler concurrency story (goroutines vs tokio), single-binary distribution is the language norm, far more ecosystem for the daemon-and-clients shape. <strong>Real cost:</strong> no fastembed-rs equivalent (would need to call Python or use <code>onnxruntime-go</code> directly); ratatui equivalent is tcell/tview/bubbletea — usable but each smaller than ratatui's ecosystem in 2026; LanceDB has a Go client but the embedded story is Rust-first.</li>
+          <li><strong>Zig:</strong> no embedded vector store, no ratatui equivalent, no axum equivalent, file watcher story would be hand-rolled. Fast, fun, wrong tool.</li>
+          <li><strong>OCaml:</strong> <code>dream</code> + <code>ocaml-tui-rs-equiv-doesnt-exist</code> + … nope. Also slower compile.</li>
+        </ul>
+        <p>The strongest case <em>against</em> Rust is the binary size hit from lance + Arrow + DataFusion (40–80 MB stripped — see topic 01). A Go equivalent shipping just sqlite-vec + tantivy-go + ratatui-go-stub would land at ~15–25 MB. That's a real loss.</p>
+        <p>The strongest case <em>for</em> Rust is the embedding stack: fastembed-rs is the most mature single-process embedding library in any language right now (topic 02). Go's <code>onnxruntime-go</code> needs hand-written tokenisers; Python integration adds a second runtime; the convenience gap is real.</p>
+        <p><strong>Verdict:</strong> Rust still wins on net <em>given the embedding requirement</em>. If kb dropped vector search and shipped pure BM25 (topic 02 confirms BM25-alone is competitive for code-heavy corpora), Go would be the better call.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #6</b> · Packaging · single binary vs workspace</div>
+        <h3>Single binary is right for distribution. Workspace is right for source. They're not mutually exclusive.</h3>
+        <p>The briefing conflates "one binary for users" with "one crate for developers." These are separate decisions:</p>
+        <ul>
+          <li><strong>Distribution:</strong> single <code>kb</code> binary with subcommands (<code>kb serve</code>, <code>kb tui</code>, <code>kb search</code>, <code>kb add</code>, …). Confirmed correct — matches Tailscale, kubectl, gh, etc.</li>
+          <li><strong>Source layout:</strong> a Cargo workspace with <code>kb-core</code> (lib), <code>kb-server</code> (binary), <code>kb-cli</code> (binary), <code>kb-tui</code> (binary), <code>kb-spa</code> (web bundle, separately built and embedded via <code>rust-embed</code>). Each crate has tight scope and tests against <code>kb-core</code> only. <strong>Then</strong> a single top-level <code>kb</code> binary that depends on the binary crates and dispatches subcommands.</li>
+        </ul>
+        <p><strong>Why workspace:</strong> compile-time guard against business logic leaking into the TUI/CLI. <code>kb-core</code> doesn't depend on <code>tokio::sync::broadcast</code>; only <code>kb-server</code> does. <code>kb-tui</code> doesn't depend on lancedb; it depends on <code>kb-client</code> (a thin HTTP wrapper around the kb daemon API). The dependency arrows are the architecture diagram.</p>
+        <p><strong>The trick:</strong> bundling many binary crates into one ship-able binary. Use <code>cargo build --release --bin kb</code> where <code>kb</code> is the top-level dispatcher. The workspace lets you also <code>cargo build --release --bin kb-server</code> for users who want only the server (e.g. a self-host appliance). Best of both.</p>
+        <p><strong>Recommended action:</strong> workspace with <code>kb-core</code> + 4 binary crates + 1 top-level dispatcher. Single binary in the GitHub releases page.</p>
+      </div>
+    </li>
+
+    <li class="finding">
+      <div>
+        <div class="tag"><b>Challenge #7</b> · MCP · the "no MCP, only CLI" decision</div>
+        <h3>The briefing says HIGH-confidence "no MCP." Defensible — but worth revisiting once the HTTP API exists</h3>
+        <p>The briefing's reasoning: "transparency over magic." Claude Code calls <code>kb search</code> as a shell command, the operator sees it. MCP would hide the same call behind a tool-use wrapper.</p>
+        <p>Three counter-arguments to keep in mind:</p>
+        <ol>
+          <li><strong>MCP servers are often thinner than the briefing assumes.</strong> If kb has an HTTP API (it does — the SSE topic 04 confirms this), a stdio MCP wrapper is ~150 LOC of <code>tokio</code> + <code>serde_json</code>. The cost of <em>also offering</em> MCP is low.</li>
+          <li><strong>Streaming results are hard via shell.</strong> <code>kb search "x"</code> returns N rows. Claude Code parses them. But what about "watch this folder for new artifacts and tell me when one matches my open thread"? CLI wants exit codes; MCP wants tool-use streaming. The briefing's "no MCP" precludes that flow.</li>
+          <li><strong>Other agents.</strong> Cursor, Cline, Windsurf, Aider all support MCP. CLI-only locks kb to Claude Code's specific shell affordance. <em>If</em> kb wants to be agent-agnostic, MCP is the lingua franca.</li>
+        </ol>
+        <p><strong>The case <em>for</em> CLI-only stays strong:</strong> for the operator's specific workflow (single-user, transparent agent calls), CLI gives the better mental model. The user sees what the agent is doing, can intervene, can run the same command by hand.</p>
+        <p><strong>Recommended action:</strong> CLI-only in v0.0.1 as proposed. Add MCP wrapper in v0.2 once the HTTP API is stable. Treat MCP as a thin shim, not a re-architecture. Cost low, optionality high.</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="section">
+  <div class="rec">
+    <span class="lbl">Summary table</span>
+    <table class="alt-table">
+      <thead><tr><th>#</th><th>Challenge</th><th>Verdict</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Plugin / extension alternatives to the daemon</td><td>Considered, rejected</td><td>Daemon path confirmed. Each plugin / extension alternative fails on at least one of: observability, agent-ingest HTTP API, headless self-host, HTML-as-primary-unit.</td></tr>
+        <tr><td>2</td><td>Event-log storage architecture</td><td>Defer</td><td>Note the pattern; sqlite-vec spike (topic 01) covers the practical question.</td></tr>
+        <tr><td>3</td><td>Iframe sandbox is storage-broken</td><td><strong>Real</strong></td><td>Adopt topic 06 recipe: subdomain + tighter flags + iframe-recreate.</td></tr>
+        <tr><td>4</td><td>No published SSE JSON Schema</td><td><strong>Real</strong></td><td>Author <code>events.schema.json</code> in v0.0.1, <em>before</em> any client subscribes.</td></tr>
+        <tr><td>5</td><td>Rust vs Go (vs Zig vs OCaml)</td><td>Rust kept</td><td>Rust wins on net given embedding requirement. Reconsider only if vector search is dropped.</td></tr>
+        <tr><td>6</td><td>Single binary vs workspace</td><td>Both</td><td>Workspace for source, single binary for distribution. Not mutually exclusive.</td></tr>
+        <tr><td>7</td><td>No MCP, only CLI</td><td>Defer</td><td>CLI-only in v0.0.1. Add MCP wrapper in v0.2 — thin shim, ~150 LOC.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="page-nav section">
+  <a href="surfaces/08-prior-art.html"><span class="dir">← Prev</span><span class="ttl">08 · Prior art</span></a>
+  <a class="next" href="discussion.html"><span class="dir">Next →</span><span class="ttl">Discussion</span></a>
+</nav>
+
+</main>
+
+<footer class="site">
+  <div class="ftr">
+    <div class="colophon">
+      <p>kb · research · challenges</p>
+      <p>The biggest substantive bug caught: the proposed iframe sandbox is storage-broken. Topic 06 has the recipe — subdomain per artifact + tighter flags + iframe-recreate.</p>
+    </div>
+    <div>
+      <h5>Pages</h5>
+      <ul>
+        <li><a href="index.html">Index</a></li>
+        <li><a href="discussion.html">Discussion</a></li>
+        <li><a href="spikes.html">Spikes</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Outside</h5>
+      <ul>
+        <li><a href="https://syncthing.net/">Syncthing</a></li>
+        <li><a href="https://html.spec.whatwg.org/multipage/iframe-embed-object.html">WHATWG iframe</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  const root = document.documentElement;
+  const stored = localStorage.getItem('kb-research-theme');
+  if (stored === 'ink' || stored === 'paper') root.setAttribute('data-theme', stored);
+  document.querySelectorAll('[data-action="toggle-theme"]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    });
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 't' || e.key === 'T') {
+      const cur = root.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+      root.setAttribute('data-theme', cur);
+      localStorage.setItem('kb-research-theme', cur);
+    }
+  });
+  const prog = document.querySelector('.reading-progress');
+  if (prog) {
+    const upd = ()=>{
+      const h = document.documentElement;
+      const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+      prog.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    };
+    document.addEventListener('scroll', upd, {passive:true});
+    upd();
+  }
+})();
+</script>
+</body>
+</html>

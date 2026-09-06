@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="kb-category" content="landscape">
+<meta name="kb-tags" content="status:reference, project:kb, web-ui, spa, idea-board, research-catalog, frontier">
+<title>kb web UI idea atlas: 130 ideas from 13 research lenses (July 2026)</title>
+
+<style>
+:root {
+  --bg:#f4f7f8; --surface:#e8eef0; --fg:#1d2b31; --muted:#4d5f68;
+  --rule:#cbd8dc; --accent:#0b6272; --accent-fg:#ffffff;
+  --warn:#77590a; --danger:#a8281f; --ok:#17694a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#101b1f; --surface:#18262c; --fg:#e2ecef; --muted:#9db4bc;
+    --rule:#2c424b; --accent:#5fd0e0; --accent-fg:#101b1f;
+    --warn:#e6c76a; --danger:#ff9a90; --ok:#85d6ab;
+  }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:16.5px/1.6 ui-sans-serif, system-ui, sans-serif; }
+main { max-width: 50rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+h1 { font-size: 1.8rem; line-height:1.2; margin:.3rem 0 .6rem; letter-spacing:-.015em; }
+h2 { font-size: 1.25rem; margin:2.6rem 0 .6rem; padding-top:1rem; border-top:1px solid var(--rule); scroll-margin-top:1rem; }
+h3 { font-size: 1rem; margin:1.5rem 0 .5rem; scroll-margin-top:1rem; }
+p, li { max-width: 75ch; }
+a { color: var(--accent); text-decoration-thickness:1px; text-underline-offset:2px; }
+a:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
+.kicker { font-size:.8rem; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); }
+.lede { font-size:1.1rem; color:var(--muted); margin:.2rem 0 1rem; }
+.meta-strip { font-size:.8rem; color:var(--muted); display:flex; flex-wrap:wrap; gap:.5rem; border-bottom:1px solid var(--rule); padding-bottom:1.2rem; }
+.tag { background:var(--surface); border:1px solid var(--rule); border-radius:999px; padding:.05rem .6rem; }
+table { border-collapse:collapse; width:100%; font-size:.87rem; margin:1rem 0; }
+th, td { text-align:left; padding:.4rem .55rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+th { font-size:.76rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.lens-sum { background:var(--surface); border-left:3px solid var(--accent); padding:.7rem 1rem; border-radius:0 6px 6px 0; font-size:.95rem; margin:.8rem 0 1.2rem; }
+.idea { border:1px solid var(--rule); border-radius:8px; padding:.7rem .9rem .6rem; margin:.7rem 0; background:var(--surface); }
+.idea-h { margin:0 0 .35rem; display:flex; align-items:baseline; gap:.45rem; flex-wrap:wrap; }
+.idea-h strong { font-size:1rem; }
+.idea-p { margin:.2rem 0; font-size:.93rem; }
+.idea-m { margin:.35rem 0 0; font-size:.82rem; color:var(--muted); }
+.idea-m em { font-style:normal; color:var(--fg); }
+.chip { font-size:.72rem; border:1px solid var(--rule); border-radius:999px; padding:0 .5rem; color:var(--muted); white-space:nowrap; background:var(--bg); }
+.chip--wild { border-color: var(--accent); color: var(--accent); }
+.src { font-size:.82rem; color:var(--muted); max-width:75ch; }
+code { font-family: ui-monospace, monospace; font-size:.86em; background:var(--bg); border:1px solid var(--rule); padding:.05em .3em; border-radius:4px; }
+.skip-link { position:absolute; left:-9999px; top:0; background:var(--accent); color:var(--accent-fg); padding:.5rem 1rem; }
+.skip-link:focus { left:.5rem; top:.5rem; z-index:10; }
+@media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#how-to-read">Skip to content</a>
+<main id="main">
+<article>
+<header>
+  <div class="kicker">landscape &middot; project:kb &middot; web UI frontier</div>
+  <h1>kb web UI idea atlas: 130 ideas from 13 research lenses (July 2026)</h1>
+  <p class="lede">The raw evidence layer behind the <a href="kb-web-ui-frontier-synthesis-2026-07.html">frontier synthesis</a>: every idea the offload research fleet produced, with pitch, inspiration, kb fit, wildness, effort, and invariant risk.</p>
+  <div class="meta-strip">
+    <span>2026-07-18</span><span class="tag">status:reference</span><span class="tag">project:kb</span><span class="tag">130 ideas &middot; 13 lenses &middot; 18 workers</span>
+  </div>
+</header>
+
+<section>
+<h2 id="how-to-read">How to read this catalog</h2>
+<p>Each lens was an independent grok-4.5 offload worker researching one external design tradition against a shared preamble: kb's already-shipped surface (nothing here re-proposes existing features) and the hard non-goals (no in-daemon LLM, no multiplayer/CRDT, no accounts, no push/streaks/badges, mobile is reader + capture, no terminal dashboard). Badges: <span class="chip chip--wild">W1&ndash;W5</span> = wildness (5 = nobody ships this), <span class="chip">S/M/L/XL</span> = effort. A risk line appears only where an idea flirts with a constraint and names its mitigation. Decisions live in the <a href="kb-web-ui-frontier-synthesis-2026-07.html">synthesis</a>; refusal collisions (TTS, offline packs, print, read-next rails, daemon media) are adjudicated there, not here.</p>
+</section>
+
+<section>
+<h2 id="convergence">Convergence matrix</h2>
+<p>Independent lenses arriving at the same territory is the strongest signal in a fan-out. Counted across the 130 ideas:</p>
+<table>
+<tr><th>Theme</th><th>Lenses that converged</th><th>N</th></tr>
+<tr><td>Atlas as instrument &mdash; selection, labels, honesty about projection</td><td>semantic-atlas, spatial-canvas, reading-experience, serendipity, editorial, discovery-museum</td><td>6</td></tr>
+<tr><td>Time / provenance as interface</td><td>timeline-episodic, agent-copresence, dashboards, ambient, reading-experience</td><td>5</td></tr>
+<tr><td>Overview-first generous entry</td><td>discovery-museum, editorial, dashboards, web-platform</td><td>4</td></tr>
+<tr><td>Triage as keyboard/gesture grammar</td><td>keyboard-power, reading-experience, mobile-touch, serendipity</td><td>4</td></tr>
+<tr><td>Selection &rarr; working set as a primitive</td><td>semantic-atlas, keyboard-power, spatial-canvas, reading-experience</td><td>4</td></tr>
+<tr><td>Explainability made tactile (decomposable scores in UI)</td><td>web-platform, serendipity, semantic-atlas</td><td>3</td></tr>
+<tr><td>Corpus as publication (deterministic editorial identity)</td><td>editorial, dashboards, ambient</td><td>3</td></tr>
+<tr><td>Calm pull-based ambient surfaces</td><td>ambient, serendipity, dashboards</td><td>3</td></tr>
+<tr><td>Reviewable agent output (human gate, ghost proposals)</td><td>agent-copresence, spatial-canvas, timeline-episodic</td><td>3</td></tr>
+<tr><td>TTS re-proposal (collides with recorded refusal)</td><td>reading-experience, web-platform, mobile-touch</td><td>3</td></tr>
+</table>
+</section>
+
+<section>
+<h2 id="lens-reading-experience">Lens 1 &mdash; Reading experience (Readwise, Matter, Instapaper, Omnivore)</h2>
+<div class="lens-sum">Long-form readers thrive on evidence-first search (match passages, not summaries), frictionless capture (highlight &rarr; cite/list/memory in three clicks), and keyboard-native triage. kb's atlas, lists, reading-progress and session memory are load-bearing primitives for trail walks, heat maps, and comparison splits &mdash; no daemon LLM required.</div>
+
+<div class="idea"><p class="idea-h"><strong>Match-passage search cards</strong> <span class="chip chip--wild">W1</span> <span class="chip">M</span></p>
+<p class="idea-p">Search hits show the best-matching body passage with highlights and a &sect;section &middot; score chip, not the static summary; Enter opens at the section with an arrival flash, <code>p</code> peeks the passage in a side sheet.</p>
+<p class="idea-m"><em>Inspiration:</em> Raycast's evidence-first results &middot; <em>Fits:</em> command palette + search cards (confirms the board's match-context item)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Highlight &rarr; cite / list / memory</strong> <span class="chip chip--wild">W2</span> <span class="chip">L</span></p>
+<p class="idea-p">Select text in the reader &rarr; popover: copy citation (title &sect;id &middot; path), add to list with note, save highlight. Highlights live in a per-artifact sidecar (same anchor family as comments), get a rail tab, and export as Markdown quote blocks.</p>
+<p class="idea-m"><em>Inspiration:</em> Instapaper highlights + Matter export &middot; <em>Fits:</em> reader annotate layer + lists &middot; <em>Risk:</em> reuse <code>review::Anchor</code>; never market export as backup (invariant #9)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Keyboard triage mode (t)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">From inbox / open comments / stale anchors: <code>t</code> enters triage &mdash; j/k move, e open, r resolve, l file to list, s snooze-by-date, u undo; a thin strip shows 3/41 &middot; triage &middot; ?. A processing loop for agent-produced volume, zero gamification.</p>
+<p class="idea-m"><em>Inspiration:</em> Readwise triage inbox &middot; <em>Fits:</em> UI choreography over existing mutations (confirms the board's triage item)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Focus tunnel (section monologue)</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Reader chrome collapses to the current h2/h3 only, dimmed prev/next titles as scrubbers, progress as a 1px hairline; n/p jump sections. Built for 4k-word LLM reports where TOC + rail is noise.</p>
+<p class="idea-m"><em>Inspiration:</em> Instapaper full-screen / Matter focus &middot; <em>Fits:</em> detail iframe + TocSpy; tunnel is parent chrome, artifact CSS untouched</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Clip library (portable reading pack)</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">A /clips surface aggregating highlights + list entries + pinned comments into an ordered pack of quote cards; one-click export to a single self-contained HTML/Markdown with relativized links.</p>
+<p class="idea-m"><em>Inspiration:</em> Matter export, Omnivore packs &middot; <em>Fits:</em> kb-list/1 import-export + share strip rules &middot; <em>Risk:</em> outbound must strip kb-prompt; "pack", never "backup"</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Heat atlas (read &times; semantic map)</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Atlas nodes tint by dwell/completion (cold unread &rarr; hot finished), size by word count; shift-click multi-select &rarr; new list from selection. Answers "where haven't I actually read in this neighborhood?"</p>
+<p class="idea-m"><em>Inspiration:</em> Readwise library heat &middot; <em>Fits:</em> client-side join of existing progress + atlas coords, no new embedding pass</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Echo rail (why am I here?)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">A rail tab stacking backlinks, sessions that touched this path, open comments, supersede lineage, and k-NN atlas neighbors &mdash; each a one-line provenance chip with deep link. Structured evidence ranked by recency + link strength, no generated narration.</p>
+<p class="idea-m"><em>Inspiration:</em> research-tool provenance without LLM fluff &middot; <em>Fits:</em> rail + sessions/why + graph + atlas neighbors</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Semantic trail walk</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p"><code>][</code> steps to the nearest <em>unread</em> neighbor in embedding space; a breadcrumb trail is pinnable as a list ("walked 2026-07-18 &middot; 12 hops"); dead ends offer the farthest unread in cluster. Serendipity without a recommender.</p>
+<p class="idea-m"><em>Inspiration:</em> linear, keyboard-native discovery over the atlas &middot; <em>Fits:</em> atlas vectors + reading progress + lists</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Ghost split (A|B read)</strong> <span class="chip chip--wild">W4</span> <span class="chip">XL</span></p>
+<p class="idea-p"><code>?compare=</code> renders two sandboxed iframes with shared scroll ratio and synced sections where heading ids match; palette verb "Compare with&hellip;". For design-review vs shipped notes, superseding memory vs old.</p>
+<p class="idea-m"><em>Inspiration:</em> code review, applied to longreads &middot; <em>Fits:</em> detail route + versions/notes; same sandbox rules, no CRDT</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Local voice read (browser-only)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Web Speech synthesis over the current section in a parallel plain-text pane (never injecting into the artifact origin); pause/resume, rate, section skip; off by default.</p>
+<p class="idea-m"><em>Inspiration:</em> Omnivore TTS &middot; <em>Risk:</em> <strong>collides with the recorded TTS refusal</strong> &mdash; adjudicated in the synthesis; legal shape if ever revisited: client-side only</p></div>
+
+<p class="src">Sources: Readwise Reader, Matter, Instapaper, Omnivore (product surfaces); kb docs/web-ui.md, docs/reading-lists.md, docs/architecture-invariants.md; the existing idea board's refusals list.</p>
+</section>
+
+<section>
+<h2 id="lens-spatial-canvas">Lens 2 &mdash; Spatial canvas (Heptabase, Muse, Kosmik, Kinopio, tldraw)</h2>
+<div class="lens-sum">Spatial tools treat position as meaning: where artifacts live on a user-arranged plane encodes the operator's topology. Heptabase's decisive move &mdash; cards owned by a library, reusable across many boards &mdash; is kb's highest-leverage pattern: durable artifacts exist; a first-class user-arranged plane doesn't. Method-of-loci research says ordered places + vivid layout improve recall, shippable deterministically.</div>
+
+<div class="idea"><p class="idea-h"><strong>Pin Atlas &mdash; hybrid auto map + hand anchors</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Atlas stays embedding-driven, but the operator can pin cards to absolute (x,y), draw named neighborhood rectangles, freeze clusters; unpinned items reflow under pins as gravity anchors; "reset unpinned" re-runs the deterministic layout.</p>
+<p class="idea-m"><em>Inspiration:</em> Kosmik frames, Kinopio boxes, tldraw groups &middot; <em>Fits:</em> extends shipped Atlas; pins are operator data</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Board from selection</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">From gallery multi-select, list, search, or resurface queue: "Open as board" &mdash; an infinite pan surface of those artifacts as cards; drag to arrange, labeled edges, sections. A first-class named object, not a throwaway.</p>
+<p class="idea-m"><em>Inspiration:</em> Heptabase whiteboard-from-library, Obsidian Canvas bulk-from-folder &middot; <em>Fits:</em> new Boards surface wired to existing selection sources</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Card multi-placement + "where else" jump</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">The same artifact appears on many boards without duplication; the inspector lists every placement with a viewport thumbnail; deleting removes the placement, not the artifact.</p>
+<p class="idea-m"><em>Inspiration:</em> Heptabase's core model (whiteboards don't own cards) &middot; <em>Fits:</em> inspector rail + Boards</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Atomic pull-outs (clip cards)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Open an artifact in a right split on a board; drag a heading/section or comment thread onto the board as a clip card deep-linking back into source. Clips are indexable notes with backlinks &mdash; concept-level spatial work, not document-blob tiling.</p>
+<p class="idea-m"><em>Inspiration:</em> Heptabase "drag blocks out as concept cards" &middot; <em>Fits:</em> reader + notes/wikilinks; agents can pre-atomize outside the daemon</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Memory-palace walk (loci mode)</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Define an ordered path of loci on a board or atlas pins ("foyer &rarr; library &rarr; workshop"), each holding artifacts; walk mode is a full-bleed sequential tour with keyboard next/prev. Pull-based review routes.</p>
+<p class="idea-m"><em>Inspiration:</em> method of loci (Simonides &rarr; Yates), Kinopio's spatial-memory claim &middot; <em>Risk:</em> flirts with streaks if gamified &mdash; walks stay pure navigation, zero points</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Agent-proposed layouts, operator-owned geometry</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Agents write layout-proposal sidecars (computed outside the daemon); kb renders them as a translucent ghost layer; the operator accepts all, a subset, or drags to override. Accepted geometry becomes ordinary board state.</p>
+<p class="idea-m"><em>Inspiration:</em> tldraw programmatic canvas, Heptabase agent skills &middot; <em>Risk:</em> stays legal &mdash; daemon only stores/renders; single-writer accept, no CRDT</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Decay fog &amp; comment constellation</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Toggleable layers: decay fog (opacity from decay-ranked memory + read-state; stale unread sinks; freshly commented punches through) and comment constellations (orbit dots sized by thread density). Spatial encoding of signals kb already computes.</p>
+<p class="idea-m"><em>Inspiration:</em> kb's own resurface scoring made geometric &middot; <em>Fits:</em> atlas + boards + comments + read-state; pull-only</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Nested boards as zoom levels</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">A board can hold a portal card opening a child board, with a live thumbnail and breadcrumb trail: corpus &rarr; topic &rarr; investigation without dumping a thousand cards on one plane.</p>
+<p class="idea-m"><em>Inspiration:</em> Heptabase sub-whiteboards, Obsidian nested Canvas &middot; <em>Fits:</em> Boards hierarchy; gallery folders seed the tree</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Dual-field Atlas &mdash; gravity wells vs hand islands</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">Two coupled layers in one viewport: the live embedding Field (read-only) and operator-placed Islands (permanent coordinates); lasso on Field promotes a selection to a new Island; onion-skin both. Machine similarity and human topology, side by side.</p>
+<p class="idea-m"><em>Inspiration:</em> method of loci vs embedding maps &middot; <em>Risk:</em> strip any multiplayer kit if tldraw is reused</p></div>
+
+<div class="idea"><p class="idea-h"><strong>JSON Canvas I/O</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">Import/export boards as <code>.canvas</code> (JSON Canvas 1.0): nodes point at kb artifact ids, edges carry labels; open a kb board in Obsidian and re-import position edits. Storage stays kb-native.</p>
+<p class="idea-m"><em>Inspiration:</em> jsoncanvas.org (open MIT interchange) &middot; <em>Fits:</em> board serialization; versions-friendly</p></div>
+
+<p class="src">Sources: heptabase.com + wiki.heptabase.com, obsidian.md/canvas, jsoncanvas.org, kosmik.app, scrintal.com, kinopio.club, tldraw.dev, Wikipedia method-of-loci / spatial-memory.</p>
+</section>
+
+<section>
+<h2 id="lens-semantic-atlas">Lens 3 &mdash; Latent-space cartography (Nomic Atlas, Embedding Projector, Distill)</h2>
+<div class="lens-sum">Embedding maps become navigation instruments only when they expose neighborhoods, labels, and selections. Hard rules from the literature: resolve neighbors in the <em>original</em> high-D space; 2-D cluster sizes and inter-cluster distances mislead by design (Distill) &mdash; the UI must refuse to imply them; c-TF-IDF is the deterministic label path that fits the no-in-daemon-LLM invariant where Nomic's LLM namer doesn't. <em>(Lens recovered from the worker's on-disk report after a relay failure.)</em></div>
+
+<div class="idea"><p class="idea-h"><strong>Continent keywords (c-TF-IDF labels)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Replace most-frequent-tag cluster labels with class-based TF-IDF over member text; hover expands a ranked term bar with raw tf, idf, and c-tf-idf per term &mdash; fully decomposable, no LLM.</p>
+<p class="idea-m"><em>Inspiration:</em> BERTopic's ClassTfidfTransformer; Nomic's floating labels (presentation only) &middot; <em>Fits:</em> AtlasView labels; compute in kb-core at recompute, seeded</p></div>
+
+<div class="idea"><p class="idea-h"><strong>True-neighbors rail + layout-stress badge</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Click a dot &rarr; inspector lists top-k cosine neighbors from embedding space with distance bars; a badge admits "3 of 8 high-D neighbors are far in 2-D" and pulses them. Distill's lesson, taught in-product.</p>
+<p class="idea-m"><em>Inspiration:</em> Embedding Projector original-space NN; Distill t-SNE essay &middot; <em>Fits:</em> AtlasInspector (its NN stub already exists)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Semantic zoom continents</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">&le;6 broad continents at low zoom, the existing &le;12 clusters mid-zoom, c-TF-IDF bigrams + titles up close; <code>[</code>/<code>]</code> step depth without moving the camera. A basemap revealing countries &rarr; cities &rarr; streets.</p>
+<p class="idea-m"><em>Inspiration:</em> Nomic's geographic-map topic hierarchy &middot; <em>Risk:</em> hierarchy must be a seeded deterministic cascade &mdash; do not copy Nomic's LLM label step</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Lasso &rarr; working set</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Hold <code>L</code>, draw a region; a bottom bar offers: open as gallery filter, add to reading list, boost in resurface, copy ids for an agent. Selections compose with facet chips and search; bookmarkable in the URL hash.</p>
+<p class="idea-m"><em>Inspiration:</em> Nomic lasso + selection composition; Projector isolate &middot; <em>Fits:</em> AtlasView &rarr; gallery facets, lists, resurface inputs</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Bookmarkable cameras</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">"Bookmark this view" saves pan/zoom/color-mode/cluster-depth/selection as named local presets; <code>b</code> cycles recent. "The memory-system continent at depth 2, unread-only" becomes a one-key return.</p>
+<p class="idea-m"><em>Inspiration:</em> Projector's bookmarks drawer &middot; <em>Fits:</em> thin atlas-route surface, localStorage</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Terra incognita (density voids)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Invert the density heatmap: cells sparse in layout <em>and</em> isolated in embedding space light up as dashed void contours labeled by the nearest continents, with a decomposed gap score. Clicking a void yields a copy-to-clipboard brief so an agent can fill the gap &mdash; the daemon only detects.</p>
+<p class="idea-m"><em>Inspiration:</em> DensMAP density preservation; cartographic negative space &middot; <em>Risk:</em> emits structured gap records; essays are agent-authored outside</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Concept axes (custom directions)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Pick two poles (two artifacts, or two short texts embedded via the existing worker) and reproject the map onto that axis; slider morphs between default layout and axis layout. "Shipped design &harr; open question" becomes a spatial dimension.</p>
+<p class="idea-m"><em>Inspiration:</em> Projector custom linear projections &middot; <em>Risk:</em> pole embeds go through the existing embed path, never an in-daemon generative model</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Temporal cartographic replay</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">A scrubber steps through index snapshots; points fade in at first-index time; ghost trails show position jumps across recomputes, stabilized with seeded Procrustes alignment so the movie isn't noise. Session polylines reveal which continents were written in which weeks.</p>
+<p class="idea-m"><em>Inspiration:</em> Nomic timestamp slicing; embedding-trajectory viz &middot; <em>Risk:</em> store layout snapshots rather than re-rolling UMAP RNG (atlas determinism)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Map-home shell</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">Optional <code>nav.home = atlas</code>: the app opens on the full-viewport map; typing dims non-hits in place; facets and resurface become overlay masks; Enter on a multi-selection opens the gallery <em>as the list projection of the map selection</em>. The gallery ceases to be a separate world.</p>
+<p class="idea-m"><em>Inspiration:</em> Nomic map-first curation; Projector isolate &middot; <em>Fits:</em> composition of the earlier steps; desktop-first</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Agent weather fronts</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">Density isobands colored by authorship weather: warm fronts where agent sessions wrote heavily this week, cool fronts where human curation pressure (comments, anchors, deep reads) concentrates; each front opens a decomposable score panel and the sessions that built it. Cartography of the collaboration itself.</p>
+<p class="idea-m"><em>Inspiration:</em> meteorological isobands over kb's session + comment + read-state joins &middot; <em>Risk:</em> pull-only overlays, no achievements framing</p></div>
+
+<p class="src">Sources: distill.pub/2016/misread-tsne, research.google Embedding Projector post + projector.tensorflow.org, docs.nomic.ai (data maps, controls, topics, curation, selections), maartengr.github.io/BERTopic (algorithm, c-TF-IDF), umap-learn DensMAP docs, arXiv:1611.05469; local AtlasView.tsx/AtlasInspector.tsx/atlas.rs.</p>
+</section>
+
+<section>
+<h2 id="lens-serendipity">Lens 4 &mdash; Serendipity &amp; spaced repetition (Readwise Review, FSRS, antilibrary)</h2>
+<div class="lens-sum">Spaced repetition schedules encounters when retrieval is about to fail (FSRS R/S/D; Ebbinghaus). Readwise shows the product shape kb half-owns: pull-only review, frequency tuning, soft discard, no push. The antilibrary (Eco/Taleb) inverts guilt: unread artifacts are research capacity, not debt. Extend the shipped explainable resurface queue with more signal families &mdash; never a queue that only grows.</div>
+
+<div class="idea"><p class="idea-h"><strong>Review mode on resurface</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">Card-at-a-time pull session over the top-N queue: show the reason arithmetic, jump to the open comment or scroll-resume offset; acting clears (resolve, finish) &mdash; no "mark done" storage.</p>
+<p class="idea-m"><em>Inspiration:</em> Readwise Review vs Scroll &middot; <em>Fits:</em> gallery strip + <code>kb resurface --explain</code>, zero new storage</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Frequency tuning (weights, not streaks)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Per-kb / per-tag / per-list multipliers on resurface terms ("show me less of this kind"), one palette surface, every multiplier visible in --explain.</p>
+<p class="idea-m"><em>Inspiration:</em> Readwise frequency tuning; FSRS desired-retention as the one knob &middot; <em>Fits:</em> constants already named in <code>kb_core::resurface</code></p></div>
+
+<div class="idea"><p class="idea-h"><strong>On-this-day in corpus</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A calendar facet: artifacts created, last fully read, or sessions active on this month-day &plusmn;N years, with honest reasons ("opened 2025-07-18 &middot; 2 open comments then"). A pure date join on stored timestamps.</p>
+<p class="idea-m"><em>Inspiration:</em> BBC On This Day; memories-calendar pattern &middot; <em>Fits:</em> history + mtime + session records</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Antilibrary shelf</strong> <span class="chip chip--wild">W3</span> <span class="chip">S</span></p>
+<p class="idea-p">A first-class "never opened / &lt;5% / zero backlinks" gallery mode framed as <em>research reserve</em>, sorted by potential (backlink gap, tag rarity, age), with humble copy. Decay never applies &mdash; the antilibrary must not fade into guilt.</p>
+<p class="idea-m"><em>Inspiration:</em> Eco/Taleb antilibrary; tsundoku &middot; <em>Risk:</em> never mixed into debt-queue scoring</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Stability ribbon (R without quizzes)</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Inspector shows a tiny deterministic retrievability curve from the last meaningful encounter, half-life varying by event type (comment work &gt; skim). Observation-only FSRS-ish R; no grades.</p>
+<p class="idea-m"><em>Inspiration:</em> FSRS R/S; Readwise mastery half-lives &middot; <em>Risk:</em> must stay explainable; never imply measured recall</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Leitner lanes for comment debt</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Open comments bucketed into lanes (today / this week / cooling / cold) with bulk-resolve per lane; lanes are presentation over the <code>.review/</code> store, not new state.</p>
+<p class="idea-m"><em>Inspiration:</em> the Leitner card box &middot; <em>Fits:</em> inbox + comments apply</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Drunkard's walk on atlas</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Wander mode: biased random walk over wikilinks/backlinks/tags with a pinnable breadcrumb; resurface can inject cold nodes as attractors; self-avoiding bias prevents bouncing.</p>
+<p class="idea-m"><em>Inspiration:</em> random walks on graphs &middot; <em>Risk:</em> must not auto-spam history beacons</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Forgotten-cluster radar</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Detect weakly-connected components whose idle-days and open-rates are outliers; surface <em>one</em> cluster card ("7 artifacts on X, last touch 112d"), not seven guilt chips; click applies a temporary filter.</p>
+<p class="idea-m"><em>Inspiration:</em> community detection + set-level forgetting curve &middot; <em>Risk:</em> labels must be mechanical (shared tags), never LLM titles</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Drift heat on status claims</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">A resurface cousin for research HTML: artifacts whose status tags / "shipped" prose disagree with git/path truth, with the evidence in the reason line. A pull-only audit strip.</p>
+<p class="idea-m"><em>Inspiration:</em> the kb-audit skill's drift signals &middot; <em>Risk:</em> degrade honestly (empty strip) where git is absent</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Negative-space memory</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">Surface topics/tags/kbs with high write volume and near-zero recollect/search/open over a window &mdash; "you author here; you never return" &mdash; optionally seeding the wander mode.</p>
+<p class="idea-m"><em>Inspiration:</em> Taleb's anti-r&eacute;sum&eacute;; retrieval-practice gap &middot; <em>Fits:</em> existing query logs + episodic aggregates</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Half-life dial</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">One slider scaling all decay half-lives with a closed-form preview ("at 90%: queue &asymp; N; at 70%: &asymp; M"). No ML fit; simulated offline from current rows.</p>
+<p class="idea-m"><em>Inspiration:</em> FSRS desired retention as sole knob &middot; <em>Fits:</em> single-operator deterministic scoring</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Session echo cards</strong> <span class="chip chip--wild">W5</span> <span class="chip">M</span></p>
+<p class="idea-p">Resurface past session beats, not just artifacts: prompt + decisions + files touched as a review card whose action is open-artifact or <code>kb why</code>. Bridges episodic memory into the same pull strip.</p>
+<p class="idea-m"><em>Inspiration:</em> spaced retrieval of episodes &middot; <em>Risk:</em> must not become a second chat log; stays a pull card</p></div>
+
+<p class="src">Sources: docs.readwise.io (reviewing highlights), open-spaced-repetition ABC-of-FSRS, Wikipedia spaced-repetition/forgetting-curve/antilibrary, Marginalian on Eco, BBC On This Day, random-walk literature.</p>
+</section>
+
+<section>
+<h2 id="lens-editorial">Lens 5 &mdash; Editorial &amp; generative presentation (front pages, colophons, illuminations)</h2>
+<div class="lens-sum">Publication design can elevate a corpus without LLM ephemera: provenance becomes colophon, comments become errata, versions become galley proofs, wikilinks become cartographic edges. Even the wildest ideas here stay rule-deterministic and ride shipped infrastructure (lists, content_hash, atlas, history). <em>(Retry run with capped fetch budget.)</em></div>
+
+<div class="idea"><p class="idea-h"><strong>Broadsheet home</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A fifth gallery mode packing the current filter set into a newspaper front page: one lead story (largest type, deck from kb-summary), two features, a briefs column, a continuing-coverage rail of open-comment artifacts. Packing is pure rules on word count, recency, unread progress, comment mass &mdash; same inputs, same page.</p>
+<p class="idea-m"><em>Inspiration:</em> NYT/Guardian digital fronts &middot; <em>Fits:</em> gallery view mode beside grid/list/atlas/history</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Reader folio chrome</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">An optional folio density: serif measure locked to ~66ch, running header (kb &middot; folder &middot; section), footer with short-id + scroll %, and a quiet colophon strip (created, hash prefix, session link). Longreads feel published, not "opened in an iframe".</p>
+<p class="idea-m"><em>Inspiration:</em> iA Writer; print @page running headers &middot; <em>Fits:</em> detail chrome; colophon folds what the rail already knows</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Issue masthead</strong> <span class="chip chip--wild">W2</span> <span class="chip">S</span></p>
+<p class="idea-p">Per-kb masthead above the gallery: display name, deterministic "Vol. YYYY &middot; Issue WW" from the ISO week, corpus census, one-line weather ("3 resurfaced &middot; 1 stale anchor"). <code>?issue=2026-W29</code> freezes the week slice. Switching kbs feels like switching publications.</p>
+<p class="idea-m"><em>Inspiration:</em> magazine mastheads; Are.na channel headers &middot; <em>Fits:</em> gallery chrome + kb switcher</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Errata slip layer</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Open comments render as a translucent numbered errata slip pinned to the artifact's top margin (E1&hellip;En with jump-to-anchor); resolving tears a line off live over SSE; "errata only" exports as a one-page companion.</p>
+<p class="idea-m"><em>Inspiration:</em> publisher errata slips, galley marginalia &middot; <em>Fits:</em> comments layer on detail + comments export</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Hash-seeded illuminations</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Every artifact gets a small generative SVG ornament derived only from content_hash + theme tokens: card vignette, reader endpiece, print rule. Same hash &rarr; identical SVG everywhere; theme change recolors without reshaping. Decoration-as-identity, no thumbnails or model calls.</p>
+<p class="idea-m"><em>Inspiration:</em> manuscript illuminations; identicon families &middot; <em>Fits:</em> cards + detail chrome; seed already on doc rows</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Signature binding (quires)</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">"Bind" a reading list into nested signatures: full-bleed opener, continuous folio numbers, blank verso for marginalia, back-matter index from tags + h2 ids; deterministic page breaks; on-screen flipbook and/or CSS-print pamphlet.</p>
+<p class="idea-m"><em>Inspiration:</em> codex quires; Vivliostyle paged media &middot; <em>Risk:</em> <strong>adjacent to the print-export refusal</strong> &mdash; catalogued as an art project, not roadmap</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Galley-proof versions</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">The diff pane as a printer's galley: proof marks (strikethrough, carets, transpose), hunks grouped by section id, numbered margin queries linkable like comments; word-level vs structural toggles. Same git/hash history, presented as editorial production.</p>
+<p class="idea-m"><em>Inspiration:</em> galley proofs; Distill revision sidebars &middot; <em>Fits:</em> versions/diff in the inspector</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Section atlas (press map)</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">Re-skin the atlas as a city map: clusters as named districts (deterministic top-TF labels), wikilink edges as streets, high in-degree artifacts as landmarks with serif callouts, an "ink density" layer for unread heat. Hovering a district lists its section-front five.</p>
+<p class="idea-m"><em>Inspiration:</em> newspaper section geography; cartographic news graphics &middot; <em>Fits:</em> atlas + wikilink graph + history signals</p></div>
+
+<p class="src">Sources: NYT/Guardian front anatomy, CSS magazine-layout demos, iA Writer, Vivliostyle, Are.na, identicon/hash-art systems, codex-binding tradition, Distill revision UI (retry run; partly from training knowledge).</p>
+</section>
+
+<section>
+<h2 id="lens-dashboards">Lens 6 &mdash; Quantified reading &amp; corpus analytics (contribution graphs, Wrapped, Feltron)</h2>
+<div class="lens-sum">Quantified systems succeed as glanceable temporal structure and once-a-year narrative artifacts &mdash; never as nags. GitHub's calendar and Spotify Wrapped prove density fields + deterministic annual aggregates; Li/Dey/Forlizzi's stage model says integration barriers kill reflection, not missing charts. Everything below is pull-based and zero-gamification.</div>
+
+<div class="idea"><p class="idea-h"><strong>Corpus activity calendar</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A 52&times;7 heatmap with facet toggles (created, versioned, opened, finished, commented, linked-to); hover lists the day's events; click filters the gallery to that day. Density only &mdash; no streak counter, no "keep it going".</p>
+<p class="idea-m"><em>Inspiration:</em> GitHub contributions; Obsidian heatmap plugins &middot; <em>Risk:</em> gamification &mdash; ban current-streak affordances by design</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Year-in-corpus (deterministic Wrapped deck)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A palette command opens a sequential full-screen deck: words + reading-hours completed, top folders by dwell, top hubs, longest finished read, firsts; the final slide exports as a dated HTML artifact so next year's deck can cite it.</p>
+<p class="idea-m"><em>Inspiration:</em> Spotify Wrapped structure; Goodreads Year in Books &middot; <em>Risk:</em> daemon computes numbers; an agent may narrate the exported HTML afterwards &mdash; never in-daemon</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Vital-signs strip</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">One quiet strip of live rollups (artifacts &middot; notes-words &middot; median time-to-first-read &middot; read-through % &middot; links/artifact &middot; open threads), each clickable into the surface that defines it; pin 3&ndash;5.</p>
+<p class="idea-m"><em>Inspiration:</em> Obsidian word-count status bars; Li et al. integration stage &middot; <em>Risk:</em> no health grades &mdash; numbers, not judgments</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Reading distribution studio</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Histograms and CDFs instead of calendars-of-shame: session-length distribution, time-of-day rose, days-to-finish by length quartile, abandoned-vs-finished funnel; brush a bin to open those sessions' artifacts. Quiet-season annotations, never missed-goal framing.</p>
+<p class="idea-m"><em>Inspiration:</em> casual infovis / slow technology &middot; <em>Fits:</em> desktop analytics route over reading + session timestamps</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Knowledge growth rings</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Each kb as a tree-ring cross-section: band thickness = net new artifacts + notes per quarter, hue = fraction that later became load-bearing (linked or commented); hover a ring wedge to see what grew that season.</p>
+<p class="idea-m"><em>Inspiration:</em> dendrochronology as metaphor &middot; <em>Risk:</em> comparison stays visual morphology, never a score</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Ship-wake snapshots</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">On a shipped-tagged version (or manual pin), freeze a 1-hop link-graph snapshot; a Wake tab scrubs between snapshots showing edges appearing/thickening with numeric &Delta; density. "What did publishing this change in the corpus?" as a first-class deterministic diff.</p>
+<p class="idea-m"><em>Inspiration:</em> before/after network analytics &middot; <em>Fits:</em> inspector, sibling to versions/diff; append-only snapshot store</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Remarkable days</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Up to ~5 statistically marked days per quarter from ranked heuristics (biggest ingest, biggest finish-read, most unusual by embedding centroid distance), each card showing its raw evidence table; a secondary agent-layer CTA copies the stats block into a prompt.</p>
+<p class="idea-m"><em>Inspiration:</em> Spotify Wrapped Archive's priority heuristics &middot; <em>Risk:</em> hard split &mdash; daemon: heuristics + tables; agent: optional prose</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Influence half-life spiral</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">An Archimedean spiral (one loop = a quarter): beads at creation date, sized by cumulative inbound attention, fading by a fitted half-life; filter "still hot after 180d" vs "flash bulbs"; a side list shows citing descendants chronologically.</p>
+<p class="idea-m"><em>Inspiration:</em> spiral timelines; longevity analytics &middot; <em>Risk:</em> influence is document&rarr;document, never person&rarr;person; no expiry notifications</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Reproducible yearbook artifact</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p"><code>kb yearbook --year 2025</code> emits one self-contained HTML artifact (inline SVG calendar, growth rings, hub table, remarkable-days evidence, a machine block with every number + query hash) that byte-matches on re-run at the same corpus head; it indexes like any research card.</p>
+<p class="idea-m"><em>Inspiration:</em> Felton annual reports; kb's own artifact contract &middot; <em>Risk:</em> stats/SVG only by default; narration is agent-layer</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Multi-facet reflection canvas</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">Four stacked time tracks (artifact spine, reading pulses, session bars, comment/resurface events) under one synchronized brush; brushing three days highlights the joint subgraph of everything touched; saved brushes become named local scenes.</p>
+<p class="idea-m"><em>Inspiration:</em> Li/Dey/Forlizzi multi-faceted reflection &middot; <em>Risk:</em> desktop SPA only; scenes are single-operator local state; no LLM summarizer inside</p></div>
+
+<p class="src">Sources: github.blog contributions post, Spotify Wrapped engineering (Archive 2025), Goodreads Year in Books, obsidianstats heatmap/statistics plugins, Li, Dey &amp; Forlizzi CHI 2010 (ianli.com PDF), Bostock calendar view.</p>
+</section>
+
+<section>
+<h2 id="lens-keyboard-power">Lens 7 &mdash; Keyboard power (Linear, Superhuman, Raycast, Vimium, i3, VS Code)</h2>
+<div class="lens-sum">Speed-first tools make every actionable object addressable: hints, marks, symbols, registers. Linear/Raycast prove purpose-built command surfaces beat flexible chaos; Vimium/vim show marks and registers turn UIs into addressable memory; i3/tmux show spatial workspaces beat tab piles. The scarce resource is rapid, trustworthy navigation &mdash; keep every jump explainable.</div>
+
+<div class="idea"><p class="idea-h"><strong>Hint-mode everywhere (f / F)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p"><code>f</code> overlays one/two-key hints on every actionable target (cards, chips, atlas dots, rail rows, comment threads); <code>F</code> opens in a background peek pane; <code>yf</code> copies the permalink under the hint. Vimium's muscle memory over the whole SPA.</p>
+<p class="idea-m"><em>Inspiration:</em> Vimium link hints &middot; <em>Fits:</em> a unified hit-target layer over palette + reader + gallery</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Named marks + jump ring</strong> <span class="chip chip--wild">W3</span> <span class="chip">S</span></p>
+<p class="idea-p"><code>m</code>&lt;letter&gt; marks any artifact/note/session/atlas position; backtick jumps back; uppercase marks are durable operator anchors; a palette subsection lists marks with titles + age; tiny glyphs appear on atlas and folder tree.</p>
+<p class="idea-m"><em>Inspiration:</em> Vimium/vim marks; i3 mark/goto &middot; <em>Fits:</em> spatial-instant twin to reading lists</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Triage chords with provenance bundles</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Inbox/resurface as pure keyboard lanes: j/k, e dismiss, h snooze via deterministic decay bump, l file, x multi-select then bulk chord; adjacent items auto-bundle on shared folder/kb/session so one <code>e</code> clears a session dump; the status line always shows <em>why</em> the current item scored.</p>
+<p class="idea-m"><em>Inspiration:</em> Superhuman triage language; Linear "decide and move on" &middot; <em>Risk:</em> snooze re-scores only &mdash; no notifications ever</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Split-pane reading workspace</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p"><code>Cmd+\</code> splits the stage into 2&ndash;4 panes (reader, note, search, atlas slice); Ctrl+h/j/k/l focus; saved layouts (compare-two-RFCs, artifact+backlinks+session) are one chord away.</p>
+<p class="idea-m"><em>Inspiration:</em> i3 splits, VS Code grid, tmux &middot; <em>Fits:</em> shell layout over existing routes; single focus owner, no CRDT</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Peek-on-hover / peek-on-hint</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Alt-hover opens an inline peek card (title, passport one-liner, first screenful, link counts) without unloading the reader; Alt+Enter promotes to a side pane; works on wikilinks, backlinks, session files, memory ids; every peek carries a provenance footer.</p>
+<p class="idea-m"><em>Inspiration:</em> VS Code peek definition/references &middot; <em>Fits:</em> reader + notes + links inspector (confirms the board's hover-preview item)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Operator macros as data</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Named sequences of existing palette command ids + args bound to chords (<code>;;triage</code> = open resurface &rarr; filter open &rarr; sort by score &rarr; hint mode); macros are plain JSON; agents may author macro definitions as artifacts the operator imports.</p>
+<p class="idea-m"><em>Inspiration:</em> Raycast script commands &middot; <em>Risk:</em> macros stay local/deterministic; no model calls in the loop</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Provenance registers (yank rings for knowledge)</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">Vim registers for kb objects: <code>"ay</code> yanks id+permalink+title into register a, <code>"A</code> appends, <code>"ap</code> pastes as wikilink/citation in notes or comments; special registers for last search, current artifact, alternate artifact; <code>"p</code> yanks the full passport stub (kb, path, version, hash, indexed-at). Citation becomes as fast as editing.</p>
+<p class="idea-m"><em>Inspiration:</em> vim registers + jump list, reimagined for provenance &middot; <em>Fits:</em> global input layer; deepens agent&harr;human handoff</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Spatial workspaces (i3 desktops over corpora)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Number keys switch named workspaces (1:inbox 2:read 3:write 4:atlas 5:agents), each with fixed layout, filters, folder root, density; switching is instant with per-workspace scroll restore; in-UI badges only when queues cross thresholds &mdash; seen when you look, never pushed.</p>
+<p class="idea-m"><em>Inspiration:</em> i3 workspaces + back_and_forth; Raycast focus &middot; <em>Risk:</em> urgency stays in-UI; no push, no streaks</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Jump-to-definition across the knowledge graph</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Stable ids (artifact slug, heading anchor, wikilink target, memory id, session id, path) become symbols: Cmd+Shift+O = outline of the current artifact; F12 on any id resolves to its definition; Shift+F12 peeks references (backlinks + session touches + comment mentions); breadcrumbs show kb / folder / artifact / &sect;heading.</p>
+<p class="idea-m"><em>Inspiration:</em> VS Code go-to-definition / breadcrumbs / outline &middot; <em>Risk:</em> unresolved = explainable miss; no semantic-guess LLM fallback</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Scratchpad drawer + capture registers</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p"><code>Ctrl+'</code> toggles one persistent floating buffer over any view; registers paste in; Cmd+Enter routes contents to note / capture / comment-on-current-artifact; survives reloads. Compose without leaving triage.</p>
+<p class="idea-m"><em>Inspiration:</em> i3 scratchpad; Superhuman speed-to-reply &middot; <em>Risk:</em> on mobile this is the capture sheet, not an editor</p></div>
+
+<p class="src">Sources: linear.app/method, raycast.com manual, github.com/philc/vimium README, i3wm.org userguide, tmux wiki, code.visualstudio.com docs (editingevolved, userinterface), vim motion docs, superhuman.com.</p>
+</section>
+
+<section>
+<h2 id="lens-web-platform">Lens 8 &mdash; Web-platform capabilities 2024&ndash;2026 (View Transitions, anchors, fragments)</h2>
+<div class="lens-sum">The platform finally ships what a dense reading SPA always wanted: shared-element continuity, main-thread-free scroll coupling, native layered UI, speculative instant navigation. Highest leverage is continuity + explainability + zero-ceremony depth &mdash; not prettier chrome. Support was checked against webstatus.dev; Speculation Rules and FS Access are Chromium-only, the rest Baseline. All progressive enhancement.</div>
+
+<div class="idea"><p class="idea-h"><strong>Card morph reader</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Clicking a card morphs its title and status chips into the reader header via View Transitions; back reverses; facet toggles animate spatial reflow. Honor prefers-reduced-motion.</p>
+<p class="idea-m"><em>Inspiration:</em> Chrome VT cards demo &middot; <em>Fits:</em> gallery + reader, no new surface</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Scroll-truth progress</strong> <span class="chip chip--wild">W2</span> <span class="chip">S</span></p>
+<p class="idea-p">A 2px top rail + section ticks driven by CSS scroll-driven animations, reflecting the same signal that feeds read-state and resurface &mdash; the stored progress made visible and scrubbable.</p>
+<p class="idea-m"><em>Inspiration:</em> scroll-driven-animations.style demos &middot; <em>Fits:</em> reader + reading-lists read-state</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Scorechip popovers</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Every score chip (resurface, search, related) opens a light-dismiss popover anchored via CSS anchor positioning, showing the decomposed server-side terms (comment-density, progress, decay, BM25, cosine) as a stacked bar + copyable formula.</p>
+<p class="idea-m"><em>Inspiration:</em> anchor+popover patterns; kb's explainability principle made tactile &middot; <em>Fits:</em> resurface, search hits, related rail</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Speculative next-read</strong> <span class="chip chip--wild">W3</span> <span class="chip">S</span></p>
+<p class="idea-p">Speculation Rules prefetch broadly and prerender the keyboard-focused row, 200ms-hover targets, and the #1 resurface item; opening feels instant; never prerender mutating endpoints.</p>
+<p class="idea-m"><em>Inspiration:</em> Chrome prerender eagerness tiers &middot; <em>Risk:</em> Chromium-only; cap for memory</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Quote deep-links</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Comments, search snippets, session excerpts and agent citations mint <code>#:~:text=</code> links plus kb's stable section ids; opening scrolls and highlights the exact quoted span; copy-deep-link works on any selection.</p>
+<p class="idea-m"><em>Inspiration:</em> scroll-to-text-fragment (Baseline since Firefox 131) &middot; <em>Risk:</em> if fragment injection is blocked by the iframe sandbox, fall back to a parent highlight overlay</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Atlas anchor constellation</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Selecting an atlas point anchors a popover card showing deterministic neighborhood stats (degree, mean distance, shared tags); neighbor edges draw as anchored connectors; recency decay subtly pulses on zoom.</p>
+<p class="idea-m"><em>Inspiration:</em> CSS anchor connector experiments &middot; <em>Fits:</em> atlas + links graph + resurface signals; motion optional</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Hands-free provenance read</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Web Speech synthesis over the current section with the spoken paragraph highlighted in a parallel pane; chained text-fragment navigations make an audio queue from a comment thread.</p>
+<p class="idea-m"><em>Inspiration:</em> a11y read-aloud patterns &middot; <em>Risk:</em> <strong>collides with the TTS refusal</strong> &mdash; adjudicated in the synthesis; explicit user gesture only if ever built</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Offline reading pack</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Pack a list or folder into OPFS (optionally a user-picked dir via FS Access); a service worker serves the pack when the daemon is unreachable; read-state syncs back when online.</p>
+<p class="idea-m"><em>Inspiration:</em> Fugu FS Access demos &middot; <em>Risk:</em> <strong>gated by the PWA/offline deferred-with-trigger ruling</strong> (Authelia story unresolved)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Density-reactive shell</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Container queries + <code>:has()</code> across cards, rail, palette, mobile sheet: a card with a stale anchor gains a hazard stripe, unresolved comments thicken the border, the inspector collapses graphs to icons under 320px &mdash; no JS resize observers.</p>
+<p class="idea-m"><em>Inspiration:</em> Kravets "new responsive"; CQ e-commerce case studies &middot; <em>Fits:</em> cross-cutting design-system upgrade</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Deterministic briefing canvas</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">A pull-only Briefing surface laying out today's resurface queue + unread inbox + recent agent-authored artifacts as one scroll-driven canvas with pinned sections; order is a stable sort of existing scores; the top three prerender.</p>
+<p class="idea-m"><em>Inspiration:</em> triage canvases + scroll storytelling &middot; <em>Risk:</em> no server-generated prose (agents write dated artifacts if narrative is wanted); strictly pull</p></div>
+
+<p class="src">Sources: developer.chrome.com (view-transitions, scroll-driven-animations, anchor-positioning, prerender-pages, CQ/:has case studies), web.dev popover, webstatus.dev feature API (support checks), scroll-driven-animations.style, view-transitions.chrome.dev.</p>
+</section>
+
+<section>
+<h2 id="lens-timeline-episodic">Lens 9 &mdash; Time as interface (Lifestreams, Memex, Rewind, git history)</h2>
+<div class="lens-sum">Time is not metadata &mdash; it's an interaction axis. kb's unique asset is full episodic provenance: sessions joined to files, commits, artifacts, decisions, comments. No commercial tool has this join; the SPA renders it as lists. <em>(Retry run; sources largely from training knowledge, marked below.)</em></div>
+
+<div class="idea"><p class="idea-h"><strong>Artifact biography panel</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A vertical timeline in the inspector: generating prompt &rarr; every session that touched the artifact &rarr; commits &rarr; comments &rarr; diffs; each row deep-links (replay session, show diff, jump to comment). A pure audit-trail join of existing tables.</p>
+<p class="idea-m"><em>Inspiration:</em> git blame + Rewind replay + Day One context &middot; <em>Fits:</em> new inspector tab beside versions; sessions/session_files/session_commits already exist</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Temporal search scrubber</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">A timeline slider under the search box filtering results to artifacts read during a date range or session: "what was I researching on July 15?" Powered by existing history timestamps.</p>
+<p class="idea-m"><em>Inspiration:</em> Rewind's temporal query; git log --since &middot; <em>Fits:</em> search route + history table</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Corpus time-lapse</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">A full-screen playback of the corpus growing: artifacts pop in by creation date onto the atlas's stable coordinates; pause, scrub, click to freeze and inspect.</p>
+<p class="idea-m"><em>Inspiration:</em> Lifestreams; time-lapse photography &middot; <em>Fits:</em> docs sorted by mtime + existing atlas layout as the stage</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Session trails (Memex threads)</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">Save a session's artifact path as a named replayable trail &mdash; a reading-list variant ordered by session event time, with transcript snippet, decisions and files-changed inline; trails are themselves indexable.</p>
+<p class="idea-m"><em>Inspiration:</em> Bush's Memex associative trails &middot; <em>Fits:</em> reading lists + session records</p></div>
+
+<div class="idea"><p class="idea-h"><strong>What-was-I-doing context window</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Extend <code>kb why</code> with a context view: given a path and a moment, show the parallel activity stream &mdash; other sessions, files, decisions, reads in the same window &mdash; as a mini Gantt.</p>
+<p class="idea-m"><em>Inspiration:</em> Rewind "replay to when I last saw X"; git --date-order &middot; <em>Fits:</em> kb why CLI + SPA Why panel</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Artifact archaeology (reverse blame)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Two overlaid per-section timelines: when each section was first written (which session/commit) and last touched; hover highlights a section's birth and latest revision. Finds stale claims vs fresh work from version history alone.</p>
+<p class="idea-m"><em>Inspiration:</em> git blame / log -p &middot; <em>Fits:</em> inspector beside versions; prototype at artifact level, then per-section</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Session-replay reader</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">Artifact and parent session side-by-side under one shared playhead: the transcript advances, the artifact highlights what was being read at that moment. Cognitive flow &mdash; what prompted each decision &mdash; from joins already captured.</p>
+<p class="idea-m"><em>Inspiration:</em> Rewind multi-stream playback &middot; <em>Fits:</em> full-screen view off kb why / session cards</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Last-read / staleness badges</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">Cards and search rows show "last read 45d ago", "never read", or "updated 3d ago (read before update)" from existing progress + mtime &mdash; the gallery quietly shifts from latest-first to relevance &times; recency &times; staleness.</p>
+<p class="idea-m"><em>Inspiration:</em> Day One entry age; Lifestreams backwards browsing &middot; <em>Fits:</em> Card meta + gallery query, no new storage</p></div>
+
+<p class="src">Sources (from training knowledge, marked by the worker): Freeman &amp; Gelernter's Lifestreams (1996), Bush's Memex, Rewind.ai replay UX, Day One journaling, git-history visualization idioms.</p>
+</section>
+
+<section>
+<h2 id="lens-agent-copresence">Lens 10 &mdash; Agent copresence (GitHub reviews, Cursor, Devin)</h2>
+<div class="lens-sum">Three levers: structured review states so feedback is actionable, agent continuity (checkpoints, queues, mid-task questions) so long work can pause and resume safely, and organized diffs of knowledge changes. kb already has margin comments and durable memory; the leverage is a PR-plus-agent cockpit for personal knowledge &mdash; with the human gate as the invariant.</div>
+
+<div class="idea"><p class="idea-h"><strong>Three-state artifact review</strong> <span class="chip chip--wild">W1</span> <span class="chip">M</span></p>
+<p class="idea-p">A review pass ends with comment / approve / request-changes; approvals gate a "trusted/shipped" mark; request-changes lists must-fix threads in a readiness panel.</p>
+<p class="idea-m"><em>Inspiration:</em> GitHub PR review statuses &middot; <em>Risk:</em> verdict is metadata; agents must not assume soft gates if it hard-blocks</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Suggest-edit patches on anchored prose</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Comments carry a one-click suggested rewrite against a stable section id; the human accepts, edits, or rejects without leaving the artifact.</p>
+<p class="idea-m"><em>Inspiration:</em> GitHub suggested changes &middot; <em>Risk:</em> apply must go through the CLI/agent layer &mdash; <code>reanchor</code> stays the only anchor rewrite (invariant #6)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Knowledge checkpoints</strong> <span class="chip chip--wild">W2</span> <span class="chip">L</span></p>
+<p class="idea-p">Before an agent bulk-rewrites artifacts or memories, snapshot prior content; checkpoints appear on the session scrubber with preview/restore/fork.</p>
+<p class="idea-m"><em>Inspiration:</em> Cursor checkpoints &middot; <em>Risk:</em> restore must not resurrect superseded memories or corrupt daemon-owned sidecars</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Queued follow-ups</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">While an agent distills or audits, the human queues next prompts with drag-reorder; urgent-interrupt attaches to the live turn, default waits for idle.</p>
+<p class="idea-m"><em>Inspiration:</em> Cursor queued messages &middot; <em>Fits:</em> session view; client-side orchestration</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Ask-while-working clarification cards</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">The agent keeps working but surfaces a non-blocking question chip ("Is status:shipped correct for X?"); the answer lands mid-flight and steers the rest.</p>
+<p class="idea-m"><em>Inspiration:</em> Cursor's ask-questions tool &middot; <em>Risk:</em> blocking-by-nature questions must not auto-resolve while waiting</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Organized knowledge-diff</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">Agent batch changes presented grouped by section, claim type (status/tag/finding), and risk &mdash; with before/after <em>rendered</em> views &mdash; not a raw HTML dump.</p>
+<p class="idea-m"><em>Inspiration:</em> Devin review + visual QA &middot; <em>Risk:</em> display-only; visual QA must not drive auto-approve</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Domain routing (CODEOWNERS, reshaped)</strong> <span class="chip chip--wild">W3</span> <span class="chip">S</span></p>
+<p class="idea-p">Tag corpora/paths with a responsible agent-skill route ("memory steward", "research"); edits in those regions surface the right review queue.</p>
+<p class="idea-m"><em>Inspiration:</em> GitHub CODEOWNERS &middot; <em>Risk:</em> <strong>reshaped to stay legal</strong> &mdash; routing metadata only, no identities/roles (single-operator invariant)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Live mission feed</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Long agent jobs stream a mission panel over the existing SSE: plan steps, tool calls, blockers, and explicit design-choice forks the human can pick without stopping the run.</p>
+<p class="idea-m"><em>Inspiration:</em> Devin's real-time progress &middot; <em>Risk:</em> partial writes stay transactional; forks must not leave half-applied graphs</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Tribal-knowledge proposal inbox</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Post-session memory candidates land in a reviewable queue; approve &rarr; first-class <code>kb remember</code> with provenance; reject &rarr; a negative prior. Upgrades silent distill writes into a human-gated flow.</p>
+<p class="idea-m"><em>Inspiration:</em> Devin's learn-your-codebase cards &middot; <em>Risk:</em> auto-write must never be the default &mdash; memory pollution</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Fleet of specialist workers</strong> <span class="chip chip--wild">W5</span> <span class="chip">XL</span></p>
+<p class="idea-p">Parallel agent roles (Auditor, Distiller, Linker, Stale-hunter) file PRs-as-artifacts that merge only via review states; later workers read prior trajectories.</p>
+<p class="idea-m"><em>Inspiration:</em> Devin fleets &middot; <em>Risk:</em> <strong>agent-layer orchestration entirely</strong> &mdash; kb stores artifacts/comments; strict locking, single-writer per artifact</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Prompt as first-class content</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Browse, diff, and reuse the kb-prompt templates stored inside artifacts: a Prompts view listing every generating prompt, diffable across versions, one-click copy into a new agent brief. The corpus's own genome, surfaced.</p>
+<p class="idea-m"><em>Inspiration:</em> kb's unique stored-prompt fact &middot; <em>Fits:</em> new lens over existing template extraction; local-only render (kb-prompt strips on public serve)</p></div>
+
+<p class="src">Sources: docs.github.com PR reviews, cursor.com/docs agent overview, devin.ai + cognition.ai introducing-devin.</p>
+</section>
+
+<section>
+<h2 id="lens-ambient">Lens 11 &mdash; Ambient &amp; calm computing (TRMNL, information radiators, Weiser/Brown)</h2>
+<div class="lens-sum">Treat knowledge as weather, not alerts: always available, never demanding. Pull-only display modes let the operator notice research when ready instead of being pinged into it. The winning pattern is low-stimulus fidelity: grayscale, sparse typography, long dwell, human-paced cycles. <em>(Retry run with capped fetch budget.)</em></div>
+
+<div class="idea"><p class="idea-h"><strong>Desk radiator (always-on secondary display)</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A chromeless full-screen mode for a spare monitor: large title, one-line thesis, status chip, faint corpus crumb; crossfade every 90&ndash;180s; click opens the reader; idle dimming.</p>
+<p class="idea-m"><em>Inspiration:</em> information radiators; TRMNL; calm technology &middot; <em>Fits:</em> new /ambient route over the artifact index</p></div>
+
+<div class="idea"><p class="idea-h"><strong>E-ink daycard</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A sparse daily card rendered for e-ink (1-bit/4-gray): open findings count, one remembered decision, one stale-doc hint, one random deep-link; the panel pulls a static render every 15&ndash;60 min. No animation, no websocket.</p>
+<p class="idea-m"><em>Inspiration:</em> TRMNL's pull-refresh model &middot; <em>Risk:</em> the "notify when stale" temptation &mdash; refresh stays device-scheduled pull</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Grayscale zen reader</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">A reading mode that strips color, collapses nav to a hairline, locks a bookish measure; comments and tags fade to ghost until a deliberate inspect key.</p>
+<p class="idea-m"><em>Inspiration:</em> Apple Books grayscale; calm readers &middot; <em>Fits:</em> existing reader chrome</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Serendipity wheel</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">A weighted rotation over not-recently-shown &times; open-status &times; linked-memories; user pulls next (space), auto-advance only while the ambient window is focused; the surfacing reason is a quiet footnote.</p>
+<p class="idea-m"><em>Inspiration:</em> museum slideshows; shuffle-as-curation &middot; <em>Risk:</em> auto-advance must never leave the foregrounded ambient surface</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Screensaver of unfinished threads</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Fullscreen slow-drifting cards of open findings and half-written notes, glacial motion, low contrast; any key exits into the SPA on that item; night hours bias to recently-resolved work &mdash; gentle closure instead of open-loop anxiety.</p>
+<p class="idea-m"><em>Inspiration:</em> Apple TV aerials; ambient art &middot; <em>Fits:</em> /screensaver kiosk mode</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Peripheral status ribbon</strong> <span class="chip chip--wild">W2</span> <span class="chip">S</span></p>
+<p class="idea-p">A 24&ndash;32px edge ribbon on the normal UI: corpus heartbeat as a slow breath (index age, count, last capture); no numbers unless hovered; drift is a single softer pulse, never a badge count.</p>
+<p class="idea-m"><em>Inspiration:</em> Weiser/Brown center-vs-periphery &middot; <em>Risk:</em> badge-creep &mdash; hard rule: no counts, no red, no toasts</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Desk shrine (one-object mode)</strong> <span class="chip chip--wild">W4</span> <span class="chip">M</span></p>
+<p class="idea-p">Pin one artifact or memory as the only thing on a display for a work block; it slowly accrues presence (last opened, linked memories as faint constellations); ending the block archives a tiny local glance-journal entry, pulled later, never pushed.</p>
+<p class="idea-m"><em>Inspiration:</em> tokonoma alcoves; museum placards &middot; <em>Fits:</em> focus surface + optional local markdown log</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Weather of the corpus</strong> <span class="chip chip--wild">W5</span> <span class="chip">L</span></p>
+<p class="idea-p">The kb as one full-bleed deterministic scene (hash of index stats &rarr; SVG): fog = stale status claims, clear = recently audited, a front moving in = this week's capture burst; three plain sentences beneath. Beautiful across the room, useful up close.</p>
+<p class="idea-m"><em>Inspiration:</em> Ambient Orb tradition &middot; <em>Risk:</em> metaphor stays descriptive; no scores, refresh on pull</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Walk-by provenance strip</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">A molasses-slow horizontal filmstrip for a hallway e-ink or ultrawide footer: each frame a past session that touched a hot file &mdash; prompt gist, decision line, commit crumb. Standing nearby you absorb why things are the way they are.</p>
+<p class="idea-m"><em>Inspiration:</em> museum timeline rails; kb why made spatial &middot; <em>Fits:</em> episodic store already behind why/recollect</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Paper lantern capture</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">Mobile capture becomes ceremonial and calm: one large field, paper texture, optional whiteboard photo; after save, a brief lantern animation hangs the note into today's ambient queue &mdash; the desk surface simply has new fuel next time it pulls.</p>
+<p class="idea-m"><em>Inspiration:</em> Day One; lantern festivals &middot; <em>Risk:</em> no "note saved" push &mdash; confirmation is on-device only</p></div>
+
+<p class="src">Sources: Weiser &amp; Brown, <em>The Coming Age of Calm Technology</em>; TRMNL docs (how-it-works, fetched); information-radiator tradition; Apple Books; ambient-device lineage (retry run; partly from training knowledge).</p>
+</section>
+
+<section>
+<h2 id="lens-discovery-museum">Lens 12 &mdash; Generous interfaces &amp; digital collections (Whitelaw, Cooper Hewitt, Rijksmuseum)</h2>
+<div class="lens-sum">Search is ungenerous: it withholds the collection and demands a query before revealing anything. Museums solved browsing large heterogeneous collections with delight &mdash; overview first, multiple representational ways in, no dead ends. The gallery must open on abundance; the command palette is one path among many, not the only door.</div>
+
+<div class="idea"><p class="idea-h"><strong>Corpus lobby &mdash; overview-first home</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">The empty-query gallery becomes a lobby: census numbers, a segmented category/status bar, a highlights strip of full cards, 4&ndash;6 example searches drawn from real facet values; every element drops into the existing grid pre-filtered.</p>
+<p class="idea-m"><em>Inspiration:</em> Whitelaw's "show everything"; Cooper Hewitt's home &middot; <em>Fits:</em> gallery empty state + existing facets API</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Facets as visual variables</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">The rail's chip lists become sized bars/treemap cells with live counts that update as other facets apply; hovering previews a 3-card sample; no path ever zero-results without dimming alternatives first.</p>
+<p class="idea-m"><em>Inspiration:</em> Hearst's Flamenco; faceted-browse research &middot; <em>Risk:</em> counts must stay generation-keyed so reindex never serves stale bars</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Pleasurable random &mdash; sample deck</strong> <span class="chip chip--wild">W3</span> <span class="chip">S</span></p>
+<p class="idea-p">"Random 48": a deterministic-seeded sample of full-preview cards with shuffle and one-click "more like this" (atlas neighbors); empty-query and zero-result states offer "Surprise me" as a primary CTA.</p>
+<p class="idea-m"><em>Inspiration:</em> David Rumsey's "get pleasurably lost" &middot; <em>Fits:</em> gallery view mode; client sample over cached docs</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Portal walls &mdash; ways in by dimension</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Categories / tags / folders / status / capabilities as representational tiles (count + 4 mini title samples), a "ways in" layer before the flat grid &mdash; museum type/period/people indexes without new metadata.</p>
+<p class="idea-m"><em>Inspiration:</em> Cooper Hewitt explore pages; Rumsey What/Where/Who/When &middot; <em>Fits:</em> gallery subviews over facets/tags/folders APIs</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Atlas-as-lobby</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">Opt-in default where <code>/</code> opens the atlas with cluster hull labels and hover samples, a grid pane refining beside it &mdash; Shneiderman's overview &rarr; zoom &rarr; details on the surface kb already built for meaning-space.</p>
+<p class="idea-m"><em>Inspiration:</em> Google Arts &amp; Culture t-SNE map &middot; <em>Risk:</em> atlas determinism &mdash; UI must not imply live drift; honest empty state without coords</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Never-empty search</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">On 0 hits always render: same query in other modes with counts, fleet-scope count, nearest facet chips that would yield hits, six samples, example searches. Zero-result becomes a branching overview, not a wall.</p>
+<p class="idea-m"><em>Inspiration:</em> Whitelaw's "no dead ends" &middot; <em>Fits:</em> search empty state (extends the board's zero-result item)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Representational cards</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">Cards show a true sample of the body &mdash; first meaningful paragraph, heading-outline chips, a structure collage (code/table/h2 density) &mdash; with a density toggle. Browsing becomes competitive with search for "I don't know the words yet".</p>
+<p class="idea-m"><em>Inspiration:</em> museum object thumbnails, done for text &middot; <em>Risk:</em> previews from <em>indexed</em> text only &mdash; never live-load artifact HTML into the parent (sandbox)</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Neighborhood footer</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Four always-filled rails at the end of every reader: same folder &middot; same tags &middot; atlas neighbors &middot; explicit links.</p>
+<p class="idea-m"><em>Inspiration:</em> GAC related-works rails &middot; <em>Risk:</em> <strong>collides with the board's "read next" rejection</strong> (three ways already exist in the inspector) &mdash; skipped in the synthesis; recorded here for completeness</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Corpus shape timeline</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Stacked bars of artifacts by month/quarter segmented by category/status, undated bucket explicit; brush a range to filter the gallery. What this kb is about over time, without a query.</p>
+<p class="idea-m"><em>Inspiration:</em> Whitelaw's decade summaries &middot; <em>Fits:</em> gallery/history subview over docs dates</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Studio sets &mdash; curated trails as browse</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">Promote reading lists to Rijksstudio-like sets: cover card, count, horizontal sample strip on the lobby; "set from atlas lasso" and "set from this search" as one-click creators.</p>
+<p class="idea-m"><em>Inspiration:</em> Rijksstudio galleries &middot; <em>Risk:</em> sets are list objects (kb-list/1), never a parallel store; no engagement mechanics</p></div>
+
+<p class="src">Sources: digitalhumanities.org DHQ 9.1 (Whitelaw), collection.cooperhewitt.org, rijksmuseum.nl/en/collection, artsandculture.google.com + t-SNE map experiment, davidrumsey.com, flamenco.berkeley.edu + Yee/Hearst CHI 2003, Shneiderman's visual information-seeking mantra.</p>
+</section>
+
+<section>
+<h2 id="lens-mobile-touch">Lens 13 &mdash; Mobile reading &amp; capture (swipe triage, thumb zones, PWA readers)</h2>
+<div class="lens-sum">Mobile is the operator's escape hatch: reading agent-captured artifacts, reviewing comments, triaging captures. The current bottom-sheet reader is competent but reactive; the gap is proactive triage (swipe), time-aware queueing, and session-thread context &mdash; all inside the reader+capture boundary. <em>(Retry run.)</em></div>
+
+<div class="idea"><p class="idea-h"><strong>Swipe-to-triage gestures</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Swipe left/right on an open artifact archives or flags for follow-up; swipe-up opens a fast comment-reply sheet anchored to the current section; three-zone tap for inspector/dismiss/navigate.</p>
+<p class="idea-m"><em>Inspiration:</em> Spark/Hey swipes; Pocket archive &middot; <em>Fits:</em> mobile bottom-sheet reader gesture layer</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Thumb-zone action rail</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">A fixed four-button footer (add-to-list, favorite, comment-reply, archive), each badging its pending count, 44px+ targets, auto-hide on scroll.</p>
+<p class="idea-m"><em>Inspiration:</em> Gmail's bottom bar &middot; <em>Fits:</em> existing list/review/reading endpoints, no daemon change</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Capture-to-draft queue</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">Quick captures land untagged in a pull-only pending queue; later, swipe-tag from existing tags or swipe-preview; a quiet "N pending" chip on the gallery. Decouples one-handed capture from curation.</p>
+<p class="idea-m"><em>Inspiration:</em> Bear/Reminders capture-then-sort &middot; <em>Fits:</em> CaptureSheet + a pending view; provenance stamping already exists</p></div>
+
+<div class="idea"><p class="idea-h"><strong>One-hand reading mode</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">The metadata passport auto-collapses to a chevron; comments become a lightweight pull-sheet with 3-line thread summaries; chapter/backlink nav moves to a swipeable bottom carousel.</p>
+<p class="idea-m"><em>Inspiration:</em> Apple News / Matter reading &middot; <em>Fits:</em> mobile PreviewInspector compact mode</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Time-aware reading queue</strong> <span class="chip chip--wild">W3</span> <span class="chip">M</span></p>
+<p class="idea-p">A mobile home grouping by estimated reading time: 5-min reads (notes + comments), 15-min (list items under ~2k words), deep dives; defer-until chips stored client-side. Morning commute picks short comment reviews; evening takes the long reads.</p>
+<p class="idea-m"><em>Inspiration:</em> Pocket time-to-read; Instapaper queues &middot; <em>Risk:</em> defer state stays SPA-local; no daemon storage, no notifications</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Reflow focus with related sections</strong> <span class="chip chip--wild">W3</span> <span class="chip">L</span></p>
+<p class="idea-p">A focus button shows a compact per-section skim (deterministic extraction) plus three related sections from other artifacts via the existing backlink/embedding graph, comment counts floating as badges.</p>
+<p class="idea-m"><em>Inspiration:</em> Apple News reflow &middot; <em>Risk:</em> extraction must be deterministic and ideally client/agent-side &mdash; keep the daemon out of summarization</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Ephemeral session thread strip</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">If the open artifact belongs to a captured session, a breadcrumb appears ("part of Saturday AM planning session"); tapping shows the session narrative and the other artifacts it touched, with jump links. Isolated reads become guided narrative.</p>
+<p class="idea-m"><em>Inspiration:</em> backlinks panes; linked issues &middot; <em>Fits:</em> sessions + session_files joins already indexed</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Comment triage stream</strong> <span class="chip chip--wild">W2</span> <span class="chip">M</span></p>
+<p class="idea-p">A mobile-first infinite scroll of only unresolved comments across all kbs (quote + artifact + author + age); tap jumps to the anchor; swipe resolves or defers. Strictly pull &mdash; refresh by hand, zero alerts.</p>
+<p class="idea-m"><em>Inspiration:</em> Linear inbox; HEY imbox &middot; <em>Risk:</em> flirts with push framing &mdash; stays pull-only by construction</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Night reading guard</strong> <span class="chip chip--wild">W1</span> <span class="chip">S</span></p>
+<p class="idea-p">Beyond the dark theme: near-black artifact background, pale-gray text at gentle contrast for evening reading, manual or time-of-day toggle, preference local.</p>
+<p class="idea-m"><em>Inspiration:</em> Kindle/Books night modes &middot; <em>Fits:</em> reader CSS + one localStorage key</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Audio reading mode</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Interruptible TTS with a deck-style UI (large center pause, corner chapter skips); pausing to answer a comment timestamps the anchor.</p>
+<p class="idea-m"><em>Inspiration:</em> Pocket listen; Audible controls &middot; <em>Risk:</em> <strong>collides with the TTS refusal</strong>; the worker's daemon-side WAV sidecar variant is additionally illegal (daemon media pipeline) &mdash; client-side only if ever revisited</p></div>
+
+<div class="idea"><p class="idea-h"><strong>Inline claim marks (reshaped)</strong> <span class="chip chip--wild">W4</span> <span class="chip">L</span></p>
+<p class="idea-p">Tap a marked span to flag it agree / questionable / disagree while reading one-handed; desktop shows the marks as a per-section strip. Human marks disputes while agents author; controversial sections become greppable.</p>
+<p class="idea-m"><em>Inspiration:</em> Docs resolve flows; talk-page markers &middot; <em>Risk:</em> the worker proposed a parallel vote table &mdash; <strong>reshaped</strong> to a comment flavor (kb-comments/1 stays the single annotation store)</p></div>
+
+<p class="src">Sources: Spark/Hey/Gmail triage patterns, Pocket, Apple Mail/Books, Matter/Apple News reflow, Kindle night modes, Linear inbox (retry run; partly from training knowledge).</p>
+</section>
+
+<section>
+<h2 id="provenance">Provenance</h2>
+<p>Generated 2026-07-18 by two Workflow fan-outs of grok-4.5 offload workers (opencode, researcher agent, variant high): 14 workers in the first wave (~748K tokens; 3 died fetch-hunting, 1 lost structured output and was recovered from its on-disk report), 4 tightened retries (~212K tokens, hard fetch budgets). Idea counts per lens: reading 10 &middot; spatial 10 &middot; atlas 10 &middot; serendipity 12 &middot; editorial 8 &middot; dashboards 10 &middot; keyboard 10 &middot; web-platform 10 &middot; timeline 8 &middot; copresence 11 &middot; ambient 10 &middot; museum 10 &middot; mobile 11 = <strong>130</strong>. The SPA-audit worker's inventory informed the synthesis but two of its headline claims were refuted by source-grep and are excluded. Decisions, waves, and refusal adjudications: <a href="kb-web-ui-frontier-synthesis-2026-07.html">the frontier synthesis</a>. The prior in-repo critique: audit &amp; idea board (private).</p>
+<h3 id="source-index">Source index (URLs the workers actually consulted)</h3>
+<p class="src">
+Cartography: <a href="https://distill.pub/2016/misread-tsne/">Distill t-SNE</a> &middot; <a href="https://docs.nomic.ai/">Nomic Atlas docs</a> &middot; <a href="https://projector.tensorflow.org/">Embedding Projector</a> &middot; <a href="https://maartengr.github.io/BERTopic/algorithm/algorithm.html">BERTopic c-TF-IDF</a> &middot; <a href="https://umap-learn.readthedocs.io/en/latest/densmap_demo.html">DensMAP</a>.
+Spatial: <a href="https://wiki.heptabase.com/">Heptabase wiki</a> &middot; <a href="https://jsoncanvas.org">JSON Canvas</a> &middot; <a href="https://obsidian.md/canvas">Obsidian Canvas</a> &middot; <a href="https://kinopio.club">Kinopio</a> &middot; <a href="https://tldraw.dev">tldraw</a>.
+Serendipity: <a href="https://docs.readwise.io/readwise/docs/faqs/reviewing-highlights">Readwise review docs</a> &middot; <a href="https://github.com/open-spaced-repetition/awesome-fsrs/wiki/ABC-of-FSRS">ABC of FSRS</a> &middot; <a href="https://www.themarginalian.org/2015/03/24/umberto-eco-antilibrary/">Eco's antilibrary</a>.
+Dashboards: <a href="https://github.blog/2013-01-07-introducing-contributions/">GitHub contributions</a> &middot; <a href="https://engineering.atspotify.com/2026/3/inside-the-archive-2025-wrapped">Spotify Wrapped Archive engineering</a> &middot; <a href="https://ianli.com/publications/2010-ianli-chi-stage-based-model.pdf">Li, Dey &amp; Forlizzi (CHI 2010)</a> &middot; <a href="https://www.obsidianstats.com/plugins/heatmap-calendar">Obsidian heatmap plugins</a>.
+Keyboard: <a href="https://linear.app/method">Linear Method</a> &middot; <a href="https://manual.raycast.com/">Raycast manual</a> &middot; <a href="https://github.com/philc/vimium">Vimium</a> &middot; <a href="https://i3wm.org/docs/userguide.html">i3 userguide</a> &middot; <a href="https://code.visualstudio.com/docs/editor/editingevolved">VS Code code navigation</a>.
+Platform: <a href="https://developer.chrome.com/docs/web-platform/view-transitions">View Transitions</a> &middot; <a href="https://developer.chrome.com/docs/css-ui/scroll-driven-animations">scroll-driven animations</a> &middot; <a href="https://developer.chrome.com/blog/anchor-positioning-api">anchor positioning</a> &middot; <a href="https://web.dev/blog/popover-api">Popover API</a> &middot; <a href="https://developer.chrome.com/docs/web-platform/prerender-pages">Speculation Rules</a> &middot; <a href="https://scroll-driven-animations.style/">scroll-driven-animations.style</a>.
+Copresence: <a href="https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/about-pull-request-reviews">GitHub PR reviews</a> &middot; <a href="https://cursor.com/docs/agent/overview">Cursor Agent</a> &middot; <a href="https://www.cognition.ai/blog/introducing-devin">Devin</a>.
+Museum: <a href="https://www.digitalhumanities.org/dhq/vol/9/1/000205/000205.html">Whitelaw, Generous Interfaces (DHQ 9.1)</a> &middot; <a href="https://collection.cooperhewitt.org/">Cooper Hewitt</a> &middot; <a href="https://www.rijksmuseum.nl/en/collection">Rijksmuseum</a> &middot; <a href="https://experiments.withgoogle.com/t-sne-map">GAC t-SNE map</a> &middot; <a href="https://www.davidrumsey.com/">David Rumsey</a> &middot; <a href="https://flamenco.berkeley.edu/">Flamenco</a>.
+Ambient: <a href="https://docs.trmnl.com/go/how-it-works.md">TRMNL how-it-works</a>.
+</p>
+</section>
+</article>
+</main>
+</body>
+</html>

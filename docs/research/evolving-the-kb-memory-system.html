@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Evolving the kb Memory System</title>
+<meta name="kb-category" content="research">
+<meta name="kb-tags" content="status:partial, memory, sessions, recall, episodic, distiller, architecture, design, roadmap">
+<!-- kb-audit 2026-07-10: added status:partial (this doc had no status token at all before) -- verified against main@381486a8 (kb-audit pilot, GC-D4). All four "Near" correctness fixes shipped: title/summary split (kb-summary meta + kb_summary lance column, parser.rs/lance.rs, tagged RA4), DEFAULT_SALIENCE re-export (crates/kb-core/src/memory.rs:25, re-exported into kb-server/src/routes/memory.rs), decay basis on write-time kb-created meta not filesystem mtime (memory.rs/indexer.rs, tagged RA3), digest research-noise filter (sessions.rs::classify_research, tagged RA2, test classify_research_filters_self_referential_and_playwright). The "Mid" recommendation -- the R6 offline distiller -- shipped 2026-07-06 as the agent-layer skill /kb-distill (commit db7ce381, plugins/kb-memory/skills/kb-distill/SKILL.md), matching the design closely: ADD/SUPERSEDE/NOOP write vocabulary (MERGE deferred to human review, even more conservative than this doc's ADD/SUPERSEDE/MERGE/NOOP proposal), --dry-run, and a mandatory --session-id as the idempotency stamp -- directly answering this doc's own flagged idempotency-key risk. R6.3 (trusted cron / daemon-side auto-apply) was NOT built; /kb-distill stays agent-invoked only, consistent with the no-in-daemon-LLM non-goal. "Far" items (supersede-as-edge, a real usage signal, a per-install eval harness, capture-suggestion) remain unactioned -- confirmed absent via rg/git log. The five scored directions (D1-D5) and their verdicts are a historical record of a design decision, not open claims, and are left untouched. -->
+
+
+<style>
+/* ── kb visual floor — keep in sync with the kb-artifact skill's assets/style.css ── */
+:root{
+  --bg:#fbfbfa; --surface:#f3f3f1; --fg:#1b1b1a; --muted:#5f5f5c;
+  --rule:#d9d9d6; --accent:#5a4a9f; --accent-fg:#ffffff;
+  --warn:#8a5f00; --danger:#9a2f28; --ok:#256148;
+  --fs-body:1.0625rem; --fs-small:.85rem; --lh:1.6; --maxw:50rem;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --radius:6px; --focus:2px solid var(--accent);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#16171a; --surface:#1f2126; --fg:#e6e6e3; --muted:#a3a39e;
+    --rule:#2c2e33; --accent:#a99be8; --accent-fg:#11131a;
+    --warn:#e0b24d; --danger:#f08079; --ok:#6fcaa0;
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:var(--fs-body);line-height:var(--lh)}
+:focus-visible{outline:var(--focus);outline-offset:2px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--fg);color:var(--bg);
+  padding:.5rem 1rem;z-index:100;font:600 var(--fs-small)/1 var(--mono);
+  text-transform:uppercase;letter-spacing:.05em;text-decoration:none}
+.skip-link:focus{left:.5rem;top:.5rem}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface);border-radius:4px;padding:.08em .35em}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:1rem;overflow:auto;font-size:.85rem;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.9rem;margin:1em 0}
+th,td{border:1px solid var(--rule);padding:.5em .7em;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600}
+a{color:var(--accent);text-underline-offset:2px}
+a:focus-visible{outline:var(--focus);outline-offset:2px;border-radius:2px}
+.callout{font-family:var(--serif);border:1px solid var(--rule);border-left:4px solid var(--accent);
+  border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 7%,var(--bg));padding:.8em 1em;margin:1.2em 0}
+.callout-label{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:.3em}
+.callout--warn{border-left-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--bg))}
+.callout--warn .callout-label{color:var(--warn)}
+.callout--danger{border-left-color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--bg))}
+.callout--danger .callout-label{color:var(--danger)}
+.callout--ok{border-left-color:var(--ok);background:color-mix(in srgb,var(--ok) 9%,var(--bg))}
+.callout--ok .callout-label{color:var(--ok)}
+.shipped-note{display:inline-block;font-size:.72rem;font-weight:600;border-radius:4px;padding:.1em .5em;margin:.1rem 0 .3rem;border:1px solid var(--ok);color:var(--ok);background:var(--surface)}
+/* ── end kb visual floor ── */
+
+/* layout above the floor */
+main{max-width:var(--maxw);margin:0 auto;padding:2.5rem 1.25rem 6rem}
+h1{font-size:2.05rem;line-height:1.15;letter-spacing:-.02em;margin:.2em 0 .1em}
+h2{font-size:1.45rem;letter-spacing:-.01em;margin:2.4em 0 .5em;padding-bottom:.25em;border-bottom:1px solid var(--rule)}
+h3{font-size:1.12rem;margin:1.8em 0 .4em}
+.lede{font-size:1.18rem;color:var(--muted);line-height:1.5;margin:.6em 0 1.4em}
+.meta-row{font:500 var(--fs-small)/1.4 var(--mono);color:var(--muted);letter-spacing:.02em;
+  display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;margin:.4em 0 1.6em;padding-bottom:1.4em;border-bottom:1px solid var(--rule)}
+.toc{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.9em 1.2em;margin:1.6em 0}
+.toc ol{margin:.3em 0;padding-left:1.3em;columns:2;column-gap:2rem}
+.toc li{margin:.2em 0;font-size:.92rem}
+.badge{display:inline-block;font:650 .68rem/1 var(--sans);letter-spacing:.04em;text-transform:uppercase;
+  padding:.25em .5em;border-radius:4px;vertical-align:middle}
+.b-severe{background:color-mix(in srgb,var(--danger) 16%,var(--bg));color:var(--danger)}
+.b-mod{background:color-mix(in srgb,var(--warn) 18%,var(--bg));color:var(--warn)}
+.b-ok{background:color-mix(in srgb,var(--ok) 16%,var(--bg));color:var(--ok)}
+.b-minor{background:var(--surface);color:var(--muted)}
+.scorecard td:nth-child(n+3){text-align:center;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:.84rem}
+.rec{background:color-mix(in srgb,var(--ok) 7%,var(--bg))}
+.rej{opacity:.86}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));gap:.8rem;margin:1.4em 0}
+.stat{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:.8em .9em}
+.stat .n{font:700 1.5rem/1 var(--sans);letter-spacing:-.02em;color:var(--accent);display:block}
+.stat .l{font-size:.78rem;color:var(--muted);margin-top:.3em;display:block;line-height:1.35}
+.dir{border:1px solid var(--rule);border-radius:var(--radius);padding:.2em 1.2em 1em;margin:1.4em 0;background:var(--surface)}
+.dir.win{border-color:var(--ok);border-left:4px solid var(--ok)}
+.dir h3{margin-top:.9em}
+.verdict{font:650 .72rem/1 var(--sans);letter-spacing:.05em;text-transform:uppercase}
+ul,ol{padding-left:1.3em}
+li{margin:.32em 0}
+.foot{margin-top:3em;padding-top:1.2em;border-top:1px solid var(--rule);font-size:.84rem;color:var(--muted)}
+.refs li{font-size:.86rem;margin:.4em 0}
+.refs code{font-size:.8em}
+.kbd{font:600 .78rem/1 var(--mono);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.12em .4em}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<main id="main">
+
+<h1>Evolving the kb Memory System</h1>
+<p class="lede">The architecture is right and matches where the field landed. The data says we built the half that already works and starved the half that matters — so the highest-leverage move is not a smarter ranker, it is finally building the write side.</p>
+<div class="meta-row">
+  <span>kb research</span>
+  <span>2026-06-29</span>
+  <span>method: 31-agent orchestrated workflow</span>
+  <span>real data: live memory backend</span>
+</div>
+
+<div class="callout">
+  <span class="callout-label">Thesis</span>
+  kb's memory architecture is correct and SOTA-aligned. The binding constraint is <strong>not</strong> the deterministic ranker (it is over-built for 13 facts) but the <strong>empty, manual write side</strong>. The highest-leverage evolution is an offline, model-isolated <em>session&nbsp;&rarr;&nbsp;fact</em> distiller feeding a human-review queue — preceded by a handful of cheap correctness fixes — with the per-turn recall path (invariant&nbsp;#10) and the episodic pull-only contract (invariant&nbsp;#11) left intact.
+</div>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#today">How memory works today</a></li>
+    <li><a href="#data">What the real data says</a></li>
+    <li><a href="#landscape">The external landscape</a></li>
+    <li><a href="#directions">Five directions, scored</a></li>
+    <li><a href="#recommended">The recommended path</a></li>
+    <li><a href="#roadmap">Phased roadmap</a></li>
+    <li><a href="#risks">Risks &amp; guardrails</a></li>
+    <li><a href="#open">Open questions</a></li>
+    <li><a href="#method">Method &amp; references</a></li>
+  </ol>
+</nav>
+
+<section id="today">
+<h2>1 · How memory works today</h2>
+<p>kb's memory is two LLM-free halves. Both are deliberate; both are documented as load-bearing invariants.</p>
+
+<h3>Curated agent memory — invariant #10</h3>
+<p><span class="kbd">kb remember "&lt;fact&gt;"</span> renders an HTML artifact into a memory corpus (<code>memory</code> = global, <code>memory-kb</code> = project-scoped). <span class="kbd">kb recall "&lt;q&gt;"</span> is a hybrid search over those corpora followed by a <strong>pure, deterministic, model-free</strong> re-rank (<code>crates/kb-core/src/memory.rs</code>):</p>
+<pre><code>score = rel · salience · exp(−k · age_days)        rel = 1 / (60 + rank)
+        salience ∈ [0,1] (default 0.5)   k = 0.01 (slow) | 0.1 (fast)</code></pre>
+<p>Superseded and forgotten memories drop at recall time; a <code>DecayPolicy</code> floor (strict 0.20 / balanced 0.15 / loose −∞) drops low-salience non-pinned memories. Recall fires every turn through a <code>UserPromptSubmit</code> hook injecting the top-5. The design slogan is exactly right: <em>the live agent decides what to keep; kb only stores, ranks, and serves.</em></p>
+
+<h3>Episodic session memory — invariant #11</h3>
+<p>A <code>Stop</code> hook wraps the raw Claude Code JSONL transcript in HTML into the <code>sessions</code> corpus on every stop. The indexed surface is a deterministic <strong>digest</strong>, not the raw JSONL; transcripts are excluded from default search and recall, and pulled on demand via <span class="kbd">kb why &lt;file&gt;</span> (provenance) and <span class="kbd">kb recollect "&lt;task&gt;"</span> (semantic search over past work). Recollect's success and staleness are <em>surfaced</em> signals, never score terms. This half is healthy: lossless capture, one pure parser feeding both the sqlite rows and the served render, canonical id recovered from JSONL ground truth, multi-capture newest-superset handled uniformly.</p>
+
+<h3>The current-state assessment</h3>
+<table>
+  <thead><tr><th>Area</th><th>Severity</th><th>Assessment</th></tr></thead>
+  <tbody>
+    <tr><td>Curated <strong>write side</strong></td><td><span class="badge b-severe">severe</span></td><td>Fully manual, barely used. No auto-capture, no dedup, no conflict detection, no auto-supersede, no usage reinforcement. Salience collapses to the 0.5 default; supersede needs the agent to recall a prior id and almost never fires. <strong>The binding constraint.</strong></td></tr>
+    <tr><td>Session&nbsp;&rarr;&nbsp;memory bridge</td><td><span class="badge b-severe">severe</span></td><td><code>memory_count = 0</code> on recent sessions. The bridge is a string-match on the <code>kb_session</code> column, fired only when the agent both runs <code>kb remember</code> <em>and</em> stamps a matching meta. The rich episodic store never feeds the thin curated tier.</td></tr>
+    <tr><td>Signal calibration &amp; bugs</td><td><span class="badge b-mod">moderate</span></td><td>Decay reads file <code>mtime</code> (a source rewrite resets a memory's age); the route hardcodes <code>0.5</code> duplicating a private const; titles truncate mid-sentence (no title/summary split); research-rollup conflates kb verbs and MCP UI calls as "research".</td></tr>
+    <tr><td>Recall ranking (#10)</td><td><span class="badge b-minor">minor</span></td><td>Clean and fast (~80–95 ms), correctly drops superseded/forgotten/floored. But the <code>1/(60+rank)</code> term spans only ~13% across the top-10, so salience reorders by at most one position and the decay floor never fires on the live install. Real sophistication, inert at current scale.</td></tr>
+    <tr><td>Storage model (memory = artifact)</td><td><span class="badge b-minor">minor</span></td><td>"Memory is an HTML artifact with metas" is correct and load-bearing — it reuses search / embed / share / SPA / edges / versions for free. The machinery (pins, links, decay-policy) is over-built for 13 facts but additive and cheap.</td></tr>
+    <tr><td>Episodic sessions (#11)</td><td><span class="badge b-ok">ok</span></td><td>Honest, well-tested, pull-only. Leave it alone.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="data">
+<h2>2 · What the real data says</h2>
+<p>Gathered live from the running memory backend on 2026-06-29. The numbers make the constraint unambiguous and it is <strong>not</strong> ranking.</p>
+
+<div class="stat-grid">
+  <div class="stat"><span class="n">13</span><span class="l">curated facts (1 global + 12 project)</span></div>
+  <div class="stat"><span class="n">196</span><span class="l">captured session transcripts</span></div>
+  <div class="stat"><span class="n">0</span><span class="l">memories produced by recent sessions</span></div>
+  <div class="stat"><span class="n">8/13</span><span class="l">facts stuck at the 0.5 default salience</span></div>
+  <div class="stat"><span class="n">0</span><span class="l">pinned memories</span></div>
+  <div class="stat"><span class="n">2/13</span><span class="l">facts using <code>linked_kbs</code> scoping</span></div>
+</div>
+
+<table>
+  <thead><tr><th>Finding</th><th>Evidence</th><th>Implication</th></tr></thead>
+  <tbody>
+    <tr><td>Curated memory is write-starved relative to episodic capture</td><td>13 facts vs 196 transcripts; capture is an unconditional <code>Stop</code> hook, <code>kb remember</code> fires only on agent volition</td><td>The architecture optimizes the automatic half and starves the deliberate half. Sharpening recall over 13 facts addresses the wrong constraint.</td></tr>
+    <tr><td>Salience is a near-inert near-constant</td><td>Distribution <code>{0.5:5, 0.55:1, 0.8:2, 0.85:1, 0.9:1}</code>; live recall scores 0.006–0.011; a 0.8 hit beat a 0.9 hit purely on search rank</td><td>The decay / floor / pin machinery is dormant. Recall ordering is effectively "return search order." Smarter ranking yields little until the write side supplies graded salience.</td></tr>
+    <tr><td>The session&nbsp;&rarr;&nbsp;curated bridge is dead</td><td><code>memory_count = 0</code> on recent sessions; the bridge fires only on a manual, correctly-stamped <code>kb remember</code></td><td>The 196-transcript store never converts into durable facts. Closing this gap is the deferred R6 distiller — the single highest-leverage missing component.</td></tr>
+    <tr><td>Two verified correctness defects</td><td><code>routes/memory.rs</code> sources file <code>mtime</code> into decay age (a reindex resets age to 0); the same route hardcodes <code>0.5</code> duplicating the private <code>DEFAULT_SALIENCE</code>, with a comment admitting it</td><td>Cheap, real, low-risk fixes worth shipping regardless of the larger direction.</td></tr>
+    <tr><td>Titles truncate mid-sentence</td><td>The display handle is the first 80 chars of the body — live titles cut mid-word ("…rebuilds kb", "…at 127")</td><td>Degrades the <code>/memory</code> view and recall readability. A write-side <code>kb-summary</code> meta fixes it without touching recall math.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout--warn">
+  <span class="callout-label">The shape of the problem</span>
+  Capture is abundant; curated knowledge is starved. We have a firehose pointed at a notebook nobody writes in. Every credible direction below is judged first on one question: <em>does it actually grow and clean the write side, or does it add machinery to the read side that already works?</em>
+</div>
+</section>
+
+<section id="landscape">
+<h2>3 · The external landscape</h2>
+<p>The field converged on one pattern, and kb already embodies it: an <strong>intelligent (LLM) write/consolidation path that runs in the background, feeding a cheap deterministic read path at inference</strong>. That <em>is</em> invariant&nbsp;#10's "smart write side, pure-math read side" split — externally validated as both lower-latency and higher-quality. kb built the read half well and never built the write half.</p>
+
+<table>
+  <thead><tr><th>Technique</th><th>Source</th><th>Relevance to kb</th></tr></thead>
+  <tbody>
+    <tr><td>Hard read/write role split — a background "sleep-time" agent owns all writes; the live agent only reads</td><td>Letta / MemGPT; Sleep-time Compute</td><td>This <em>is</em> kb's #10 architecture, externally validated. It also names the missing half: kb has no background writer. ~5× test-time compute reduction is the case for an offline distiller.</td></tr>
+    <tr><td>Idle-time consolidation / defrag — merge duplicates, restructure, on a tunable cadence with a stronger non-latency-bound model</td><td>Letta MemFS defrag; LangMem ReflectionExecutor; Cognee Memify</td><td>kb has explicitly <em>no</em> consolidation/dedup/conflict-detection. The proven template for turning 196 messy transcripts + 13 coarse facts into clean facts without touching the per-turn path.</td></tr>
+    <tr><td>Write-time reconciliation against top-k neighbors — ADD/UPDATE/DELETE/NOOP; soft-invalidate, never hard-delete</td><td>mem0; Graphiti / Zep bitemporal KG</td><td>Exactly the dedup + auto-supersede kb lacks. Maps onto the deferred R6: retrieve nearest existing memories, emit <code>kb-supersedes</code>. mem0's 2026 reversal to <em>ADD-only</em> validates kb's append-only + drop-at-recall design — do <strong>not</strong> adopt destructive deletes.</td></tr>
+    <tr><td>importance × recency × relevance retrieval + periodic reflection writing cited insights back; decay from last <em>retrieval</em></td><td>Generative Agents; RMM</td><td>The direct ancestor of kb's rerank. Transferable: provenance-cited reflection memories (a #11-safe batch writer). The access-reinforced recency idea is endogenous feedback that risks entrenchment — keep it off the deterministic hot path.</td></tr>
+    <tr><td>Score in pairs: accuracy × token-cost × latency; benchmarks under-measure write quality &amp; forgetting</td><td>LoCoMo / LongMemEval / BEAM</td><td>Tells kb <em>how</em> to judge whether memory helps. kb owns the latency/token story (~80–95 ms, top-5); it lacks a utility number — but harvesting an eval set needs a "used" signal kb cannot currently observe.</td></tr>
+    <tr><td>Memory as size-bounded blocks with a label/summary distinct from the value; files outside the window, pulled just-in-time</td><td>Anthropic memory tool + context editing; Letta memory blocks</td><td>Validates kb's pull-only sessions and recall-then-expand posture. The label/summary split is a cheap upgrade that fixes kb's truncated-title problem and gives dedup a stable key — without abandoning memory = artifact.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout--ok">
+  <span class="callout-label">The reassuring finding</span>
+  Nothing in the SOTA suggests kb's foundations are wrong. The deterministic, offline, append-only read path is exactly what Letta, mem0, LangMem and Cognee independently arrived at. kb is not behind on architecture — it is behind on <em>one component</em>: the background writer.
+</div>
+</section>
+
+<section id="directions">
+<h2>4 · Five directions, scored</h2>
+<p>Five divergent designs were generated — from "tune what exists" to "rewrite from scratch" — and each was scored 1–5 (5 = best) by three adversarial reviewers across feasibility, invariant-alignment, real-data fit, and cost/benefit. The adversarial pass earned its keep: it found load-bearing <em>mechanism</em> bugs in three of the five, including the flagship phase of the conservative option.</p>
+
+<table class="scorecard">
+  <thead><tr><th>Direction</th><th>Verdict</th><th>Feas.</th><th>Inv.</th><th>Data</th><th>C/B</th><th>Overall</th></tr></thead>
+  <tbody>
+    <tr class="rec"><td><strong>D2 · kb-reflect</strong> — offline distiller (the deferred R6)</td><td><span class="verdict" style="color:var(--ok)">adopt — central</span></td><td>4.0</td><td>5.0</td><td>4.7</td><td>3.3</td><td><strong>3.7</strong></td></tr>
+    <tr><td>D1 · Calibrate/Reinforce/Distinguish — write-side tuning</td><td><span class="verdict">adopt, heavily pruned</span></td><td>3.7</td><td>3.0</td><td>2.7</td><td>2.3</td><td>3.0</td></tr>
+    <tr class="rej"><td>D4 · Typed memory tiers — from-scratch rewrite</td><td><span class="verdict">defer (mostly relabeling)</span></td><td>4.0</td><td>4.0</td><td>2.0</td><td>2.0</td><td>2.3</td></tr>
+    <tr class="rej"><td>D3 · Bitemporal entity-graph</td><td><span class="verdict" style="color:var(--danger)">reject; salvage 1 piece</span></td><td>2.0</td><td>2.7</td><td>2.0</td><td>2.0</td><td>2.0</td></tr>
+    <tr class="rej"><td>D5 · Closed-loop telemetry auto-tune</td><td><span class="verdict" style="color:var(--danger)">reject loop; keep instinct</span></td><td>2.0</td><td>4.0</td><td>2.7</td><td>2.0</td><td>2.0</td></tr>
+  </tbody>
+</table>
+
+<div class="dir win">
+  <h3>D2 · kb-reflect — the offline sleep-time distiller <span class="badge b-ok">recommended</span></h3>
+  <p><span class="shipped-note">shipped 2026-07-06 — db7ce381</span> Built as the agent-layer skill <code>/kb-distill</code> (<code>plugins/kb-memory/skills/kb-distill</code>), not a daemon-cron worker — see the roadmap section below for the fidelity check against this design.</p>
+  <p>A standalone batch worker (<span class="kbd">kb reflect</span>) reads session <em>digests</em>, proposes ADD / SUPERSEDE / MERGE / NOOP against the curated tier via an offline LLM, and writes accepted facts <strong>through the existing artifact write path</strong> into a human-review queue. It is the missing write side the data and the SOTA both point to.</p>
+  <ul>
+    <li><strong>Input</strong> is the deterministic <code>session_digest</code> (#11 R1), never the raw 2.48M-token JSONL — bounded token cost.</li>
+    <li><strong>Reconcile</strong> retrieves the k-nearest existing memories and classifies each candidate; DELETE maps to SUPERSEDE/forget (matching kb's drop-at-recall philosophy and mem0's 2026 ADD-only retreat).</li>
+    <li><strong>Write</strong> is 100% existing rails: <code>render_artifact</code> + POST, <code>kb-supersedes</code> on merges, <code>kb-summary</code> kills the truncated title, graded salience kills the 0.5 monoculture, lands in the memory corpus so #11 R0 stays clean.</li>
+    <li><strong>Provenance</strong> rides the edge graph (#29): each reflection links to its source sessions and the facts it replaced, so <code>kb why</code> shows "distilled from sessions X, Y; replaces Z" for free, and a wrong synthesis is traceable and <code>kb forget</code>-able.</li>
+    <li><strong>Recall is byte-identical</strong> — the model is confined to a subprocess recall never calls (#26 isolation precedent), no-op when unconfigured.</li>
+  </ul>
+  <p><strong>Why it wins:</strong> highest reviewer score, perfect invariant-alignment (5.0), and it is the only direction that attacks the actual 13-vs-196 constraint. The dry-run&nbsp;&rarr;&nbsp;queue&nbsp;&rarr;&nbsp;cron phasing de-risks it and is valuable before any auto-apply.</p>
+  <div class="callout callout--warn">
+    <span class="callout-label">What the adversarial pass added</span>
+    Three fixes the original design missed: (1) an <strong>idempotency key</strong> — <code>artifacts::create</code> derives the filename from <code>slug-&lt;unix_secs&gt;</code>, so a batch emitting multiple ADDs in the same second, or a re-run over the same window, becomes a <em>duplicate generator</em> — the exact thing it exists to prevent. (2) MERGE needs <strong>multi-target tombstones</strong>; it does <em>not</em> ride the single-target supersede path as claimed. (3) Dedup must query raw <code>list_docs</code>, not the floor-filtered <code>recall</code> endpoint, which hides exactly the mis-scoped/dropped facts the corpus is messiest in. And a hard deliverable, not a footnote: a <strong>salience rubric + held-out distribution check</strong>, or the LLM rater collapses to all-0.8 and recreates the 0.5 monoculture in a confident-but-noisy form.
+  </div>
+</div>
+
+<div class="dir">
+  <h3>D1 · Calibrate, Reinforce, Distinguish — adopt, heavily pruned</h3>
+  <p>Six small phases retuning existing signals with recall math preserved. Reviewers reached "adopt-with-changes" but gutted the flagship:</p>
+  <ul>
+    <li><span class="badge b-ok">keep</span> Title/summary split (<code>kb-summary</code> meta + nullable lance column), re-export <code>DEFAULT_SALIENCE</code> to kill the duplicated literal + add the missing route test, and fix the decay basis with a <strong>write-time <code>kb-created</code> meta</strong> (not filesystem btime, which is mutable and absent on network/overlay mounts — the proposed <code>created_unix.or(mtime)</code> fallback <em>silently restores the bug</em>).</li>
+    <li><span class="badge b-severe">drop</span> <strong>P1 lowering <code>RANK_K</code> 60&rarr;12 is mathematically backwards.</strong> Verified: lowering K <em>widens</em> the rank-term spread, making search position <em>more</em> decisive and salience <em>less</em> able to reorder — the inverse of its stated goal. A salience-0.9 hit that <em>wins</em> at K=60 <em>loses</em> at K=12. The phase pitched as "the direct, measured fix" inverts its own arithmetic.</li>
+    <li><span class="badge b-severe">drop</span> <strong>P3 usage-reinforcement is a real #10 violation</strong>, not a cosmetic one: the recall route would write <code>recall_count</code> every turn, so the same query returns different scores on successive turns — accrued mutable state on the hot path, the precise thing #10 exists to exclude. It also entrenches frequently-injected facts (memory poisoning) on a 13-fact corpus.</li>
+  </ul>
+</div>
+
+<div class="dir rej">
+  <h3>D4 · Typed memory tiers (working / episodic / semantic / procedural) — defer</h3>
+  <p>The "rethink from scratch" option. Reviewers found it is <strong>mostly relabeling</strong>: episodic = sessions (exists), semantic = the memory corpus (exists), "working" = the hook's top-5 (not persisted — not a tier at all). The only genuinely new tier, <em>procedural</em>, is just the R6 distiller wearing a taxonomy. The two real wins it bundles (the decay-reset bug, the duplicated const) are ~30 lines each and need no tier abstraction. Vocabulary, not capability — at 13 facts, typing-for-typing's-sake.</p>
+</div>
+
+<div class="dir rej">
+  <h3>D3 · Bitemporal entity-graph — reject; salvage one piece</h3>
+  <p>Mint entity artifacts and typed/temporal edge kinds on the existing edges table; make recall a 1-hop graph expansion. Two fatal mechanism bugs:</p>
+  <ul>
+    <li><strong>Write-path collision:</strong> <code>record_edges</code> does <em>delete-all-then-reinsert-per-src</em>; its sole caller (<code>EdgeRecordHook</code>) owns the full link set, so any second writer adding <code>supersedes</code>/<code>mentions</code> edges is wiped on the next reindex. "Additive temporal edges for free" rests on a primitive that is single-set-per-src <em>replace</em>.</li>
+    <li><strong>Read leakage:</strong> <code>backlinks_of</code>/<code>edges_from</code> do not filter by kind, so new edge kinds silently inflate backlink counts and pollute the graph route and atlas.</li>
+  </ul>
+  <p><strong>Salvage:</strong> supersede-as-edge (a queryable "what replaced this") — but only later, as a deliberate per-edge upsert with kind-filtered reads, not as a headline.</p>
+</div>
+
+<div class="dir rej">
+  <h3>D5 · Closed-loop telemetry &rarr; auto-tune ("the memory thermostat") — reject the loop</h3>
+  <p>Log every injection, mine a "used" signal from the next session, auto-tune salience/decay. <strong>Fatal: the used-signal cannot be observed.</strong> Recalled memories are injected as <em>prompt text</em> by the hook — the agent never Reads the memory's file and never searches its id, so it appears in neither <code>session_files</code> nor <code>session_research</code> (and <code>classify_research</code> never emits an <code>artifact_open</code> kind — it is a dead CHECK-constraint value). The reward signal the whole loop rests on is structurally near-empty. <strong>Keep the instinct</strong> (kb genuinely cannot answer "which of the 13 facts ever help") but earn it later via an explicit memory-id citation point and an offline eval harness — measurement, not a feedback loop.</p>
+</div>
+</section>
+
+<section id="recommended">
+<h2>5 · The recommended path</h2>
+<div class="callout">
+  <span class="callout-label">Recommendation</span>
+  <strong>Do not build a smarter ranker.</strong> The deterministic recall path is correct and over-built for 13 facts. Fix the write side instead.
+  <ol>
+    <li><strong>Near term</strong> — ship the four verified, model-free correctness fixes (title/summary split; <code>DEFAULT_SALIENCE</code> re-export + missing test; write-time <code>kb-created</code> decay basis; digest research-noise filter). Explicitly <em>drop</em> D1's backwards <code>RANK_K</code> retune and its usage-reinforcement term.</li>
+    <li><strong>Mid term</strong> — build the deferred R6 as <span class="kbd">kb reflect</span>: offline, model-isolated, opt-in, starting with a <em>no-LLM cleanup of the existing 13</em>. Keep recall byte-identical and sessions pull-only; gate writes behind a human review queue.</li>
+    <li><strong>Far term</strong> — defer the bitemporal graph (D3) and the telemetry loop (D5); both have fatal mechanism bugs as designed and target a scale problem the corpus does not yet have. Earn their salvageable cores — correctly-implemented supersede-as-edge, a real citation-based usage signal, an eval harness — once the distiller has grown the curated tier enough that they matter.</li>
+  </ol>
+</div>
+</section>
+
+<section id="roadmap">
+<h2>6 · Phased roadmap</h2>
+
+<h3>Near — verified correctness fixes <span class="badge b-minor">this month · no new model · no schema rewrite</span></h3>
+<p><span class="shipped-note">all 4 shipped — verified 2026-07-10</span> All four fixes below landed (tagged RA2/RA3/RA4 in the source): <code>kb-summary</code> meta + <code>kb_summary</code> lance column (parser.rs, lance.rs), <code>DEFAULT_SALIENCE</code> re-exported into <code>routes/memory.rs</code>, decay basis moved to the write-time <code>kb-created</code> meta (memory.rs, indexer.rs), and <code>classify_research</code> filters self-referential kb verbs out of the digest.</p>
+<ul>
+  <li><strong>Title/summary split:</strong> optional <code>kb-summary</code> meta on <code>render_artifact</code> + a nullable <code>kb_summary</code> lance column (the v0.14 <code>kb_session</code> pattern); stop using the 80-char truncation as the display handle; one-shot retitle over the existing 13.</li>
+  <li><strong>Kill the duplicated literal:</strong> re-export <code>DEFAULT_SALIENCE</code> from <code>kb_core::memory</code> to the route; add the missing recall-path test for the route's inline floor + Loose-rerank double-drop split.</li>
+  <li><strong>Fix the decay basis:</strong> decay on a write-time-stamped <code>kb-created</code> meta — <em>not</em> filesystem btime — so reindex/rewrite no longer resets a memory's age.</li>
+  <li><strong>Clean the digest:</strong> pre-filter self-referential kb verbs (<code>remember</code>/<code>recall</code>/<code>recollect</code>/<code>why</code>) and routine MCP UI tools out of the digest's research line, so the funnel and any future distiller input are clean.</li>
+</ul>
+<p class="lede" style="font-size:1rem">Small, reviewer-verified, low-risk, and they unblock later work — clean titles and a clean digest are distiller inputs.</p>
+
+<h3>Mid — build the write side: the offline distiller <span class="badge b-mod">next quarter · the central move</span></h3>
+<p><span class="shipped-note">R6.0-R6.2 shipped 2026-07-06 — db7ce381</span> Landed as the agent-layer skill <code>/kb-distill</code> (<code>plugins/kb-memory/skills/kb-distill/SKILL.md</code>) plus a Stop-hook nudge (<code>kb-distill-nudge.sh</code>): ADD/SUPERSEDE/NOOP write vocabulary (MERGE narrowed to human-report-only, addressing this doc's own multi-target-tombstone concern by deferring it rather than risking it), <code>--dry-run</code>, and a mandatory <code>--session-id</code> serving as the idempotency stamp this doc flagged as missing. <strong>R6.3 (trusted cron) was not built</strong> — the skill stays agent-invoked, never a daemon background task, per the no-in-daemon-LLM non-goal.</p>
+<ul>
+  <li><strong>R6.0 — no-LLM cleanup of the 13 first:</strong> merge the duplicate deploy/rebuild facts, re-salient the 8 stuck at 0.5, default <code>linked_kbs</code> to project. Most of today's real pain, zero model.</li>
+  <li><strong>R6.1 — <code>kb reflect --dry-run</code>:</strong> read digests, propose ADD/SUPERSEDE/MERGE/NOOP with rationale and the neighbors compared, print only. Validates whether 196 sessions yield useful facts before any writes.</li>
+  <li><strong>R6.2 — <code>kb reflect --queue</code> (default):</strong> land candidates in a review queue surfaced in the SPA <code>/memory</code> view; operator approves; accepted facts write through <code>render_artifact</code> with graded salience, <code>kb-supersedes</code>, and provenance links.</li>
+  <li><strong>Guardrails baked in:</strong> raw <code>list_docs</code> as the dedup oracle (not floor-filtered recall); multi-target tombstones for MERGE; an idempotency key per candidate; a salience rubric + held-out distribution check.</li>
+  <li><strong>R6.3 — trusted cron (optional):</strong> a daemon background task mirroring <code>spawn_metrics_ticker</code>, no-op unless <code>KB_REFLECT_MODEL</code> is set, <code>--apply</code> gated to high-confidence ADD/NOOP with SUPERSEDE/MERGE kept behind the human gate.</li>
+</ul>
+<p class="lede" style="font-size:1rem">The single highest-leverage move, kept on safe rails: offline, model-isolated, opt-in, lands in the memory corpus, append-only, human-gated by default.</p>
+
+<h3>Far — earn-when-the-store-grows <span class="badge b-minor">when the curated tier is 10–50× larger</span></h3>
+<ul>
+  <li><strong>Supersede-as-edge</strong> (D3's one good idea), implemented correctly: a per-edge upsert that survives the per-src replace, with kind-filtered reads so memory edges don't pollute wikilink/atlas counts.</li>
+  <li><strong>A real usage signal</strong> at a new instrumentation point (explicit memory-id citation by the agent), logged as a <em>surfaced</em> signal only — never folded into the deterministic recall score.</li>
+  <li><strong>A per-install eval harness</strong> (accuracy × token-cost × latency) to finally answer "is the salience/decay ranker worth it versus plain hybrid" on a corpus large enough for the numbers to mean something.</li>
+  <li><strong>Capture-suggestion</strong> ("you re-derived X across N sessions — remember it?") as a deterministic join, independent of telemetry.</li>
+</ul>
+</section>
+
+<section id="risks">
+<h2>7 · Risks &amp; guardrails</h2>
+<table>
+  <thead><tr><th>Risk</th><th>Guardrail</th></tr></thead>
+  <tbody>
+    <tr><td>Distiller salience inflation — an LLM rater collapsing to all-0.8 recreates the 0.5 monoculture in a confident-but-noisy form (worse than an honest default)</td><td>A salience rubric + held-out distribution check as a hard deliverable, not a footnote.</td></tr>
+    <tr><td>Review-queue abandonment — the same attention scarcity that produced only 13 facts leaves a 200-candidate queue unreviewed</td><td>Rank the queue, batch it, and start with the no-LLM cleanup of 13 that needs no review effort.</td></tr>
+    <tr><td>Model dependency erodes offline-capability</td><td>Confine the model to the worker subprocess (recall stays offline ~80–95 ms); no-op when unconfigured; never reintroduce a model into <code>kb-server</code>.</td></tr>
+    <tr><td>Hallucinated facts polluting the curated tier</td><td>Feed the deterministic digest (not raw JSONL); a self-critique pass; provenance edges making every fact traceable + forgettable; keep <code>--apply</code> gated behind the human queue longest for SUPERSEDE/MERGE.</td></tr>
+    <tr><td>Scope creep into the read path (LLM-rerank, usage counts in the score, graph-proximity terms)</td><td>An explicit test asserting <code>rerank</code> takes no model/telemetry input. #10 is operator-locked.</td></tr>
+    <tr><td>Over-building for 13 facts</td><td>The roadmap is sequenced so cheap fixes + the no-LLM cleanup land first; heavy graph/telemetry work is deferred until the store earns it.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="open">
+<h2>8 · Open questions</h2>
+<ul>
+  <li><strong>Will the project host a generative model for the distiller, and which</strong> — local for offline-purity vs hosted for quality? The entire mid-term plan is gated on this decision.</li>
+  <li><strong>Is the 13-vs-196 imbalance a curation-effort problem or a discovery problem?</strong> Would <em>auto-draft-on-signal</em> (a commit, a correction, an AskUserQuestion answer triggers a one-keystroke "remember this?") outperform a periodic batch distiller — and should both ship?</li>
+  <li><strong>At what corpus size does the deterministic ranker's salience/decay actually start to matter?</strong> Without the eval harness this remains an opinion.</li>
+  <li><strong>Should episodic sessions ever get a conditional, evidence-gated PUSH</strong> (a "has-this-been-done" prompt-shape) — and only if pull demonstrably fails — or is auto-injection permanently off the table given the context-rot / self-reinforcement argument?</li>
+  <li><strong>Is the unbounded, growing episodic corpus a near-term compaction problem</strong> (serve-time re-parse of multi-MB transcripts, multi-capture row accretion), warranting an archival/tiering policy before retrieval degrades?</li>
+  <li><strong>Can a real "used" signal be captured cheaply</strong> (explicit memory-id citation by the agent), or is recall utility fundamentally unobservable without changing how memories are injected?</li>
+</ul>
+</section>
+
+<section id="method">
+<h2>9 · Method &amp; references</h2>
+<p>This report is the synthesis of an orchestrated multi-agent workflow run on 2026-06-29: <strong>6 internal code analysts</strong> (recall ranking, capture/write, episodic sessions, storage model, UX surface, design rationale) and <strong>4 external SOTA researchers</strong> ran in parallel; <strong>5 divergent design directions</strong> were then generated, each scored by <strong>3 adversarial reviewers</strong> (feasibility/invariant-alignment, real-data fit/cost-benefit, failure-modes); a final synthesis pass weighed the verdicts. 31 agents total. Real installation data was gathered live from the running memory backend (docker daemon, <code>127.0.0.1:4000</code>). All file:line claims and mechanism bugs were verified against the source at HEAD.</p>
+
+<h3>Prior kb memory design lineage</h3>
+<ul>
+  <li><a href="/a/kb-docs/memory/19-kb-as-claude-code-memory.html">19 · kb as Claude Code memory — hub &amp; recommendation</a></li>
+  <li><a href="/a/kb-docs/memory/20-memory-corpus-and-protocol.html">20 · Memory, Approach A — corpus + protocol</a></li>
+  <li><a href="/a/kb-docs/memory/22-memory-native-subsystem.html">22 · Memory, Approach C — native subsystem</a></li>
+  <li><a href="/a/kb-docs/memory/23-memory-implementation-spec.html">23 · Memory implementation spec</a></li>
+  <li><a href="/a/kb-docs/sessions-as-episodic-memory-design.html">kb sessions as episodic memory — design</a></li>
+  <li><a href="/a/kb-docs/sessions-follow-the-work-design.html">kb sessions — follow-the-work design</a></li>
+</ul>
+
+<h3>External references</h3>
+<ul class="refs">
+  <li>Packer et al. — <em>MemGPT: Towards LLMs as Operating Systems</em>. <code>arXiv:2310.08560</code>. Letta blog: Agent Memory, Memory Blocks, Sleep-time Compute; Letta docs: sleep-time agents, MemFS.</li>
+  <li>Lin et al. — <em>Sleep-time Compute</em>. <code>arXiv:2504.13171</code>.</li>
+  <li>Chhikara et al. — <em>Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory</em> (ECAI 2025). <code>arXiv:2504.19413</code>. Includes Mem0ᵍ graph variant; 2026 ADD-only algorithm (<code>mem0.ai/research</code>, <code>mem0.ai/blog/ai-memory-benchmarks-in-2026</code>).</li>
+  <li>Rasmussen et al. — <em>Zep: A Temporal Knowledge Graph Architecture for Agent Memory</em>. <code>arXiv:2501.13956</code>. Graphiti: <code>github.com/getzep/graphiti</code>.</li>
+  <li>Park et al. — <em>Generative Agents: Interactive Simulacra of Human Behavior</em> (UIST 2023). <code>arXiv:2304.03442</code>.</li>
+  <li>Xu et al. — <em>A-MEM: Agentic Memory for LLM Agents</em> (NeurIPS 2025). <code>arXiv:2502.12110</code>.</li>
+  <li>Tan et al. — <em>Reflective Memory Management (RMM)</em>. <code>arXiv:2503.08026</code>.</li>
+  <li>Anthropic — <em>Memory tool &amp; context editing</em> (<code>claude.com/blog/context-management</code>; platform docs). Self-reported: memory + context-editing +39% over baseline, context editing alone +29%, 84% token reduction on a 100-turn web-search eval.</li>
+  <li>LangMem (LangChain) — semantic/episodic/procedural taxonomy, hot-path vs background formation. Cognee — graph-based Cognify/Memify (<code>github.com/topoteretes/cognee</code>).</li>
+  <li>Evaluation lineage — LoCoMo, LongMemEval, BEAM (2024–2026): score accuracy × token-cost × latency in pairs.</li>
+</ul>
+
+<p class="foot">Invariants referenced: <strong>#10</strong> (agent-memory recall = rank-position × salience × decay, deterministic, LLM-free), <strong>#11</strong> (sessions = episodic memory, pull-only, digest-indexed), <strong>#16</strong> (notes are Markdown artifacts), <strong>#26</strong> (ONNX/model isolation to a subprocess), <strong>#29</strong> (wikilinks/backlinks ride the edge graph). Full text in <code>docs/architecture-invariants.md</code>.</p>
+</section>
+
+</main>
+</body>
+</html>

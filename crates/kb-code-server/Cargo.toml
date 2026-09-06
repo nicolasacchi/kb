@@ -1,0 +1,164 @@
+[package]
+name = "kb-code-server"
+description = "kb-code — read-oriented code-browsing daemon (Wave 1 scaffold; lib + bin)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kb-code-server"
+path = "src/main.rs"
+
+[dependencies]
+# Per the decided architecture, kb-code reuses kb-core's events/paths/
+# embed-IPC plumbing rather than reimplementing it. W1.2 wires paths +
+# config; events/embed-IPC land in later waves.
+kb-core = { path = "../kb-core" }
+# W1.2 — kb-code-server is a SIBLING daemon, not a kb-server route, but it
+# reuses kb-server as a LIBRARY for the security-critical bits: the
+# invariant-#3/#4 loopback/auth predicates (`middleware::{request_is_loopback,
+# is_loopback_origin, xff_real_client, refuse_public_bind_without_auth,
+# allow_no_auth}`) and the `auth_bearer` middleware + `AuthConfig` state it
+# runs on. Same precedent as kb-cli depending on kb-server (`kb daemon`).
+# Never re-derive this logic locally — see the doc comments on the imported
+# items in crates/kb-server/src/middleware.rs.
+kb-server = { path = "../kb-server" }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# V70-A8 — `GET /api/schemas` (`api_schemas.rs`): a curated starter set of
+# hand-mirrored wire shapes, `#[derive(JsonSchema)]`'d so the daemon can
+# describe its own surface rather than an agent reverse-engineering it from
+# `--json` output. NOT wired onto every existing wire struct in this crate
+# (most build ad-hoc `serde_json::json!()` bodies with no backing type to
+# derive from) — see this module's doc for the exact four names covered.
+schemars = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# W1.3 — `git::GitError` (mirrors `kb_core::Error`'s thiserror convention).
+thiserror = { workspace = true }
+# W4.6 — `annotations::new_annotation_id` mints ids the same way kb-core's
+# own `review::short_random_hex` does (6 random bytes -> 12 hex chars); that
+# helper is `pub(crate)` to kb-core, so this crate mints its own rather than
+# reaching into kb-core's private surface. Already in the workspace lockfile
+# via kb-core's own dependency graph — no new supply-chain surface.
+getrandom = { workspace = true }
+# W1.5 — kb-code's own per-daemon SQLite store (`store.rs`). Mirrors
+# kb-core's `storage/sqlite.rs` idioms (refinery migrations, WAL +
+# busy_timeout pragmas) but is a SEPARATE schema/file
+# (`<state>/kb-code/index.db`) — kb-code owns its store rather than
+# importing kb-core's `Db`/`Storage`. Both workspace pins already exist
+# because kb-core depends on them; reusing the same pinned versions here
+# adds no new entries to the dependency graph.
+rusqlite = { workspace = true }
+refinery = { workspace = true }
+# 2026-08-31 incident (store.rs module doc): `Store.conn`'s mutex must be
+# parking_lot's, NOT std's — std::sync::Mutex has no fairness guarantee, so
+# the sink's per-file lock/unlock loop re-acquires immediately and a parked
+# HTTP-handler reader can starve for an ENTIRE reconcile burst (observed
+# live: /api/identity >90s while each sink message was ~11s). parking_lot's
+# eventual-fairness handoff bounds a reader's wait to roughly one sink
+# message, not one burst. Already in the dep graph transitively (0.12.x).
+parking_lot = "0.12"
+# W1.4 — live-mirror watcher: notify-debouncer-full arms the two watch
+# domains (working tree + git internals); blake3 backs the reconcile
+# module's racy-git stat-then-hash dirty check (already in the dep graph
+# via kb-core's Direct Upload feature — same crate, no new supply-chain
+# surface).
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
+blake3 = { workspace = true }
+
+# W1.6 — HTTP wiring: the real `mirror::MirrorSink` + read routes.
+# sha1/hex back `ingest::git_blob_hash` (git-compatible blob content hash
+# for uncommitted working-tree bytes — see the workspace Cargo.toml
+# comment). base64 backs `GET /api/file`'s binary-content fallback
+# (non-UTF8 blobs still need to travel over JSON). futures backs the SSE
+# route's `Stream` combinators over `kb_core::events::events_stream`,
+# mirroring kb-server's own `routes/events.rs`. All four are already in
+# the workspace's `[workspace.dependencies]` (hex/base64/futures via
+# kb-core's own graph, sha1 newly promoted — see that comment).
+sha1 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+futures = { workspace = true }
+
+# Wave-1/2 dependency scaffold (W1.1) — see the workspace Cargo.toml
+# comment for version rationale + citations. Each is referenced minimally
+# below (src/lib.rs) so the supply-chain gate and Cargo.lock see the real
+# graph now; real logic starts W1.2.
+gix = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-ruby = { workspace = true }
+tree-sitter-bash = { workspace = true }
+tree-sitter-yaml = { workspace = true }
+# W2.6 — next-tier languages (Go tags; TOML/JSON key-path outlines via the
+# `keypath` module). See the root Cargo.toml comment for version rationale.
+tree-sitter-go = { workspace = true }
+tree-sitter-toml-ng = { workspace = true }
+tree-sitter-json = { workspace = true }
+# PRR-N3 — Rails lens ERB grammar (see the root Cargo.toml comment).
+tree-sitter-embedded-template = { workspace = true }
+# PRR-N4 — Stimulus binding scan: a closed regex over ERB `content` (raw
+# HTML) nodes, per design-nav.md §2's own "no tree-sitter-html" ruling
+# (`frameworks::rails::stimulus`). Already resolved workspace-wide (root
+# Cargo.toml); this just wires the existing workspace member into this
+# crate, no new external dependency.
+regex = { workspace = true }
+grep-searcher = { workspace = true }
+grep-regex = { workspace = true }
+# W2.1 — the text search lane's own `grep_matcher::Matcher::find` call (see
+# the root Cargo.toml comment).
+grep-matcher = { workspace = true }
+nucleo = { workspace = true }
+
+# W2.4 — the unified Search-Everywhere box's SESSIONS lane
+# (`search::sessions`) federates over real HTTP to the operator's own `kb`
+# daemon's `GET /api/sessions/recollect` (a sibling process, not a library
+# call — see that module's doc). Promoted from [dev-dependencies] (it was
+# already pulled in transitively for e2e tests) to a real dependency now
+# that main.rs's own request path uses it.
+reqwest = { workspace = true }
+
+# DCB W1.C — `CorsLayer` for the doc-lens SUB-ROUTERS ONLY (`doclens::cors`).
+# The workspace entry already enables the `cors` feature, and kb-server has
+# been pulling the same crate in for its own SW3 layer since v0.4, so this
+# adds no new supply-chain surface. Deliberately NOT layered `/api`-wide —
+# see `router.rs`'s merge-point comment for what that would open.
+tower-http = { workspace = true }
+
+# W2.3 — kb-code's OWN lance chunk-vector store (`semantic/store.rs`), a
+# SEPARATE dataset from kb-core's per-kb `artifacts`/`artifact_chunks`
+# tables (per the decided architecture: kb-code owns its own lance tables in
+# its own state dir, `<state>/kb-code/lance/`; kb-core itself is untouched
+# except one `embed::ModelInfo::max_length` edit). Same exact pins as
+# kb-core (root Cargo.toml invariant #1: lance + arrow MUST share one
+# version across the whole workspace dep graph, or `RecordBatch` types
+# won't unify) — `{ workspace = true }` inherits `lancedb`'s
+# `default-features = false` from the root `[workspace.dependencies]` entry.
+lancedb = { workspace = true }
+lance-index = { workspace = true }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# W1.5 — symbol/highlight golden snapshots (exact-Vec asserts use plain
+# `assert_eq!`; the larger per-fixture symbol lists and highlight span
+# lists use insta, matching kb-core's own snapshot convention).
+insta = { workspace = true }
