@@ -1,5 +1,12 @@
 -- V73-K1 — `kbc-review/1`: the review DOCUMENT + findings v2.
 --
+-- (V0032/V0033 are pre-assigned to two other in-flight units by the
+-- milestone's migration ledger — a NUMBER GAP here is deliberate and
+-- expected, not a lost migration. refinery applies by version, so a gap
+-- is inert; renumbering after a merge would change this file's checksum
+-- and re-arm the kb-sibling/1 volume-ahead guard, which is exactly the
+-- rollback trap invariant 11 records.)
+--
 -- Two halves, both purely ADDITIVE. Every existing `reviews`/
 -- `review_findings` row reads back unchanged (the new finding columns all
 -- carry a DEFAULT that reproduces today's meaning exactly: an existing
@@ -76,7 +83,7 @@ CREATE INDEX idx_review_docs_latest
 -- export — a cite never competes with it.
 --
 -- `fingerprint` is a CHANGE DETECTOR, never an identity: the slug is
--- identity (D9). It is NULL on every pre-V0032 row and is never
+-- identity (D9). It is NULL on every pre-V0034 row and is never
 -- backfilled — nothing computed one for those rows, and inventing one now
 -- would let a re-compose silently adopt a finding it did not write.
 --
