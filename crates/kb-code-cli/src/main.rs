@@ -12181,14 +12181,9 @@ async fn review_doc_cmd(
     json: bool,
 ) -> Result<()> {
     let client = http_client()?;
-    let mut query: Vec<(&str, &str)> = Vec::new();
-    if let Some(p) = ps {
-        query.push(("ps", p));
-    }
-    if resolve {
-        query.push(("resolve", "1"));
-    }
-    let body = get_json(&client, daemon, &format!("/api/reviews/{id}/doc"), &query).await?;
+    let (template, query) = review_doc_request(ps, resolve);
+    let path = fill_review_id(template, id);
+    let body = get_json(&client, daemon, &path, &as_query_pairs(&query)).await?;
     if json {
         envelope::print_ok("kbc-review/1", &body, Vec::new(), false, None);
         return Ok(());
@@ -12284,17 +12279,9 @@ async fn review_lint_cmd(
             .await?
         }
         None => {
-            let mut query: Vec<(&str, &str)> = Vec::new();
-            if let Some(p) = ps {
-                query.push(("ps", p));
-            }
-            get_json_raw(
-                &client,
-                daemon,
-                &format!("/api/reviews/{id}/doc/lint"),
-                &query,
-            )
-            .await?
+            let (template, query) = review_doc_lint_request(ps);
+            let path = fill_review_id(template, id);
+            get_json_raw(&client, daemon, &path, &as_query_pairs(&query)).await?
         }
     };
     let lint = if body.get("lint").is_some() {
@@ -12346,17 +12333,9 @@ async fn review_render_cmd(
             .await?
         }
         None => {
-            let mut query: Vec<(&str, &str)> = Vec::new();
-            if let Some(p) = ps {
-                query.push(("ps", p));
-            }
-            get_json_raw(
-                &client,
-                daemon,
-                &format!("/api/reviews/{id}/doc/render"),
-                &query,
-            )
-            .await?
+            let (template, query) = review_doc_render_request(ps, None);
+            let path = fill_review_id(template, id);
+            get_json_raw(&client, daemon, &path, &as_query_pairs(&query)).await?
         }
     };
     if !status.is_success() {
@@ -16893,25 +16872,39 @@ async fn workspace_export_cmd(daemon: &str, repo: &str, name_or_id: &str) -> Res
 /// empty; they join the walk anyway, because the half of it that matters
 /// here is "a `kb-code` verb exists that addresses this route at all" — the
 /// v7.0 dead-surface defect in its CLI-side shape.
-fn review_doc_request(resolve: bool) -> (&'static str, Vec<(&'static str, String)>) {
+fn review_doc_request(
+    ps: Option<&str>,
+    resolve: bool,
+) -> (&'static str, Vec<(&'static str, String)>) {
     let mut query: Vec<(&'static str, String)> = Vec::new();
+    if let Some(p) = ps {
+        query.push(("ps", p.to_string()));
+    }
     if resolve {
         query.push(("resolve", "1".to_string()));
     }
     (kb_code_server::review_doc::routes::DOC_ROUTE.path, query)
 }
 
-fn review_doc_lint_request() -> (&'static str, Vec<(&'static str, String)>) {
+fn review_doc_lint_request(ps: Option<&str>) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query: Vec<(&'static str, String)> = Vec::new();
+    if let Some(p) = ps {
+        query.push(("ps", p.to_string()));
+    }
     (
         kb_code_server::review_doc::routes::DOC_LINT_ROUTE.path,
-        Vec::new(),
+        query,
     )
 }
 
 fn review_doc_render_request(
+    ps: Option<&str>,
     template: Option<&str>,
 ) -> (&'static str, Vec<(&'static str, String)>) {
     let mut query: Vec<(&'static str, String)> = Vec::new();
+    if let Some(p) = ps {
+        query.push(("ps", p.to_string()));
+    }
     if let Some(t) = template {
         query.push(("template", t.to_string()));
     }
@@ -16919,6 +16912,14 @@ fn review_doc_render_request(
         kb_code_server::review_doc::routes::DOC_RENDER_ROUTE.path,
         query,
     )
+}
+
+/// The `{id}` in a declared `RouteContract::path`, filled in. The path
+/// itself always comes from the server crate's own contract — never a
+/// string literal here — which is what lets
+/// `cli_requests_send_every_param_their_route_requires` compare the two.
+fn fill_review_id(template: &str, id: i64) -> String {
+    template.replace("{id}", &id.to_string())
 }
 
 /// The `GET /api/entity` request: `(path, query)`.
@@ -21146,15 +21147,12 @@ mod tests {
             lane_facts_request("repo", "a.rb", None, None),
             lane_summary_request("repo"),
             lane_ingest_request("repo"),
-<<<<<<< HEAD
             // V72-H2a — `outline/1`.
             outline_request("repo", "a.rb", None),
-=======
             // V73-K1 — `kbc-review/1`'s three document reads, same rule.
-            review_doc_request(true),
-            review_doc_lint_request(),
-            review_doc_render_request(Some("default")),
->>>>>>> af69200 (feat(kb-code): kbc-review/1 — review document, compose transaction, scheme refs → live cards, findings v2, lint, render (V73-K1))
+            review_doc_request(None, true),
+            review_doc_lint_request(None),
+            review_doc_render_request(None, Some("default")),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -21178,11 +21176,8 @@ mod tests {
             // V72-I1 — and one more, the same way.
             .chain(kb_code_server::rails::routes::V72_I1_ROUTES.iter())
             .chain(kb_code_server::lanes::V72_H4A_ROUTES.iter())
-<<<<<<< HEAD
-            .chain(kb_code_server::outline::V72_H2A_ROUTES.iter());
-=======
+            .chain(kb_code_server::outline::V72_H2A_ROUTES.iter())
             .chain(kb_code_server::review_doc::routes::V73_K1_ROUTES.iter());
->>>>>>> af69200 (feat(kb-code): kbc-review/1 — review document, compose transaction, scheme refs → live cards, findings v2, lint, render (V73-K1))
         for c in declared {
             let (path, query) = built
                 .iter()
