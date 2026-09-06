@@ -1,21 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import type { GithubThread, ReviewDetailPr, ReviewFileRow, ReviewReadingStop } from "../api/types";
-import DiffFile from "../components/diff/DiffFile";
-import KeyboardHelp from "../components/KeyboardHelp";
-import MobileDrawer from "../components/MobileDrawer";
-import { Icon } from "../components/icons";
-// S2-C — the shared Diagnostics inspector card (Reader mounts it via
-// `InspectorRail`'s `diagnosticsCard` slot; here it's the diagnostics
-// chip's on-demand expansion, `FileDiffBody`'s own doc).
-import DiagnosticsCard from "../components/provenance/DiagnosticsCard";
-import { useDiagnostics } from "../hooks/useDiagnostics";
-import { useDiff } from "../hooks/useDiff";
-import { useFile } from "../hooks/useFile";
-import { useInViewOnce } from "../hooks/useInViewOnce";
+import { useNavigate, useParams } from "react-router-dom";
+import type { ReviewDetailPr, ReviewFileRow } from "../api/types";
 import {
   useReviewComments,
-  useReviewDiffComments,
   useReviewFindingDispositionMutations,
 } from "../hooks/useReviewComments";
 import {
@@ -27,13 +14,11 @@ import {
   useReview,
   useReviewFiles,
   useReviewFindings,
-  useReviewImpact,
   useReviewInterdiff,
   useReviewReadingOrder,
 } from "../hooks/useReviews";
-import { indexThreads, type DiffCommentsApi, type DiffSide } from "../lib/reviewComments";
-import { buildDiagnosticsView, diagnosticGutterMarks, diagnosticsChipText } from "../lib/diagnostics";
-import { parseUnifiedDiff, type ParsedDiff } from "../lib/diff";
+import { indexThreads, type DiffSide } from "../lib/reviewComments";
+import type { ParsedDiff } from "../lib/diff";
 import {
   buildThreadStops,
   nextUnviewedFileIdx,
@@ -48,67 +33,27 @@ import {
   dispositionLabel,
   findingsByAnnotationId,
   findingsBySlug,
-  githubThreadVisibleInOverlay,
   nextOverlayMode,
-  overlayParamValue,
-  parseOverlayParam,
   type FindingDisposition,
-  type OverlayMode,
 } from "../lib/diffFindings";
-import {
-  githubOrphansForPath,
-  githubThreadCountTotal,
-  indexGithubThreadsByLine,
-} from "../lib/githubThreads";
-import { impactChipText, topChangedSymbol } from "../lib/reviewImpact";
 import { buildTourStops, clampTourStep } from "../lib/reviewTour";
-import {
-  codeUrl,
-  formatDiffPs,
-  nextDiffCtx,
-  parseDiffCtx,
-  parseDiffMap,
-  parseDiffPs,
-  reviewDiffHref,
-  reviewUrl,
-  type DiffCtxDial,
-  type DiffPsSelection,
-} from "../lib/codeUrl";
+import { nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
-import {
-  hunkHasThreads,
-  hunkId,
-  hunkStats,
-  hunkNewSpan,
-  type HunkThreadRef,
-} from "../lib/diffHunks";
+import { hunkId } from "../lib/diffHunks";
 import {
   buildMovedIndex,
   classifyFile,
   classifyHunk,
   noiseCensus,
-  noiseCensusText,
-  noiseCollapses,
-  parseNoiseMode,
   type MovedIndex,
   type NoiseLabel,
-  type NoiseMode,
 } from "../lib/diffNoise";
-import {
-  combineExpand,
-  contextCaption,
-  dialNeedsFile,
-  expandHunk,
-  fileLines,
-  EXPAND_STEP,
-  type ExpandRequest,
-} from "../lib/diffContext";
+import { EXPAND_STEP, type ExpandRequest } from "../lib/diffContext";
 import {
   clearDrafts,
   draftCountByPath,
-  draftsInSpan,
   draftsToBatch,
   loadDrafts,
   newDraftId,
@@ -121,19 +66,22 @@ import {
 } from "../lib/reviewDrafts";
 import { mapChapters, type MapRowState } from "../lib/reviewMapColumn";
 import { postAnnotationsBatch } from "../api/client";
-import type { HunkView } from "../components/diff/HunkStrip";
-import DraftsTray from "../components/reviews/DraftsTray";
-import PatchsetSwitcher from "../components/reviews/PatchsetSwitcher";
-import ReviewMapColumn from "../components/reviews/ReviewMapColumn";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useQueryClient } from "@tanstack/react-query";
-import type { DiffMode } from "../lib/prefs";
-import { loadDiffMode, saveDiffMode } from "../lib/prefs";
-import { highlightSegments, speedFilterItems } from "../lib/speedSearch";
+import { speedFilterItems } from "../lib/speedSearch";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { toast } from "../lib/toast";
 import "../styles/reviews.css";
+// V73-K2b — the route's own center renderers and pure helpers, extracted
+// verbatim. `ReviewDiff` below is the SHELL: queries, page-wide derivations,
+// the URL writers and the command handlers.
+import { type DiffV2Api } from "./reviewDiff/DiffSections";
+import ReviewDiffCenter from "./reviewDiff/ReviewDiffCenter";
+import ReviewDiffRail from "./reviewDiff/ReviewDiffRail";
+import ReviewDiffToolbar from "./reviewDiff/ReviewDiffToolbar";
+import { cssAttr, msg, orderedRows, splatPath } from "./reviewDiff/helpers";
+import { useReviewDiffState } from "./reviewDiff/useReviewDiffState";
 
 /// `/r/:repo/~reviews/:id/diff` and `/r/:repo/~reviews/:id/diff/*`.
 /// Query: `ps` `view` `line` `side` `file` `thread` `finding` `overlay`
@@ -149,469 +97,44 @@ import "../styles/reviews.css";
 // whole app on vim's policy — a prefix never expires by itself, Escape
 // cancels — and this route owns HANDLERS, not keys.
 
-function parseView(raw: string | null): DiffMode | null {
-  return raw === "unified" || raw === "split" ? raw : null;
-}
-
-function parseSide(raw: string | null): "old" | "new" | null {
-  return raw === "old" || raw === "new" ? raw : null;
-}
-
-function parseLine(raw: string | null): number | null {
-  if (raw == null || raw === "") return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function cssAttr(value: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-function orderedRows(files: ReviewFileRow[], stops: ReviewReadingStop[] | null): ReviewFileRow[] {
-  if (!stops || stops.length === 0) return files;
-  const byPath = new Map(files.map((f) => [f.path, f]));
-  const seen = new Set<string>();
-  const out: ReviewFileRow[] = [];
-  for (const s of stops) {
-    const f = byPath.get(s.path);
-    if (f && !seen.has(f.path)) {
-      out.push(f);
-      seen.add(f.path);
-    }
-  }
-  for (const f of files) {
-    if (!seen.has(f.path)) out.push(f);
-  }
-  return out;
-}
-
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-/// V73-K2a — everything diff v2 hands ONE file's body, in one bag rather
-/// than a dozen props. Built once at the route level from data the page
-/// already has; `FileDiffBody` derives this file's `HunkView[]` from it and
-/// hands that to `DiffFile`, which renders it in either layout.
-export interface DiffV2Api {
-  ctx: DiffCtxDial;
-  noiseMode: NoiseMode;
-  /// `null` until at least one file's diff has parsed — a moved-block
-  /// index over nothing would label nothing and say it had looked.
-  movedIndex: MovedIndex | null;
-  fileNoise: readonly NoiseLabel[];
-  /// Server-backed per-hunk viewed ids (`review_hunk_viewed`).
-  hunkViewed: ReadonlySet<string>;
-  /// Operator folds, keyed by hunk id so a fold survives a re-render, a
-  /// patchset switch that carries the hunk forward, and a layout toggle.
-  folded: ReadonlySet<string>;
-  /// Extra context clicked open per hunk, on top of the dial's own width.
-  expand: ReadonlyMap<string, ExpandRequest>;
-  drafts: DraftsState;
-  /// The cursor's hunk index within THIS file, or `null` when the cursor
-  /// is elsewhere.
-  currentHunk: number | null;
-  onParsed: (path: string, parsed: ParsedDiff) => void;
-  onToggleHunkViewed: (path: string, id: string) => void;
-  onToggleFold: (id: string) => void;
-  onExpandHunk: (id: string, dir: "up" | "down") => void;
-  /// Compose a DRAFT instead of posting (`lib/reviewDrafts.ts`). Replaces
-  /// `DiffCommentsApi.onCreate` for the composer only — resolve/reply/
-  /// delete/suggestion all still go straight to the server, because those
-  /// act on threads that already landed.
-  onDraftCreate: (
-    path: string,
-    side: DiffSide,
-    line: number,
-    lineEnd: number | undefined,
-    body: string,
-    intent: string,
-  ) => Promise<void>;
-}
-
-function FileDiffBody({
-  repo,
-  reviewId,
-  ps,
-  path,
-  from,
-  to,
-  mode,
-  onHunks,
-  compose,
-  flashThreadId,
-  overlay,
-  githubThreads,
-  v2,
-}: {
-  repo: string;
-  reviewId: number;
-  ps: string;
-  path: string;
-  from: string;
-  to: string;
-  mode: DiffMode;
-  onHunks: (path: string, n: number) => void;
-  compose?: { side: DiffSide; line: number; token?: number } | null;
-  flashThreadId?: string | null;
-  overlay?: OverlayMode;
-  /// PRR-F (design-addendum-2.md §A) — every GitHub thread on the review
-  /// (fetched ONCE at the top level, `ReviewDiff`'s own doc), filtered/
-  /// indexed to THIS path below, only while the overlay is in the
-  /// `"github"` lane.
-  githubThreads?: GithubThread[];
-  v2?: DiffV2Api | null;
-}) {
-  const navigate = useNavigate();
-  const { data, isLoading, error } = useDiff(repo, path, from, to);
-  const parsed = useMemo(() => (data ? parseUnifiedDiff(data.diff) : null), [data]);
-  const rawComments = useReviewDiffComments(repo, reviewId, ps, path, { compose, flashThreadId, overlay });
-  // V73-K2a — the composer writes a DRAFT; every other callback is
-  // untouched, so a landed thread still resolves/replies/deletes against
-  // the server exactly as before.
-  const onDraftCreate = v2?.onDraftCreate;
-  const comments: DiffCommentsApi | null = useMemo(
-    () =>
-      rawComments && onDraftCreate
-        ? {
-            ...rawComments,
-            onCreate: (side: DiffSide, line: number, lineEnd: number | undefined, body: string, intent: string) =>
-              onDraftCreate(path, side, line, lineEnd, body, intent),
-          }
-        : rawComments,
-    [rawComments, onDraftCreate, path],
-  );
-  useEffect(() => {
-    if (parsed) onHunks(path, parsed.hunks.length);
-  }, [parsed, path, onHunks]);
-
-  // V73-K2a — publish the parsed diff upward ONCE per parse. The route
-  // needs it for two page-wide derivations that a per-file component
-  // structurally cannot do: the moved-block index (which is about OTHER
-  // files) and the hunk-id → cursor mapping.
-  const onParsed = v2?.onParsed;
-  useEffect(() => {
-    if (parsed && onParsed) onParsed(path, parsed);
-  }, [parsed, path, onParsed]);
-
-  // V73-K2a — the context dial. `3` needs nothing (the wire already sent
-  // git's own -U3); `10`/`full` splice REAL rows out of the file at this
-  // patchset's tip. `useFile` is gated on that, so the default page fires
-  // no extra request per file.
-  const wantFile = !!v2 && dialNeedsFile(v2.ctx);
-  const fileQ = useFile(wantFile ? repo : undefined, wantFile ? path : undefined, to);
-  const contentLines = useMemo(
-    () =>
-      fileQ.data && fileQ.data.encoding === "utf8" ? fileLines(fileQ.data.content) : null,
-    [fileQ.data],
-  );
-  const ctxNote = v2
-    ? contextCaption(v2.ctx, contentLines !== null, fileQ.isLoading)
-    : null;
-
-  const hunkViews: HunkView[] | null = useMemo(() => {
-    if (!v2 || !parsed) return null;
-    const threadRefs: HunkThreadRef[] = [];
-    for (const list of rawComments?.byLine.values() ?? []) {
-      for (const c of list) {
-        if (c.path !== path) continue;
-        threadRefs.push({
-          side: c.side === "old" || c.side === "new" ? c.side : null,
-          line: c.resolution?.line ?? null,
-        });
-      }
-    }
-    return parsed.hunks.map((hunk, i) => {
-      const id = hunkId(path, hunk);
-      const noise = classifyHunk(path, hunk, v2.fileNoise, v2.movedIndex);
-      const byNoise = noiseCollapses(v2.noiseMode, noise);
-      const folded = v2.folded.has(id);
-      const expanded = expandHunk(hunk, contentLines, combineExpand(v2.ctx, v2.expand.get(id)));
-      const span = hunkNewSpan(hunk);
-      const stats = hunkStats(hunk);
-      return {
-        id,
-        index: i,
-        header: hunk.header,
-        additions: stats.additions,
-        deletions: stats.deletions,
-        viewed: v2.hunkViewed.has(id),
-        hasThreads: hunkHasThreads(hunk, threadRefs),
-        draftCount: span
-          ? draftsInSpan(v2.drafts, path, "new", span.start, span.end).length
-          : 0,
-        noise,
-        lines: expanded.lines,
-        addedBefore: expanded.addedBefore,
-        addedAfter: expanded.addedAfter,
-        moreAbove: expanded.moreAbove,
-        moreBelow: expanded.moreBelow,
-        collapsed: folded || byNoise,
-        collapsedBy: folded ? ("fold" as const) : byNoise ? ("noise" as const) : null,
-      };
-    });
-  }, [v2, parsed, path, contentLines, rawComments?.byLine]);
-
-  // PRR-U9 (design-addendum-2.md §D) — diagnostics for this file. `useDiagnostics`
-  // gates its own fetch on the repo's intel provider covering `path`'s
-  // language, so this is a no-op query object (no request fired) for the
-  // common case. `FileDiffBody` only ever mounts once this file's SECTION
-  // has actually expanded (`LazyDiffSection`'s `useInViewOnce` gate, or the
-  // always-expanded single-file focus view) — that's the "lazily fetched
-  // when the file section first expands" contract, no extra plumbing here.
-  const diagnostics = useDiagnostics(repo, path);
-  const diagView = useMemo(
-    () => buildDiagnosticsView(diagnostics.covered, diagnostics.data, diagnostics.isLoading),
-    [diagnostics.covered, diagnostics.data, diagnostics.isLoading],
-  );
-  const diagChip = diagnosticsChipText(diagView);
-  // Line marks are gated behind the overlay selector's own "diagnostics"
-  // lane (design-addendum-2 §D) — computed only while `overlay ===
-  // "diagnostics"`, `null` otherwise so `DiffFile`/the hunk renderers never
-  // even see a stale map from a previous overlay mode.
-  const diagByLine = useMemo(
-    () => (overlay === "diagnostics" && diagView.rows ? diagnosticGutterMarks(diagView.rows) : null),
-    [overlay, diagView.rows],
-  );
-  // S2-C — clicking the diagnostics chip toggles the SAME `DiagnosticsCard`
-  // component the Reader's inspector rail mounts (`InspectorRail.tsx`'s
-  // `diagnosticsCard` slot) open below this file's header, so the "Fixes"
-  // quick-fixes affordance (`DiagnosticsCard`'s own doc) is available in
-  // BOTH contexts off the ONE shared component — no second copy to keep in
-  // sync. `useDiagnostics` above already fetched/cached this file's rows
-  // (same TanStack Query key), so mounting the card here is a cache hit,
-  // not a second network round trip.
-  const [diagCardOpen, setDiagCardOpen] = useState(false);
-  function onDiagJumpLine(line: number) {
-    navigate(codeUrl({ repo, path, ref: to, line }));
-  }
-
-  // PRR-F (design-ui.md §12.2, "Reviewer X-ray") — same lazy-on-expand
-  // contract as diagnostics above: `FileDiffBody` only mounts once this
-  // file's section is in view, so this fetch is naturally deferred with no
-  // extra plumbing. Independent of the overlay lane — the chip is a file-
-  // header fact, not a thread/gutter overlay.
-  const impactQ = useReviewImpact(repo, reviewId, path, true);
-  const impactChip = impactChipText(impactQ.data);
-  function onImpactClick() {
-    const sym = topChangedSymbol(impactQ.data);
-    if (!sym) return;
-    navigate(codeUrl({ repo, path, ref: to, line: sym.line }));
-  }
-
-  // PRR-F (design-addendum-2.md §A) — GitHub-origin cards, own exclusive
-  // overlay lane (`githubThreadVisibleInOverlay`'s own doc).
-  const githubByLine = useMemo(
-    () =>
-      githubThreads && githubThreadVisibleInOverlay(overlay ?? "all")
-        ? indexGithubThreadsByLine(githubThreads, path)
-        : null,
-    [githubThreads, overlay, path],
-  );
-  const githubOrphans = useMemo(
-    () =>
-      githubThreads && githubThreadVisibleInOverlay(overlay ?? "all")
-        ? githubOrphansForPath(githubThreads, path)
-        : [],
-    [githubThreads, overlay, path],
-  );
-
-  if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
-  if (error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
-  if (!parsed) return null;
-  return (
-    <>
-    {ctxNote && (
-      <p className="kbc-rdiff__ctx-note" role="status" data-kbc-rdiff-ctx-note>
-        {ctxNote}
-      </p>
-    )}
-    <DiffFile
-      path={path}
-      parsed={parsed}
-      mode={mode}
-      comments={comments}
-      hunkViews={hunkViews}
-      currentHunk={v2?.currentHunk ?? null}
-      onHunkFold={(hi) => {
-        const view = hunkViews?.[hi];
-        if (view) v2?.onToggleFold(view.id);
-      }}
-      onHunkViewed={(hi) => {
-        const view = hunkViews?.[hi];
-        if (view) v2?.onToggleHunkViewed(path, view.id);
-      }}
-      onHunkExpand={(hi, dir) => {
-        const view = hunkViews?.[hi];
-        if (view) v2?.onExpandHunk(view.id, dir);
-      }}
-      diagnosticsChip={diagChip}
-      diagnosticsByLine={diagByLine}
-      onDiagnosticsClick={() => setDiagCardOpen((v) => !v)}
-      diagnosticsCardOpen={diagCardOpen}
-      diagnosticsCard={
-        <DiagnosticsCard repo={repo} path={path} onJumpLine={onDiagJumpLine} reviewId={reviewId} />
-      }
-      impactChip={impactChip}
-      onImpactClick={onImpactClick}
-      githubByLine={githubByLine}
-      githubOrphans={githubOrphans}
-    />
-    </>
-  );
-}
-
-function LazyDiffSection({
-  repo,
-  reviewId,
-  ps,
-  file,
-  from,
-  to,
-  mode,
-  collapsed,
-  current,
-  checked,
-  focusHref,
-  onHunks,
-  onToggleViewed,
-  onToggleCollapse,
-  compose,
-  flashThreadId,
-  overlay,
-  githubThreads,
-  v2,
-}: {
-  repo: string;
-  reviewId: number;
-  ps: string;
-  file: ReviewFileRow;
-  from: string;
-  to: string;
-  mode: DiffMode;
-  collapsed: boolean;
-  current: boolean;
-  checked: boolean;
-  focusHref: string;
-  onHunks: (path: string, n: number) => void;
-  onToggleViewed: (file: ReviewFileRow) => void;
-  onToggleCollapse: () => void;
-  compose?: { side: DiffSide; line: number; token?: number } | null;
-  flashThreadId?: string | null;
-  overlay?: OverlayMode;
-  githubThreads?: GithubThread[];
-  v2?: DiffV2Api | null;
-}) {
-  const { ref, inView } = useInViewOnce();
-  return (
-    <section
-      ref={ref}
-      className={"kbc-rdiff__section" + (current ? " kbc-rdiff__section--current" : "")}
-      data-kbc-rdiff-file={file.path}
-    >
-      <header className="kbc-rdiff__section-head" data-kbc-rdiff-section={file.path}>
-        <button
-          type="button"
-          className="kbc-rdiff__collapse"
-          onClick={onToggleCollapse}
-          aria-expanded={!collapsed}
-          title={collapsed ? "Expand" : "Collapse"}
-          data-kbc-rdiff-collapse={file.path}
-        >
-          {collapsed ? <Icon.Expand /> : <Icon.Collapse />}
-        </button>
-        <span className="kbc-rdiff__section-path">{file.path}</span>
-        <span className="kbc-review__file-stats">
-          <span className="kbc-review__file-add">+{file.additions}</span>{" "}
-          <span className="kbc-review__file-del">−{file.deletions}</span>
-        </span>
-        <label className="kbc-review__file-viewed" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
-            checked={checked}
-            onChange={() => onToggleViewed(file)}
-            aria-label={checked ? "mark unviewed" : "mark viewed"}
-            data-kbc-review-viewed={file.path}
-          />
-        </label>
-        <Link to={focusHref} className="kbc-rdiff__focus" data-kbc-rdiff-focus={file.path}>
-          focus
-        </Link>
-      </header>
-      {!collapsed && (
-        <div className="kbc-rdiff__section-body">
-          {inView ? (
-            <FileDiffBody
-              repo={repo}
-              reviewId={reviewId}
-              ps={ps}
-              path={file.path}
-              from={from}
-              to={to}
-              mode={mode}
-              onHunks={onHunks}
-              compose={compose}
-              flashThreadId={flashThreadId}
-              overlay={overlay}
-              githubThreads={githubThreads}
-              v2={v2}
-            />
-          ) : (
-            <div className="kbc-rdiff__placeholder">Scroll to load diff</div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
 
 export default function ReviewDiff() {
   const { repo = "", id: idParam = "" } = useParams<{ repo: string; id: string }>();
-  const splat = useParams()["*"] ?? "";
-  const focusPath = splat
-    ? splat
-        .split("/")
-        .map((s) => {
-          try {
-            return decodeURIComponent(s);
-          } catch {
-            return s;
-          }
-        })
-        .filter((s) => s !== "")
-        .join("/")
-    : "";
+  const focusPath = splatPath(useParams()["*"] ?? "");
   const single = focusPath.length > 0;
   const id = Number(idParam);
   const idOk = Number.isFinite(id) && id > 0;
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-
-  // V73-K2a — `?ps=` is now WRITTEN as well as read (the full-page diff was
-  // permanently pinned to "latest" before this unit). A bare number picks
-  // one patchset; `a..b` picks the INTERDIFF between two, which is a
-  // different route with a different, thinner file row — see `filesRows`
-  // below for the honest degrade that entails.
-  const psSel = parseDiffPs(searchParams.get("ps"));
-  const psRange = psSel !== null && typeof psSel !== "number" ? psSel : null;
-  const psQuery = psSel === null ? "latest" : String(typeof psSel === "number" ? psSel : psSel.to);
-  const ctxDial = parseDiffCtx(searchParams.get("ctx"));
-  const noiseMode: NoiseMode = parseNoiseMode(searchParams.get("noise"));
-  const mapParamOpen = parseDiffMap(searchParams.get("map"));
-  const hunkParam = searchParams.get("hunk");
-  const urlView = parseView(searchParams.get("view"));
-  const line = parseLine(searchParams.get("line"));
-  const side = parseSide(searchParams.get("side"));
-  const fileHint = searchParams.get("file") ?? "";
-  const threadId = searchParams.get("thread");
-  // PRR-U3 — `?finding=<f-slug>` deep link + `?overlay=` toggle (design-ui.md
-  // §5/§S3).
-  const findingParam = searchParams.get("finding");
-  const overlay: OverlayMode = parseOverlayParam(searchParams.get("overlay"));
-
-  const [prefMode, setPrefMode] = useState<DiffMode>(() => loadDiffMode());
-  const mode: DiffMode = urlView ?? prefMode;
+  // V73-K2b — every `?param=` this route reads or writes lives in ONE hook.
+  // A `?ps=a..b` range is the INTERDIFF, which is a different route with a
+  // different, thinner file row — see `files` below for the honest degrade
+  // that entails.
+  const {
+    psSel,
+    psRange,
+    psQuery,
+    ctxDial,
+    noiseMode,
+    mapParamOpen,
+    hunkParam,
+    line,
+    side,
+    fileHint,
+    threadId,
+    findingParam,
+    overlay,
+    mode,
+    tourParamOn,
+    setParam,
+    setPs,
+    setCtx,
+    setNoiseMode,
+    setMapOpen,
+    setView,
+    setOverlay,
+    setTourParam,
+    withQuery,
+  } = useReviewDiffState();
 
   const reviewQ = useReview(repo, idOk ? id : undefined);
   const filesQ = useReviewFiles(repo, idOk ? id : undefined, psQuery);
@@ -713,7 +236,7 @@ export default function ReviewDiff() {
     () => buildTourStops(paths, findingsQ.data?.findings ?? []),
     [paths, findingsQ.data],
   );
-  const [tourOn, setTourOnState] = useState(() => searchParams.get("tour") === "1");
+  const [tourOn, setTourOnState] = useState(() => tourParamOn);
   const [tourStepIdx, setTourStepIdx] = useState(0);
 
   const [keys, setKeys] = useState<DiffKeysState>(initialDiffKeysState);
@@ -862,19 +385,6 @@ export default function ReviewDiff() {
     [ordered, jump],
   );
 
-  function withQuery(href: string): string {
-    const q = searchParams.toString();
-    return q ? `${href}?${q}` : href;
-  }
-
-  function setView(next: DiffMode) {
-    saveDiffMode(next);
-    setPrefMode(next);
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("view", next);
-    setSearchParams(nextParams, { replace: true });
-  }
-
   async function toggleViewed(file: ReviewFileRow) {
     try {
       if (file.viewed && !file.viewed_stale) {
@@ -900,50 +410,6 @@ export default function ReviewDiff() {
     }
     apply({ type: "gotoFile", fileIdx: idx });
   }
-
-  // PRR-U3 — overlay cycle (`o`) + t/T thread-or-finding stepping + the
-  // disposition menu (`d`, then a/d/w/f) + finding permalink copy (`y`).
-  function setOverlay(next: OverlayMode) {
-    const nextParams = new URLSearchParams(searchParams);
-    const v = overlayParamValue(next);
-    if (v) nextParams.set("overlay", v);
-    else nextParams.delete("overlay");
-    setSearchParams(nextParams, { replace: true });
-  }
-
-  // --- V73-K2a — the five URL writers -----------------------------------
-  //
-  // ONE helper, so every diff-v2 control writes its param the same way and
-  // "the URL is the state" cannot rot into "the URL is the state, except
-  // this control". `replace: true` matches every pre-existing writer on
-  // this route (view/overlay/tour): a view knob is not a navigation step,
-  // and Back must still leave the diff rather than undo a dial click.
-  const setParam = useCallback(
-    (key: string, value: string | null) => {
-      const next = new URLSearchParams(searchParams);
-      if (value === null) next.delete(key);
-      else next.set(key, value);
-      setSearchParams(next, { replace: true });
-    },
-    [searchParams, setSearchParams],
-  );
-
-  const setPs = useCallback(
-    (next: DiffPsSelection | null) => setParam("ps", next === null ? null : formatDiffPs(next)),
-    [setParam],
-  );
-  const setCtx = useCallback(
-    (next: DiffCtxDial) => setParam("ctx", next === 3 ? null : String(next)),
-    [setParam],
-  );
-  const setNoiseMode = useCallback(
-    (next: NoiseMode) => setParam("noise", next === "shown" ? null : next),
-    [setParam],
-  );
-  const setMapOpen = useCallback(
-    (next: boolean) => setParam("map", next ? null : "0"),
-    [setParam],
-  );
 
   /// `] p` / `[ p` — step the HEAD patchset. A range keeps its base and
   /// moves its head, so stepping never silently collapses an interdiff
@@ -1141,16 +607,12 @@ export default function ReviewDiff() {
   }
   function startTour() {
     setTourOnState(true);
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("tour", "1");
-    setSearchParams(nextParams, { replace: true });
+    setTourParam(true);
     goToTourStep(0);
   }
   function exitTour() {
     setTourOnState(false);
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.delete("tour");
-    setSearchParams(nextParams, { replace: true });
+    setTourParam(false);
   }
   function advanceTour(dir: 1 | -1) {
     const next = clampTourStep(tourStepIdx + dir, tourStops.length);
@@ -1612,501 +1074,114 @@ export default function ReviewDiff() {
       data-kbc-rdiff-mode={single ? "single" : "all"}
       data-kbc-rdiff-thread={threadId ?? undefined}
     >
-      <header className="kbc-rdiff__toolbar" data-kbc-rdiff-toolbar>
-        <Link to={reviewUrl(repo, id)} className="kbc-rdiff__back" data-kbc-rdiff-back>
-          <Icon.ArrowLeft />
-          <span>Review</span>
-        </Link>
-        <h1 className="kbc-rdiff__title" data-kbc-rdiff-title>
-          {title}
-        </h1>
-        <span className="kbc-review__ps-chip kbc-review__ps-chip--active" data-kbc-rdiff-ps>
-          {psRange
-            ? `ps${psRange.from}→ps${psRange.to}`
-            : psSel === null && activePsNum != null
-              ? `ps${activePsNum}`
-              : `ps${psQuery}`}
-        </span>
-        {/* V73-K2a — the patchset switcher. `?ps=` was read but never
-            written before this unit, so the full-page diff was pinned to
-            latest. */}
-        <PatchsetSwitcher
-          patchsets={review?.patchsets ?? []}
-          value={psSel}
-          latestPs={activePsNum ?? null}
-          onChange={setPs}
-        />
-        {psRange && (
-          <span className="kbc-rdiff__ps-note" data-kbc-rdiff-ps-note>
-            interdiff — the interdiff wire carries no viewed or comment counts, so those columns are
-            absent here, not zero
-          </span>
-        )}
-        <div
-          className="kbc-review__progress"
-          title={`${viewedCount}/${filesCount} viewed`}
-          data-kbc-review-progress={`${viewedCount}/${filesCount}`}
-        >
-          <div className="kbc-review__progress-bar" style={{ width: `${pct}%` }} />
-          <span className="kbc-review__progress-label">
-            {viewedCount}/{filesCount}
-          </span>
-        </div>
-        <div className="kbc-diff__modes" role="group" aria-label="Diff layout">
-          <button
-            type="button"
-            className={"kbc-diff__mode" + (mode === "unified" ? " is-active" : "")}
-            aria-pressed={mode === "unified"}
-            aria-label="Unified diff"
-            data-kbc-diff-mode-toggle="unified"
-            onClick={() => setView("unified")}
-          >
-            Unified
-          </button>
-          <button
-            type="button"
-            className={"kbc-diff__mode" + (mode === "split" ? " is-active" : "")}
-            aria-pressed={mode === "split"}
-            aria-label="Side-by-side diff"
-            data-kbc-diff-mode-toggle="split"
-            onClick={() => setView("split")}
-          >
-            Split
-          </button>
-        </div>
-        <div className="kbc-rdiff__overlay" data-kbc-rdiff-overlay>
-          <label className="kbc-rdiff__overlay-select">
-            <span className="kbc-sr-only">Findings overlay</span>
-            <select
-              value={overlay}
-              onChange={(e) => setOverlay(parseOverlayParam(e.target.value))}
-              aria-label="findings overlay"
-              data-kbc-rdiff-overlay-select
-            >
-              <option value="all">All</option>
-              <option value="findings">Findings</option>
-              <option value="comments">Comments</option>
-              <option value="diagnostics">Diagnostics</option>
-              <option value="github">GitHub</option>
-              <option value="none">None</option>
-            </select>
-          </label>
-          <span className="kbc-rdiff__overlay-counts" data-kbc-rdiff-overlay-counts>
-            Findings {overlayCounts.findings} · Comments {overlayCounts.comments}
-            {reviewGithubThreadsQ.data ? ` · GitHub ${githubThreadCountTotal(reviewGithubThreadsQ.data.threads)}` : ""}
-          </span>
-        </div>
-        {/* V73-K2a — the context dial, the noise toggle (with its census),
-            the map toggle and the drafts tray door. Every one of them
-            writes the URL and reads nothing else. */}
-        <div className="kbc-rdiff__dials" data-kbc-rdiff-dials>
-          <label className="kbc-rdiff__dial">
-            <span className="kbc-sr-only">Context lines</span>
-            <select
-              value={String(ctxDial)}
-              onChange={(e) => setCtx(parseDiffCtx(e.target.value))}
-              aria-label="context lines"
-              title="How much unchanged context each hunk shows. Widened rows are fetched from the file at this patchset, never synthesised."
-              data-kbc-rdiff-ctx
-            >
-              <option value="3">ctx 3</option>
-              <option value="10">ctx 10</option>
-              <option value="full">whole file</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className={"kbc-review__action" + (noiseMode === "collapsed" ? " is-active" : "")}
-            aria-pressed={noiseMode === "collapsed"}
-            onClick={() => setNoiseMode(noiseMode === "collapsed" ? "shown" : "collapsed")}
-            title={
-              noiseMode === "collapsed"
-                ? "Labelled hunks are collapsed — they are still counted and one click from open"
-                : "Collapse hunks carrying a noise label (never hides one: each stays counted and expandable)"
-            }
-            data-kbc-rdiff-noise={noiseMode}
-          >
-            Noise
-          </button>
-          <span className="kbc-rdiff__noise-census" data-kbc-rdiff-noise-census>
-            {noiseCensusText(noiseStats)}
-          </span>
-          {!isMobile && (
-            <button
-              type="button"
-              className={"kbc-review__action" + (mapOpen ? " is-active" : "")}
-              aria-pressed={mapOpen}
-              onClick={() => setMapOpen(!mapParamOpen)}
-              title="Show / hide the file map column (Space m)"
-              data-kbc-rdiff-map-toggle={mapOpen ? "1" : "0"}
-            >
-              Map
-            </button>
-          )}
-          <button
-            type="button"
-            className={"kbc-review__action" + (draftsOpen ? " is-active" : "")}
-            aria-pressed={draftsOpen}
-            onClick={() => setDraftsOpen((v) => !v)}
-            title="Drafts you have composed but not published (Space w)"
-            data-kbc-rdiff-drafts-toggle={drafts.drafts.length}
-          >
-            Drafts {drafts.drafts.length}
-          </button>
-        </div>
-        <div className="kbc-rdiff__tour" data-kbc-rdiff-tour>
-          {tourOn ? (
-            <>
-              <span className="kbc-rdiff__tour-progress" data-kbc-rdiff-tour-progress>
-                Tour {tourStops.length === 0 ? 0 : tourStepIdx + 1}/{tourStops.length}
-              </span>
-              <button
-                type="button"
-                className="kbc-review__action"
-                onClick={exitTour}
-                data-kbc-rdiff-tour-exit
-              >
-                Exit tour
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="kbc-review__action"
-              onClick={startTour}
-              disabled={tourStops.length === 0}
-              title={
-                tourStops.length > 0
-                  ? `Guided tour — ${tourStops.length} stop${tourStops.length === 1 ? "" : "s"}`
-                  : "No files to tour"
-              }
-              data-kbc-rdiff-tour-start
-            >
-              Guided tour
-            </button>
-          )}
-        </div>
-        <div className="kbc-rdiff__nav">
-          <button
-            type="button"
-            className="kbc-review__action"
-            disabled={!hasPrev}
-            onClick={() => goFile(cursorIdx - 1)}
-            data-kbc-rdiff-prev-file
-          >
-            Prev
-          </button>
-          <button
-            type="button"
-            className="kbc-review__action"
-            disabled={!hasNext}
-            onClick={() => goFile(cursorIdx + 1)}
-            data-kbc-rdiff-next-file
-          >
-            Next
-          </button>
-        </div>
-        <button
-          type="button"
-          className="kbc-rdiff__files-toggle"
-          onClick={() => setFilesOpen(true)}
-          aria-label="jump to file"
-          aria-expanded={filesOpen}
-          data-kbc-rdiff-files-toggle
-        >
-          <Icon.List />
-          Files
-        </button>
-        <div className="kbc-rdiff__jump">
-          <input
-            type="search"
-            className="kbc-rdiff__jump-input"
-            value={jump}
-            onChange={(e) => setJump(e.target.value)}
-            placeholder="Jump to file…"
-            aria-label="jump to file"
-            data-kbc-rdiff-jump
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              const hit = jumpHits[0]?.item;
-              if (!hit) return;
-              e.preventDefault();
-              const idx = paths.indexOf(hit.path);
-              if (idx >= 0) goFile(idx);
-              setJump("");
-            }}
-          />
-          {jump.trim() !== "" && (
-            <ul className="kbc-rdiff__jump-list" data-kbc-rdiff-jump-list>
-              {jumpHits.slice(0, 12).map(({ item, ranges }) => (
-                <li key={item.path}>
-                  <button
-                    type="button"
-                    className="kbc-rdiff__jump-hit"
-                    onClick={() => {
-                      const idx = paths.indexOf(item.path);
-                      if (idx >= 0) goFile(idx);
-                      setJump("");
-                    }}
-                  >
-                    {highlightSegments(item.path, ranges).map((seg, i) =>
-                      seg.hit ? (
-                        <mark key={i} className="kbc-speed-hit">
-                          {seg.text}
-                        </mark>
-                      ) : (
-                        <span key={i}>{seg.text}</span>
-                      ),
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <button
-          type="button"
-          className="kbc-rdiff__help"
-          onClick={() => setHelpOpen(true)}
-          aria-label="keyboard shortcuts"
-          data-kbc-rdiff-help
-        >
-          ?
-        </button>
-      </header>
-      <div className={"kbc-rdiff__body" + (mapOpen ? " kbc-rdiff__body--mapped" : "")}>
-        {mapOpen && (
-          <ReviewMapColumn
-            chapters={chapters}
-            stateByPath={mapStateByPath}
-            currentPath={cursorPath}
-            fileCount={filesCount}
-            viewedCount={viewedCount}
-            derived={stops !== null && stops.length > 0}
-            onPick={(path) => {
-              const idx = paths.indexOf(path);
-              if (idx >= 0) goFile(idx);
-              document
-                .querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`)
-                ?.scrollIntoView({ block: "start" });
-              setParam("file", path);
-            }}
-            onClose={() => setMapOpen(false)}
-          />
-        )}
-        <div className="kbc-rdiff__stream">
-        {ordered.length === 0 ? (
-          <div className="kbc-reader__hint">No files in this patchset.</div>
-        ) : single ? (
-          <>
-            {(() => {
-              const file = ordered.find((f) => f.path === focusPath) ?? {
-                path: focusPath,
-                old_path: null,
-                status: "M",
-                additions: 0,
-                deletions: 0,
-                blob_sha: "",
-                viewed: false,
-                viewed_stale: false,
-                open_annotations: 0,
-              };
-              const checked = !!(file.viewed && !file.viewed_stale);
-              return (
-                <section
-                  className="kbc-rdiff__section kbc-rdiff__section--single"
-                  data-kbc-rdiff-file={file.path}
-                >
-                  <header className="kbc-rdiff__section-head" data-kbc-rdiff-section={file.path}>
-                    <span className="kbc-rdiff__section-path">{file.path}</span>
-                    <span className="kbc-review__file-stats">
-                      <span className="kbc-review__file-add">+{file.additions}</span>{" "}
-                      <span className="kbc-review__file-del">−{file.deletions}</span>
-                    </span>
-                    {file.blob_sha && (
-                      <label className="kbc-review__file-viewed">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => void toggleViewed(file)}
-                          aria-label={checked ? "mark unviewed" : "mark viewed"}
-                          data-kbc-review-viewed={file.path}
-                        />
-                      </label>
-                    )}
-                  </header>
-                  <FileDiffBody
-                    repo={repo}
-                    reviewId={id}
-                    ps={psQuery}
-                    path={file.path}
-                    from={baseSha}
-                    to={tipSha}
-                    mode={mode}
-                    onHunks={onHunks}
-                    compose={composeFor(file.path)}
-                    flashThreadId={flashThreadId}
-                    overlay={overlay}
-                    githubThreads={reviewGithubThreadsQ.data?.threads}
-                    v2={v2For(file.path)}
-                  />
-                </section>
-              );
-            })()}
-            <footer className="kbc-rdiff__footer" data-kbc-rdiff-footer>
-              <button
-                type="button"
-                className="kbc-review__action"
-                disabled={!hasPrev}
-                onClick={() => goFile(cursorIdx - 1)}
-                data-kbc-rdiff-footer-prev
-              >
-                Prev file
-              </button>
-              <span className="kbc-rdiff__footer-pos">
-                {cursorIdx + 1} / {paths.length}
-              </span>
-              <button
-                type="button"
-                className="kbc-review__action"
-                disabled={!hasNext}
-                onClick={() => goFile(cursorIdx + 1)}
-                data-kbc-rdiff-footer-next
-              >
-                Next file
-              </button>
-            </footer>
-          </>
-        ) : (
-          ordered.map((file) => (
-            <LazyDiffSection
-              key={file.path}
-              repo={repo}
-              reviewId={id}
-              ps={psQuery}
-              file={file}
-              from={baseSha}
-              to={tipSha}
-              mode={mode}
-              compose={composeFor(file.path)}
-              flashThreadId={flashThreadId}
-              overlay={overlay}
-              githubThreads={reviewGithubThreadsQ.data?.threads}
-              collapsed={keys.collapsed.has(file.path)}
-              current={file.path === cursorPath}
-              checked={!!(file.viewed && !file.viewed_stale)}
-              focusHref={withQuery(reviewDiffHref(repo, id, file.path))}
-              onHunks={onHunks}
-              onToggleViewed={(f) => void toggleViewed(f)}
-              onToggleCollapse={() => {
-                const idx = paths.indexOf(file.path);
-                setKeys((s) => {
-                  const at = idx >= 0 ? reduceDiffKeys(s, { type: "gotoFile", fileIdx: idx }, hunkCounts) : s;
-                  return reduceDiffKeys(at, { type: "toggleCollapse" }, hunkCounts);
-                });
-              }}
-              v2={v2For(file.path)}
-            />
-          ))
-        )}
-        </div>
-      </div>
-      <MobileDrawer
-        open={filesOpen}
-        onClose={() => setFilesOpen(false)}
-        title="Files"
-        ariaLabel="Review files"
-      >
-        {ordered.map((file, idx) => {
-          const checked = !!(file.viewed && !file.viewed_stale);
-          const openN = fileRollup?.get(file.path)?.open ?? file.open_annotations;
-          return (
-            <button
-              key={file.path}
-              type="button"
-              className={
-                "kbc-rdiff__file-row" + (file.path === cursorPath ? " is-current" : "")
-              }
-              onClick={() => {
-                goFile(idx);
-                const el = document.querySelector(
-                  `[data-kbc-rdiff-file="${cssAttr(file.path)}"]`,
-                );
-                el?.scrollIntoView({ block: "start" });
-                setFilesOpen(false);
-              }}
-              data-kbc-rdiff-drawer-file={file.path}
-            >
-              <span
-                className="kbc-rdiff__file-check"
-                aria-label={checked ? "viewed" : "unviewed"}
-                data-kbc-rdiff-drawer-viewed={checked ? "1" : "0"}
-              >
-                {checked ? <Icon.Check /> : null}
-              </span>
-              <span className="kbc-rdiff__file-row-path">{file.path}</span>
-              {openN > 0 && (
-                <span className="kbc-review__file-ann" data-kbc-rdiff-drawer-ann>
-                  {openN}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </MobileDrawer>
-      {dispositionMenuOpen && focusThreadId && findingsById.get(focusThreadId) && (
-        <div
-          className="kbc-rdiff__disp-menu-scrim"
-          onClick={closeDispositionMenu}
-          data-kbc-rdiff-disposition-menu
-        >
-          <div
-            className="kbc-rdiff__disp-menu"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Set disposition"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="kbc-rdiff__disp-menu-title">
-              {findingsById.get(focusThreadId)?.slug} — set disposition
-            </div>
-            <ul className="kbc-rdiff__disp-menu-list">
-              <li>
-                <kbd>a</kbd> agree
-              </li>
-              <li>
-                <kbd>d</kbd> dispute
-              </li>
-              <li>
-                <kbd>w</kbd> waive
-              </li>
-              <li>
-                <kbd>f</kbd> fix-later
-              </li>
-              <li>
-                <kbd>Esc</kbd> cancel
-              </li>
-            </ul>
-          </div>
-        </div>
-      )}
-      <DraftsTray
-        open={draftsOpen}
-        drafts={drafts.drafts}
-        publishing={publishing}
-        onClose={() => setDraftsOpen(false)}
-        onGoTo={(d) => {
-          const idx = paths.indexOf(d.path);
-          if (idx >= 0) goFile(idx);
-          document
-            .querySelector(`[data-kbc-rdiff-file="${cssAttr(d.path)}"]`)
-            ?.scrollIntoView({ block: "start" });
-        }}
-        onRemove={(draftId) => setDrafts((cur) => removeDraft(cur, draftId))}
-        onPublish={publishDrafts}
-        onDiscardAll={discardDrafts}
+      <ReviewDiffToolbar
+        repo={repo}
+        id={id}
+        title={title}
+        patchsets={review?.patchsets ?? []}
+        psSel={psSel}
+        psRange={psRange}
+        psQuery={psQuery}
+        activePsNum={activePsNum}
+        onSetPs={setPs}
+        viewedCount={viewedCount}
+        filesCount={filesCount}
+        pct={pct}
+        mode={mode}
+        onSetView={setView}
+        overlay={overlay}
+        onSetOverlay={setOverlay}
+        overlayCounts={overlayCounts}
+        githubThreadsData={reviewGithubThreadsQ.data}
+        ctxDial={ctxDial}
+        onSetCtx={setCtx}
+        noiseMode={noiseMode}
+        onSetNoiseMode={setNoiseMode}
+        noiseStats={noiseStats}
+        isMobile={isMobile}
+        mapOpen={mapOpen}
+        mapParamOpen={mapParamOpen}
+        onSetMapOpen={setMapOpen}
+        draftsOpen={draftsOpen}
+        onSetDraftsOpen={setDraftsOpen}
+        drafts={drafts}
+        tourOn={tourOn}
+        tourStops={tourStops}
+        tourStepIdx={tourStepIdx}
+        onStartTour={startTour}
+        onExitTour={exitTour}
+        hasPrev={hasPrev}
+        hasNext={hasNext}
+        cursorIdx={cursorIdx}
+        onGoFile={goFile}
+        filesOpen={filesOpen}
+        onSetFilesOpen={setFilesOpen}
+        jump={jump}
+        onSetJump={setJump}
+        jumpHits={jumpHits}
+        paths={paths}
+        onSetHelpOpen={setHelpOpen}
       />
-      <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} context="review-diff" />
+      <ReviewDiffCenter
+        repo={repo}
+        id={id}
+        psQuery={psQuery}
+        baseSha={baseSha}
+        tipSha={tipSha}
+        mode={mode}
+        single={single}
+        focusPath={focusPath}
+        ordered={ordered}
+        paths={paths}
+        keys={keys}
+        setKeys={setKeys}
+        hunkCounts={hunkCounts}
+        cursorPath={cursorPath}
+        cursorIdx={cursorIdx}
+        hasPrev={hasPrev}
+        hasNext={hasNext}
+        mapOpen={mapOpen}
+        chapters={chapters}
+        mapStateByPath={mapStateByPath}
+        filesCount={filesCount}
+        viewedCount={viewedCount}
+        stops={stops}
+        overlay={overlay}
+        flashThreadId={flashThreadId}
+        githubThreads={reviewGithubThreadsQ.data?.threads}
+        onHunks={onHunks}
+        onGoFile={goFile}
+        onSetMapOpen={setMapOpen}
+        onSetParam={setParam}
+        onToggleViewed={toggleViewed}
+        composeFor={composeFor}
+        v2For={v2For}
+        withQuery={withQuery}
+        reviewDiffHref={reviewDiffHref}
+      />
+      <ReviewDiffRail
+        filesOpen={filesOpen}
+        onSetFilesOpen={setFilesOpen}
+        ordered={ordered}
+        cursorPath={cursorPath}
+        fileRollup={fileRollup}
+        onGoFile={goFile}
+        dispositionMenuOpen={dispositionMenuOpen}
+        focusThreadId={focusThreadId}
+        findingsById={findingsById}
+        onCloseDispositionMenu={closeDispositionMenu}
+        draftsOpen={draftsOpen}
+        drafts={drafts}
+        publishing={publishing}
+        paths={paths}
+        onSetDraftsOpen={setDraftsOpen}
+        onSetDrafts={setDrafts}
+        removeDraft={removeDraft}
+        onPublishDrafts={publishDrafts}
+        onDiscardDrafts={discardDrafts}
+        helpOpen={helpOpen}
+        onSetHelpOpen={setHelpOpen}
+      />
     </div>
   );
 }
