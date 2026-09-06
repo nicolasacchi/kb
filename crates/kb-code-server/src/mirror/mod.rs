@@ -4,7 +4,11 @@
 //! Three sub-steps, one per submodule:
 //! - **(a) [`watchset`]** — which paths get registered with `notify`, and
 //!   with what recursion mode (the working tree, gitignore-aware pruned,
-//!   plus the worktree-correct git-internals set).
+//!   plus the worktree-correct git-internals set), and which working-tree
+//!   events are DROPPED before the sink (`watchset::event_skip_patterns` —
+//!   git-ignored directory churn like `.claude/worktrees/` or
+//!   `apps/server/log/`, which registration's top-level-only pruning
+//!   structurally cannot express).
 //! - **(b) [`gate`]** — the per-repo suspend/resume state machine keyed on
 //!   `rebase-merge`/`rebase-apply`/`MERGE_HEAD`/`CHERRY_PICK_HEAD`/
 //!   `BISECT_LOG` markers, plus the classification that decides what a raw
@@ -324,8 +328,9 @@ fn arm_entries<T: notify::Watcher>(
 const POST_RECONCILE_QUIET: Duration = Duration::from_millis(3000);
 
 /// Per-repo mutable runtime state — the gate plus whatever's needed to act
-/// on it (the repo's own paths, the dirty-check cache, and the
-/// [`POST_RECONCILE_QUIET`] deadline).
+/// on it (the repo's own paths, the dirty-check cache, the
+/// [`POST_RECONCILE_QUIET`] deadline, and the working-tree event skip
+/// patterns).
 struct RepoRuntime {
     repo_ref: RepoRef,
     git_dir: PathBuf,
@@ -333,6 +338,13 @@ struct RepoRuntime {
     gate: RepoGate,
     dirty_cache: reconcile::DirtyCache,
     quiet_until: Option<std::time::Instant>,
+    /// Working-tree events under these path patterns are dropped before
+    /// they can reach the sink (see `watchset::event_skip_patterns`'s doc —
+    /// git-ignored directory churn: agent-session worktrees, log/, tmp/,
+    /// nested build output). Computed ONCE at watcher start; a `.gitignore`
+    /// edit takes effect at the next daemon restart, the same trade
+    /// `working_tree_watch_set`'s boot-time registration already makes.
+    event_skips: Vec<String>,
 }
 
 fn drain_loop(
@@ -355,6 +367,7 @@ fn drain_loop(
                     gate: RepoGate::new(),
                     dirty_cache: reconcile::DirtyCache::new(),
                     quiet_until: None,
+                    event_skips: watchset::event_skip_patterns(&cfg.root),
                 };
                 // Startup does an initial full reconcile per repo — "HEAD
                 // tree vs nothing = everything, but expressed as the same
@@ -461,6 +474,18 @@ fn process_flush(runtimes: &mut [RepoRuntime], events: Vec<DebouncedEvent>, sink
         let removed = wt_latest[&key];
         let (idx, path) = key;
         let rt = &mut runtimes[idx];
+        if is_event_skipped(rt, &path) {
+            // Git-ignored directory churn (agent-session worktrees, log/,
+            // tmp/, nested build output — see `watchset::event_skip_patterns`).
+            // Dropped BEFORE the suspended/quiet dispatch below: ignored
+            // churn must neither reach the sink NOR fill the gate's held
+            // buffer (which would only make the next reconcile's dirty
+            // check stat-and-hash paths git will never report). Filtered
+            // here rather than at watch registration because registration
+            // can only express "skip this TOP-LEVEL dir" — never
+            // `.claude/worktrees/` or `apps/server/log/`.
+            continue;
+        }
         let quiet = rt
             .quiet_until
             .is_some_and(|deadline| std::time::Instant::now() < deadline);
@@ -531,6 +556,41 @@ fn route_path(
         }
         wt_latest.insert(key, op == PathOp::Removed);
     }
+}
+
+/// `true` if a working-tree event for `path` (absolute) falls under one of
+/// the repo's git-ignored directory patterns — see
+/// `watchset::event_skip_patterns`'s doc for the grammar and the sources.
+/// The match runs on the repo-relative, forward-slash path (the same
+/// convention `sink::relativize` uses) via `kb_core::watcher`'s ONE
+/// skip-pattern matcher, so the mirror never grows a second pattern
+/// dialect. A path that doesn't strip to a repo-relative form is never
+/// skipped here (it will be rejected downstream by `sink::relativize`
+/// anyway).
+fn is_event_skipped(rt: &RepoRuntime, path: &Path) -> bool {
+    if rt.event_skips.is_empty() {
+        return false;
+    }
+    let Ok(rel) = path.strip_prefix(&rt.repo_ref.root) else {
+        return false;
+    };
+    let rel = if cfg!(windows) {
+        rel.to_string_lossy().replace('\\', "/")
+    } else {
+        rel.to_string_lossy().into_owned()
+    };
+    let basename = rel.rsplit('/').next().unwrap_or(rel.as_str());
+    let skipped = rt
+        .event_skips
+        .iter()
+        .any(|pat| kb_core::watcher::path_matches_skip_pattern(&rel, basename, pat));
+    if skipped {
+        tracing::trace!(
+            repo = %rt.repo_ref.name, path = %path.display(),
+            "mirror watcher: dropping working-tree event under a git-ignored directory",
+        );
+    }
+    skipped
 }
 
 fn handle_git_dir_event(rt: &mut RepoRuntime, path: &Path, sink: &dyn MirrorSink) {
@@ -714,5 +774,110 @@ mod tests {
         assert_eq!(cfg.debounce, Duration::from_millis(DEFAULT_DEBOUNCE_MS));
         assert_eq!(cfg.mode, WatchMode::Auto);
         assert!(cfg.repos.is_empty());
+    }
+
+    // --- working-tree event skip filter (git-ignored dir churn) -----------
+
+    /// Minimal recording sink — the same shape `tests/mirror_matrix.rs`
+    /// uses, re-declared here since integration-test helpers aren't
+    /// importable from a unit test.
+    #[derive(Default)]
+    struct RecordingSink {
+        upserts: std::sync::Mutex<Vec<PathBuf>>,
+        removes: std::sync::Mutex<Vec<PathBuf>>,
+    }
+
+    impl MirrorSink for RecordingSink {
+        fn upsert_path(&self, _repo: &RepoRef, path: &Path) {
+            self.upserts.lock().unwrap().push(path.to_path_buf());
+        }
+        fn remove_path(&self, _repo: &RepoRef, path: &Path) {
+            self.removes.lock().unwrap().push(path.to_path_buf());
+        }
+        fn head_moved(&self, _repo: &RepoRef, _old: Option<gix::ObjectId>, _new: gix::ObjectId) {}
+        fn full_reconcile(&self, _repo: &RepoRef, _changed: Vec<PathBuf>, _removed: Vec<PathBuf>) {}
+    }
+
+    fn wt_modify_event(path: PathBuf) -> DebouncedEvent {
+        DebouncedEvent::new(
+            notify::Event::new(EventKind::Modify(ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )))
+            .add_path(path),
+            std::time::Instant::now(),
+        )
+    }
+
+    #[test]
+    fn process_flush_drops_events_under_git_ignored_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        // The h4o shape: a multi-segment agent-worktree pattern plus a
+        // bare log/ churn dir — neither expressible at watch registration.
+        std::fs::write(root.join(".gitignore"), ".claude/worktrees/\nlog/\n").unwrap();
+        let mut runtimes = vec![RepoRuntime {
+            repo_ref: RepoRef {
+                name: "fixture".to_string(),
+                root: root.clone(),
+            },
+            git_dir: root.join(".git"),
+            common_dir: root.join(".git"),
+            gate: RepoGate::new(),
+            dirty_cache: reconcile::DirtyCache::new(),
+            quiet_until: None,
+            event_skips: watchset::event_skip_patterns(&root),
+        }];
+        let sink = RecordingSink::default();
+
+        process_flush(
+            &mut runtimes,
+            vec![
+                wt_modify_event(root.join(".claude/worktrees/agent-x/src/lib.rs")),
+                wt_modify_event(root.join("log/app.log")),
+                wt_modify_event(root.join("src/lib.rs")),
+            ],
+            &sink,
+        );
+
+        assert_eq!(
+            *sink.upserts.lock().unwrap(),
+            vec![root.join("src/lib.rs")],
+            "only the non-ignored source file may reach the sink",
+        );
+        assert!(sink.removes.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn process_flush_neither_holds_nor_replays_ignored_churn_during_a_git_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::write(root.join(".gitignore"), ".claude/worktrees/\n").unwrap();
+        let mut rt = RepoRuntime {
+            repo_ref: RepoRef {
+                name: "fixture".to_string(),
+                root: root.clone(),
+            },
+            git_dir: root.join(".git"),
+            common_dir: root.join(".git"),
+            gate: RepoGate::new(),
+            dirty_cache: reconcile::DirtyCache::new(),
+            quiet_until: None,
+            event_skips: watchset::event_skip_patterns(&root),
+        };
+        rt.gate.suspended = true;
+        let sink = RecordingSink::default();
+        let mut runtimes = vec![rt];
+
+        process_flush(
+            &mut runtimes,
+            vec![wt_modify_event(
+                root.join(".claude/worktrees/agent-x/src/lib.rs"),
+            )],
+            &sink,
+        );
+
+        // Not held for the post-op dirty check, not sent to the sink.
+        assert!(runtimes[0].gate.held.is_empty());
+        assert!(sink.upserts.lock().unwrap().is_empty());
     }
 }

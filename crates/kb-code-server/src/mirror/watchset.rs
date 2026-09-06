@@ -78,38 +78,152 @@ pub fn working_tree_watch_set(root: &Path) -> Vec<WatchEntry> {
     out
 }
 
-/// Lightweight `.gitignore`-top-level-only scan: a line shaped exactly like
-/// a bare directory name (`target/`, `node_modules`, an optional leading
-/// `/` and/or trailing `/`, no wildcards, no embedded `/`) contributes its
-/// own name to the watch-registration skip-set.
+/// One directory-shaped `.gitignore` line, normalised (no leading/trailing
+/// `/`). Two shapes, following git's own anchoring rule: a pattern with NO
+/// slash anywhere matches a directory of that name at ANY depth; a pattern
+/// with a leading or embedded slash is anchored at the repo root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirPattern {
+    /// `vendor`, `node_modules/` — any-depth directory name.
+    Bare(String),
+    /// `/dist`, `.claude/worktrees/`, `apps/server/log/` — root-relative.
+    Anchored(String),
+}
+
+/// Lightweight `.gitignore` scan, directory-shaped lines only: a line that
+/// names a directory (`target/`, `.claude/worktrees/`, `/dist`, or a bare
+/// `node_modules`) with no wildcard characters contributes one
+/// [`DirPattern`]. Comments, negations and wildcard patterns are skipped.
 ///
 /// Deliberately NOT a real gitignore engine — mirrors `kb_core::watcher`'s
 /// own `path_matches_skip_pattern` precedent ("if you need a real
-/// gitignore engine, add the `ignore` crate"). This only prunes WATCH
-/// REGISTRATION (an inotify-budget concern); it never decides ingest
-/// eligibility, so a pattern this heuristic misses just costs a few extra
-/// watched inodes, never a correctness bug.
-pub fn gitignore_top_level_dirs(root: &Path) -> HashSet<String> {
-    let mut out = HashSet::new();
-    let Ok(raw) = std::fs::read_to_string(root.join(".gitignore")) else {
-        return out;
-    };
+/// gitignore engine, add the `ignore` crate"). A pattern this heuristic
+/// misses just costs a few extra watched inodes or a few extra events,
+/// never a correctness bug (reconcile only ever reports TRACKED paths,
+/// which gitignore by definition does not cover).
+fn parse_gitignore_dir_patterns(raw: &str) -> Vec<DirPattern> {
+    let mut out = Vec::new();
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
             continue;
         }
+        let anchored = line.starts_with('/');
         let stripped = line.strip_prefix('/').unwrap_or(line);
         let stripped = stripped.strip_suffix('/').unwrap_or(stripped);
         if stripped.is_empty()
-            || stripped.contains('/')
             || stripped.contains('*')
             || stripped.contains('?')
             || stripped.contains('[')
         {
             continue;
         }
-        out.insert(stripped.to_string());
+        if anchored || stripped.contains('/') {
+            out.push(DirPattern::Anchored(stripped.to_string()));
+        } else {
+            out.push(DirPattern::Bare(stripped.to_string()));
+        }
+    }
+    out
+}
+
+/// Lightweight `.gitignore`-top-level-only scan: a line shaped exactly like
+/// a bare directory name (`target/`, `node_modules`, an optional leading
+/// `/` and/or trailing `/`, no wildcards, no embedded `/`) contributes its
+/// own name to the watch-registration skip-set.
+///
+/// This only prunes WATCH REGISTRATION (an inotify-budget concern); it
+/// never decides ingest eligibility — see [`event_skip_patterns`] for the
+/// event-routing half, which unlike registration CAN honour multi-segment
+/// patterns.
+pub fn gitignore_top_level_dirs(root: &Path) -> HashSet<String> {
+    let Ok(raw) = std::fs::read_to_string(root.join(".gitignore")) else {
+        return HashSet::new();
+    };
+    parse_gitignore_dir_patterns(&raw)
+        .into_iter()
+        .filter_map(|p| match p {
+            // A root-anchored single-segment pattern (`/dist`) is, for
+            // top-level registration, the same thing as a bare name.
+            DirPattern::Bare(name) => Some(name),
+            DirPattern::Anchored(path) if !path.contains('/') => Some(path),
+            DirPattern::Anchored(_) => None,
+        })
+        .collect()
+}
+
+/// Skip patterns for the mirror's WORKING-TREE EVENT filter
+/// (`process_flush`), expressed in `kb_core::watcher`'s skip-pattern
+/// grammar (see `path_matches_skip_pattern`'s doc). Three sources:
+///
+/// - [`ALWAYS_SKIP_DIRS`], as any-depth `**/name/**` patterns — the
+///   registration skip is top-level-only, but a NESTED `target/` or
+///   `node_modules/` (a crate subdir, a JS sub-app) is just as much
+///   build output.
+/// - every directory-shaped line of the repo's root `.gitignore`
+///   ([`parse_gitignore_dir_patterns`]): bare names become any-depth
+///   `**/name/**`, anchored patterns become `path/**` prefixes. This is
+///   what covers the patterns registration structurally cannot —
+///   multi-segment ones like `.claude/worktrees/` or `apps/server/log/`
+///   (agent-session worktrees and Rails log/tmp churn INSIDE the watched
+///   tree: untracked by git, so the HEAD-tree walk and every reconcile
+///   never report them, but a recursive inotify watch observes every
+///   write; measured on h4o: 728k junk `files` rows, ~96% of the store,
+///   from months of `.claude/worktrees/agent-*` indexing).
+/// - SELF-IGNORING top-level directories: a child dir whose own
+///   `.gitignore` is exactly `*` (the agent-worktree convention, e.g.
+///   `.grokclaude-worktrees/.gitignore`) — the root `.gitignore` never
+///   mentions these, but the dir's own ignore file declares every
+///   content un-trackable, so its events are never ingest-worthy either.
+///
+/// Negations and wildcard patterns stay out of scope (skipped by the
+/// parser): the worst case of a missed pattern is extra events, and the
+/// reconcile backstop is unaffected either way since it derives from
+/// tracked paths only.
+pub fn event_skip_patterns(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = ALWAYS_SKIP_DIRS
+        .iter()
+        .map(|name| format!("**/{name}/**"))
+        .collect();
+    if let Ok(raw) = std::fs::read_to_string(root.join(".gitignore")) {
+        for pat in parse_gitignore_dir_patterns(&raw) {
+            match pat {
+                DirPattern::Bare(name) => out.push(format!("**/{name}/**")),
+                DirPattern::Anchored(path) => out.push(format!("{path}/**")),
+            }
+        }
+    }
+    for name in self_ignoring_top_level_dirs(root) {
+        out.push(format!("{name}/**"));
+    }
+    out
+}
+
+/// Immediate child directories of `root` whose own `.gitignore` is exactly
+/// `*` — the "everything in here is scratch" convention used by agent
+/// session dirs (`.grokclaude-worktrees/`, changelog scratch dirs, …).
+/// Such a dir's contents are un-trackable by git's own rules regardless of
+/// what the root `.gitignore` says.
+fn self_ignoring_top_level_dirs(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(entry.path().join(".gitignore")) else {
+            continue;
+        };
+        if raw.trim() == "*" {
+            if let Some(name) = entry.file_name().to_str() {
+                out.push(name.to_string());
+            }
+        }
     }
     out
 }
@@ -212,6 +326,92 @@ mod tests {
                 "dist".to_string(),
                 "vendor".to_string()
             ])
+        );
+    }
+
+    #[test]
+    fn parse_gitignore_dir_patterns_keeps_multi_segment_and_marks_anchoring() {
+        let pats = parse_gitignore_dir_patterns(
+            "# comment\n\nbuild/\n/dist\nvendor\n*.log\nnested/dir/\n!keep\n.claude/worktrees/\n",
+        );
+        assert_eq!(
+            pats,
+            vec![
+                DirPattern::Bare("build".to_string()),
+                DirPattern::Anchored("dist".to_string()),
+                DirPattern::Bare("vendor".to_string()),
+                // `*.log` (wildcard) and `!keep` (negation) are out of grammar.
+                DirPattern::Anchored("nested/dir".to_string()),
+                DirPattern::Anchored(".claude/worktrees".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn event_skip_patterns_cover_agent_worktrees_and_nested_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // The h4o shape: multi-segment agent-worktree and Rails log/tmp
+        // patterns registration could never express.
+        std::fs::write(
+            root.join(".gitignore"),
+            "apps/server/log/\napps/server/tmp/\n.claude/worktrees/\n.codex-worktrees/\n*.log\n",
+        )
+        .unwrap();
+        // …plus a self-ignoring dir (`.grokclaude-worktrees/.gitignore`
+        // containing exactly `*`), which no root `.gitignore` line names.
+        let self_ignoring = root.join(".grokclaude-worktrees");
+        std::fs::create_dir_all(&self_ignoring).unwrap();
+        std::fs::write(self_ignoring.join(".gitignore"), "*\n").unwrap();
+        // …a dir whose .gitignore has real content is NOT self-ignoring…
+        let ordinary = root.join("docs");
+        std::fs::create_dir_all(&ordinary).unwrap();
+        std::fs::write(ordinary.join(".gitignore"), "*.tmp\n").unwrap();
+        // …and neither is a FILE named like one.
+        std::fs::write(root.join("README.md"), "x\n").unwrap();
+
+        let pats = event_skip_patterns(root);
+        let matches = |rel: &str| {
+            let basename = rel.rsplit('/').next().unwrap_or(rel);
+            pats.iter()
+                .any(|p| kb_core::watcher::path_matches_skip_pattern(rel, basename, p))
+        };
+
+        // The observed h4o churn vectors are all covered.
+        assert!(matches(".claude/worktrees/agent-0129abc/src/main.rs"));
+        assert!(matches(".codex-worktrees/f6-plan/apps/server/Gemfile"));
+        assert!(matches(".grokclaude-worktrees/gc-01KZX/x.rb"));
+        assert!(matches(".grokclaude-worktrees")); // the dir itself (a Remove)
+        assert!(matches("apps/server/log/production.log"));
+        assert!(matches("apps/server/tmp/pids/server.pid"));
+        // ALWAYS_SKIP_DIRS as any-depth patterns: a nested build-output dir.
+        assert!(matches("crates/sub/target/debug/build.rs"));
+        assert!(matches("apps/desktop/node_modules/left-pad/index.js"));
+
+        // Real source paths must NEVER match — including near-misses that
+        // share a prefix with an ignored pattern (component-boundary, never
+        // substring).
+        assert!(!matches("apps/server/app/models/user.rb"));
+        assert!(!matches("apps/server/logistics/tracker.rb"));
+        assert!(!matches(".claude/workflows/review.md"));
+        assert!(!matches("docs/guide.html"));
+        assert!(!matches("README.md"));
+        // The wildcard `*.log` line is out of grammar: a TRACKED .log file
+        // (force-added) still flows — the filter only prunes directories.
+        assert!(!matches("docs/CHANGELOG.log"));
+    }
+
+    #[test]
+    fn event_skip_patterns_survive_a_missing_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .gitignore at all: only the ALWAYS_SKIP_DIRS patterns remain.
+        let pats = event_skip_patterns(tmp.path());
+        assert_eq!(
+            pats,
+            ALWAYS_SKIP_DIRS
+                .iter()
+                .map(|n| format!("**/{n}/**"))
+                .collect::<Vec<_>>()
         );
     }
 
