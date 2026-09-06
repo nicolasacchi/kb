@@ -65,7 +65,7 @@ fastembed = { version = "5", default-features = false, features = [
 ] }
 
 # HTML parsing
-scraper = "0.20"
+scraper = "0.27"
 lol_html = "2"
 # U1 (v0.25 quick capture) — opt-in HTML sanitize at capture time (Html
 # pipeline only; the stored source IS the sanitized output). Whitelist-based,
