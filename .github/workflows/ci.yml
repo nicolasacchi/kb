@@ -491,8 +491,42 @@ jobs:
         run: npx playwright install --with-deps chromium firefox
 
       - name: Run Playwright tests
+        # V72-C3 — capture to a file (in addition to the live `list` output)
+        # so the next step can grep it; pipefail (the default shell for this
+        # workflow, confirmed by GH Actions' own step log) keeps this step's
+        # exit status the playwright one, not tee's.
         working-directory: tests/e2e
-        run: npx playwright test
+        run: npx playwright test 2>&1 | tee playwright-output.log
+
+      - name: Flaky spec summary
+        # V72-C3 — the CI-only retry (playwright.config.ts: `retries: 1`,
+        # `process.env.CI` gated) must stay VISIBLE, never a silent green.
+        # Playwright's `list` reporter buckets a retried-then-passed spec
+        # under its own "N flaky" summary line, formatted exactly like the
+        # "N failed" block above it. Grep that bucket out of the captured run
+        # (a static local file — no untrusted event data touches this shell)
+        # and surface it in the job summary so a flaky-but-green run is still
+        # an observable signal instead of something dug out of a raw log —
+        # and so the SAME spec recurring across runs is easy to notice (the
+        # hosted-runner-load pattern this budget/retry pair is meant for
+        # loses a DIFFERENT spec each run; a repeat name is a real bug, not
+        # load — see the PR body).
+        if: always()
+        working-directory: tests/e2e
+        run: |
+          if [ -f playwright-output.log ] && grep -qE '^[[:space:]]*[0-9]+ flaky[[:space:]]*$' playwright-output.log; then
+            {
+              echo "## Flaky this run"
+              echo
+              echo "Passed only after a retry (retries: 1, CI-only) — not a merge blocker, but track it if the same spec shows up here twice:"
+              echo
+              awk '
+                /^[[:space:]]*[0-9]+ flaky[[:space:]]*$/ { grab=1; next }
+                grab && /^[[:space:]]+\[/ { print; next }
+                { grab=0 }
+              ' playwright-output.log | sed 's/^[[:space:]]*/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   embedder-lint:
     name: embedder-lint (ORT surface — clippy)
