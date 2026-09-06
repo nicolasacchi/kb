@@ -5,6 +5,11 @@ Rails.application.routes.draw do
     member do
       post :cancel
     end
+
+    # V72-I2 — reached by `summary.html.haml`, the fixture's HAML view.
+    collection do
+      get :summary
+    end
   end
 
   # Deliberately points at an action `OrdersController` does not define —

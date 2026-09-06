@@ -28,7 +28,7 @@ static SERIAL: AsyncMutex<()> = AsyncMutex::const_new(());
 const REPO: &str = "acme-app";
 /// Every tracked file in the fixture tree — what `wait_for_indexed` waits
 /// for before a single assertion runs.
-const FIXTURE_FILES: usize = 19;
+const FIXTURE_FILES: usize = 21;
 
 fn fixture_src() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rails-app")
@@ -485,5 +485,134 @@ async fn the_whole_index_answers_inside_a_generous_ceiling() {
     assert!(
         per_call < Duration::from_millis(2000),
         "the per-request join took {per_call:?} on a 19-file fixture — something is scanning"
+    );
+}
+
+/// V72-I2 — **HAML in the Rails lens, proven through the SHIPPED path.**
+///
+/// The dispatch code was already right at V72-I1: `rails::extract` has a
+/// `.haml` arm, `rails_lens_relevant_path` lists both `.haml` predicates,
+/// `lang::detect` resolves `.haml` to the first-party scanner, and
+/// `find_view_files` matches on a template's STEM rather than its extension.
+/// What was missing was a test that any of that survives the REAL pipeline:
+/// every fixture that runs through `ingest::index_file` → `replace_rails_edges`
+/// → `GET /api/rails/*` was 100% ERB, and the only HAML lens assertions
+/// (`tests/haml_corpus.rs`) build their own tempdir and call
+/// `frameworks::extract_edges` DIRECTLY — bypassing `is_rails`,
+/// `rails_lens_relevant_path`, `lang::detect`, the store and the daemon. So a
+/// regression that dropped `.haml` from any of those gates would have left
+/// `just ci-code` green.
+///
+/// This test closes that seam, on the two claims a reader of `~rails`
+/// actually depends on:
+///
+///  * a template RENDERED FROM HAML is not in the `view_never_rendered`
+///    orphan lane (`summary.html.haml` renders `_haml_row.html.haml`, and
+///    `OrdersController#summary`'s own implicit convention render resolves
+///    the `.haml` template itself);
+///  * a locale key referenced ONLY from HAML is not in the
+///    `locale_key_never_referenced` lane — including the LAZY `t(".heading")`
+///    form, whose scope is derived from the view path (`view_relative_scope`
+///    splits on the first dot, so `.haml` and `.erb` reduce identically).
+///
+/// The negative control rides along: `orders.unused_key` IS referenced
+/// nowhere and must still be reported, so a bug that emptied the lane
+/// entirely cannot pass this test either.
+#[tokio::test]
+async fn the_rails_lens_reads_haml_through_the_real_ingest_path() {
+    let _g = SERIAL.lock().await;
+    let boot = boot().await;
+
+    const HAML_VIEW: &str = "app/views/orders/summary.html.haml";
+    const HAML_PARTIAL: &str = "app/views/orders/_haml_row.html.haml";
+
+    // 1 — both templates are indexed as views at all.
+    let views = get(
+        &boot.base,
+        &format!("/api/rails/views?repo={REPO}&limit=1000"),
+    )
+    .await;
+    let rows = views["rows"].as_array().expect("view rows");
+    let find = |path: &str| {
+        rows.iter()
+            .find(|r| r["path"] == serde_json::json!(path))
+            .unwrap_or_else(|| panic!("{path} is missing from /api/rails/views"))
+    };
+    let view = find(HAML_VIEW);
+    let partial = find(HAML_PARTIAL);
+
+    // 2 — the render edge the HAML template itself produced. This is the
+    // claim V72-I1 could not check: the partial's inbound count comes from a
+    // `render "haml_row"` written in HAML, walked by
+    // `support::walk_haml_ruby_fragments`.
+    assert!(
+        partial["counts"]["rendered_by"].as_u64().unwrap_or(0) >= 1,
+        "no render edge reaches {HAML_PARTIAL} — the lens did not read the HAML template that \
+         renders it: {partial}"
+    );
+    assert!(
+        view["counts"]["rendered_by"].as_u64().unwrap_or(0) >= 1,
+        "no render edge reaches {HAML_VIEW} — OrdersController#summary's implicit convention \
+         render did not resolve a .haml template: {view}"
+    );
+
+    // 3 — and therefore neither is an orphan.
+    let orphans = get(&boot.base, &format!("/api/rails/orphans?repo={REPO}")).await;
+    let lane = |id: &str| {
+        orphans["lanes"]
+            .as_array()
+            .expect("lanes")
+            .iter()
+            .find(|l| l["id"] == serde_json::json!(id))
+            .unwrap_or_else(|| panic!("lane {id} is missing"))
+    };
+    let never_rendered = lane("view_never_rendered");
+    for path in [HAML_VIEW, HAML_PARTIAL] {
+        assert!(
+            !never_rendered["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["path"] == serde_json::json!(path)),
+            "{path} was reported as never rendered: {never_rendered}"
+        );
+    }
+
+    // 4 — the i18n keys reached only from HAML, absolute and LAZY.
+    let locale = lane("locale_key_never_referenced");
+    let unused: Vec<&str> = locale["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    for key in ["orders.summary.heading", "orders.summary.link"] {
+        assert!(
+            !unused.contains(&key),
+            "{key} is referenced only from HAML and was reported unused — the lens did not read \
+             the template's `t(...)` calls. Lane rows: {unused:?}"
+        );
+    }
+    // The negative control: a key nothing references must STILL be reported.
+    assert!(
+        unused.contains(&"orders.unused_key"),
+        "the unused-locale lane reported nothing at all, so the assertions above prove nothing: \
+         {unused:?}"
+    );
+
+    // 5 — the route + action the HAML view hangs off resolve too, so the
+    // fixture cannot silently stop exercising the implicit-render path.
+    let actions = get(
+        &boot.base,
+        &format!("/api/rails/actions?repo={REPO}&q=summary&limit=1000"),
+    )
+    .await;
+    assert!(
+        actions["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == serde_json::json!("orders#summary")),
+        "orders#summary is missing from /api/rails/actions: {actions}"
     );
 }

@@ -9,11 +9,11 @@
   "noun": "route",
   "offset": 0,
   "repo": "acme-app",
-  "returned": 5,
+  "returned": 6,
   "rows": [
     {
-      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
-      "line": 15,
+      "blob_sha": "7393957c61b04dba4dc3b7e6cbbf1e96dba29e46",
+      "line": 20,
       "name": "GET /admin/reports",
       "noun": "route",
       "path": "config/routes.rb",
@@ -27,7 +27,7 @@
         {
           "detail": "rails-lens/1 route_action",
           "kind": "rails-edge",
-          "line": 15,
+          "line": 20,
           "path": "config/routes.rb",
           "trust": "likely"
         },
@@ -38,7 +38,7 @@
       ]
     },
     {
-      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "blob_sha": "7393957c61b04dba4dc3b7e6cbbf1e96dba29e46",
       "line": 4,
       "name": "GET /orders",
       "noun": "route",
@@ -64,7 +64,7 @@
       ]
     },
     {
-      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "blob_sha": "7393957c61b04dba4dc3b7e6cbbf1e96dba29e46",
       "line": 4,
       "name": "GET /orders/:id",
       "noun": "route",
@@ -90,11 +90,11 @@
       ]
     },
     {
-      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "blob_sha": "7393957c61b04dba4dc3b7e6cbbf1e96dba29e46",
       "flags": [
         "action-missing"
       ],
-      "line": 12,
+      "line": 17,
       "name": "GET /orders/ping",
       "noun": "route",
       "path": "config/routes.rb",
@@ -108,7 +108,7 @@
         {
           "detail": "rails-lens/1 route_action",
           "kind": "rails-edge",
-          "line": 12,
+          "line": 17,
           "path": "config/routes.rb",
           "trust": "likely"
         },
@@ -119,7 +119,33 @@
       ]
     },
     {
-      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "blob_sha": "7393957c61b04dba4dc3b7e6cbbf1e96dba29e46",
+      "line": 11,
+      "name": "GET /orders/summary",
+      "noun": "route",
+      "path": "config/routes.rb",
+      "route": {
+        "path": "/orders/summary",
+        "target": "orders#summary",
+        "verb": "GET"
+      },
+      "trust": "likely",
+      "witnesses": [
+        {
+          "detail": "rails-lens/1 route_action",
+          "kind": "rails-edge",
+          "line": 11,
+          "path": "config/routes.rb",
+          "trust": "likely"
+        },
+        {
+          "detail": "route target resolved by convention to app/controllers/orders_controller.rb",
+          "kind": "convention"
+        }
+      ]
+    },
+    {
+      "blob_sha": "7393957c61b04dba4dc3b7e6cbbf1e96dba29e46",
       "line": 6,
       "name": "POST /orders/:id/cancel",
       "noun": "route",
@@ -146,6 +172,6 @@
     }
   ],
   "schema": "rails/1",
-  "total": 5,
+  "total": 6,
   "truncated": false
 }

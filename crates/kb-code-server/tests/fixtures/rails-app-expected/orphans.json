@@ -9,7 +9,7 @@
       "returned": 1,
       "rows": [
         {
-          "line": 12,
+          "line": 17,
           "name": "GET /orders/ping",
           "path": "config/routes.rb",
           "trust": "candidate",
@@ -17,7 +17,7 @@
             {
               "detail": "rails-lens/1 route_action",
               "kind": "rails-edge",
-              "line": 12,
+              "line": 17,
               "path": "config/routes.rb",
               "trust": "likely"
             },
@@ -39,7 +39,7 @@
       "returned": 1,
       "rows": [
         {
-          "line": 19,
+          "line": 28,
           "name": "orders#export",
           "path": "app/controllers/orders_controller.rb",
           "trust": "candidate",
@@ -47,7 +47,7 @@
             {
               "detail": "method export in a controller class",
               "kind": "symbol",
-              "line": 19,
+              "line": 28,
               "path": "app/controllers/orders_controller.rb"
             }
           ]
