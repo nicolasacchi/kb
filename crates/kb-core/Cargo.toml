@@ -112,7 +112,7 @@ insta = { workspace = true }
 # Microbench harness for the perf-review hot paths. default-features off
 # drops plotters/gnuplot (we read the terminal summary), keeping the dev
 # dep graph small. Run with `cargo bench -p kb-core`.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "perf"
