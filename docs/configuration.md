@@ -77,11 +77,30 @@ search = 120
 history_post = 1200
 ```
 
+### `[server.attachments]`
+
+Upload limits for **comment attachments** (`kb comments upload`/`attach`,
+the SPA composer's file picker). Omit the table to keep defaults. Distinct
+from `[server.capture]` below (quick-capture / Share Target) — a different
+upload surface with its own cap.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `max_file_bytes` | u64 | 10 MiB | Max size for a single staged attachment. Over-cap → `413`. `0` is a hard validation error. |
+| `max_per_comment` | usize | 20 | Max attachments one comment/reply can carry. `0` is a hard validation error. |
+| `gc_grace_hours` | i64 | 24 | Hours a staged-but-never-adopted attachment (uploaded, never referenced in a comment body) survives before the GC sweep reaps it. `0` is accepted but warned on (reaps a staged upload almost immediately). |
+
+```toml
+[server.attachments]
+max_file_bytes = 20_000_000
+max_per_comment = 10
+```
+
 ### `[server.capture]`
 
 v0.25 (U1/U2) — quick-capture upload limits + the Web Share Target
 destination kb. Omit the table to keep defaults. Distinct from
-`[server.attachments]` (comment attachments) — a different upload surface
+`[server.attachments]` above (comment attachments) — a different upload surface
 with its own cap.
 
 Both routes (`POST /api/kb/{kb}/capture` and the share-target `POST
@@ -240,6 +259,24 @@ cleanup never reaps. Only uuid-shaped dirs not referenced by the current
 manifest and older than a 60-minute grace window are removed; reclamations
 are logged at INFO (`orphan index GC reclaimed …`).
 
+## `[defaults]`
+
+D1 — daemon-wide fallback for any `[kb.<name>]` that omits its own
+`embedding_model`. Precedence (highest first): per-kb `embedding_model` →
+`[defaults] embedding_model` → the registry default (`bge-small-en-v1.5`).
+See [self-host.md → Embedding model](self-host.md#embedding-model--picking-and-switching-d).
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `embedding_model` | string | none | Daemon-wide embedding-model fallback, used when a `[kb.<name>]` omits `embedding_model`. Must match a `kb_core::embed::SUPPORTED_MODELS` entry; an unknown name here is treated the same as unset (warn at boot). |
+| `disable_embedder_fallback` | bool | `false` | D2 — suppress the final registry-default fallback. When `true`, a kb with no per-kb AND no `[defaults]` model resolves to `None` (lexical-only search, no embedder subprocess spawned). Useful for tests/CI that skip downloading model weights, or a deliberately no-embedder daemon. |
+
+```toml
+[defaults]
+embedding_model = "bge-large-en-v1.5"
+# disable_embedder_fallback = true   # lexical-only daemons / CI
+```
+
 ## `[retention]`
 
 v0.24 (R3) — opt-in retention windows for user-data tables. Daemon-wide
@@ -295,15 +332,16 @@ a non-loopback request 403s even with a valid bearer token (stricter than
 every other sessions route; `/raw`/`/export`/`/view` force a redaction
 floor instead of refusing, since a live transcript is unscrubbed mid-flight
 content with no floor that makes it safe to serve remotely). Both set
-`Cache-Control: no-store`. See [README.md](../README.md#L1106) for the
-route shapes and `kb sessions read --live`/`--follow` for the CLI's
+`Cache-Control: no-store`. See [`docs/http-api.md`](http-api.md)
+for the route shapes and `kb sessions read --live`/`--follow` for the CLI's
 direct-disk twin (zero daemon required).
 
 ## `[webhooks]`
 
 Daemon-wide reactive bridge: one background subscriber forwards selected
-[event-bus](../README.md#L419) envelopes to an external URL as JSON
-POSTs. Omit the table to disable it (nothing is spawned). It is
+event-bus envelopes (see [`docs/http-api.md`](http-api.md)
+for `GET /api/events`) to an external URL as JSON POSTs. Omit the table to
+disable it (nothing is spawned). It is
 **read-only + post-emit** — it only reads the firehose and makes an
 outbound request, so it adds no inbound surface and never writes storage.
 See [`extending.md`](extending.md) for how this fits kb's extension model.
@@ -437,6 +475,48 @@ it finds), and an empty result is a non-signal — see
 (“`Kb-Memory` trailers”) for the full contract, the 20-per-commit cap,
 and the fail-open behaviour.
 
+## `[share]`
+
+`kb share` publishing config (Cloudflare Pages + Access, GitHub Pages).
+Daemon-wide, optional — omit the table entirely and `kb share` errors with
+a setup hint naming which host you asked for. Secrets are never inlined
+here (see [self-host.md → Sharing artifacts](self-host.md#sharing-artifacts-kb-share)
+for env-var wiring on systemd/Docker).
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `live_origin` | string | none | Live kb origin used to build absolute links (`kb share --links absolute`); only required for that mode. |
+| `cloudflare` | table | none | See `[share.cloudflare]` below. |
+| `github` | table | none | See `[share.github]` below. |
+
+### `[share.cloudflare]`
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `account_id` | string | **required** | Cloudflare account id. |
+| `team_domain` | string | **required** | Zero-Trust team domain, `<team>.cloudflareaccess.com`. |
+| `google_idp` / `github_idp` | string | none | Pre-registered IdP UUID, for `--gate google`/`--gate github`. |
+| `api_token_env` | string | `"KB_CF_API_TOKEN"` | Name of the env var the daemon reads the Cloudflare API token from at share time (the token itself never lives in `kb.toml`). |
+
+### `[share.github]`
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `owner` | string | **required** | GitHub user/org that owns the created share repos. |
+| `token_env` | string | `"KB_GH_TOKEN"` | Name of the env var the daemon reads the GitHub token from. |
+
+```toml
+[share]
+live_origin = "https://kb.example.com"
+
+[share.cloudflare]
+account_id  = "<cf-account-id>"
+team_domain = "<team>.cloudflareaccess.com"
+
+[share.github]
+owner = "<github-user-or-org>"
+```
+
 ## `[kb.<name>]`
 
 One table per knowledge base. `<name>` is the kb's identifier used in
@@ -447,11 +527,18 @@ URLs (`/api/kb/<name>/…`) and `--kb`.
 | `path` | path | **required** | Source folder watched + indexed for this kb. |
 | `skip_patterns` | [string] | `[]` | Glob patterns to skip during indexing (e.g. `.git`, `*.tmp`, `drafts/**`). |
 | `embedding_model` | string | none | Model name (must match a supported model). **Absent → no embedder:** the indexer skips embedding and `/api/search?mode=hybrid\|semantic` returns `400` (keyword search still works). The on-disk embedding-column width is fixed at first index; changing dims needs `kb model set --in-place` or a `kb reset`. |
+| `reranker_model` | string | none | SQ4 — opt-in cross-encoder reranker name (from the reranker registry, ~1 GB model). A load failure is non-fatal (falls back to unranked hybrid/keyword results). |
+| `chunked_embeddings` | bool | `false` | SQ5 — opt-in passage/chunk embeddings into a separate `artifact_chunks` table for finer-grained semantic hits. Flipping it on needs a `kb reindex` to backfill existing artifacts. |
+| `graph_boost` | float | none | GS-track — additive post-fusion hybrid-search boost from the edge graph: `weight/60 × sqrt(in_degree)/sqrt(max_in_degree)`. Sane range `(0, 4]`; an out-of-range value warns at validate time and still applies verbatim. |
+| `memory_scope` | string | none | v0.9 (M2) — marks this corpus as agent-memory: `"global"` or `"project"`. Unknown value warns and is treated as unset. |
+| `decay_policy` | string | none | v0.13 — recall decay curve for a memory corpus: `"strict"`, `"balanced"`, or `"loose"`. Only meaningful when `memory_scope` is set; unknown value warns and falls back to the daemon-wide policy cell. |
+| `default_search_category` | string | none | R0 — per-kb default for the `?category` filter on a `scope=one` search when the request omits it (e.g. `"memory-session"` on a sessions corpus). Never applies to `scope=all` (federated search builds its filters from the request alone). |
+| `reading_progress` | bool | `true` | RP-track — per-kb reading-progress capture toggle. `false` makes `POST …/history/reading` a no-op (`204`) for this kb. |
 | `versions` | string | `auto` | Source for the artifact **Versions/Diff** timeline (`kb versions` / `kb diff`, the SPA Versions panel): `auto` (git history when the file is tracked, else kb index snapshots — per-file hybrid), `git`, `index`, `both` (union), or `off`. Index snapshots are captured on each changed-content re-index and pruned to the newest 25 per artifact (memory-session transcripts excluded); a `git`/`off` kb stores none. In the deployed container (no `.git`/`git` binary) `git`/`auto` degrade cleanly to snapshots / an empty timeline. |
 | `indexable_extensions` | table | inherit | v0.24 (X1) — per-kb override of `[indexer] indexable_extensions` (same shape + validation rules; see that entry). Absent → inherit the daemon-wide map, else the built-in set. |
 | `reconcile_secs` | u64 | inherit | PF-I1 — per-kb override of `[indexer] reconcile_secs` (same semantics — `0` disables the background walk, just for this kb; the explicit `POST /api/kb/{kb}/reindex` still works). Absent → inherit the daemon-wide `[indexer] reconcile_secs`, else 60. Resolution order is `KB_RECONCILE_SECS` env (still trumps everything, including this) → this kb's `reconcile_secs` → daemon-wide `[indexer] reconcile_secs` → 60. The periodic auto-compact ticker, which is already spawned per kb, follows this same resolved value. |
 | `capture_dir` | string | `"capture"` | v0.25 (U1) — subfolder (relative to `path`) quick-captured files land in (`kb capture`, the SPA capture sheet, the Web Share Target route). Provenance-stamped, then indexed like any other artifact — not a separate storage surface. |
-| `code_url` | string | none | v1 (DCB) — kb-code SPA base URL this kb's Code section resolves references against (e.g. `https://kbc.example.com`, or `http://127.0.0.1:4747` for a colocated local dev daemon). **(reconciled: minor-101 / m27)** Absent → the Links tab's Code section renders ONE honest "not linked to a code repo" note and nothing else — the raw extracted rows are deliberately NOT shown (an unresolved ref with no href and no repo context reads as noise, per `13-w1d-kb-spa.md`'s degrade-state ruling, §6/§15 there — this is the owning track's call, this doc merely mirrors it). Follows `ProjectSection.code_url`'s field shape (`config.rs`) but lives on `[kb.<name>]` directly — `code_repo` (singular checkout pin) is deliberately NOT carried over: DCB's checkout selection is a per-read-time human pick (the scorecard), never a config-file mapping. |
+| `code_url` | string | none | v1 (DCB) — kb-code SPA base URL this kb's Code section resolves references against (e.g. `https://kbc.example.com`, or `http://127.0.0.1:4747` for a colocated local dev daemon). Absent → the Links tab's Code section renders ONE honest "not linked to a code repo" note and nothing else — the raw extracted rows are deliberately NOT shown (an unresolved ref with no href and no repo context reads as noise). Follows `ProjectSection.code_url`'s field shape (`config.rs`) but lives on `[kb.<name>]` directly — `code_repo` (singular checkout pin) is deliberately NOT carried over: DCB's checkout selection is a per-read-time human pick (the scorecard), never a config-file mapping. |
 
 ### `[kb.<name>.ui]`
 
@@ -601,6 +688,31 @@ fix  = "/home/me/kb-templates/fix.html"
 kb new --template idea --title "Ring buffer sizing" --kb notes --out notes/ring.html
 ```
 
+## `[projects.<id>]`
+
+W3.A — a declarative registry that relabels/merges the sessions "projects
+home" grouping. `<id>` is a stable, operator-chosen key (e.g.
+`[projects.kb]`); zero config still gives a useful projects home via
+auto-projects (basenames of the derived project key), so this whole table
+is optional.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `label` | string | the registry id | Display label for this project. |
+| `roots` | [string] | `[]` | Absolute path prefixes this project owns (worktrees, renamed subdirs). Empty matches nothing (warn); a non-absolute entry is a hard validation error. |
+| `kb` | string | none | Primary `[kb.<name>]` corpus this project maps to, if any. |
+| `code_url` | string | none | kb-code SPA base URL for this project, if any (P7/P8 integration). |
+| `code_repo` | string | none | The `:repo` route segment kb-code uses for this project, if any. |
+
+```toml
+[projects.kb]
+label = "kb"
+roots = ["/home/me/project/kb"]
+kb    = "research"
+code_url  = "https://kbc.example.com"
+code_repo = "kb"
+```
+
 ## A fuller example
 
 ```toml
@@ -639,7 +751,7 @@ strip_kb_prompt = true
 ## kb-code.toml (kb-code daemon config)
 
 `kb-code` — the separate, sibling read-oriented code-browsing daemon (see
-[README.md → kb-code](../README.md#kb-code-waves-15-shipped)) — reads its own
+[`docs/kb-code.md`](kb-code.md)) — reads its own
 `kb-code.toml` (default `<KbPaths::new("kb-code").config>/kb-code.toml`,
 override with `--config`; schema source of truth:
 `crates/kb-code-server/src/config.rs`). It is a **completely separate file**

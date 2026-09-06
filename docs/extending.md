@@ -290,4 +290,4 @@ deliberately not built here. See the RFC §7 for the honest trade.
 - [Plugin / extensibility RFC](research/kb-plugins-extensibility-rfc.html) — the full design rationale, seam map, and phased roadmap.
 - [`configuration.md`](configuration.md) — `[webhooks]` and every other key.
 - [`authoring-artifacts.md`](authoring-artifacts.md) — the `<meta name="kb-*">` vocabulary.
-- [README § HTTP API](../README.md) — `/api/events` and the event-type registry.
+- [`http-api.md`](http-api.md) — `/api/events` and the event-type registry.

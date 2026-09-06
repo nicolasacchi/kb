@@ -284,8 +284,11 @@ honestly rather than pretending push parity that doesn't exist yet.
 - [`architecture-invariants.md` §6](architecture-invariants.md) — the
   SLATE amendment: the sidecar-ledger family, the per-slate lock, and
   why this is an amendment to #6 rather than a new invariant slot.
-- [README.md → `## kb slate`](../README.md) — the CLI verb fence, exit
-  codes, and the Non-goals plaques this design ruled on.
+- [`cli.md`](cli.md) — the `kb slate` CLI verb fence and exit codes.
+- [`http-api.md`](http-api.md) — the `/api/slates/*` route shapes (incl.
+  the loopback-only `DELETE …?purge=true`).
+- [README.md → Non-goals](../README.md#non-goals) — the plaques this
+  design ruled on.
 - [`docs/research/kb-slate-design-2026-09.html`](research/kb-slate-design-2026-09.html) —
   the full design: entities, the rules matrix, storage, security
   posture, wire shapes, the board, the recall-line track, and every

@@ -269,7 +269,7 @@ limiting apply unconditionally — list that bridge IP in
 ### Embedding model — picking and switching (D)
 
 The bake-off at
-[`docs/research/foundation/14-embedding-bakeoff-2026-05-19.html`](../docs/research/foundation/14-embedding-bakeoff-2026-05-19.html)
+[`docs/research/foundation/14-embedding-bakeoff-2026-05-19.html`](research/foundation/14-embedding-bakeoff-2026-05-19.html)
 benchmarks bge-small vs bge-base vs bge-large on kb's own design
 corpus. On technical-English prose, bge-large lifts hybrid Recall@1 by
 +15.6pp over bge-small; bge-base barely moves the needle. The Docker
@@ -309,7 +309,7 @@ for a dim change on an existing kb:
 
 ```bash
 # 1. Stop the daemon.
-systemctl --user stop kb        # or docker stop kb / kill <pid>
+systemctl stop kb-daemon        # or docker stop kb / kill <pid>
 
 # 2. Wipe the lance state for the kb whose model is being upgraded.
 #    Other kbs in the same daemon are untouched.
@@ -319,7 +319,7 @@ rm -rf /var/lib/kb/state/<daemon-name>/<kb-name>/lance/
 #    and re-embeds every doc — proportional to N_docs × bge-<size>
 #    throughput (~5.6 emb/s on i7-7700 Kaby Lake; faster on newer
 #    cores with AVX-VNNI).
-systemctl --user start kb
+systemctl start kb-daemon
 ```
 
 For **same-dim** model swaps (e.g. bge-base ↔ jina-v2-base-code, both

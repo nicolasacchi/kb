@@ -18,11 +18,11 @@ else comes from the daemon over HTTP + SSE.
 
 | Dir | What |
 |---|---|
-| `components/` | 24 presentational + container components (`*.tsx`). |
-| `hooks/` | 12 data/state hooks (`use*.ts`). |
+| `components/` | Presentational + container components (`*.tsx`) — the tables below cover the architecturally significant ones, not an exhaustive list; the directory has grown well past the original handful as features shipped. |
+| `hooks/` | Data/state hooks (`use*.ts`) — same caveat as `components/`. |
 | `api/` | daemon I/O: fetchers, types, the SSE manager, prefs, base URL. |
 | `lib/` | pure helpers: sort/group, derivations, artifact-host/href, time. |
-| `routes/` | 4 top-level views (gallery, detail, settings, stale-anchors). |
+| `routes/` | Top-level views (gallery, detail, settings, stale-anchors, and — added since this map was first written — slates/board, sessions, notes, lists, memory, search, inbox, replay, ambient). |
 | `scripts/` | `annotate.ts` — injected into artifact iframes, not imported by React. |
 
 ## Components (`web/src/components/`)
@@ -143,7 +143,7 @@ RFC-7807 `application/problem+json` into readable `Error`s;
 
 **`sse.ts`** — the `sse` singleton facade: per-tab listener registries +
 status aggregation. The CONNECTIONS live behind `../sse/transport.ts`
-(invariant #24): a SharedWorker (`workers/sse.worker.ts`) hosting the
+(invariant #24): a SharedWorker (`../workers/sse.worker.ts`) hosting the
 context-agnostic core (`../sse/core.ts`) holds ONE unfiltered
 `/api/events` stream per daemon for ALL same-origin tabs — or the same
 core runs inline in this tab (direct fallback; force with `?sse=direct`
@@ -181,7 +181,7 @@ core; the worker advances cursors, tabs mirror `kb:lid:<url>`.
 | `/` | `Gallery` (`gallery.tsx`) | Four views (grid/list/atlas/history); filters/sort/group; virtualized; `useDocs` + `useReadingProgress`. |
 | `/a/:kb/*` | `Detail` (`detail.tsx`) | Splat = source-relative path → `fetchDocByPath`. Iframes the artifact at `<id>.artifacts.<suffix>`; `AnnotatorBridge` + `useReview` + scroll postMessage. |
 | `/settings` | `Settings` (`settings.tsx`) | Theme/accent/density + `DaemonsManager`. |
-| `/stale-anchors` | `StaleAnchorsRoute` (`stale-anchors.tsx`) | `useStaleAnchors`, grouped by (kb, artifact). |
+| `/stale-anchors` | `AnchorsRoute` (`anchors.tsx`) | `useStaleAnchors`, grouped by (kb, artifact). |
 | `/slates` | `SlatesRoute` (`slates.tsx`) | `useSlates`, ranked by `attentionCount`, closed last. |
 | `/slates/:slug` | `SlateBoardRoute` (`slateBoard.tsx`) | NOW band + five `role="region"` columns + swimlanes; `?topic=`/`?history=1` are the only state (URL, never a second home). Owns its OWN window keydown listener for `j/k/Enter/m/x/e/p/c/t/h` — registered `scope: "slates"` (doc-only) in `lib/keymap.ts`, NOT dispatched by `HotkeyRoot`, because a global `j`/`k`/`m`/`p` would also fire `useRovingCursor` and the marks handler. `g b` (global) opens `/slates`. |
 

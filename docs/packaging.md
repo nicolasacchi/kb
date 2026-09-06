@@ -1,9 +1,11 @@
 # Packaging + distribution
 
-How kb is built into shippable artifacts, and the plan for prebuilt
-multi-arch releases. **Docker is ready today**; the cargo-dist
-path is a ready-to-apply template gated on two project
-decisions (called out under [Blockers](#blockers-decide-before-cutting-a-release)).
+How kb is built into shippable artifacts: the Docker images, the
+per-target release tarballs, and the `curl | sh` installer. All three
+channels are built and wired into CI (`.github/workflows/release.yml`,
+triggered on a `v*` tag push) — see
+[packaging/README.md](../packaging/README.md) for the full asset list and
+the release checklist.
 
 ## The two-binary distribution rule
 
@@ -23,7 +25,7 @@ They must also be built in **separate cargo invocations** — a single
 `cargo build` over both feature-unifies `kb-core`'s `local-embedder`
 feature and pulls ONNX Runtime into `kb` too (architecture invariant §26).
 
-## Docker (ready)
+## Docker
 
 The [`Dockerfile`](../Dockerfile) is the canonical reproducible build:
 
@@ -55,57 +57,49 @@ explicit `--target`. A `v*` tag publishes both as
 `kb-<ver>-<triple>.tar.gz` and `kb-code-<ver>-<triple>.tar.gz` archives — the
 full asset list is in [`packaging/README.md`](../packaging/README.md).
 
-## Prebuilt releases via cargo-dist (template — see blockers)
+## Prebuilt releases — hand-rolled, not cargo-dist
 
-[cargo-dist](https://opensource.axo.dev/cargo-dist/) (the `dist` tool) can
-build per-platform archives + a `curl | sh` installer
-from a tagged release. The intended config (`dist-workspace.toml` at the
-repo root):
+A `v*` tag push runs [`.github/workflows/release.yml`](../.github/workflows/release.yml),
+which builds and publishes **both halves** from one workflow:
 
-```toml
-[workspace]
-members = ["cargo:."]
+| Half | Release assets (per target) | Image |
+|---|---|---|
+| **kb** | `kb-<ver>-<triple>.tar.gz` + `.sha256` — `kb`, `kb-embedder`, `INSTALL` | `ghcr.io/nicolasacchi/kb:<ver>` + `:latest` |
+| **kb-code** | `kb-code-<ver>-<triple>.tar.gz` + `.sha256` — `kb-code-server`, `kb-code`, `kb-lip`, `INSTALL` | `ghcr.io/nicolasacchi/kb-code:<ver>` + `:latest` |
 
-[dist]
-cargo-dist-version = "0.28.0"
-ci = ["github"]
-# Linux is -gnu, NOT -musl: kb-embedder statically links a prebuilt ONNX
-# Runtime that needs GLIBC_2.38, which musl can't satisfy.
-targets = [
-  "x86_64-unknown-linux-gnu",
-  "aarch64-unknown-linux-gnu",
-]
-installers = ["shell"]
-# LOAD-BEARING (invariant §26): build each package on its own cargo
-# invocation so the workspace build never unions `local-embedder` into
-# `kb`. Without it, `kb` would link ONNX Runtime.
-precise-builds = true
-```
+`<triple>` is `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` —
+the aarch64 leg runs on a **native** `ubuntu-24.04-arm` GitHub-hosted
+runner, not a cross-compile, which sidesteps the usual cross-linking risk
+for `kb-embedder`'s statically-bundled ONNX Runtime. Neither tarball
+bundles its SPA (both daemons resolve `KB_SPA_DIST`/`KB_CODE_SPA_DIST`
+from disk at boot); the container images bake both SPAs in — that's the
+difference between the two channels. Versioning stays git-tag-derived
+(the workspace pins `version = "0.0.0"`; `VERSION="${GITHUB_REF_NAME#v}"`
+in the workflow, matching the `KB_GIT_DESCRIBE` build stamp — see
+`routes/identity.rs`), so there is no crate-version bump to keep in sync
+per release.
 
-Both `kb-cli` and `kb-embedder` are distable, so each platform archive
-packs **both** binaries side-by-side (satisfying the discovery rule above).
-Apply with `dist init` (scaffolds + generates `.github/workflows/release.yml`,
-which is owned by `dist generate` — never hand-edit it).
+[cargo-dist](https://opensource.axo.dev/cargo-dist/) was evaluated and
+**rejected** in favor of this hand-rolled workflow, for two reasons
+(full rationale in `release.yml`'s header comment):
 
-### Blockers (decide before cutting a release)
+1. **The two-binary split.** `kb-embedder` must be built in a *separate*
+   `cargo build` invocation from `kb` (invariant §26) or a single build
+   unifies `kb-core`'s `local-embedder` feature and links ONNX Runtime
+   into `kb` too. cargo-dist models a workspace and builds its members
+   together — steering it away from that is exactly the shape it makes
+   awkward.
+2. **SHA-pinned actions.** `ci.yml` pins every third-party action to a
+   40-char commit SHA; cargo-dist generates and owns its own release
+   workflow with tag/floating action refs, which would drift on every
+   `dist` upgrade. The hand-rolled file mirrors `ci.yml`'s pins and
+   otherwise uses the preinstalled `gh`/`docker` CLIs, so there are no
+   extra actions to pin at all.
 
-1. **Version scheme.** The workspace pins `version = "0.0.0"` *deliberately*
-   and versions via git tags (the `KB_GIT_DESCRIBE` build stamp is the real
-   version; see `routes/identity.rs`). cargo-dist instead derives the release
-   version from the **crate version** and matches it to the tag, so it needs a
-   real semver (`0.19.0`) in `[workspace.package]`. Adopting cargo-dist means
-   **either** bumping the crate version per release (abandoning 0.0.0-forever)
-   **or** configuring dist to take the version from the tag. This is a project
-   decision, not made here.
-2. **Tag format.** Existing tags are bare (`v0.13`, `v0.18`); dist's default
-   wants full semver (`v0.19.0`). Pick one going forward.
-3. **aarch64-linux ONNX.** The static ONNX Runtime link on a cross-compiled
-   `aarch64-unknown-linux-gnu` target is the riskiest matrix entry — validate
-   it on an arm runner first, and be ready to drop to native-arm-only if the
-   cross link fails.
-4. **Build deps in CI.** dist's build job needs `protoc` (lancedb) and, on
-   Linux, `libssl-dev` — wire them via `[dist.dependencies]` when running
-   `dist init`.
+See [packaging/README.md](../packaging/README.md) for the full asset
+list, the release checklist, and the outstanding
+`TODO(verify-after-public)` markers the workflow carries until the first
+real tag exercises it end-to-end.
 
 ## From source
 

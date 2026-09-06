@@ -296,7 +296,7 @@ case the design set out to satisfy.
   in-memory registry + Tier-0 degraded view, and the posture rationale
   for why `/beat`/`/live-status` are `auth_bearer` while `/presence`/
   `/{id}/live` stay loopback-only.
-- [README.md → HTTP API](../README.md) — `POST /api/sessions/beat`,
+- [`http-api.md`](http-api.md) — `POST /api/sessions/beat`,
   `GET /api/sessions/live-status`.
 - [`docs/research/kb-live-sessions-cockpit-2026-08.html`](research/kb-live-sessions-cockpit-2026-08.html) —
   the design round: harness-by-harness evidence, the wire contract, and

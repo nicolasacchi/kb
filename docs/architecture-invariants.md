@@ -11,7 +11,7 @@ atlas determinism, embedding dim per-kb, enrichment-hook registry) are NOT
 repeated here — they live in
 [`../crates/kb-core/CLAUDE.md`](../crates/kb-core/CLAUDE.md). Surface specifics
 (authoring, comments, config, deploy, web) live in the rest of `docs/`; the
-HTTP API canon lives in [`../README.md`](../README.md).
+HTTP API canon lives in [`http-api.md`](http-api.md).
 
 ## Architecture invariants
 
@@ -2590,7 +2590,7 @@ together, with goldens.
 | Slate hook wiring (session-start hybrid block, per-prompt delta, protocol paragraph) | `plugins/kb-memory/hooks/{kb-wake.sh,kb-wake-kimi.sh,kb-recall.sh,kb-omp.ts,memory-protocol.txt,CLAUDE.memory.md}` + `plugins/kb-memory/hooks/tests/test-*-slate.sh` |
 | Slate tidy/distill skills | `plugins/kb-memory/skills/{kb-slate-tidy,kb-slate-distill}/SKILL.md` |
 | Slate operator doc | `docs/slate.md` |
-| Slate dispatcher bridge (digest-in / take-on-spawn / harvest-out, all five job-exit paths) | `~/project/grokclaude` (`src/engine.rs`: `with_kb_slate_digest`, `post_kb_slate_take`, `trigger_kb_slate`/`trigger_kb_slate_abandoned`; `src/lib.rs`'s `reap`) + `plugins/kb-memory/hooks/kb-slate-harvest.sh` (kb-side adapter) + `plugins/kb-memory/hooks/tests/test-slate-harvest.sh` |
+| Slate dispatcher bridge (digest-in / take-on-spawn / harvest-out, all five job-exit paths) | an external, separately-repo'd dispatcher tool (`with_kb_slate_digest`, `post_kb_slate_take`, `trigger_kb_slate`/`trigger_kb_slate_abandoned`, `reap` — outside this repo, not shipped here) + `plugins/kb-memory/hooks/kb-slate-harvest.sh` (kb-side adapter) + `plugins/kb-memory/hooks/tests/test-slate-harvest.sh` |
 
 ## Common pitfalls
 
@@ -2606,8 +2606,9 @@ together, with goldens.
   reader for an entire burst (observed: `/api/identity` >90 s while single
   sink messages were ~11 s). Full narrative: `store.rs` module doc; the
   regression pin is `kb-code-server/tests/starvation.rs`. Trigger to
-  remember: `~/project/kb` is bind-mounted into prod kb-code, so an agent
-  session editing this repo IS a live reconcile burst on kbc.example.com.
+  remember: if this repo's checkout is bind-mounted into a running kb-code
+  instance (e.g. a prod deployment indexing its own source), an agent
+  session editing it IS a live reconcile burst against that daemon.
 - **Raw-string `#` collisions in HTML test fixtures**: `r#"..."#` ends at the
   first `"#` — embedded `<a href="#section">` aborts the string. Use `r##"..."##`
   for HTML fixtures with `#` in attributes.
