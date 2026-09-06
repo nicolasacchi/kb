@@ -1498,3 +1498,359 @@ span.kbc-diff__impact-chip {
 .kbc-timeline__glyph--github {
   color: var(--ink-mute);
 }
+
+/* ── V73-K2a — review diff v2 ──────────────────────────────────────────────
+ *
+ * Four surfaces: the file MAP column, the per-hunk STRIP, the toolbar
+ * DIALS and the DRAFTS tray. kbc-theme/1's Lane Budget is respected
+ * throughout — the diff lane keeps its background tint plus its permanent
+ * sign column, and nothing here paints a diff row a new colour. A noise
+ * chip is text on the ordinary chip surface with a LEFT RULE for its class
+ * (a line style, the budget's own channel for a classification), never a
+ * hue that would compete with add/del.
+ */
+
+/* --- the map column --------------------------------------------------- */
+.kbc-rdiff__body--mapped {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+}
+.kbc-rdiff__stream {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kbc-rmap {
+  flex: 0 0 clamp(200px, 22vw, 320px);
+  position: sticky;
+  top: var(--topbar-h);
+  max-height: calc(100vh - var(--topbar-h));
+  overflow: auto;
+  padding: var(--pad-2);
+  border-right: 1px solid var(--rule);
+  background: var(--bg-panel);
+  font-size: var(--fs-sm);
+}
+.kbc-rmap__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding-bottom: var(--pad-2);
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-rmap__title {
+  font-weight: 600;
+}
+.kbc-rmap__census {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+}
+.kbc-rmap__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  color: var(--fg-dim);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.kbc-rmap__note {
+  margin: var(--pad-2) 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.kbc-rmap__chapter {
+  margin-top: var(--pad-2);
+}
+.kbc-rmap__chapter-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  margin: 0 0 4px;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: none;
+}
+.kbc-rmap__chapter-n {
+  margin-left: auto;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+.kbc-rmap__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kbc-rmap__row {
+  display: block;
+  width: 100%;
+  padding: 3px 6px;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-1, 4px);
+  cursor: pointer;
+}
+.kbc-rmap__row:hover {
+  background: var(--bg-hover, var(--bg-panel-2));
+}
+.kbc-rmap__row.is-current {
+  border-left-color: var(--accent);
+  background: var(--bg-panel-2);
+}
+.kbc-rmap__path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.kbc-rmap__stats,
+.kbc-rmap__chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+}
+.kbc-rmap__chip {
+  padding: 0 4px;
+  color: var(--fg-dim);
+  background: var(--bg-panel-2);
+  border-radius: var(--radius-1, 4px);
+}
+.kbc-rmap__chip--viewed {
+  color: var(--fg);
+}
+.kbc-rmap__chip--stale {
+  border-left: 2px dashed var(--fg-dim);
+}
+.kbc-rmap__chip--draft {
+  border-left: 2px dotted var(--accent);
+}
+
+/* --- the per-hunk strip ------------------------------------------------ */
+.kbc-hunkstrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  color: var(--accent-soft);
+  background: var(--bg-panel-2);
+  border-left: 2px solid transparent;
+  font-size: var(--fs-xs);
+}
+.kbc-hunkstrip--current {
+  border-left-color: var(--accent);
+}
+.kbc-hunkstrip--viewed .kbc-hunkstrip__header {
+  opacity: 0.6;
+}
+.kbc-hunkstrip__header {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.kbc-hunkstrip__spacer {
+  flex: 1 1 auto;
+}
+.kbc-hunkstrip__fold,
+.kbc-hunkstrip__expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 4px;
+  color: var(--fg-dim);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-1, 4px);
+  cursor: pointer;
+}
+.kbc-hunkstrip__expand:hover,
+.kbc-hunkstrip__fold:hover {
+  border-color: var(--rule);
+}
+.kbc-hunkstrip__chip {
+  padding: 0 4px;
+  color: var(--fg-dim);
+  background: var(--bg-panel);
+  border-radius: var(--radius-1, 4px);
+}
+/* A noise class reads as a LINE STYLE (the Lane Budget's channel for a
+ * classification), never as its own hue — the diff lane owns colour here. */
+.kbc-hunkstrip__chip--noise {
+  border-left: 2px solid var(--fg-dim);
+}
+.kbc-noise--generated {
+  border-left-style: solid;
+}
+.kbc-noise--whitespace-only {
+  border-left-style: dotted;
+}
+.kbc-noise--moved {
+  border-left-style: dashed;
+}
+.kbc-noise--rename-only {
+  border-left-style: double;
+}
+.kbc-noise--large {
+  border-left-style: groove;
+}
+.kbc-hunkstrip__chip--draft {
+  color: var(--fg);
+  border-left: 2px dotted var(--accent);
+}
+.kbc-hunkstrip__why {
+  color: var(--fg-dim);
+  font-style: italic;
+}
+.kbc-diff__hunk--collapsed {
+  opacity: 0.85;
+}
+.kbc-rdiff__ctx-note {
+  margin: 0;
+  padding: 2px 10px;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+}
+
+/* --- the toolbar dials -------------------------------------------------- */
+.kbc-rdiff__dials,
+.kbc-rdiff__psw {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.kbc-rdiff__psw-arrow {
+  color: var(--fg-dim);
+}
+.kbc-rdiff__ps-note,
+.kbc-rdiff__noise-census {
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+}
+
+/* --- the drafts tray ---------------------------------------------------- */
+.kbc-drafts {
+  position: fixed;
+  right: var(--pad-3);
+  bottom: var(--pad-3);
+  z-index: var(--z-drawer);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  width: min(420px, calc(100vw - 2 * var(--pad-3)));
+  max-height: min(60vh, 620px);
+  padding: var(--pad-3);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-2, 8px);
+  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 35%));
+}
+.kbc-drafts__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.kbc-drafts__title {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+.kbc-drafts__close,
+.kbc-drafts__drop {
+  display: inline-flex;
+  padding: 2px;
+  color: var(--fg-dim);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.kbc-drafts__list {
+  flex: 1 1 auto;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kbc-drafts__item {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 4px;
+  align-items: baseline;
+  padding: var(--pad-2) 0;
+  border-bottom: 1px dotted var(--rule);
+}
+.kbc-drafts__where {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: var(--fs-xs);
+}
+.kbc-drafts__path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.kbc-drafts__loc {
+  color: var(--fg-dim);
+}
+.kbc-drafts__intent {
+  padding: 0 4px;
+  color: var(--fg-dim);
+  background: var(--bg-panel-2);
+  border-left: 2px dotted var(--accent);
+  border-radius: var(--radius-1, 4px);
+  font-size: var(--fs-xs);
+}
+.kbc-drafts__intent--question {
+  border-left-style: dashed;
+}
+.kbc-drafts__body {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+}
+.kbc-drafts__empty,
+.kbc-drafts__note {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.kbc-drafts__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+  border-top: 1px solid var(--rule);
+  padding-top: var(--pad-2);
+}
+
+@media (max-width: 860px) {
+  /* Mobile keeps ONE entry point for the file list — the existing "Files"
+   * drawer (root CLAUDE.md #30). The map column is not rendered there at
+   * all; this rule is the belt to that braces. */
+  .kbc-rmap {
+    display: none;
+  }
+  .kbc-drafts {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    border-radius: var(--radius-2, 8px) var(--radius-2, 8px) 0 0;
+  }
+}

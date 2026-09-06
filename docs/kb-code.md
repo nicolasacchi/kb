@@ -402,6 +402,127 @@ legitimately has more than one. See
 [`providers/README.md`](../providers/README.md) for install/enable steps and
 live-smoke evidence per language.
 
+## Review diff v2 (v7.3, Track K)
+
+The full-page review reader (`/r/{repo}/~reviews/{id}/diff[/<path>]`) is
+where a patchset is actually read. v7.3's diff v2 (design §D9) turns it
+from a scrolling list of unified diffs into a navigable instrument. Every
+control writes the URL and reads nothing else, so a reload — or a link you
+paste to someone else — reproduces the view exactly.
+
+**URL grammar** (all additive; each omitted at its default):
+
+| param | values | meaning |
+| --- | --- | --- |
+| `ps` | `N` · `A..B` | one patchset, or the INTERDIFF between two. Absent = latest. |
+| `ctx` | `10` · `full` | the context dial. Absent = git's own `-U3`. |
+| `noise` | `collapsed` | collapse noise-labelled hunks. Absent = `shown`. |
+| `map` | `0` | hide the file-map column. Absent = shown. |
+| `file` | a path | the map cursor / all-files scroll hint. |
+| `hunk` | a hunk id | the hunk cursor, content-addressed (below). |
+
+**The file map column.** The review's files as a left column, grouped into
+chapters. The chapters are DERIVED from `GET /reviews/{id}/reading-order`'s
+own per-stop `reason` strings by grouping CONSECUTIVE stops that share one
+— the wire carries no authored chapters (those are a Track-K SHOULD), and
+the column says "chapters derived from the reading order's own reasons" on
+screen rather than implying otherwise. Grouping is consecutive, never a
+global re-bucket, because the reading order is a topological walk and
+re-bucketing would reorder the one thing it asserts. A file the reading
+order does not mention lands in a named trailing group rather than being
+dropped. Each row carries per-file chips (viewed · open comments ·
+findings · unpublished drafts · noise class), every count taken verbatim
+from the wire. The column shares the `]f`/`[f` cursor and is hidden on
+mobile, where the existing "Files" drawer stays the single entry point.
+
+**Per-hunk state, content-addressed (`kbc-hunkid/1`).** Each hunk shows a
+strip: its `@@` header, `+N −M`, a threads chip, a drafts chip, its noise
+chips, a fold and a viewed checkbox. Viewed is SERVER state — new table
+`review_hunk_viewed` (migration V0031) behind
+`PUT /api/reviews/{id}/hunk-viewed` `{hunk_id, path}` and
+`DELETE /api/reviews/{id}/hunk-viewed/{hunk_id}`, both **loopback-only**,
+the same unconditional gate the per-file `PUT .../viewed` rides (this is
+the review-mutation family `[review] remote_mutations` explicitly never
+reaches). The marks ride back on `GET /reviews/{id}/files` as an ADDITIVE
+`hunks_viewed: [{hunk_id, path}]` array — absent from an older daemon,
+which every reader treats as "no marks", never as an error.
+
+`hunk_id` is minted by the SPA (`web-code/src/lib/diffHunks.ts`) as a
+64-bit FNV-1a over the file path plus the hunk's own `+`/`-` lines,
+deliberately EXCLUDING line numbers and context rows — so a rebase that
+renumbers the file around a change does not rename it, which is the
+"content-addressed per-hunk reviewed state that survives rebases" §D9
+asks for. The daemon stores the id opaquely and does not parse diffs; the
+addressing scheme can therefore version (a `kbc-hunkid/2`) with no
+migration, and an id minted under an older scheme simply stops matching —
+a viewed hunk reads UNVIEWED, never the reverse.
+
+**The patchset switcher.** A base→head pair in the diff header. Head picks
+`GET /reviews/{id}/files?ps=N`; choosing a base patchset switches to
+`GET /reviews/{id}/interdiff?from=&to=` and writes `?ps=A..B`. The
+interdiff wire's file rows carry no viewed or annotation fields, so in
+range mode those columns are ABSENT under a caption saying why — never
+rendered as zero. Before this unit the full-page diff read `?ps=` and
+nothing ever wrote it, so it was permanently pinned to `latest`.
+
+**Expand / collapse and the context dial.** `z c`/`z o`/`z a` fold one
+hunk; the dial (`?ctx=3|10|full`) applies to every hunk on the page, and
+"↑ 10"/"↓ 10" widen one hunk further. Widened rows are REAL file content:
+`GET /api/diff` is hardcoded to `-U3` (no context param, and this unit did
+not add one), so the extra rows are spliced from
+`GET /api/file?repo=&path=&ref=<patchset tip>`. If that file is
+unavailable the hunk stays at its wire width under a caption — kb-code
+never invents a line of code it did not read.
+
+**Noise classification — a label, never a filter.** Five classes, each
+with its rule stated verbatim in the chip's tooltip:
+
+| class | rule |
+| --- | --- |
+| `generated` | the path matches a generated-output pattern (lockfile, `*.gen.*`/`*.generated.*`, schema dump, minified bundle, test snapshot) |
+| `rename-only` | the file's status is a rename and the patch adds and removes zero lines |
+| `whitespace-only` | removing every space and tab makes the hunk's added text identical to its removed text |
+| `moved` | this hunk's removed block is byte-identical to an added block in another file already loaded on this page |
+| `large` | the hunk changes more than 120 lines (a file is large past 800 changed lines) |
+
+Classification is pure, client-side and golden-pinned
+(`web-code/src/lib/diffNoise.ts`). Nothing is ever removed from the page:
+`?noise=collapsed` COLLAPSES a labelled hunk, which stays counted in the
+header census and is one click from open. Two deliberate limits are stated
+rather than hidden — hand-authored `migrations/` are not `generated` (only
+schema DUMPS like `db/schema.rb` are; a migration is the change, not a
+rendering of it), and `moved` only searches the file diffs the page has
+loaded, so a label always names its counterpart file while its absence
+claims nothing.
+
+**Drafts and atomic publish.** Comments and questions composed in the diff
+are DRAFTS: badged as such, listed in a tray, kept in the browser's
+`sessionStorage` per `(repo, review)` — they survive a reload and are
+discarded with the tab, which the tray says out loud. There is no
+`review_drafts` table and no `kb-code review draft` verb; an unpublished
+draft is not yet a fact about the review. `Publish` sends the whole tray as
+ONE `POST /api/annotations/batch` — one store transaction, at most one
+`annotation.changed` SSE — and the tray is cleared only after the server
+accepts, so a refused batch leaves nothing half-written. `Discard` goes
+through the app's shared confirm host.
+
+FINDINGS are deliberately **not** drafted, and the reason is a gate:
+`/api/annotations/batch` is an ordinary bearer route, while creating a
+finding (`POST /reviews/{id}/findings`) rides
+`review_gate::review_mutations_gate` (`[review] remote_mutations`, default
+OFF). Adding an `add_finding` op to the batch would graduate finding
+creation off that gate as a side effect of a UI change. The composer's
+finding tab therefore still posts immediately through its own route;
+folding findings into the atomic publish needs a gated batch op and is
+recorded here as open work.
+
+**Keys** (all `scope: diff`): `Space h` hunk viewed · `z c`/`z o`/`z a`
+fold/unfold/toggle · `Space c` context dial · `Space n` noise collapse ·
+`Space m` map column · `] p`/`[ p` patchset step · `Space w` drafts tray ·
+`Space W` publish · `Space X` discard. `Space h` rather than bare `v`
+because `v` is the reader's visual mode and the two scopes are coactive —
+the same ruling that moved the per-file `diff.toggle-viewed` to `Space v`.
+
 ## The Continuum — ground truth + the Desk
 
 kb-code v7.0 (tag `kb-code-v7.0`, design of record

@@ -4,6 +4,7 @@ import {
   createReview,
   deleteReview,
   deleteReviewViewed,
+  deleteReviewHunkViewed,
   // ── PRR-U2 ──
   deleteFindingDisposition,
   fetchPrChecks,
@@ -21,6 +22,7 @@ import {
   putFindingDisposition,
   putReviewVerdict,
   putReviewViewed,
+  putReviewHunkViewed,
   snapshotReview,
   type CreateReviewInput,
   type FetchReviewFindingsParams,
@@ -222,6 +224,27 @@ export function useDeleteReviewViewed(repo: string, id: number) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => deleteReviewViewed(id, path),
+    onSuccess: () => invalidateReviewSurface(qc, repo),
+  });
+}
+
+/// V73-K2a — the per-HUNK twins. Same `invalidateReviewSurface` prefix
+/// invalidation as the per-file pair above, because `hunks_viewed` rides
+/// the very same `GET .../files` response the file rows come from — one
+/// refetch, one source of truth, no second cache to drift.
+export function usePutReviewHunkViewed(repo: string, id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hunkId, path }: { hunkId: string; path: string }) =>
+      putReviewHunkViewed(id, hunkId, path),
+    onSuccess: () => invalidateReviewSurface(qc, repo),
+  });
+}
+
+export function useDeleteReviewHunkViewed(repo: string, id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (hunkId: string) => deleteReviewHunkViewed(id, hunkId),
     onSuccess: () => invalidateReviewSurface(qc, repo),
   });
 }

@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { GithubThread } from "../../api/types";
 import type { DiffLine, ParsedDiff } from "../../lib/diff";
 import type { DiagnosticGutterMark } from "../../lib/diagnostics";
 import { paintLine, spansForLine, type DiffHighlights, type LineSpan } from "../../lib/diffHighlight";
 import { severityRank, threadVisibleInOverlay } from "../../lib/diffFindings";
-import { buildSplitRows } from "../../lib/diffRows";
+import { buildSplitPairs, buildSplitRows, type SplitRow } from "../../lib/diffRows";
 import {
   orphansAt,
   threadLineKey,
@@ -12,6 +12,7 @@ import {
   type DiffCommentsApi,
   type DiffSide,
 } from "../../lib/reviewComments";
+import HunkStrip, { type HunkView } from "./HunkStrip";
 import DiffLineComposerV2 from "./DiffLineComposerV2";
 import DiffThread from "./DiffThread";
 import GithubDiffCard from "../reviews/GithubDiffCard";
@@ -86,6 +87,14 @@ export interface SplitHunksProps {
   /// rendered. Mirrors `UnifiedHunks.tsx`'s own props + rendering exactly.
   githubByLine?: Map<string, GithubThread[]> | null;
   githubOrphans?: GithubThread[];
+  /// V73-K2a — see `UnifiedHunks`'s twin: one entry per `parsed.hunks`
+  /// entry, index-aligned; absent on the non-review diff surfaces, which
+  /// then render exactly as they did before diff v2.
+  hunkViews?: readonly HunkView[] | null;
+  onHunkFold?: (hunkIdx: number) => void;
+  onHunkViewed?: (hunkIdx: number) => void;
+  onHunkExpand?: (hunkIdx: number, dir: "up" | "down") => void;
+  currentHunk?: number | null;
 }
 
 /// Context lines: paint the NEW side on both cells (text is identical;
@@ -152,8 +161,42 @@ export default function SplitHunks({
   diagnosticsByLine,
   githubByLine,
   githubOrphans,
+  hunkViews,
+  onHunkFold,
+  onHunkViewed,
+  onHunkExpand,
+  currentHunk,
 }: SplitHunksProps) {
-  const rows = buildSplitRows(parsed);
+  // V73-K2a — with hunk views in hand the row stream is rebuilt PER HUNK
+  // (each hunk owns a strip, a fold and its own context-expanded lines),
+  // through the very same `buildSplitPairs` `buildSplitRows` delegates to
+  // — one pairing implementation, two entry points. `rowHunk[i]` is the
+  // hunk index row `i` belongs to, so the header row can render its own
+  // strip without `SplitRow` growing a field the pre-v2 golden pins.
+  const { rows, rowHunk } = useMemo((): { rows: SplitRow[]; rowHunk: number[] } => {
+    if (!hunkViews) {
+      const flat = buildSplitRows(parsed);
+      let hi = -1;
+      const idx = flat.map((r) => {
+        if (r.kind === "hunk") hi += 1;
+        return hi;
+      });
+      return { rows: flat, rowHunk: idx };
+    }
+    const out: SplitRow[] = [];
+    const idx: number[] = [];
+    parsed.hunks.forEach((hunk, hi) => {
+      const view = hunkViews[hi];
+      out.push({ kind: "hunk", header: view?.header ?? hunk.header });
+      idx.push(hi);
+      if (view?.collapsed) return;
+      for (const row of buildSplitPairs(view ? view.lines : hunk.lines)) {
+        out.push(row);
+        idx.push(hi);
+      }
+    });
+    return { rows: out, rowHunk: idx };
+  }, [parsed, hunkViews]);
   const [compose, setCompose] = useState<ComposeAt | null>(null);
   const seenComposeToken = useRef<number | undefined>(undefined);
 
@@ -176,9 +219,22 @@ export default function SplitHunks({
     <div className="kbc-sdiff" data-kbc-sdiff>
       {rows.map((row, i) => {
         if (row.kind === "hunk") {
+          const hi = rowHunk[i] ?? 0;
+          const view = hunkViews?.[hi] ?? null;
           return (
             <div className="kbc-sdiff__hunk" data-kbc-sdiff-row="hunk" key={i}>
-              {row.header}
+              {view ? (
+                <HunkStrip
+                  view={view}
+                  current={currentHunk === hi}
+                  reviewMode={!!comments}
+                  onToggleFold={() => onHunkFold?.(hi)}
+                  onToggleViewed={() => onHunkViewed?.(hi)}
+                  onExpand={(dir) => onHunkExpand?.(hi, dir)}
+                />
+              ) : (
+                row.header
+              )}
             </div>
           );
         }

@@ -8,6 +8,7 @@ import { worstSeverity } from "../../lib/diffFindings";
 import type { DiffMode } from "../../lib/prefs";
 import type { DiffCommentsApi } from "../../lib/reviewComments";
 import DiffFileHeader from "./DiffFileHeader";
+import type { HunkView } from "./HunkStrip";
 import SplitHunks from "./SplitHunks";
 import UnifiedHunks from "./UnifiedHunks";
 
@@ -53,6 +54,15 @@ export interface DiffFileProps {
   /// exclusive lane" gating `diagnosticsByLine` already establishes.
   githubByLine?: Map<string, GithubThread[]> | null;
   githubOrphans?: GithubThread[];
+  /// V73-K2a — per-hunk state (`HunkStrip`'s own `HunkView` doc), forwarded
+  /// verbatim to whichever renderer is mounted. `DiffFile` computes none of
+  /// it: one derivation in `FileDiffBody`, two renderers — the same "one
+  /// projection, two renderers" rule kbc-tree/1 states.
+  hunkViews?: readonly HunkView[] | null;
+  onHunkFold?: (hunkIdx: number) => void;
+  onHunkViewed?: (hunkIdx: number) => void;
+  onHunkExpand?: (hunkIdx: number, dir: "up" | "down") => void;
+  currentHunk?: number | null;
 }
 
 /// Orchestrator every call site uses: header (path / stats / optional
@@ -78,6 +88,11 @@ export default function DiffFile({
   onImpactClick,
   githubByLine,
   githubOrphans,
+  hunkViews,
+  onHunkFold,
+  onHunkViewed,
+  onHunkExpand,
+  currentHunk,
 }: DiffFileProps) {
   const isMobile = useIsMobile();
   const effectiveMode: DiffMode = isMobile ? "unified" : mode;
@@ -165,6 +180,11 @@ export default function DiffFile({
           diagnosticsByLine={diagnosticsByLine}
           githubByLine={githubByLine}
           githubOrphans={githubOrphans}
+          hunkViews={hunkViews}
+          onHunkFold={onHunkFold}
+          onHunkViewed={onHunkViewed}
+          onHunkExpand={onHunkExpand}
+          currentHunk={currentHunk}
         />
       ) : (
         <UnifiedHunks
@@ -177,6 +197,11 @@ export default function DiffFile({
           comments={comments}
           githubByLine={githubByLine}
           githubOrphans={githubOrphans}
+          hunkViews={hunkViews}
+          onHunkFold={onHunkFold}
+          onHunkViewed={onHunkViewed}
+          onHunkExpand={onHunkExpand}
+          currentHunk={currentHunk}
         />
       )}
     </div>

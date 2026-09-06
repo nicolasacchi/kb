@@ -16,6 +16,12 @@ import {
   parsePane2,
   parseReviewPs,
   parseReviewTab,
+  parseDiffCtx,
+  parseDiffMap,
+  parseDiffPs,
+  formatDiffPs,
+  nextDiffCtx,
+  DIFF_CTX_DIAL,
   permalinkFor,
   prsUrl,
   rangeDiffUrl,
@@ -583,12 +589,131 @@ describe("reviewDiffHref", () => {
       ["kb", 7, "a.rs", { finding: "f-a b" }],
       "/r/kb/~reviews/7/diff/a.rs?finding=f-a%20b",
     ],
+    // --- V73-K2a — diff v2's six params, appended LAST ------------------
+    //
+    // Every row above is unchanged, which is the point: `opts` grew and no
+    // existing URL moved a byte.
+    ["ps= a single patchset", ["kb", 7, undefined, { ps: 3 }], "/r/kb/~reviews/7/diff?ps=3"],
+    [
+      "ps= an interdiff RANGE",
+      ["kb", 7, undefined, { ps: { from: 2, to: 5 } }],
+      "/r/kb/~reviews/7/diff?ps=2..5",
+    ],
+    ["ctx= 10", ["kb", 7, undefined, { ctx: 10 }], "/r/kb/~reviews/7/diff?ctx=10"],
+    ["ctx= full", ["kb", 7, undefined, { ctx: "full" }], "/r/kb/~reviews/7/diff?ctx=full"],
+    ["ctx 3 is omitted (the default)", ["kb", 7, undefined, { ctx: 3 }], "/r/kb/~reviews/7/diff"],
+    [
+      "noise= collapsed",
+      ["kb", 7, undefined, { noise: "collapsed" }],
+      "/r/kb/~reviews/7/diff?noise=collapsed",
+    ],
+    [
+      "noise 'shown' is omitted (the default)",
+      ["kb", 7, undefined, { noise: "shown" }],
+      "/r/kb/~reviews/7/diff",
+    ],
+    ["map=0 when hidden", ["kb", 7, undefined, { map: false }], "/r/kb/~reviews/7/diff?map=0"],
+    ["map true is omitted (the default)", ["kb", 7, undefined, { map: true }], "/r/kb/~reviews/7/diff"],
+    [
+      "file= is path-encoded as ONE query value",
+      ["kb", 7, undefined, { file: "a b/c.rs" }],
+      "/r/kb/~reviews/7/diff?file=a%20b%2Fc.rs",
+    ],
+    [
+      "hunk= carries the content address",
+      ["kb", 7, undefined, { hunk: "3ae1e11fec5881f1" }],
+      "/r/kb/~reviews/7/diff?hunk=3ae1e11fec5881f1",
+    ],
+    [
+      "param ORDER is fixed: finding, overlay, ps, ctx, noise, map, file, hunk",
+      [
+        "kb",
+        7,
+        "a.rs",
+        {
+          finding: "f-x",
+          overlay: "findings",
+          ps: { from: 1, to: 2 },
+          ctx: "full",
+          noise: "collapsed",
+          map: false,
+          file: "a.rs",
+          hunk: "deadbeefdeadbeef",
+        },
+      ],
+      "/r/kb/~reviews/7/diff/a.rs?finding=f-x&overlay=findings&ps=1..2&ctx=full&noise=collapsed&map=0&file=a.rs&hunk=deadbeefdeadbeef",
+    ],
   ];
   for (const [name, args, expected] of cases) {
     it(name, () => {
       expect(reviewDiffHref(...args)).toBe(expected);
     });
   }
+});
+
+// --- V73-K2a — the diff v2 param PARSERS ---------------------------------
+//
+// Every one is TOTAL: junk degrades to the documented default and never
+// throws, so a hand-edited or stale URL always renders a view.
+
+describe("parseDiffPs", () => {
+  it("parses a bare patchset number", () => {
+    expect(parseDiffPs("3")).toBe(3);
+  });
+
+  it("parses an interdiff range", () => {
+    expect(parseDiffPs("2..5")).toEqual({ from: 2, to: 5 });
+  });
+
+  const nulls = [null, "", "latest", "0", "-1", "1.5", "abc", "..", "3..", "..3", "a..b"];
+  for (const raw of nulls) {
+    it(`${JSON.stringify(raw)} → null (read as "latest")`, () => {
+      expect(parseDiffPs(raw)).toBeNull();
+    });
+  }
+
+  it("REFUSES an inverted or degenerate range rather than swapping it", () => {
+    // Guessing which end the operator meant is the quiet repair this
+    // codebase refuses; `null` means "latest", which is honest.
+    expect(parseDiffPs("5..2")).toBeNull();
+    expect(parseDiffPs("3..3")).toBeNull();
+  });
+
+  it("round-trips through formatDiffPs", () => {
+    expect(formatDiffPs(3)).toBe("3");
+    expect(formatDiffPs({ from: 2, to: 5 })).toBe("2..5");
+    expect(parseDiffPs(formatDiffPs({ from: 2, to: 5 }))).toEqual({ from: 2, to: 5 });
+  });
+});
+
+describe("parseDiffCtx", () => {
+  it("knows exactly three stops", () => {
+    expect(parseDiffCtx("3")).toBe(3);
+    expect(parseDiffCtx("10")).toBe(10);
+    expect(parseDiffCtx("full")).toBe("full");
+  });
+
+  it("defaults to 3 for anything else", () => {
+    for (const raw of [null, "", "0", "7", "whole", "FULL"]) {
+      expect(parseDiffCtx(raw)).toBe(3);
+    }
+  });
+
+  it("cycles 3 → 10 → full → 3", () => {
+    expect(DIFF_CTX_DIAL).toEqual([3, 10, "full"]);
+    expect(nextDiffCtx(3)).toBe(10);
+    expect(nextDiffCtx(10)).toBe("full");
+    expect(nextDiffCtx("full")).toBe(3);
+  });
+});
+
+describe("parseDiffMap", () => {
+  it("is shown unless the URL says 0", () => {
+    expect(parseDiffMap(null)).toBe(true);
+    expect(parseDiffMap("1")).toBe(true);
+    expect(parseDiffMap("")).toBe(true);
+    expect(parseDiffMap("0")).toBe(false);
+  });
 });
 
 describe("findingUrl", () => {

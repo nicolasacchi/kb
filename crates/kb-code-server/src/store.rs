@@ -4047,6 +4047,64 @@ impl Store {
         Ok(out)
     }
 
+    // --- V73-K2a — per-HUNK viewed state (`review_hunk_viewed`, V0031) ---
+    //
+    // Beside `review_viewed`, never instead of it: the file-level rows
+    // above answer "has this file been read at this blob", these answer
+    // "has this CHANGE been read". `hunk_id` is an opaque content address
+    // the SPA mints (`kbc-hunkid/1` — see the migration's own header for
+    // why the daemon does not mint it and what an unrecognised id degrades
+    // to).
+
+    pub fn upsert_hunk_viewed(
+        &self,
+        review_id: i64,
+        hunk_id: &str,
+        path: &str,
+        viewed_at: i64,
+    ) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO review_hunk_viewed (review_id, hunk_id, path, viewed_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(review_id, hunk_id) DO UPDATE SET
+                path = excluded.path,
+                viewed_at = excluded.viewed_at",
+            params![review_id, hunk_id, path, viewed_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_hunk_viewed(&self, review_id: i64, hunk_id: &str) -> Result<bool> {
+        let n = self.lock().execute(
+            "DELETE FROM review_hunk_viewed WHERE review_id = ?1 AND hunk_id = ?2",
+            params![review_id, hunk_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Every viewed-hunk row for a review, path-then-hunk ordered so the
+    /// wire array is deterministic (a set with a stable order is what lets
+    /// the SPA's own golden compare two responses).
+    pub fn list_hunk_viewed(&self, review_id: i64) -> Result<Vec<ReviewHunkViewedRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT review_id, hunk_id, path, viewed_at
+             FROM review_hunk_viewed WHERE review_id = ?1
+             ORDER BY path, hunk_id",
+        )?;
+        let rows = stmt
+            .query_map(params![review_id], |row| {
+                Ok(ReviewHunkViewedRow {
+                    review_id: row.get(0)?,
+                    hunk_id: row.get(1)?,
+                    path: row.get(2)?,
+                    viewed_at: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn get_viewed(&self, review_id: i64, path: &str) -> Result<Option<ReviewViewedRow>> {
         self.lock()
             .query_row(
@@ -6521,6 +6579,16 @@ pub struct ReviewViewedRow {
     pub review_id: i64,
     pub path: String,
     pub blob_sha: String,
+    pub viewed_at: i64,
+}
+
+/// One `review_hunk_viewed` row (V73-K2a / V0031). `hunk_id` is the
+/// SPA's own `kbc-hunkid/1` content address — opaque here by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewHunkViewedRow {
+    pub review_id: i64,
+    pub hunk_id: String,
+    pub path: String,
     pub viewed_at: i64,
 }
 
