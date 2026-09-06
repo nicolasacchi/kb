@@ -359,6 +359,11 @@ pub mod ingest;
 pub mod intel;
 pub mod join;
 pub mod keypath;
+/// V72-H4a — `aug-lane/1`: the augmentation-lane registry, its fact store,
+/// the loopback-only claim ingest and the per-request classing that turns
+/// a stored claim into a trust class. See the module doc for the three
+/// rules it exists to keep.
+pub mod lanes;
 pub mod lang;
 pub mod lenses;
 /// PRR-L2 — the lip/1 provider client + ladder overlay (design-lip.md +
@@ -605,6 +610,15 @@ pub async fn bind_and_spawn(
     // unnoticed in the first place), so it belongs off the boot path, in
     // bounded pages, exactly like the initial index walk below.
     spawn_stale_salt_sweep(store.clone(), paths.state.clone());
+
+    // V72-H4a — `aug-lane/1`'s retention sweep. Same V72-B0 shape as the
+    // salt sweep above and for the same reason: spawned, never awaited, so
+    // nothing whole-corpus sits between `Store::open` and the bind below;
+    // paged inside, so it never holds the store's one connection mutex for
+    // long. Unlike the salt sweep it is PERIODIC (retention is a moving
+    // window) and needs no marker — the cutoff is recomputed per page from
+    // the clock. A daemon with no ingested lane enabled starts no task.
+    lanes::gc::spawn_lane_retention_gc(store.clone(), config.lanes.clone());
 
     // W1.6 (a) — initial background index: a HEAD-tree walk per repo
     // (W1.5's `ingest::index_repo_working_tree`), spawned so it never delays
@@ -1029,6 +1043,7 @@ pub async fn bind_and_spawn(
         file_index: Arc::new(search::FileIndex::new()),
         symbol_index: symbol_index.clone(),
         search_factors: search_factors_config,
+        lanes: config.lanes.clone(),
         status_index: Arc::new(git_status::StatusIndex::new()),
         semantic: semantic_config,
         semantic_chunk_store,
@@ -1291,6 +1306,7 @@ pub(crate) async fn build_state_for_test(
         file_index: Arc::new(search::FileIndex::new()),
         symbol_index: Arc::new(search::SymbolIndex::new()),
         search_factors: config.search.factors(),
+        lanes: config.lanes.clone(),
         status_index: Arc::new(git_status::StatusIndex::new()),
         semantic: config.semantic,
         semantic_chunk_store: None,

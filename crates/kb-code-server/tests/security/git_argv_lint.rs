@@ -216,6 +216,24 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
         "file_history must separate its pathspec with `--`"
     );
 
+    // V72-H4a — `lanes/git_behavior.rs` takes a caller-supplied PATH
+    // (`?path=` off the facts route) into two `git log` invocations. It
+    // spawns nothing itself (every call goes through
+    // `history::run_git_raw`, which is why it is absent from
+    // GIT_SPAWNING_FILES), but the pathspec rule is about ARGV, not about
+    // who spawns — so it is asserted here beside the other two.
+    let gb = std::fs::read_to_string(src_root().join("lanes/git_behavior.rs")).unwrap();
+    let sep = gb
+        .find("\"--\",")
+        .expect("git_behavior separates its pathspec with `--`");
+    let path_arg = gb
+        .find("            path,")
+        .expect("git_behavior passes the caller-supplied path as an argv entry");
+    assert!(
+        sep < path_arg,
+        "git_behavior must push `--` BEFORE the pathspec"
+    );
+
     // `blame/timeline.rs` is the ONE documented non-case: it embeds the
     // path inside `-L <line>,<line>:<path>`, an option VALUE rather than a
     // pathspec position, so `--` neither applies nor helps. Recorded here
