@@ -113,6 +113,11 @@ tree-sitter-toml-ng = { workspace = true }
 tree-sitter-json = { workspace = true }
 # PRR-N3 — Rails lens ERB grammar (see the root Cargo.toml comment).
 tree-sitter-embedded-template = { workspace = true }
+# V72-H2a (D7) — CSS/SCSS/Markdown. See the root Cargo.toml comment for
+# version rationale + the tree-sitter-scss ABI note.
+tree-sitter-css = { workspace = true }
+tree-sitter-scss = { workspace = true }
+tree-sitter-md = { workspace = true }
 # PRR-N4 — Stimulus binding scan: a closed regex over ERB `content` (raw
 # HTML) nodes, per design-nav.md §2's own "no tree-sitter-html" ruling
 # (`frameworks::rails::stimulus`). Already resolved workspace-wide (root

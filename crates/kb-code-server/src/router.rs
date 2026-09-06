@@ -522,6 +522,11 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/tree", get(routes::tree))
         .route("/file", get(routes::file))
         .route("/symbols", get(routes::symbols))
+        // V72-H2a — `outline/1`, the universal per-file outline. An
+        // ordinary `auth_bearer` read beside `/symbols`, whose rows it is
+        // a VIEW of; `crate::outline::V72_H2A_ROUTES` declares it and a
+        // unit test walks that declaration against THIS file.
+        .route("/outline", get(crate::outline::outline_route))
         .route("/refs", get(routes::refs))
         // V70-A3X — `GET /api/status` (`git_status`'s module doc): working-
         // tree/index status, same ordinary `auth_bearer`-gated `api` router

@@ -325,6 +325,8 @@ pub mod checkout;
 // distinct from `lip::DiagnosticsOut`. See `code_actions`'s own module doc.
 pub mod code_actions;
 pub mod config;
+/// V72-H2a (D7) — the CSS/SCSS stylesheet outline.
+pub mod css;
 pub mod diff;
 pub mod doclens;
 // V71-G0 — `entities/1`: the entity index (Ruby class/module definition
@@ -356,6 +358,8 @@ pub mod impact_analysis;
 pub mod import_graph;
 pub mod imports;
 pub mod ingest;
+/// V72-H2a (D7) — the ONE host->guest injection layer.
+pub mod injection;
 pub mod intel;
 pub mod join;
 pub mod keypath;
@@ -370,9 +374,13 @@ pub mod lenses;
 /// design-addendum-2.md §D). See that module's doc.
 pub mod lip;
 pub mod locals;
+/// V72-H2a (D7) — the Markdown heading outline + fence regions.
+pub mod markdown;
 pub mod mirror;
 pub mod numstat;
 pub mod occurrences;
+/// V72-H2a (D7) — the universal `outline/1` contract.
+pub mod outline;
 pub mod provenance;
 pub mod rails;
 pub mod reading_sets;

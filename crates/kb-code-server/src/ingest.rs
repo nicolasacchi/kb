@@ -1005,6 +1005,10 @@ mod tests {
         assert_eq!(file.lang, TIER_LFS);
     }
 
+    /// V72-H2a moved `.md` INTO the registry (it is `markdown` now), so
+    /// this test's "an extension nothing claims" case had to move with it
+    /// — the property under test is the unregistered-type path, not that
+    /// any particular extension is unregistered.
     #[test]
     fn unsupported_extension_gets_a_files_row_and_no_symbols() {
         let (_tmp, store) = open_store();
@@ -1012,15 +1016,15 @@ mod tests {
         let outcome = index_file(
             &store,
             repo_id,
-            "README.md",
-            b"# hello\n",
-            "hashMd",
+            "NOTES.txt",
+            b"hello\n",
+            "hashTxt",
             true,
             false,
         )
         .unwrap();
         assert_eq!(outcome.tier, TIER_UNKNOWN);
-        let file = store.get_file(repo_id, "README.md").unwrap().unwrap();
+        let file = store.get_file(repo_id, "NOTES.txt").unwrap().unwrap();
         assert_eq!(file.lang, TIER_UNKNOWN);
     }
 

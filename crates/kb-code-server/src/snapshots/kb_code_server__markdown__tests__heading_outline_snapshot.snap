@@ -1,0 +1,46 @@
+---
+source: crates/kb-code-server/src/markdown.rs
+expression: rows(FIXTURE)
+---
+[
+    (
+        "Title",
+        Some(
+            "h1",
+        ),
+        1,
+        36,
+    ),
+    (
+        "Setup",
+        Some(
+            "h2",
+        ),
+        5,
+        17,
+    ),
+    (
+        "Details",
+        Some(
+            "h3",
+        ),
+        13,
+        17,
+    ),
+    (
+        "Usage",
+        Some(
+            "h2",
+        ),
+        17,
+        36,
+    ),
+    (
+        "Setext Heading",
+        Some(
+            "h1",
+        ),
+        32,
+        36,
+    ),
+]

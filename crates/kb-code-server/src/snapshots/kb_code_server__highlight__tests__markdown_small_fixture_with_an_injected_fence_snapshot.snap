@@ -1,0 +1,36 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: spans
+---
+[
+    Span {
+        byte_start: 0,
+        byte_len: 1,
+        class: Punctuation,
+    },
+    Span {
+        byte_start: 2,
+        byte_len: 5,
+        class: Other,
+    },
+    Span {
+        byte_start: 22,
+        byte_len: 3,
+        class: Punctuation,
+    },
+    Span {
+        byte_start: 30,
+        byte_len: 5,
+        class: Keyword,
+    },
+    Span {
+        byte_start: 36,
+        byte_len: 1,
+        class: Constant,
+    },
+    Span {
+        byte_start: 38,
+        byte_len: 3,
+        class: Keyword,
+    },
+]

@@ -25,8 +25,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -61,8 +61,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -97,8 +97,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -133,8 +133,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -169,8 +169,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -205,8 +205,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -241,8 +241,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -277,8 +277,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -313,8 +313,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -349,8 +349,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -385,8 +385,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -397,6 +397,114 @@
           "capability": "hover",
           "state": "partial",
           "reason": "word-scan resolve over key-path rows — no occurrences index to bind a position"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "css",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "partial",
+          "reason": "stylesheet outline rows (selectors, at-rules, mixins, functions, variables) — a style structure, not callable definitions"
+        },
+        {
+          "capability": "outline",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "partial",
+          "reason": "word-scan resolve over stylesheet outline rows — no occurrences index to bind a position"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "scss",
+      "tier": "highlight_only",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "no",
+          "reason": "tier highlight_only — symbol extraction is skipped by design, not missing"
+        },
+        {
+          "capability": "outline",
+          "state": "no",
+          "reason": "tier highlight_only — symbol extraction is skipped by design, not missing"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "no",
+          "reason": "no symbols and no occurrences — the resolve ladder has nothing to bind"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "markdown",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "partial",
+          "reason": "document outline rows (heading sections) — a reading structure, not code definitions"
+        },
+        {
+          "capability": "outline",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "partial",
+          "reason": "word-scan resolve over heading rows — no occurrences index to bind a position"
         },
         {
           "capability": "lens",
@@ -457,8 +565,8 @@
         },
         {
           "capability": "outline",
-          "state": "partial",
-          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+          "state": "yes",
+          "reason": null
         },
         {
           "capability": "usages",
@@ -550,6 +658,6 @@
       ]
     }
   ],
-  "total": 15,
+  "total": 18,
   "truncated": false
 }

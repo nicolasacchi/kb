@@ -1,0 +1,323 @@
+{
+  "schema": "syntax/1",
+  "rows": [
+    {
+      "lang": "rust",
+      "tier": "full",
+      "grammar": "tree-sitter-rust",
+      "scanner": null,
+      "salt": "rust@0.24.2+q3",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "rs"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "python",
+      "tier": "full",
+      "grammar": "tree-sitter-python",
+      "scanner": null,
+      "salt": "python@0.25.0+q3",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "py"
+      ],
+      "filenames": [],
+      "interpreters": [
+        "python"
+      ],
+      "note": null
+    },
+    {
+      "lang": "ruby",
+      "tier": "full",
+      "grammar": "tree-sitter-ruby",
+      "scanner": null,
+      "salt": "ruby@0.23.1+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "rb",
+        "rake",
+        "jbuilder",
+        "gemspec",
+        "ru"
+      ],
+      "filenames": [
+        "Gemfile",
+        "Rakefile",
+        "Guardfile",
+        "Capfile"
+      ],
+      "interpreters": [
+        "ruby"
+      ],
+      "note": null
+    },
+    {
+      "lang": "typescript",
+      "tier": "full",
+      "grammar": "tree-sitter-typescript",
+      "scanner": null,
+      "salt": "typescript@0.23.2+q3",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "ts",
+        "mts",
+        "cts"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "tsx",
+      "tier": "full",
+      "grammar": "tree-sitter-typescript",
+      "scanner": null,
+      "salt": "tsx@0.23.2+q3",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "tsx"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "javascript",
+      "tier": "full",
+      "grammar": "tree-sitter-javascript",
+      "scanner": null,
+      "salt": "javascript@0.25.0+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "js",
+        "jsx",
+        "mjs",
+        "cjs"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "bash",
+      "tier": "full",
+      "grammar": "tree-sitter-bash",
+      "scanner": null,
+      "salt": "bash@0.25.1+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "sh",
+        "bash"
+      ],
+      "filenames": [],
+      "interpreters": [
+        "bash",
+        "sh",
+        "dash",
+        "ksh"
+      ],
+      "note": null
+    },
+    {
+      "lang": "yaml",
+      "tier": "full",
+      "grammar": "tree-sitter-yaml",
+      "scanner": null,
+      "salt": "yaml@0.7.2+q2",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "yml",
+        "yaml"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "go",
+      "tier": "full",
+      "grammar": "tree-sitter-go",
+      "scanner": null,
+      "salt": "go@0.25.0+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "go"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "toml",
+      "tier": "full",
+      "grammar": "tree-sitter-toml-ng",
+      "scanner": null,
+      "salt": "toml@0.7.0+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "toml"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "json",
+      "tier": "full",
+      "grammar": "tree-sitter-json",
+      "scanner": null,
+      "salt": "json@0.24.8+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "json"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "css",
+      "tier": "full",
+      "grammar": "tree-sitter-css",
+      "scanner": null,
+      "salt": "css@0.25.0+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "css"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "scss",
+      "tier": "highlight_only",
+      "grammar": "tree-sitter-scss",
+      "scanner": null,
+      "salt": "scss@1.0.0+q1",
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "scss"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": "tree-sitter-scss 1.0.0 (its upstream's only release) cannot parse @extend: the ERROR swallows the rest of the enclosing block, so an outline would silently drop every rule after one. Highlighting degrades visibly over an error tree; a missing outline row does not"
+    },
+    {
+      "lang": "markdown",
+      "tier": "full",
+      "grammar": "tree-sitter-md",
+      "scanner": null,
+      "salt": "markdown@0.5.3+q1",
+      "injection_host": true,
+      "injections": [
+        "bash",
+        "css",
+        "go",
+        "haml",
+        "javascript",
+        "json",
+        "markdown",
+        "python",
+        "ruby",
+        "rust",
+        "scss",
+        "toml",
+        "tsx",
+        "typescript",
+        "yaml"
+      ],
+      "extensions": [
+        "md",
+        "markdown"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "erb",
+      "tier": "none",
+      "grammar": "tree-sitter-embedded-template",
+      "scanner": null,
+      "salt": "erb@0.25.0+q1",
+      "injection_host": true,
+      "injections": [
+        "ruby"
+      ],
+      "extensions": [
+        "erb"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": "parse-only grammar: registered so the Rails view scanner can walk tag boundaries; no tags or highlights query in this build"
+    },
+    {
+      "lang": "haml",
+      "tier": "full",
+      "grammar": null,
+      "scanner": "haml/1",
+      "salt": "haml@haml/1+q1",
+      "injection_host": true,
+      "injections": [
+        "ruby"
+      ],
+      "extensions": [
+        "haml"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": null
+    },
+    {
+      "lang": "dockerfile",
+      "tier": "none",
+      "grammar": null,
+      "scanner": null,
+      "salt": null,
+      "injection_host": false,
+      "injections": [],
+      "extensions": [],
+      "filenames": [
+        "Dockerfile"
+      ],
+      "interpreters": [],
+      "note": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+    },
+    {
+      "lang": "sql",
+      "tier": "none",
+      "grammar": null,
+      "scanner": null,
+      "salt": null,
+      "injection_host": false,
+      "injections": [],
+      "extensions": [
+        "sql"
+      ],
+      "filenames": [],
+      "interpreters": [],
+      "note": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+    }
+  ],
+  "total": 18,
+  "truncated": false
+}
