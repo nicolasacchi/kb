@@ -649,7 +649,59 @@ invariant #2 records).
     question and legitimately returns many entities, a dossier is about
     exactly one — and `dossier::V72_G1_ROUTES` joins invariant 15's
     `RouteContract` walk from both sides.
-20. **`aug-lane/1` has one enablement gate, one classing function, and
+20. **`rails/1` is a per-request VIEW over three tables it does not own,
+    and its trust ceiling is a TYPE** (V72-I1, `src/rails/`, design D7 +
+    Track I). Three rules, separate to state.
+    (a) **No table, no migration.** The eight nouns (`rails::NOUNS` —
+    model/controller/action/route/job/mailer/view/concern) are a fold over
+    `entity_defs` (invariant 13), `rails_edges` (invariant 12) and the
+    mirror index, computed per request and persisted nowhere: `codelens/1`'s
+    posture and root invariant #2's "kb-code mints classes, nothing is
+    cached", applied to a lane whose whole job is naming things. A derived
+    table would buy latency at the price of a fourth thing that can be
+    stale in a system whose honesty story is "a stale fact must never read
+    as a fresh one". The measured budget lives in `tests/rails_route.rs`.
+    (b) **`rails::noun_trust` is the ONE minter, and it returns
+    `frameworks::Trust`** — the Rails-lens enum with no `Exact` variant, so
+    the oracle bar is enforced by the type rather than by remembering, the
+    same way `rails_edges`'s own `CHECK (trust IN ('likely','candidate'))`
+    enforces it in SQL. Two independent WITNESSES, a live blob and a
+    Zeitwerk config that could be read buys `likely`; a drifted blob or a
+    degraded config demotes. The witness list ships beside the class so the
+    arithmetic is checkable, and a route row takes the EDGE's own class
+    rather than re-deriving one upward. `rails::NOUNS` is also the `rails:`
+    kbcq/1 atom's value vocabulary (invariant 16(a) reads it directly), so
+    a ninth noun cannot exist on one surface and not the other.
+    (c) **What it cannot say, it says.** Class ancestry is not indexed
+    (there is no `entity_edges` table — invariant 13 records the deferral),
+    so a "model" is a class under an `app/models` root corroborated by the
+    lens's own edges, never a proven `ApplicationRecord` descendant, and the
+    note saying so rides every response. Method visibility is not indexed
+    either: the `action` noun resolves `public` with a LINE SCAN for a bare
+    `private`/`protected` under a hard read budget
+    (`rails::MAX_VISIBILITY_READS`) — a scan that misses `private def foo`
+    and `private :foo` by construction and therefore may only ever DEMOTE a
+    row, never promote one — and past the budget an action is honestly
+    `unknown`, flagged, with the response `partial` and the budget named.
+    The four read states (`ok`/`empty`+reason/`partial`+budget/`error`) are
+    `rails::Honesty`, not a convention. `rails::filter` (the kbcq/1 atoms'
+    resolver) is a SEPARATE, lighter read on purpose — a keystroke must not
+    pay for the full join — but it reads the SAME `noun_for_path`, so the
+    search box and `/api/rails/*` can never disagree about what a model is;
+    it REFUSES (unapplied, with the reason captioned on the lane) rather
+    than guess when the repo is not a Rails app or more than one repo is in
+    scope, since the lanes' post-filter sees only a repo-relative path.
+    (d) **Routes carry an ADDRESS, additively.** `route_action`'s
+    `extra_json` gained `{"verb","path"}` from the same DSL walk that
+    resolves the controller (`frameworks/rails/routes.rs`'s `RouteCtx`
+    tracks the module and URL axes SEPARATELY — `namespace` moves both,
+    `scope module:` only the first). This is additive content, NOT a
+    `rails-lens/2` bump: no `kind` is added and no `kind`'s meaning
+    changes. An edge written by an older binary therefore has no address
+    until its source file is re-extracted, and every reader must render
+    that as unknown — never as `/`.
+
+21. **`aug-lane/1` has one enablement gate, one classing function, and
     two lane kinds because the daemon runs no tool** (V72-H4a, `src/lanes/`,
     migration V0030, design §P8/D7). Three rules, separate to state and
     easy to break one at a time.
@@ -707,58 +759,6 @@ invariant #2 records).
     page), and a DISABLED lane is never swept out from under a re-enable.
     `lanes::V72_H4A_ROUTES` joins invariant 15's `RouteContract` walk from
     both sides.
-
-20. **`rails/1` is a per-request VIEW over three tables it does not own,
-    and its trust ceiling is a TYPE** (V72-I1, `src/rails/`, design D7 +
-    Track I). Three rules, separate to state.
-    (a) **No table, no migration.** The eight nouns (`rails::NOUNS` —
-    model/controller/action/route/job/mailer/view/concern) are a fold over
-    `entity_defs` (invariant 13), `rails_edges` (invariant 12) and the
-    mirror index, computed per request and persisted nowhere: `codelens/1`'s
-    posture and root invariant #2's "kb-code mints classes, nothing is
-    cached", applied to a lane whose whole job is naming things. A derived
-    table would buy latency at the price of a fourth thing that can be
-    stale in a system whose honesty story is "a stale fact must never read
-    as a fresh one". The measured budget lives in `tests/rails_route.rs`.
-    (b) **`rails::noun_trust` is the ONE minter, and it returns
-    `frameworks::Trust`** — the Rails-lens enum with no `Exact` variant, so
-    the oracle bar is enforced by the type rather than by remembering, the
-    same way `rails_edges`'s own `CHECK (trust IN ('likely','candidate'))`
-    enforces it in SQL. Two independent WITNESSES, a live blob and a
-    Zeitwerk config that could be read buys `likely`; a drifted blob or a
-    degraded config demotes. The witness list ships beside the class so the
-    arithmetic is checkable, and a route row takes the EDGE's own class
-    rather than re-deriving one upward. `rails::NOUNS` is also the `rails:`
-    kbcq/1 atom's value vocabulary (invariant 16(a) reads it directly), so
-    a ninth noun cannot exist on one surface and not the other.
-    (c) **What it cannot say, it says.** Class ancestry is not indexed
-    (there is no `entity_edges` table — invariant 13 records the deferral),
-    so a "model" is a class under an `app/models` root corroborated by the
-    lens's own edges, never a proven `ApplicationRecord` descendant, and the
-    note saying so rides every response. Method visibility is not indexed
-    either: the `action` noun resolves `public` with a LINE SCAN for a bare
-    `private`/`protected` under a hard read budget
-    (`rails::MAX_VISIBILITY_READS`) — a scan that misses `private def foo`
-    and `private :foo` by construction and therefore may only ever DEMOTE a
-    row, never promote one — and past the budget an action is honestly
-    `unknown`, flagged, with the response `partial` and the budget named.
-    The four read states (`ok`/`empty`+reason/`partial`+budget/`error`) are
-    `rails::Honesty`, not a convention. `rails::filter` (the kbcq/1 atoms'
-    resolver) is a SEPARATE, lighter read on purpose — a keystroke must not
-    pay for the full join — but it reads the SAME `noun_for_path`, so the
-    search box and `/api/rails/*` can never disagree about what a model is;
-    it REFUSES (unapplied, with the reason captioned on the lane) rather
-    than guess when the repo is not a Rails app or more than one repo is in
-    scope, since the lanes' post-filter sees only a repo-relative path.
-    (d) **Routes carry an ADDRESS, additively.** `route_action`'s
-    `extra_json` gained `{"verb","path"}` from the same DSL walk that
-    resolves the controller (`frameworks/rails/routes.rs`'s `RouteCtx`
-    tracks the module and URL axes SEPARATELY — `namespace` moves both,
-    `scope module:` only the first). This is additive content, NOT a
-    `rails-lens/2` bump: no `kind` is added and no `kind`'s meaning
-    changes. An edge written by an older binary therefore has no address
-    until its source file is re-extracted, and every reader must render
-    that as unknown — never as `/`.
 
 ## When to update this file
 
