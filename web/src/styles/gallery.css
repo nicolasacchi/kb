@@ -1,7 +1,7 @@
 /* Gallery (v0.6 refresh) — topbar + left rail + grid + hybrid card.
  *
  * Lifted, with minor adjustments, from
- * docs/research/claude-design-handoff/web-gallery/project/app/styles.css.
+ * the Claude Design web-gallery handoff bundle, kept outside this repository.
  * Loaded AFTER app.css so it overrides legacy gallery rules without
  * touching unrelated views (detail/settings/comments).
  */
