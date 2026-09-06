@@ -6,7 +6,7 @@ the kb-code v7 "The Continuum" design of record). This file holds invariants
 that live entirely inside the SPA — above all its keyboard/command dispatch
 contract, which is what actually broke, three separate times, during the v7.0
 build. Root CLAUDE.md's crate-layout section and
-[README.md](../README.md)'s "kb-code" section are the feature-level surface;
+[docs/kb-code.md](../docs/kb-code.md) are the feature-level surface;
 `kb-code-server/CLAUDE.md` is the server-side half of every contract
 documented here (the two registries this file's commands/themes sections
 consume are SOURCED there).

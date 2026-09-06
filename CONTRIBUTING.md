@@ -2,7 +2,8 @@
 
 kb is a self-hosted daemon that indexes, searches, and serves a personal
 collection of LLM-generated HTML/Markdown artifacts — see
-[README.md](README.md) for the user-facing surface and
+[README.md](README.md) for the overview, [docs/cli.md](docs/cli.md) /
+[docs/http-api.md](docs/http-api.md) for the user-facing surface, and
 [docs/research/index.html](docs/research/index.html) for the design
 rationale behind it. This is a small, opinionated project; the bar for a
 patch is green CI and a clear commit message.
@@ -55,7 +56,8 @@ feature ON across the shared kb-core rlib and pulls a statically-linked ONNX
 Runtime into every downstream crate — slow to link and not the real shipping
 shape. The embedder has its own recipe: `just ci-embedder`.
 
-New to the codebase? Start with [README.md](README.md), then
+New to the codebase? Start with [README.md](README.md) and the docs index
+([docs/README.md](docs/README.md)), then
 [docs/architecture-invariants.md](docs/architecture-invariants.md) — read the
 matching entry before changing a load-bearing subsystem.
 
