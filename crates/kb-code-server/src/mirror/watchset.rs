@@ -168,7 +168,7 @@ pub fn gitignore_top_level_dirs(root: &Path) -> HashSet<String> {
 ///   (agent-session worktrees and Rails log/tmp churn INSIDE the watched
 ///   tree: untracked by git, so the HEAD-tree walk and every reconcile
 ///   never report them, but a recursive inotify watch observes every
-///   write; measured on h4o: 728k junk `files` rows, ~96% of the store,
+///   write; measured on a busy multi-worktree host: 728k junk `files` rows, ~96% of the store,
 ///   from months of `.claude/worktrees/agent-*` indexing).
 /// - SELF-IGNORING top-level directories: a child dir whose own
 ///   `.gitignore` is exactly `*` (the agent-worktree convention, e.g.
@@ -351,7 +351,7 @@ mod tests {
     fn event_skip_patterns_cover_agent_worktrees_and_nested_churn() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        // The h4o shape: multi-segment agent-worktree and Rails log/tmp
+        // The observed shape: multi-segment agent-worktree and Rails log/tmp
         // patterns registration could never express.
         std::fs::write(
             root.join(".gitignore"),
@@ -377,7 +377,7 @@ mod tests {
                 .any(|p| kb_core::watcher::path_matches_skip_pattern(rel, basename, p))
         };
 
-        // The observed h4o churn vectors are all covered.
+        // The observed churn vectors are all covered.
         assert!(matches(".claude/worktrees/agent-0129abc/src/main.rs"));
         assert!(matches(".codex-worktrees/f6-plan/apps/server/Gemfile"));
         assert!(matches(".grokclaude-worktrees/gc-01KZX/x.rb"));

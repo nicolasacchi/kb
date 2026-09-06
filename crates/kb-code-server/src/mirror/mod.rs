@@ -812,7 +812,7 @@ mod tests {
     fn process_flush_drops_events_under_git_ignored_dirs() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
-        // The h4o shape: a multi-segment agent-worktree pattern plus a
+        // The observed shape: a multi-segment agent-worktree pattern plus a
         // bare log/ churn dir — neither expressible at watch registration.
         std::fs::write(root.join(".gitignore"), ".claude/worktrees/\nlog/\n").unwrap();
         let mut runtimes = vec![RepoRuntime {
