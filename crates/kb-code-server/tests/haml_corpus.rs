@@ -253,12 +253,16 @@ fn byte_level_mutations_never_panic_and_never_mint_an_out_of_bounds_span() {
     );
 }
 
-/// Indentation corruption specifically: the two shapes HAML's own parser
-/// RAISES on must both produce a caption here rather than a silent
-/// reinterpretation.
+/// Indentation corruption specifically. A tab in the indentation is a
+/// caption — UNLESS every tab-indented line lies inside a `:filter` or
+/// `-#` body, where the lines are opaque CONTENT and a tab-indented
+/// `:javascript` block is not a HAML error. That carve-out is the
+/// assertion, not an exemption from it: a fixture with no caption must
+/// prove every tabbed line was swallowed.
 #[test]
 fn indentation_corruption_is_always_captioned() {
-    use kb_code_server::haml::DiagnosticKind;
+    use kb_code_server::haml::{DiagnosticKind, NodeKind};
+    let mut asserted = 0usize;
     for path in fixtures() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let src = std::fs::read_to_string(&path).expect("read");
@@ -274,19 +278,46 @@ fn indentation_corruption_is_always_captioned() {
             })
             .collect();
         let doc = haml::scan(tabbed.as_bytes());
-        assert!(
-            doc.diagnostics
-                .iter()
-                .any(|d| d.kind == DiagnosticKind::TabIndent),
-            "{name}: tab indentation was not captioned"
-        );
+        if doc
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagnosticKind::TabIndent)
+        {
+            asserted += 1;
+            continue;
+        }
+        // No caption — then every tab-indented line must be swallowed.
+        let bodies: Vec<(u32, u32)> = doc
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Filter(f) => f.body_span.map(|s| (s.start, s.end)),
+                NodeKind::HamlComment(c) => c.body_span.map(|s| (s.start, s.end)),
+                _ => None,
+            })
+            .collect();
+        let mut offset = 0u32;
+        for line in tabbed.split_inclusive('\n') {
+            let start = offset;
+            offset += line.len() as u32;
+            if !line.starts_with('\t') {
+                continue;
+            }
+            assert!(
+                bodies.iter().any(|(a, b)| start >= *a && start < *b),
+                "{name}: a tab-indented line at byte {start} was neither captioned nor \
+                 swallowed by a filter/comment body"
+            );
+        }
+        asserted += 1;
     }
+    assert!(asserted > 20, "only {asserted} fixtures were corrupted");
     // A dedent that lands between two open levels.
     let doc = haml::scan(b"%a\n    %b\n  %c\n");
     assert!(doc
         .diagnostics
         .iter()
-        .any(|d| d.kind == DiagnosticKind::InconsistentDedent));
+        .any(|d| d.kind == kb_code_server::haml::DiagnosticKind::InconsistentDedent));
 }
 
 fn mutations(original: &[u8]) -> Vec<Vec<u8>> {
