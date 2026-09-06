@@ -328,6 +328,11 @@ mod tests {
             import_batch_id: import_batch_id.to_string(),
             created_at,
             updated_at: created_at,
+            act: "issue".into(),
+            blocking: false,
+            cites_json: None,
+            fingerprint: None,
+            superseded_by: None,
         }
     }
 

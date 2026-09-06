@@ -2048,6 +2048,11 @@ mod tests {
             import_batch_id: "batch_1".into(),
             created_at: 100,
             updated_at: 100,
+            act: "issue".into(),
+            blocking: false,
+            cites_json: None,
+            fingerprint: None,
+            superseded_by: None,
         }
     }
 

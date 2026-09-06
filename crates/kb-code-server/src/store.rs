@@ -13254,6 +13254,11 @@ mod tests {
             .unwrap(),
             anchor2: None,
             side: Some("new".to_string()),
+            act: "issue".to_string(),
+            blocking: false,
+            cites_json: None,
+            fingerprint: None,
+            supersedes: Vec::new(),
         }
     }
 
@@ -13297,6 +13302,10 @@ mod tests {
             import_batch_id: "batch-1".to_string(),
             origin: FINDING_ORIGIN_IMPORT.to_string(),
             finding_author: None,
+            act: "issue".to_string(),
+            blocking: false,
+            cites_json: None,
+            fingerprint: None,
         };
         let (annotation_id, finding_id) = store.insert_review_finding(&new, 1_000).unwrap();
         assert!(finding_id > 0);
@@ -13552,6 +13561,10 @@ mod tests {
             import_batch_id: "manual".to_string(),
             origin: FINDING_ORIGIN_MANUAL.to_string(),
             finding_author: Some("you".to_string()),
+            act: "issue".to_string(),
+            blocking: false,
+            cites_json: None,
+            fingerprint: None,
         };
         store.insert_review_finding(&new, 900).unwrap();
         new
@@ -14076,6 +14089,10 @@ mod tests {
             // the SQL layer imposes no CHECK on either.
             origin: FINDING_ORIGIN_MANUAL.to_string(),
             finding_author: Some("carol".to_string()),
+            act: "issue".to_string(),
+            blocking: false,
+            cites_json: None,
+            fingerprint: None,
         };
         let (annotation_id, _finding_id) = store.insert_review_finding(&new, 1_000).unwrap();
         let ann = store.get_annotation(&annotation_id).unwrap().unwrap();
