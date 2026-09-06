@@ -45,6 +45,7 @@ const TAB_META: Record<InspectorTab, { label: string; icon: ReactNode; hint: str
   history: { label: "History", icon: <Icon.History />, hint: "how did it get here?" },
   notes: { label: "Notes", icon: <Icon.Note />, hint: "what did I mark?" },
   review: { label: "Review", icon: <Icon.ClipboardCheck />, hint: "what's contested?" },
+  dossier: { label: "Dossier", icon: <Icon.List />, hint: "what does this entity have?" },
 };
 
 export interface InspectorRailHandle {
@@ -97,6 +98,12 @@ export interface InspectorRailProps {
   onMobileClose?: () => void;
   /// V3.1-H3b — the entity passport (built by Reader; needs cursor + lenses).
   entityPanel?: ReactNode | null;
+  /// V72-G1.2 — the Dossier tab's body (the member jump list). Supplied ONLY
+  /// while the dossier center is mounted; its presence is what OFFERS the tab
+  /// (`hasDossierContext` below), the exact shape `reviewPanel`/
+  /// `hasReviewContext` already take.
+  dossierPanel?: ReactNode | null;
+  hasDossierContext?: boolean;
   /// DCB W3.B — the "Cited by" strip, ALWAYS visible above the tab body
   /// regardless of which tab is selected (does NOT extend `InspectorTab`'s
   /// closed union — root CLAUDE.md invariant #30). Built by `Reader.tsx`
@@ -241,6 +248,8 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     asSheet = false,
     onMobileClose,
     entityPanel = null,
+    dossierPanel = null,
+    hasDossierContext = false,
     citedBy = null,
     frameworkCard = null,
     diagnosticsCard = null,
@@ -274,7 +283,15 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
   // Review is offered only when there IS one. A selected-but-absent
   // Review tab still renders (with its honest empty body) so a persisted
   // choice never silently becomes a different tab.
-  const visibleTabs = INSPECTOR_TABS.filter((t) => t !== "review" || hasReviewContext || tab === "review");
+  // Review is offered only when there IS one; Dossier only while the dossier
+  // center is mounted. Both keep the same carve-out: a selected-but-absent tab
+  // still renders (with its own honest empty body) so a persisted choice never
+  // silently becomes a different tab.
+  const visibleTabs = INSPECTOR_TABS.filter(
+    (t) =>
+      (t !== "review" || hasReviewContext || tab === "review") &&
+      (t !== "dossier" || hasDossierContext || tab === "dossier"),
+  );
 
   const outlineBody = <OutlineRail symbols={symbols} onJump={onJumpOutline} />;
   const entityBody = entityPanel ?? (
@@ -300,6 +317,13 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     <BookmarksPanel repo={repo} onJump={onJumpBookmark} />
   ) : (
     <div className="kbc-inspector__hint">Bookmarks unavailable.</div>
+  );
+  const dossierBody = hasDossierContext ? (
+    (dossierPanel ?? <div className="kbc-inspector__hint">No members in this dossier.</div>)
+  ) : (
+    <div className="kbc-inspector__hint" data-kbc-rail-no-dossier>
+      Open an entity dossier to jump through its members.
+    </div>
   );
   const reviewBody = hasReviewContext ? (
     (reviewPanel ?? <div className="kbc-inspector__hint">No threads on this file yet.</div>)
@@ -408,6 +432,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
           </>
         )}
         {tab === "review" && <Section title="Review">{reviewBody}</Section>}
+        {tab === "dossier" && <Section title="Members">{dossierBody}</Section>}
       </div>
     </div>
   );

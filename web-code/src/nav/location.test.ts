@@ -13,6 +13,7 @@
 //      with the rule each case exercises named.
 import { describe, expect, it } from "vitest";
 import { decode, emptyLocation, encode, locationKey, transition, type Location } from "./location";
+import { entityUrl } from "../lib/codeUrl";
 
 const ROUND_TRIP_URLS = [
   "/",
@@ -45,6 +46,11 @@ const ROUND_TRIP_URLS = [
   "/r/kb/~reviews/7/diff",
   "/r/kb/~reviews/7/diff/src/main.rs",
   "/r/kb/~reviews/7/diff/src/main.rs?finding=f-3",
+  // V72-G1.2 — `?ent=` (the dossier center). Byte-identical before and after
+  // the grammar moved into `lib/codeUrl.ts`'s `entityUrl`.
+  "/r/kb?ent=Shop%3A%3AOrder",
+  "/r/kb/app/models/shop/order.rb?ent=Shop%3A%3AOrder",
+  "/r/kb/a.rb?ref=main&line=12&ent=Shop%3A%3AOrder",
   // Not modelled — must survive verbatim.
   "/session/abc/diff?repo=kb",
   "/~lens/notes/by-path/a/b.html",
@@ -196,5 +202,66 @@ describe("the transition table (§P7)", () => {
 
   it("is total over the empty location", () => {
     expect(transition(emptyLocation("kb"), reader())).toBe("push");
+  });
+});
+
+// --- V72-G1.2 — `?ent=` joins the contract ---------------------------------
+
+describe("`?ent=` is a PLACE, and its grammar is codeUrl.ts's", () => {
+  it("decodes to the reader mode carrying `ent`", () => {
+    const loc = decode("/r/kb/a.rb?ent=Shop%3A%3AOrder");
+    expect(loc.mode).toBe("reader");
+    expect(loc.path).toBe("a.rb");
+    expect(loc.ent).toBe("Shop::Order");
+  });
+
+  it("a BLANK `ent=` is not an address — it decodes to no entity at all", () => {
+    // `parseEntParam`'s totality, reached through `decode`: `?ent=` with
+    // nothing after it must not put the shell into dossier mode over nothing.
+    expect(decode("/r/kb/a.rb?ent=").ent).toBeUndefined();
+    expect(decode("/r/kb/a.rb?ent=%20%20").ent).toBeUndefined();
+  });
+
+  it("`encode` emits exactly what `entityUrl` builds — ONE grammar, not two", () => {
+    // The Location Contract's rule is that every URL it emits comes out of
+    // `codeUrl.ts`. Before V72-G1.2 `?ent=` was the one tail `encode`
+    // assembled by hand; this pins the two together so they cannot drift.
+    const cases: Array<{ path: string; ref?: string; line?: number; ent: string }> = [
+      { path: "", ent: "Shop::Order" },
+      { path: "app/models/shop/order.rb", ent: "Shop::Order" },
+      { path: "a.rb", ref: "main", line: 12, ent: "A&B::C" },
+    ];
+    for (const c of cases) {
+      const built = entityUrl("kb", c.ent, {
+        path: c.path,
+        ref: c.ref,
+        ...(c.line !== undefined ? { line: c.line } : {}),
+      });
+      const encoded = encode({
+        repo: "kb",
+        mode: "reader",
+        panes: { focused: 1 },
+        path: c.path,
+        ...(c.ref ? { frame: c.ref } : {}),
+        ...(c.line !== undefined ? { anchor: { line: c.line } } : {}),
+        ent: c.ent,
+      });
+      expect(encoded).toBe(built);
+    }
+  });
+
+  it("a different ENTITY is a different place (a push), and so is entity → file", () => {
+    const at = (ent?: string) => ({
+      repo: "kb",
+      mode: "reader" as const,
+      panes: { focused: 1 as const },
+      path: "a.rb",
+      ...(ent ? { ent } : {}),
+    });
+    expect(transition(at("Shop::Order"), at("Shop::Invoice"))).toBe("push");
+    expect(transition(at("Shop::Order"), at())).toBe("push");
+    expect(transition(at(), at("Shop::Order"))).toBe("push");
+    // The SAME entity, re-rendered, is not a navigation at all.
+    expect(transition(at("Shop::Order"), at("Shop::Order"))).toBe("none");
   });
 });

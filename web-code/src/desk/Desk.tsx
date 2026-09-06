@@ -163,6 +163,7 @@ const RAIL_STRIPE_META: { tab: RailTab; label: string; icon: ReactNode }[] = [
   { tab: "history", label: "History", icon: <Icon.History /> },
   { tab: "notes", label: "Notes", icon: <Icon.Note /> },
   { tab: "review", label: "Review", icon: <Icon.ClipboardCheck /> },
+  { tab: "dossier", label: "Dossier", icon: <Icon.List /> },
 ];
 
 /// The Group's `defaultLayout`: percentages for the EXPANDED sizes. The

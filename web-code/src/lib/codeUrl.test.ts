@@ -36,6 +36,8 @@ import {
   type ReviewDiffHrefOpts,
   type ReviewUrlOpts,
   type SymGrammarInput,
+  entityUrl,
+  parseEntParam,
 } from "./codeUrl";
 
 // Golden table: CodeLoc → exact URL string. Mirrors the discipline of kb's
@@ -733,5 +735,66 @@ describe("symbolPermalinkFor", () => {
     expect(
       symbolPermalinkFor("https://kbc.example.com/", "kb", "rust:widget", { fallbackPath: "src/lib.rs" }),
     ).toBe("https://kbc.example.com/r/kb/src/lib.rs?sym=rust%3Awidget");
+  });
+});
+
+// --- V72-G1.2 — `?ent=` ----------------------------------------------------
+
+describe("entityUrl", () => {
+  const cases: Array<[string, Parameters<typeof entityUrl>, string]> = [
+    ["bare repo (no file context)", ["kb", "Shop::Order"], "/r/kb?ent=Shop%3A%3AOrder"],
+    [
+      "with the file the reader was on",
+      ["kb", "Shop::Order", { path: "app/models/shop/order.rb" }],
+      "/r/kb/app/models/shop/order.rb?ent=Shop%3A%3AOrder",
+    ],
+    [
+      "ref + line ride BEFORE ent, in codeUrl's own param order",
+      ["kb", "Shop::Order", { path: "a.rb", ref: "main", line: 12 }],
+      "/r/kb/a.rb?ref=main&line=12&ent=Shop%3A%3AOrder",
+    ],
+    [
+      "a line RANGE serialises the same way codeUrl does",
+      ["kb", "Shop::Order", { path: "a.rb", line: { start: 24, end: 10 } }],
+      "/r/kb/a.rb?line=10-24&ent=Shop%3A%3AOrder",
+    ],
+    [
+      "repo + entity needing encoding",
+      ["my repo", "A&B::C", { path: "x y.rb" }],
+      "/r/my%20repo/x%20y.rb?ent=A%26B%3A%3AC",
+    ],
+  ];
+  for (const [name, args, expected] of cases) {
+    it(name, () => {
+      expect(entityUrl(...args)).toBe(expected);
+    });
+  }
+
+  it("a non-positive line is omitted, never emitted as junk", () => {
+    expect(entityUrl("kb", "Foo", { path: "a.rb", line: 0 })).toBe("/r/kb/a.rb?ent=Foo");
+  });
+});
+
+describe("parseEntParam", () => {
+  it("round-trips what entityUrl emits", () => {
+    const url = entityUrl("kb", "Shop::Order", { path: "a.rb" });
+    const value = new URLSearchParams(url.slice(url.indexOf("?"))).get("ent");
+    expect(parseEntParam(value)).toBe("Shop::Order");
+  });
+
+  it("is TOTAL: absent, empty and whitespace-only are all `null`", () => {
+    // A blank `ent=` is not an address — returning `""` would put the shell
+    // into dossier mode over nothing.
+    expect(parseEntParam(null)).toBeNull();
+    expect(parseEntParam("")).toBeNull();
+    expect(parseEntParam("   ")).toBeNull();
+  });
+
+  it("does NOT validate Ruby's constant grammar — the daemon decides", () => {
+    // This module has no business inventing a constant grammar; an address it
+    // cannot resolve earns an honest `entity-unknown` from the route, which is
+    // a better answer than a client-side guess.
+    expect(parseEntParam("not a constant")).toBe("not a constant");
+    expect(parseEntParam("  Shop::Order  ")).toBe("Shop::Order");
   });
 });

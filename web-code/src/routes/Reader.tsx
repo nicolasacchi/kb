@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,6 +35,8 @@ import HierarchyPanel from "../components/hierarchy/HierarchyPanel";
 import ImpactPanel from "../components/impact/ImpactPanel";
 import EgoGraph from "../components/graph/EgoGraph";
 import EntityRail from "../components/entity/EntityRail";
+import DossierRail from "../components/entity/DossierRail";
+import DossierView from "../components/entity/DossierView";
 import PeekPanel, { type PeekAnchor } from "../components/peek/PeekPanel";
 import UsagesDock from "../components/usages/UsagesDock";
 import ActionMenu, { ActionPill } from "../components/actions/ActionMenu";
@@ -55,6 +57,16 @@ import WorkspaceNotesPanel from "../components/workspaces/WorkspaceNotesPanel";
 import Desk, { type DeskRailSlotCtx } from "../desk/Desk";
 import { effectiveCollapsed, useDesk } from "../desk/useDesk";
 import { placementFor } from "../desk/placement";
+import {
+  cycleMemberSort,
+  DEFAULT_MEMBER_SORT,
+  DEFAULT_USAGES_PER_KIND,
+  DOSSIER_SECTIONS,
+  stepSection,
+  type DossierSectionId,
+  type MemberSort,
+} from "../lib/dossier";
+import { useDossier } from "../hooks/useDossier";
 import { drawerSetId, drawerTabOrder, type DrawerRow } from "../desk/drawerSets";
 import type { RailTab } from "../desk/deskState";
 import {
@@ -98,7 +110,9 @@ import { diagnosticGutterMarks, type DiagnosticGutterMark } from "../lib/diagnos
 import {
   codeUrl,
   commitUrl,
+  entityUrl,
   formatLineParam,
+  parseEntParam,
   parseLineParam,
   parsePane2,
   permalinkFor,
@@ -429,6 +443,24 @@ export default function Reader() {
   const pane2Param = searchParams.get("pane2");
   // T1 (design-ui.md §5/§9.2) — `?sym=` deep link, resolved on load below.
   const symParam = searchParams.get("sym");
+  // V72-G1.2 (§P9/D6) — `?ent=` puts this SAME route into the shell's
+  // `dossier` center mode. Deliberately NOT a new route: D1's rule is that a
+  // new surface lands in an existing REGION, and the dossier's dock, rail,
+  // drawer and stripes are the ones the reader already has. `parseEntParam`
+  // (lib/codeUrl.ts) is the one parser — a blank `ent=` is not an address.
+  const entParam = parseEntParam(searchParams.get("ent"));
+  const dossierMode = entParam !== null;
+  // Dossier VIEW state. None of it belongs in the URL: `?ent=` names the
+  // PLACE, and the sort/inherited/usages cut are refinements of how that one
+  // place is read — the Location Contract's own axis (`samePlace` keys on
+  // `ent`, and a refinement is a replace at most). `inherited` is the one that
+  // re-fetches, because it changes what the SERVER sends, not what this side
+  // shows.
+  const [dossierInherited, setDossierInherited] = useState(false);
+  const [dossierSort, setDossierSort] = useState<MemberSort>(DEFAULT_MEMBER_SORT);
+  const [dossierUsagesPerKind, setDossierUsagesPerKind] = useState(DEFAULT_USAGES_PER_KIND);
+  const [dossierSection, setDossierSection] = useState<DossierSectionId | null>(null);
+  const dossier = useDossier(repo, entParam, dossierInherited, dossierUsagesPerKind);
 
   // F5 — mobile shell (≤860px). `isMobile` is read FIRST so the lazy state
   // initializers below can close over its already-current value (both
@@ -2917,6 +2949,38 @@ export default function Reader() {
       window.removeEventListener("pointerdown", onPointerDown);
     };
   }, []);
+
+  // V72-G1.2 — the dossier's own navigation, all of it through
+  // `lib/codeUrl.ts` (root CLAUDE.md #35: one builder, never an ad hoc
+  // string). `openEntity` REPLACES the address in place; leaving the dossier
+  // is an ordinary reader URL, which is what makes browser Back work with no
+  // second stack (the Location Contract's "in-app Back IS the browser's
+  // Back").
+  const openEntityDossier = useCallback(
+    (fqn: string) => {
+      setDossierSection(null);
+      navigate(entityUrl(repo, fqn, { path, ref: gitRef }));
+    },
+    [navigate, repo, path, gitRef],
+  );
+  const leaveDossier = useCallback(() => {
+    navigate(codeUrl({ repo, path, ref: gitRef }));
+  }, [navigate, repo, path, gitRef]);
+  /// `]s`/`[s`. The cursor is the SECTION LIST's own (`lib/dossier.ts`), and
+  /// scrolling is a DOM effect of moving it — the section still exists (and
+  /// still renders its own empty caption) when it holds nothing, so the
+  /// motion never skips unpredictably.
+  const stepDossierSection = useCallback((dir: 1 | -1) => {
+    setDossierSection((cur) => {
+      const next = stepSection(cur, dir);
+      const dom = DOSSIER_SECTIONS.find((x) => x.id === next);
+      if (dom) {
+        document.getElementById(dom.domId)?.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
+      return next;
+    });
+  }, []);
+
   useCommandScope(bufferFocused ? "reader" : "tree", {
     "tree.focused": !bufferFocused,
     "help.open": helpOpen,
@@ -2927,8 +2991,32 @@ export default function Reader() {
     // inline peek is up; `pane.provisional` does the same for `p`.
     "peek.inline": inlinePeekIsOpen(inpeek),
     "pane.provisional": provisional.pane !== null,
+    // V72-G1.2 — which CENTER is mounted, so the dossier's own keys (`i`,
+    // `M`, `]s`/`[s`) are live ONLY there. The vocabulary is
+    // `desk/centerModes.ts`'s `CenterMode`, declared in `registry.json`'s
+    // `context_keys` so `commands doctor` can reason about disjointness.
+    center: dossierMode ? "dossier" : "reader",
   });
   useCommandHandlers({
+    // V72-G1.2 — the dossier family. `entity.dossier.open` is the only one
+    // reachable outside the dossier center; the other four are gated
+    // `center == dossier` in the registry, so they are inert (not merely
+    // silent) anywhere else.
+    "entity.dossier.open": () => {
+      // The entity under the cursor, from the rail's own resolve — never a
+      // guess at what a constant looks like. Nothing to open is a NO-OP with
+      // a toast, never a navigation to an address we invented.
+      if (!entityAddressUnderCursor) {
+        toast.err("no class or module under the cursor to open a dossier for");
+        return;
+      }
+      openEntityDossier(entityAddressUnderCursor);
+    },
+    "entity.dossier.inherited": () => setDossierInherited((v) => !v),
+    "entity.dossier.sort": () => setDossierSort((s2) => cycleMemberSort(s2)),
+    "entity.dossier.section-next": () => stepDossierSection(1),
+    "entity.dossier.section-prev": () => stepDossierSection(-1),
+    "rail.tab.dossier": () => selectRailTab("dossier"),
     "tree.focus-next": () => treeRef.current?.moveFocus(1),
     "tree.focus-prev": () => treeRef.current?.moveFocus(-1),
     "tree.open": () => treeRef.current?.activateFocused(undefined),
@@ -3319,6 +3407,35 @@ export default function Reader() {
 
   const focusedFileData = focusedPane === 1 ? file.data : pane2File.data;
   const focusedSymbols = focusedFileData && focusedFileData.encoding === "utf8" ? focusedFileData.symbols : [];
+
+  /// V72-G1.2 — the entity ADDRESS under the cursor for `Space e d`.
+  ///
+  /// It sends a NAME, not a constructed FQN. `extract.rs`'s `container` names
+  /// only the NEAREST lexical ancestor (crate invariant 13 says so
+  /// explicitly — reconstructing a full constant path is the ENTITY INDEX's
+  /// job, over range containment, and is exactly what this client cannot do),
+  /// so gluing `container::name` together here would mint an address this
+  /// side cannot stand behind. `entity/1` resolves a bare last segment
+  /// itself, and answers an ambiguous one with `candidates` rather than
+  /// picking — which is the honest division of labour: the client says which
+  /// WORD, the daemon says which entity.
+  const entityAddressUnderCursor = useMemo(() => {
+    const line = cursorLineUi;
+    if (line == null || line < 1) return null;
+    let innermost: (typeof focusedSymbols)[number] | null = null;
+    for (const sym of focusedSymbols) {
+      if (line < sym.line_start || line > sym.line_end) continue;
+      if (!innermost || sym.line_end - sym.line_start < innermost.line_end - innermost.line_start) {
+        innermost = sym;
+      }
+    }
+    if (!innermost) return null;
+    // A class/module the cursor sits in IS the address. Anything else (a
+    // method, a constant) addresses its own container, which for Ruby is the
+    // enclosing class/module name — the same one segment, still a name.
+    if (innermost.kind === "class" || innermost.kind === "module") return innermost.name;
+    return innermost.container ?? null;
+  }, [focusedSymbols, cursorLineUi]);
   // F5 — mobile-only reader-tools sheet is available whenever the outline
   // aside itself would render (see the aside's own condition below); kept as
   // a plain boolean so both the header's entry button and the aside's render
@@ -3563,6 +3680,22 @@ export default function Reader() {
       selectedPath={path}
       onSelect={handleSelect}
       onRamp={(rung, p) => ramp.activate(rung, { repo, path: p, via: "tree" })}
+      // V72-G1.2 — in dossier mode the tree narrows to the entity's own files
+      // and its namespace children, through kbc-scope/1's EXISTING `ns:` atom
+      // (`SCOPE_ATOM_SPECS`, resolved over the V71-G0 entity index). A derived
+      // scope, not a second tree: same wire, same projection, same honesty
+      // strip — and the daemon still answers `scope_applied: false` with the
+      // unscoped tree if it cannot resolve the entity, which is a caption
+      // rather than a wrong answer.
+      derivedScope={
+        dossierMode && entParam
+          ? {
+              scope: `ns:${entParam}`,
+              label: entParam,
+              onClear: leaveDossier,
+            }
+          : null
+      }
     />
   );
 
@@ -3828,6 +3961,19 @@ export default function Reader() {
                   ? () => void handleHierarchyCallers(lastHoverPosRef.current!.pane, lastHoverPosRef.current!.pos)
                   : undefined
               }
+              // V72-G1.2 — "Open dossier", offered only when the hover card's
+              // own candidate says this is a CLASS or MODULE. The gate uses
+              // the `kind` the symbols table already sent; it never sniffs
+              // the identifier's shape, and it never resolves ahead of the
+              // click (D5: a row that cannot prove `exact` must not jump —
+              // so this one does not jump at all, it navigates on an
+              // explicit press and lets `entity/1` answer honestly).
+              onOpenDossier={
+                peek.card &&
+                (peek.card.candidate.kind === "class" || peek.card.candidate.kind === "module")
+                  ? () => openEntityDossier(peek.card!.ident)
+                  : undefined
+              }
               // V70-A4 — the drawer's ONE tenant: turn this row set into a
               // drawer tab that outlives the popup (`desk/Drawer.tsx`).
               onKeepInDrawer={handleKeepPeekInDrawer}
@@ -3958,6 +4104,19 @@ export default function Reader() {
               // `role="dialog"`.
               asSheet={ctx.asSheet}
               onMobileClose={ctx.onMobileClose}
+              hasDossierContext={dossierMode}
+              dossierPanel={
+                dossierMode && dossier.data ? (
+                  <DossierRail
+                    fqn={dossier.data.entity.fqn}
+                    members={dossier.data.members}
+                    sort={dossierSort}
+                    onOpen={(p2, line) =>
+                      navigate(codeUrl({ repo, path: p2, ref: gitRef, ...(line ? { line } : {}) }))
+                    }
+                  />
+                ) : null
+              }
               entityPanel={
                 focusedPath ? (
                   <EntityRail
@@ -4018,7 +4177,11 @@ export default function Reader() {
       <Desk
         repo={repo}
         desk={desk}
-        centerMode="reader"
+        // V72-G1.2 — `?ent=` swaps the CENTER, never the shell. Every region
+        // (dock, main, drawer, rail, both stripes) is the one that was
+        // already there; `e2e/desk-landmarks.spec.ts` asserts the identical
+        // region set for both modes, which is D1's rule made mechanical.
+        centerMode={dossierMode ? "dossier" : "reader"}
         isMobile={isMobile}
         dock={dockBody}
         dockOpen={treeVisible}
@@ -4070,7 +4233,28 @@ export default function Reader() {
           ) : null
         }
       >
-        {readerBody}
+        {dossierMode && entParam ? (
+          <DossierView
+            repo={repo}
+            ent={entParam}
+            data={dossier.data}
+            state={dossier.state}
+            error={dossier.error}
+            inherited={dossierInherited}
+            onInheritedChange={setDossierInherited}
+            sort={dossierSort}
+            onSortChange={setDossierSort}
+            usagesPerKind={dossierUsagesPerKind}
+            onUsagesPerKind={setDossierUsagesPerKind}
+            activeSection={dossierSection}
+            onOpen={(p2, line) =>
+              navigate(codeUrl({ repo, path: p2, ref: gitRef, ...(line ? { line } : {}) }))
+            }
+            onOpenEntity={openEntityDossier}
+          />
+        ) : (
+          readerBody
+        )}
       </Desk>
       {/* V71-E2 — the ONE action menu, rendered once at the reader root.
           The drag-select pill is the same response's top three rows. */}

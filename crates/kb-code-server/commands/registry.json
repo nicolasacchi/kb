@@ -202,6 +202,14 @@
         "false"
       ],
       "note": "the focused pane is provisional (peek→pane promotion, not yet pinned) (V70-A6)"
+    },
+    {
+      "key": "center",
+      "values": [
+        "reader",
+        "dossier"
+      ],
+      "note": "which CENTER mode the shell has mounted (`web-code/src/desk/centerModes.ts`'s SHIPPED_CENTER_MODES). V72-G1.2 added `dossier` (`?ent=`); the dossier's own keys gate on it so they are inert everywhere else."
     }
   ],
   "scopes": [
@@ -1555,6 +1563,31 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "central"
+    },
+    {
+      "id": "rail.tab.dossier",
+      "title": "Rail tab: Dossier",
+      "aka": [
+        "dossier rail",
+        "members"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R d"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R d"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V72-G1.2 — the member table as a jump list. Like the Review tab it is CONDITIONAL: `InspectorRail` offers it only while the dossier center is mounted (or while it is the persisted choice), so selecting it elsewhere lands on its own honest empty body rather than a different tab."
     },
     {
       "id": "action.panel",
@@ -6239,6 +6272,144 @@
       "lifecycle": "shipped",
       "dispatch": "central",
       "note": "NOT bound to `gr`, which the evidence report asked for: `reader.find-references` already owns `g r` in the buffer, and adding ANY global `g`-prefixed row would flip `g` from a pure-vim prefix to a MIXED one inside the CodeView — changing what `CommandRoot`'s buffer guard does with every `g` chord. The Space-leader family is the door that already works from inside the buffer (V70-K1)."
+    },
+    {
+      "id": "entity.dossier.open",
+      "title": "Open the entity dossier",
+      "aka": [
+        "dossier",
+        "what is this class",
+        "entity page"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space e d"
+        ],
+        "plain": [
+          "Space e d"
+        ],
+        "helix": [
+          "Space e d"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code entity",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V72-G1.2 (§P9/D6) — opens `?ent=<name>` on the class/module under the cursor, which swaps the shell's CENTER to `dossier` without leaving the route. It sends the NAME the symbol table already has, never a client-built FQN: `extract.rs`'s `container` names only the nearest lexical ancestor, so reconstructing a constant path here would mint an address this side cannot stand behind — `entity/1` resolves a bare last segment itself and answers an ambiguous one with `candidates`. `Space e` is a NEW leader branch (no other row claimed it), which leaves room for the rest of the entity family without disturbing `Space g`/`Space R`/`Space P`."
+    },
+    {
+      "id": "entity.dossier.inherited",
+      "title": "Dossier: toggle inherited members",
+      "aka": [
+        "inherited",
+        "ancestors' methods"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "i"
+        ],
+        "plain": [
+          "i"
+        ],
+        "helix": [
+          "i"
+        ]
+      },
+      "scope": "global",
+      "when": "center == dossier",
+      "cli": "kb-code entity --inherited",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "RE-FETCHES with `?inherited=1` — it changes what the SERVER sends (the ancestors' and mixins' own member tables, merged), not what this side hides, so it can never be a client-side filter over rows that were never delivered. Bare `i` is safe from inside the read-only CodeView: the vim reducer reacts to `i` only under the `g` prefix (`gi`, the impact panel), so `i` carries no `vim_kind`, `shouldWithholdFromBuffer` resolves it exactly and lets it through, and nothing fires twice."
+    },
+    {
+      "id": "entity.dossier.sort",
+      "title": "Dossier: cycle the member sort",
+      "aka": [
+        "sort members",
+        "member order"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "M"
+        ],
+        "plain": [
+          "M"
+        ],
+        "helix": [
+          "M"
+        ]
+      },
+      "scope": "global",
+      "when": "center == dossier",
+      "cli": "none:a view over rows already returned",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "visibility (the server's own order) → name → defining type. A pure re-ordering of rows already in hand — it never re-queries, because a sort cannot change which members exist. Bare `M` is free of the vim reducer for the same reason `i` is: it reacts to `M` only as `gM` (the mnemonic popup)."
+    },
+    {
+      "id": "entity.dossier.section-next",
+      "title": "Dossier: next section",
+      "aka": [
+        "next section"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "] s"
+        ],
+        "plain": [
+          "] s"
+        ],
+        "helix": [
+          "] s"
+        ]
+      },
+      "scope": "global",
+      "when": "center == dossier",
+      "cli": "none:a scroll position",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Definitions → Members → Hierarchy → Usages → Unknown members → Namespace tree, wrapping. Deliberately NO `vim_kind`, the `] u`/`] d` precedent exactly: `[`/`]` is a MIXED prefix, so guard 2 lets the prefix through, the second key is never withheld (`chordPendingLength != 0`), and the vim reducer no-ops on a continuation it does not recognise — a vim arm here would fire the step TWICE."
+    },
+    {
+      "id": "entity.dossier.section-prev",
+      "title": "Dossier: previous section",
+      "aka": [
+        "previous section"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "[ s"
+        ],
+        "plain": [
+          "[ s"
+        ],
+        "helix": [
+          "[ s"
+        ]
+      },
+      "scope": "global",
+      "when": "center == dossier",
+      "cli": "none:a scroll position",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "The mirror of `] s`; see that row for why neither carries a `vim_kind`."
     }
   ]
 }

@@ -637,3 +637,63 @@ export function stripTrail(url: string): string {
     });
   return kept.length > 0 ? `${url.slice(0, q)}?${kept.join("&")}` : url.slice(0, q);
 }
+
+// --- V72-G1.2 — `?ent=` deep links (design §P9 / D6) -----------------------
+//
+// `?ent=<fqn>` addresses an ENTITY (a Ruby constant path) rather than a file:
+// it puts the reader shell into its `dossier` center mode over
+// `GET /api/entity/dossier` (`entity/1`). The param has existed in
+// `nav/location.ts`'s `Location` since V70-A6, parsed and re-encoded so a link
+// carrying one survived a round trip while nothing read it; this is the unit
+// that gives it a consumer, and with it a home in THIS module — the Location
+// Contract's own rule is that "every URL it emits comes out of `codeUrl.ts`'s
+// own functions", and until now `?ent=` was the one string `encode` assembled
+// by hand.
+//
+// `ent` is appended LAST — after `sym`, which is itself after `pane2`, which is
+// after `line` (the precedent this module's header doc records) — so every
+// pre-G1.2 golden is byte-for-byte unchanged and `location.ts`'s `encode`
+// keeps emitting exactly the bytes it emitted before it was repointed here.
+
+export interface EntityUrlOpts {
+  /// The file the reader was on when the dossier was opened. Kept in the URL
+  /// so Escape/`u` land back on real code rather than an empty shell, and so a
+  /// shared dossier link carries the context it was found in. Omitted ⇒ the
+  /// repo-root form `/r/{repo}?ent=…`.
+  path?: string;
+  ref?: string;
+  line?: LineSel;
+}
+
+/// `entityUrl(repo, ent, opts?)` → `/r/{repo}[/{path}][?ref=][&line=]&ent=<fqn>`.
+/// The FQN is percent-encoded as ONE query value: `Shop::Order`'s colons are
+/// legal in a query string but are encoded anyway, for the same reason
+/// `commitUrl` encodes a plain-hex sha — consistency with every other value
+/// this module emits, not a defensive necessity.
+export function entityUrl(repo: string, ent: string, opts: EntityUrlOpts = {}): string {
+  const base = codeBasePath(repo, opts.path ?? "");
+  const params: string[] = [];
+  if (opts.ref) params.push(`ref=${encodeURIComponent(opts.ref)}`);
+  if (opts.line !== undefined) {
+    const lp = formatLineParam(opts.line);
+    if (lp !== "") params.push(`line=${lp}`);
+  }
+  params.push(`ent=${encodeURIComponent(ent)}`);
+  return `${base}?${params.join("&")}`;
+}
+
+/// Parse an `?ent=` value (already URL-decoded, e.g. via
+/// `URLSearchParams.get`) into an entity address. TOTAL: `null` for absent,
+/// empty, or whitespace-only — a blank `ent=` is not an address, and returning
+/// `""` would put the shell into dossier mode over nothing.
+///
+/// Deliberately NOT a validator: this module does not know Ruby's constant
+/// grammar and must not invent one. `Shop::Order` and `not a constant` both
+/// come back verbatim; the DAEMON decides what answers to an address, and its
+/// honest refusal (`entity-unknown`) is a better answer than a client-side
+/// guess about what a constant may look like.
+export function parseEntParam(v: string | null): string | null {
+  if (v === null) return null;
+  const t = v.trim();
+  return t === "" ? null : t;
+}

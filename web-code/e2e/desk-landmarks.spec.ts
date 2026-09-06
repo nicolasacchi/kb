@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { BASE, REPO_DIR, REPO_NAME } from "./helpers";
-import { KNOWN_FILE } from "./fixture-repo";
+import { KNOWN_FILE, RUBY_ENTITY, RUBY_ORDER_FILE } from "./fixture-repo";
 
 /// V70-A4 — the LANDMARK golden.
 ///
@@ -30,7 +30,19 @@ const EXPECTED_REGIONS = ["stripe-left", "dock", "main", "drawer", "rail", "stri
 /// `src/desk/centerModes.ts`'s `SHIPPED_CENTER_MODES` by hand — this e2e
 /// package is standalone and never imports from `../src` (see
 /// `helpers.ts`'s own note on the same discipline for `DeskPreset`).
-const MODES = [{ mode: "reader", url: `${BASE}/r/${REPO_NAME}/${KNOWN_FILE}` }] as const;
+const MODES = [
+  { mode: "reader", url: `${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`, ready: ".kbc-codeview" },
+  // V72-G1.2 — the dossier center. D1's rule ("any new surface lands in an
+  // existing REGION") is exactly what this loop mechanises: the dossier is a
+  // different CENTER over the SAME shell, so it must produce a byte-identical
+  // region set. It rides the reader's own route via `?ent=`, which is also
+  // the assertion that it did not quietly become a new page.
+  {
+    mode: "dossier",
+    url: `${BASE}/r/${REPO_NAME}/${RUBY_ORDER_FILE}?ent=${encodeURIComponent(RUBY_ENTITY)}`,
+    ready: "[data-kbc-dossier]",
+  },
+] as const;
 
 async function regionOrder(page: Page): Promise<string[]> {
   return page.evaluate(() =>
@@ -52,11 +64,17 @@ test.describe("Desk landmarks (V70-A4)", () => {
     test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
   });
 
-  for (const { mode, url } of MODES) {
+  for (const { mode, url, ready } of MODES) {
     test(`center mode "${mode}" renders every region, in order, exactly once`, async ({ page }) => {
       await page.goto(url);
       await expect(page.locator('[data-region="main"]')).toBeVisible();
-      await expect(page.locator(".kbc-codeview")).toBeVisible({ timeout: 15_000 });
+      // Each mode names its OWN "the center has painted" selector: the shell
+      // is what this golden pins, and a mode is free to fill `main` with
+      // whatever it likes (that is what makes it a mode). Waiting on the
+      // reader's `.kbc-codeview` for every mode would assert the opposite —
+      // that every center is a code buffer — and would have made the dossier
+      // fail this spec for being itself.
+      await expect(page.locator(ready)).toBeVisible({ timeout: 15_000 });
 
       const regions = await regionOrder(page);
       expect(regions, `center mode ${mode} moved, renamed or dropped a region`).toEqual([

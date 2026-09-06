@@ -1,0 +1,465 @@
+/* V72-G1.2 — the entity dossier center mode (D6's snippet-list dossier).
+ *
+ * Every colour is a kbc-theme/1 ROLE token (`tokens.css`), never a literal —
+ * the theme registry's 27 themes and the AA repair pass both work through
+ * those roles, so a hard-coded hex here would be the one surface that does
+ * not follow the palette.
+ *
+ * TRUST IS NOT STYLED HERE. `TrustBadge` owns it (`--kbc-trust-style`: solid /
+ * dashed / dotted, the Lane Budget's line-style channel), and this file must
+ * never add a hue-only trust cue beside it — that is the rule that keeps
+ * exact/likely/candidate legible under every theme and every colour-vision
+ * deficiency.
+ */
+
+.kbc-dossier {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  height: 100%;
+  padding: 14px 18px 40px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* --- head ---------------------------------------------------------------- */
+
+.kbc-dossier__head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 10px;
+}
+
+.kbc-dossier__title-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.kbc-dossier__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.kbc-dossier__kind,
+.kbc-dossier__pill {
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.kbc-dossier__census {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.kbc-dossier__controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kbc-dossier__toggle,
+.kbc-dossier__sort,
+.kbc-dossier__more {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--ink-dim);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kbc-dossier__toggle:hover,
+.kbc-dossier__sort:hover,
+.kbc-dossier__more:hover {
+  border-color: var(--rule-hi);
+  color: var(--ink);
+}
+
+.kbc-dossier__toggle.is-on {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+/* --- honesty ------------------------------------------------------------- */
+
+/* The header caption a `partial`/`empty` response owes its reader. Styled as
+ * a real banner rather than a footnote: it is the first thing after the head,
+ * and it never scrolls away underneath the sections it describes. */
+.kbc-dossier__honesty {
+  margin: 0;
+  border: 1px solid var(--rule-hi);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.kbc-dossier__honesty--empty {
+  color: var(--ink);
+}
+
+.kbc-dossier__note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-mute);
+  line-height: 1.5;
+}
+
+.kbc-dossier__note--warn {
+  color: var(--ink-dim);
+  border-left: 2px solid var(--rule-strong);
+  padding-left: 8px;
+}
+
+/* --- sections ------------------------------------------------------------ */
+
+.kbc-dossier__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scroll-margin-top: 12px;
+}
+
+/* The `]s`/`[s` cursor. A rule on the leading edge, not a fill: the section
+ * is being POINTED AT, not selected. */
+.kbc-dossier__section.is-active {
+  border-left: 2px solid var(--accent-bor);
+  margin-left: -10px;
+  padding-left: 8px;
+}
+
+.kbc-dossier__h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+
+.kbc-dossier__ugroup-h {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Every count in the dossier comes off the wire; this is what one looks
+ * like. */
+.kbc-dossier__h-count {
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-mute);
+}
+
+/* --- definitions --------------------------------------------------------- */
+
+.kbc-dossier__defs,
+.kbc-dossier__hlist,
+.kbc-dossier__holes,
+.kbc-dossier__ns,
+.kbc-dossier__urows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kbc-dossier__def {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg-card);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kbc-dossier__def-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kbc-dossier__def-addr,
+.kbc-dossier__link,
+.kbc-dossier__member-name {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+
+.kbc-dossier__def-addr:hover,
+.kbc-dossier__link:hover,
+.kbc-dossier__member-name:hover {
+  text-decoration: underline;
+}
+
+.kbc-dossier__def-kind,
+.kbc-dossier__def-form {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.kbc-dossier__def-opener {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+
+.kbc-dossier__code {
+  margin: 0;
+  overflow-x: auto;
+  border-radius: 4px;
+  background: var(--bg-elev);
+  padding: 6px 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.kbc-dossier__code-line {
+  display: flex;
+  gap: 10px;
+  white-space: pre;
+}
+
+.kbc-dossier__code-num {
+  flex: 0 0 auto;
+  min-width: 3.5ch;
+  padding-left: 8px;
+  text-align: right;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.kbc-dossier__code-text {
+  padding-right: 10px;
+}
+
+/* --- members ------------------------------------------------------------- */
+
+.kbc-dossier__members {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.kbc-dossier__members th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute);
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 8px 4px 0;
+}
+
+.kbc-dossier__members td {
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 8px 4px 0;
+  color: var(--ink-dim);
+  vertical-align: baseline;
+}
+
+.kbc-dossier__members tr:hover td {
+  background: var(--bg-card);
+}
+
+/* --- usages / holes / namespace ------------------------------------------ */
+
+.kbc-dossier__urow,
+.kbc-dossier__holes li,
+.kbc-dossier__ns li,
+.kbc-dossier__hlist li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kbc-dossier__ucontext,
+.kbc-dossier__fqn {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+
+.kbc-dossier__ugroup {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-bottom: 4px;
+}
+
+/* --- the rail's jump list ------------------------------------------------ */
+
+.kbc-dossier-rail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.kbc-dossier-rail:focus-visible {
+  outline: 2px solid var(--accent-bor);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.kbc-dossier-rail__btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  text-align: left;
+}
+
+.kbc-dossier-rail__row.is-cursor .kbc-dossier-rail__btn,
+.kbc-dossier-rail__btn:hover {
+  background: var(--bg-card-hi);
+  color: var(--ink);
+}
+
+.kbc-dossier-rail__name {
+  font-family: var(--mono, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-dossier-rail__kind,
+.kbc-dossier-rail__pill {
+  font-size: 10.5px;
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.kbc-dossier-rail__pill {
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+/* --- the tree's "scoped to <fqn>" chip ----------------------------------- */
+
+.kbc-tree__scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--accent-bor);
+  border-radius: 999px;
+  background: var(--accent-bg);
+  padding: 0 4px 0 8px;
+  font-size: 11px;
+  color: var(--accent-fg);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-tree__scope-clear {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: none;
+  padding: 1px;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.kbc-tree__scope-clear:hover {
+  opacity: 1;
+}
+
+/* --- mobile (≤860px) ------------------------------------------------------
+ * One column, and the member table stops being a table: at this width six
+ * columns cannot be read, and a horizontally-scrolling table is a worse
+ * answer than a stacked one. */
+@media (max-width: 860px) {
+  .kbc-dossier {
+    padding: 10px 12px 32px;
+  }
+
+  .kbc-dossier__members thead {
+    display: none;
+  }
+
+  .kbc-dossier__members,
+  .kbc-dossier__members tbody,
+  .kbc-dossier__members tr,
+  .kbc-dossier__members td {
+    display: block;
+    width: auto;
+  }
+
+  .kbc-dossier__members tr {
+    border-bottom: 1px solid var(--rule);
+    padding: 5px 0;
+  }
+
+  .kbc-dossier__members td {
+    border: 0;
+    padding: 1px 0;
+  }
+
+  .kbc-dossier__ucontext,
+  .kbc-dossier__fqn {
+    max-width: 100%;
+  }
+}
