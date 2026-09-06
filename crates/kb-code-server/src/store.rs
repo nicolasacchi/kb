@@ -5171,6 +5171,79 @@ impl Store {
         Ok(rows)
     }
 
+    /// EVERY `rails_edges` row for `repo_id`, `(src_path, ordinal)`-ordered
+    /// — the whole-repo read the `rails/1` index (V72-I1) joins over.
+    ///
+    /// ONE query rather than a per-noun fan-out over
+    /// [`Self::rails_edges_by_kind`]: the index needs a dozen kinds at
+    /// once, and the `(repo_id, kind)` index answers the bare `WHERE
+    /// repo_id = ?` prefix just as well. The per-path/per-kind readers stay
+    /// for the position-gated consumers (`hover`, `resolve`, `usages`),
+    /// which want one file's rows and must not pay for the repo's.
+    pub fn rails_edges_for_repo(
+        &self,
+        repo_id: i64,
+    ) -> Result<Vec<crate::frameworks::FrameworkEdge>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT kind, src_path, src_line, src_symbol, dst_kind, dst_path, dst_symbol,
+                    trust, extra_json
+             FROM rails_edges WHERE repo_id = ?1 ORDER BY src_path, ordinal",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id], rails_edge_row_from)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// [`Self::symbols_for_repo`] narrowed to one path PREFIX — the same
+    /// current-salt discipline (invariant 11), one `LIKE 'prefix%'` more.
+    ///
+    /// `prefix` is a caller-side CONSTANT (`app/controllers/`), never a
+    /// user-supplied string: `LIKE`'s `%`/`_` wildcards are not escaped
+    /// here, so a caller that ever wants to pass a query param must escape
+    /// them first. The narrowing is the point — the `rails/1` index needs
+    /// the methods of a few hundred controller files, and materialising a
+    /// monolith's ~200k symbol rows to filter in Rust is the shape
+    /// kbc-tree/1's own whole-repo reads already refused.
+    pub fn symbols_for_repo_under_prefix(
+        &self,
+        repo_id: i64,
+        prefix: &str,
+    ) -> Result<Vec<(String, Symbol)>> {
+        let conn = self.lock();
+        let (cte, salts) = current_salt_cte();
+        let sql = format!(
+            "{cte}
+             SELECT f.path, s.ordinal, s.name, s.kind, s.line_start, s.line_end,
+                    s.col_start, s.col_end, s.container, s.signature, s.doc,
+                    s.param_min, s.param_max
+             FROM files f
+             JOIN symbols s ON s.blob_hash = f.blob_hash
+             WHERE f.repo_id = ?
+               AND f.path LIKE ? || '%'
+               AND (
+                     s.salt IN (SELECT salt FROM cur)
+                     OR NOT EXISTS (
+                           SELECT 1 FROM symbols s2
+                           WHERE s2.blob_hash = s.blob_hash AND s2.salt IN (SELECT salt FROM cur)
+                         )
+                   )
+             ORDER BY f.path, s.ordinal"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut bind: Vec<Box<dyn rusqlite::ToSql>> =
+            salts.iter().map(|s| Box::new(*s) as _).collect();
+        bind.push(Box::new(repo_id));
+        bind.push(Box::new(prefix.to_string()));
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(bind.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, symbol_from_row(r, 1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // --- V71-G0 — the entity index (`entities/1`, `crate::entities`) -----
 
     /// Replace every `entity_defs` row for one `(repo_id, worktree, path)`

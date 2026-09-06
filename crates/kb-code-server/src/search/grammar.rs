@@ -97,6 +97,21 @@
 //! | `explain:` | single (`1|0|yes|no|true|false`) | no | the box's per-lane decomposition |
 //! | `group:` | single (`file|kind|lane|dir|none`) | no | how the returned page is GROUPED (V71-D2) |
 //! | `facets:` | single (`1|0|yes|no|true|false`) | no | the facet census over the returned page (V71-D2) |
+//! | `model:` | single | no | `rails/1`'s model index — `unified::rails_selection` (V72-I1) |
+//! | `controller:` | single | no | `rails/1`'s controller index (V72-I1) |
+//! | `action:` | single | no | `rails/1`'s controller-action index (V72-I1) |
+//! | `route:` | single | no | `rails/1`'s route index — matches the verb+path address or `controller#action` (V72-I1) |
+//! | `job:` | single | no | `rails/1`'s job index (V72-I1) |
+//! | `rails:` | single (`model|controller|action|route|job|mailer|view|concern`) | no | `rails/1`'s whole index for one noun — the generic form (V72-I1) |
+//!
+//! The six Rails atoms are a FACET over a derived index, not a path
+//! predicate: each resolves — once per request, inside `unified` — to the
+//! set of files the named noun lives in, and the files/symbols/text lanes
+//! keep only hits inside it. They are ORed with each other (two atoms name
+//! two nouns, and a hit in either is kept) and ANDed with every other
+//! filter, which is the only combination a facet reading has. They need a
+//! SINGLE repo in scope; with more than one they are not applied and the
+//! lane says so, rather than matching a same-named path in the wrong repo.
 //!
 //! A token that LOOKS like `key:` but has an empty value (`"lang:"`), an
 //! unrecognised value for a closed-vocabulary key (`case:closed`), an
@@ -276,6 +291,60 @@ pub const FILTER_SPECS: &[FilterKeySpec] = &[
         consumer_module: "unified.rs",
         consumer_expr: "parsed.facets",
     },
+    // V72-I1 — the `rails/1` facet atoms. Appended at the END of the list
+    // (the declaration order is `normalize`'s render order and is pinned by
+    // `filter_keys_matches_the_documented_set`), so every pre-existing
+    // query's normalized form is byte-identical.
+    FilterKeySpec {
+        key: "model",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "unified.rs",
+        consumer_expr: "filters.model",
+    },
+    FilterKeySpec {
+        key: "controller",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "unified.rs",
+        consumer_expr: "filters.controller",
+    },
+    FilterKeySpec {
+        key: "action",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "unified.rs",
+        consumer_expr: "filters.action",
+    },
+    FilterKeySpec {
+        key: "route",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "unified.rs",
+        consumer_expr: "filters.route",
+    },
+    FilterKeySpec {
+        key: "job",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "unified.rs",
+        consumer_expr: "filters.job",
+    },
+    FilterKeySpec {
+        key: "rails",
+        multi: false,
+        negatable: false,
+        // ONE home for the noun vocabulary: `crate::rails::NOUNS`. A ninth
+        // noun cannot exist on the `/api/rails/*` surface and not here.
+        values: Some(crate::rails::NOUNS),
+        consumer_module: "unified.rs",
+        consumer_expr: "filters.rails",
+    },
 ];
 
 /// Farthest a typo may sit from a known key and still earn a did-you-mean —
@@ -316,6 +385,46 @@ pub struct Filters {
     pub not_path: Vec<String>,
     pub not_ext: Vec<String>,
     pub not_kind: Vec<String>,
+    /// V72-I1 — the `rails/1` facet atoms. Each holds the value as typed;
+    /// resolving it to a file set is `unified`'s job, not the parser's (the
+    /// grammar knows nothing about any repo). Non-negatable in v1: a
+    /// `-model:` would have to mean "every file that is not part of this
+    /// model", which the index cannot state honestly for a hit it never
+    /// looked at.
+    pub model: Option<String>,
+    pub controller: Option<String>,
+    pub action: Option<String>,
+    pub route: Option<String>,
+    pub job: Option<String>,
+    /// `rails:<noun>` — the generic form, selecting a whole noun. Its
+    /// vocabulary is `crate::rails::NOUNS`.
+    pub rails: Option<String>,
+}
+
+impl Filters {
+    /// The Rails atoms as `(noun, value)` pairs in declaration order.
+    /// `value` is `None` for the generic `rails:<noun>` form, which selects
+    /// the whole noun rather than one named member of it.
+    pub fn rails_atoms(&self) -> Vec<(&'static str, Option<String>)> {
+        let mut out = Vec::new();
+        for (noun, v) in [
+            ("model", &self.model),
+            ("controller", &self.controller),
+            ("action", &self.action),
+            ("route", &self.route),
+            ("job", &self.job),
+        ] {
+            if let Some(v) = v {
+                out.push((noun, Some(v.clone())));
+            }
+        }
+        if let Some(noun) = &self.rails {
+            if let Some(n) = crate::rails::NOUNS.iter().find(|n| **n == noun.as_str()) {
+                out.push((*n, None));
+            }
+        }
+        out
+    }
 }
 
 /// How the returned PAGE is ordered — `sort:`. Deliberately narrow: this
@@ -793,6 +902,14 @@ fn apply_filter(m: &mut Modifiers<'_>, spec: &FilterKeySpec, negated: bool, valu
             })
         }
         ("facets", _) => *m.facets = matches!(last().as_str(), "1" | "yes" | "true"),
+        // V72-I1 — the Rails atoms carry their value through verbatim; the
+        // parser resolves nothing (it has no repo to resolve against).
+        ("model", _) => filters.model = Some(last()),
+        ("controller", _) => filters.controller = Some(last()),
+        ("action", _) => filters.action = Some(last()),
+        ("route", _) => filters.route = Some(last()),
+        ("job", _) => filters.job = Some(last()),
+        ("rails", _) => filters.rails = Some(last()),
         // Unreachable while `FILTER_SPECS` and this match agree — and
         // `every_declared_filter_key_is_applied` is what keeps them
         // agreeing.
@@ -964,6 +1081,12 @@ pub fn normalize(p: &ParsedQuery) -> String {
             "facets" if p.facets => {
                 parts.push("facets:1".to_string());
             }
+            "model" => push_single(&mut parts, "model", &p.filters.model),
+            "controller" => push_single(&mut parts, "controller", &p.filters.controller),
+            "action" => push_single(&mut parts, "action", &p.filters.action),
+            "route" => push_single(&mut parts, "route", &p.filters.route),
+            "job" => push_single(&mut parts, "job", &p.filters.job),
+            "rails" => push_single(&mut parts, "rails", &p.filters.rails),
             _ => {}
         }
     }
@@ -974,6 +1097,16 @@ pub fn normalize(p: &ParsedQuery) -> String {
         out.push_str(&part);
     }
     out.trim().to_string()
+}
+
+/// Render one single-valued filter, quoting a value that needs it — the
+/// single-valued twin of [`push_multi`], added by V72-I1's six atoms
+/// (`lang`/`path`/`repo` predate it and keep their own inline forms so the
+/// pre-V72-I1 `normalize` output stays byte-identical).
+fn push_single(parts: &mut Vec<String>, key: &str, value: &Option<String>) {
+    if let Some(v) = value {
+        parts.push(format!("{key}:{}", quote_if_needed(v)));
+    }
 }
 
 fn push_multi(parts: &mut Vec<String>, key: &str, values: &[String]) {
@@ -1503,11 +1636,74 @@ mod tests {
     }
 
     #[test]
+    fn the_rails_atom_reads_its_vocabulary_from_the_rails_module_not_a_copy() {
+        // ONE home for the noun list. A ninth noun added to
+        // `crate::rails::NOUNS` is accepted here the same day, and a value
+        // this grammar accepts is always a noun that surface can answer.
+        let spec = FILTER_SPECS
+            .iter()
+            .find(|s| s.key == "rails")
+            .expect("rails: is declared");
+        assert_eq!(spec.values, Some(crate::rails::NOUNS));
+        for noun in crate::rails::NOUNS {
+            let p = parse(&format!("q rails:{noun}"));
+            assert_eq!(p.filters.rails.as_deref(), Some(*noun));
+            assert!(p.diagnostics.is_empty(), "{noun} should parse cleanly");
+        }
+        // Outside the vocabulary: a diagnostic and an ordinary word, never
+        // a 400 and never a silent drop.
+        let p = parse("q rails:widget");
+        assert_eq!(p.filters.rails, None);
+        assert_eq!(p.diagnostics.len(), 1);
+        assert!(p.query.contains("rails:widget"));
+    }
+
+    #[test]
+    fn the_rails_atoms_round_trip_through_normalize_including_a_quoted_route() {
+        let p = parse(r#"orders model:Order route:"GET /orders/:id""#);
+        assert_eq!(p.filters.model.as_deref(), Some("Order"));
+        assert_eq!(p.filters.route.as_deref(), Some("GET /orders/:id"));
+        let again = parse(&p.normalized);
+        assert_eq!(again.normalized, p.normalized, "normalize is a fixed point");
+        assert_eq!(again.filters, p.filters);
+    }
+
+    #[test]
+    fn rails_atoms_are_ored_in_declaration_order() {
+        let p = parse("model:Order job:Export rails:view");
+        assert_eq!(
+            p.filters.rails_atoms(),
+            vec![
+                ("model", Some("Order".to_string())),
+                ("job", Some("Export".to_string())),
+                ("view", None),
+            ]
+        );
+        assert!(Filters::default().rails_atoms().is_empty());
+    }
+
+    #[test]
     fn filter_keys_matches_the_documented_set() {
         assert_eq!(
             filter_keys(),
             vec![
-                "lang", "path", "repo", "case", "ext", "kind", "sort", "explain", "group", "facets"
+                "lang",
+                "path",
+                "repo",
+                "case",
+                "ext",
+                "kind",
+                "sort",
+                "explain",
+                "group",
+                "facets",
+                // V72-I1 — the rails/1 facet atoms, appended.
+                "model",
+                "controller",
+                "action",
+                "route",
+                "job",
+                "rails",
             ]
         );
     }

@@ -1,0 +1,44 @@
+{
+  "counts": {
+    "action": 5,
+    "concern": 1,
+    "controller": 2,
+    "job": 2,
+    "mailer": 1,
+    "model": 3,
+    "route": 5,
+    "view": 5
+  },
+  "detected": true,
+  "honesty": {
+    "state": "ok"
+  },
+  "lens": {
+    "edges_total": 21,
+    "generation": 0,
+    "grammar_version": "rails-lens/1",
+    "orphan_source_files": 0,
+    "source_files": 7,
+    "stale_source_files": 0
+  },
+  "notes": [
+    "class ancestry is not indexed (there is no entity-edge table yet), so a model, job, mailer or controller here is a class under the matching app/ root corroborated by the lens's own edges — not a proven ActiveRecord/ActiveJob descendant"
+  ],
+  "nouns": [
+    "model",
+    "controller",
+    "action",
+    "route",
+    "job",
+    "mailer",
+    "view",
+    "concern"
+  ],
+  "rails_version": "8.1.0",
+  "repo": "acme-app",
+  "schema": "rails/1",
+  "version_source": "Gemfile.lock",
+  "zeitwerk": {
+    "state": "read"
+  }
+}

@@ -1,0 +1,8 @@
+en:
+  orders:
+    index:
+      title: "Orders"
+    unused_key: "Nothing references this"
+  admin:
+    reports:
+      title: "Reports"

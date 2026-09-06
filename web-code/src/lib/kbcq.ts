@@ -46,6 +46,22 @@ export type GroupKey = "file" | "kind" | "lane" | "dir" | "none";
 /// `grammar.rs`'s `GROUP_KEYS`, in the same order.
 export const GROUP_KEYS: GroupKey[] = ["file", "kind", "lane", "dir", "none"];
 
+/// `crate::rails::NOUNS`, in the same order — the `rails:` atom's closed
+/// vocabulary (V72-I1). The Rust side reads its copy straight out of the
+/// `rails` module so there is one home THERE; this mirror is pinned to it
+/// by the shared `kbcq.golden.json` corpus, the same way every other key's
+/// vocabulary is.
+export const RAILS_NOUNS: string[] = [
+  "model",
+  "controller",
+  "action",
+  "route",
+  "job",
+  "mailer",
+  "view",
+  "concern",
+];
+
 export interface Filters {
   lang: string | null;
   path: string | null;
@@ -58,6 +74,19 @@ export interface Filters {
   not_path: string[];
   not_ext: string[];
   not_kind: string[];
+  /**
+   * V72-I1 — the `rails/1` facet atoms, mirroring `grammar.rs`'s own
+   * fields. The value is carried verbatim; resolving it to a file set is
+   * the daemon's job (the SPA has no index to resolve against), so these
+   * are display + round-trip state here and nothing more.
+   */
+  model: string | null;
+  controller: string | null;
+  action: string | null;
+  route: string | null;
+  job: string | null;
+  /** `rails:<noun>` — the generic form; vocabulary is `RAILS_NOUNS`. */
+  rails: string | null;
 }
 
 export interface QueryTerm {
@@ -107,6 +136,15 @@ export const FILTER_SPECS: FilterKeySpec[] = [
   { key: "explain", multi: false, negatable: false, values: ["1", "0", "yes", "no", "true", "false"] },
   { key: "group", multi: false, negatable: false, values: [...GROUP_KEYS] },
   { key: "facets", multi: false, negatable: false, values: ["1", "0", "yes", "no", "true", "false"] },
+  // V72-I1 — the rails/1 facet atoms, APPENDED (declaration order is
+  // `normalize`'s render order, so every pre-existing query's normalized
+  // form is byte-identical).
+  { key: "model", multi: false, negatable: false, values: null },
+  { key: "controller", multi: false, negatable: false, values: null },
+  { key: "action", multi: false, negatable: false, values: null },
+  { key: "route", multi: false, negatable: false, values: null },
+  { key: "job", multi: false, negatable: false, values: null },
+  { key: "rails", multi: false, negatable: false, values: [...RAILS_NOUNS] },
 ];
 
 export const SUGGEST_MAX_DISTANCE = 2;
@@ -131,6 +169,12 @@ export function emptyFilters(): Filters {
     not_path: [],
     not_ext: [],
     not_kind: [],
+    model: null,
+    controller: null,
+    action: null,
+    route: null,
+    job: null,
+    rails: null,
   };
 }
 
@@ -338,6 +382,30 @@ function extract(s: string): Extracted {
       case "kind:true":
         filters.not_kind.push(...values);
         break;
+      case "model:false":
+      case "model:true":
+        filters.model = last;
+        break;
+      case "controller:false":
+      case "controller:true":
+        filters.controller = last;
+        break;
+      case "action:false":
+      case "action:true":
+        filters.action = last;
+        break;
+      case "route:false":
+      case "route:true":
+        filters.route = last;
+        break;
+      case "job:false":
+      case "job:true":
+        filters.job = last;
+        break;
+      case "rails:false":
+      case "rails:true":
+        filters.rails = last;
+        break;
       case "sort:false":
       case "sort:true":
         sort = last === "path" ? "path" : "relevance";
@@ -514,6 +582,25 @@ export function normalize(p: ParsedQuery): string {
         break;
       case "facets":
         if (p.facets) parts.push("facets:1");
+        break;
+      case "model":
+        if (p.filters.model !== null) parts.push(`model:${quoteIfNeeded(p.filters.model)}`);
+        break;
+      case "controller":
+        if (p.filters.controller !== null)
+          parts.push(`controller:${quoteIfNeeded(p.filters.controller)}`);
+        break;
+      case "action":
+        if (p.filters.action !== null) parts.push(`action:${quoteIfNeeded(p.filters.action)}`);
+        break;
+      case "route":
+        if (p.filters.route !== null) parts.push(`route:${quoteIfNeeded(p.filters.route)}`);
+        break;
+      case "job":
+        if (p.filters.job !== null) parts.push(`job:${quoteIfNeeded(p.filters.job)}`);
+        break;
+      case "rails":
+        if (p.filters.rails !== null) parts.push(`rails:${quoteIfNeeded(p.filters.rails)}`);
         break;
       default:
         break;

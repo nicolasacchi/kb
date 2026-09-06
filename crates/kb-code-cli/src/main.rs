@@ -1761,6 +1761,91 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ScopeCmd,
     },
+    // ── V72-I1 (kb-code v7.2 "Rails") — appended at the END of `Cmd` per
+    // the standing convention, so concurrent sibling units' own new
+    // top-level verbs stay disjoint. ─────────────────────────────────────
+    /// `kb-code rails <sub> --repo R [--q TEXT] [--json]` — `rails/1`
+    /// (`GET /api/rails/*`): the Rails ENTITY INDEX, a per-request join of
+    /// the entity index, the `rails-lens/1` convention edges and the mirror
+    /// index into eight nouns, plus the orphan triage report.
+    ///
+    /// Every row carries its ADDRESS (path, line, blob, fqn or route
+    /// triple), its trust class and the WITNESSES that produced it. No row
+    /// this family emits is ever `exact` — a directory name and an English
+    /// pluralisation are conventions, so `likely` is the ceiling by
+    /// construction (see `kb_code_server::rails::noun_trust`).
+    Rails {
+        #[command(subcommand)]
+        cmd: RailsCmd,
+    },
+}
+
+/// `kb-code rails <sub>` — V72-I1. One subcommand per `rails/1` surface;
+/// `--repo` is the one required flag on every one of them, and every list
+/// takes the same `--q`/`--limit`/`--offset` page controls.
+#[derive(Subcommand, Debug)]
+enum RailsCmd {
+    /// `kb-code rails home --repo R [--json]` — the passport: framework
+    /// detection, the resolved Rails version (or an honest "unknown"),
+    /// TRUE totals per noun, and the lens's own freshness.
+    Home {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code rails models --repo R [--q TEXT] [--limit N] [--offset N]`.
+    Models(RailsListArgs),
+    /// `kb-code rails controllers --repo R [--q TEXT] […]`.
+    Controllers(RailsListArgs),
+    /// `kb-code rails actions --repo R [--q TEXT] […]` — public controller
+    /// methods; visibility is read with a line scan under a budget, so a
+    /// row may honestly say `unknown`.
+    Actions(RailsListArgs),
+    /// `kb-code rails routes --repo R [--q TEXT] […]` — verb + path +
+    /// `controller#action`; a route whose target was not found is flagged.
+    Routes(RailsListArgs),
+    /// `kb-code rails jobs --repo R [--q TEXT] […]`.
+    Jobs(RailsListArgs),
+    /// `kb-code rails mailers --repo R [--q TEXT] […]`.
+    Mailers(RailsListArgs),
+    /// `kb-code rails views --repo R [--q TEXT] […]`.
+    Views(RailsListArgs),
+    /// `kb-code rails concerns --repo R [--q TEXT] […]`.
+    Concerns(RailsListArgs),
+    /// `kb-code rails orphans --repo R [--json]` — six triage lanes, each
+    /// naming its own witness and why it might be wrong. A queue to read,
+    /// never a verdict.
+    Orphans {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The flags every `rails/1` LIST verb takes — one struct so eight
+/// subcommands cannot drift apart.
+#[derive(clap::Args, Debug)]
+struct RailsListArgs {
+    #[arg(long)]
+    repo: String,
+    /// Case-insensitive substring over a row's name and path. Applied
+    /// before the total is counted, so `total` stays the true one.
+    #[arg(long)]
+    q: Option<String>,
+    #[arg(long)]
+    limit: Option<usize>,
+    #[arg(long)]
+    offset: Option<usize>,
+    #[arg(long, default_value = "http://127.0.0.1:4747")]
+    daemon: String,
+    #[arg(long)]
+    json: bool,
 }
 
 /// `kb-code scope <sub>` — V71-F1.
@@ -4886,6 +4971,23 @@ async fn run(cli: Cli) -> Result<()> {
                 daemon,
                 json,
             } => scope_import_cmd(&daemon, &repo, &source, json).await,
+        },
+        // V72-I1 — `rails/1`. Every list subcommand routes through ONE
+        // handler with the noun as data, so a ninth noun is a clap variant
+        // and a match arm, never a ninth copy of the request builder.
+        Cmd::Rails { cmd } => match cmd {
+            RailsCmd::Home { repo, daemon, json } => rails_home_cmd(&daemon, &repo, json).await,
+            RailsCmd::Models(a) => rails_list_cmd("models", &a).await,
+            RailsCmd::Controllers(a) => rails_list_cmd("controllers", &a).await,
+            RailsCmd::Actions(a) => rails_list_cmd("actions", &a).await,
+            RailsCmd::Routes(a) => rails_list_cmd("routes", &a).await,
+            RailsCmd::Jobs(a) => rails_list_cmd("jobs", &a).await,
+            RailsCmd::Mailers(a) => rails_list_cmd("mailers", &a).await,
+            RailsCmd::Views(a) => rails_list_cmd("views", &a).await,
+            RailsCmd::Concerns(a) => rails_list_cmd("concerns", &a).await,
+            RailsCmd::Orphans { repo, daemon, json } => {
+                rails_orphans_cmd(&daemon, &repo, json).await
+            }
         },
     }
 }
@@ -16709,6 +16811,244 @@ async fn scope_import_cmd(daemon: &str, repo: &str, source: &str, json: bool) ->
     Ok(())
 }
 
+// ── V72-I1 — `rails/1` (`GET /api/rails/*`) ──────────────────────────────
+//
+// Every request below is built by ONE function per shape, and the paths come
+// from `kb_code_server::rails::routes`'s own `RouteContract` consts rather
+// than from string literals here — so the verb cannot address a path the
+// daemon does not register, and `cli_requests_send_every_param_their_route_requires`
+// can walk the two against each other.
+//
+// The renderers are FORMATTERS. Every number they print is the daemon's own
+// (`counts`, `total`, `returned`, each lane's `total`); none is re-derived
+// from the rows that happened to arrive, which is how a second, disagreeing
+// implementation starts.
+
+use kb_code_server::rails::routes as rails_routes;
+
+/// The `/api/rails/<noun>` list path for one plural noun segment, taken from
+/// the route's own declared contract.
+fn rails_list_path(noun: &str) -> &'static str {
+    match noun {
+        "models" => rails_routes::RAILS_MODELS_ROUTE.path,
+        "controllers" => rails_routes::RAILS_CONTROLLERS_ROUTE.path,
+        "actions" => rails_routes::RAILS_ACTIONS_ROUTE.path,
+        "routes" => rails_routes::RAILS_ROUTES_ROUTE.path,
+        "jobs" => rails_routes::RAILS_JOBS_ROUTE.path,
+        "mailers" => rails_routes::RAILS_MAILERS_ROUTE.path,
+        "views" => rails_routes::RAILS_VIEWS_ROUTE.path,
+        "concerns" => rails_routes::RAILS_CONCERNS_ROUTE.path,
+        // Unreachable through clap (the noun is a variant, not a string the
+        // user types) — an honest fallback rather than a panic.
+        _ => rails_routes::RAILS_MODELS_ROUTE.path,
+    }
+}
+
+/// The `GET /api/rails/home` request: `(path, query)`.
+fn rails_home_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        rails_routes::RAILS_HOME_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+/// The `GET /api/rails/orphans` request: `(path, query)`.
+fn rails_orphans_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        rails_routes::RAILS_ORPHANS_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+/// The `GET /api/rails/<noun>` request: `(path, query)`. `repo` is always
+/// sent — the route's one required param.
+fn rails_list_request(
+    noun: &str,
+    repo: &str,
+    q: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query: Vec<(&'static str, String)> = vec![("repo", repo.to_string())];
+    if let Some(q) = q.filter(|s| !s.is_empty()) {
+        query.push(("q", q.to_string()));
+    }
+    if let Some(n) = limit {
+        query.push(("limit", n.to_string()));
+    }
+    if let Some(n) = offset {
+        query.push(("offset", n.to_string()));
+    }
+    (rails_list_path(noun), query)
+}
+
+/// `kb-code rails home --repo R` — the passport.
+async fn rails_home_cmd(daemon: &str, repo: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = rails_home_request(repo);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        envelope::print_ok("rails/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    let version = body["rails_version"].as_str().unwrap_or("unknown");
+    let source = body["version_source"].as_str().unwrap_or("no source");
+    println!(
+        "{}  rails {version} ({source})  {}",
+        body["repo"].as_str().unwrap_or(repo),
+        if body["detected"].as_bool().unwrap_or(false) {
+            "detected"
+        } else {
+            "NOT a Rails app"
+        }
+    );
+    if let Some(counts) = body["counts"].as_object() {
+        let line = counts
+            .iter()
+            .map(|(k, v)| format!("{k} {}", v.as_u64().unwrap_or(0)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("{line}");
+    }
+    let lens = &body["lens"];
+    println!(
+        "lens: {} edges over {} files ({}), generation {}, {} orphaned source path(s)",
+        lens["edges_total"].as_u64().unwrap_or(0),
+        lens["source_files"].as_u64().unwrap_or(0),
+        lens["grammar_version"].as_str().unwrap_or("?"),
+        lens["generation"].as_u64().unwrap_or(0),
+        lens["orphan_source_files"].as_u64().unwrap_or(0),
+    );
+    print_rails_honesty(&body);
+    print_rails_notes(&body);
+    Ok(())
+}
+
+/// `kb-code rails <noun> --repo R [--q …]` — one page of one noun.
+async fn rails_list_cmd(noun: &str, args: &RailsListArgs) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) =
+        rails_list_request(noun, &args.repo, args.q.as_deref(), args.limit, args.offset);
+    let body = get_json(&client, &args.daemon, path, &as_query_pairs(&query)).await?;
+    if args.json {
+        envelope::print_ok("rails/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for row in body["rows"].as_array().unwrap_or(&empty) {
+        let line = row["line"]
+            .as_u64()
+            .map(|n| format!(":{n}"))
+            .unwrap_or_default();
+        let mut tail: Vec<String> = Vec::new();
+        if let Some(t) = row["table"].as_str() {
+            tail.push(format!("table={t}"));
+        }
+        if let Some(v) = row["visibility"].as_str() {
+            tail.push(format!("visibility={v}"));
+        }
+        if let Some(counts) = row["counts"].as_object() {
+            for (k, v) in counts {
+                tail.push(format!("{k}={}", v.as_u64().unwrap_or(0)));
+            }
+        }
+        if let Some(flags) = row["flags"].as_array() {
+            for f in flags {
+                if let Some(f) = f.as_str() {
+                    tail.push(format!("!{f}"));
+                }
+            }
+        }
+        println!(
+            "{:<9} {}  {}{}  {}",
+            row["trust"].as_str().unwrap_or("?"),
+            row["name"].as_str().unwrap_or(""),
+            row["path"].as_str().unwrap_or(""),
+            line,
+            tail.join(" ")
+        );
+    }
+    println!(
+        "{} of {} (offset {}, limit {}){}",
+        body["returned"].as_u64().unwrap_or(0),
+        body["total"].as_u64().unwrap_or(0),
+        body["offset"].as_u64().unwrap_or(0),
+        body["limit"].as_u64().unwrap_or(0),
+        if body["truncated"].as_bool().unwrap_or(false) {
+            " — truncated"
+        } else {
+            ""
+        }
+    );
+    print_rails_honesty(&body);
+    print_rails_notes(&body);
+    Ok(())
+}
+
+/// `kb-code rails orphans --repo R` — the triage queue.
+async fn rails_orphans_cmd(daemon: &str, repo: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = rails_orphans_request(repo);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        envelope::print_ok("rails/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for l in body["lanes"].as_array().unwrap_or(&empty) {
+        println!(
+            "\n{} — {} ({} of {}{})",
+            l["id"].as_str().unwrap_or(""),
+            l["title"].as_str().unwrap_or(""),
+            l["returned"].as_u64().unwrap_or(0),
+            l["total"].as_u64().unwrap_or(0),
+            if l["truncated"].as_bool().unwrap_or(false) {
+                ", truncated"
+            } else {
+                ""
+            }
+        );
+        println!("  why: {}", l["why"].as_str().unwrap_or(""));
+        if let Some(r) = l["reason"].as_str() {
+            println!("  note: {r}");
+        }
+        for row in l["rows"].as_array().unwrap_or(&empty) {
+            let line = row["line"]
+                .as_u64()
+                .map(|n| format!(":{n}"))
+                .unwrap_or_default();
+            println!(
+                "  {:<9} {}  {}{}",
+                row["trust"].as_str().unwrap_or("?"),
+                row["name"].as_str().unwrap_or(""),
+                row["path"].as_str().unwrap_or(""),
+                line
+            );
+        }
+    }
+    println!("\n{}", body["caption"].as_str().unwrap_or(""));
+    print_rails_honesty(&body);
+    Ok(())
+}
+
+/// The one-line read state every `rails/1` response carries.
+fn print_rails_honesty(body: &serde_json::Value) {
+    let h = &body["honesty"];
+    match h["reason"].as_str() {
+        Some(r) => println!("state: {} — {r}", h["state"].as_str().unwrap_or("?")),
+        None => println!("state: {}", h["state"].as_str().unwrap_or("?")),
+    }
+}
+
+fn print_rails_notes(body: &serde_json::Value) {
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for n in body["notes"].as_array().unwrap_or(&empty) {
+        if let Some(n) = n.as_str() {
+            println!("note: {n}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19366,6 +19706,17 @@ mod tests {
             // to `entities::dossier::V72_G1_ROUTES` with no verb building
             // a request for it fails HERE, by path.
             entity_dossier_request("repo", "Shop::Order", &EntityDossierOpts::default()),
+            // V72-I1 — the ten `rails/1` routes join the SAME walk.
+            rails_home_request("repo"),
+            rails_orphans_request("repo"),
+            rails_list_request("models", "repo", None, None, None),
+            rails_list_request("controllers", "repo", None, None, None),
+            rails_list_request("actions", "repo", None, None, None),
+            rails_list_request("routes", "repo", None, None, None),
+            rails_list_request("jobs", "repo", None, None, None),
+            rails_list_request("mailers", "repo", None, None, None),
+            rails_list_request("views", "repo", None, None, None),
+            rails_list_request("concerns", "repo", None, None, None),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -19385,7 +19736,9 @@ mod tests {
             // of the dead-surface rule: a declared route with no verb
             // building a request for it fails here, by path.
             .chain(kb_code_server::syntax::V72_H1_ROUTES.iter())
-            .chain(kb_code_server::entities::dossier::V72_G1_ROUTES.iter());
+            .chain(kb_code_server::entities::dossier::V72_G1_ROUTES.iter())
+            // V72-I1 — and one more, the same way.
+            .chain(kb_code_server::rails::routes::V72_I1_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
@@ -19400,6 +19753,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// V72-I1 — the eight list nouns must map to EIGHT distinct declared
+    /// paths. `rails_list_path`'s `_ =>` fallback exists so an
+    /// unreachable-through-clap noun cannot panic; this walk is what keeps
+    /// it from silently swallowing a real one.
+    #[test]
+    fn every_rails_list_noun_addresses_its_own_declared_route() {
+        let nouns = [
+            "models",
+            "controllers",
+            "actions",
+            "routes",
+            "jobs",
+            "mailers",
+            "views",
+            "concerns",
+        ];
+        let mut paths: Vec<&str> = nouns.iter().map(|n| rails_list_path(n)).collect();
+        let declared: Vec<&str> = kb_code_server::rails::routes::V72_I1_ROUTES
+            .iter()
+            .map(|c| c.path)
+            .collect();
+        for p in &paths {
+            assert!(declared.contains(p), "{p} is not a declared route");
+        }
+        paths.sort_unstable();
+        let before = paths.len();
+        paths.dedup();
+        assert_eq!(before, paths.len(), "two nouns share a route path");
+        assert_eq!(
+            before + 2,
+            declared.len(),
+            "the declared set is the eight lists plus home and orphans"
+        );
+    }
+
+    /// The page controls are OPTIONAL and omitted when absent — a `q=` that
+    /// went out empty would silently narrow every list to nothing.
+    #[test]
+    fn a_rails_list_request_omits_the_page_controls_it_was_not_given() {
+        let (_, q) = rails_list_request("models", "repo", None, None, None);
+        assert_eq!(q, vec![("repo", "repo".to_string())]);
+        let (_, q) = rails_list_request("models", "repo", Some(""), None, None);
+        assert_eq!(
+            q,
+            vec![("repo", "repo".to_string())],
+            "an empty --q is not sent"
+        );
+        let (_, q) = rails_list_request("views", "repo", Some("show"), Some(5), Some(10));
+        assert_eq!(
+            q,
+            vec![
+                ("repo", "repo".to_string()),
+                ("q", "show".to_string()),
+                ("limit", "5".to_string()),
+                ("offset", "10".to_string()),
+            ]
+        );
     }
 
     // --- V71-E2: `act`'s own declaration↔consumer walk ---------------------
