@@ -2,7 +2,7 @@
 //!
 //! A review is a **Markdown document with YAML front matter**, stored per
 //! review + patchset as an append-only chain of revisions (`review_docs`,
-//! migration V0032). The body is Markdown and never HTML: D9-a records why
+//! migration V0034). The body is Markdown and never HTML: D9-a records why
 //! (HTML is a permanent XSS surface, cannot be interdiffed across
 //! re-reviews, and its references are dead text). The operator's HTML
 //! artifact is met one level up — [`render`] turns the SAME document into
@@ -160,7 +160,7 @@ pub const ACTS: [&str; 8] = [
 
 /// `category` v2 — the SUBJECT axis. Note that `review_findings.category`
 /// remains free text at the STORAGE layer (V0024's own convention, and
-/// every pre-V0032 row's value): this closed vocabulary is enforced on the
+/// every pre-V0034 row's value): this closed vocabulary is enforced on the
 /// `compose`/document path only, and `lint` reports an out-of-vocabulary
 /// category on the low-level `findings import` twin as an INFO rather than
 /// rewriting anyone's existing rows.

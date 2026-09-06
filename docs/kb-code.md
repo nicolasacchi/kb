@@ -1352,7 +1352,7 @@ Design of record: D9 + D9-a + Track K of
 ### The document
 
 A `kbc-review/1` document is **Markdown with YAML front matter**, stored per
-review and patchset in `review_docs` (migration V0032) as an **append-only
+review and patchset in `review_docs` (migration V0034) as an **append-only
 chain of revisions** — `compose` never updates a row, it appends the next
 revision and the highest wins on read. The body is Markdown and never HTML.
 D9-a records why: HTML is a permanent XSS surface, cannot be interdiffed
@@ -1457,7 +1457,7 @@ daemon has indexed — a pure store lookup, never derived in a handler.
 
 ### Findings v2
 
-Additive on `review_findings` (V0032), beside the unchanged `severity`
+Additive on `review_findings` (V0034), beside the unchanged `severity`
 (`blocker|concern|ok`) and the unchanged origin rule:
 
 - `act` — `issue|question|suggestion|nitpick|praise|note|todo|chore`
@@ -1467,7 +1467,7 @@ Additive on `review_findings` (V0032), beside the unchanged `severity`
 - `cites` — SECONDARY refs; the PRIMARY location stays the annotation anchor
   that gives the finding its ladder, its thread and its GitHub export
 - `fingerprint` — a stable hash of `act + category + normalised title +
-  primary path`; NULL on every pre-V0032 row and never backfilled
+  primary path`; NULL on every pre-V0034 row and never backfilled
 - `superseded_by` — the slug that replaced a tombstoned finding, written
   ONLY when an incoming finding declared `supersedes: [<slug>]`; never inferred
 
