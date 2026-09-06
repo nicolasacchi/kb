@@ -111,6 +111,17 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "join/backfill_tests.rs",
     "join/ladder_tests.rs",
     "join/local.rs",
+    // V72-H4a's `git.behavior` lane. Audited when the lint caught it: the
+    // PRODUCTION code in this file spawns nothing — every one of its four
+    // git invocations goes through `history::run_git_raw` — and the only
+    // `Command::new("git")` is the `#[cfg(test)]` fixture builder that
+    // constructs a synthetic repo, exactly the case `git_status.rs`'s own
+    // note records. Its one caller-supplied value is a PATHSPEC (the facts
+    // route's `?path=`), passed after an explicit `--` and asserted by
+    // `caller_supplied_pathspecs_are_preceded_by_a_double_dash` below; the
+    // only other interpolated argv entries are shas the daemon read out of
+    // its OWN `git log` output and re-validated as 40 hex characters.
+    "lanes/git_behavior.rs",
     "mirror/reconcile.rs",
     "provenance/report.rs",
     "recipes.rs",
