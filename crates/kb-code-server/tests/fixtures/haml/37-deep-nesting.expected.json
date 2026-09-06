@@ -1,0 +1,89 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "div",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "div",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": [
+            {
+              "kind": "tag",
+              "name": "div",
+              "attributes": {},
+              "self_closing": false,
+              "inline": null,
+              "children": [
+                {
+                  "kind": "tag",
+                  "name": "div",
+                  "attributes": {},
+                  "self_closing": false,
+                  "inline": null,
+                  "children": [
+                    {
+                      "kind": "tag",
+                      "name": "div",
+                      "attributes": {},
+                      "self_closing": false,
+                      "inline": null,
+                      "children": [
+                        {
+                          "kind": "tag",
+                          "name": "p",
+                          "attributes": {},
+                          "self_closing": false,
+                          "inline": {
+                            "text": "deep"
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "tag",
+                  "name": "p",
+                  "attributes": {},
+                  "self_closing": false,
+                  "inline": {
+                    "text": "back up"
+                  },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "further up"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "root"
+      },
+      "children": []
+    }
+  ]
+}

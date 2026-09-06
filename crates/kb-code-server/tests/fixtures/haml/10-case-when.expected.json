@@ -1,0 +1,59 @@
+{
+  "nodes": [
+    {
+      "kind": "silent_script",
+      "ruby": "case @state",
+      "keyword": "case",
+      "children": [
+        {
+          "kind": "silent_script",
+          "ruby": "when :open",
+          "keyword": "when",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "open"
+          },
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "when :closed",
+          "keyword": "when",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "closed"
+          },
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "else",
+          "keyword": "else",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "unknown"
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

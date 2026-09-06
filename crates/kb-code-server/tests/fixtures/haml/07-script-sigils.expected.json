@@ -1,0 +1,46 @@
+{
+  "nodes": [
+    {
+      "kind": "script",
+      "ruby": "plain_script",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "\"interpolated #{text}\"",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "preserved_script",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "escaped_script",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "unescaped_script",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "\"toggled #{text}\"",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "\"toggled_too #{text}\"",
+      "keyword": null,
+      "children": []
+    }
+  ]
+}

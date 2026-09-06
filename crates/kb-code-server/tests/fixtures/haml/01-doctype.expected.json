@@ -1,0 +1,38 @@
+{
+  "nodes": [
+    {
+      "kind": "doctype",
+      "version": "5",
+      "doctype": "",
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "html",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "head",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": [
+            {
+              "kind": "tag",
+              "name": "title",
+              "attributes": {},
+              "self_closing": false,
+              "inline": {
+                "text": "Acme"
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

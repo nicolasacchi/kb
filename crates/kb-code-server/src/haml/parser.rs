@@ -1,0 +1,1205 @@
+//! `haml/1` — the indentation-aware parser: physical lines
+//! ([`super::lexer`]) → a tree of [`Node`]s, every one carrying its exact
+//! byte range in the ORIGINAL source.
+//!
+//! # The three rules that are not obvious
+//!
+//! 1. **A mid-block keyword is a CHILD of the block it continues, not a
+//!    sibling.** `- else` sits at the same indentation as its `- if`, and
+//!    HAML's own parser attaches it (and everything after it, at any
+//!    depth) to the `if` node. This scanner reproduces that shape exactly
+//!    ([`MID_BLOCK_KEYWORDS`], the `==` arm of the level stack in
+//!    [`parse`]) — not for cosmetic parity with the gem, but because it is
+//!    what makes the synthesized Ruby program in [`super::extract`]
+//!    correct: `if` / body / `else` / body / one `end`, from a plain
+//!    in-order walk with no second pass.
+//! 2. **Indentation is compared in BYTES, and a dedent that lands between
+//!    two open levels is a diagnostic, not a guess.** The scanner snaps to
+//!    the nearest enclosing level and records
+//!    [`super::DiagnosticKind::InconsistentDedent`]; HAML itself raises
+//!    here. Showing the file with a caption beats refusing to show it.
+//! 3. **A continuation is resolved by the SOURCE, never by a heuristic
+//!    line count.** An attribute list runs until its brackets balance (a
+//!    scan that respects string literals AND nested `#{}`), a `|` block
+//!    runs until a line does not end in `|`, and a trailing comma pulls in
+//!    exactly one more line. Each is capped ([`MAX_CONTINUATION_LINES`]),
+//!    and hitting the cap is a diagnostic — an unterminated `{` must not
+//!    silently swallow a whole file.
+//!
+//! Nothing here interprets Ruby. A script line's payload is recorded as a
+//! byte range plus its text; who parses it, and with what, is
+//! [`super::extract`]'s decision.
+
+use super::lexer::{self, is_name_byte, PhysLine, Sigil, Span};
+use super::{Diagnostic, DiagnosticKind};
+
+/// HAML's own `MID_BLOCK_KEYWORDS`, verbatim (`Haml::Parser`). A line
+/// opening with one of these continues the enclosing block rather than
+/// closing it.
+pub const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
+
+/// HAML's own `START_BLOCK_KEYWORDS`, verbatim. Note what is NOT here:
+/// `while`/`until`/`for`/`def` open a Ruby block but HAML does not TAG
+/// them, and this scanner does not either — the tag is a faithfulness
+/// property, and [`super::extract`]'s `end` synthesis keys on the
+/// indentation tree instead, which is true for all of them.
+pub const START_BLOCK_KEYWORDS: &[&str] = &["if", "begin", "case", "unless"];
+
+/// The most physical lines any single continuation may absorb. An
+/// unterminated `{` would otherwise consume the rest of the file and
+/// report one enormous node.
+pub const MAX_CONTINUATION_LINES: usize = 256;
+
+/// Nesting depth cap — a malformed file cannot make the tree walk
+/// unbounded.
+pub const MAX_DEPTH: usize = 256;
+
+/// A parsed HAML document: a flat node arena plus the root ordering, so a
+/// caller walks it without recursion and every node id is stable.
+#[derive(Debug, Clone, Default)]
+pub struct Document {
+    pub nodes: Vec<Node>,
+    pub roots: Vec<usize>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl Document {
+    pub fn node(&self, id: usize) -> &Node {
+        &self.nodes[id]
+    }
+
+    /// Every node id in document (pre-)order.
+    pub fn preorder(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.nodes.len());
+        let mut stack: Vec<usize> = self.roots.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            out.push(id);
+            for c in self.nodes[id].children.iter().rev() {
+                stack.push(*c);
+            }
+        }
+        out
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    /// 1-based line the node starts on.
+    pub line: u32,
+    /// Indentation byte count of the node's first line.
+    pub indent: u32,
+    /// The node's OWN source — its first line plus every continuation line
+    /// it absorbed (and, for a filter or a HAML comment, its swallowed
+    /// body). Never its structural children.
+    pub span: Span,
+    pub kind: NodeKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum NodeKind {
+    Doctype(Doctype),
+    Tag(Tag),
+    /// A plain-text line (`Sigil::Plain`, `Escape`, `PlainInterpolated`,
+    /// `PlainEscapeToggle`).
+    Plain(Text),
+    /// `=` / `~` / `&=` / `!=`.
+    Script(Script),
+    /// `-`.
+    SilentScript(Script),
+    /// `-#` and everything it swallowed.
+    HamlComment(Swallowed),
+    /// `/`, optionally conditional.
+    HtmlComment(HtmlComment),
+    /// `:name` and its opaque body.
+    Filter(Filter),
+}
+
+impl NodeKind {
+    /// The `haml/1` kind string — the vocabulary the outline, the wire and
+    /// the divergence corpus all speak. Deliberately the SAME words HAML's
+    /// own `ParseNode#type` uses, so a corpus expectation generated by the
+    /// gem and one produced here are comparable without a translation
+    /// table nobody can audit.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NodeKind::Doctype(_) => "doctype",
+            NodeKind::Tag(_) => "tag",
+            NodeKind::Plain(_) => "plain",
+            NodeKind::Script(_) => "script",
+            NodeKind::SilentScript(_) => "silent_script",
+            NodeKind::HamlComment(_) => "haml_comment",
+            NodeKind::HtmlComment(_) => "comment",
+            NodeKind::Filter(_) => "filter",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Doctype {
+    /// The text after `!!!`, trimmed (`"5"`, `"XML"`, `""`).
+    pub text: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Tag {
+    pub name: String,
+    pub name_span: Span,
+    /// `false` for the `.class`/`#id` implicit-`div` shorthands.
+    pub name_explicit: bool,
+    pub shorthand: Vec<Shorthand>,
+    pub attrs: Vec<AttrGroup>,
+    pub self_closing: bool,
+    /// `%tag>` — remove the whitespace OUTSIDE the tag.
+    pub nuke_outer: bool,
+    /// `%tag<` — remove the whitespace INSIDE the tag.
+    pub nuke_inner: bool,
+    pub inline: Option<Inline>,
+}
+
+impl Tag {
+    /// The outline's display name: `section#hero.big` — the tag, then its
+    /// id, then its classes in SOURCE order.
+    pub fn display_name(&self) -> String {
+        let mut s = self.name.clone();
+        for sh in &self.shorthand {
+            if sh.kind == ShorthandKind::Id {
+                s.push('#');
+                s.push_str(&sh.name);
+            }
+        }
+        for sh in &self.shorthand {
+            if sh.kind == ShorthandKind::Class {
+                s.push('.');
+                s.push_str(&sh.name);
+            }
+        }
+        s
+    }
+
+    /// The static `id`/`class` attribute pair HAML itself reports, built
+    /// from the shorthands and the HTML-style attribute groups. Classes
+    /// are space-joined in source order, shorthands first — the gem's own
+    /// merge order.
+    pub fn static_attributes(&self) -> Vec<(String, String)> {
+        let mut classes: Vec<String> = self
+            .shorthand
+            .iter()
+            .filter(|s| s.kind == ShorthandKind::Class)
+            .map(|s| s.name.clone())
+            .collect();
+        let mut id: Option<String> = self
+            .shorthand
+            .iter()
+            .find(|s| s.kind == ShorthandKind::Id)
+            .map(|s| s.name.clone());
+        let mut others: Vec<(String, String)> = Vec::new();
+        for g in &self.attrs {
+            if g.form != AttrForm::HtmlStyle {
+                continue;
+            }
+            for a in &g.statics {
+                match a.name.as_str() {
+                    "class" => classes.push(a.value.clone()),
+                    "id" => id = Some(a.value.clone()),
+                    _ => others.push((a.name.clone(), a.value.clone())),
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if !classes.is_empty() {
+            out.push(("class".to_string(), classes.join(" ")));
+        }
+        if let Some(id) = id {
+            out.push(("id".to_string(), id));
+        }
+        out.extend(others);
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShorthandKind {
+    Class,
+    Id,
+}
+
+#[derive(Debug, Clone)]
+pub struct Shorthand {
+    pub kind: ShorthandKind,
+    pub name: String,
+    /// Covers the `.`/`#` and the name.
+    pub span: Span,
+    /// Interpolations inside a dynamic shorthand (`.item-#{i}`).
+    pub interpolations: Vec<Span>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttrForm {
+    /// `{ … }` — a Ruby hash. Its contents are a Ruby FRAGMENT.
+    RubyHash,
+    /// `( … )` — HTML-style. Literal `name="value"` pairs; a `#{}` inside
+    /// a value is still a Ruby fragment.
+    HtmlStyle,
+    /// `[ … ]` — an object reference. Ruby.
+    ObjectRef,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttrGroup {
+    pub form: AttrForm,
+    /// Includes the brackets.
+    pub span: Span,
+    /// Excludes the brackets.
+    pub inner: Span,
+    /// Literal pairs — only ever populated for [`AttrForm::HtmlStyle`].
+    pub statics: Vec<StaticAttr>,
+    pub interpolations: Vec<Span>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticAttr {
+    pub name: String,
+    pub name_span: Span,
+    pub value: String,
+    /// The value INCLUDING its quotes, so a highlighter can paint them.
+    pub value_span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum Inline {
+    Text(Text),
+    Script(Script),
+}
+
+/// Literal text plus the interpolations found inside it.
+#[derive(Debug, Clone)]
+pub struct Text {
+    pub span: Span,
+    pub value: String,
+    /// The INNER Ruby of each `#{…}`, in source order.
+    pub interpolations: Vec<Span>,
+    /// True when `value` is exactly `span`'s source bytes — false when a
+    /// `|` continuation or a `\` escape means the text was reassembled.
+    pub verbatim: bool,
+    /// `==` / `&` / `!` — text HAML always interpolates, which its own
+    /// parser reports as a `script` node holding a Ruby string literal
+    /// rather than as plain text. Recorded so
+    /// [`super::projection`] can reproduce that shape without
+    /// re-deriving which sigil produced the line.
+    pub forced_script: bool,
+}
+
+impl Text {
+    pub fn has_interpolation(&self) -> bool {
+        !self.interpolations.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Script {
+    pub sigil: Sigil,
+    /// The sigil's own bytes (empty for a tag's inline `=`… no: an inline
+    /// script has a sigil too). Empty only when the script was synthesized
+    /// from interpolated plain text, which this parser never does.
+    pub sigil_span: Span,
+    /// The Ruby payload's source extent.
+    pub span: Span,
+    /// The Ruby payload. Equal to `span`'s bytes unless a `|` or
+    /// trailing-comma continuation reassembled it.
+    pub code: String,
+    pub verbatim: bool,
+    /// HAML's own block-keyword tag — see [`START_BLOCK_KEYWORDS`] /
+    /// [`MID_BLOCK_KEYWORDS`].
+    pub keyword: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HtmlComment {
+    /// `[if IE]`, brackets included.
+    pub conditional: Option<String>,
+    pub conditional_span: Option<Span>,
+    pub body: Text,
+}
+
+/// A `-#` comment's swallowed body: opaque, never parsed, kept only so the
+/// highlighter can grey it out and the round-trip can prove nothing was
+/// lost.
+#[derive(Debug, Clone)]
+pub struct Swallowed {
+    /// The first line's own text after the sigil.
+    pub head: String,
+    /// The dedented body, `\n`-joined with a trailing newline (HAML's own
+    /// shape), empty when the comment had no nested lines.
+    pub text: String,
+    /// The body's source extent, `None` when there was no body.
+    pub body_span: Option<Span>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Filter {
+    pub name: String,
+    pub name_span: Span,
+    /// Dedented body text, `\n`-joined with a trailing newline.
+    pub text: String,
+    pub body_span: Option<Span>,
+}
+
+/// The filter names HAML ships. An unlisted name is still parsed as a
+/// filter — its body is simply opaque, which is the honest answer for a
+/// filter this build knows nothing about.
+pub const KNOWN_FILTERS: &[&str] = &[
+    "javascript",
+    "css",
+    "ruby",
+    "markdown",
+    "plain",
+    "erb",
+    "preserve",
+    "escaped",
+    "cdata",
+    "coffee",
+    "sass",
+    "scss",
+    "less",
+];
+
+// ── the parse ─────────────────────────────────────────────────────────────
+
+struct Ctx<'a> {
+    src: &'a str,
+    lines: Vec<PhysLine>,
+    doc: Document,
+    tab_reported: bool,
+}
+
+impl Ctx<'_> {
+    fn diag(&mut self, kind: DiagnosticKind, line: u32, span: Span) {
+        // One diagnostic per (kind, line) is enough to caption a file; an
+        // unbounded list on adversarial input is its own bug.
+        if self.doc.diagnostics.len() >= 64 {
+            return;
+        }
+        self.doc.diagnostics.push(Diagnostic { kind, line, span });
+    }
+}
+
+/// Parse `src` (already known-valid UTF-8; [`super::scan`] owns the
+/// bytes→str step and its own diagnostic).
+pub fn parse_str(src: &str) -> Document {
+    let lines = lexer::split_lines(src);
+    let mut ctx = Ctx {
+        src,
+        lines,
+        doc: Document::default(),
+        tab_reported: false,
+    };
+    // The open-block stack: `(node id, that node's indentation)`.
+    let mut stack: Vec<(usize, u32)> = Vec::new();
+    let mut i = 0usize;
+    while i < ctx.lines.len() {
+        let line = ctx.lines[i];
+        if line.blank {
+            i += 1;
+            continue;
+        }
+        if line.has_tab_indent && !ctx.tab_reported {
+            ctx.tab_reported = true;
+            ctx.diag(
+                DiagnosticKind::TabIndent,
+                line.line_no,
+                Span::new(line.start as usize, line.content_start as usize),
+            );
+        }
+        let Some(sigil) = lexer::classify(line.content(ctx.src)) else {
+            i += 1;
+            continue;
+        };
+        let (kind, span, next) = build_node(&mut ctx, i, sigil);
+        let indent = line.indent;
+
+        // The level stack — rule 1 and rule 2 of the module doc.
+        let is_mid = matches!(&kind, NodeKind::SilentScript(s) | NodeKind::Script(s)
+            if s.keyword.as_deref().is_some_and(|k| MID_BLOCK_KEYWORDS.contains(&k)));
+        let mut popped_any = false;
+        let mut popped_exact = false;
+        loop {
+            let Some(&(top_id, top_indent)) = stack.last() else {
+                break;
+            };
+            if top_indent > indent {
+                stack.pop();
+                popped_any = true;
+                continue;
+            }
+            if top_indent == indent {
+                let top_is_script = matches!(
+                    ctx.doc.nodes[top_id].kind,
+                    NodeKind::Script(_) | NodeKind::SilentScript(_)
+                );
+                if is_mid && top_is_script {
+                    break; // attach to the block this keyword continues
+                }
+                stack.pop();
+                popped_any = true;
+                popped_exact = true;
+                continue;
+            }
+            break;
+        }
+        // Rule 2: a dedent that landed BETWEEN two open levels never
+        // matched a level it could close. HAML raises here; this scanner
+        // snaps to the nearest enclosing level and captions the file.
+        if popped_any && !popped_exact {
+            ctx.diag(DiagnosticKind::InconsistentDedent, line.line_no, span);
+        }
+
+        let parent = stack.last().map(|&(id, _)| id);
+        let id = ctx.doc.nodes.len();
+        ctx.doc.nodes.push(Node {
+            parent,
+            children: Vec::new(),
+            line: line.line_no,
+            indent,
+            span,
+            kind,
+        });
+        match parent {
+            Some(p) => ctx.doc.nodes[p].children.push(id),
+            None => ctx.doc.roots.push(id),
+        }
+        // A mid-block keyword is a LEAF in the tree: everything after it
+        // belongs to the block it continues, not to it (module doc, rule
+        // 1). Everything else may open a level.
+        // The depth cap BINDS: past it, deeper lines attach to the last
+        // node inside the cap rather than growing the stack. A malformed
+        // file cannot make this walk unbounded.
+        if !is_mid {
+            if stack.len() >= MAX_DEPTH {
+                ctx.diag(DiagnosticKind::DepthLimit, line.line_no, span);
+            } else {
+                stack.push((id, indent));
+            }
+        }
+        i = next;
+    }
+    ctx.doc
+}
+
+/// Build the node starting at physical line `i`, returning it with the
+/// index of the next unconsumed line.
+fn build_node(ctx: &mut Ctx, i: usize, sigil: Sigil) -> (NodeKind, Span, usize) {
+    let line = ctx.lines[i];
+    let content = line.content(ctx.src);
+    let cs = line.content_start as usize;
+    match sigil {
+        Sigil::Doctype => {
+            let after = cs + 3;
+            let text = ctx.src[after..line.end as usize].trim().to_string();
+            (
+                NodeKind::Doctype(Doctype {
+                    text,
+                    span: Span::new(after, line.end as usize),
+                }),
+                Span::new(cs, line.end as usize),
+                i + 1,
+            )
+        }
+        Sigil::HamlComment => {
+            let (text, body_span, next) = swallow_body(ctx, i, cs + 2);
+            let head = ctx.src[cs + 2..line.end as usize].to_string();
+            let end = body_span
+                .map(|s| s.end as usize)
+                .unwrap_or(line.end as usize);
+            (
+                NodeKind::HamlComment(Swallowed {
+                    head,
+                    text,
+                    body_span,
+                }),
+                Span::new(cs, end),
+                next,
+            )
+        }
+        Sigil::Filter => {
+            let name_end = cs
+                + 1
+                + content[1..]
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                    .unwrap_or(content.len() - 1);
+            let name = ctx.src[cs + 1..name_end].to_string();
+            let (text, body_span, next) = swallow_body(ctx, i, name_end);
+            let end = body_span
+                .map(|s| s.end as usize)
+                .unwrap_or(line.end as usize);
+            (
+                NodeKind::Filter(Filter {
+                    name,
+                    name_span: Span::new(cs, name_end),
+                    text,
+                    body_span,
+                }),
+                Span::new(cs, end),
+                next,
+            )
+        }
+        Sigil::HtmlComment => {
+            let rest_start = cs + 1;
+            let rest = &ctx.src[rest_start..line.end as usize];
+            let (conditional, conditional_span, body_start) = if rest.starts_with('[') {
+                match scan_balanced(ctx.src, rest_start, b'[', b']', line.end as usize) {
+                    Some(close) => (
+                        Some(ctx.src[rest_start..close].to_string()),
+                        Some(Span::new(rest_start, close)),
+                        close,
+                    ),
+                    None => (None, None, rest_start),
+                }
+            } else {
+                (None, None, rest_start)
+            };
+            let body = text_from(ctx, body_start, line.end as usize, true);
+            (
+                NodeKind::HtmlComment(HtmlComment {
+                    conditional,
+                    conditional_span,
+                    body,
+                }),
+                Span::new(cs, line.end as usize),
+                i + 1,
+            )
+        }
+        Sigil::Silent
+        | Sigil::Script
+        | Sigil::ScriptPreserve
+        | Sigil::ScriptEscaped
+        | Sigil::ScriptUnescaped => {
+            let w = sigil.width();
+            let (code, span, verbatim, next) = ruby_run(ctx, i, cs + w);
+            let keyword = block_keyword(&code);
+            let script = Script {
+                sigil,
+                sigil_span: Span::new(cs, cs + w),
+                span,
+                code,
+                verbatim,
+                keyword,
+            };
+            let end = span.end as usize;
+            let kind = if sigil == Sigil::Silent {
+                NodeKind::SilentScript(script)
+            } else {
+                NodeKind::Script(script)
+            };
+            (kind, Span::new(cs, end.max(cs)), next)
+        }
+        Sigil::Tag => parse_tag(ctx, i),
+        // Every remaining sigil is plain TEXT. `\` drops its own byte,
+        // `==`/`&`/`!` drop theirs; the payload is identical after that.
+        Sigil::Escape | Sigil::PlainInterpolated | Sigil::PlainEscapeToggle | Sigil::Plain => {
+            let w = sigil.width();
+            let (mut text, next) = text_run(ctx, i, cs + w);
+            text.forced_script =
+                matches!(sigil, Sigil::PlainInterpolated | Sigil::PlainEscapeToggle);
+            let end = text.span.end as usize;
+            (NodeKind::Plain(text), Span::new(cs, end.max(cs)), next)
+        }
+    }
+}
+
+/// Swallow every line deeper than line `i`'s indentation (blank lines
+/// included, as long as a deeper non-blank line follows) — the shape both
+/// `:filter` bodies and `-#` comments have. Returns the DEDENTED text (the
+/// body's own minimum indentation removed, HAML's own normalisation), the
+/// body's source span, and the next unconsumed line.
+fn swallow_body(ctx: &mut Ctx, i: usize, _head_end: usize) -> (String, Option<Span>, usize) {
+    let base = ctx.lines[i].indent;
+    let mut last = i;
+    let mut j = i + 1;
+    while j < ctx.lines.len() {
+        let l = ctx.lines[j];
+        if l.blank || l.indent > base {
+            if !l.blank {
+                last = j;
+            }
+            j += 1;
+            continue;
+        }
+        break;
+    }
+    if last == i {
+        return (String::new(), None, i + 1);
+    }
+    let body_lines = &ctx.lines[i + 1..=last];
+    let min_indent = body_lines
+        .iter()
+        .filter(|l| !l.blank)
+        .map(|l| l.indent)
+        .min()
+        .unwrap_or(base + 2) as usize;
+    let mut text = String::new();
+    for l in body_lines {
+        let content = &ctx.src[l.start as usize..l.end as usize];
+        let cut = min_indent.min(content.len());
+        text.push_str(&content[cut..]);
+        text.push('\n');
+    }
+    let span = Span::new(
+        ctx.lines[i + 1].start as usize,
+        ctx.lines[last].end as usize,
+    );
+    (text, Some(span), last + 1)
+}
+
+/// Read a Ruby payload starting at `start` on line `i`, absorbing `|` and
+/// trailing-comma continuations. Returns `(code, span, verbatim, next)`.
+fn ruby_run(ctx: &mut Ctx, i: usize, start: usize) -> (String, Span, bool, usize) {
+    let line = ctx.lines[i];
+    let first = &ctx.src[start.min(line.end as usize)..line.end as usize];
+    if ends_with_pipe(first) {
+        let (code, span, next) = pipe_run(ctx, i, start);
+        return (code, span, false, next);
+    }
+    if first.trim_end().ends_with(',') {
+        let (code, span, next) = comma_run(ctx, i, start);
+        return (code, span, false, next);
+    }
+    (
+        first.to_string(),
+        Span::new(start.min(line.end as usize), line.end as usize),
+        true,
+        i + 1,
+    )
+}
+
+/// A `|` multiline block: every line ending in `|` — INCLUDING the last —
+/// joins into one logical line. HAML's own join: drop the final `|`
+/// character (keeping the space that preceded it, which is what separates
+/// the pieces), then right-trim the result.
+fn pipe_run(ctx: &mut Ctx, i: usize, start: usize) -> (String, Span, usize) {
+    let mut out = String::new();
+    let mut j = i;
+    let mut end = start;
+    let mut consumed = 0usize;
+    while j < ctx.lines.len() && consumed < MAX_CONTINUATION_LINES {
+        let l = ctx.lines[j];
+        let from = if j == i {
+            start.min(l.end as usize)
+        } else {
+            l.content_start as usize
+        };
+        let piece = &ctx.src[from..l.end as usize];
+        if !ends_with_pipe(piece) {
+            break;
+        }
+        let trimmed = piece.trim_end();
+        out.push_str(&trimmed[..trimmed.len() - 1]);
+        end = l.end as usize;
+        j += 1;
+        consumed += 1;
+    }
+    if consumed == 0 {
+        // Defensive: the caller only enters here when the first line ends
+        // in `|`, so this is unreachable in practice.
+        return (String::new(), Span::new(start, start), i + 1);
+    }
+    if consumed >= MAX_CONTINUATION_LINES {
+        ctx.diag(
+            DiagnosticKind::UnterminatedMultiline,
+            ctx.lines[i].line_no,
+            Span::new(start, end),
+        );
+    }
+    let joined = out.trim_end().to_string();
+    (joined, Span::new(start, end), j)
+}
+
+/// A trailing-comma continuation: exactly one more line, its indentation
+/// stripped and joined with a single space (HAML's own shape).
+fn comma_run(ctx: &mut Ctx, i: usize, start: usize) -> (String, Span, usize) {
+    let line = ctx.lines[i];
+    let mut out = ctx.src[start.min(line.end as usize)..line.end as usize]
+        .trim_end()
+        .to_string();
+    let mut j = i + 1;
+    let mut end = line.end as usize;
+    let mut consumed = 0usize;
+    while out.ends_with(',') && j < ctx.lines.len() && consumed < MAX_CONTINUATION_LINES {
+        let l = ctx.lines[j];
+        if l.blank {
+            break;
+        }
+        out.push(' ');
+        out.push_str(l.content(ctx.src).trim_end());
+        end = l.end as usize;
+        j += 1;
+        consumed += 1;
+    }
+    (out, Span::new(start, end), j)
+}
+
+fn ends_with_pipe(s: &str) -> bool {
+    let t = s.trim_end();
+    t.len() >= 2 && t.ends_with('|') && t.as_bytes()[t.len() - 2] == b' '
+}
+
+/// Read plain text starting at `start`, absorbing `|` continuations.
+fn text_run(ctx: &mut Ctx, i: usize, start: usize) -> (Text, usize) {
+    let line = ctx.lines[i];
+    let first = &ctx.src[start.min(line.end as usize)..line.end as usize];
+    if ends_with_pipe(first) {
+        let (joined, span, next) = pipe_run(ctx, i, start);
+        let interpolations = find_interpolations(ctx, span.start as usize, span.end as usize);
+        return (
+            Text {
+                span,
+                value: joined,
+                interpolations,
+                verbatim: false,
+                forced_script: false,
+            },
+            next,
+        );
+    }
+    (text_from(ctx, start, line.end as usize, false), i + 1)
+}
+
+/// A verbatim text span, optionally with one leading space stripped (a
+/// tag's inline content and an HTML comment's body are both written
+/// `%p text` / `/ text`, and HAML strips exactly that separator).
+fn text_from(ctx: &mut Ctx, start: usize, end: usize, trim: bool) -> Text {
+    let start = start.min(end);
+    let raw = &ctx.src[start..end];
+    let value = if trim { raw.trim() } else { raw }.to_string();
+    let interpolations = find_interpolations(ctx, start, end);
+    Text {
+        span: Span::new(start, end),
+        value,
+        interpolations,
+        verbatim: !trim || raw.len() == value.len(),
+        forced_script: false,
+    }
+}
+
+/// Every `#{…}`'s INNER Ruby range within `[start, end)`. Nested braces and
+/// string literals inside the interpolation are honoured, which is what
+/// makes `#{h({a: "}"})}` one interpolation rather than two halves.
+fn find_interpolations(ctx: &mut Ctx, start: usize, end: usize) -> Vec<Span> {
+    let bytes = ctx.src.as_bytes();
+    let mut out = Vec::new();
+    let mut i = start;
+    while i + 1 < end {
+        if bytes[i] == b'#' && bytes[i + 1] == b'{' {
+            // A `\#{` is an escaped literal, not an interpolation.
+            if i > start && bytes[i - 1] == b'\\' {
+                i += 2;
+                continue;
+            }
+            match scan_balanced(ctx.src, i + 1, b'{', b'}', ctx.src.len()) {
+                Some(close) => {
+                    out.push(Span::new(i + 2, close - 1));
+                    i = close;
+                }
+                None => {
+                    let line = line_of(ctx, i);
+                    ctx.diag(
+                        DiagnosticKind::UnclosedInterpolation,
+                        line,
+                        Span::new(i, end),
+                    );
+                    break;
+                }
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn line_of(ctx: &Ctx, offset: usize) -> u32 {
+    ctx.lines
+        .iter()
+        .rev()
+        .find(|l| (l.start as usize) <= offset)
+        .map(|l| l.line_no)
+        .unwrap_or(1)
+}
+
+// ── the tag line ──────────────────────────────────────────────────────────
+
+fn parse_tag(ctx: &mut Ctx, i: usize) -> (NodeKind, Span, usize) {
+    let line = ctx.lines[i];
+    let cs = line.content_start as usize;
+    let line_end = line.end as usize;
+    let bytes = ctx.src.as_bytes();
+    let mut p = cs;
+
+    // `%name` — or the implicit `div` a `.class`/`#id` line opens with.
+    let (name, name_span, name_explicit) = if bytes[p] == b'%' {
+        let s = p + 1;
+        let mut e = s;
+        while e < line_end && (is_name_byte(bytes[e]) || bytes[e] == b':') {
+            e += 1;
+        }
+        p = e;
+        (ctx.src[s..e].to_string(), Span::new(s, e), true)
+    } else {
+        ("div".to_string(), Span::new(p, p), false)
+    };
+
+    // `.class` / `#id`, any number, any order.
+    let mut shorthand = Vec::new();
+    while p < line_end && (bytes[p] == b'.' || bytes[p] == b'#') {
+        if !bytes
+            .get(p + 1)
+            .copied()
+            .is_some_and(|b| is_name_byte(b) || b == b'#')
+        {
+            break;
+        }
+        let kind = if bytes[p] == b'.' {
+            ShorthandKind::Class
+        } else {
+            ShorthandKind::Id
+        };
+        let s = p;
+        let mut e = p + 1;
+        while e < line_end {
+            if is_name_byte(bytes[e]) {
+                e += 1;
+            } else if bytes[e] == b'#' && bytes.get(e + 1) == Some(&b'{') {
+                match scan_balanced(ctx.src, e + 1, b'{', b'}', ctx.src.len()) {
+                    Some(close) => e = close,
+                    None => break,
+                }
+            } else {
+                break;
+            }
+        }
+        let interpolations = find_interpolations(ctx, s, e);
+        shorthand.push(Shorthand {
+            kind,
+            name: ctx.src[s + 1..e].to_string(),
+            span: Span::new(s, e),
+            interpolations,
+        });
+        p = e;
+    }
+
+    // Attribute groups: `{…}` (Ruby), `(…)` (HTML-style), `[…]` (object
+    // ref). Any number, any order — and a group may run past this line, so
+    // the balanced scan is capped at the FILE end, not the line end.
+    let mut attrs: Vec<AttrGroup> = Vec::new();
+    let mut logical_end = line_end;
+    loop {
+        let Some(&b) = bytes.get(p) else { break };
+        let (form, open, close) = match b {
+            b'{' => (AttrForm::RubyHash, b'{', b'}'),
+            b'(' => (AttrForm::HtmlStyle, b'(', b')'),
+            b'[' => (AttrForm::ObjectRef, b'[', b']'),
+            _ => break,
+        };
+        let cap = continuation_cap(ctx, i);
+        match scan_balanced(ctx.src, p, open, close, cap) {
+            Some(end) => {
+                let inner = Span::new(p + 1, end - 1);
+                let statics = if form == AttrForm::HtmlStyle {
+                    parse_html_attrs(ctx, p + 1, end - 1)
+                } else {
+                    Vec::new()
+                };
+                let interpolations = find_interpolations(ctx, p + 1, end - 1);
+                attrs.push(AttrGroup {
+                    form,
+                    span: Span::new(p, end),
+                    inner,
+                    statics,
+                    interpolations,
+                });
+                logical_end = logical_end.max(end);
+                p = end;
+            }
+            None => {
+                ctx.diag(
+                    DiagnosticKind::UnclosedAttributes,
+                    line.line_no,
+                    Span::new(p, line_end),
+                );
+                p = line_end;
+                break;
+            }
+        }
+    }
+    // Whichever physical line the attribute run ended on is where the rest
+    // of the tag (modifiers, inline content) continues.
+    let tail_line_idx = line_index_at(ctx, logical_end.saturating_sub(1)).unwrap_or(i);
+    let tail_end = ctx.lines[tail_line_idx].end as usize;
+
+    let mut self_closing = false;
+    let mut nuke_outer = false;
+    let mut nuke_inner = false;
+    while p < tail_end {
+        match bytes[p] {
+            b'/' => {
+                self_closing = true;
+                p += 1;
+            }
+            b'>' => {
+                nuke_outer = true;
+                p += 1;
+            }
+            b'<' => {
+                nuke_inner = true;
+                p += 1;
+            }
+            _ => break,
+        }
+    }
+
+    // Inline content: a script sigil, or text after exactly one space.
+    let rest = &ctx.src[p.min(tail_end)..tail_end];
+    let inline_sigil = lexer::classify(rest).filter(|s| {
+        s.is_output_script() || matches!(s, Sigil::PlainInterpolated | Sigil::PlainEscapeToggle)
+    });
+    let (inline, next) = match inline_sigil {
+        Some(s) if s.is_output_script() => {
+            let (code, span, verbatim, next) = ruby_run(ctx, tail_line_idx, p + s.width());
+            let keyword = block_keyword(&code);
+            (
+                Some(Inline::Script(Script {
+                    sigil: s,
+                    sigil_span: Span::new(p, p + s.width()),
+                    span,
+                    code,
+                    verbatim,
+                    keyword,
+                })),
+                next,
+            )
+        }
+        Some(s) => {
+            let (mut text, next) = text_run(ctx, tail_line_idx, p + s.width());
+            text.forced_script = true;
+            (Some(Inline::Text(text)), next)
+        }
+        None => {
+            if p >= tail_end || ctx.src[p..tail_end].trim().is_empty() {
+                (None, tail_line_idx + 1)
+            } else {
+                let (mut text, next) = text_run(ctx, tail_line_idx, p);
+                text.value = text.value.trim().to_string();
+                text.verbatim = false;
+                (Some(Inline::Text(text)), next)
+            }
+        }
+    };
+
+    let end = inline
+        .as_ref()
+        .map(|inl| match inl {
+            Inline::Text(t) => t.span.end as usize,
+            Inline::Script(s) => s.span.end as usize,
+        })
+        .unwrap_or(tail_end)
+        .max(logical_end);
+
+    (
+        NodeKind::Tag(Tag {
+            name,
+            name_span,
+            name_explicit,
+            shorthand,
+            attrs,
+            self_closing,
+            nuke_outer,
+            nuke_inner,
+            inline,
+        }),
+        Span::new(cs, end),
+        next,
+    )
+}
+
+/// The byte offset an attribute continuation may not run past —
+/// [`MAX_CONTINUATION_LINES`] lines on from `i`, or the file end.
+fn continuation_cap(ctx: &Ctx, i: usize) -> usize {
+    let last = (i + MAX_CONTINUATION_LINES).min(ctx.lines.len().saturating_sub(1));
+    ctx.lines
+        .get(last)
+        .map(|l| l.end as usize)
+        .unwrap_or(ctx.src.len())
+}
+
+fn line_index_at(ctx: &Ctx, offset: usize) -> Option<usize> {
+    ctx.lines.iter().rposition(|l| (l.start as usize) <= offset)
+}
+
+/// `name="value"` / `name='value'` pairs inside an HTML-style group.
+/// Deliberately literal-only: a `name=#{expr}` value has no static text to
+/// report, and inventing one would be the kind of guess this crate does
+/// not make.
+fn parse_html_attrs(ctx: &mut Ctx, start: usize, end: usize) -> Vec<StaticAttr> {
+    let bytes = ctx.src.as_bytes();
+    let mut out = Vec::new();
+    let mut i = start;
+    while i < end {
+        while i < end && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        let ns = i;
+        while i < end && (is_name_byte(bytes[i]) || bytes[i] == b':') {
+            i += 1;
+        }
+        if i == ns {
+            i += 1;
+            continue;
+        }
+        let name = ctx.src[ns..i].to_string();
+        let name_span = Span::new(ns, i);
+        if i >= end || bytes[i] != b'=' {
+            continue;
+        }
+        i += 1;
+        if i >= end {
+            break;
+        }
+        let q = bytes[i];
+        if q != b'"' && q != b'\'' {
+            // A non-literal value (`href=#{url}` or a bare word) — recorded
+            // as present, never as a static string.
+            let vs = i;
+            while i < end && !(bytes[i] as char).is_whitespace() {
+                i += 1;
+            }
+            let _ = vs;
+            continue;
+        }
+        let vs = i;
+        i += 1;
+        while i < end && bytes[i] != q {
+            if bytes[i] == b'\\' {
+                i += 1;
+            }
+            i += 1;
+        }
+        let ve = (i + 1).min(end);
+        out.push(StaticAttr {
+            name,
+            name_span,
+            value: ctx.src[vs + 1..i.min(end)].to_string(),
+            value_span: Span::new(vs, ve),
+        });
+        i = ve;
+    }
+    out
+}
+
+// ── shared scanning helpers ───────────────────────────────────────────────
+
+/// Scan from the `open` bracket at `from` to its match, returning the index
+/// just PAST the closing bracket. String literals are skipped whole, and a
+/// `#{…}` inside a double-quoted string is recursed into — which is what
+/// makes `{title: "a#{h(")")}b"}` balance correctly instead of closing at
+/// the `"` inside the interpolation.
+pub fn scan_balanced(src: &str, from: usize, open: u8, close: u8, cap: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let cap = cap.min(bytes.len());
+    if from >= cap || bytes[from] != open {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut i = from;
+    while i < cap {
+        let b = bytes[i];
+        if b == b'"' || b == b'\'' {
+            i = skip_string(src, i, cap);
+            continue;
+        }
+        if b == open {
+            depth += 1;
+        } else if b == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i + 1);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Skip the string literal starting at `i` (its own quote byte), returning
+/// the index just past its closing quote. A double-quoted string's `#{…}`
+/// is scanned as a nested brace run, so a quote inside an interpolation
+/// never terminates the string.
+fn skip_string(src: &str, i: usize, cap: usize) -> usize {
+    let bytes = src.as_bytes();
+    let quote = bytes[i];
+    let mut j = i + 1;
+    while j < cap {
+        match bytes[j] {
+            b'\\' => j += 2,
+            b'#' if quote == b'"' && bytes.get(j + 1) == Some(&b'{') => {
+                match scan_balanced(src, j + 1, b'{', b'}', cap) {
+                    Some(end) => j = end,
+                    None => return cap,
+                }
+            }
+            b if b == quote => return j + 1,
+            _ => j += 1,
+        }
+    }
+    cap
+}
+
+/// HAML's own `BLOCK_KEYWORD_REGEX`, hand-rolled: a mid-block keyword, or
+/// a start-block keyword optionally preceded by an assignment
+/// (`x = if …`). `None` for everything else — including `while`/`for`/
+/// `def`, which HAML does not tag either.
+pub fn block_keyword(code: &str) -> Option<String> {
+    let s = code.trim_start();
+    if let Some(k) = first_word(s).filter(|w| MID_BLOCK_KEYWORDS.contains(w)) {
+        return Some(k.to_string());
+    }
+    let after_assign = strip_assignment(s);
+    first_word(after_assign)
+        .filter(|w| START_BLOCK_KEYWORDS.contains(w))
+        .map(|w| w.to_string())
+}
+
+fn first_word(s: &str) -> Option<&str> {
+    let s = s.trim_start();
+    let end = s
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(s.len());
+    if end == 0 {
+        None
+    } else {
+        Some(&s[..end])
+    }
+}
+
+/// `x = ` / `a, b = ` — HAML's own optional assignment prefix.
+fn strip_assignment(s: &str) -> &str {
+    let mut rest = s;
+    loop {
+        let Some(word) = first_word(rest) else {
+            return s;
+        };
+        let after = rest[word.len()..].trim_start();
+        if let Some(tail) = after.strip_prefix(',') {
+            rest = tail.trim_start();
+            continue;
+        }
+        if let Some(tail) = after.strip_prefix('=') {
+            if tail.starts_with('=') || tail.starts_with('~') {
+                return s;
+            }
+            return tail.trim_start();
+        }
+        return s;
+    }
+}

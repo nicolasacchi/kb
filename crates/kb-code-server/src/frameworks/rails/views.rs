@@ -250,6 +250,31 @@ pub fn extract_erb(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkE
     out
 }
 
+/// PRR-N3's ERB entry point's V72-H3 sibling: the same render/turbo_stream
+/// resolution over a `.haml` view.
+///
+/// It differs from [`extract_erb`] in exactly one line — the WALK — and
+/// deliberately so: `scan_calls`, `resolve_render_call`, `resolve_render`,
+/// `find_view_files` and `make_view_edge` are all shared unchanged, so a
+/// `render "shared/menu"` written in HAML resolves to the same file, with
+/// the same `EdgeKind` and the same `Trust`, as one written in ERB. That
+/// equivalence is pinned by a test (`erb_and_haml_mint_the_same_edges`).
+pub fn extract_haml(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkEdge> {
+    let Some(view_dir) = path.rfind('/').map(|i| path[..i].to_string()) else {
+        return Vec::new();
+    };
+    let ctx = RenderCtx::View { view_dir };
+    let mut out = Vec::new();
+    crate::frameworks::rails::support::walk_haml_ruby_fragments(
+        bytes,
+        &mut out,
+        &mut |root, source, offset, out| {
+            scan_calls(root, source, &ctx, path, repo_root, offset, out);
+        },
+    );
+    out
+}
+
 /// Walk the ERB tree; at every `directive`/`output_directive` tag, re-parse
 /// its `code` child as an independent Ruby fragment (see the module doc's
 /// "ERB per-tag Ruby injection" section) and scan IT for call sites.

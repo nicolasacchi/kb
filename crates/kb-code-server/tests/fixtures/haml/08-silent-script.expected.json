@@ -1,0 +1,31 @@
+{
+  "nodes": [
+    {
+      "kind": "silent_script",
+      "ruby": "x = compute",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "silent_script",
+      "ruby": "helper_call(1, 2)",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "silent_script",
+      "ruby": "content_for :head do",
+      "keyword": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "meta",
+          "attributes": {},
+          "self_closing": true,
+          "inline": null,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

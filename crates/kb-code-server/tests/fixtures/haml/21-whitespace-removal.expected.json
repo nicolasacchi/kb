@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "tight outer"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "q",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "tight inner"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "span",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "both"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "em",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "Normal"
+      },
+      "children": []
+    }
+  ]
+}

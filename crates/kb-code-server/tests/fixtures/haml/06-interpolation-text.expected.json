@@ -1,0 +1,40 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "\"Total: #{total}\""
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "\"Hello #{user.name}, welcome\""
+      },
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "\"#{bare_line} and more\"",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "li",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "\"Mixed \\\"quotes\\\" and #{value}\""
+      },
+      "children": []
+    }
+  ]
+}

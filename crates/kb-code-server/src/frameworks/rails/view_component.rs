@@ -160,6 +160,28 @@ pub fn extract_from_erb(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<Frame
     out
 }
 
+/// V72-H3 — the `.haml` sibling of [`extract_from_erb`]. Same
+/// `resolve_component_render`, same constant→path convention.
+pub fn extract_from_haml(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkEdge> {
+    let mut out = Vec::new();
+    crate::frameworks::rails::support::walk_haml_ruby_fragments(
+        bytes,
+        &mut out,
+        &mut |root, source, offset, out| {
+            walk_calls(
+                root,
+                source,
+                offset,
+                out,
+                &mut |node, source, line_offset| {
+                    resolve_render_component_call(node, source, line_offset, path, repo_root)
+                },
+            );
+        },
+    );
+    out
+}
+
 fn resolve_render_component_call(
     node: Node,
     source: &[u8],

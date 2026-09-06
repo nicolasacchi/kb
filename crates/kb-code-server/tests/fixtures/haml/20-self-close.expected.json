@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "br",
+      "attributes": {},
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "img",
+      "attributes": {},
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "meta",
+      "attributes": {},
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "hr",
+      "attributes": {},
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    }
+  ]
+}

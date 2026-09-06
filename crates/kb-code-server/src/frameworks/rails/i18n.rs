@@ -131,6 +131,43 @@ pub fn extract_from_erb(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<Frame
     out
 }
 
+/// V72-H3 — the `.haml` sibling of [`extract_from_erb`]. Same locale
+/// index, same `resolve_t_call`, same lazy `t(".key")` scope derived from
+/// the view path (`view_relative_scope` splits on the FIRST dot, so
+/// `orders/show.html.haml` scopes to `orders.show` exactly as the `.erb`
+/// form does); only the fragment walk differs.
+pub fn extract_from_haml(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkEdge> {
+    let index = locale_index_for(repo_root);
+    if index.is_empty() {
+        return Vec::new();
+    }
+    let view_scope = view_relative_scope(path);
+    let mut out = Vec::new();
+    crate::frameworks::rails::support::walk_haml_ruby_fragments(
+        bytes,
+        &mut out,
+        &mut |root, source, offset, out| {
+            walk_calls(
+                root,
+                source,
+                offset,
+                out,
+                &mut |node, source, line_offset| {
+                    resolve_t_call(
+                        node,
+                        source,
+                        line_offset,
+                        path,
+                        &index,
+                        view_scope.as_deref(),
+                    )
+                },
+            );
+        },
+    );
+    out
+}
+
 fn resolve_t_call(
     node: Node,
     source: &[u8],
@@ -278,6 +315,7 @@ struct CachedLocaleIndex {
     /// guarded) makes each test's assertion immune to what any OTHER
     /// repo_root's concurrent activity does, with no suite-wide
     /// serialization.
+
     #[cfg(test)]
     builds: usize,
 }
