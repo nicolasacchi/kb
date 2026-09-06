@@ -39,6 +39,16 @@ fn fixture_repo() -> tempfile::TempDir {
 }
 
 async fn boot(path: &Path, enabled: &[&str]) -> (tempfile::TempDir, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = boot_at(tmp.path(), path, enabled).await;
+    (tmp, base)
+}
+
+/// Boot against an EXISTING state dir — what
+/// `a_disabled_lanes_stored_facts_are_withheld_and_counted` needs, since
+/// enablement is boot-time config and the point is that the SAME store
+/// reads differently under a different `[lanes]`.
+async fn boot_at(state: &Path, path: &Path, enabled: &[&str]) -> String {
     let cfg = KbCodeConfig {
         repos: vec![RepoEntry {
             name: "fx".to_string(),
@@ -56,12 +66,11 @@ async fn boot(path: &Path, enabled: &[&str]) -> (tempfile::TempDir, String) {
         },
         ..KbCodeConfig::default()
     };
-    let tmp = tempfile::tempdir().unwrap();
-    let paths = KbPaths::rooted_at(tmp.path(), "kb-code");
+    let paths = KbPaths::rooted_at(state, "kb-code");
     let (addr, _task) = kb_code_server::serve_on_random_port_with_paths(cfg, paths)
         .await
         .expect("serve");
-    (tmp, format!("http://{addr}"))
+    format!("http://{addr}")
 }
 
 async fn ingest(base: &str, lane: &str, body: &Value) -> (reqwest::StatusCode, Value) {
@@ -412,7 +421,8 @@ async fn a_re_ingest_replaces_and_clear_paths_erase_a_fixed_offense() {
 #[tokio::test]
 async fn a_disabled_lanes_stored_facts_are_withheld_and_counted() {
     let repo = fixture_repo();
-    let (_tmp, base) = boot(repo.path(), &["rubocop"]).await;
+    let state = tempfile::tempdir().unwrap();
+    let base = boot_at(state.path(), repo.path(), &["rubocop"]).await;
     ingest(
         &base,
         "rubocop",
@@ -420,34 +430,25 @@ async fn a_disabled_lanes_stored_facts_are_withheld_and_counted() {
     )
     .await;
 
-    // Reboot the daemon with the SAME state dir but the lane off.
-    let cfg = KbCodeConfig {
-        repos: vec![RepoEntry {
-            name: "fx".to_string(),
-            path: std::fs::canonicalize(repo.path()).unwrap(),
-        }],
-        kb_daemon: KbDaemonSection {
-            enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
-            token_file: None,
-            public_url: None,
-        },
-        ..KbCodeConfig::default()
-    };
-    let state = tempfile::tempdir().unwrap();
-    let paths = KbPaths::rooted_at(state.path(), "kb-code");
-    let (addr, _task) = kb_code_server::serve_on_random_port_with_paths(cfg, paths)
-        .await
-        .expect("serve");
-    let off = format!("http://{addr}");
+    // The SAME store, read by a daemon whose config no longer enables the
+    // lane: the rows are still there and are deliberately not served.
+    let off = boot_at(state.path(), repo.path(), &[]).await;
     let facts = get(
         &off,
         "/api/lanes/facts",
         &[("repo", "fx"), ("path", "app/widget.rb")],
     )
     .await;
-    assert_eq!(facts["returned"].as_u64(), Some(0));
-    assert!(facts["absent"].as_array().unwrap().is_empty());
+    assert_eq!(facts["returned"].as_u64(), Some(0), "{facts}");
+    assert_eq!(
+        facts["withheld_disabled"].as_u64(),
+        Some(1),
+        "a withheld fact is COUNTED, never a silently shorter list: {facts}"
+    );
+    assert!(
+        facts["absent"].as_array().unwrap().is_empty(),
+        "a disabled lane is not 'absent', it is off: {facts}"
+    );
 }
 
 #[tokio::test]

@@ -170,7 +170,8 @@ mod tests {
                     "{} {}:{} {}",
                     f.kind,
                     f.path,
-                    f.range_start.map(|l| l.to_string()).unwrap_or("-".into()),
+                    f.range_start
+                        .map_or_else(|| "-".to_string(), |l| l.to_string()),
                     f.value
                 )
             })
