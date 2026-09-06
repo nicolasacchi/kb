@@ -885,7 +885,7 @@ mod tests {
     fn process_flush_drops_events_under_a_submodule_working_tree() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
-        // No .gitignore line covers a submodule — the h4o `legacy/` leak:
+        // No .gitignore line covers a submodule — the `legacy/` submodule leak seen on a production host:
         // notify descends into the checked-out submodule and reports its
         // churn as ordinary working-tree events.
         std::fs::write(
