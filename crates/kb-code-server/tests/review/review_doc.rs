@@ -309,7 +309,7 @@ async fn refs_resolve_pinned_carried_and_orphan_and_never_guess_a_line() {
     assert_eq!(status, reqwest::StatusCode::OK, "{body}");
 
     let doc: serde_json::Value = client
-        .get(format!("{base}/api/reviews/{id}/doc?resolve=1"))
+        .get(format!("{base}/api/reviews/{id}/doc?resolve=true"))
         .send()
         .await
         .unwrap()

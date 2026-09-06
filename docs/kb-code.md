@@ -1432,7 +1432,7 @@ Rust parser and (from v7.3's SPA unit) by its TS mirror.
 
 ### Refs — the live cards
 
-`GET /api/reviews/{id}/doc?resolve=1` turns every ref into a **card**,
+`GET /api/reviews/{id}/doc?resolve=true` turns every ref into a **card**,
 computed per request and persisted nowhere:
 
 | state | meaning | trust |
@@ -1583,7 +1583,7 @@ into a corpus. `kb-code review set-artifact` records the link back.
 
 | route | posture |
 |---|---|
-| `GET /api/reviews/{id}/doc?ps=&resolve=1` | bearer |
+| `GET /api/reviews/{id}/doc?ps=&resolve=true` | bearer |
 | `GET /api/reviews/{id}/doc/lint?ps=` | bearer |
 | `GET /api/reviews/{id}/doc/render?ps=&template=<name>` | bearer |
 | `POST /api/reviews/{id}/doc/render` | loopback-only (the operator's template bytes; writes nothing) |

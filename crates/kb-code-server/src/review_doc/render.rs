@@ -582,17 +582,19 @@ mod tests {
                 std::slice::from_ref(&card),
                 &ctx(payload, &omitted),
             );
+            // The assertions are about TAG and ATTRIBUTE boundaries, not
+            // about substrings: `&lt;img src=x onerror=alert(1)&gt;` legitimately
+            // CONTAINS "onerror=alert" and is perfectly inert, so testing
+            // for the substring alone would be testing the wrong thing.
+            for tag in ["<script", "<img", "<iframe", "<svg"] {
+                assert!(
+                    !out.html.contains(tag),
+                    "payload {payload:?} opened a live {tag} tag"
+                );
+            }
             assert!(
-                !out.html.contains("<script>"),
-                "payload {payload:?} produced a live <script> tag"
-            );
-            assert!(
-                !out.html.contains("onerror=alert"),
-                "payload {payload:?} produced a live event handler"
-            );
-            assert!(
-                !out.html.contains("onmouseover=\"alert"),
-                "payload {payload:?} escaped its attribute context"
+                !out.html.contains("\" onmouseover=\"") && !out.html.contains("' onload='"),
+                "payload {payload:?} broke out of its quoted attribute"
             );
             assert!(
                 out.html.contains("&lt;script&gt;") || !payload.contains("<script>"),

@@ -26,7 +26,7 @@
 -- author sent it: the lossless record. `summary_md`/`risk_*`/`omitted_json`/
 -- `author_json` are DENORMALISED copies of parsed front-matter fields, so a
 -- list read never has to parse N documents; the document itself always
--- wins on a disagreement (the parse is re-run on every `?resolve=1` read).
+-- wins on a disagreement (the parse is re-run on every read).
 --
 -- Vocabularies (`schema`, `tier`, `risk_level`) are stringly-typed and
 -- ROUTE-validated, never SQL-`CHECK`ed — this crate's established
