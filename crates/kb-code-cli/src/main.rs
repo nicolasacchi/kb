@@ -1612,19 +1612,25 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    // ── V71-G0 (kb-code v7.1 "Understanding") ────────────────────────────
-    /// `kb-code entity <NAME> --repo R [--worktree W] [--json]` —
-    /// `GET /api/entity` (`entities/1`): every definition site of one Ruby
-    /// class or module, with a per-site trust class
-    /// (`exact`/`likely`/`candidate`, computed per request — see
-    /// `kb_code_server::entities::class_for`).
+    // ── V71-G0 (kb-code v7.1 "Understanding") / V72-G1.1 ─────────────────
+    /// `kb-code entity <NAME> --repo R [--inherited] [--budget N]
+    /// [--usages-per-kind N] [--worktree W] [--sites] [--json]` —
+    /// `GET /api/entity/dossier` (`entity/1`, V72-G1.1): the DOSSIER for
+    /// one Ruby class or module — every reopening as a live block, the
+    /// merged member table, the hierarchy, usages grouped by kind, the
+    /// metaprogramming holes and the namespace tree.
     ///
     /// `NAME` is a constant path (`Order`, `Reseller::Order`). A bare last
     /// segment is resolved across the whole repo and, when more than one
-    /// constant answers to it, every one of them is listed — nothing is
-    /// ever merged on a bare name. A member address (`Foo#bar`, `Foo.bar`)
-    /// is refused BY NAME rather than 404'd: members are the entity page's
-    /// own later unit.
+    /// constant answers to it, the dossier REFUSES to pick: it lists every
+    /// candidate and asks to be re-addressed — nothing is ever merged on a
+    /// bare name. A member address (`Foo#bar`, `Foo.bar`) is refused BY
+    /// NAME rather than 404'd.
+    ///
+    /// `--sites` asks the frozen `entities/1` index instead
+    /// (`GET /api/entity`): just the definition sites and their trust
+    /// classes, which is the cheaper read when all you need is "where is
+    /// this thing defined".
     Entity {
         name: String,
         #[arg(long)]
@@ -1632,6 +1638,24 @@ enum Cmd {
         /// Restrict to one checkout's rows (`entity_defs.worktree`).
         #[arg(long)]
         worktree: Option<String>,
+        /// Merge the ancestors' and mixins' own member tables into this
+        /// one (`?inherited=1`). Off by default: an inherited row is
+        /// capped below `exact` and can triple the table.
+        #[arg(long)]
+        inherited: bool,
+        /// Response ROW budget (D20's "every large read takes --budget").
+        /// Rows are spent definitions-first and usages-last, and every
+        /// dropped row is counted by lane in `honesty.budget.dropped`.
+        #[arg(long)]
+        budget: Option<usize>,
+        /// Rows per usage KIND group (default 20). The group's `total` is
+        /// always the TRUE total, whatever this caps.
+        #[arg(long)]
+        usages_per_kind: Option<usize>,
+        /// Ask the frozen `entities/1` index (`GET /api/entity`) instead
+        /// of the dossier.
+        #[arg(long)]
+        sites: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4769,9 +4793,31 @@ async fn run(cli: Cli) -> Result<()> {
             name,
             repo,
             worktree,
+            inherited,
+            budget,
+            usages_per_kind,
+            sites,
             daemon,
             json,
-        } => entity_cmd(&daemon, &repo, &name, worktree.as_deref(), json).await,
+        } => {
+            if sites {
+                entity_cmd(&daemon, &repo, &name, worktree.as_deref(), json).await
+            } else {
+                entity_dossier_cmd(
+                    &daemon,
+                    &repo,
+                    &name,
+                    &EntityDossierOpts {
+                        worktree: worktree.as_deref(),
+                        inherited,
+                        budget,
+                        usages_per_kind,
+                    },
+                    json,
+                )
+                .await
+            }
+        }
         Cmd::Seq { cmd } => match cmd {
             SeqCmd::List {
                 repo,
@@ -15439,6 +15485,39 @@ fn entity_request(
     (kb_code_server::entities::ENTITY_ROUTE.path, query)
 }
 
+/// The `GET /api/entity/dossier` request options — grouped rather than
+/// six positional params, the `TreeV2Opts` shape (V71-F1).
+#[derive(Debug, Default, Clone)]
+struct EntityDossierOpts<'a> {
+    worktree: Option<&'a str>,
+    inherited: bool,
+    budget: Option<usize>,
+    usages_per_kind: Option<usize>,
+}
+
+/// The `GET /api/entity/dossier` request: `(path, query)`.
+fn entity_dossier_request(
+    repo: &str,
+    ent: &str,
+    opts: &EntityDossierOpts<'_>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query: Vec<(&'static str, String)> =
+        vec![("repo", repo.to_string()), ("ent", ent.to_string())];
+    if let Some(w) = opts.worktree {
+        query.push(("worktree", w.to_string()));
+    }
+    if opts.inherited {
+        query.push(("inherited", "1".to_string()));
+    }
+    if let Some(b) = opts.budget {
+        query.push(("budget", b.to_string()));
+    }
+    if let Some(n) = opts.usages_per_kind {
+        query.push(("usages_per_kind", n.to_string()));
+    }
+    (kb_code_server::entities::dossier::DOSSIER_ROUTE.path, query)
+}
+
 /// The `GET /api/seq` request: `(path, query)`.
 fn seq_request(
     repo: &str,
@@ -15512,6 +15591,275 @@ async fn entity_cmd(
         }
     }
     Ok(())
+}
+
+/// `kb-code entity <NAME> --repo R` — `GET /api/entity/dossier`
+/// (`entity/1`, V72-G1.1).
+///
+/// The text rendering is a COMPACT DOSSIER meant to be read by an agent in
+/// one screen: the definition blocks, the member table, the hierarchy, a
+/// usage census (counts per kind, never the rows), the metaprogramming
+/// holes and the namespace children — followed by every honesty caption
+/// the daemon attached. `--json` prints the D20 envelope around the
+/// daemon's own body; nothing here re-derives a number the daemon already
+/// computed.
+async fn entity_dossier_cmd(
+    daemon: &str,
+    repo: &str,
+    name: &str,
+    opts: &EntityDossierOpts<'_>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = entity_dossier_request(repo, name, opts);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        let state = body["honesty"]["state"].as_str().unwrap_or("ok");
+        let warnings: Vec<String> = body["honesty"]["notes"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let empty_reason = if state == "empty" {
+            body["honesty"]["reason"].as_str()
+        } else {
+            None
+        };
+        envelope::print_ok(
+            kb_code_server::entities::dossier::DOSSIER_SCHEMA,
+            &body,
+            warnings,
+            state != "ok",
+            empty_reason,
+        );
+        return Ok(());
+    }
+    render_entity_dossier(&body);
+    Ok(())
+}
+
+/// Print one `entity/1` body. Split out so it is exercised by a unit test
+/// against a golden-shaped body rather than only by a live daemon.
+fn render_entity_dossier(body: &serde_json::Value) {
+    let e = &body["entity"];
+    let fqn = e["fqn"].as_str().unwrap_or("?");
+    let counts = &e["trust_counts"];
+    println!(
+        "{fqn} ({}) — {} definition site(s) in {} file(s)  [exact {} · likely {} · candidate {}]",
+        e["kind"].as_str().unwrap_or("?"),
+        body["definitions"].as_array().map(Vec::len).unwrap_or(0),
+        e["files"].as_array().map(Vec::len).unwrap_or(0),
+        counts["exact"].as_i64().unwrap_or(0),
+        counts["likely"].as_i64().unwrap_or(0),
+        counts["candidate"].as_i64().unwrap_or(0),
+    );
+    let candidates = body["candidates"].as_array().cloned().unwrap_or_default();
+    if !candidates.is_empty() {
+        println!("\nambiguous — re-address with one of:");
+        for c in &candidates {
+            println!("  {}", c.as_str().unwrap_or("?"));
+        }
+    }
+
+    let defs = body["definitions"].as_array().cloned().unwrap_or_default();
+    if !defs.is_empty() {
+        println!("\ndefinitions");
+        for d in &defs {
+            let flags = [
+                ("stale", d["stale"].as_bool().unwrap_or(false)),
+                ("missing", d["missing"].as_bool().unwrap_or(false)),
+            ]
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(n, _)| *n)
+            .collect::<Vec<_>>()
+            .join(",");
+            println!(
+                "  [{}] {}:{}-{}  {}  {}  {}{}",
+                d["reopening_index"].as_i64().unwrap_or(0),
+                d["path"].as_str().unwrap_or("?"),
+                d["line_start"].as_i64().unwrap_or(0),
+                d["line_end"].as_i64().unwrap_or(0),
+                d["kind"].as_str().unwrap_or("?"),
+                d["trust"].as_str().unwrap_or("?"),
+                d["opener"].as_str().unwrap_or(""),
+                if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ({flags})")
+                },
+            );
+        }
+    }
+
+    let members = body["members"].as_array().cloned().unwrap_or_default();
+    if !members.is_empty() {
+        println!("\nmembers ({})", members.len());
+        for m in &members {
+            println!(
+                "  {:<10} {:<18} {:<24} {}:{}{}{}",
+                m["visibility"].as_str().unwrap_or("?"),
+                m["kind"].as_str().unwrap_or("?"),
+                m["name"].as_str().unwrap_or("?"),
+                m["path"].as_str().unwrap_or("?"),
+                m["line"].as_i64().unwrap_or(0),
+                if m["inherited"].as_bool().unwrap_or(false) {
+                    format!(
+                        "  inherited from {}",
+                        m["defining_type"].as_str().unwrap_or("?")
+                    )
+                } else {
+                    String::new()
+                },
+                match m["via"].as_str() {
+                    Some("tree") | None => String::new(),
+                    Some(v) => format!("  ({v}, {})", m["trust"].as_str().unwrap_or("?")),
+                },
+            );
+        }
+    }
+
+    let h = &body["hierarchy"];
+    let ancestors = h["ancestors"].as_array().cloned().unwrap_or_default();
+    let mixins = h["mixins"].as_array().cloned().unwrap_or_default();
+    let descendants = h["descendants"].as_array().cloned().unwrap_or_default();
+    let implementors = h["implementors"].as_array().cloned().unwrap_or_default();
+    if !ancestors.is_empty()
+        || !mixins.is_empty()
+        || !descendants.is_empty()
+        || !implementors.is_empty()
+    {
+        println!("\nhierarchy");
+        for a in &ancestors {
+            println!(
+                "  ancestor  {} → {}  [{}]",
+                a["written"].as_str().unwrap_or("?"),
+                a["fqn"].as_str().unwrap_or("(unresolved)"),
+                a["resolved"].as_str().unwrap_or("?"),
+            );
+        }
+        for m in &mixins {
+            println!(
+                "  {:<9} {} → {}  [{}]",
+                m["kind"].as_str().unwrap_or("?"),
+                m["written"].as_str().unwrap_or("?"),
+                m["fqn"].as_str().unwrap_or("(unresolved)"),
+                m["resolved"].as_str().unwrap_or("?"),
+            );
+        }
+        for (label, rows) in [("subclass", &descendants), ("implementor", &implementors)] {
+            for r in rows.iter() {
+                println!(
+                    "  {label:<9} {} ({}) at {}:{}  [{}]",
+                    r["fqn"].as_str().unwrap_or("(unnamed)"),
+                    r["via"].as_str().unwrap_or("?"),
+                    r["path"].as_str().unwrap_or("?"),
+                    r["line"].as_i64().unwrap_or(0),
+                    r["trust"].as_str().unwrap_or("?"),
+                );
+            }
+        }
+        for n in h["notes"].as_array().cloned().unwrap_or_default() {
+            if let Some(n) = n.as_str() {
+                println!("  note: {n}");
+            }
+        }
+    }
+
+    let u = &body["usages"];
+    let groups = u["groups"].as_array().cloned().unwrap_or_default();
+    println!(
+        "\nusages [{}] — {} total{}",
+        u["state"].as_str().unwrap_or("?"),
+        u["total"].as_i64().unwrap_or(0),
+        if u["truncated"].as_bool().unwrap_or(false) {
+            ", truncated"
+        } else {
+            ""
+        },
+    );
+    if let Some(r) = u["reason"].as_str() {
+        println!("  reason: {r}");
+    }
+    for g in &groups {
+        let c = &g["trust_census"];
+        println!(
+            "  {:<16} {:>5}  shown {:>3}  [exact {} · likely {} · candidate {} over the shown rows]",
+            g["kind"].as_str().unwrap_or("?"),
+            g["total"].as_i64().unwrap_or(0),
+            g["rows"].as_array().map(Vec::len).unwrap_or(0),
+            c["exact"].as_i64().unwrap_or(0),
+            c["likely"].as_i64().unwrap_or(0),
+            c["candidate"].as_i64().unwrap_or(0),
+        );
+    }
+
+    let holes = body["unknown_members"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if !holes.is_empty() {
+        println!(
+            "\nunknown members ({}) — what metaprogramming hides",
+            holes.len()
+        );
+        for u in &holes {
+            println!(
+                "  {:<22} {}  {}:{}",
+                u["mechanism"].as_str().unwrap_or("?"),
+                u["name_hint"].as_str().unwrap_or("—"),
+                u["path"].as_str().unwrap_or("?"),
+                u["line"].as_i64().unwrap_or(0),
+            );
+        }
+    }
+
+    let ns = body["namespace_tree"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if !ns.is_empty() {
+        println!("\nnamespace");
+        for c in &ns {
+            println!(
+                "  {:<28} {:<10} {} definition(s), {} descendant(s)",
+                c["segment"].as_str().unwrap_or("?"),
+                c["kind"].as_str().unwrap_or("?"),
+                c["definitions"].as_i64().unwrap_or(0),
+                c["descendants"].as_i64().unwrap_or(0),
+            );
+        }
+    }
+
+    let b = &body["honesty"]["budget"];
+    println!(
+        "\nhonesty: {} — {} of {} row(s) spent",
+        body["honesty"]["state"].as_str().unwrap_or("?"),
+        b["spent"].as_i64().unwrap_or(0),
+        b["requested"].as_i64().unwrap_or(0),
+    );
+    if let Some(dropped) = b["dropped"].as_object() {
+        let named: Vec<String> = dropped
+            .iter()
+            .filter(|(_, v)| v.as_i64().unwrap_or(0) > 0)
+            .map(|(k, v)| format!("{k} {}", v.as_i64().unwrap_or(0)))
+            .collect();
+        if !named.is_empty() {
+            println!("  dropped by the budget: {}", named.join(", "));
+        }
+    }
+    for n in body["honesty"]["notes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        if let Some(n) = n.as_str() {
+            println!("  note: {n}");
+        }
+    }
 }
 
 /// `kb-code seq list --repo R` — `GET /api/seq`.
@@ -19013,6 +19361,11 @@ mod tests {
             }),
             syntax_request(),
             parity_request(),
+            // V72-G1.1 — the entity DOSSIER, on its own sibling path
+            // beside the frozen `entities/1` index above. A route added
+            // to `entities::dossier::V72_G1_ROUTES` with no verb building
+            // a request for it fails HERE, by path.
+            entity_dossier_request("repo", "Shop::Order", &EntityDossierOpts::default()),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -19031,7 +19384,8 @@ mod tests {
             // no params, so what this proves for them is the OTHER half
             // of the dead-surface rule: a declared route with no verb
             // building a request for it fails here, by path.
-            .chain(kb_code_server::syntax::V72_H1_ROUTES.iter());
+            .chain(kb_code_server::syntax::V72_H1_ROUTES.iter())
+            .chain(kb_code_server::entities::dossier::V72_G1_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
@@ -19391,6 +19745,157 @@ mod tests {
     #[test]
     fn entity_requires_a_repo() {
         assert!(Cli::try_parse_from(["kb-code", "entity", "Foo"]).is_err());
+    }
+
+    #[test]
+    fn entity_dossier_request_carries_only_the_options_it_was_given() {
+        let (path, bare) =
+            entity_dossier_request("r", "Shop::Order", &EntityDossierOpts::default());
+        assert_eq!(path, "/api/entity/dossier");
+        assert_eq!(bare.len(), 2, "{bare:?}");
+        let (_, full) = entity_dossier_request(
+            "r",
+            "Shop::Order",
+            &EntityDossierOpts {
+                worktree: Some("wt1"),
+                inherited: true,
+                budget: Some(50),
+                usages_per_kind: Some(3),
+            },
+        );
+        // `?inherited=1` is the documented spelling — the route reads it
+        // as a string, since serde_urlencoded will not read "1" as a bool.
+        assert!(full.iter().any(|(k, v)| *k == "inherited" && v == "1"));
+        assert!(full.iter().any(|(k, v)| *k == "budget" && v == "50"));
+        assert!(full
+            .iter()
+            .any(|(k, v)| *k == "usages_per_kind" && v == "3"));
+        assert!(full.iter().any(|(k, v)| *k == "worktree" && v == "wt1"));
+    }
+
+    /// V72-G1.1's own flag walk, the `act`/`usages` shape: every flag the
+    /// `entity` verb declares must either reach the wire or be named here
+    /// as local (transport, output format, or the index/dossier switch).
+    #[test]
+    fn entity_verb_sends_every_flag_it_declares() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let entity = cmd
+            .get_subcommands()
+            .find(|c| c.get_name() == "entity")
+            .expect("`entity` subcommand exists");
+        const LOCAL: &str = "\u{0}local";
+        let expected: &[(&str, &str)] = &[
+            ("repo", "repo"),
+            ("worktree", "worktree"),
+            ("inherited", "inherited"),
+            ("budget", "budget"),
+            ("usages-per-kind", "usages_per_kind"),
+            // `--sites` picks WHICH route to call; it is never a param.
+            ("sites", LOCAL),
+            ("daemon", LOCAL),
+            ("json", LOCAL),
+        ];
+        let (_, full) = entity_dossier_request(
+            "r",
+            "Foo",
+            &EntityDossierOpts {
+                worktree: Some("w"),
+                inherited: true,
+                budget: Some(1),
+                usages_per_kind: Some(1),
+            },
+        );
+        for arg in entity.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            let (_, param) = expected
+                .iter()
+                .find(|(l, _)| *l == long)
+                .unwrap_or_else(|| panic!("`entity --{long}` is declared but not classified here"));
+            if *param == LOCAL {
+                continue;
+            }
+            assert!(
+                full.iter().any(|(k, _)| k == param),
+                "`entity --{long}` is declared but never reaches the wire as {param:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn entity_parses_the_dossier_flags() {
+        let cli = Cli::try_parse_from([
+            "kb-code",
+            "entity",
+            "Shop::Order",
+            "--repo",
+            "r",
+            "--inherited",
+            "--budget",
+            "50",
+            "--usages-per-kind",
+            "3",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Entity {
+                inherited,
+                budget,
+                usages_per_kind,
+                sites,
+                ..
+            } => {
+                assert!(inherited);
+                assert_eq!(budget, Some(50));
+                assert_eq!(usages_per_kind, Some(3));
+                assert!(!sites, "the dossier is the default read");
+            }
+            other => panic!("expected Cmd::Entity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_entity_dossier_renderer_prints_every_lane_it_is_given() {
+        // A minimal `entity/1`-shaped body: the renderer must not panic on
+        // absent optional keys, and must name each lane it does have.
+        let body = serde_json::json!({
+            "schema": "entity/1",
+            "entity": {
+                "fqn": "Shop::Order",
+                "kind": "class",
+                "files": ["app/models/shop/order.rb"],
+                "trust_counts": {"exact": 1, "likely": 0, "candidate": 0},
+            },
+            "candidates": [],
+            "definitions": [{
+                "path": "app/models/shop/order.rb", "line_start": 4, "line_end": 40,
+                "kind": "class", "reopening_index": 0, "opener": "module Shop; class Order",
+                "opener_form": "nested", "trust": "exact", "matched_via": "nesting",
+                "nesting": "lexical", "stale": false, "missing": false,
+            }],
+            "members": [{
+                "name": "total", "kind": "instance_method", "visibility": "public",
+                "defining_type": "Shop::Order", "inherited": false,
+                "path": "app/models/shop/order.rb", "line": 20, "via": "tree", "trust": "exact",
+            }],
+            "hierarchy": {
+                "ancestors": [{"written": "ApplicationRecord", "fqn": "ApplicationRecord",
+                               "resolved": "likely", "depth": 1,
+                               "from_path": "app/models/shop/order.rb", "from_line": 4}],
+                "mixins": [], "descendants": [], "implementors": [], "notes": [],
+            },
+            "usages": {"state": "ok", "groups": [], "total": 0, "truncated": false},
+            "unknown_members": [],
+            "namespace_tree": [],
+            "zeitwerk": {"state": "read", "roots": [], "acronyms": [], "collapse": []},
+            "honesty": {
+                "state": "ok",
+                "budget": {"requested": 600, "spent": 3,
+                           "dropped": {"members": 0, "usages": 0}, "order": []},
+                "notes": [],
+            },
+        });
+        render_entity_dossier(&body);
     }
 
     #[test]
