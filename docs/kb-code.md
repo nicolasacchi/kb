@@ -765,6 +765,57 @@ persisted by any of these verbs — saved scopes in sqlite are a later
 unit; `[scopes]` in `kb-code.toml` is the one source this milestone
 reads, tagged `source: config`.
 
+**comments/1 (V72-J1, D8) — `GET /api/comments?repo=[&path=][&kind=]
+[&keyword=][&state=][&limit=][&offset=]`, `GET /api/comments/file?repo=
+&path=`, `GET /api/comments/summary?repo=`, `GET
+/api/comments/keywords`.** ONE scanner over every comment in a repo,
+classified into eight kinds — `doc` (a block immediately above a
+definition, with the definition it documents), `annotation` (a keyword
+hit), `directive` (a tool pragma: `rubocop:disable/enable/todo`,
+`frozen_string_literal`, `typed:`, RBS `#:`, `eslint-disable`, `@ts-
+expect-error`, `noqa`, `type: ignore`, `go:build`, `shellcheck`, …, with
+the tool named and, for a SUPPRESSION only, whether it carried a
+reason), `section` (a banner or fold marker), `licence` (a head-of-file
+SPDX/copyright block), `generated` (`# == Schema Information` and other
+"do not edit" markers — **never** `doc`, whatever it sits above),
+`commented_code` (the run re-parses cleanly in the file's own grammar)
+and `prose`. Adjacent same-kind lines form one block with a range;
+`annotation` and `directive` are the two exceptions, one block per line,
+because each carries its own identity. The keyword grammar is
+CONFIGURABLE (`[comments] keywords`, an override REPLACES the default
+set) and defaults to RuboCop's six — `TODO FIXME OPTIMIZE HACK REVIEW
+NOTE` — plus `XXX`/`BUG`; a smart_todo parenthetical `TODO(on:
+date('2027-09-01'), to: 'someone')` is parsed into typed fields (an OPEN
+`key: value` bag, so `by:` and any future key round-trip) while staying
+verbatim in the annotation's own text. **`state` is computed per request
+and persisted nowhere**: a `doc` block is `fresh`, `drifted` (with
+`age_days`, `code_commit` and `doc_commit` — the arithmetic, never a
+verdict about whether the comment is wrong; that judgement is an
+agent-layer step) or `unknown` WITH ITS REASON (`uncommitted`,
+`blame-budget`, `blame-unavailable`, `no-documented-symbol`); an
+annotation with a past `on: date(…)` is `aged`; a suppression with no
+`--`-separated reason is `unreasoned`; everything else is `none`. Every
+bound is in band — `scan` (rows examined, the true `rows_matching_
+filters` count, the cap, whether it was hit) and `blame` (files blamed,
+files wanted, the `MAX_BLAMED_FILES` budget, `exhausted`) — and a row the
+blame budget could not reach is reported `unknown`, never quietly
+`fresh`. `summary` counts kinds and keywords EXACTLY (whole-repo `GROUP
+BY`s) and covers only the two blame-free state lanes, naming the three it
+excludes and why rather than sampling them. **`GET /api/todos` is now a
+filtered VIEW over this index** (`kind=annotation` and a keyword in the
+legacy five-marker family); `todo_items` and the old marker scanner are
+gone, so there is exactly one scanner over these lines. Its response
+struct, ordering, limit/truncation and scope semantics are byte-identical;
+its ROW SET changes in exactly two enumerated ways — outline-tier
+languages (YAML/TOML) are now scanned, and a two-marker line reports the
+LEFTMOST keyword rather than the first entry of a hardcoded array. Source
+is never mutated: a change to comment text rides the EXISTING suggestion +
+apply path. CLI: `kb-code comments list|show <PATH:LINE>|file|summary|
+audit|keywords --repo R [--path P] [--kind K] [--keyword K] [--state S]
+[--limit N] [--offset N] [--json]`, where `audit` is the actionable slice
+(drifted docs · aged annotations · unreasoned suppressions) in a compact
+form an agent can act on.
+
 **Track R — review unblock (D22 local-canonical): IN FLIGHT, not yet
 landed as of this writing (V70-A9D).** This section is a placeholder,
 deliberately left unfilled rather than guessed: Track R registers a real

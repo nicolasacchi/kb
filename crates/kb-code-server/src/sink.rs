@@ -246,6 +246,7 @@ pub fn spawn(
     bus: Arc<EventBus>,
     occurrences: crate::config::OccurrencesSection,
     is_rails: HashMap<String, bool>,
+    comment_keywords: crate::comments::KeywordSet,
 ) -> (IndexSink, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
     let handle = tokio::spawn(worker(
@@ -255,6 +256,7 @@ pub fn spawn(
         bus,
         Arc::new(occurrences),
         Arc::new(is_rails),
+        Arc::new(comment_keywords),
     ));
     (IndexSink { tx }, handle)
 }
@@ -286,6 +288,12 @@ async fn worker(
     bus: Arc<EventBus>,
     occurrences: Arc<crate::config::OccurrencesSection>,
     is_rails: Arc<HashMap<String, bool>>,
+    // V72-J1 — `[comments] keywords`, resolved ONCE at boot (same
+    // no-live-reload posture as `[occurrences]`/`[scopes]`) and threaded to
+    // every `index_file` call this worker makes, so the annotation
+    // vocabulary can never differ between the boot walk and a later
+    // watcher event.
+    comment_keywords: Arc<crate::comments::KeywordSet>,
 ) {
     let mut processed_total: u64 = 0;
     let mut window = ProgressWindow::new();
@@ -298,6 +306,7 @@ async fn worker(
         let bus = bus.clone();
         let occurrences = occurrences.clone();
         let is_rails = is_rails.clone();
+        let comment_keywords = comment_keywords.clone();
         let started = Instant::now();
         let outcome = tokio::task::spawn_blocking(move || match msg {
             SinkMsg::Upsert { repo, path } => {
@@ -311,6 +320,7 @@ async fn worker(
                     &path,
                     occurrences_enabled,
                     is_rails_flag,
+                    &comment_keywords,
                 )
             }
             SinkMsg::Remove { repo, path } => handle_remove(&store, &repo_ids, &bus, &repo, &path),
@@ -331,6 +341,7 @@ async fn worker(
                     removed,
                     occurrences_enabled,
                     is_rails_flag,
+                    &comment_keywords,
                 )
             }
         })
@@ -376,6 +387,7 @@ fn relativize<'a>(repo: &RepoRef, abs: &'a Path) -> Option<std::borrow::Cow<'a, 
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_upsert(
     store: &Store,
     repo_ids: &HashMap<String, i64>,
@@ -384,6 +396,7 @@ fn handle_upsert(
     abs_path: &Path,
     occurrences_enabled: bool,
     is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
 ) {
     let Some(&repo_id) = repo_ids.get(&repo.name) else {
         tracing::warn!(repo = %repo.name, "kb-code sink: upsert for an unregistered repo — skipping");
@@ -407,6 +420,7 @@ fn handle_upsert(
                 &blob_hash,
                 occurrences_enabled,
                 is_rails,
+                comment_keywords,
             ) {
                 tracing::warn!(repo = %repo.name, path = %rel, error = %e, "kb-code sink: index_file failed");
                 return;
@@ -480,6 +494,7 @@ fn handle_full_reconcile(
     removed: Vec<PathBuf>,
     occurrences_enabled: bool,
     is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
 ) {
     let Some(&repo_id) = repo_ids.get(&repo.name) else {
         tracing::warn!(repo = %repo.name, "kb-code sink: reconcile for an unregistered repo — skipping");
@@ -507,6 +522,7 @@ fn handle_full_reconcile(
                     &blob_hash,
                     occurrences_enabled,
                     is_rails,
+                    comment_keywords,
                 ) {
                     tracing::warn!(
                         repo = %repo.name, path = %rel_str, error = %e,
@@ -572,6 +588,7 @@ pub fn initial_index_one(
     repo_root: &Path,
     occurrences_enabled: bool,
     is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
 ) {
     match GitRepo::open(repo_root) {
         Ok(git_repo) => match ingest::index_repo_working_tree(
@@ -581,6 +598,7 @@ pub fn initial_index_one(
             "HEAD",
             occurrences_enabled,
             is_rails,
+            comment_keywords,
         ) {
             Ok(stats) => tracing::info!(
                 repo = %repo_name,
@@ -701,6 +719,7 @@ mod tests {
             bus.clone(),
             crate::config::OccurrencesSection::default(),
             std::collections::HashMap::new(),
+            crate::comments::KeywordSet::defaults(),
         );
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
@@ -739,6 +758,7 @@ mod tests {
             bus,
             crate::config::OccurrencesSection::default(),
             std::collections::HashMap::new(),
+            crate::comments::KeywordSet::defaults(),
         );
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
@@ -767,6 +787,7 @@ mod tests {
             bus,
             crate::config::OccurrencesSection::default(),
             std::collections::HashMap::new(),
+            crate::comments::KeywordSet::defaults(),
         );
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
@@ -808,6 +829,7 @@ mod tests {
             bus,
             crate::config::OccurrencesSection::default(),
             std::collections::HashMap::new(),
+            crate::comments::KeywordSet::defaults(),
         );
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
@@ -842,7 +864,15 @@ mod tests {
             .upsert_repo("fixture", repo_dir.to_str().unwrap())
             .unwrap();
 
-        initial_index_one(&store, repo_id, "fixture", &repo_dir, true, false);
+        initial_index_one(
+            &store,
+            repo_id,
+            "fixture",
+            &repo_dir,
+            true,
+            false,
+            &crate::comments::KeywordSet::defaults(),
+        );
         assert_eq!(store.file_count(repo_id).unwrap(), 1);
         assert_eq!(
             store.get_file(repo_id, "a.rs").unwrap().unwrap().lang,

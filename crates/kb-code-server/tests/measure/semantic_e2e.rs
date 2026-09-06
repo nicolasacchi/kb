@@ -61,6 +61,7 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         &blob_hash,
         true,
         false,
+        &kb_code_server::comments::KeywordSet::defaults(),
     )
     .unwrap();
 
