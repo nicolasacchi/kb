@@ -614,6 +614,42 @@ invariant #2 records).
     is untouched — `tests/haml_corpus.rs` greps its own source for
     `Command::new` to keep that true.
 
+19. **The entity DOSSIER raises no trust class, and its budget is a ROW
+    budget nothing may spend silently** (V72-G1.1, `entity/1`,
+    `src/entities/dossier.rs` + `src/entities/ruby_body.rs`). Invariant
+    13's posture, one layer up. Three rules. (a) **Every lane's class is
+    borrowed, never minted.** The usages lane hands `usages2::usages2_at`
+    — the SAME engine `/api/usages/2` calls, factored out for this — and
+    copies each `UsageRow2` verbatim, so a group's rows carry the
+    engine's own `trust` and the dossier is structurally unable to
+    upgrade one; a member the TREE proves inherits its definition block's
+    own `class_for` class, a member a LINE scan proves (`attr_*`, a
+    constant assignment, `alias_method`) is capped at `likely`, and an
+    INHERITED member is capped below `exact` because Ruby's method lookup
+    can be shadowed by a mixin this index cannot order.
+    `dossier::resolve_reference` is the ONE function turning a written
+    superclass/mixin name into a class, and it reaches `exact` from
+    exactly one shape — a root-anchored or empty-lexical-nesting
+    reference whose every definition site is itself `exact` — because
+    `module M; class A < B` is `M::B` when `M::B` exists and `::B`
+    otherwise, a lookup Ruby performs at RUNTIME. (b) **Visibility is
+    resolved or it is `unknown`.** `ruby_body::scan_visibility` tracks a
+    keyword-block depth over a block's DIRECT body lines (a nested
+    symbol's body is removed, its OPENER line is not — `private def
+    total` and `attr_reader :a` both live on one) and refuses, naming the
+    line, the moment a bare `private` appears at a depth it cannot
+    account for (inside an `included do`, an `if`, behind a splat); every
+    member from there on is `unknown`. A wrong `private` on a member
+    table is the member-level shape of a wrong `exact`. (c) **The budget
+    is rows, and the order is data.** `LANE_PRIORITY` is a `const` the
+    response echoes in `honesty.budget.order`; drops are counted per lane
+    in `honesty.budget.dropped` and a group emptied by the budget still
+    reports its true `total`. `GET /api/entity` (`entities/1`) is FROZEN
+    beside `/api/entity/dossier` — the index answers an ADDRESSING
+    question and legitimately returns many entities, a dossier is about
+    exactly one — and `dossier::V72_G1_ROUTES` joins invariant 15's
+    `RouteContract` walk from both sides.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside `kb-code-server` (or its

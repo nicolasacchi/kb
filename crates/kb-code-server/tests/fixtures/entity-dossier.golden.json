@@ -1,0 +1,678 @@
+{
+  "schema": "entity/1",
+  "repo": "acme-app",
+  "ent": "Shop::Order",
+  "entity": {
+    "fqn": "Shop::Order",
+    "kind": "class",
+    "namespace": "Shop",
+    "files": [
+      "app/models/shop/order.rb",
+      "app/models/shop/order_totals.rb"
+    ],
+    "trust_counts": {
+      "exact": 2,
+      "likely": 0,
+      "candidate": 0
+    }
+  },
+  "candidates": [],
+  "definitions": [
+    {
+      "path": "app/models/shop/order.rb",
+      "line_start": 4,
+      "line_end": 60,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "kind": "class",
+      "reopening_index": 0,
+      "opener": "module Shop; class Order",
+      "opener_form": "nested",
+      "trust": "exact",
+      "matched_via": "nesting",
+      "nesting": "lexical",
+      "stale": false,
+      "missing": false
+    },
+    {
+      "path": "app/models/shop/order_totals.rb",
+      "line_start": 3,
+      "line_end": 32,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "kind": "reopen",
+      "reopening_index": 1,
+      "opener": "class Shop::Order",
+      "opener_form": "compact",
+      "trust": "exact",
+      "matched_via": "nesting",
+      "nesting": "lexical",
+      "stale": false,
+      "missing": false
+    }
+  ],
+  "members": [
+    {
+      "name": "DYNAMIC_FIELDS",
+      "kind": "constant",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 10,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "assignment",
+      "trust": "likely"
+    },
+    {
+      "name": "MAX_LINES",
+      "kind": "constant",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 4,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "assignment",
+      "trust": "likely"
+    },
+    {
+      "name": "TAX_RATE",
+      "kind": "constant",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 9,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "assignment",
+      "trust": "likely"
+    },
+    {
+      "name": "audited?",
+      "kind": "singleton_method",
+      "visibility": "public",
+      "defining_type": "ApplicationRecord",
+      "inherited": true,
+      "path": "app/models/application_record.rb",
+      "line": 6,
+      "blob_sha": "blob-app-models-application_record-rb",
+      "via": "tree",
+      "trust": "likely"
+    },
+    {
+      "name": "build",
+      "kind": "singleton_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 21,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "customer_ref",
+      "kind": "attr_accessor",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 13,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "macro",
+      "trust": "likely"
+    },
+    {
+      "name": "decorate!",
+      "kind": "singleton_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 51,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "dynamic_finders",
+      "kind": "singleton_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 29,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "lines",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 17,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "method_missing",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 43,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "open_orders",
+      "kind": "singleton_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 17,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "pay",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Payable",
+      "inherited": true,
+      "path": "app/models/shop/payable.rb",
+      "line": 5,
+      "blob_sha": "blob-app-models-shop-payable-rb",
+      "via": "tree",
+      "trust": "likely"
+    },
+    {
+      "name": "placed_at",
+      "kind": "attr_reader",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 14,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "macro",
+      "trust": "likely"
+    },
+    {
+      "name": "placed_at",
+      "kind": "attr_writer",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 12,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "macro",
+      "trust": "likely"
+    },
+    {
+      "name": "refund",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Payable",
+      "inherited": true,
+      "path": "app/models/shop/payable.rb",
+      "line": 9,
+      "blob_sha": "blob-app-models-shop-payable-rb",
+      "via": "tree",
+      "trust": "likely"
+    },
+    {
+      "name": "reset!",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 47,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "sum",
+      "kind": "alias",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 13,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "macro",
+      "trust": "likely"
+    },
+    {
+      "name": "summary",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 32,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "total",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 28,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "touch_audit",
+      "kind": "instance_method",
+      "visibility": "public",
+      "defining_type": "ApplicationRecord",
+      "inherited": true,
+      "path": "app/models/application_record.rb",
+      "line": 10,
+      "blob_sha": "blob-app-models-application_record-rb",
+      "via": "tree",
+      "trust": "likely"
+    },
+    {
+      "name": "audit_key",
+      "kind": "instance_method",
+      "visibility": "private",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 36,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "gateway",
+      "kind": "instance_method",
+      "visibility": "private",
+      "defining_type": "Shop::Payable",
+      "inherited": true,
+      "path": "app/models/shop/payable.rb",
+      "line": 15,
+      "blob_sha": "blob-app-models-shop-payable-rb",
+      "via": "tree",
+      "trust": "likely"
+    },
+    {
+      "name": "hidden_scope",
+      "kind": "singleton_method",
+      "visibility": "private",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 23,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "internal_key",
+      "kind": "instance_method",
+      "visibility": "private",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order_totals.rb",
+      "line": 25,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "via": "tree",
+      "trust": "exact"
+    },
+    {
+      "name": "recompute",
+      "kind": "instance_method",
+      "visibility": "private",
+      "defining_type": "Shop::Order",
+      "inherited": false,
+      "path": "app/models/shop/order.rb",
+      "line": 57,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "via": "tree",
+      "trust": "exact"
+    }
+  ],
+  "hierarchy": {
+    "ancestors": [
+      {
+        "written": "ApplicationRecord",
+        "fqn": "ApplicationRecord",
+        "resolved": "likely",
+        "depth": 1,
+        "from_path": "app/models/shop/order.rb",
+        "from_line": 4
+      },
+      {
+        "written": "ActiveRecord::Base",
+        "resolved": "unresolved",
+        "depth": 2,
+        "from_path": "app/models/application_record.rb",
+        "from_line": 3
+      }
+    ],
+    "mixins": [
+      {
+        "kind": "include",
+        "written": "Payable",
+        "fqn": "Shop::Payable",
+        "resolved": "likely",
+        "from_path": "app/models/shop/order.rb",
+        "from_line": 5
+      },
+      {
+        "kind": "prepend",
+        "written": "Auditable",
+        "resolved": "unresolved",
+        "from_path": "app/models/shop/order.rb",
+        "from_line": 6
+      },
+      {
+        "kind": "extend",
+        "written": "Findable",
+        "resolved": "unresolved",
+        "from_path": "app/models/shop/order.rb",
+        "from_line": 7
+      }
+    ],
+    "descendants": [
+      {
+        "fqn": "Shop::Invoice",
+        "via": "inherit",
+        "path": "app/models/shop/invoice.rb",
+        "line": 4,
+        "trust": "likely"
+      }
+    ],
+    "implementors": [
+      {
+        "fqn": "Shop::Invoice",
+        "via": "include",
+        "path": "app/models/shop/invoice.rb",
+        "line": 5,
+        "trust": "candidate"
+      },
+      {
+        "fqn": "Shop::Ledger",
+        "via": "prepend",
+        "path": "app/models/shop/ledger.rb",
+        "line": 4,
+        "trust": "candidate"
+      }
+    ],
+    "notes": []
+  },
+  "usages": {
+    "state": "ok",
+    "anchor": {
+      "path": "app/models/shop/order.rb",
+      "line": 4,
+      "col": 10
+    },
+    "groups": [
+      {
+        "kind": "call",
+        "total": 40,
+        "truncated": true,
+        "trust_census": {
+          "exact": 0,
+          "likely": 3,
+          "candidate": 0
+        },
+        "census_basis": "returned",
+        "rows": [
+          {
+            "path": "app/services/shop/checkout.rb",
+            "line": 1,
+            "col": 4,
+            "blob_sha": "blob-app-services-shop-checkout-rb",
+            "kind": "call",
+            "roles": 8,
+            "role_names": [
+              "read_access"
+            ],
+            "trust": "likely",
+            "precision": "tags-approx",
+            "context": "context"
+          },
+          {
+            "path": "app/services/shop/checkout.rb",
+            "line": 2,
+            "col": 4,
+            "blob_sha": "blob-app-services-shop-checkout-rb",
+            "kind": "call",
+            "roles": 8,
+            "role_names": [
+              "read_access"
+            ],
+            "trust": "likely",
+            "precision": "tags-approx",
+            "context": "context"
+          },
+          {
+            "path": "app/services/shop/checkout.rb",
+            "line": 3,
+            "col": 4,
+            "blob_sha": "blob-app-services-shop-checkout-rb",
+            "kind": "call",
+            "roles": 8,
+            "role_names": [
+              "read_access"
+            ],
+            "trust": "likely",
+            "precision": "tags-approx",
+            "context": "context"
+          }
+        ]
+      },
+      {
+        "kind": "include",
+        "total": 1,
+        "truncated": false,
+        "trust_census": {
+          "exact": 0,
+          "likely": 0,
+          "candidate": 1
+        },
+        "census_basis": "returned",
+        "rows": [
+          {
+            "path": "app/models/shop/invoice.rb",
+            "line": 5,
+            "col": 4,
+            "blob_sha": "blob-app-models-shop-invoice-rb",
+            "kind": "include",
+            "roles": 8,
+            "role_names": [
+              "read_access"
+            ],
+            "trust": "candidate",
+            "precision": "tags-approx",
+            "context": "context"
+          }
+        ]
+      },
+      {
+        "kind": "prepend",
+        "total": 1,
+        "truncated": false,
+        "trust_census": {
+          "exact": 0,
+          "likely": 0,
+          "candidate": 1
+        },
+        "census_basis": "returned",
+        "rows": [
+          {
+            "path": "app/models/shop/ledger.rb",
+            "line": 4,
+            "col": 4,
+            "blob_sha": "blob-app-models-shop-ledger-rb",
+            "kind": "prepend",
+            "roles": 8,
+            "role_names": [
+              "read_access"
+            ],
+            "trust": "candidate",
+            "precision": "tags-approx",
+            "context": "context"
+          }
+        ]
+      },
+      {
+        "kind": "inherit",
+        "total": 1,
+        "truncated": false,
+        "trust_census": {
+          "exact": 0,
+          "likely": 1,
+          "candidate": 0
+        },
+        "census_basis": "returned",
+        "rows": [
+          {
+            "path": "app/models/shop/invoice.rb",
+            "line": 4,
+            "col": 4,
+            "blob_sha": "blob-app-models-shop-invoice-rb",
+            "kind": "inherit",
+            "roles": 8,
+            "role_names": [
+              "read_access"
+            ],
+            "trust": "likely",
+            "precision": "tags-approx",
+            "context": "context"
+          }
+        ]
+      }
+    ],
+    "total": 43,
+    "truncated": true
+  },
+  "unknown_members": [
+    {
+      "mechanism": "attr_dynamic",
+      "path": "app/models/shop/order.rb",
+      "line": 11,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "context": "attr_accessor(*DYNAMIC_FIELDS)"
+    },
+    {
+      "mechanism": "define_method",
+      "name_hint": "legacy_total",
+      "path": "app/models/shop/order.rb",
+      "line": 41,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "context": "define_method(:legacy_total) { total }"
+    },
+    {
+      "mechanism": "method_missing",
+      "name_hint": "method_missing",
+      "path": "app/models/shop/order.rb",
+      "line": 43,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "context": "def method_missing(name, *args)"
+    },
+    {
+      "mechanism": "send",
+      "name_hint": "recompute",
+      "path": "app/models/shop/order.rb",
+      "line": 48,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "context": "send(:recompute)"
+    },
+    {
+      "mechanism": "class_eval",
+      "path": "app/models/shop/order.rb",
+      "line": 52,
+      "blob_sha": "blob-app-models-shop-order-rb",
+      "context": "class_eval { attr_reader :decorated }"
+    },
+    {
+      "mechanism": "delegate",
+      "name_hint": "name",
+      "path": "app/models/shop/order_totals.rb",
+      "line": 15,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "context": "delegate :name, to: :customer"
+    },
+    {
+      "mechanism": "define_method",
+      "path": "app/models/shop/order_totals.rb",
+      "line": 30,
+      "blob_sha": "blob-app-models-shop-order_totals-rb",
+      "context": "names.each { |n| define_method(n) { nil } }"
+    }
+  ],
+  "namespace_tree": [
+    {
+      "fqn": "Shop::Order::Line",
+      "segment": "Line",
+      "kind": "class",
+      "definitions": 1,
+      "descendants": 0,
+      "trust_counts": {
+        "exact": 1,
+        "likely": 0,
+        "candidate": 0
+      }
+    }
+  ],
+  "zeitwerk": {
+    "state": "read",
+    "roots": [
+      "app/models"
+    ],
+    "acronyms": [],
+    "collapse": []
+  },
+  "honesty": {
+    "state": "ok",
+    "budget": {
+      "requested": 600,
+      "spent": 49,
+      "dropped": {
+        "definitions": 0,
+        "members": 0,
+        "ancestors": 0,
+        "mixins": 0,
+        "descendants": 0,
+        "implementors": 0,
+        "unknown_members": 0,
+        "namespace_tree": 0,
+        "usages": 0
+      },
+      "order": [
+        "definitions",
+        "ancestors",
+        "mixins",
+        "members",
+        "unknown_members",
+        "namespace_tree",
+        "descendants",
+        "implementors",
+        "usages"
+      ]
+    },
+    "notes": []
+  }
+}

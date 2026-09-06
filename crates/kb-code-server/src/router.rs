@@ -720,6 +720,19 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // through `/tree` and `/file`.
         .route("/tree/2", get(crate::tree::tree_v2_route))
         .route("/entity", get(crate::entities::entity_route))
+        // V72-G1.1 — `entity/1` (`GET /api/entity/dossier`): the D6
+        // dossier over the SAME index. A sibling path rather than a
+        // widened `/entity` — the `/usages/2` and `/tree/2` treatment —
+        // because `entities/1` answers an ADDRESSING question and
+        // legitimately returns many entities, while a dossier is
+        // everything about exactly one. Same ordinary `auth_bearer` read:
+        // it reads strictly less than `GET /api/file` already does.
+        // `crate::entities::dossier::V72_G1_ROUTES` declares it; a unit
+        // test walks that declaration against THIS file.
+        .route(
+            "/entity/dossier",
+            get(crate::entities::dossier::dossier_route),
+        )
         .route("/seq", get(crate::seq::seq_route))
         // V71-E2 (D5) — `kbc-actions/1` (`GET /api/actions?repo=&path=&
         // line=&col=`): the typed dispatch table over the thing under the

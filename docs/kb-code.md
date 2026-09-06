@@ -516,8 +516,44 @@ constant answers to it, EVERY one is listed with `ambiguous: true` —
 nothing is merged on a bare name. A member address (`Foo#bar`, `Foo.bar`)
 is refused by name, not 404'd: the member table is a later unit. Rows are
 keyed `(repo, worktree, path, ordinal)` so a second checkout can never
-alias the first. CLI: `kb-code entity <NAME> --repo R [--worktree W]
-[--json]`.
+alias the first. FROZEN as of V72-G1.1 — see the dossier below, which is
+a sibling path rather than a widening of this one. CLI: `kb-code entity
+<NAME> --repo R [--worktree W] --sites [--json]`.
+
+**Entity dossier (`entity/1`, V72-G1.1) — `GET /api/entity/dossier?repo=&ent=`
+`[&worktree=][&inherited=1][&budget=N][&usages_per_kind=N]`.** Everything
+about ONE entity, computed per request and persisted nowhere: `entity`
+(fqn, `kind` = `class|module|constant|unknown`, namespace, every file that
+reopens it), `definitions` (each reopening as a live block with its
+`blob_sha`, its `reopening_index` and the literal opener chain — `module
+Shop; class Order` vs `class Shop::Order`, with `opener_form`
+`top-level|nested|compact|mixed`; the block at the path the app's Zeitwerk
+configuration expects keeps its keyword, every other is a `reopen`),
+`members` (the merged table across every reopening — name, kind
+`instance_method|singleton_method|attr_reader|attr_writer|attr_accessor|constant|alias`,
+`visibility` with an honest `unknown` when a `private` keyword's scope
+cannot be resolved, `defining_type`, `inherited`, path/line/blob_sha, `via`
+= `tree|macro|assignment`, sorted by visibility then name), `hierarchy`
+(the superclass chain, `include`/`prepend`/`extend` mixins, known
+subclasses and implementors, each with `resolved:
+exact|likely|candidate|unresolved`), `usages` (the `usages/2` ENGINE's own
+rows, regrouped by kind — every group carries the TRUE `total`, an explicit
+`truncated`, and a `trust_census` whose `census_basis` says it counts the
+RETURNED rows), `unknown_members` (the metaprogramming holes:
+`define_method`, `method_missing`, `delegate`, dynamic `attr_*`,
+`class_eval`/`instance_eval`/`module_eval`, `send`/`public_send`, dynamic
+`alias_method`), `namespace_tree` (direct children with definition and
+descendant counts), and `honesty` (`state: ok|partial|empty`, a `reason` on
+the latter two, and a `budget` report — the budget is a ROW budget, spent
+definitions-first and usages-last, and every dropped row is counted by
+lane). A trust class is never raised here: a line scan caps at `likely`, an
+inherited member caps below `exact`, and a usage row's class is the
+engine's own, verbatim. An unknown constant is a typed 404
+(`entity-unknown`); an entity still in the index whose files carry no live
+bytes is `empty` with a reason; an ambiguous bare name refuses to pick and
+lists every `candidate`. CLI: `kb-code entity <NAME> --repo R
+[--inherited] [--budget N] [--usages-per-kind N] [--worktree W] [--json]`
+(and `--sites` for the frozen index above).
 
 **kbc-seq/1 (V71-G0) — `GET /api/seq?repo=[&projection=][&workspace=]`.**
 One READ layer over the sequence projections that already exist: `set`,
