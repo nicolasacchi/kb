@@ -895,36 +895,59 @@ const SELECTION_NEEDLE = "column header to sort";
 // install a Range over it as the window selection. Deliberately fires no
 // mouse/pointer event — Chromium dispatches `selectionchange` on its own
 // once `addRange` lands, which is exactly the path this fix added.
+/// `beaconAfterMs` (used by exactly one spec) additionally schedules the
+/// artifact runtime's own debounced `kb:scroll` beacon — same message shape
+/// `runtime_js` posts — from INSIDE this evaluate, so it lands a couple of
+/// milliseconds after the 150ms relay debounce rather than a round trip
+/// later. That tight coupling is the point: the bug it guards only shows
+/// when both messages reach the parent inside one React batch.
 async function selectSubstring(
   frame: import("@playwright/test").FrameLocator,
   needle: string,
+  beaconAfterMs?: number,
 ): Promise<void> {
-  await frame.locator(":root").evaluate((_, needle) => {
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-    );
-    let node: Text | null = null;
-    let at = -1;
-    let n: Node | null;
-    while ((n = walker.nextNode())) {
-      const t = n as Text;
-      const i = t.data.indexOf(needle);
-      if (i >= 0) {
-        node = t;
-        at = i;
-        break;
+  await frame.locator(":root").evaluate(
+    (_, arg) => {
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+      );
+      let node: Text | null = null;
+      let at = -1;
+      let n: Node | null;
+      while ((n = walker.nextNode())) {
+        const t = n as Text;
+        const i = t.data.indexOf(arg.needle);
+        if (i >= 0) {
+          node = t;
+          at = i;
+          break;
+        }
       }
-    }
-    if (!node) throw new Error(`substring not found in iframe: ${needle}`);
-    const range = document.createRange();
-    range.setStart(node, at);
-    range.setEnd(node, at + needle.length);
-    const sel = window.getSelection();
-    if (!sel) throw new Error("no Selection object in iframe");
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }, needle);
+      if (!node)
+        throw new Error(`substring not found in iframe: ${arg.needle}`);
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + arg.needle.length);
+      const sel = window.getSelection();
+      if (!sel) throw new Error("no Selection object in iframe");
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (arg.beaconAfterMs !== undefined) {
+        setTimeout(() => {
+          parent.postMessage(
+            {
+              kind: "kb:scroll",
+              y: window.scrollY || 0,
+              max: document.documentElement.scrollHeight || 0,
+            },
+            "*",
+          );
+        }, arg.beaconAfterMs);
+      }
+    },
+    { needle, beaconAfterMs },
+  );
 }
 
 // Collapse the live selection — no mouseup, same rationale as above; only
@@ -1067,6 +1090,44 @@ test.describe("desktop: selectionchange relay + selection→comment @selection",
     // pencil turns on tap-anywhere-to-compose, which a selection-initiated
     // compose must not switch on (see detail.tsx's onComposeSelection).
     await expect(pen).toHaveAttribute("aria-pressed", "false");
+  });
+
+  // The desktop half of R3 — and the CI flake that exposed it (a firefox-only
+  // `.kb-selact` never-appeared, run 34032948454).
+  //
+  // ArtifactPane dismisses the rect-anchored desktop floater on a `kb:scroll`
+  // beacon, but ONLY when the artifact has actually moved since that rect was
+  // frozen — the beacon is debounced 500ms by the iframe runtime, so it
+  // routinely describes a scroll that finished BEFORE the selection (the
+  // scroll-resume jump this same handler posts on `kb-probe`). That
+  // comparison reads the pane's `selectionRef`, which is written during
+  // render, so a beacon landing in the SAME task as the `cm:selection` it
+  // follows used to find it still null, take the "nothing to protect" branch,
+  // and clear a selection that had not moved by a pixel — before React ever
+  // painted the floater, so it never appeared at all and nothing re-posts it.
+  //
+  // Firefox hit the natural collision in CI; the bug is engine-independent
+  // (forced here, the pre-fix build failed this on chromium too). The beacon
+  // carries the artifact's CURRENT offset, i.e. exactly the one the selection
+  // was captured at: the honest answer is "nothing moved, keep the floater".
+  test("a same-offset scroll beacon colliding with the relay leaves the floater up", async ({
+    page,
+  }) => {
+    const { rel } = await pickArtifact(page.request);
+    await page.goto(`http://127.0.0.1:${PORT}/a/canon/${rel}`);
+
+    const frame = page.frameLocator(".detail__frame");
+    await waitForAnnotatorReady(frame);
+
+    // 152ms — just past annotate.ts's 150ms relay debounce, so the beacon
+    // lands a millisecond or two AFTER the `cm:selection` it must not undo.
+    await selectSubstring(frame, SELECTION_NEEDLE, 152);
+
+    await expect(page.locator(".kb-selact")).toBeVisible({ timeout: 5_000 });
+    // …and stays: outlast the beacon plus a beat, since the pre-fix failure
+    // mode is a dismissal, not a delay.
+    await page.waitForTimeout(500);
+    await expect(page.locator(".kb-selact")).toBeVisible();
   });
 });
 
