@@ -4,7 +4,7 @@ This guide is for sessions *generating* HTML that will be ingested
 by `kb`. For the daemon's internals see
 [docs/architecture-invariants.md](architecture-invariants.md) (and
 [CLAUDE.md](../CLAUDE.md) for orientation); for the user-facing surface see
-[README.md](../README.md).
+the [docs index](README.md).
 
 The rules below come from `crates/kb-core/src/parser.rs`,
 `crates/kb-core/src/iframe.rs`, `crates/kb-core/src/scrub.rs`,

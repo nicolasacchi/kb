@@ -69,7 +69,8 @@ for three concrete reasons, each grounded in code:
    position, every list, and every memory desynced or absent on the second
    machine. There is no supported way to merge two divergent `.review`
    trees or two divergent sqlite `history` tables — kb has no CRDT layer
-   (see the README non-goal below) and never will.
+   ([README → Non-goals](../README.md#non-goals): "No CRDT / multiplayer
+   editing") and never will.
 
 ## What IS safe to sync
 
@@ -87,18 +88,23 @@ per the three reasons above.
 ## This is the same operator, not a second one
 
 To be explicit: multi-machine access by the same person is squarely inside
-kb's design, not a violation of the **one-daemon-one-operator** non-goal.
-README's non-goals section rules out a *second identity* sharing your
-daemon — "roles, read-only tokens, viewer accounts, and per-user read-state
-are refused... a second human inside your daemon is a guest wielding your
-full authority" (`README.md` → Non-goals). That ruling is about **who** holds
-the bearer token, not **how many machines** the one legitimate holder uses it
-from. One operator, one bearer token, N client machines (laptop + desktop +
-phone browser, all pointed at the same daemon) is exactly the supported
-shape — it's the same shared-token model the SPA and CLI already use
-from a single machine, just reached over the network instead of loopback.
-Nothing about auth, rate limiting, or `.review` ownership changes when the
-second machine is yours instead of a second identity's.
+kb's design, not a violation of the **one trust tier** non-goal. README's
+non-goals section rules out *authorization* tiers, not additional named
+identities: kb "never *authenticates*: no passwords, sessions, roles,
+read-only tokens, ACLs or visibility tiers. Every identity holds the
+operator's full authority, so a teammate is a co-operator, not a guest"
+([README → Non-goals](../README.md#non-goals)). That ruling is about
+**what** an identity can do once admitted, not **how many machines** a
+legitimate holder reaches the daemon from. One operator (or one named
+identity via [`[identity]`](configuration.md#identity-v034)), one credential,
+N client machines (laptop + desktop + phone browser, all pointed at the
+same daemon) is exactly the supported shape — it's the same credential
+model the SPA and CLI already use from a single machine, just reached over
+the network instead of loopback. Nothing about auth, rate limiting, or
+`.review` ownership changes when the second machine is yours instead of a
+different identity's — and a second *identity* (a real teammate) is a
+separate, supported case (`[identity]`), not the multi-machine case this
+ADR is about.
 
 ## Open ends
 

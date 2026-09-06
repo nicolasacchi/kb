@@ -77,7 +77,7 @@ pm/02-cause.html,INC-0315 · Root Cause,Y,20,0,N,Y,84
 pm/03-actions.html,INC-0315 · Action Items,Y,22,0,N,Y,118
 
 spike-walker summary:
-  corpus:           ~/project/kb/corpus/canon
+  corpus:           <repo>/corpus/canon
   files parsed:     8
   total wallclock:  1.61ms
   parse μs/file:    mean=189  p50=170  p95=437
@@ -638,13 +638,13 @@ $ cargo run --bin spike-lance -- all
 {"step":"evolve","add_columns":"OK","bug_3136":"not observed in this version"}
 
 --- on-disk size ---
-  ~/project/kb/spikes/lance/dataset
-  ~/project/kb/spikes/lance/dataset/artifacts.lance
-  ~/project/kb/spikes/lance/dataset/artifacts.lance/_versions
-  ~/project/kb/spikes/lance/dataset/artifacts.lance/_indices
-  ~/project/kb/spikes/lance/dataset/artifacts.lance/_indices/94cf05ee-722d-4f7d-a9d6-c22b904c4825
-  ~/project/kb/spikes/lance/dataset/artifacts.lance/_transactions
-  ~/project/kb/spikes/lance/dataset/artifacts.lance/data
+  <repo>/spikes/lance/dataset
+  <repo>/spikes/lance/dataset/artifacts.lance
+  <repo>/spikes/lance/dataset/artifacts.lance/_versions
+  <repo>/spikes/lance/dataset/artifacts.lance/_indices
+  <repo>/spikes/lance/dataset/artifacts.lance/_indices/94cf05ee-722d-4f7d-a9d6-c22b904c4825
+  <repo>/spikes/lance/dataset/artifacts.lance/_transactions
+  <repo>/spikes/lance/dataset/artifacts.lance/data
   dataset size: 20535 bytes
 
 OPERATOR CHECKLIST:

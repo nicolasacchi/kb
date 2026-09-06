@@ -1,9 +1,9 @@
 # Track-S deploy runbook
 
 Example steps to turn on `/api/sessions/*` + the SPA route on an existing
-reverse-proxied deployment (e.g. `kb.example.com`). The agent prepared
-everything except the production-config edits; apply these by hand and
-rebuild.
+reverse-proxied deployment (e.g. `kb.example.com`). Everything except the
+production-config edits below ships already wired in the daemon; apply
+these by hand and rebuild.
 
 ## 1. Add the bind mount to your deployment's compose file
 
@@ -40,7 +40,7 @@ memory_scope = "global"
 Example redeploy flow (adapt to your own compose layout):
 
 ```bash
-cd ~/your-deploy-dir && export KB_GIT_SHA=$(git -C ~/project/kb rev-parse --short=12 HEAD) && docker compose build kb && docker compose up -d kb
+cd ~/your-deploy-dir && export KB_GIT_SHA=$(git -C ~/path/to/kb rev-parse --short=12 HEAD) && docker compose build kb && docker compose up -d kb
 ```
 
 ## 4. Export `KB_SESSIONS_DIR` in the local Claude env

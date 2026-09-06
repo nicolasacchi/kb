@@ -1,13 +1,12 @@
 # Deploying the PERF milestone (shipped within v0.41's range)
 
-The PF-wave commits (PRs #68/#69) landed on main just before the slate
+The PF-wave performance commits landed on `main` just before the slate
 milestone tagged v0.41, so v0.41+ binaries carry everything below — there
-is no separate PERF tag. The reference kb.example.com deployment passed
-this point on 2026-09-05 (the V0040 migration has already run there).
+is no separate PERF tag.
 
-Operator notes for rolling the 2026-09 performance milestone (PF waves,
-PRs #68/#69) onto a production host. Deploys stay operator-owned — this
-doc recommends, it does not mutate.
+Notes for rolling the 2026-09 performance milestone (the PF waves) onto a
+production host. Deploys stay operator-owned — this doc recommends, it
+does not mutate.
 
 ## The one hard rule: no binary rollback after V0040
 
@@ -30,7 +29,7 @@ under a second.
 
 | key | default | recommendation |
 |---|---|---|
-| `[server] fanout_cap` | 8 | **Leave at 8** until measured on the target host. It caps per-request corpus fan-out concurrency for every `scope=all` read. Raising it lowers federated latency on many-kb daemons at the cost of parallel storage-actor + `spawn_blocking` pressure; on the ~24-kb prod daemon a bump to 12–16 is the plausible sweet spot — change it only with a before/after `kb bench`/curl-timing check. Applies via config edit (in-process restart). |
+| `[server] fanout_cap` | 8 | **Leave at 8** until measured on the target host. It caps per-request corpus fan-out concurrency for every `scope=all` read. Raising it lowers federated latency on many-kb daemons at the cost of parallel storage-actor + `spawn_blocking` pressure; on a large multi-corpus deployment (~24 kbs, in the observed case below) a bump to 12–16 is the plausible sweet spot — change it only with a before/after `kb bench`/curl-timing check. Applies via config edit (in-process restart). |
 | `[kb.<name>] reconcile_secs` | inherit | New per-kb override. Set a **large value (e.g. 3600) on big, rarely-changing corpora** (research archives, frozen showcases) to stop paying a full walk every 60s; leave hot corpora (sessions, memory) on the daemon default. `KB_RECONCILE_SECS` env still trumps everything. The per-kb auto-compact ticker follows the same value. |
 
 No other config changes are required; absent keys are byte-identical to
@@ -38,10 +37,9 @@ pre-milestone behavior.
 
 ## What you get (evidence highlights)
 
-Two-daemon A/B lab (2026-09-05, this host): identical corpora (1.2k HTML
-docs + 200 sessions × 4 captures each), pre = the `d25be582` prod image
-binary, post = `f8149f72` (this milestone), BM25-only, warm p50 over 20
-samples:
+Two-daemon A/B lab: identical corpora (1.2k HTML docs + 200 sessions × 4
+captures each), pre = the pre-milestone binary, post = the milestone
+binary, BM25-only, warm p50 over 20 samples:
 
 | endpoint | pre p50 ms | post p50 ms | Δ |
 |---|---|---|---|
@@ -55,7 +53,7 @@ samples:
 The daycard/desk/resurface wins are the gallery-memo rewires; they grow
 with corpus size (the pre binary re-pulls the full corpus per request).
 The funnel/list deltas grow with capture density — the lab used 4
-captures per session; the prod sessions corpus carries 20+ on busy days,
+captures per session; a busy sessions corpus can carry 20+ on busy days,
 and the correlated re-sort the flag replaced was per-outer-row.
 
 - **Sessions storage**: the newest-capture pick is precomputed
@@ -80,7 +78,7 @@ and the correlated re-sort the flag replaced was per-outer-row.
   suite runs under nextest — test phase ~2–3 min for ~3,590 tests vs
   40–60+ min serial; drift checks moved off the critical path.
 
-## Lab findings feeding PF-I1 (2026-09-05, same host/lab)
+## Lab findings feeding PF-I1
 
 - **Atlas cliff confirmed**: `?projection=atlas` (uncached per-request
   full lance scan, the deliberately deferred item) measured 28ms p50 at
@@ -100,8 +98,8 @@ and the correlated re-sort the flag replaced was per-outer-row.
   extrapolation (~600ms): fragmentation multiplies scan cost; compacted
   row-count scaling is mild (~11µs/doc). Operational advice: avoid
   parallel bulk imports on HDD hosts; compaction needs no tuning.
-- **Prod RSS fully attributed** (read-only in-container probe,
-  2026-09-05): 2.80GB cgroup = kb daemon 780MB + embed-model
+- **Prod-shaped RSS fully attributed** (read-only in-container probe):
+  2.80GB cgroup = kb daemon 780MB + embed-model
   kb-embedder 1.67GB + reranker kb-embedder 242MB. The 1.67GB for a
   ~130MB-weight bge-small model points at ORT arena growth (the old
   ">32 batch thrashes RSS" spike note — arenas don't shrink). So
@@ -127,7 +125,7 @@ and the correlated re-sort the flag replaced was per-outer-row.
 - Three flat-800ms SSE test drains remain in `end_to_end.rs`
   (~6219/~10063/~18161) — same class as the one the nextest flip
   surfaced and we fixed; convert on next fire.
-- The prod kb container idles at multi-GiB RSS (2.79 GiB observed
-  2026-09-04, cap 12 GiB) — cause unattributed (lance caches / mmap /
+- A long-running kb container idles at multi-GiB RSS (2.79 GiB observed
+  in one case, cap 12 GiB) — cause unattributed (lance caches / mmap /
   embedder RSS), on the PF-I1 follow-up list. Hold the current memory
   limit until attributed.

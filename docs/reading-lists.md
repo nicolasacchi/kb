@@ -146,7 +146,7 @@ Markdown grammar (pinned by golden tests in kb-core AND kb-cli):
 | following `> …` blockquote | description |
 | `<!-- kb-list {json} -->` | provenance (`schema`, `kb`, `list_id`) — import targeting: `--into` > existing `list_id` > create-new named by the title |
 | `N. [ ]` / `N. [x]` item | one entry, document order authoritative (`[x]` ⇒ read override) |
-| `[text](path#section-id)` | target: source-relative path (or bare 12-hex id); `#fragment` ⇒ Section anchor |
+| `` [text](path#section-id) `` | target: source-relative path (or bare 12-hex id); `#fragment` ⇒ Section anchor |
 | trailing `<!-- kb-entry {json} -->` | machine state (`id`, `read_override`, full `anchor`) — beats the visible markdown |
 | ≥3-space-indented lines | the entry's note |
 | anything else | ignored (forward-compatible) |

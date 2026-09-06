@@ -3,7 +3,7 @@
 The daemon serves a single-page React app at its root (default
 `http://127.0.0.1:4000`). It browses, searches, reads, and reviews the
 artifacts the daemon has indexed, across one or more daemons. This is a
-user guide; the routes behind it are in the README's HTTP API section.
+user guide; the routes behind it are in [`http-api.md`](http-api.md).
 For the component/hook reference, see
 [`web-internals.md`](web-internals.md).
 
