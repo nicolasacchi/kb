@@ -311,6 +311,30 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// The `syntax/1` file-type registry (`GET /api/syntax`): every file
+    /// type this daemon knows, its tree-sitter grammar (or the honest
+    /// absence of one), its extraction tier, and the extensions, exact
+    /// filenames and `#!` interpreters that address it. Daemon-only —
+    /// the answer describes the DAEMON's build, not this CLI's.
+    Syntax {
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `syntax/1` JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The Parity Grid (`GET /api/parity`): every registry language
+    /// against every capability (highlight, symbols, outline, usages,
+    /// hover, lens), each cell derived from what the daemon can actually
+    /// do — an honest map of where the instrument is weak, never a
+    /// hand-written claim. Daemon-only.
+    Parity {
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `parity/1` JSON instead of the grid.
+        #[arg(long)]
+        json: bool,
+    },
     /// Per-file symbol list (PATH), or a repo-wide substring search
     /// (`--query`) — exactly one of the two. Daemon-only
     /// (`GET /api/symbols`); the real fuzzy-match lane is W2.1's job, this
@@ -3309,6 +3333,8 @@ async fn run(cli: Cli) -> Result<()> {
             None => cat(Path::new(&repo), &path, &rev),
         },
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
+        Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
+        Cmd::Parity { daemon, json } => parity_cmd(&daemon, json).await,
         Cmd::Symbols {
             path,
             repo,
@@ -5489,6 +5515,174 @@ async fn repos_cmd(daemon: &str, json: bool) -> Result<()> {
             r["symbol_count"].as_u64().unwrap_or(0),
             r["watcher"].as_str().unwrap_or("?"),
         );
+    }
+    Ok(())
+}
+
+// ── V72-H1 — `kb-code syntax` / `kb-code parity` ────────────────────────
+//
+// Both verbs are pure daemon reads with no params, and both take the route
+// PATH from the server crate's own declared contract
+// (`kb_code_server::syntax::V72_H1_ROUTES`) rather than a string literal,
+// so `cli_requests_send_every_param_their_route_requires` can walk the two
+// against each other exactly as it does for `entity`/`seq`/`act`/`tree`.
+//
+// They are daemon-only ON PURPOSE even though the registry is build-time
+// data this binary also links: the honest answer to "what can be done with
+// a `.rake` file" is what the DAEMON's build can do, and a CLI rendering
+// its own table would quietly answer for a different binary.
+
+/// The `GET /api/syntax` request: `(path, query)`.
+fn syntax_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::syntax::SYNTAX_ROUTE.path, Vec::new())
+}
+
+/// The `GET /api/parity` request: `(path, query)`.
+fn parity_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::syntax::PARITY_ROUTE.path, Vec::new())
+}
+
+/// Render one row's addressing keys: `.rb .rake` / `Gemfile` / `#!ruby`.
+fn syntax_keys(row: &serde_json::Value) -> String {
+    let list = |field: &str, prefix: &str| -> Vec<String> {
+        row[field]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|v| format!("{prefix}{v}"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut keys = list("extensions", ".");
+    keys.extend(list("filenames", ""));
+    keys.extend(list("interpreters", "#!"));
+    if keys.is_empty() {
+        "—".to_string()
+    } else {
+        keys.join(" ")
+    }
+}
+
+/// `kb-code syntax` — `GET /api/syntax`.
+async fn syntax_cmd(daemon: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = syntax_request();
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let rows = body["rows"].as_array().cloned().unwrap_or_default();
+    println!(
+        "{:<12} {:<15} {:<30} {}",
+        "LANG", "TIER", "GRAMMAR", "ADDRESSED BY"
+    );
+    let mut notes: Vec<(String, String)> = Vec::new();
+    for r in &rows {
+        let lang = r["lang"].as_str().unwrap_or("?");
+        println!(
+            "{:<12} {:<15} {:<30} {}",
+            lang,
+            r["tier"].as_str().unwrap_or("?"),
+            r["grammar"].as_str().unwrap_or("— none linked"),
+            syntax_keys(r),
+        );
+        if let Some(note) = r["note"].as_str() {
+            notes.push((lang.to_string(), note.to_string()));
+        }
+        if r["injection_host"].as_bool().unwrap_or(false) {
+            notes.push((
+                lang.to_string(),
+                "injection host — declared for the injection-aware pipeline, which is not \
+                 built yet"
+                    .to_string(),
+            ));
+        }
+    }
+    println!("\n{} file type(s)", body["total"].as_u64().unwrap_or(0));
+    if !notes.is_empty() {
+        println!("\nnotes:");
+        for (lang, note) in notes {
+            println!("  {lang}: {note}");
+        }
+    }
+    Ok(())
+}
+
+/// `kb-code parity` — `GET /api/parity`. Renders the grid with a numbered
+/// legend: every non-`yes` cell carries a reason, and printing each one
+/// inline would make the grid unreadable, so identical reasons share a
+/// marker and the legend prints them once.
+async fn parity_cmd(daemon: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = parity_request();
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let caps: Vec<String> = body["capabilities"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let rows = body["rows"].as_array().cloned().unwrap_or_default();
+
+    let mut header = format!("{:<12} {:<15}", "LANG", "TIER");
+    for c in &caps {
+        header.push_str(&format!(" {c:<12}"));
+    }
+    println!("{header}");
+
+    // Reason → marker, in first-seen order.
+    let mut legend: Vec<String> = Vec::new();
+    for r in &rows {
+        let mut line = format!(
+            "{:<12} {:<15}",
+            r["lang"].as_str().unwrap_or("?"),
+            r["tier"].as_str().unwrap_or("?")
+        );
+        for cap in &caps {
+            let cell = r["cells"]
+                .as_array()
+                .and_then(|a| a.iter().find(|c| c["capability"].as_str() == Some(cap)));
+            let state = cell
+                .and_then(|c| c["state"].as_str())
+                .unwrap_or("?")
+                .to_string();
+            let marked = match cell.and_then(|c| c["reason"].as_str()) {
+                Some(reason) => {
+                    let idx = match legend.iter().position(|r| r.as_str() == reason) {
+                        Some(i) => i,
+                        None => {
+                            legend.push(reason.to_string());
+                            legend.len() - 1
+                        }
+                    };
+                    format!("{state}[{}]", idx + 1)
+                }
+                None => state,
+            };
+            line.push_str(&format!(" {marked:<12}"));
+        }
+        println!("{line}");
+    }
+    println!(
+        "\n{} language(s) × {} capability(ies)",
+        body["total"].as_u64().unwrap_or(0),
+        caps.len()
+    );
+    if !legend.is_empty() {
+        println!("\nwhy:");
+        for (i, reason) in legend.iter().enumerate() {
+            println!("  [{}] {reason}", i + 1);
+        }
     }
     Ok(())
 }
@@ -18817,6 +19011,8 @@ mod tests {
                 repo: "repo",
                 ..Default::default()
             }),
+            syntax_request(),
+            parity_request(),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -18830,7 +19026,12 @@ mod tests {
         let declared = kb_code_server::entities::V71_G0_ROUTES
             .iter()
             .chain(kb_code_server::actions::V71_E2_ROUTES.iter())
-            .chain(kb_code_server::tree::V71_F1_ROUTES.iter());
+            .chain(kb_code_server::tree::V71_F1_ROUTES.iter())
+            // V72-H1 — same walk, one milestone later. Both routes take
+            // no params, so what this proves for them is the OTHER half
+            // of the dead-surface rule: a declared route with no verb
+            // building a request for it fails here, by path.
+            .chain(kb_code_server::syntax::V72_H1_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

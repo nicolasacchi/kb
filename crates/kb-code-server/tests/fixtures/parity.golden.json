@@ -1,0 +1,519 @@
+{
+  "schema": "parity/1",
+  "capabilities": [
+    "highlight",
+    "symbols",
+    "outline",
+    "usages",
+    "hover",
+    "lens"
+  ],
+  "rows": [
+    {
+      "lang": "rust",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "python",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "ruby",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "typescript",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "tsx",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "javascript",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "partial",
+          "reason": "likely/candidate only — no locals query, so the static ladder has no exact tier"
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "bash",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "partial",
+          "reason": "likely/candidate only — no locals query, so the static ladder has no exact tier"
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "yaml",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "partial",
+          "reason": "key-path outline rows (kind \"key\") — a data outline, not code definitions"
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "partial",
+          "reason": "word-scan resolve over key-path rows — no occurrences index to bind a position"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "go",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "partial",
+          "reason": "likely/candidate only — no locals query, so the static ladder has no exact tier"
+        },
+        {
+          "capability": "hover",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "lens",
+          "state": "yes",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "lang": "toml",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "partial",
+          "reason": "key-path outline rows (kind \"key\") — a data outline, not code definitions"
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "partial",
+          "reason": "word-scan resolve over key-path rows — no occurrences index to bind a position"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "json",
+      "tier": "full",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "yes",
+          "reason": null
+        },
+        {
+          "capability": "symbols",
+          "state": "partial",
+          "reason": "key-path outline rows (kind \"key\") — a data outline, not code definitions"
+        },
+        {
+          "capability": "outline",
+          "state": "partial",
+          "reason": "rendered from the symbols table; the universal outline/1 contract is not built yet"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "partial",
+          "reason": "word-scan resolve over key-path rows — no occurrences index to bind a position"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "erb",
+      "tier": "none",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "no",
+          "reason": "parse-only grammar: registered so the Rails view scanner can walk tag boundaries; no tags or highlights query in this build"
+        },
+        {
+          "capability": "symbols",
+          "state": "no",
+          "reason": "parse-only grammar: registered so the Rails view scanner can walk tag boundaries; no tags or highlights query in this build"
+        },
+        {
+          "capability": "outline",
+          "state": "no",
+          "reason": "parse-only grammar: registered so the Rails view scanner can walk tag boundaries; no tags or highlights query in this build"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "no",
+          "reason": "no symbols and no occurrences — the resolve ladder has nothing to bind"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "dockerfile",
+      "tier": "none",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "no",
+          "reason": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+        },
+        {
+          "capability": "symbols",
+          "state": "no",
+          "reason": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+        },
+        {
+          "capability": "outline",
+          "state": "no",
+          "reason": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "no",
+          "reason": "no symbols and no occurrences — the resolve ladder has nothing to bind"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    },
+    {
+      "lang": "sql",
+      "tier": "none",
+      "cells": [
+        {
+          "capability": "highlight",
+          "state": "no",
+          "reason": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+        },
+        {
+          "capability": "symbols",
+          "state": "no",
+          "reason": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+        },
+        {
+          "capability": "outline",
+          "state": "no",
+          "reason": "no tree-sitter grammar linked in this build — the type is named so the gap is visible"
+        },
+        {
+          "capability": "usages",
+          "state": "no",
+          "reason": "no occurrences index — every usages row is occurrence-backed"
+        },
+        {
+          "capability": "hover",
+          "state": "no",
+          "reason": "no symbols and no occurrences — the resolve ladder has nothing to bind"
+        },
+        {
+          "capability": "lens",
+          "state": "no",
+          "reason": "lens rows are callable/type declarations with occurrence-backed usage counts; this language has neither"
+        }
+      ]
+    }
+  ],
+  "total": 14,
+  "truncated": false
+}

@@ -3767,6 +3767,51 @@ the `kb-code search '<kbcq>'` line the page copies with `Alt-y`. The page's
 keys are ordinary `kbc-cmd/1` rows (`scope: "search"`, `dispatch:
 "surface"`) resolved through the same dispatcher every other surface uses.
 
+### v7.2 — Languages and lanes
+
+**`syntax/1` (V72-H1, D7) — `GET /api/syntax` and `GET /api/parity`.** ONE
+registry (`crates/kb-code-server/src/syntax.rs`) says, per file TYPE, which
+tree-sitter grammar parses it, which EXTRACTION TIER the ingest pipeline
+runs, whether it is an injection host, and the extensions, exact filenames
+and `#!` interpreters that address it. `lang::detect` is now a thin façade
+over that table and its contract is unchanged (`Some` still means "there is
+a grammar, and `salt` keys its derived rows").
+
+The tier is `full` (highlight spans + symbols), `highlight_only` (spans;
+symbol extraction skipped by ONE short-circuit at the top of the pipeline,
+never an aborted walk) or `none` (neither — a type with no grammar linked,
+or a parse-only grammar like ERB). It rides `GET /api/file` and the
+per-file `GET /api/symbols` as `tier` + `tier_reason`, both additive, so an
+empty symbol list can be read as "no symbols by tier" instead of a bug. It
+is a property of the file TYPE, decided before a byte is read — a different
+axis from `files.lang`'s content skip markers (`unknown`/`binary`/
+`too-large`/`lfs`).
+
+The stem table D7 asks for ships here: `Gemfile`, `Rakefile`, `Guardfile`,
+`Capfile` and the `.rake`/`.jbuilder`/`.gemspec`/`.ru` extensions are Ruby
+(they were `unknown` before, i.e. Ruby source the instrument silently
+ignored); `Gemfile.lock` deliberately stays plain (a resolver artefact in
+its own format, not Ruby); the `#!` sniff widens past bash-family to
+`ruby` and `python`; `Dockerfile` and `.sql` are NAMED rows with no
+grammar, so the gap is visible instead of invisible.
+
+`GET /api/parity` is the **Parity Grid**: rows = every registry language,
+columns = `highlight, symbols, outline, usages, hover, lens`, each cell
+`yes`/`no`/`partial` and DERIVED from the predicate that actually gates
+that lane — never hand-typed, so it cannot claim a capability the daemon
+does not have. Every non-`yes` cell carries a reason. The grid is pinned by
+a checked-in golden (`crates/kb-code-server/tests/fixtures/
+parity.golden.json`), so a capability change is a deliberate golden update,
+reviewable in the diff that causes it. CLI: `kb-code syntax [--json]`,
+`kb-code parity [--json]` — daemon reads, because the honest answer is what
+the DAEMON's build can do.
+
+Not in this unit, by design: new grammars (SCSS/CSS/Markdown), the
+injection-aware pipeline, the universal `outline/1` contract, and the
+`symbol_salt`/`highlight_salt` split. `highlight_only` therefore ships as a
+mechanism with no production row yet, recorded by a test that fails when
+the first one lands.
+
 ## Fleet monitoring (TUI retired in v0.24)
 
 The 5-tab ratatui fleet monitor (`kb tui`, v0.6–v0.23) was removed in v0.24
