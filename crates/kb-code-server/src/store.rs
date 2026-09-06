@@ -75,6 +75,88 @@ pub fn schema_epoch() -> u32 {
     kb_core::sibling::binary_epoch(&embedded::migrations::runner())
 }
 
+/// V72-B1 — the name refinery recorded for the V3 migration (`transcripts`,
+/// from `V0003__transcripts.sql`). Shared by the repair below and its tests.
+const V3_TRANSCRIPTS_NAME: &str = "transcripts";
+
+/// V72-B1 — the checksum an archive-era binary wrote into
+/// `refinery_schema_history` for V3 `transcripts`, before this repo went
+/// public. Refinery's checksum hashes a migration's exact file content
+/// (version + name + full SQL text — `refinery_core::Migration::
+/// unapplied`), and the public-repo scrub anonymised an EXAMPLE PATH inside
+/// a comment in that file (not executed SQL — see `migrations/
+/// V0003__transcripts.sql`'s header), which changed the checksum. Read
+/// from a copy of a real production kb-code state volume's
+/// `refinery_schema_history` row (migrated by an archive-era binary) and
+/// independently reproduced by hashing the archive-era file's exact
+/// content; cross-checked against [`V3_TRANSCRIPTS_PUBLIC_CHECKSUM`] below
+/// and the `migrations.checksums.json` golden — see `tests::v72_b1` for
+/// all three. Dated 2026-09.
+const V3_TRANSCRIPTS_ARCHIVE_CHECKSUM: &str = "17561702661079640667";
+
+/// V72-B1 — the checksum this binary computes today for V3 `transcripts`
+/// from the current (public-tree) migration file — i.e. what
+/// `embedded::migrations::runner()` embeds. Also pinned as one row of the
+/// `migrations.checksums.json` golden (`tests::v72_b1::
+/// every_embedded_migration_checksum_matches_the_golden`), so a future
+/// accidental edit to an APPLIED migration fails CI rather than silently
+/// drifting again.
+const V3_TRANSCRIPTS_PUBLIC_CHECKSUM: &str = "6341265312121235865";
+
+/// V72-B1 — repair the ONE `refinery_schema_history` row the 2026-09
+/// public-repo scrub diverged (see the constants above for the full
+/// story). This is a ONE-TIME, NARROWLY-TARGETED fix, never a general
+/// divergent-checksum bypass: refinery's own `abort_divergent` default
+/// stays ON, and only a V3 row named `transcripts` whose checksum is
+/// EXACTLY [`V3_TRANSCRIPTS_ARCHIVE_CHECKSUM`] is ever rewritten — to
+/// EXACTLY [`V3_TRANSCRIPTS_PUBLIC_CHECKSUM`], never anything computed at
+/// runtime. Any OTHER checksum at V3 (including one that's already
+/// public, or a REAL divergence unrelated to this scrub) is left
+/// untouched, so refinery's own guard still fires exactly as designed.
+/// Idempotent: a volume already repaired (or already public, e.g. a fresh
+/// volume this binary itself created) simply doesn't match the archive
+/// value and this is a no-op.
+///
+/// Must run AFTER `kb_core::sibling::refuse_if_volume_ahead` (a stale
+/// checksum must never be confused with a forward-migrated volume) and
+/// BEFORE the refinery runner (which would otherwise abort on it first) —
+/// see the call site in [`Store::open`].
+fn repair_v3_transcripts_checksum(conn: &mut Connection) -> rusqlite::Result<()> {
+    let history_table_exists: bool = conn.query_row(
+        "SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'refinery_schema_history'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !history_table_exists {
+        // Brand-new volume — refinery creates the table itself on first run.
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+    let current: Option<String> = tx
+        .query_row(
+            "SELECT checksum FROM refinery_schema_history WHERE version = 3 AND name = ?1",
+            params![V3_TRANSCRIPTS_NAME],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if current.as_deref() != Some(V3_TRANSCRIPTS_ARCHIVE_CHECKSUM) {
+        // Not the known archive-era value: no V3 row at all, already the
+        // public value, already repaired, or a real divergence refinery
+        // must still refuse. Touch nothing either way.
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE refinery_schema_history SET checksum = ?1 WHERE version = 3 AND name = ?2",
+        params![V3_TRANSCRIPTS_PUBLIC_CHECKSUM, V3_TRANSCRIPTS_NAME],
+    )?;
+    tx.commit()?;
+    tracing::info!(
+        "migration checksum repaired: V3__transcripts (2026-09 public-scrub comment change)"
+    );
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("kb-code store sqlite error: {0}")]
@@ -219,6 +301,13 @@ impl Store {
         // and the error propagates out of `bind_and_spawn`, refusing boot.
         kb_core::sibling::refuse_if_volume_ahead(&conn, path, schema_epoch())
             .map_err(|e| StoreError::SchemaEpoch(e.to_string()))?;
+
+        // V72-B1 — one-time, narrowly-targeted repair for the ONE migration
+        // checksum a 2026-09 public-repo scrub diverged. MUST run after the
+        // schema-epoch guard above (a stale checksum is never a
+        // forward-migrated volume) and before the runner below (which would
+        // otherwise abort on it first).
+        repair_v3_transcripts_checksum(&mut conn)?;
 
         embedded::migrations::runner()
             .run(&mut conn)
@@ -8051,6 +8140,155 @@ mod tests {
         );
         drop(store);
         Store::open(&db_path).expect("re-opening at an equal epoch must boot");
+    }
+
+    /// V72-B1 — the migration-checksum repair (`repair_v3_transcripts_checksum`)
+    /// and its own regression golden (`migrations.checksums.json`). See the
+    /// constants next to `repair_v3_transcripts_checksum` for the full
+    /// defect story.
+    mod v72_b1 {
+        use super::*;
+
+        /// The JSON shape of `tests/fixtures/migrations.checksums.json` —
+        /// one row per migration EMBEDDED in this binary.
+        #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+        struct MigrationChecksumRow {
+            version: u32,
+            name: String,
+            checksum: String,
+        }
+
+        fn embedded_checksums() -> Vec<MigrationChecksumRow> {
+            let mut rows: Vec<MigrationChecksumRow> = embedded::migrations::runner()
+                .get_migrations()
+                .iter()
+                .map(|m| MigrationChecksumRow {
+                    version: m.version(),
+                    name: m.name().to_string(),
+                    checksum: m.checksum().to_string(),
+                })
+                .collect();
+            rows.sort_by_key(|r| r.version);
+            rows
+        }
+
+        /// The CI golden. Lives under `tests/` (where a reviewer looks for
+        /// a fixture) and is read from here (where the only test that can
+        /// regenerate it lives) — same convention as `syntax.rs`'s
+        /// `PARITY_GOLDEN`.
+        const MIGRATIONS_CHECKSUMS_GOLDEN: &str =
+            include_str!("../tests/fixtures/migrations.checksums.json");
+
+        /// (e) — every embedded migration's checksum matches the checked-in
+        /// golden. A change here means an APPLIED migration's file content
+        /// changed — exactly the class of edit that diverged V3 in the
+        /// public scrub. Failing loudly, with the fix spelled out, is the
+        /// whole point of this test.
+        #[test]
+        fn every_embedded_migration_checksum_matches_the_golden() {
+            let actual = serde_json::to_string_pretty(&embedded_checksums()).expect("serialize");
+            assert_eq!(
+                actual.trim_end(),
+                MIGRATIONS_CHECKSUMS_GOLDEN.trim_end(),
+                "an applied migration's content changed — either revert the edit or ship \
+                 a repair like V72-B1 and bump this golden deliberately\n{actual}"
+            );
+        }
+
+        /// A freshly-migrated db, NOT via `Store::open` (so this helper is
+        /// unaffected by the repair under test) — the runner's own public
+        /// checksums land straight in `refinery_schema_history`.
+        fn fresh_migrated_db() -> (tempfile::TempDir, std::path::PathBuf) {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("index.db");
+            let mut conn = Connection::open(&db_path).unwrap();
+            embedded::migrations::runner().run(&mut conn).unwrap();
+            (tmp, db_path)
+        }
+
+        fn set_v3_checksum(db_path: &std::path::Path, checksum: &str) {
+            Connection::open(db_path)
+                .unwrap()
+                .execute(
+                    "UPDATE refinery_schema_history SET checksum = ?1 \
+                     WHERE version = 3 AND name = 'transcripts'",
+                    params![checksum],
+                )
+                .unwrap();
+        }
+
+        fn v3_checksum(db_path: &std::path::Path) -> String {
+            Connection::open(db_path)
+                .unwrap()
+                .query_row(
+                    "SELECT checksum FROM refinery_schema_history \
+                     WHERE version = 3 AND name = 'transcripts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+
+        /// (a) — a db carrying the archive-era V3 checksum opens
+        /// successfully via `Store::open`, and the row is rewritten to the
+        /// public value.
+        #[test]
+        fn archive_era_checksum_is_repaired_and_open_succeeds() {
+            let (_tmp, db_path) = fresh_migrated_db();
+            set_v3_checksum(&db_path, V3_TRANSCRIPTS_ARCHIVE_CHECKSUM);
+            let store = Store::open(&db_path).expect("open must repair and then succeed");
+            drop(store);
+            assert_eq!(v3_checksum(&db_path), V3_TRANSCRIPTS_PUBLIC_CHECKSUM);
+        }
+
+        /// (b) — a db already carrying the public checksum (the normal,
+        /// never-diverged case) is left byte-for-byte untouched.
+        #[test]
+        fn public_checksum_is_left_untouched() {
+            let (_tmp, db_path) = fresh_migrated_db();
+            assert_eq!(
+                v3_checksum(&db_path),
+                V3_TRANSCRIPTS_PUBLIC_CHECKSUM,
+                "a fresh migration must already record the public checksum"
+            );
+            let store = Store::open(&db_path).expect("re-open must succeed");
+            drop(store);
+            assert_eq!(v3_checksum(&db_path), V3_TRANSCRIPTS_PUBLIC_CHECKSUM);
+        }
+
+        /// (c) — an UNRELATED V3 checksum (neither archive-era nor public)
+        /// is a real divergence: the repair must not touch it, and
+        /// refinery's own `abort_divergent` (the default — never weakened
+        /// by this repair) must still surface the error.
+        #[test]
+        fn an_unrelated_v3_checksum_still_refuses_to_open() {
+            let (_tmp, db_path) = fresh_migrated_db();
+            set_v3_checksum(&db_path, "1");
+            let err = match Store::open(&db_path) {
+                Ok(_) => panic!("a real divergence must still refuse to open"),
+                Err(e) => e,
+            };
+            assert!(matches!(err, StoreError::Migration(_)), "{err:?}");
+            assert!(err.to_string().contains("V3__transcripts"), "{err}");
+            assert_eq!(
+                v3_checksum(&db_path),
+                "1",
+                "an unrelated checksum must be left exactly alone"
+            );
+        }
+
+        /// (d) — idempotency: opening an already-repaired (or always-public)
+        /// volume a second time is a clean no-op repair followed by a
+        /// normal boot, same as any other repeated `Store::open`.
+        #[test]
+        fn repair_is_idempotent_across_repeated_opens() {
+            let (_tmp, db_path) = fresh_migrated_db();
+            set_v3_checksum(&db_path, V3_TRANSCRIPTS_ARCHIVE_CHECKSUM);
+            drop(Store::open(&db_path).expect("first open repairs"));
+            assert_eq!(v3_checksum(&db_path), V3_TRANSCRIPTS_PUBLIC_CHECKSUM);
+            drop(Store::open(&db_path).expect("second open is a no-op repair"));
+            assert_eq!(v3_checksum(&db_path), V3_TRANSCRIPTS_PUBLIC_CHECKSUM);
+        }
     }
 
     /// V0007 (B2) on a FRESH db: refinery runs the whole chain
