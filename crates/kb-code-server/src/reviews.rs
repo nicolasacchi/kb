@@ -1226,7 +1226,7 @@ pub async fn delete_viewed(
 /// caller cannot use this column as a free-text side channel: 1..=64 chars
 /// of `[0-9a-z]` (today's `kbc-hunkid/1` is exactly 16 lowercase hex, and
 /// the wider alphabet leaves room for a future scheme without a migration).
-fn is_hunk_id(s: &str) -> bool {
+pub(crate) fn is_hunk_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && s.bytes()

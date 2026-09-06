@@ -39,6 +39,15 @@
 //!   column with no writer is the v7.0 dead-surface defect. A `?workspace=`
 //!   filter therefore excludes boards outright and SAYS SO in `notes` —
 //!   the honest degrade, not a silent absence.
+//!
+//! ## V74-L1 amendment
+//!
+//! The `board` projection now resolves out of TWO tables — `canvas_sets`
+//! (v3.4-C1's opaque fragment canvases) and `canvas_boards` (kbc-canvas/1's
+//! reference boards). Nothing about this module's posture changes: it still
+//! creates, moves and merges nothing, and `source` still names the table
+//! each row physically lives in. The workspace note above is unchanged —
+//! neither board table carries a `workspace_id`.
 
 use crate::routes::{find_repo, ApiError};
 use crate::state::SharedState;
@@ -117,10 +126,12 @@ pub struct SeqProjectionOut {
     pub id: String,
     pub name: String,
     /// Number of ordered references the projection carries (spans, for a
-    /// `reading_sets`-backed one). `null` for a board, whose geometry
-    /// payload is opaque to this daemon (invariant: `canvas_sets.payload`
-    /// is never parsed server-side) — an unknown count, never a 0 that
-    /// would read as "empty".
+    /// `reading_sets`-backed one). `null` for a `canvas_sets` board, whose
+    /// geometry payload is opaque to this daemon (invariant:
+    /// `canvas_sets.payload` is never parsed server-side) — an unknown
+    /// count, never a 0 that would read as "empty". V74-L1's own
+    /// `canvas_boards` rows DO carry a true node count, because their
+    /// nodes are rows rather than an opaque blob.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "ref")]
@@ -190,7 +201,16 @@ pub async fn seq_route(
                 )?);
             }
             if want_boards {
+                // V74-L1 — TWO sources for the ONE `board` projection: the
+                // v3.4-C1 `canvas_sets` fragment canvases and kbc-canvas/1's
+                // own `canvas_boards`. Still a LAYER (invariant 14):
+                // nothing is created, moved or merged here, and each row
+                // reports the table it physically lives in. A kbc-canvas/1
+                // board reports a TRUE node count where a `canvas_sets` row
+                // still honestly reports `null` (its payload is opaque to
+                // this daemon and always was).
                 rows.extend(store.seq_canvas_sets(repo_id)?);
+                rows.extend(store.seq_canvas_boards(repo_id)?);
             }
             Ok::<_, ApiError>(rows)
         })

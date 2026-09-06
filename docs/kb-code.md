@@ -711,6 +711,153 @@ repo; an empty string UNBINDS. Boards carry no workspace binding yet, so
 `?workspace=` excludes them and says so in `notes`. CLI: `kb-code seq
 list --repo R [--projection P] [--workspace ID] [--json]`.
 
+**kbc-canvas/1 (V74-L1) — boards of reference nodes, on the Ladder.**
+Design of record: D10 (boards, the canvas rebuilt) + D21 (an agent-proposed
+board is PENDING until a human accepts it), Track L. A **board** is an
+ordered set of REFERENCES into surfaces this daemon already serves — never
+a copy of them — plus authored edges between those references, and every
+reference is re-resolved through the carry-forward **Ladder** on every read.
+
+Three properties hold the whole thing up.
+
+*Nothing about resolution is stored.* There is no state column: `pinned` /
+`carried` / `orphan` is computed per request, exactly as `lanes::classing`
+and `entities::class_for` compute theirs, and for the reason root invariant
+#2 states for the whole doc↔code bridge — a stale fact must never read as a
+fresh one. *An orphan is SHOWN, never dropped:* it keeps its title, its
+note, its last-known address and the one line of source it was anchored to,
+and says the code is gone. *Boards are coordinate-free:* the document has no
+`x`/`y` anywhere, layout is the SPA's (TypeScript, one engine), and the only
+authored geometry is a `pins` map — an explicit override for a card a human
+placed by hand.
+
+Node kinds are CLOSED at ten. `code` (path + optional symbol + a primary
+range and an optional context range + blob + guard hash), `note`
+(Markdown), `query` (a kbcq/1 query plus the count its author saw), `hunk`
+(review + patchset + a `kbc-hunkid/1` address), `finding` (review +
+`f-*` slug), `annotation`, `turn` (session + `t-<uuid12>`), `bookmark`,
+`group` and `link`. Edge kinds are CLOSED at eight — `calls`, `renders`,
+`reads`, `writes`, `then`, `implements`, `contradicts`, `question` — and an
+edge's provenance is `authored` or `derived`: a DERIVED edge must name the
+trust class it inherited, an AUTHORED edge may not carry one at all (a
+human's arrow is not a claim the index can back). Node threads REUSE the
+annotations store — a node's `thread_id` points at an annotation parent, and
+there is no second comments table.
+
+Four states answer a node, and what each promises is different: `pinned`
+(the claimed bytes are still at the claimed place — the blob is unchanged,
+or the guard hash over the range still matches, or the anchored line
+re-resolved verbatim where it was), `carried` (the bytes moved; the range
+comes back shifted, with `shifted_by`), `orphan` (no confident match, or the
+addressed thing is gone), `present` (an id-shaped reference whose target
+exists) and `inert` (a note, a group, a link — there is nothing to resolve).
+Every state carries a REASON from a closed vocabulary. The `code` rungs are
+`annotations::anchor_for_line` + `annotations::resolve` guarded by
+`review_comments::line_matches_snippet` — the same three calls review
+comments, findings and `aug-lane/1` make, not a fourth implementation.
+
+What a board read deliberately does NOT probe, it says: a `kbc-hunkid/1` id
+is a content address the SPA mints from diff text, so `present` for a hunk
+node means the review and the patchset exist and the daemon did not
+recompute the diff; a session turn is probed for EXISTENCE only and never a
+byte of transcript text (a board is bearer-readable, the transcripts lane is
+loopback-only); and a `query` card's count is not re-run on an ordinary read
+at all — `?live=1` opts in, `canvas sweep` always does, and the count that
+comes back is a PAGE count with `basis: "page"`, the same honesty the facet
+census already ships.
+
+**The apply lint.** `kb-code canvas apply -f board.json`
+(`POST /api/boards/apply`, loopback-only) is an idempotent upsert BY SLUG:
+the same document twice is a no-op with `unchanged: true` and no revision
+bump, because the whole document has one canonical content hash rather than
+a field-by-field diff that could disagree with itself. A node that survives
+a re-apply keeps its id, which is what makes a node thread durable across an
+edit. Before anything is written the document is linted, and the report is a
+LIST rather than a first error — an agent retrying an apply needs every
+problem in one round trip:
+
+| rule | severity | what it catches |
+|---|---|---|
+| `coordinates` | refuse | `x`/`y`/`width`/`height`/`position`/… ANYWHERE outside the `pins` map. The message names `pins` as the one sanctioned way to fix a position |
+| `node-cap` / `edge-cap` | refuse | more than 200 nodes / 600 edges, with the count |
+| `steps-required` | refuse | more than 40 nodes and no `steps` reading order |
+| `components` | warn, then refuse | disconnected components, listed by member; above six an apply refuses unless `--allow-disconnected`. Group membership counts as connectivity |
+| `node-kind` / `edge-kind` / `edge-provenance` / `status` | refuse | a value outside a closed vocabulary, naming the whole vocabulary |
+| `node-ref` | refuse | a required reference field missing, another kind's field present, or a MALFORMED address (a `..` path, a 0-based range, a context range that does not contain its primary, a non-`f-*` finding slug, a non-http `link`) |
+| `edge-endpoint` / `step-node` / `pin-node` / `group-member` | refuse | a reference to a node that is not in the document, a self-edge, a duplicated step |
+| `node-id` / `slug` / `title` / `body-cap` | refuse | a malformed or duplicated id, a reserved slug (`apply`, `sweep`), an over-long title, a body over 8 KiB |
+
+A reference that does not RESOLVE is a warning, not a refusal: the node
+becomes an honest orphan and the response says so. That split — "I cannot
+read this" versus "I read this and it points at something that is gone" —
+is the whole posture in one line.
+
+**Status.** `pending` → `accepted` is a human's move (D21). `apply` may only
+ever write `pending` (the default) or `draft`; `accepted` and `archived` are
+reachable ONLY through `POST /api/boards/{slug}/accept` / `archive`, both
+loopback-only. A document naming `accepted` is refused by the lint, so the
+rule holds for a loopback caller too rather than resting on the gate. A
+CHANGED apply against an accepted board resets it to the status the document
+asked for and says `status_reset: true` — a human accepted a specific board,
+not a slug.
+
+**Exports.** `GET /api/boards/{slug}/export?format=md|jsoncanvas|kb-html`
+(and `kb-code canvas export`). All three are pure functions of an
+already-resolved board — they run no query and resolve no anchor — and all
+three carry the same sentence: *an exported board is a SNAPSHOT; the live
+board re-resolves on every read and this file does not*. **Markdown** is one
+`##` per group, nodes in step order, each as its address, state, note and
+snippet. **JSON Canvas** is the Obsidian 1.0 format, and it is lossy in a
+stated way: the spec requires `x`/`y`/`width`/`height` on every node, so the
+server derives a deterministic layered layout FOR THIS FORMAT ONLY (pins are
+honoured exactly; everything else is laid out by longest-path depth over the
+edge DAG, rows in step order, on `egoGraph.ts`'s own geometry constants) —
+the same algorithm FAMILY as the SPA's engine, deliberately not a port, and
+the file says which. Everything the spec cannot express (a range, a trust
+class, a resolution state) rides `kbc_`-prefixed extension fields the spec's
+own extensibility rule says other apps ignore. **kb-html** is the
+high-fidelity one: a single self-contained artifact with a real `<title>` +
+`<h1>`/`<h2>` hierarchy, stable section ids, `kb-category`/`kb-tags`/
+`kb-summary` metas, addresses as reader deep links, every byte escaped, no
+scripts and no event handlers. The `<template id="kb-prompt">` wrapper is
+NOT generated here — the kb side owns it.
+
+**`kb-code canvas sweep --check [--slug S]`**
+(`GET /api/boards/sweep?repo=`) re-resolves every node of every (or one)
+board and reports drift: orphans, carried nodes, query deltas, and stale
+pins (a fixed position still held for a card that no longer points
+anywhere). It NEVER mutates — a gate that repaired what it found could not
+fail — and with `--check` it exits **3** on any drift, the documented
+"well-formed response reporting a conflict with current state" rung of the
+CLI's exit table. That is what makes a walkthrough board CI-gateable.
+
+Storage is four new tables (`migrations/V0036__canvas.sql`), NOT a
+`canvas_sets` row: that table's payload is opaque by contract and a board
+must be re-resolvable, which requires structured rows. `canvas_sets` is
+FROZEN beside it (the `/api/usages` → `/api/usages/2` treatment) and the
+routes live under `/api/boards` because `GET /api/canvas/{id}` (an i64) and
+`GET /api/canvas/{slug}` are the same axum pattern. kbc-seq/1's `board`
+projection now resolves out of BOTH tables and stays a layer; a kbc-canvas/1
+board reports a TRUE node count where a `canvas_sets` row still honestly
+reports `null`.
+
+Reads (`/api/boards`, `/api/boards/{slug}`, `/api/boards/{slug}/export`,
+`/api/boards/sweep`) are ordinary `auth_bearer` and are declared as
+`RouteContract`s in `kb_code_server::boards::V74_L1_ROUTES`, walked from
+both the server and the CLI side by the dead-surface tests V71-G0 added.
+Mutations (`apply`, `accept`, `archive`, `DELETE`) ride the same
+loopback-only sub-router the review mutations do, so
+`security::audit_mutations` records each attempt with its outcome. D10
+sketches a later graduation onto a named-family
+`[review] remote_mutations = ["review", "canvas"]` allowlist; that is its
+own unit and nothing here weakens root invariant #4.
+
+CLI: `kb-code canvas {boards,show,apply,accept,archive,rm,export,sweep}`.
+`canvas list` keeps its pre-existing meaning — the v3.4-C1 canvas SETS — so
+no script breaks; `canvas boards` lists kbc-canvas/1 boards. The board SPA
+(rendering, fold/expand, the keyboard model, walkthrough mode, add-to-board
+from every surface) is L2 and is not in this unit.
+
 **kbc-tree/1 (V71-F1) — `GET /api/tree/2?repo=[&view=][&root=][&depth=]
 [&expand=][&scope=][&filter=][&mode=][&decorate=][&base=][&review=]
 [&limit=]`.** The PROJECTED, decorated tree, computed ONCE server-side so

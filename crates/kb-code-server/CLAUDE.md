@@ -876,6 +876,71 @@ invariant #2 records).
     invariant #4 is not amended. `review_doc::routes::V73_K1_ROUTES` joins
     invariant 15's `RouteContract` walk from both sides.
 
+22. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
+    board is COORDINATE-FREE, and the two mutation rules are enforced by
+    the LINT rather than by the gate** (V74-L1, D10 + D21, `src/boards/`,
+    migration V0036). Four rules, separate to state and easy to break one
+    at a time.
+    (a) **Nothing about resolution is stored.** `canvas_nodes` has no state
+    column and never will: `pinned`/`carried`/`orphan`/`present`/`inert` is
+    computed per request by `boards::resolve`, which is invariant 13's and
+    21's posture (and root invariant #2's "kb-code mints classes, nothing is
+    cached") applied to a lane whose whole job is pointing at other things.
+    The `code` rungs are the crate's ONE ladder —
+    `annotations::anchor_for_line` + `annotations::resolve`, guarded by
+    `review_comments::line_matches_snippet` — not a fourth implementation.
+    The only thing an apply DOES persist for resolution is
+    `canvas_nodes.anchor_snippet`, captured under `lane_facts`' exact rule
+    (invariant 21): the file must be readable AND the node's claimed blob
+    must be what is on disk at that moment, because a snippet captured
+    against other bytes manufactures a match later instead of admitting an
+    orphan. **An orphan is SHOWN** — with its address and that snippet —
+    never dropped, and `honesty` counts it. The two things a read
+    deliberately does not probe say so in `note`: a `kbc-hunkid/1` id is a
+    content address (so `present` means the review and patchset exist, not
+    that the hunk does), and a `turn` is probed for EXISTENCE only, never a
+    byte of transcript text — a board is bearer-readable and the
+    transcripts lane is loopback-only.
+    (b) **Boards are coordinate-free, and the refusal is the teaching
+    surface.** D10 puts layout in TypeScript with one engine; the document
+    therefore has no geometry except a top-level `pins` map. The
+    `coordinates` lint rule runs on the RAW JSON *before* the typed parse —
+    `BoardDoc` is `deny_unknown_fields`, so serde would otherwise refuse an
+    `"x": 10` with a generic "unknown field" instead of the message that
+    names `pins`. The server derives geometry in exactly ONE place,
+    `boards::layout`, and only for the JSON Canvas export, whose spec
+    requires it; that export says in its own payload that its coordinates
+    were derived and that it is a snapshot. Do not grow `boards::layout`
+    into a second layout engine — if the SPA's geometry ever has to survive
+    a round trip, it sends PINS.
+    (c) **`accepted` is not authorable, and idempotency is one hash.**
+    `apply` may write only `pending` (the default, D21) or `draft`; the
+    `status` lint rule refuses a document naming `accepted`/`archived`, so
+    the rule holds for a LOOPBACK caller too rather than resting on the
+    route gate, and `POST …/accept` is the only writer of that value. A
+    CHANGED apply against an accepted board resets it and says
+    `status_reset: true` — a human accepted a specific board, not a slug.
+    Idempotency is `boards::content_hash` over a canonical rendering that
+    deliberately EXCLUDES `status` and `repo`; a field-by-field diff would
+    be a second answer to the same question. Nodes are keyed by the
+    author's own id, which is what keeps a node's `thread_id` (an
+    `annotations` parent — there is no second comments table) alive across
+    a re-apply.
+    (d) **The lint's two severities are the whole posture.** `refuse` is
+    "I cannot read this" (a cap, an unknown vocabulary value, a dangling
+    edge or step, a MALFORMED address); `warn` is "I read this and it
+    points at something that is gone" (an unresolvable reference — the node
+    becomes an honest orphan). Conflating them turns a board into either a
+    liar or a brick wall. The report is a LIST, never a first error,
+    because an agent retries the whole document. `kb-code canvas sweep
+    --check` is the same resolution run as a CI gate: it NEVER mutates (a
+    gate that repaired what it found could not fail) and exits 3 on drift.
+    `boards::V74_L1_ROUTES` joins invariant 15's `RouteContract` walk from
+    both sides; the four mutations are absent from it for the reason
+    `lanes`' ingest route is absent from its own — a `RouteContract`
+    describes a query-param surface, and a POST whose payload IS the
+    contract has nothing for `params_accept_without` to say.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside `kb-code-server` (or its

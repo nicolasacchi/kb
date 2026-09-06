@@ -2539,18 +2539,154 @@ enum BehavioralCmd {
     },
 }
 
-/// `kb-code canvas list [--repo R]` — V3.4-C1 list canvas sets
-/// (`GET /api/canvas`). **Read-only verb.**
+/// `kb-code canvas …` — TWO families under one verb, deliberately named
+/// apart rather than merged.
 ///
-/// Create/edit/delete of canvas sets are SPA interaction chrome with **no
-/// CLI verb parity** (D7 recorded exemption) — operators list what exists
-/// here; the SPA owns layout mutations over the loopback-gated HTTP API.
+/// * `canvas list` is the v3.4-C1 **canvas SETS** family: the SPA's
+///   working-set fragment canvas, one opaque geometry payload per row
+///   (`GET /api/canvas`). Read-only from the CLI, unchanged, FROZEN.
+/// * every other verb is **`kbc-canvas/1` BOARDS** (V74-L1, D10): a board
+///   of REFERENCE nodes the Ladder re-resolves on every read, authored as a
+///   document and applied idempotently by slug. D10 retires v3 D7's
+///   "no CLI verbs for the canvas" ruling by citation — a board is
+///   something an agent authors and a human walks, so it needs a CLI.
+///
+/// The two families address different routes (`/api/canvas` vs
+/// `/api/boards`) and different tables. `canvas boards` lists the second
+/// one; `canvas list` keeps its pre-existing meaning so no script breaks.
 #[derive(Subcommand, Debug)]
 enum CanvasCmd {
-    /// List canvas sets (`GET /api/canvas?repo=`). Requires `--repo`.
+    /// List v3.4-C1 canvas SETS (`GET /api/canvas?repo=`). Requires `--repo`.
     List {
         #[arg(long)]
         repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List `kbc-canvas/1` BOARDS (`GET /api/boards?repo=`).
+    Boards {
+        #[arg(long)]
+        repo: String,
+        /// `pending` | `draft` | `accepted` | `archived`; absent = all.
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one board, every node re-resolved through the Ladder NOW
+    /// (`GET /api/boards/{slug}?repo=`).
+    Show {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        /// Include each code node's CONTEXT range beside its primary one.
+        #[arg(long)]
+        ctx: bool,
+        /// Execute every query card and report the delta since it was
+        /// authored. Off by default — a live read runs a full search per
+        /// card.
+        #[arg(long)]
+        live: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a `kbc-canvas/1` document — an idempotent upsert BY SLUG
+    /// (`POST /api/boards/apply`, LOOPBACK-ONLY).
+    ///
+    /// The document is linted first: node/edge caps, unknown vocabulary,
+    /// dangling edges and steps, disconnected components, a walkthrough
+    /// order above 40 nodes — and, above all, COORDINATES. A board is
+    /// stored coordinate-free; an `x`/`y`/`width`/`position` anywhere in
+    /// the payload is refused by name, with the `pins` map named as the
+    /// one sanctioned way to fix a card's position.
+    Apply {
+        /// The document. Exactly one of this or `--stdin`.
+        #[arg(short = 'f', long = "from-file")]
+        from_file: Option<PathBuf>,
+        #[arg(long)]
+        stdin: bool,
+        /// Lint and RESOLVE the document without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Permit more than six disconnected components.
+        #[arg(long)]
+        allow_disconnected: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept a board (`POST /api/boards/{slug}/accept`, LOOPBACK-ONLY) —
+    /// the ONLY way a board reaches `accepted` (D21).
+    Accept {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive a board (`POST /api/boards/{slug}/archive`, LOOPBACK-ONLY).
+    Archive {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a board (`DELETE /api/boards/{slug}`, LOOPBACK-ONLY).
+    Rm {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+    },
+    /// Export a board (`GET /api/boards/{slug}/export?format=`).
+    ///
+    /// An exported board is a SNAPSHOT, and every format says so: the live
+    /// board re-resolves on each read, an exported file does not.
+    Export {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        /// `md` | `jsoncanvas` | `kb-html`.
+        #[arg(long, default_value = "md")]
+        format: String,
+        /// An absolute `http(s)` prefix for the reader links a `kb-html`
+        /// export emits; absent = root-relative.
+        #[arg(long)]
+        base: Option<String>,
+        /// Write here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+    },
+    /// Re-resolve every node of every (or one) board and report drift
+    /// (`GET /api/boards/sweep?repo=`). Never mutates.
+    ///
+    /// With `--check`, exits **3** when anything drifted — an orphan, a
+    /// carried node, a query delta or a stale pin — which is what makes a
+    /// walkthrough board CI-gateable.
+    Sweep {
+        #[arg(long)]
+        repo: String,
+        /// One board; absent = every board in the repo.
+        #[arg(long)]
+        slug: Option<String>,
+        /// Exit 3 on drift.
+        #[arg(long)]
+        check: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4238,6 +4374,76 @@ async fn run(cli: Cli) -> Result<()> {
         },
         Cmd::Canvas { cmd } => match cmd {
             CanvasCmd::List { repo, daemon, json } => canvas_list_cmd(&daemon, &repo, json).await,
+            CanvasCmd::Boards {
+                repo,
+                status,
+                daemon,
+                json,
+            } => board_list_cmd(&daemon, &repo, status.as_deref(), json).await,
+            CanvasCmd::Show {
+                slug,
+                repo,
+                ctx,
+                live,
+                daemon,
+                json,
+            } => board_show_cmd(&daemon, &slug, &repo, ctx, live, json).await,
+            CanvasCmd::Apply {
+                from_file,
+                stdin,
+                dry_run,
+                allow_disconnected,
+                daemon,
+                json,
+            } => {
+                board_apply_cmd(
+                    &daemon,
+                    from_file.as_deref(),
+                    stdin,
+                    dry_run,
+                    allow_disconnected,
+                    json,
+                )
+                .await
+            }
+            CanvasCmd::Accept {
+                slug,
+                repo,
+                daemon,
+                json,
+            } => board_status_cmd(&daemon, &slug, &repo, "accept", json).await,
+            CanvasCmd::Archive {
+                slug,
+                repo,
+                daemon,
+                json,
+            } => board_status_cmd(&daemon, &slug, &repo, "archive", json).await,
+            CanvasCmd::Rm { slug, repo, daemon } => board_rm_cmd(&daemon, &slug, &repo).await,
+            CanvasCmd::Export {
+                slug,
+                repo,
+                format,
+                base,
+                out,
+                daemon,
+            } => {
+                board_export_cmd(
+                    &daemon,
+                    &slug,
+                    &repo,
+                    &format,
+                    base.as_deref(),
+                    out.as_deref(),
+                )
+                .await
+            }
+            CanvasCmd::Sweep {
+                repo,
+                slug,
+                check,
+                daemon,
+                json,
+            } => board_sweep_cmd(&daemon, &repo, slug.as_deref(), check, json).await,
         },
         Cmd::Doclens { cmd } => match cmd {
             DoclensCmd::Show {
@@ -9482,6 +9688,426 @@ async fn canvas_list_cmd(daemon: &str, repo: &str, json: bool) -> Result<()> {
             it["updated_unix"].as_i64().unwrap_or(0),
             it["payload_bytes"].as_i64().unwrap_or(0),
         );
+    }
+    Ok(())
+}
+
+// ── V74-L1 — `kbc-canvas/1` boards (`kb-code canvas {boards,show,apply,
+// accept,archive,rm,export,sweep}`) ────────────────────────────────────────
+//
+// The four READ routes take their path from the server crate's own declared
+// contracts (`kb_code_server::boards::V74_L1_ROUTES`) rather than a string
+// literal, so `cli_requests_send_every_param_their_route_requires` walks
+// the CLI and the server against each other — the same discipline
+// `entity`/`seq`/`tree`/`lanes`/`rails` follow.
+//
+// The four MUTATIONS are loopback-only and use the status-preserving
+// `*_raw` helpers, so a refusal keeps its body and
+// `loopback_or_api_error` can name the gate rather than printing a bare
+// 404.
+
+/// `GET /api/boards` — `(declared path, query)`.
+fn boards_list_request(
+    repo: &str,
+    status: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(s) = status {
+        q.push(("status", s.to_string()));
+    }
+    (kb_code_server::boards::BOARDS_LIST_ROUTE.path, q)
+}
+
+/// `GET /api/boards/{slug}` — the declared path carries the `{slug}`
+/// placeholder; [`board_show_cmd`] substitutes the real one.
+fn board_get_request(
+    repo: &str,
+    ctx: bool,
+    live: bool,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if ctx {
+        q.push(("ctx", "1".to_string()));
+    }
+    if live {
+        q.push(("live", "1".to_string()));
+    }
+    (kb_code_server::boards::BOARD_GET_ROUTE.path, q)
+}
+
+/// `GET /api/boards/{slug}/export` — as above for `{slug}`.
+fn board_export_request(
+    repo: &str,
+    format: &str,
+    base: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string()), ("format", format.to_string())];
+    if let Some(b) = base {
+        q.push(("base", b.to_string()));
+    }
+    (kb_code_server::boards::BOARD_EXPORT_ROUTE.path, q)
+}
+
+/// `GET /api/boards/sweep` — a literal path, no substitution.
+fn board_sweep_request(
+    repo: &str,
+    slug: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(s) = slug {
+        q.push(("slug", s.to_string()));
+    }
+    (kb_code_server::boards::BOARD_SWEEP_ROUTE.path, q)
+}
+
+/// Substitute a real slug into a declared path's `{slug}` placeholder. The
+/// slug is percent-encoded even though `boards::is_valid_id` already
+/// refuses anything that would need it — a URL builder that trusts a
+/// validator on the other side of a wire is one relaxation away from a
+/// path-traversal.
+fn board_path(declared: &str, slug: &str) -> String {
+    declared.replace(
+        "{slug}",
+        &slug
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect::<String>(),
+    )
+}
+
+async fn board_list_cmd(daemon: &str, repo: &str, status: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = boards_list_request(repo, status);
+    let body = get_json(&client, daemon, path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let boards = body["boards"].as_array().cloned().unwrap_or_default();
+    if boards.is_empty() {
+        println!("(no kbc-canvas/1 boards in {repo})");
+        return Ok(());
+    }
+    println!(
+        "{:<28} {:<10} {:<5} {:>6} {:>6} {:>6}",
+        "slug", "status", "rev", "nodes", "edges", "steps"
+    );
+    for b in boards {
+        println!(
+            "{:<28} {:<10} {:<5} {:>6} {:>6} {:>6}",
+            b["slug"].as_str().unwrap_or("?"),
+            b["status"].as_str().unwrap_or("?"),
+            b["revision"].as_i64().unwrap_or(0),
+            b["nodes"].as_i64().unwrap_or(0),
+            b["edges"].as_i64().unwrap_or(0),
+            b["steps"].as_i64().unwrap_or(0),
+        );
+    }
+    Ok(())
+}
+
+async fn board_show_cmd(
+    daemon: &str,
+    slug: &str,
+    repo: &str,
+    ctx: bool,
+    live: bool,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (declared, q) = board_get_request(repo, ctx, live);
+    let path = board_path(declared, slug);
+    let body = get_json(&client, daemon, &path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "{}  [{}]  rev {}",
+        body["title"].as_str().unwrap_or("?"),
+        body["status"].as_str().unwrap_or("?"),
+        body["revision"].as_i64().unwrap_or(0),
+    );
+    let h = &body["honesty"];
+    println!(
+        "{} nodes — {} pinned · {} carried · {} present · {} inert · {} ORPHAN | {} edges, {} steps",
+        h["nodes"].as_i64().unwrap_or(0),
+        h["pinned"].as_i64().unwrap_or(0),
+        h["carried"].as_i64().unwrap_or(0),
+        h["present"].as_i64().unwrap_or(0),
+        h["inert"].as_i64().unwrap_or(0),
+        h["orphans"].as_i64().unwrap_or(0),
+        h["edges"].as_i64().unwrap_or(0),
+        h["steps"].as_i64().unwrap_or(0),
+    );
+    for note in h["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", note.as_str().unwrap_or(""));
+    }
+    println!();
+    for n in body["nodes"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "{:<20} {:<11} {:<10} {:<18} {}",
+            n["id"].as_str().unwrap_or("?"),
+            n["kind"].as_str().unwrap_or("?"),
+            n["state"].as_str().unwrap_or("?"),
+            n["reason"].as_str().unwrap_or("?"),
+            n["address"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+async fn board_apply_cmd(
+    daemon: &str,
+    from_file: Option<&std::path::Path>,
+    stdin: bool,
+    dry_run: bool,
+    allow_disconnected: bool,
+    json: bool,
+) -> Result<()> {
+    if from_file.is_some() == stdin {
+        anyhow::bail!("canvas apply: pass exactly one of --from-file FILE or --stdin");
+    }
+    let text = if stdin {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .context("read board document from stdin")?;
+        buf
+    } else {
+        let p = from_file.expect("checked above");
+        std::fs::read_to_string(p).with_context(|| format!("read --from-file {}", p.display()))?
+    };
+    let payload: serde_json::Value =
+        serde_json::from_str(&text).context("parse the board document as JSON")?;
+
+    let client = http_client()?;
+    let mut q: Vec<(&str, &str)> = Vec::new();
+    if dry_run {
+        q.push(("dry_run", "1"));
+    }
+    if allow_disconnected {
+        q.push(("allow_disconnected", "1"));
+    }
+    let (status, body) =
+        post_json_query_raw(&client, daemon, "/api/boards/apply", &q, &payload).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("canvas apply", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        let verb = if body["unchanged"].as_bool().unwrap_or(false) {
+            "unchanged"
+        } else if body["created"].as_bool().unwrap_or(false) {
+            "created"
+        } else {
+            "updated"
+        };
+        println!(
+            "{} {} [{}] rev {}{}",
+            verb,
+            body["slug"].as_str().unwrap_or("?"),
+            body["status"].as_str().unwrap_or("?"),
+            body["revision"].as_i64().unwrap_or(0),
+            if body["dry_run"].as_bool().unwrap_or(false) {
+                "  (dry run — nothing written)"
+            } else {
+                ""
+            }
+        );
+        if body["status_reset"].as_bool().unwrap_or(false) {
+            println!(
+                "  status reset: the board's content changed, so it is no longer accepted \
+                 — run `kb-code canvas accept` to re-approve it"
+            );
+        }
+        for f in body["lint"]["findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
+            println!(
+                "  {} [{}] {}{}",
+                f["severity"].as_str().unwrap_or("?"),
+                f["rule"].as_str().unwrap_or("?"),
+                f["at"]
+                    .as_str()
+                    .map(|a| format!("{a}: "))
+                    .unwrap_or_default(),
+                f["message"].as_str().unwrap_or(""),
+            );
+        }
+        for w in body["resolution_warnings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
+            println!("  warn {}", w.as_str().unwrap_or(""));
+        }
+    }
+    Ok(())
+}
+
+async fn board_status_cmd(
+    daemon: &str,
+    slug: &str,
+    repo: &str,
+    verb: &str,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let path = format!("{}/{verb}", board_path("/api/boards/{slug}", slug));
+    let (status, body) = post_json_query_raw(
+        &client,
+        daemon,
+        &path,
+        &[("repo", repo)],
+        &serde_json::Value::Null,
+    )
+    .await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error(
+            &format!("canvas {verb}"),
+            daemon,
+            status,
+            &body,
+        ));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!(
+            "{} is now {} (rev {})",
+            body["slug"].as_str().unwrap_or(slug),
+            body["status"].as_str().unwrap_or("?"),
+            body["revision"].as_i64().unwrap_or(0),
+        );
+    }
+    Ok(())
+}
+
+async fn board_rm_cmd(daemon: &str, slug: &str, repo: &str) -> Result<()> {
+    let client = http_client()?;
+    let path = board_path("/api/boards/{slug}", slug);
+    let (status, body) = delete_json_raw(&client, daemon, &path, &[("repo", repo)]).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("canvas rm", daemon, status, &body));
+    }
+    println!("deleted board {slug}");
+    Ok(())
+}
+
+async fn board_export_cmd(
+    daemon: &str,
+    slug: &str,
+    repo: &str,
+    format: &str,
+    base: Option<&str>,
+    out: Option<&std::path::Path>,
+) -> Result<()> {
+    // The SAME vocabulary check the daemon runs
+    // (`kb_code_server::boards::export::is_valid_format`), reused rather
+    // than duplicated, so catching a typo here can never drift from what
+    // the daemon would 400 on — `require_valid_intent`'s precedent.
+    if !kb_code_server::boards::export::is_valid_format(format) {
+        anyhow::bail!(
+            "invalid format {format:?} — expected one of: {}",
+            kb_code_server::boards::export::FORMATS.join(", ")
+        );
+    }
+    let client = http_client()?;
+    let (declared, q) = board_export_request(repo, format, base);
+    let path = format!("{}/export", board_path("/api/boards/{slug}", slug));
+    debug_assert!(declared.ends_with("/export"));
+    let url = format!("{}{path}", daemon.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .query(&query_pairs(&q))
+        .send()
+        .await
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
+        .error_for_status()
+        .with_context(|| format!("GET {url}"))?;
+    let body = resp.text().await.context("read the export body")?;
+    match out {
+        Some(p) => {
+            std::fs::write(p, body.as_bytes()).with_context(|| format!("write {}", p.display()))?;
+            eprintln!("wrote {} ({} bytes)", p.display(), body.len());
+        }
+        None => print!("{body}"),
+    }
+    Ok(())
+}
+
+async fn board_sweep_cmd(
+    daemon: &str,
+    repo: &str,
+    slug: Option<&str>,
+    check: bool,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = board_sweep_request(repo, slug);
+    let body = get_json(&client, daemon, path, &query_pairs(&q)).await?;
+    let drifted = body["drifted"].as_bool().unwrap_or(false);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        let boards = body["boards"].as_array().cloned().unwrap_or_default();
+        println!(
+            "checked {} board(s) in {repo} — {}",
+            body["checked"].as_i64().unwrap_or(0),
+            if drifted { "DRIFTED" } else { "no drift" }
+        );
+        for b in boards {
+            if !b["drifted"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            println!(
+                "\n{} [{}] — {} orphan · {} carried · {} query delta · {} stale pin",
+                b["slug"].as_str().unwrap_or("?"),
+                b["status"].as_str().unwrap_or("?"),
+                b["orphans"].as_i64().unwrap_or(0),
+                b["carried"].as_i64().unwrap_or(0),
+                b["query_deltas"].as_i64().unwrap_or(0),
+                b["stale_pins"].as_i64().unwrap_or(0),
+            );
+            for n in b["nodes"].as_array().cloned().unwrap_or_default() {
+                let extra = match (n["shifted_by"].as_i64(), n["delta"].as_i64()) {
+                    (Some(s), _) => format!(" moved {s:+}"),
+                    (_, Some(d)) => format!(" {d:+} results"),
+                    _ => String::new(),
+                };
+                println!(
+                    "  {:<20} {:<10} {:<18} {}{}{}",
+                    n["node"].as_str().unwrap_or("?"),
+                    n["state"].as_str().unwrap_or("?"),
+                    n["reason"].as_str().unwrap_or("?"),
+                    n["address"].as_str().unwrap_or(""),
+                    extra,
+                    if n["stale_pin"].as_bool().unwrap_or(false) {
+                        "  [stale pin]"
+                    } else {
+                        ""
+                    },
+                );
+            }
+        }
+    }
+    if check && drifted {
+        // The documented exit table (`envelope`): 3 = "the response was
+        // well-formed but reports a conflict with current state". Drift IS
+        // that conflict. Flush first — stdout is block-buffered into a pipe,
+        // and a CI gate that exits before its own report reached the log
+        // would be useless.
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        std::process::exit(envelope::EXIT_CONFLICT);
     }
     Ok(())
 }
@@ -21675,6 +22301,11 @@ mod tests {
             comments_file_request("repo", "a.rb"),
             comments_summary_request("repo"),
             comments_keywords_request(),
+            // V74-L1 — `kbc-canvas/1`'s four reads.
+            boards_list_request("repo", None),
+            board_get_request("repo", false, false),
+            board_export_request("repo", "md", None),
+            board_sweep_request("repo", None),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -21701,7 +22332,11 @@ mod tests {
             .chain(kb_code_server::outline::V72_H2A_ROUTES.iter())
             .chain(kb_code_server::review_doc::routes::V73_K1_ROUTES.iter())
             // V72-J1 — the four `comments/1` reads, the same way.
-            .chain(kb_code_server::comments::V72_J1_ROUTES.iter());
+            .chain(kb_code_server::comments::V72_J1_ROUTES.iter())
+            // V74-L1 — same walk, one milestone later. A board read
+            // declared in `boards::V74_L1_ROUTES` with no verb building a
+            // request for it fails HERE, by path.
+            .chain(kb_code_server::boards::V74_L1_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
@@ -21716,6 +22351,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// V74-L1 — the `{slug}` substitution is percent-encoding, not string
+    /// concatenation: a slug the daemon would refuse must still not be able
+    /// to leave its path segment on the way there.
+    #[test]
+    fn a_board_slug_is_percent_encoded_into_its_declared_path() {
+        assert_eq!(
+            board_path("/api/boards/{slug}", "checkout-flow"),
+            "/api/boards/checkout-flow"
+        );
+        assert_eq!(
+            board_path("/api/boards/{slug}/export", "a_b-c.d~e"),
+            "/api/boards/a_b-c.d~e/export"
+        );
+        for (raw, encoded) in [
+            // `.` and `~` are UNRESERVED (`encodeURIComponent`'s own set,
+            // which this builder mirrors so a CLI-built URL and an
+            // SPA-built one are the same string), so `..` survives
+            // literally — what makes traversal impossible is that the
+            // SEPARATOR is encoded, which the `/`-count assertion below
+            // is the real check for.
+            ("../etc", "..%2Fetc"),
+            ("a/b", "a%2Fb"),
+            ("a b", "a%20b"),
+            ("a?b=1", "a%3Fb%3D1"),
+            ("a#f", "a%23f"),
+        ] {
+            let got = board_path("/api/boards/{slug}", raw);
+            assert_eq!(got, format!("/api/boards/{encoded}"), "raw {raw:?}");
+            // The property that actually matters: whatever the slug was,
+            // it stayed ONE path segment.
+            let segment = got
+                .strip_prefix("/api/boards/")
+                .expect("the declared path's prefix is literal");
+            assert!(
+                !segment.contains('/'),
+                "{raw:?} escaped its path segment: {got}"
+            );
+        }
+    }
+
+    /// V74-L1 — the CLI's format gate is the SERVER's own vocabulary, so a
+    /// format added on one side can never be missing on the other.
+    #[test]
+    fn the_export_format_vocabulary_is_the_servers_own() {
+        for f in kb_code_server::boards::export::FORMATS {
+            assert!(kb_code_server::boards::export::is_valid_format(f));
+        }
+        assert!(!kb_code_server::boards::export::is_valid_format("svg"));
     }
 
     /// V72-I1 — the eight list nouns must map to EIGHT distinct declared
