@@ -120,10 +120,11 @@ it's still on the CURRENT generation (an archived-generation post has
 no live `#n` to close against — skip the `done` call for those, the
 memory's own provenance is the only record needed).
 
-Then one narrative note:
+Then one narrative note (`kb notes new` always writes a `kb-category: note`
+Markdown artifact — there's no separate `--category` flag to pass):
 
 ```bash
-kb notes new --title "<slate/topic> — closing narrative" --category note
+kb notes new --title "<slate/topic> — closing narrative"
 ```
 
 A short prose summary (what the slate coordinated, what shipped, what

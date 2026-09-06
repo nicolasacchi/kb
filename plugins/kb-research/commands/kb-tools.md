@@ -12,10 +12,14 @@ kb tools
 the installed binary. Read the output, then use the relevant `kb` verbs to
 author, index, search, and explore artifacts — for example:
 
-- `kb add <file> --kb <name>` — index a new artifact (or rely on the
-  watcher, which reindexes on file change).
+- `kb add <folder> --kb <name>` — register (or re-point) a corpus's whole
+  source folder in `kb.toml`; a one-time setup step, not per-artifact. To add
+  one new artifact, just drop the file into an already-registered corpus's
+  source folder — the watcher indexes it automatically (`kb reindex --kb
+  <name>` forces a full re-scan).
 - `kb find <name>` / `kb search "<query>" --kb <name>` — locate artifacts.
-- `kb related <id>` — neighbours in the embedding space.
+- `kb similar <id>` — true nearest neighbours in the embedding space
+  (`kb related <id>` is the link-graph neighbours instead).
 - `kb comments list` — open review comments (see the `kb-comments` plugin).
 - `kb why <file>` — why is a file the way it is? The past sessions that
   touched it + the prompt/decisions/commits that produced it (episodic

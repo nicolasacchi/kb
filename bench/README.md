@@ -11,7 +11,7 @@ that compares the three BGE models registered in
 | bge-large-en-v1.5  | 1024 | 1340 MB |
 
 The bench answers: **does a larger model improve retrieval quality on
-the operator's actual corpora?** Same source dir, three parallel kbs,
+your own corpora?** Same source dir, three parallel kbs,
 one daemon, hand-curated query sets per corpus, Recall@k / MRR /
 nDCG@10 side-by-side.
 
@@ -141,6 +141,32 @@ notably GC-B1 (`eedd1504`, tie-order determinism pinning) sits inside
 so BM25 tie behaviour differs from the laptop's warm index. Watch the
 next few nightlies: quality deltas are now runner-vs-runner and should
 be stable; a further drop is a real regression, not provenance noise.
+
+## The nightly regression bench (CI, self-contained)
+
+Separate from the embedding bake-off above, [`scripts/bench-nightly.sh`](../scripts/bench-nightly.sh)
+(driven by [`.github/workflows/bench-nightly.yml`](../.github/workflows/bench-nightly.yml))
+is a small, fully self-contained search-quality regression check: every
+input lives in this repository. It boots a throwaway daemon over the
+repo's own `docs/research` corpus, runs `kb bench run` in **keyword
+(BM25-only)** mode against the committed 20-query gold set
+[`bench/queries/kb-docs.jsonl`](queries/kb-docs.jsonl) (queries about kb's
+own design docs, each with a hand-picked `relevant` artifact id), and
+diffs the result against the committed [`bench/baseline.json`](baseline.json).
+BM25-only means the job needs no `kb-embedder` binary, no ONNX Runtime,
+and no model download.
+
+Run it locally the same way CI does:
+
+```bash
+scripts/bench-nightly.sh --baseline bench/baseline.json
+```
+
+It's non-blocking by design (scheduled + manual dispatch only, never on a
+PR) — a quality or latency regression shows up as a signed delta in the
+job summary, not a failed check. To establish a new baseline after an
+intentional ranking change, copy a fresh `report.json` over
+`bench/baseline.json` and commit it.
 
 ## Caveats
 

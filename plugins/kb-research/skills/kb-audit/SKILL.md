@@ -178,8 +178,8 @@ drift counts above, and never auto-fixed.
 
 Every verdict resolves to exactly one of five outcomes. **Two CSS classes
 carry all of them — pin these, don't invent new ones:** `shipped-note` and
-`partial-note` (both first used in the pilot, commit `3ba9035d`, following the
-GC-A9 convention in `docs/authoring-artifacts.md`). Both render as a small
+`partial-note`, following the GC-A9 convention in
+`docs/authoring-artifacts.md`. Both render as a small
 inline `<span>` placed right after the finding's heading/prose — **never**
 inside a heading `id=`-bearing tag:
 
@@ -202,8 +202,8 @@ For each claim where the correct new status is unambiguous, edit the
    whitespace stay byte-identical.
 3. **No `<!-- kb-audit … -->` HTML comments.** An earlier revision of this
    skill required one; that's dropped now — comments aren't indexed by the
-   daemon and invite silent drift (this contradicted the GC-A9 template, which
-   used inline spans + prose only, per `73c598f7`). The marker text itself
+   daemon and invite silent drift (this contradicted the GC-A9 template,
+   which uses inline spans + prose only). The marker text itself
    *is* the dated note — nothing else to append. Absolute date always (never
    "today").
 4. **Never touch** `<template id="kb-prompt">`, `<script>`, `<style>`, or any
@@ -248,34 +248,23 @@ needs-ruling), and any pre-existing out-of-scope issues flagged but left
 unfixed. State explicitly that a re-run now reports the flipped/added claims
 as `CONFIRMED`.
 
-## Completed pilot (2026-07-10) — and how to run the next audit
+## How to run an audit
 
-The pilot ran on **2026-07-10** (commit `3ba9035d`), auditing
-`fresh-eyes-next-iteration-2026-07.html`, `kb-next-prompts-playbook-2026-07.html`,
-and `evolving-the-kb-memory-system.html` — the three docs known-drifted at
-authoring time. (`kb-code-craft-review-2026-07.html` was **not** part of the
-automated pilot: it was the hand-flipped GC-A9 **template**, commit `73c598f7`,
-that established the marker convention this skill now follows — treat it as a
-worked reference, not a pilot target.)
+Lessons worth carrying into every run: phase-id letters (`R1`, `F2`, ...) get
+reused across unrelated milestone tracks in this repo, so a `git log --grep`
+match on a bare phase id can silently hit the wrong track — always confirm via
+the commit **body** and the **files touched**, never the phase-id string
+alone. A design can also ship under a different name than the doc used at
+authoring time (search by the described *capability*, not the literal verb,
+and check `plugins/*/skills/`, `plugins/*/commands/`, and CLI verbs under
+`crates/kb-cli` — a shipped feature is as likely to be an agent-layer skill as
+a daemon/CLI change). A pre-existing structural error unrelated to status
+claims (e.g. headings missing `id=`) is flagged, never fixed, per Step 1's
+"pre-broken targets" rule.
 
-Outcome: all three landed on `status:partial` (two flipped from `status:open`;
-`evolving-the-kb-memory-system.html` had **no status token at all** and got one
-**added**, per the missing-status-token handling above). The pilot is what
-surfaced every lesson folded into this revision: the phase-id collision
-(playbook `R1`/`R4` vs the unrelated v0.24 "Track R"), the renamed-feature miss
-(`kb-reflect` design → shipped as `/kb-distill`), the `RULED` outcome (F6
-second-operator ruling, F2 MCP-deferral re-ruling), an `AHEAD` case (F5,
-`feat/resurface-thin-slice`, not on `main`), and a pre-existing structural
-error in `evolving-the-kb-memory-system.html` (22 `<h2>`/`<h3>` without `id=`)
-that was flagged, not fixed. Full per-doc reasoning is in the commit body of
-`3ba9035d`.
-
-**Running the next audit:** there's no longer a fixed known-drift target list —
-that was this pilot's starting condition, and it's now resolved. Pick the
-corpus the normal way (Step 1): `--since <date-of-last-audit>` (use
-`3ba9035d`'s date, 2026-07-10, as the floor) over `docs/research/`, or `--docs`
-for a specific artifact a reviewer flagged as possibly stale. Apply Steps 2–6
-and the Step 5 marker vocabulary as documented above — there's no separate
-pilot procedure anymore; this **is** the procedure. Always dry-run first,
-review the drift table with the operator, then `--fix` only the unambiguous
-rows; the output is itself worth a short memory (`/kb-distill`).
+Pick the corpus the normal way (Step 1): `--since <date-of-last-audit>` over
+`docs/research/`, or `--docs` for a specific artifact flagged as possibly
+stale. Apply Steps 2–6 and the Step 5 marker vocabulary as documented above.
+Always dry-run first, review the drift table with the user, then `--fix` only
+the unambiguous rows; the output is itself worth a short memory
+(`/kb-distill`).

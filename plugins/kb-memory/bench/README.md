@@ -86,8 +86,8 @@ nothing.
 Resumable by construction: a `<query_id>|<layout>|<k>|<model>` key already in
 `results.jsonl` is skipped, so a killed run resumes where it stopped. It waits
 (never more than 10 minutes) whenever `/proc/pressure/io` `full avg10` is at or
-above `PROBE_IO_CEILING` (default 40) — this box is IO-bound on spinning RAID5
-and other sessions build on it.
+above `PROBE_IO_CEILING` (default 40), so the probe backs off instead of
+competing for disk I/O with other work on a busy machine.
 
 `PROBE_CLAUDE_MODEL` (default `haiku`) and `PROBE_CODEX_MODEL` pick the models.
 The `codex` lane is enabled only when both `codex` and `codexclaude` are on

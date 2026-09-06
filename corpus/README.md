@@ -1,10 +1,15 @@
 # corpus/
 
-Real HTML artifacts used by spike code (unit + manual validation) and, later, by production tests.
+Real HTML artifacts used by the test suite (`crates/kb-core`, `crates/kb-server`,
+`crates/kb-cli`, `tests/e2e`) and as the bundled sample corpus for a first
+`kb add` — see [Try it in 60 seconds](../docs/quickstart.md).
 
 ## Layout
 
-- **`canon/`** — verbatim copy of `kb-research/sample-artifacts/`. **Frozen.** Do not edit these files. They are the executable specification — what the indexer's pipeline must handle.
+- **`canon/`** — a small set of frozen sample artifacts. **Do not edit these
+  files.** Tests reference them directly by relative path
+  (`corpus/canon` from the repo root), so they are the executable
+  specification for what the indexer's pipeline must handle:
   - `fullscreen-viz.html` — single-file interactive (drag-to-resolve borrow checker)
   - `kitchen-sink.html` — component stress test (dialogs, sliders, drag-reorder, zoom)
   - `multi-page.html` — 4 chapters, sticky TOC
@@ -20,12 +25,11 @@ Real HTML artifacts used by spike code (unit + manual validation) and, later, by
 3. **Naming convention.** `<short-slug>.html` (kebab-case). For multi-file: `<short-slug>/` directory.
 4. **No secrets.** These artifacts are committed to a git repo.
 
-## Pointing spike code at a specific corpus
+## Pointing a daemon at a corpus
 
-Every spike reads the `KB_CORPUS` env var, defaulting to `corpus/canon`:
+Register any of these directories as a kb corpus with `kb add`:
 
 ```bash
-just spike walker                                          # uses corpus/canon
-KB_CORPUS=corpus/curated just spike walker                 # uses corpus/curated
-KB_CORPUS=/some/other/path just spike walker               # uses arbitrary path
+kb add ./corpus/canon --kb canon        # the bundled sample corpus
+kb add ./corpus/curated --kb curated    # your own dropped-in artifacts
 ```

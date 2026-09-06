@@ -11,8 +11,11 @@ the daemon. The `kb` CLI is the only path. Three hard rules:
 - **Dry-run first, human-gated.** Propose everything in a table and STOP for
   approval before any write. Never write, supersede, or delete unprompted.
 - **Append-only + reversible by default.** `--supersedes` drops a memory at recall
-  but keeps the file; only a MERGE uses `kb forget`, which **deletes** — and only
-  with explicit approval.
+  but keeps the file; only a MERGE uses `kb forget --purge`, which **deletes** —
+  and only with explicit approval. (Plain `kb forget`, without `--purge`, only
+  soft-forgets — tombstones the memory in place, still on disk and
+  census-visible — so a MERGE must pass `--purge` to actually remove the
+  superseded ids.)
 - **Recall is untouched.** You only WRITE (via `kb remember`); the per-turn ranking
   stays deterministic and LLM-free (#10). Facts land in the MEMORY corpus, never
   the sessions corpus (#11).
@@ -169,10 +172,12 @@ named subset, or none. Do not proceed without an explicit go.
   recall; the file remains — reversible).
 - **MERGE (N:1):** write the merged fact (ADD form), then for **each** source id:
   ```bash
-  kb forget <id> [--kb <kb>]
+  kb forget <id> --purge [--kb <kb>]
   ```
-  ⚠️ `kb forget` **deletes the file — irreversible.** Only run it on the ids you
-  listed and the operator approved.
+  ⚠️ `kb forget --purge` **deletes the file — irreversible** (plain `kb
+  forget`, without `--purge`, only soft-forgets: the memory is tombstoned but
+  stays on disk and searchable). Only run `--purge` on the ids you listed and
+  the operator approved.
 - **Provenance:** pass `--session-id <clean-uuid>` when you have one (it links the
   fact to its origin session and lifts that session's `memory_count`, so the next
   sweep skips it). `--session-id` takes one id, so when several sessions
@@ -199,5 +204,6 @@ second `/kb-reflect` sweep should now skip the sessions you just reflected (thei
 - **#11** — sessions stay pull-only; you READ digests on demand, write into the
   MEMORY corpus, never auto-inject.
 - **#26** — no model on the daemon; the distiller is this agent.
-- **Reversible by default** — `--supersedes` is a recall-time drop; only an
-  approved MERGE hard-deletes.
+- **Reversible by default** — `--supersedes` is a recall-time drop; a plain
+  `kb forget` is a reversible soft-forget; only an approved MERGE's
+  `kb forget --purge` hard-deletes.

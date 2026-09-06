@@ -15,7 +15,7 @@
 # it, `GET /api/usages/2` on this repo tops out at `likely` the moment the
 # question leaves the open file — which is honest, and much less useful.
 #
-# Usage (on the operator's own box — D22 local-canonical: the loopback
+# Usage (on your own machine — D22 local-canonical: the loopback
 # daemon owns this repo; a hosted read-only daemon hosts none of it):
 #
 #   kb-lip --config providers/ruby-lsp-target.toml

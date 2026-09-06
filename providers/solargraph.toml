@@ -1,9 +1,10 @@
 # kb-lip reference provider: solargraph (ALTERNATIVE, not the default)
 #
-# solargraph (https://github.com/castwide/solargraph) is the operator's
-# previously-named tool for Ruby language intelligence. It is offered here
-# as an alternative to providers/ruby-lsp.toml (the RECOMMENDED default —
-# see that file's header for why). Reach for solargraph instead when:
+# solargraph (https://github.com/castwide/solargraph) was the longstanding
+# standard tool for Ruby language intelligence before ruby-lsp. It is
+# offered here as an alternative to providers/ruby-lsp.toml (the RECOMMENDED
+# default — see that file's header for why). Reach for solargraph instead
+# when:
 #   - a repo already has a maintained `.solargraph.yml` / YARD-documented
 #     codebase solargraph handles well, or
 #   - ruby-lsp's composed-bundle bootstrap (see ruby-lsp.toml's prerequisite

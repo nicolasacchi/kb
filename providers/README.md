@@ -3,9 +3,11 @@
 `crates/kb-lip` is a generic LSP→HTTP adapter: it spawns ONE language server
 as a stdio child process and speaks a small closed HTTP surface (`lip/1`) in
 front of it. This directory holds REFERENCE configs + docs for wiring up a
-real language server — not code, not CI-covered. Design of record:
-`docs/research/design-lip.md` (search the corpus) + the addendum's §D
-(`/lip/diagnostics`).
+real language server — not code, not CI-covered. The original design docs
+(`design-lip.md`, `design-s2.md`, `design-addendum-2.md`, cited by short name
+throughout this directory's comments) are internal planning documents kept
+outside this repository; the behavior they describe is implemented in
+`crates/kb-lip` and documented here and in `crates/kb-code-server`.
 
 ## Files
 
@@ -43,8 +45,8 @@ None of the four new `.toml` files above were part of the PRR-L3/L4/L5
 live-smoke evidence below (ruby/Rails only) — each has its own "Live smoke
 evidence" subsection further down. The S2-D smoke run (2026-08-31) has since
 filled all four in: typescript, python, go AND rust (a same-day re-run once
-the box's build lock cleared) each passed all six lip/1 endpoints live — see
-each subsection for the honest detail, including rust's first-pass lock
+a concurrent build's lock cleared) each passed all six lip/1 endpoints live —
+see each subsection for the honest detail, including rust's first-pass lock
 blockage and go's decisive UTF-16 probe.
 
 - **`ruby-lsp-target.toml`** — V71-E1: `ruby-lsp.toml` bound to the
@@ -200,7 +202,7 @@ instant the provider does.
 ## V71-E1 — binding a provider to a target repo (`acme-shop`)
 
 `ruby-lsp-target.toml` is `ruby-lsp.toml` with the placeholder
-resolved to the operator's own checkout and the port moved to **4842**, so
+resolved to a real target repo's checkout and the port moved to **4842**, so
 it runs beside the generic reference config. Everything else — the
 prerequisites, the composed-bundle warning, the tuning notes — is in
 `ruby-lsp.toml` and is deliberately not duplicated.
@@ -244,10 +246,9 @@ been run for V71-E1.
 
 ### PRR-L3 (2026-08-28, first pass) — two bugs found, one discrepancy left open
 
-kb-lip (`cargo build --profile fast -p kb-lip`) was run against the real
-acme-shop Rails checkout on this box (430-gem Gemfile.lock, ruby-lsp
-0.26.11 + the ruby-lsp-rails addon). Summary, honest positives and
-negatives:
+kb-lip (`cargo build --profile fast -p kb-lip`) was run against the
+acme-shop Rails checkout (430-gem Gemfile.lock, ruby-lsp 0.26.11 + the
+ruby-lsp-rails addon). Summary, honest positives and negatives:
 
 **What worked:** both `.toml` providers parse correctly; `GET
 /lip/identity` reports `healthy: true` + the real server name/version once
@@ -288,7 +289,7 @@ translate_locations`/`extract_uri_and_range`, `lsp.rs::LspClient::start`),
 each with a fake-LSP-fixture regression test (`FAKE_LSP_DEFINITION_
 LOCATION_LINK=1`, `FAKE_LSP_CWD_FILE`) plus unit tests for the pure
 translation logic. The PRR-L3 discrepancy was investigated end-to-end
-against the same real acme-shop checkout, working through the
+against the same acme-shop checkout, working through the
 candidate list in order:
 
 **(a) Readiness/indexing — CONFIRMED as the dominant root cause, and
@@ -407,15 +408,15 @@ path, unchanged-report-serves-cache, push fallback when pull isn't
 advertised, blob guard, and the indexing gate — all pass
 (`crates/kb-lip/tests/lip_adapter.rs`).
 
-**Live re-smoke against the real acme-shop checkout: SKIPPED, not a
+**Live re-smoke against the acme-shop checkout: SKIPPED, not a
 kb-lip issue.** Attempted against the same repo PRR-L3/L4 used
-(`ruby-lsp` 0.26.11 at `~/.local/bin/ruby-lsp`), but the box's system Ruby
-has since drifted to 3.4.10 while this repo's Gemfile still pins
+(`ruby-lsp` 0.26.11 at `~/.local/bin/ruby-lsp`), but the smoke-test host's
+system Ruby had since drifted to 3.4.10 while this repo's Gemfile still pins
 `ruby "3.4.8"` — ruby-lsp's composed-bundle `bundle install` fails outright
 with `Bundler::RubyVersionMismatch` before it ever reaches the LSP
 handshake (confirmed with a direct hand-rolled `initialize` probe,
 bypassing kb-lip entirely, to rule out an adapter-side cause). This is
-local Ruby-version environment drift on this box since PRR-L4 — unrelated
+local Ruby-version environment drift since PRR-L4 — unrelated
 to the pull-mode change above — not a regression introduced by this unit;
 fixing it needs a version-pinned Ruby (mise/rbenv) or a Gemfile bump,
 neither of which is this unit's scope. The fake-LSP-fixture coverage above
@@ -454,7 +455,7 @@ discrepancy is confirmed, fixed, and re-verified live (hover, definition,
 and references all now return real, populated data against this large
 Rails app); the push-vs-pull diagnostics protocol mismatch is fixed in
 PRR-L5 (fake-LSP-fixture-verified; live re-smoke blocked by unrelated
-Ruby-version drift on this box, see PRR-L5 above); one narrow residual
+Ruby-version drift, see PRR-L5 above); one narrow residual
 timing gap (the pre-first-`$/progress` window, PRR-L4 §a) remains open.
 
 ---
@@ -532,8 +533,8 @@ build-script/metadata pass, prerequisite #3 in `rust-analyzer.toml`), was
 kernel-blocked the entire time — confirmed via `/proc/<pid>/wchan` reading
 `locks_lock_inode_wait`, with `/proc/<pid>/io`'s `read_bytes` counter and
 `/proc/<pid>/stat`'s `utime`/`stime` both flat across repeated 20–30s sampling
-windows (ruling out "just slow disk I/O," which this box is otherwise prone
-to — it's genuinely parked on a lock, not working). `ps aux` identified the
+windows (ruling out plain slow disk I/O —
+it's genuinely parked on a lock, not working). `ps aux` identified the
 lock holder: a `cargo test -j…` process (started independently, well before
 this smoke run) running against the SAME `target/` directory — i.e. exactly
 the "test gate holds the build lock" this smoke unit's own hard rules warned
@@ -806,7 +807,7 @@ every other provider here, but it does contain the real version,
 `initialize` response, not a kb-lip bug). `indexing` was observed `true` on
 first launch and flipped to `false` within roughly two minutes for this
 trivial two-file module (slower than it should be for a module this size —
-this box was under heavy, documented I/O contention the whole session, see
+the smoke-test host was under heavy I/O contention the whole session, see
 the rust section above).
 
 Sanity probes against the definition site (`greet.go:3:5`, pure ASCII):

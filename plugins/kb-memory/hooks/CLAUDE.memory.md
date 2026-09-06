@@ -26,10 +26,11 @@ kb remember "<fact>" --scope project|global [--salience 0..1] [--tags a,b]
 kb remember "<corrected fact>" --supersedes <old-id>
 ```
 
-**Forget** a memory entirely:
+**Forget** a memory (soft by default — tombstones it, still on disk and
+census-visible; add `--purge` to delete it permanently):
 
 ```
-kb forget <id>
+kb forget <id> [--purge]
 ```
 
 **Check what the human has read** before revising an artifact you authored:

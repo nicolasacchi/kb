@@ -17,9 +17,10 @@ must support without modification.
 
 ## Why these are canon
 
-They extend Thariq's upstream 20-artifact reference set (cited in
-`kb-html-artifact-thesis.md` and `kb-research/07-html-effectiveness.html`)
-with three patterns the upstream set didn't include:
+They extend an upstream 20-artifact reference set (cited in
+`docs/research/surfaces/07-html-effectiveness.html`; the original
+`kb-html-artifact-thesis.md` write-up is an internal planning document kept
+outside this repository) with three patterns the upstream set didn't include:
 
 1. **Multi-file artifacts** — `s05/pm/` is the only multi-file artifact
    in the combined canon. Introduces `pages: [{label, src, file}, …]`
@@ -64,6 +65,6 @@ resources to keep the canon aligned with topic 07.
 
 The full raw bundle (including the React/Babel prototype, alt layout
 explorations, and the design canvas) lives at
-[`../claude-design-handoff/web-gallery/`](../claude-design-handoff/web-gallery/).
+[`docs/research/claude-design-handoff/web-gallery/`](../../docs/research/claude-design-handoff/web-gallery/).
 The TUI handoff bundle is its sibling at
-[`../claude-design-handoff/tui-platform/`](../claude-design-handoff/tui-platform/).
+[`docs/research/claude-design-handoff/tui-platform/`](../../docs/research/claude-design-handoff/tui-platform/).
