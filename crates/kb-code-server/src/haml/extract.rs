@@ -372,11 +372,11 @@ pub fn outline(doc: &Document, src: &str) -> Vec<Symbol> {
             line_start: node.line,
             line_end,
             col_start: node.indent,
-            col_end: node
-                .span
-                .end
-                .saturating_sub(node.span.start)
-                .saturating_add(node.indent),
+            // A byte column on `line_start` — the node's FIRST line's end,
+            // never the whole span's length (a multi-line attribute hash
+            // would otherwise report a column past the end of every line
+            // it covers).
+            col_end: first_line_end_col(src, node.span.start, node.span.end),
             container,
             signature: None,
             doc: None,
@@ -385,6 +385,19 @@ pub fn outline(doc: &Document, src: &str) -> Vec<Symbol> {
         });
     }
     out
+}
+
+/// The byte column at which the node's first source line ends, clamped to
+/// the node's own span.
+fn first_line_end_col(src: &str, start: u32, end: u32) -> u32 {
+    let s = (start as usize).min(src.len());
+    let line_start = src[..s].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = src[s..]
+        .find('\n')
+        .map(|i| s + i)
+        .unwrap_or(src.len())
+        .min(end as usize);
+    (line_end.saturating_sub(line_start)) as u32
 }
 
 fn container_of(doc: &Document, id: usize) -> Option<String> {
