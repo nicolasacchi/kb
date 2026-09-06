@@ -372,7 +372,7 @@ pub fn project_physical(paths: &[String]) -> Vec<Node> {
 /// the same order `web-code/src/lib/tree.ts`'s `sortTreeEntries` used
 /// before this wire existed, so the repoint does not reshuffle the tree
 /// under the operator.
-fn sort_nodes(nodes: &mut Vec<Node>) {
+fn sort_nodes(nodes: &mut [Node]) {
     nodes.sort_by(|a, b| {
         let rank = |k: RowKind| match k {
             RowKind::Dir | RowKind::Group => 0,

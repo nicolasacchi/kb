@@ -669,7 +669,7 @@ mod tests {
         );
         assert!(truncated, "the 2-token candidate must have been dropped");
         assert_eq!(by_path.get("a.rs").map(|v| v.len()), Some(1));
-        assert!(by_path.get("b.rs").is_none());
+        assert!(!by_path.contains_key("b.rs"));
     }
 
     #[test]
