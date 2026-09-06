@@ -36,6 +36,10 @@ import "./styles/nav.css";
 // After nav.css so the menu's top-layer overlay sits above the navigation
 // chrome, before mobile.css so the ≤860px sheet promotion still wins.
 import "./styles/usages.css";
+// V72-G1.2 — the dossier center mode + its rail jump list. Before mobile.css
+// for the same reason every other surface is: its own ≤860px block must stay
+// overridable by the shared mobile-shell rules.
+import "./styles/dossier.css";
 // F5 — media-queried mobile-shell overrides; imported LAST so they win over
 // every desktop rule above (mirrors kb's own `main.tsx` import order).
 import "./styles/mobile.css";

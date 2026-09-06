@@ -553,7 +553,26 @@ engine's own, verbatim. An unknown constant is a typed 404
 bytes is `empty` with a reason; an ambiguous bare name refuses to pick and
 lists every `candidate`. CLI: `kb-code entity <NAME> --repo R
 [--inherited] [--budget N] [--usages-per-kind N] [--worktree W] [--json]`
-(and `--sites` for the frozen index above).
+(and `--sites` for the frozen index above). **SPA (V72-G1.2):** the reader
+shell reads this wire as its `dossier` CENTER MODE at `?ent=<fqn>` — the
+same `/r/{repo}/{path}` route, with the dock, rail, drawer and both stripes
+unchanged (the landmark golden asserts an identical region set for reader
+and dossier). The center is the snippet-list dossier in D6's order
+(definitions as live, syntax-highlighted blocks · the merged member table
+with sort + inherited toggle · hierarchy · grouped usages · the
+metaprogramming holes · the namespace tree); the file tree narrows to
+`?scope=ns:<fqn>` (kbc-scope/1's existing `ns` atom, with a "scoped to
+<fqn>" chip that clears it); and the inspector rail gains a Dossier tab
+holding the member table as a jump list. Keys: `Space e d` opens the
+dossier for the class/module under the cursor, `i` toggles inherited
+(re-fetching with `inherited=1`), `M` cycles the member sort, `] s`/`[ s`
+step the sections, and `Space R d` selects the rail tab — the four
+in-dossier rows are gated `center == dossier`, so they are inert
+elsewhere. Every count on screen is the wire's own (`total` beside
+`truncated`, never `rows.length`), "show more" re-asks with a higher
+`usages_per_kind` rather than revealing rows the browser never had, and
+`partial`/`empty` render as visible captions naming the budget and each
+lane it dropped.
 
 **kbc-seq/1 (V71-G0) — `GET /api/seq?repo=[&projection=][&workspace=]`.**
 One READ layer over the sequence projections that already exist: `set`,

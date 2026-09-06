@@ -27,7 +27,15 @@ export const CENTER_MODES: readonly CenterMode[] = [
 /// from `CENTER_MODES`: the vocabulary is fixed now so the shell's slot
 /// contract is fixed now, but claiming a mode is shipped before it is
 /// would make the landmark golden green over nothing.
-export const SHIPPED_CENTER_MODES: readonly CenterMode[] = ["reader"];
+///
+/// V72-G1.2 added `dossier` — `entity/1`'s page, mounted by the SAME
+/// `/r/:repo/*` route the reader owns when the location carries `?ent=`
+/// (D1: "any new surface lands in an existing REGION"). It is deliberately
+/// NOT a new route: the dossier is a different CENTER over the same shell,
+/// so the dock, the rail, the drawer and both stripes are the ones that
+/// were already there, and `e2e/desk-landmarks.spec.ts` proves it by
+/// asserting the identical region set for both modes.
+export const SHIPPED_CENTER_MODES: readonly CenterMode[] = ["reader", "dossier"];
 
 export function isShippedCenterMode(m: string): m is CenterMode {
   return (SHIPPED_CENTER_MODES as readonly string[]).includes(m);

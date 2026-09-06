@@ -110,6 +110,19 @@ export interface FileTreeProps {
   /// six such surfaces). They now route through the one shared handler.
   /// Absent ⇒ pre-A6 behaviour exactly.
   onRamp?: (rung: RampRung, path: string, kind: EntryKind) => void;
+  /// V72-G1.2 — a scope the SHELL imposes, not one the operator typed. The
+  /// dossier center passes `ns:<Fqn>` here so the tree narrows to the entity's
+  /// files and its namespace children.
+  ///
+  /// This is deliberately the EXISTING kbc-scope/1 mechanism (`?scope=`, the
+  /// `ns` atom `SCOPE_ATOM_SPECS` already declares over the V71-G0 entity
+  /// index) rather than a second tree or a second projection: one tree, one
+  /// wire, one honesty strip. When the operator ALSO types something, the two
+  /// compose rather than one silently winning — a fuzzy box rides along as
+  /// `?filter=`, and a typed SCOPE is `&&`-joined with this one, which is
+  /// kbc-scope/1's own composition rather than a precedence rule invented
+  /// here.
+  derivedScope?: { scope: string; label: string; onClear: () => void } | null;
 }
 
 const ROW_HEIGHT = 24;
@@ -229,7 +242,7 @@ function hotspotTitle(row: HotspotRow): string {
 /// SOURCE branches; the render, the keyboard model and the handle are one.
 /// Tree-as-of-a-ref proper is F18 and is deferred.
 const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
-  { repo, gitRef, selectedPath, onSelect, onRamp },
+  { repo, gitRef, selectedPath, onSelect, onRamp, derivedScope = null },
   handleRef,
 ) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(ancestorDirs(selectedPath)));
@@ -266,7 +279,19 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
     });
   }, [selectedPath]);
 
-  const routed = useMemo(() => routeFilterBox(box), [box]);
+  const routed = useMemo(() => {
+    const boxed = routeFilterBox(box);
+    if (!derivedScope) return boxed;
+    // A typed SCOPE is `&&`-joined (kbc-scope/1's own composition, so the
+    // daemon still parses ONE expression and still refuses the whole thing
+    // honestly if either half is bad); a typed FILTER rides alongside as
+    // `?filter=`, narrowing WITHIN the scope. Neither silently replaces the
+    // scope the shell imposed, and the chip below says the scope is on.
+    const scope = boxed.scope
+      ? `(${derivedScope.scope}) && (${boxed.scope})`
+      : derivedScope.scope;
+    return { ...boxed, scope };
+  }, [box, derivedScope]);
   const expandCsv = useMemo(
     () => expandParam([...Array.from(expanded).map(dirKey), ...Array.from(openGroups)]),
     [expanded, openGroups],
@@ -562,6 +587,26 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
         </button>
         {response?.counts.matched !== undefined && response?.counts.matched !== null ? (
           <span className="kbc-tree__count">{response.counts.matched} matched</span>
+        ) : null}
+        {/* V72-G1.2 — the shell-imposed scope, stated with a way out. The
+            honesty strip below already renders the REFUSAL case
+            (`scope_applied: false`); a scope that IS in force was previously
+            invisible, which is the same "a projection that hides work" failure
+            from the other direction. */}
+        {derivedScope ? (
+          <span className="kbc-tree__scope-chip" data-kbc-tree-scope-chip={derivedScope.label}>
+            scoped to {derivedScope.label}
+            <button
+              type="button"
+              className="kbc-tree__scope-clear"
+              onClick={derivedScope.onClear}
+              data-kbc-tree-scope-clear
+              title="leave the dossier and show the whole tree"
+              aria-label={`clear the scope on ${derivedScope.label}`}
+            >
+              <Icon.X />
+            </button>
+          </span>
         ) : null}
       </div>
 
