@@ -82,8 +82,9 @@ This skill governs **reading documents** (research / RFC / review / analysis). I
 `frontend-design` skill is also active, its per-artifact-distinctiveness instinct is welcome
 **above** the floor (palette, type pairing, layout, voice) — but the verified outcomes here
 (AA ratios, native elements, reduced-motion, focus, ≥16px) remain authoritative for kb
-document artifacts. A corpus with its own house stylesheet (e.g. `~/project/research`'s
-`_template/style.css`) keeps it — per-corpus consistency is a legitimate corpus-level choice.
+document artifacts. A corpus with its own house stylesheet (e.g. a `_template/style.css`
+shared by every artifact in that corpus) keeps it — per-corpus consistency is a legitimate
+corpus-level choice.
 
 ## The author → index flow
 
@@ -92,10 +93,13 @@ document artifacts. A corpus with its own house stylesheet (e.g. `~/project/rese
    bind-mounted folder on disk.
 2. **Write the HTML file** into that corpus's source directory following the
    contract above.
-3. **Indexing is automatic** — the daemon watches the source dirs and
-   reindexes on file change. To force it (or to index a file outside a
-   watched dir), use `kb add <file> --kb <name>` or
-   `kb reindex --kb <name>`.
+3. **Indexing is automatic** — the daemon watches each corpus's source
+   folder and reindexes a changed file within seconds; no command is needed
+   once the file lives in a registered corpus. To force a full re-scan, use
+   `kb reindex --kb <name>`. (`kb add <folder> --kb <name>` is a separate,
+   one-time setup step that registers or re-points a corpus's whole source
+   folder in `kb.toml` — it takes a directory, not a single file, and is not
+   how you add one artifact.)
 4. **Verify** with `kb find <filename>` (prints the 12-hex artifact id) or
    `kb search "<query>" --kb <name>`.
 
