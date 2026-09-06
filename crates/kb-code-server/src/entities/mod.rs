@@ -68,6 +68,17 @@
 //! - `opener_form` (`class_eval` / `concern`). Not derivable from the
 //!   symbols table; it needs the same CST walk the edges do.
 
+/// V72-G1.1 — `entity/1`: the entity DOSSIER (`GET /api/entity/dossier`).
+/// A SIBLING of `entities/1` above, not a widening of it: the index
+/// answers an ADDRESSING question and legitimately returns many entities,
+/// while a dossier is everything about exactly one. See that module's own
+/// doc for the six rules it is built around.
+pub mod dossier;
+/// V72-G1.1 — the per-request Ruby BODY scanners the dossier reads
+/// (visibility, `attr_*`, constants, mixins, metaprogramming holes). Pure,
+/// and capped at `likely` by construction: a line scan proves less than a
+/// tree does.
+pub mod ruby_body;
 pub mod zeitwerk;
 
 use crate::extract::Symbol;
@@ -224,15 +235,27 @@ pub fn defs_for_file(
 
     let mut out: Vec<EntityDefClaim> = Vec::new();
     for (i, sym) in entities.iter().enumerate() {
-        // An enclosing definition both spans this one's whole range and —
-        // since `extract.rs` emits in byte order — was emitted before it.
-        let ancestors: Vec<&str> = entities[..i]
-            .iter()
-            .filter(|a| a.line_start <= sym.line_start && a.line_end >= sym.line_end)
-            .map(|a| a.name.as_str())
-            .collect();
-        let compact = nth_line(source, sym.line_start)
-            .and_then(|line| compact_scope(line, sym.col_start as usize));
+        // The NEAREST enclosing definition: it spans this one's whole
+        // range and — since `extract.rs` emits in byte order — was
+        // emitted before it, so the last such entry is the innermost.
+        // Its already-computed FQN is used, not its raw captured NAME:
+        // an enclosing `class Reseller::Order` is captured as `Order`,
+        // and a chain built from names would place its nested `Line` at
+        // `Order::Line`.
+        let enclosing: Option<&str> = (0..i)
+            .rev()
+            .find(|j| {
+                entities[*j].line_start <= sym.line_start && entities[*j].line_end >= sym.line_end
+            })
+            .map(|j| out[j].fqn.as_str());
+        let compact = nth_line(source, sym.line_start).and_then(|line| {
+            // V72-G1.1 — the name's OWN column, recovered from the line.
+            // See [`name_col_on_line`]: `Symbol::col_start` is the
+            // DEFINITION node's column, so passing it here made this
+            // whole recovery inert.
+            let col = name_col_on_line(line, &sym.name).unwrap_or(sym.col_start as usize);
+            compact_scope(line, col)
+        });
         let (chain, nesting): (Vec<&str>, &'static str) = match &compact {
             // `class ::Order` — root-anchored: the enclosing modules are
             // explicitly NOT part of the name, and the tree says so.
@@ -241,10 +264,10 @@ pub fn defs_for_file(
             // module, Ruby resolves `A` at runtime — the lexically-nearest
             // reading is recorded, and marked as the guess it is.
             Some(prefix) => {
-                let mut chain: Vec<&str> = ancestors.clone();
+                let mut chain: Vec<&str> = enclosing.into_iter().collect();
                 chain.extend(prefix.iter().map(|s| s.as_str()));
                 chain.push(sym.name.as_str());
-                let nesting = if ancestors.is_empty() {
+                let nesting = if enclosing.is_none() {
                     NESTING_LEXICAL
                 } else {
                     NESTING_AMBIGUOUS
@@ -252,7 +275,7 @@ pub fn defs_for_file(
                 (chain, nesting)
             }
             None => {
-                let mut chain = ancestors.clone();
+                let mut chain: Vec<&str> = enclosing.into_iter().collect();
                 chain.push(sym.name.as_str());
                 (chain, NESTING_LEXICAL)
             }
@@ -302,7 +325,7 @@ fn join_constant_path(chain: &[&str]) -> String {
         .join("::")
 }
 
-fn last_segment(fqn: &str) -> &str {
+pub(crate) fn last_segment(fqn: &str) -> &str {
     fqn.rsplit("::").next().unwrap_or(fqn)
 }
 
@@ -314,6 +337,47 @@ fn nth_line(source: &[u8], n: u32) -> Option<&str> {
     let idx = (n as usize).checked_sub(1)?;
     let line = source.split(|b| *b == b'\n').nth(idx)?;
     std::str::from_utf8(line).ok()
+}
+
+/// The 0-based BYTE column of a definition's own captured NAME on its
+/// opener line.
+///
+/// **V72-G1.1 defect fix.** [`crate::extract::Symbol::col_start`] is the
+/// DEFINITION node's column (the `class`/`module` keyword), never the
+/// captured name's — `extract_symbols` reads both columns off
+/// `c.node`, the definition node. Passing it to [`compact_scope`] made
+/// that function look at the line's leading INDENTATION, which can never
+/// end in `::`, so the compact-scope recovery this module's own doc
+/// describes returned `None` for every real file and was inert from the
+/// day it shipped: `class Reseller::Order` was indexed as a top-level
+/// `Order`, at `exact` — the wrong-`exact` the recovery exists to
+/// prevent. The V71-G0 unit tests missed it because they hand-set
+/// `col_start` to the name column, a value the real extractor never
+/// produces.
+///
+/// Whole-word so `class Order < OrderBase` finds `Order` at the name, not
+/// inside the superclass; `None` (falling back to `col_start`, i.e. the
+/// pre-fix behaviour) when the name is not spelled on that line at all.
+fn name_col_on_line(line: &str, name: &str) -> Option<usize> {
+    if name.is_empty() {
+        return None;
+    }
+    let hay = line.as_bytes();
+    let needle = name.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0usize;
+    while i + needle.len() <= hay.len() {
+        if &hay[i..i + needle.len()] == needle {
+            let before_ok = i == 0 || !ident(hay[i - 1]);
+            let after = i + needle.len();
+            let after_ok = after >= hay.len() || !ident(hay[after]);
+            if before_ok && after_ok {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// The compact scope a definition's own source line spells before its

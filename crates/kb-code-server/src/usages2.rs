@@ -520,16 +520,7 @@ pub async fn usages2_route(
     let mut out = state
         .store
         .run_blocking(move |store| {
-            let core = crate::usages::usages_core(
-                store,
-                &repo_bg,
-                repo_id,
-                &path,
-                line,
-                col,
-                rev.as_deref(),
-            )?;
-            enrich(
+            usages2_at(
                 store,
                 &repo_bg,
                 repo_id,
@@ -538,13 +529,38 @@ pub async fn usages2_route(
                 col,
                 rev.as_deref(),
                 &scopes,
-                core,
                 limit,
             )
         })
         .await?;
     overlay_lsp_live(&state, &repo, &params, limit, &mut out).await;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
+}
+
+/// The synchronous half of [`usages2_route`] — the classified ladder plus
+/// v2's enrichment, as ONE call. Factored out (V72-G1.1) so the entity
+/// dossier can delegate to this ENGINE rather than growing a second
+/// scanner: `usages/1` and `usages/2` already share `usages::usages_core`
+/// for exactly that reason (the counts path drifted from the rows path
+/// once, and one of those numbers is always wrong). The lsp-live overlay
+/// is deliberately NOT part of it — that leg is async, and this entry
+/// point exists to be called from inside a blocking hop.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn usages2_at(
+    store: &Store,
+    repo: &crate::config::RepoEntry,
+    repo_id: i64,
+    path: &str,
+    line: u32,
+    col: u32,
+    rev: Option<&str>,
+    scopes: &crate::config::ScopesSection,
+    limit: usize,
+) -> Result<Usages2Out, ApiError> {
+    let core = crate::usages::usages_core(store, repo, repo_id, path, line, col, rev)?;
+    enrich(
+        store, repo, repo_id, path, line, col, rev, scopes, core, limit,
+    )
 }
 
 /// The lsp-live leg: the SAME `crate::lip` call `usages/1`'s overlay makes
