@@ -369,6 +369,7 @@ pub mod mirror;
 pub mod numstat;
 pub mod occurrences;
 pub mod provenance;
+pub mod rails;
 pub mod reading_sets;
 pub mod recipes;
 pub mod repo_state;

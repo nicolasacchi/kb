@@ -393,7 +393,7 @@ fn build_count_for(repo_root: &Path) -> usize {
 /// matches the cached one; otherwise returns a clone of the cached index
 /// (a `Vec<(String, String)>` clone is far cheaper than re-reading and
 /// re-parsing every locale file).
-fn locale_index_for(repo_root: &Path) -> Vec<(String, String)> {
+pub(crate) fn locale_index_for(repo_root: &Path) -> Vec<(String, String)> {
     let fingerprint = compute_locale_fingerprint(repo_root);
     let mut cache = locale_cache().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = cache.get(repo_root) {

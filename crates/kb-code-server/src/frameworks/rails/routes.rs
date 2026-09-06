@@ -56,6 +56,32 @@
 //! all, or a top-level bare verb with no enclosing namespace/resource/
 //! controller-block context) is silently dropped — never fabricated.
 //!
+//! # The route ADDRESS (`extra_json`, V72-I1)
+//!
+//! Every `route_action` edge carries `{"verb": "GET", "path":
+//! "/trade/rounds/:id"}` in `extra_json` — the HTTP method and the URL
+//! pattern, reconstructed from the same DSL walk that resolves the
+//! controller. Two independent axes are tracked through the walk:
+//! [`RouteCtx::module_prefix`] (where the controller lives on disk) and
+//! [`RouteCtx::path_prefix`] (what URL answers), because `namespace` moves
+//! both, `scope module:` moves only the first and `scope path:`/a bare
+//! positional only the second. `resources` contributes its own name (or an
+//! explicit `path:`), a `member` block contributes `:id`, a nested resource
+//! contributes the parent's `:<singular>_id`, and a leading `/` on a verb
+//! call's pattern escapes the enclosing scope exactly as it already does
+//! for a `to:` controller.
+//!
+//! This is ADDITIVE CONTENT, not a grammar bump: no `kind` is added and no
+//! `kind`'s meaning changes, so `RAILS_LENS_GRAMMAR_VERSION` stays
+//! `rails-lens/1` (see `frameworks/mod.rs`'s grammar section). A route
+//! whose URL this walk cannot reconstruct — a non-literal pattern — carries
+//! NO `extra_json` at all rather than a guessed one, and an edge written by
+//! a pre-V72-I1 binary likewise has none until its source file is
+//! re-extracted; both read as "unknown", never as "/".
+//!
+//! `update` answers PATCH *and* PUT in real Rails; the lens records PATCH
+//! (Rails' own primary form since 4.0) rather than doubling every edge.
+//!
 //! # Trust
 //!
 //! Every emitted `route_action` edge is `Trust::Likely` except when an
@@ -90,6 +116,122 @@ struct RouteCtx {
     /// of those (a bare verb call then falls back to `module_prefix`
     /// itself — the `namespace :ops do get :test end` convention).
     default_controller: Option<String>,
+    /// URL path segments committed so far (no leading slash). A SEPARATE
+    /// axis from `module_prefix`: `namespace` moves both, `scope module:`
+    /// moves only the module, `scope path:` only the URL.
+    path_prefix: Vec<String>,
+    /// The dynamic segment Rails inserts for a route declared directly
+    /// inside a `resources` block with no `on:` — `:order_id` for
+    /// `resources :orders`. `member` replaces it with `member_param`,
+    /// `collection` clears it. `None` outside any resource block.
+    child_param: Option<String>,
+    /// The member segment of the enclosing resource — `:id` for a plural
+    /// `resources`, `None` for a singular `resource` (which has no member
+    /// id). What a `member do … end` block uses as its `child_param`.
+    member_param: Option<String>,
+}
+
+/// The URL a `route_action` edge answers, reconstructed from the DSL walk:
+/// the HTTP method plus the path pattern with Rails' own dynamic segments
+/// (`:id`, `:order_id`). CONVENTION-derived like every other fact this lens
+/// produces — it rides `extra_json` and inherits the edge's own
+/// likely/candidate cap unchanged (D7's "routes gain verb + path as
+/// additive content", explicitly NOT a `rails-lens/2` bump: no `kind` is
+/// added and no `kind`'s meaning changes).
+#[derive(Debug, Clone)]
+struct RouteAddr {
+    verb: &'static str,
+    url: String,
+}
+
+impl RouteAddr {
+    fn new(verb: &'static str, segments: &[String]) -> Self {
+        RouteAddr {
+            verb,
+            url: url_from(segments),
+        }
+    }
+}
+
+impl RouteCtx {
+    /// The URL base a child route inherits: the committed prefix plus the
+    /// enclosing resource's dynamic segment, if there is one.
+    fn child_base(&self) -> Vec<String> {
+        let mut segs = self.path_prefix.clone();
+        if let Some(p) = &self.child_param {
+            segs.push(p.clone());
+        }
+        segs
+    }
+
+    /// `member do … end` — every route inside answers under the member
+    /// segment (`/orders/:id/publish`).
+    fn member_scope(&self) -> RouteCtx {
+        RouteCtx {
+            child_param: self.member_param.clone(),
+            ..self.clone()
+        }
+    }
+
+    /// `collection do … end` — every route inside answers on the
+    /// collection itself (`/orders/search`), with no member segment.
+    fn collection_scope(&self) -> RouteCtx {
+        RouteCtx {
+            child_param: None,
+            ..self.clone()
+        }
+    }
+}
+
+/// `["trade", "rounds", ":id"]` → `/trade/rounds/:id`; the empty prefix is
+/// the application root, `/`.
+fn url_from(segments: &[String]) -> String {
+    let joined = segments
+        .iter()
+        .map(|s| s.trim_matches('/'))
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    if joined.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{joined}")
+    }
+}
+
+/// `{"verb":"GET","path":"/trade/rounds/:id"}` — the value is JSON-escaped
+/// (a route path is authored text and may legitimately contain a quote).
+fn route_extra_json(addr: &RouteAddr) -> String {
+    format!(
+        r#"{{"verb":"{}","path":{}}}"#,
+        addr.verb,
+        serde_json::Value::String(addr.url.clone())
+    )
+}
+
+/// The HTTP verb a `resources`/`resource` action answers, and the segments
+/// appended to the resource's own base path. `update` answers PATCH *and*
+/// PUT in real Rails; the lens records PATCH (Rails' own primary since 4.0)
+/// rather than doubling every edge.
+fn resource_action_addr(action: &str, base: &[String], plural: bool) -> Option<RouteAddr> {
+    let member: &[&str] = if plural { &[":id"] } else { &[] };
+    let (verb, tail): (&'static str, Vec<&str>) = match action {
+        "index" => ("GET", vec![]),
+        "create" => ("POST", vec![]),
+        "new" => ("GET", vec!["new"]),
+        "edit" => ("GET", [member, &["edit"][..]].concat()),
+        "show" => ("GET", member.to_vec()),
+        "update" => ("PATCH", member.to_vec()),
+        "destroy" => ("DELETE", member.to_vec()),
+        // A `member`/`collection` action reaches this table only through
+        // `handle_verb`, which builds its own address; anything else is a
+        // set this function does not model — say so by returning None
+        // rather than inventing a verb.
+        _ => return None,
+    };
+    let mut segs = base.to_vec();
+    segs.extend(tail.into_iter().map(|s| s.to_string()));
+    Some(RouteAddr::new(verb, &segs))
 }
 
 /// Entry point — see the module doc. `path` is the source-relative path
@@ -152,8 +294,8 @@ fn walk_stmt(node: Node, source: &[u8], ctx: &RouteCtx, path: &str, out: &mut Ve
     match method.as_str() {
         "resources" => handle_resources(node, source, ctx, path, out, true),
         "resource" => handle_resources(node, source, ctx, path, out, false),
-        "member" => descend_with(node, source, ctx.clone(), path, out),
-        "collection" => descend_with(node, source, ctx.clone(), path, out),
+        "member" => descend_with(node, source, ctx.member_scope(), path, out),
+        "collection" => descend_with(node, source, ctx.collection_scope(), path, out),
         "namespace" => handle_namespace(node, source, ctx, path, out),
         "scope" => handle_scope(node, source, ctx, path, out),
         "controller" => handle_controller_block(node, source, ctx, path, out),
@@ -163,7 +305,11 @@ fn walk_stmt(node: Node, source: &[u8], ctx: &RouteCtx, path: &str, out: &mut Ve
             descend_with(node, source, ctx.clone(), path, out)
         }
         "root" => handle_root(node, source, ctx, path, out),
-        "get" | "post" | "put" | "patch" | "delete" => handle_verb(node, source, ctx, path, out),
+        "get" => handle_verb(node, source, ctx, path, out, "GET"),
+        "post" => handle_verb(node, source, ctx, path, out, "POST"),
+        "put" => handle_verb(node, source, ctx, path, out, "PUT"),
+        "patch" => handle_verb(node, source, ctx, path, out, "PATCH"),
+        "delete" => handle_verb(node, source, ctx, path, out, "DELETE"),
         "draw" => handle_draw(node, source, path, out),
         // Honest drop list — see the module doc. Deliberately do NOT
         // descend into their blocks (Devise/mount-style route generation
@@ -219,6 +365,7 @@ fn handle_resources(
     }
 
     let controller_opt = find_pair_literal(&opts, "controller", source);
+    let path_opt = find_pair_literal(&opts, "path", source);
     let only = find_pair_symbol_list(&opts, "only", source);
     let except = find_pair_symbol_list(&opts, "except", source);
     let base_actions: &[&str] = if plural {
@@ -228,6 +375,7 @@ fn handle_resources(
     };
     let (actions, trust) = resolve_action_set(base_actions, only.as_ref(), except.as_ref());
     let line = src_line(node);
+    let outer_base = ctx.child_base();
 
     for name in &names {
         let controller_leaf = controller_opt.clone().unwrap_or_else(|| {
@@ -238,16 +386,65 @@ fn handle_resources(
             }
         });
         let full_controller = join_path(&ctx.module_prefix, &controller_leaf);
+        // The URL segment is the resource's OWN name (or an explicit
+        // `path:`), never the controller override — Rails routes on the
+        // resource name and dispatches to the controller.
+        let segment = path_opt.clone().unwrap_or_else(|| name.clone());
+        let mut resource_base = outer_base.clone();
+        resource_base.push(segment);
         for action in &actions {
-            out.push(make_route_edge(path, line, &full_controller, action, trust));
+            let addr = resource_action_addr(action, &resource_base, plural);
+            out.push(make_route_edge(
+                path,
+                line,
+                &full_controller,
+                action,
+                trust,
+                addr.as_ref(),
+            ));
         }
         if let Some(body) = call_block_body(node) {
             let new_ctx = RouteCtx {
                 module_prefix: ctx.module_prefix.clone(),
                 default_controller: Some(full_controller),
+                path_prefix: resource_base,
+                // A route declared directly inside a `resources` block with
+                // no `on:` nests under the parent's own id (Rails: `/photos/
+                // :photo_id/preview`); a singular `resource` has no id.
+                child_param: if plural {
+                    Some(format!(":{}_id", singularize(name)))
+                } else {
+                    None
+                },
+                member_param: if plural {
+                    Some(":id".to_string())
+                } else {
+                    None
+                },
             };
             walk_body(body, source, &new_ctx, path, out);
         }
+    }
+}
+
+/// Inverse of [`pluralize`] for the nested-resource param convention
+/// (`resources :rounds do resources :catalogs end` → `/rounds/:round_id/
+/// catalogs`). The same honest approximation, in the same three cases; a
+/// name it cannot singularise is returned unchanged rather than mangled.
+fn singularize(name: &str) -> String {
+    if let Some(stem) = name.strip_suffix("ies") {
+        return format!("{stem}y");
+    }
+    for suffix in ["sses", "xes", "ches", "shes"] {
+        if let Some(stem) = name.strip_suffix("es") {
+            if name.ends_with(suffix) {
+                return stem.to_string();
+            }
+        }
+    }
+    match name.strip_suffix('s') {
+        Some(stem) if !stem.is_empty() => stem.to_string(),
+        _ => name.to_string(),
     }
 }
 
@@ -307,16 +504,24 @@ fn handle_namespace(
     for a in &args[1..] {
         collect_pairs_into(*a, &mut opts);
     }
-    let segment = find_pair_literal(&opts, "module", source).unwrap_or(name);
+    let segment = find_pair_literal(&opts, "module", source).unwrap_or_else(|| name.clone());
+    // `namespace :admin, module: "backoffice"` moves the MODULE only;
+    // `path:` moves the URL only. Two independent axes.
+    let url_segment = find_pair_literal(&opts, "path", source).unwrap_or(name);
     let controller_opt = find_pair_literal(&opts, "controller", source);
 
     if let Some(body) = call_block_body(node) {
         let mut module_prefix = ctx.module_prefix.clone();
         module_prefix.push(segment);
         let default_controller = controller_opt.map(|c| join_path(&module_prefix, &c));
+        let mut path_prefix = ctx.child_base();
+        path_prefix.push(url_segment);
         let new_ctx = RouteCtx {
             module_prefix,
             default_controller,
+            path_prefix,
+            child_param: None,
+            member_param: None,
         };
         walk_body(body, source, &new_ctx, path, out);
     }
@@ -331,6 +536,11 @@ fn handle_scope(
 ) {
     let args = call_args(node);
     let mut opts = Vec::new();
+    // A leading positional literal is a URL scope (`scope "admin" do`), not
+    // an option pair — Rails' `scope path:` written the short way.
+    let positional_path = args
+        .first()
+        .and_then(|a| literal_string_or_symbol(*a, source));
     for a in &args {
         collect_pairs_into(*a, &mut opts);
     }
@@ -343,10 +553,17 @@ fn handle_scope(
     if let Some(ctrl) = find_pair_literal(&opts, "controller", source) {
         default_controller = Some(join_path(&module_prefix, &ctrl));
     }
+    let mut path_prefix = ctx.child_base();
+    if let Some(seg) = find_pair_literal(&opts, "path", source).or(positional_path) {
+        path_prefix.push(seg);
+    }
     if let Some(body) = call_block_body(node) {
         let new_ctx = RouteCtx {
             module_prefix,
             default_controller,
+            path_prefix,
+            child_param: None,
+            member_param: None,
         };
         walk_body(body, source, &new_ctx, path, out);
     }
@@ -367,9 +584,12 @@ fn handle_controller_block(
         return;
     };
     if let Some(body) = call_block_body(node) {
+        // A `controller :x do … end` block renames the DISPATCH target,
+        // never the URL — the enclosing URL scope (including any resource
+        // param) is carried through untouched.
         let new_ctx = RouteCtx {
-            module_prefix: ctx.module_prefix.clone(),
             default_controller: Some(join_path(&ctx.module_prefix, &name)),
+            ..ctx.clone()
         };
         walk_body(body, source, &new_ctx, path, out);
     }
@@ -383,6 +603,7 @@ fn handle_verb(
     ctx: &RouteCtx,
     path: &str,
     out: &mut Vec<FrameworkEdge>,
+    verb: &'static str,
 ) {
     let args = call_args(node);
     let Some(first) = args.first().copied() else {
@@ -393,15 +614,31 @@ fn handle_verb(
         collect_pairs_into(*a, &mut opts);
     }
     let line = src_line(node);
+    // `on: :member` / `on: :collection` is the inline form of the block
+    // scopes — same URL rule, written on one line.
+    let base = match find_pair_literal(&opts, "on", source).as_deref() {
+        Some("member") => ctx.member_scope().child_base(),
+        Some("collection") => ctx.collection_scope().child_base(),
+        _ => ctx.child_base(),
+    };
+    let explicit_path = find_pair_literal(&opts, "path", source);
 
     if let Some(to) = find_pair_literal(&opts, "to", source) {
         if let Some((controller, action)) = resolve_to_string(&to, &ctx.module_prefix) {
+            // With `to:`, the FIRST positional is the URL pattern itself
+            // (`get "stores", to: "store#stores"`). A leading `/` escapes
+            // the enclosing scope, exactly as it does for the controller.
+            let addr = explicit_path
+                .clone()
+                .or_else(|| literal_string_or_symbol(first, source))
+                .map(|pattern| verb_addr(verb, &base, &pattern));
             out.push(make_route_edge(
                 path,
                 line,
                 &controller,
                 &action,
                 Trust::Likely,
+                addr.as_ref(),
             ));
         }
         return;
@@ -434,13 +671,36 @@ fn handle_verb(
         return; // non-literal first arg, no action: — drop.
     };
 
+    // The URL pattern is `path:` if given, else the FIRST positional
+    // (which is the pattern whenever an explicit `action:` supplied the
+    // action name), else the action name itself — `get :test` → `/test`.
+    let pattern = explicit_path
+        .or_else(|| literal_string_or_symbol(first, source))
+        .unwrap_or_else(|| action.clone());
+    let addr = verb_addr(verb, &base, &pattern);
     out.push(make_route_edge(
         path,
         line,
         &controller,
         &action,
         Trust::Likely,
+        Some(&addr),
     ));
+}
+
+/// A verb call's address: the enclosing URL scope plus the route's own
+/// pattern, with Rails' leading-`/` escape (an absolute pattern ignores the
+/// scope, the same convention `resolve_to_string` honours for controllers).
+fn verb_addr(verb: &'static str, base: &[String], pattern: &str) -> RouteAddr {
+    if pattern.starts_with('/') {
+        return RouteAddr {
+            verb,
+            url: url_from(&[pattern.to_string()]),
+        };
+    }
+    let mut segs = base.to_vec();
+    segs.push(pattern.to_string());
+    RouteAddr::new(verb, &segs)
 }
 
 fn handle_root(
@@ -465,12 +725,14 @@ fn handle_root(
     let Some((controller, action)) = resolve_to_string(&to, &ctx.module_prefix) else {
         return;
     };
+    let addr = RouteAddr::new("GET", &ctx.path_prefix);
     out.push(make_route_edge(
         path,
         src_line(node),
         &controller,
         &action,
         Trust::Likely,
+        Some(&addr),
     ));
 }
 
@@ -511,6 +773,7 @@ fn make_route_edge(
     controller: &str,
     action: &str,
     trust: Trust,
+    addr: Option<&RouteAddr>,
 ) -> FrameworkEdge {
     FrameworkEdge {
         kind: EdgeKind::RouteAction,
@@ -521,7 +784,9 @@ fn make_route_edge(
         dst_path: Some(format!("app/controllers/{controller}_controller.rb")),
         dst_symbol: Some(format!("{controller}#{action}")),
         trust,
-        extra_json: None,
+        // ABSENT, never guessed: a route whose URL this walk could not
+        // reconstruct (a non-literal pattern) carries no `path` at all.
+        extra_json: addr.map(route_extra_json),
     }
 }
 
@@ -561,7 +826,7 @@ fn resolve_to_string(to: &str, module_prefix: &[String]) -> Option<(String, Stri
 /// convention (`resource :session` → `SessionsController`). Covers the
 /// common cases (`s`/`x`/`ch`/`sh` → `+es`, consonant+`y` → `ies`, else
 /// `+s`) — an honest, documented approximation, not a full inflector.
-fn pluralize(name: &str) -> String {
+pub(crate) fn pluralize(name: &str) -> String {
     if name.ends_with('s') || name.ends_with('x') || name.ends_with("ch") || name.ends_with("sh") {
         format!("{name}es")
     } else if name.ends_with('y') && !ends_with_vowel_then_y(name) {
@@ -854,6 +1119,38 @@ mod tests {
         edges.iter().filter_map(|e| e.dst_symbol.clone()).collect()
     }
 
+    /// `controller#action` → the `extra_json` address the walk recorded, as
+    /// `"VERB path"`, or `"?"` when the walk recorded none.
+    fn addresses(edges: &[FrameworkEdge]) -> Vec<(String, String)> {
+        edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::RouteAction)
+            .map(|e| {
+                let sym = e.dst_symbol.clone().unwrap_or_default();
+                let addr = match &e.extra_json {
+                    None => "?".to_string(),
+                    Some(raw) => {
+                        let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+                        format!(
+                            "{} {}",
+                            v["verb"].as_str().unwrap(),
+                            v["path"].as_str().unwrap()
+                        )
+                    }
+                };
+                (sym, addr)
+            })
+            .collect()
+    }
+
+    fn address_of(edges: &[FrameworkEdge], sym: &str) -> String {
+        addresses(edges)
+            .into_iter()
+            .find(|(s, _)| s == sym)
+            .unwrap_or_else(|| panic!("no edge for {sym}: {:?}", addresses(edges)))
+            .1
+    }
+
     #[test]
     fn simple_resources_produces_full_crud_at_likely() {
         let src = b"Rails.application.routes.draw do\n  resources :users\nend\n";
@@ -1144,5 +1441,140 @@ end
         let src = b"Rails.application.routes.draw do\n  devise_for :user\nend\n";
         let edges = extract("config/routes.rb", src);
         assert!(edges.is_empty());
+    }
+    // --- V72-I1: the route ADDRESS ------------------------------------
+
+    #[test]
+    fn resources_actions_get_their_restful_verb_and_path() {
+        let src = b"Rails.application.routes.draw do\n  resources :orders\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(address_of(&edges, "orders#index"), "GET /orders");
+        assert_eq!(address_of(&edges, "orders#create"), "POST /orders");
+        assert_eq!(address_of(&edges, "orders#new"), "GET /orders/new");
+        assert_eq!(address_of(&edges, "orders#show"), "GET /orders/:id");
+        assert_eq!(address_of(&edges, "orders#edit"), "GET /orders/:id/edit");
+        // Rails answers `update` on PATCH *and* PUT; the lens records PATCH
+        // rather than doubling every edge (see the module doc).
+        assert_eq!(address_of(&edges, "orders#update"), "PATCH /orders/:id");
+        assert_eq!(address_of(&edges, "orders#destroy"), "DELETE /orders/:id");
+    }
+
+    #[test]
+    fn a_singular_resource_has_no_member_segment() {
+        let src = b"Rails.application.routes.draw do\n  resource :profile\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(address_of(&edges, "profiles#show"), "GET /profile");
+        assert_eq!(address_of(&edges, "profiles#edit"), "GET /profile/edit");
+        assert_eq!(address_of(&edges, "profiles#update"), "PATCH /profile");
+    }
+
+    #[test]
+    fn namespace_moves_both_axes_and_scope_module_moves_only_the_module() {
+        let src = b"Rails.application.routes.draw do\n  namespace :admin do\n    resources :reports, only: [:index]\n  end\n  scope module: :internal do\n    resources :flags, only: [:index]\n  end\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(
+            address_of(&edges, "admin/reports#index"),
+            "GET /admin/reports"
+        );
+        // `scope module:` renames the controller, never the URL.
+        assert_eq!(address_of(&edges, "internal/flags#index"), "GET /flags");
+    }
+
+    #[test]
+    fn member_collection_and_a_nested_resource_each_take_their_own_segment() {
+        let src = b"Rails.application.routes.draw do\n  resources :rounds, only: [] do\n    collection do\n      get :search\n    end\n    member do\n      post :merge\n    end\n    resources :catalogs, only: [:create]\n  end\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(address_of(&edges, "rounds#search"), "GET /rounds/search");
+        assert_eq!(address_of(&edges, "rounds#merge"), "POST /rounds/:id/merge");
+        assert_eq!(
+            address_of(&edges, "catalogs#create"),
+            "POST /rounds/:round_id/catalogs"
+        );
+    }
+
+    #[test]
+    fn the_inline_on_member_form_matches_the_block_form() {
+        let src = b"Rails.application.routes.draw do\n  resources :rounds, only: [] do\n    post :merge, on: :member\n    get :search, on: :collection\n  end\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(address_of(&edges, "rounds#merge"), "POST /rounds/:id/merge");
+        assert_eq!(address_of(&edges, "rounds#search"), "GET /rounds/search");
+    }
+
+    #[test]
+    fn a_verb_call_takes_its_pattern_and_a_leading_slash_escapes_the_scope() {
+        let src = b"Rails.application.routes.draw do\n  namespace :admin do\n    get 'stores', to: 'store#stores'\n    get 'ping', to: '/health#ping'\n  end\n  root to: 'home#index'\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(
+            address_of(&edges, "admin/store#stores"),
+            "GET /admin/stores"
+        );
+        // A leading `/` on the CONTROLLER escapes the namespace; the URL
+        // pattern itself is still scope-relative here.
+        assert_eq!(address_of(&edges, "health#ping"), "GET /admin/ping");
+        assert_eq!(address_of(&edges, "home#index"), "GET /");
+    }
+
+    #[test]
+    fn scope_path_and_a_bare_positional_scope_move_only_the_url() {
+        let src = b"Rails.application.routes.draw do\n  scope 'v1' do\n    resources :orders, only: [:index]\n  end\n  scope path: 'v2' do\n    resources :carts, only: [:index]\n  end\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(address_of(&edges, "orders#index"), "GET /v1/orders");
+        assert_eq!(address_of(&edges, "carts#index"), "GET /v2/carts");
+    }
+
+    #[test]
+    fn an_explicit_path_option_renames_the_url_but_not_the_controller() {
+        let src = b"Rails.application.routes.draw do\n  resources :orders, path: 'ordini', only: [:index, :show]\nend\n";
+        let edges = extract("config/routes.rb", src);
+        assert_eq!(address_of(&edges, "orders#index"), "GET /ordini");
+        assert_eq!(address_of(&edges, "orders#show"), "GET /ordini/:id");
+    }
+
+    #[test]
+    fn the_address_is_json_escaped_and_the_grammar_version_never_moved() {
+        // The URL is authored text; the value must survive a quote.
+        let addr = RouteAddr {
+            verb: "GET",
+            url: "/a\"b".to_string(),
+        };
+        let raw = route_extra_json(&addr);
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["path"].as_str().unwrap(), "/a\"b");
+        // Additive content is NOT a grammar bump (module doc, D7).
+        assert_eq!(
+            crate::frameworks::RAILS_LENS_GRAMMAR_VERSION,
+            "rails-lens/1"
+        );
+    }
+    /// The `tests/fixtures/rails-lens/config/routes/trade.rb` shape,
+    /// verbatim and inline: a split routes file with NO
+    /// `X.routes.draw do` wrapper (the `draw(:name)` convention's other
+    /// half), a namespace, `only: %i[…]`, a collection block, a member
+    /// block and a nested resource — the combination the golden walks, in
+    /// a form that fails HERE, without a fixture read, when it drifts.
+    #[test]
+    fn the_split_routes_file_shape_gets_every_address_too() {
+        let src = b"# frozen_string_literal: true\n\nnamespace :trade do\n  resources :rounds, only: %i[index show] do\n    collection do\n      get :search_pharmacies\n    end\n    member do\n      post :merge_catalogs\n    end\n    resources :catalogs, only: [:create]\n  end\nend\n";
+        let edges = extract("config/routes/trade.rb", src);
+        assert_eq!(
+            address_of(&edges, "trade/rounds#index"),
+            "GET /trade/rounds"
+        );
+        assert_eq!(
+            address_of(&edges, "trade/rounds#show"),
+            "GET /trade/rounds/:id"
+        );
+        assert_eq!(
+            address_of(&edges, "trade/rounds#search_pharmacies"),
+            "GET /trade/rounds/search_pharmacies"
+        );
+        assert_eq!(
+            address_of(&edges, "trade/rounds#merge_catalogs"),
+            "POST /trade/rounds/:id/merge_catalogs"
+        );
+        assert_eq!(
+            address_of(&edges, "trade/catalogs#create"),
+            "POST /trade/rounds/:round_id/catalogs"
+        );
     }
 }

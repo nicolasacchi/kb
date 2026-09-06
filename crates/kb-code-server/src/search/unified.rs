@@ -74,6 +74,7 @@ use super::sessions;
 use super::{Factors, LaneOpts, MAX_LIMIT};
 use crate::config::KbDaemonSection;
 use crate::lang;
+use crate::rails::filter::Selection as RailsSelection;
 use crate::routes;
 use crate::semantic;
 use crate::state::SharedState;
@@ -118,6 +119,13 @@ pub struct LaneSection {
     /// nothing".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groups: Option<Vec<HitGroup>>,
+    /// V72-I1 — what NARROWED this section, when something did: the Rails
+    /// noun the query's `rails/1` facet atoms named, plus the honest count
+    /// of files they matched (or the reason the atom was not applied).
+    /// Absent on every unnarrowed section, so a response with no Rails atom
+    /// is byte-identical to a pre-V72-I1 one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
 }
 
 /// V71-D1 — the section-level half of `explain:1`: what a hit's `rank`
@@ -237,6 +245,7 @@ fn section(lane: Lane, results: serde_json::Value, truncated: bool) -> LaneSecti
         pending: None,
         explain: None,
         groups: None,
+        caption: None,
     }
 }
 
@@ -249,6 +258,7 @@ fn unavailable(lane: Lane, reason: impl Into<String>) -> LaneSection {
         pending: None,
         explain: None,
         groups: None,
+        caption: None,
     }
 }
 
@@ -261,6 +271,7 @@ fn pending_section(lane: Lane) -> LaneSection {
         pending: Some(true),
         explain: None,
         groups: None,
+        caption: None,
     }
 }
 
@@ -329,6 +340,18 @@ fn has_ext(path_lower: &str, want: &str) -> bool {
 }
 
 /// The symbols lane's own kbcq/1 filter — `kind:`/`-kind:` over
+/// V72-I1 — the `rails/1` facet atoms' POST-filter: `true` when no atom was
+/// applied (nothing to narrow by, so everything passes, exactly like an
+/// absent `path:`) and otherwise `true` only for a path the resolved noun
+/// actually covers. A HARD gate, not the advisory `candidate_paths` hint —
+/// a facet that left non-members in the page would not be a facet.
+fn matches_rails(path: &str, selection: Option<&RailsSelection>) -> bool {
+    match selection {
+        Some(sel) if sel.applied => sel.paths.contains(path),
+        _ => true,
+    }
+}
+
 /// `Symbol::kind`, applied as a POST-filter beside `matches_filters`'s path
 /// tests (the kind lives on the symbol, not the path, so it cannot ride the
 /// same predicate).
@@ -460,6 +483,12 @@ pub async fn run(
         Some(g) => Some(g),
     };
     let want_facets = parsed.facets;
+    // V72-I1 — the `rails/1` facet atoms resolve ONCE per request, before
+    // any lane runs, to a file set plus the caption that explains it. Every
+    // narrowed lane then shares one answer: two lanes can never disagree
+    // about what `model:Order` selected.
+    let rails_sel = resolve_rails_selection(state, &repos_result, filters).await;
+    let rails_sel = rails_sel.as_ref();
 
     let (files_out, symbols_out, text_out, semantic_out, sessions_out, transcripts_out) = tokio::join!(
         async {
@@ -476,6 +505,7 @@ pub async fn run(
                     factors,
                     sort,
                     explain,
+                    rails_sel,
                 )
                 .await,
             )
@@ -494,6 +524,7 @@ pub async fn run(
                     factors,
                     sort,
                     explain,
+                    rails_sel,
                 )
                 .await,
             )
@@ -512,6 +543,7 @@ pub async fn run(
                     limit,
                     factors,
                     sort,
+                    rails_sel,
                 )
                 .await,
             )
@@ -600,6 +632,7 @@ async fn run_files(
     factors: Factors,
     sort: Option<SortKey>,
     explain: bool,
+    rails: Option<&RailsSelection>,
 ) -> LaneSection {
     let repos = match repos {
         Ok(r) => r,
@@ -613,6 +646,7 @@ async fn run_files(
     let repos = repos.clone();
     let filters = filters.clone();
     let file_index = state.file_index.clone();
+    let rails_owned = rails.cloned();
     let result = state
         .store
         .run_blocking(move |store| {
@@ -639,7 +673,10 @@ async fn run_files(
                 let raw_len = hits.len();
                 let mut filtered: Vec<_> = hits
                     .into_iter()
-                    .filter(|h| matches_filters(&h.path, &filters))
+                    .filter(|h| {
+                        matches_filters(&h.path, &filters)
+                            && matches_rails(&h.path, rails_owned.as_ref())
+                    })
                     .collect();
                 filtered.truncate(limit);
                 apply_sort(&mut filtered, sort, |h| h.path.as_str());
@@ -653,6 +690,7 @@ async fn run_files(
             if explain {
                 s.explain = Some(lane_explain(&factors));
             }
+            s.caption = rails.map(|r| r.caption());
             s
         }
         Err(e) => unavailable(Lane::Files, e.to_string()),
@@ -669,6 +707,7 @@ async fn run_symbols(
     factors: Factors,
     sort: Option<SortKey>,
     explain: bool,
+    rails: Option<&RailsSelection>,
 ) -> LaneSection {
     let repos = match repos {
         Ok(r) => r,
@@ -683,6 +722,7 @@ async fn run_symbols(
     let q = q.to_string();
     let filters = filters.clone();
     let symbol_index = state.symbol_index.clone();
+    let rails_owned = rails.cloned();
     let result = state
         .store
         .run_blocking(move |store| {
@@ -703,6 +743,7 @@ async fn run_symbols(
                         .filter(|h| {
                             matches_filters(&h.path, &filters)
                                 && matches_symbol_filters(h, &filters)
+                                && matches_rails(&h.path, rails_owned.as_ref())
                         })
                         .collect();
                     filtered.truncate(limit);
@@ -717,6 +758,7 @@ async fn run_symbols(
             if explain {
                 s.explain = Some(lane_explain(&factors));
             }
+            s.caption = rails.map(|r| r.caption());
             s
         }
         Err(e) => unavailable(Lane::Symbols, e.to_string()),
@@ -733,6 +775,7 @@ async fn run_text(
     limit: usize,
     factors: Factors,
     sort: Option<SortKey>,
+    rails: Option<&RailsSelection>,
 ) -> LaneSection {
     let repos = match repos {
         Ok(r) => r,
@@ -770,6 +813,7 @@ async fn run_text(
     // below call `cached_snapshot_if_warm` — a non-rebuilding peek — rather
     // than reaching for `state.store` a second time outside `run_blocking`.
     let symbol_index = state.symbol_index.clone();
+    let rails_owned = rails.cloned();
     let result = state
         .store
         .run_blocking(move |store| {
@@ -797,7 +841,10 @@ async fn run_text(
                 &opts,
             )
             .map(|mut resp| {
-                resp.results.retain(|r| matches_filters(&r.path, &filters));
+                resp.results.retain(|r| {
+                    matches_filters(&r.path, &filters)
+                        && matches_rails(&r.path, rails_owned.as_ref())
+                });
                 // `search_text` itself has no per-request result-count
                 // limit (only its own fixed MAX_TOTAL_MATCHES/
                 // MAX_MATCHES_PER_FILE caps — see that module's doc), so
@@ -813,9 +860,72 @@ async fn run_text(
         })
         .await;
     match result {
-        Ok((results, truncated)) => section(Lane::Text, to_value(&results), truncated),
+        Ok((results, truncated)) => {
+            let mut s = section(Lane::Text, to_value(&results), truncated);
+            s.caption = rails.map(|r| r.caption());
+            s
+        }
         Err(e) => unavailable(Lane::Text, e.to_string()),
     }
+}
+
+/// V72-I1 — resolve the query's `rails/1` facet atoms against the ONE repo
+/// in scope. `None` when the query carries no atom at all (the ordinary
+/// case; nothing is read and nothing is narrowed).
+///
+/// Refuses rather than guesses on two inputs: an unresolvable repo set and
+/// a scope holding more than one repo. Two repos' file paths are both
+/// repo-relative, and the lanes' post-filter sees only a path — so a
+/// `model:Order` resolved in repo A would silently keep repo B's
+/// same-named file. The atom is left UNAPPLIED with that stated as the
+/// caption instead (`kbc-scope/1`'s posture: a scope that will not resolve
+/// is not applied, and the caller is told).
+async fn resolve_rails_selection(
+    state: &SharedState,
+    repos: &Result<Vec<(String, i64)>, String>,
+    filters: &Filters,
+) -> Option<RailsSelection> {
+    // `filters.model` / `filters.controller` / `filters.action` /
+    // `filters.route` / `filters.job` / `filters.rails` — the six
+    // `FILTER_SPECS` consumer expressions, read through the ONE accessor
+    // that keeps their order the grammar's.
+    let atoms = filters.rails_atoms();
+    if atoms.is_empty() {
+        return None;
+    }
+    let nouns: Vec<&'static str> = atoms.iter().map(|(n, _)| *n).collect();
+    let refused = |reason: String| {
+        Some(RailsSelection {
+            nouns: nouns.clone(),
+            applied: false,
+            reason: Some(reason),
+            paths: std::collections::HashSet::new(),
+        })
+    };
+    let repos = match repos {
+        Ok(r) => r,
+        Err(msg) => return refused(msg.clone()),
+    };
+    let (repo_name, repo_id) = match repos.len() {
+        1 => repos[0].clone(),
+        n => {
+            return refused(format!(
+                "a Rails noun filter needs exactly one repo in scope ({n} are) — pass ?repo=                  or a repo:<name> filter"
+            ))
+        }
+    };
+    let Some(entry) = state.repos.iter().find(|r| r.name == repo_name) else {
+        return refused(format!("no such repo: {repo_name:?}"));
+    };
+    let repo_root = entry.path.clone();
+    Some(
+        state
+            .store
+            .run_blocking(move |store| {
+                crate::rails::filter::resolve(store, &repo_root, repo_id, &atoms)
+            })
+            .await,
+    )
 }
 
 async fn run_semantic(

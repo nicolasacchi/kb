@@ -123,6 +123,20 @@ function clauseValues(p: ParsedQuery, key: string, negated: boolean): string[] {
       return p.group === null ? [] : [p.group as GroupKey];
     case "facets:false":
       return p.facets ? ["1"] : [];
+    // V72-I1 — the rails/1 facet atoms. Single-valued and non-negatable,
+    // so one case each and no `:true` twin.
+    case "model:false":
+      return one(p.filters.model);
+    case "controller:false":
+      return one(p.filters.controller);
+    case "action:false":
+      return one(p.filters.action);
+    case "route:false":
+      return one(p.filters.route);
+    case "job:false":
+      return one(p.filters.job);
+    case "rails:false":
+      return one(p.filters.rails);
     default:
       return [];
   }

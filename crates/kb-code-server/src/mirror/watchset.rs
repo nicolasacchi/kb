@@ -192,7 +192,8 @@ pub fn gitignore_top_level_dirs(root: &Path) -> HashSet<String> {
 ///   recursive inotify watch descends INTO the checked-out submodule and
 ///   reports its churn as ordinary working-tree events — with no
 ///   `.gitignore` line covering it, nothing else in this filter stops
-///   them (measured on h4o: ~21k junk `files` rows under `legacy/`).
+///   them (measured on a real deployment: ~21k junk `files` rows under
+///   `legacy/`).
 ///
 /// Negations and wildcard patterns stay out of scope (skipped by the
 /// parser): the worst case of a missed pattern is extra events, and the

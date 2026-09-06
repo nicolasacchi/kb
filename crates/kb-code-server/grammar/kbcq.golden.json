@@ -441,6 +441,109 @@
       "text_mode": "literal",
       "group": "none",
       "normalized": "widget group:none"
+    },
+    {
+      "raw": "orders model:Order",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "orders",
+      "text_mode": "literal",
+      "filters": {
+        "model": "Order"
+      },
+      "normalized": "orders model:Order"
+    },
+    {
+      "raw": "#index controller:Orders action:show",
+      "lanes": [
+        "files"
+      ],
+      "query": "index",
+      "text_mode": "literal",
+      "filters": {
+        "controller": "Orders",
+        "action": "show"
+      },
+      "normalized": "#index controller:Orders action:show"
+    },
+    {
+      "raw": "orders route:\"GET /orders/:id\"",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "orders",
+      "text_mode": "literal",
+      "filters": {
+        "route": "GET /orders/:id"
+      },
+      "normalized": "orders route:\"GET /orders/:id\""
+    },
+    {
+      "raw": "export job:ExportJob rails:view",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "export",
+      "text_mode": "literal",
+      "filters": {
+        "job": "ExportJob",
+        "rails": "view"
+      },
+      "normalized": "export job:ExportJob rails:view"
+    },
+    {
+      "raw": "widget rails:MODEL",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "filters": {
+        "rails": "model"
+      },
+      "normalized": "widget rails:model"
+    },
+    {
+      "raw": "widget rails:widget",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget rails:widget",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "`rails:` takes model|controller|action|route|job|mailer|view|concern — `widget` searched as an ordinary word",
+          "severity": "warning",
+          "token": "rails:widget"
+        }
+      ],
+      "normalized": "widget rails:widget"
     }
   ]
 }

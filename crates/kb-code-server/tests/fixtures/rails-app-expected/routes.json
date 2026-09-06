@@ -1,0 +1,151 @@
+{
+  "honesty": {
+    "state": "ok"
+  },
+  "limit": 100,
+  "notes": [
+    "class ancestry is not indexed (there is no entity-edge table yet), so a model, job, mailer or controller here is a class under the matching app/ root corroborated by the lens's own edges — not a proven ActiveRecord/ActiveJob descendant"
+  ],
+  "noun": "route",
+  "offset": 0,
+  "repo": "acme-app",
+  "returned": 5,
+  "rows": [
+    {
+      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "line": 15,
+      "name": "GET /admin/reports",
+      "noun": "route",
+      "path": "config/routes.rb",
+      "route": {
+        "path": "/admin/reports",
+        "target": "admin/reports#index",
+        "verb": "GET"
+      },
+      "trust": "likely",
+      "witnesses": [
+        {
+          "detail": "rails-lens/1 route_action",
+          "kind": "rails-edge",
+          "line": 15,
+          "path": "config/routes.rb",
+          "trust": "likely"
+        },
+        {
+          "detail": "route target resolved by convention to app/controllers/admin/reports_controller.rb",
+          "kind": "convention"
+        }
+      ]
+    },
+    {
+      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "line": 4,
+      "name": "GET /orders",
+      "noun": "route",
+      "path": "config/routes.rb",
+      "route": {
+        "path": "/orders",
+        "target": "orders#index",
+        "verb": "GET"
+      },
+      "trust": "likely",
+      "witnesses": [
+        {
+          "detail": "rails-lens/1 route_action",
+          "kind": "rails-edge",
+          "line": 4,
+          "path": "config/routes.rb",
+          "trust": "likely"
+        },
+        {
+          "detail": "route target resolved by convention to app/controllers/orders_controller.rb",
+          "kind": "convention"
+        }
+      ]
+    },
+    {
+      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "line": 4,
+      "name": "GET /orders/:id",
+      "noun": "route",
+      "path": "config/routes.rb",
+      "route": {
+        "path": "/orders/:id",
+        "target": "orders#show",
+        "verb": "GET"
+      },
+      "trust": "likely",
+      "witnesses": [
+        {
+          "detail": "rails-lens/1 route_action",
+          "kind": "rails-edge",
+          "line": 4,
+          "path": "config/routes.rb",
+          "trust": "likely"
+        },
+        {
+          "detail": "route target resolved by convention to app/controllers/orders_controller.rb",
+          "kind": "convention"
+        }
+      ]
+    },
+    {
+      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "flags": [
+        "action-missing"
+      ],
+      "line": 12,
+      "name": "GET /orders/ping",
+      "noun": "route",
+      "path": "config/routes.rb",
+      "route": {
+        "path": "/orders/ping",
+        "target": "orders#ping",
+        "verb": "GET"
+      },
+      "trust": "candidate",
+      "witnesses": [
+        {
+          "detail": "rails-lens/1 route_action",
+          "kind": "rails-edge",
+          "line": 12,
+          "path": "config/routes.rb",
+          "trust": "likely"
+        },
+        {
+          "detail": "route target resolved by convention to app/controllers/orders_controller.rb",
+          "kind": "convention"
+        }
+      ]
+    },
+    {
+      "blob_sha": "10807c6bec51474206066e79628327f3d20f5390",
+      "line": 6,
+      "name": "POST /orders/:id/cancel",
+      "noun": "route",
+      "path": "config/routes.rb",
+      "route": {
+        "path": "/orders/:id/cancel",
+        "target": "orders#cancel",
+        "verb": "POST"
+      },
+      "trust": "likely",
+      "witnesses": [
+        {
+          "detail": "rails-lens/1 route_action",
+          "kind": "rails-edge",
+          "line": 6,
+          "path": "config/routes.rb",
+          "trust": "likely"
+        },
+        {
+          "detail": "route target resolved by convention to app/controllers/orders_controller.rb",
+          "kind": "convention"
+        }
+      ]
+    }
+  ],
+  "schema": "rails/1",
+  "total": 5,
+  "truncated": false
+}
