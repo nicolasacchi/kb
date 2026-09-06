@@ -7,7 +7,10 @@ status` + `kb events --follow`); uses BM25 + vector embeddings (bge-small)
 for hybrid search.
 
 This file orients future Claude sessions — **keep it lean**. Read
-[README.md](README.md) for the user-facing surface (HTTP API, CLI verbs, CSS) and
+[README.md](README.md) for the project front door,
+[docs/http-api.md](docs/http-api.md) + [docs/cli.md](docs/cli.md) +
+[docs/kb-code.md](docs/kb-code.md) for the user-facing surface (HTTP API, CLI
+verbs, the sibling daemon) and
 [docs/research/index.html](docs/research/index.html) for the design rationale. The
 **full architecture invariants, the file-by-file code map, and the Rust/build
 pitfalls** live in
@@ -425,7 +428,10 @@ in [docs/architecture-invariants.md](docs/architecture-invariants.md) (sections
   inside kb-code's server or SPA respectively (its own 35-slot budget does not
   apply to these files).
 - **`docs/*`** — surface specifics (authoring, comments, config, deploy, web).
-  **[README.md](README.md)** — the HTTP API list.
+  **[docs/http-api.md](docs/http-api.md)** — the HTTP API canon;
+  **[docs/cli.md](docs/cli.md)** — the CLI verb list;
+  **[docs/kb-code.md](docs/kb-code.md)** — the kb-code surface.
+  **[README.md](README.md)** — the front door + the Non-goals canon.
 
 Do NOT put per-feature implementation details here (code comments) or spike
 findings ([docs/spike-findings.md](docs/spike-findings.md)).

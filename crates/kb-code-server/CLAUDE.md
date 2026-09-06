@@ -3,7 +3,7 @@
 Sibling of the workspace-root [`/CLAUDE.md`](../../CLAUDE.md) — kb-code is a
 **separate daemon** (own binary, own auth posture, own migrations), not a
 subsystem of `kb`/`kb-server`; root CLAUDE.md's crate-layout section and
-[README.md](../../README.md)'s "kb-code" section are the feature-level surface
+[docs/kb-code.md](../../docs/kb-code.md) are the feature-level surface
 (HTTP routes, CLI verbs). This file holds the constraints that live entirely
 inside this crate (and its `kb-code-cli`/`kb-lip` siblings) — the daemon's own
 security posture, its git-argv discipline, its command/theme registries, and
