@@ -401,7 +401,7 @@ mod tests {
         store
             .replace_symbols(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -427,7 +427,7 @@ mod tests {
         store
             .replace_symbols(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src.as_bytes()).unwrap(),
             )
             .unwrap();

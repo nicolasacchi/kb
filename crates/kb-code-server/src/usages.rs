@@ -262,7 +262,7 @@ pub(crate) fn usages_core(
     }
 
     let lang_info = crate::lang::detect(path, Some(&read.bytes));
-    let salt = lang_info.map(|l| l.salt);
+    let salt = lang_info.map(|l| l.symbol_salt);
 
     let hit = match salt {
         Some(s) if store.has_occurrences(&read.blob_hash, s)? => {
@@ -703,7 +703,7 @@ pub fn usages_counts_at(
         .unwrap_or("");
     let line_bytes = line_text.strip_suffix('\r').unwrap_or(line_text).as_bytes();
     let lang_info = crate::lang::detect(path, Some(&read.bytes));
-    let salt = lang_info.map(|l| l.salt);
+    let salt = lang_info.map(|l| l.symbol_salt);
     let hit = match salt {
         Some(s) if store.has_occurrences(&read.blob_hash, s)? => {
             store.occurrence_at(&read.blob_hash, s, line, col)?
@@ -1013,7 +1013,7 @@ mod tests {
         store
             .replace_symbols(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src.as_bytes()).unwrap(),
             )
             .unwrap();

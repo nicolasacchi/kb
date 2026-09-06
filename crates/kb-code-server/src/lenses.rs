@@ -115,7 +115,7 @@ pub async fn lenses_at(
 ) -> Result<LensesOut, ApiError> {
     let read = read_repo_file(repo, path, rev)?;
     let lang_info = crate::lang::detect(path, Some(&read.bytes));
-    let salt = lang_info.map(|l| l.salt).ok_or_else(|| {
+    let salt = lang_info.map(|l| l.symbol_salt).ok_or_else(|| {
         ApiError::bad_request(format!(
             "{path}: unsupported / unindexed language for lenses"
         ))

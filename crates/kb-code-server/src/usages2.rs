@@ -849,7 +849,7 @@ fn file_facts(
         }
     }
     let symbols = match (&blob_sha, lang) {
-        (Some(h), Some(l)) => store.symbols_for_blob(h, l.salt).unwrap_or_default(),
+        (Some(h), Some(l)) => store.symbols_for_blob(h, l.symbol_salt).unwrap_or_default(),
         _ => Vec::new(),
     };
     FileFacts {

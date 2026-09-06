@@ -56,6 +56,20 @@ async fn boot(repo_name: &str, repo_dir: &Path) -> Boot {
     }
 }
 
+/// Poll until the lane this file's assertions actually READ is ready.
+///
+/// V72-H2b: the gate used to stop at `symbol_count > 0` plus two symbols on
+/// `lens.rs`, and then the test asserted on USAGE counts — which come from
+/// the `occurrences` table, derived by a pass `ingest::index_file` runs
+/// AFTER `replace_symbols`. Symbols landing proves nothing about
+/// occurrences, so the gate was one derivation short of what it gated and
+/// the test could observe `exact=0 likely=0 cand=0` on a store that was
+/// still mid-ingest. Anything that lengthens the ingest path widens that
+/// window; the V72-H2b highlight gate did, which is how it surfaced.
+///
+/// Sibling of V72-H2a's own fix ("review-map readiness gate waited on one
+/// symbol, not all four"), and the same rule: a readiness gate waits for
+/// the LAST derivation the test reads, never the first one it can see.
 async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
     let client = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(45);
@@ -77,7 +91,7 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
                         {
                             if let Ok(sbody) = sresp.json::<serde_json::Value>().await {
                                 let n = sbody["symbols"].as_array().map(|a| a.len()).unwrap_or(0);
-                                if n >= 2 {
+                                if n >= 2 && alpha_has_usages(&client, base, repo).await {
                                     return;
                                 }
                             }
@@ -86,9 +100,39 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
                 }
             }
         }
-        assert!(Instant::now() < deadline, "index timeout (symbol_count)");
+        assert!(
+            Instant::now() < deadline,
+            "index timeout (symbols + alpha usage counts)"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// `true` once `GET /api/lenses` reports at least one usage of `alpha` —
+/// the occurrences-backed lane the assertions below read.
+async fn alpha_has_usages(client: &reqwest::Client, base: &str, repo: &str) -> bool {
+    let Ok(resp) = client
+        .get(format!("{base}/api/lenses"))
+        .query(&[("repo", repo), ("path", "lens.rs")])
+        .send()
+        .await
+    else {
+        return false;
+    };
+    let Ok(body) = resp.json::<serde_json::Value>().await else {
+        return false;
+    };
+    let Some(alpha) = body["declarations"]
+        .as_array()
+        .and_then(|d| d.iter().find(|d| d["name"] == "alpha"))
+    else {
+        return false;
+    };
+    ["exact", "likely", "candidate"]
+        .iter()
+        .filter_map(|k| alpha["usages"][k].as_u64())
+        .sum::<u64>()
+        >= 1
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

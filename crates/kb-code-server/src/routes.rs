@@ -1153,6 +1153,15 @@ pub struct FileResponse {
     /// non-empty content, and empty content parses to `[]` either way, so
     /// this distinction is purely "did we look."
     pub highlights: Option<Vec<crate::highlight::Span>>,
+    /// V72-H2b (D7) — what the HIGHLIGHT cache gate would say about this
+    /// blob: `"hit"` (spans exist under the CURRENT `highlight_salt`),
+    /// `"miss"` (this blob has not been painted under it yet — a
+    /// `highlight_salt` bump puts every blob here until the mirror catches
+    /// up) or `"skipped_tier"` (the file TYPE derives no spans, or its
+    /// content was capped). Additive and read-only: this route never
+    /// derives (see its doc), so the field REPORTS the gate rather than
+    /// running it.
+    pub highlight_cache: &'static str,
     /// V70-A2 (the critique's MISSING #5) — `true` when a cheap content
     /// sniff (`security::secrets::redaction_hint`) matched a
     /// credential-shaped pattern in this file's TEXT: a private-key
@@ -1213,7 +1222,14 @@ pub async fn file(
     let path = params.path.clone();
     let repo_label = params.repo.clone();
     let blob_hash = read.blob_hash.clone();
-    let salt = lang_info.map(|l| l.salt);
+    // V72-H2b — two salts, two lookups. Reading `highlights` under the
+    // SYMBOL salt (the pre-split shape) would silently return `None` for
+    // every blob the moment the two diverged.
+    let salt = lang_info.map(|l| l.symbol_salt);
+    let hl_salt = lang_info.map(|l| l.highlight_salt);
+    let paints = crate::syntax::row_for_path(&params.path, Some(&read.bytes))
+        .map(|row| row.plan().highlight)
+        .unwrap_or(false);
     let (symbols, highlights) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -1229,12 +1245,12 @@ pub async fn file(
                     "kb-code: failed to record file-open frecency event",
                 );
             }
-            match salt {
-                Some(salt) => Ok((
+            match (salt, hl_salt) {
+                (Some(salt), Some(hl_salt)) => Ok((
                     store.symbols_for_blob(&blob_hash, salt)?,
-                    store.highlights_for_blob(&blob_hash, salt)?,
+                    store.highlights_for_blob(&blob_hash, hl_salt)?,
                 )),
-                None => Ok((Vec::new(), None)),
+                _ => Ok((Vec::new(), None)),
             }
         })
         .await?;
@@ -1254,6 +1270,14 @@ pub async fn file(
         redaction_hint: encoding == "utf8" && crate::security::secrets::redaction_hint(&content),
         content,
         symbols,
+        highlight_cache: if !paints {
+            crate::ingest::HighlightCache::SkippedTier
+        } else if highlights.is_some() {
+            crate::ingest::HighlightCache::Hit
+        } else {
+            crate::ingest::HighlightCache::Miss
+        }
+        .as_str(),
         highlights,
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
@@ -1309,7 +1333,9 @@ pub async fn symbols(
                     let blob_hash = read.blob_hash.clone();
                     state
                         .store
-                        .run_blocking(move |store| store.symbols_for_blob(&blob_hash, li.salt))
+                        .run_blocking(move |store| {
+                            store.symbols_for_blob(&blob_hash, li.symbol_salt)
+                        })
                         .await?
                 }
                 None => Vec::new(),
@@ -2345,7 +2371,7 @@ pub(crate) fn annotation_view(
             // invariant).
             let blob_hash = ingest::git_blob_hash(content.as_bytes());
             let current_symbols = match lang::detect(&row.path, Some(content.as_bytes())) {
-                Some(li) => store.symbols_for_blob(&blob_hash, li.salt)?,
+                Some(li) => store.symbols_for_blob(&blob_hash, li.symbol_salt)?,
                 None => Vec::new(),
             };
             let resolved =
@@ -3111,7 +3137,9 @@ async fn assemble_top_level_annotation(
                     let blob_hash = blob_hash.clone();
                     state
                         .store
-                        .run_blocking(move |store| store.symbols_for_blob(&blob_hash, li.salt))
+                        .run_blocking(move |store| {
+                            store.symbols_for_blob(&blob_hash, li.symbol_salt)
+                        })
                         .await?
                 }
                 None => Vec::new(),

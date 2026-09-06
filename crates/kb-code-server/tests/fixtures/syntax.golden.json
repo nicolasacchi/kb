@@ -6,7 +6,8 @@
       "tier": "full",
       "grammar": "tree-sitter-rust",
       "scanner": null,
-      "salt": "rust@0.24.2+q3",
+      "symbol_salt": "rust@0.24.2+q3",
+      "highlight_salt": "rust@0.24.2+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -21,7 +22,8 @@
       "tier": "full",
       "grammar": "tree-sitter-python",
       "scanner": null,
-      "salt": "python@0.25.0+q3",
+      "symbol_salt": "python@0.25.0+q3",
+      "highlight_salt": "python@0.25.0+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -38,7 +40,8 @@
       "tier": "full",
       "grammar": "tree-sitter-ruby",
       "scanner": null,
-      "salt": "ruby@0.23.1+q1",
+      "symbol_salt": "ruby@0.23.1+q1",
+      "highlight_salt": "ruby@0.23.1+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -64,7 +67,8 @@
       "tier": "full",
       "grammar": "tree-sitter-typescript",
       "scanner": null,
-      "salt": "typescript@0.23.2+q3",
+      "symbol_salt": "typescript@0.23.2+q3",
+      "highlight_salt": "typescript@0.23.2+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -81,7 +85,8 @@
       "tier": "full",
       "grammar": "tree-sitter-typescript",
       "scanner": null,
-      "salt": "tsx@0.23.2+q3",
+      "symbol_salt": "tsx@0.23.2+q3",
+      "highlight_salt": "tsx@0.23.2+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -96,7 +101,8 @@
       "tier": "full",
       "grammar": "tree-sitter-javascript",
       "scanner": null,
-      "salt": "javascript@0.25.0+q1",
+      "symbol_salt": "javascript@0.25.0+q1",
+      "highlight_salt": "javascript@0.25.0+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -114,7 +120,8 @@
       "tier": "full",
       "grammar": "tree-sitter-bash",
       "scanner": null,
-      "salt": "bash@0.25.1+q1",
+      "symbol_salt": "bash@0.25.1+q1",
+      "highlight_salt": "bash@0.25.1+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -135,7 +142,8 @@
       "tier": "full",
       "grammar": "tree-sitter-yaml",
       "scanner": null,
-      "salt": "yaml@0.7.2+q2",
+      "symbol_salt": "yaml@0.7.2+q2",
+      "highlight_salt": "yaml@0.7.2+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -151,7 +159,8 @@
       "tier": "full",
       "grammar": "tree-sitter-go",
       "scanner": null,
-      "salt": "go@0.25.0+q1",
+      "symbol_salt": "go@0.25.0+q1",
+      "highlight_salt": "go@0.25.0+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -166,7 +175,8 @@
       "tier": "full",
       "grammar": "tree-sitter-toml-ng",
       "scanner": null,
-      "salt": "toml@0.7.0+q1",
+      "symbol_salt": "toml@0.7.0+q1",
+      "highlight_salt": "toml@0.7.0+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -181,7 +191,8 @@
       "tier": "full",
       "grammar": "tree-sitter-json",
       "scanner": null,
-      "salt": "json@0.24.8+q1",
+      "symbol_salt": "json@0.24.8+q1",
+      "highlight_salt": "json@0.24.8+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -196,7 +207,8 @@
       "tier": "full",
       "grammar": "tree-sitter-css",
       "scanner": null,
-      "salt": "css@0.25.0+q1",
+      "symbol_salt": "css@0.25.0+q1",
+      "highlight_salt": "css@0.25.0+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -211,7 +223,8 @@
       "tier": "highlight_only",
       "grammar": "tree-sitter-scss",
       "scanner": null,
-      "salt": "scss@1.0.0+q1",
+      "symbol_salt": "scss@1.0.0+q1",
+      "highlight_salt": "scss@1.0.0+h1+roles2",
       "injection_host": false,
       "injections": [],
       "extensions": [
@@ -226,7 +239,8 @@
       "tier": "full",
       "grammar": "tree-sitter-md",
       "scanner": null,
-      "salt": "markdown@0.5.3+q1",
+      "symbol_salt": "markdown@0.5.3+q1",
+      "highlight_salt": "markdown@0.5.3+h1+roles2",
       "injection_host": true,
       "injections": [
         "bash",
@@ -258,7 +272,8 @@
       "tier": "none",
       "grammar": "tree-sitter-embedded-template",
       "scanner": null,
-      "salt": "erb@0.25.0+q1",
+      "symbol_salt": "erb@0.25.0+q1",
+      "highlight_salt": "erb@0.25.0+h1+roles2",
       "injection_host": true,
       "injections": [
         "ruby"
@@ -275,7 +290,8 @@
       "tier": "full",
       "grammar": null,
       "scanner": "haml/1",
-      "salt": "haml@haml/1+q1",
+      "symbol_salt": "haml@haml/1+q1",
+      "highlight_salt": "haml@haml/1+h1+roles2",
       "injection_host": true,
       "injections": [
         "ruby"
@@ -292,7 +308,8 @@
       "tier": "none",
       "grammar": null,
       "scanner": null,
-      "salt": null,
+      "symbol_salt": null,
+      "highlight_salt": null,
       "injection_host": false,
       "injections": [],
       "extensions": [],
@@ -307,7 +324,8 @@
       "tier": "none",
       "grammar": null,
       "scanner": null,
-      "salt": null,
+      "symbol_salt": null,
+      "highlight_salt": null,
       "injection_host": false,
       "injections": [],
       "extensions": [

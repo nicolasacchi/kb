@@ -95,5 +95,10 @@ describe("cssClassFor", () => {
   it("prefixes every highlight class with kbc-hl-", () => {
     expect(cssClassFor("keyword")).toBe("kbc-hl-keyword");
     expect(cssClassFor("other")).toBe("kbc-hl-other");
+    // V72-H2b — the three widened roles arrive kebab-cased on the wire and
+    // pass straight through.
+    expect(cssClassFor("string-special")).toBe("kbc-hl-string-special");
+    expect(cssClassFor("constant-builtin")).toBe("kbc-hl-constant-builtin");
+    expect(cssClassFor("punctuation-special")).toBe("kbc-hl-punctuation-special");
   });
 });

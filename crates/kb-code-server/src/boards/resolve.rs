@@ -620,9 +620,13 @@ fn highlights_for_slice(
     range: [u32; 2],
 ) -> Option<Vec<crate::highlight::Span>> {
     let lang = crate::lang::detect(path, Some(text.as_bytes()))?;
+    // V72-H2b — the HIGHLIGHT family's salt. The `highlights` table is
+    // keyed by `highlight_salt`, not `symbol_salt`; reading it under the
+    // latter answers `None` for every blob, which this fn would then
+    // render as the honest "not indexed yet".
     let all = ctx
         .store
-        .highlights_for_blob(blob_hash, lang.salt)
+        .highlights_for_blob(blob_hash, lang.highlight_salt)
         .ok()
         .flatten()?;
     // Byte window of the range within the file. `line_slice` joins with

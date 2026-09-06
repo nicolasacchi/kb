@@ -547,7 +547,7 @@ fn anchor_symbol(
     let read = read_repo_file(repo, path, rev)?;
     let lang = crate::lang::detect(path, Some(&read.bytes));
     if let Some(li) = lang {
-        if let Ok(syms) = store.symbols_for_blob(&read.blob_hash, li.salt) {
+        if let Ok(syms) = store.symbols_for_blob(&read.blob_hash, li.symbol_salt) {
             // 1) name span hit
             if let Some(s) = syms.iter().find(|s| {
                 s.line_start == line && col >= s.col_start && col < s.col_end.max(s.col_start + 1)
