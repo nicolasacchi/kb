@@ -502,6 +502,80 @@ leader family that V70-K1 already made reachable from inside the buffer.
 `commit.next`/`commit.prev` (depth 20), not a conflict — `commands
 doctor`'s conflict pass only gates two coactive scopes at the SAME depth.
 
+## The dossier center mode (`entity/1`, `V72-G1.2`)
+
+`?ent=<fqn>` puts the reader shell into its `dossier` CENTER MODE. Four
+rules, each with a home.
+
+**It is a MODE, not a route.** `routes/Reader.tsx` derives
+`centerMode={dossierMode ? "dossier" : "reader"}` from the URL and renders
+`components/entity/DossierView.tsx` in place of the panes; nothing else
+about the shell changes. That is D1's rule ("any new surface lands in an
+existing REGION") and it is CI-checked rather than promised:
+`desk-landmarks.spec.ts` now loops both entries of
+`desk/centerModes.ts`'s `SHIPPED_CENTER_MODES` and asserts a byte-identical
+region set for each. Each mode in that loop declares its OWN "the center
+has painted" selector — the spec used to wait on `.kbc-codeview` for every
+mode, which would have failed the dossier for the sin of not being a code
+buffer. A future third mode adds one line to `SHIPPED_CENTER_MODES`, one to
+that `MODES` table, and no new region.
+
+**One read, two renderers.** `hooks/useDossier.ts` owns the single
+`GET /api/entity/dossier` query; the center and the rail's Dossier tab
+(`components/entity/DossierRail.tsx`) both render the `DossierOut` it
+returns. Neither fetches. This is kbc-tree/1's "one projection, two
+renderers" rule (see `kb-code-server/CLAUDE.md` invariant 17a, whose own
+stated top risk is exactly this pair drifting) applied to a second wire —
+and it is why the member ordering lives in `lib/dossier.ts` rather than in
+either component.
+
+**Every count comes off the wire; `rows.length` is never the headline.**
+`entity/1` sends each list's TRUE `total` beside an explicit `truncated`
+precisely because the rows in hand are a CUT of it. So `lib/dossier.ts`'s
+`usageGroupCensus` reports `group.total` verbatim and states "N of M shown"
+as a separate fact, "show more" RE-FETCHES with a higher `usages_per_kind`
+(the rows a smaller cut did not return were never in the browser to
+reveal), and the `inherited` toggle is a re-fetch for the same reason — it
+changes what the SERVER sends, not what this side hides. `honesty.state`'s
+`partial`/`empty` render as a header caption naming the budget and every
+lane it dropped, in the server's own `budget.order`; `honesty.notes` are
+rendered one per note, verbatim, exactly as the tree's honesty strip is.
+Trust renders through the shared `TrustBadge` (LINE STYLE, kbc-theme/1's
+Lane Budget) and never through a hue this feature picks.
+
+**`lib/dossier.ts`'s string comparator is `cmpStr`, not `localeCompare` —
+do not "modernise" it.** `dossier.rs` sorts members with `a.name.cmp(&b.name)`
+(code-point order, so `TAX_RATE` precedes `total`); `localeCompare`
+collates case-insensitively and reverses that pair. Since the default
+`visibility` sort must be a NO-OP over the order the response already
+arrived in, a different comparator silently REORDERS the wire —
+`dossier.test.ts`'s golden walk caught exactly that and is what keeps it
+caught.
+
+**The tree scoping is the EXISTING scope mechanism.** Dossier mode passes
+`FileTree` a `derivedScope` of `ns:<fqn>` — kbc-scope/1's own `ns` atom
+over the V71-G0 entity index — so there is one tree, one wire and one
+honesty strip. A typed scope `&&`-joins with it (the grammar's own
+composition) and a typed fuzzy filter rides alongside as `?filter=`;
+neither silently replaces the shell's scope, and the "scoped to <fqn>"
+chip is the positive counterpart to the strip's `scope_applied: false`
+refusal.
+
+**Keys.** `Space e d` (open, ungated), and `i` / `M` / `] s` / `[ s` gated
+`when: center == dossier` via the new `center` context key. Bare `i` and
+`M` are safe from inside a focused CodeView for a reason worth keeping
+written down: the vim reducer reacts to them ONLY under the `g` prefix
+(`gi` = impact, `gM` = mnemonics), so neither carries a `vim_kind`, guard 2
+resolves them exactly and lets them through, and nothing fires twice.
+`] s`/`[ s` carry no `vim_kind` either, following the `] u`/`] d`
+precedent exactly (§ Usages and actions above) — `[`/`]` is a MIXED
+prefix, so a vim arm here would fire the step TWICE. The dossier rail's
+`j`/`k`/`Enter` are deliberately NOT registry rows: `rail` scope declares
+exactly one row today, so there is no convention to join, and the list
+obeys the focused-panel rule instead — it stops only the keys it handles
+(`railListHandlesKey`), leaving every chord and global command to reach
+`CommandRoot`.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)

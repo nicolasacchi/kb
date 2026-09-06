@@ -24,6 +24,7 @@ import type {
   DiffResponse,
   FileHistoryResponse,
   FileResponse,
+  DossierOut,
   IdentityOut,
   LineWhyOut,
   MergeCheckResponse,
@@ -1909,5 +1910,41 @@ export function fetchActions(q: {
     end_col: q.endCol !== undefined ? String(q.endCol) : undefined,
     text: q.text,
     target: q.target !== undefined ? String(q.target) : undefined,
+  });
+}
+
+// --- V72-G1.2 — `entity/1`, the entity dossier -------------------------------
+
+/// `GET /api/entity/dossier` — everything about exactly ONE entity
+/// (`crates/kb-code-server/src/entities/dossier.rs`).
+///
+/// Three of the four params are the caller's own cuts and are OMITTED at their
+/// defaults, so a plain "open the dossier" request is the shortest URL the
+/// route accepts and the query key below stays stable across renders:
+///
+/// - `inherited` — the wire spells it `?inherited=1` (`DossierParams.inherited`
+///   is an `Option<String>`, not a bool, precisely so the documented address
+///   works); absent means "definitions and members this entity's own body
+///   declares".
+/// - `budget` — the ROW budget. Absent ⇒ the route's `DEFAULT_BUDGET` (600).
+/// - `usagesPerKind` — absent ⇒ `DEFAULT_USAGES_PER_KIND` (20). Raising it is
+///   how "show more" re-asks; the page NEVER slices a group client-side, since
+///   the rows it did not receive are not rows it can show (invariant: every
+///   count comes from the wire).
+export interface DossierQuery {
+  repo: string;
+  ent: string;
+  inherited?: boolean;
+  budget?: number;
+  usagesPerKind?: number;
+}
+
+export function fetchDossier(q: DossierQuery): Promise<DossierOut> {
+  return getJson<DossierOut>("/api/entity/dossier", {
+    repo: q.repo,
+    ent: q.ent,
+    inherited: q.inherited ? "1" : undefined,
+    budget: q.budget !== undefined ? String(q.budget) : undefined,
+    usages_per_kind: q.usagesPerKind !== undefined ? String(q.usagesPerKind) : undefined,
   });
 }

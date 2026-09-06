@@ -52,9 +52,22 @@ export type ResizeTarget = DeskRegionId | "panes";
 /// open review) but is always a legal persisted value — a stored
 /// `"review"` on a file with no review context renders the honest empty
 /// state, never a blank rail and never a silent tab substitution.
-export type RailTab = "all" | "understand" | "history" | "notes" | "review";
+/// V72-G1.2 added `dossier`. Like `review` it is a CONDITIONAL tab —
+/// `InspectorRail` only offers it while the dossier center is mounted (or
+/// while it is the persisted choice, so a stored selection never silently
+/// becomes a different tab). It is a real member of the union rather than a
+/// mode-local widget because the Desk persists the rail's tab and a tab the
+/// reducer could not name would be a tab the desk could not restore.
+export type RailTab = "all" | "understand" | "history" | "notes" | "review" | "dossier";
 
-export const RAIL_TABS: readonly RailTab[] = ["all", "understand", "history", "notes", "review"];
+export const RAIL_TABS: readonly RailTab[] = [
+  "all",
+  "understand",
+  "history",
+  "notes",
+  "review",
+  "dossier",
+];
 
 export interface DeskRegionState {
   /// Percentage of the region's own axis (0..100) — the unit

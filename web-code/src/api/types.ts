@@ -3860,3 +3860,245 @@ export interface ActionsOut {
   mutations: ActionsMutationsNote;
   notes: string[];
 }
+
+// --- V72-G1.1/G1.2 — `entity/1`, the entity DOSSIER --------------------------
+//
+// The TS mirror of `crates/kb-code-server/src/entities/dossier.rs`'s
+// `DossierOut` tree (`GET /api/entity/dossier`). Hand-maintained in lock-step
+// with that module, the same discipline every other wire type in this file
+// takes; `lib/dossier.test.ts` walks the CHECKED-IN Rust golden
+// (`crates/kb-code-server/tests/fixtures/entity-dossier.golden.json`) through
+// these types, so a field renamed on the Rust side fails a test here by name
+// rather than surfacing as an `undefined` on screen.
+//
+// Every `skip_serializing_if = "Option::is_none"` field is optional here and
+// NOTHING substitutes a zero for an absent value — an absent `blob_sha` means
+// "the file is no longer in the mirror", which is not the same fact as an
+// empty string.
+
+/// A census of trust classes. Never an aggregate verdict — `entities/1`'s
+/// posture, kept (crate invariant 13).
+export interface TrustCounts {
+  exact: number;
+  likely: number;
+  candidate: number;
+}
+
+/// `dossier.rs`'s `ENTITY_KINDS`.
+export type EntityKind = "class" | "module" | "constant" | "unknown";
+
+/// `resolve.rs`'s `CLASS_*` vocabulary, plus `dossier.rs`'s honest fourth
+/// outcome for a reference that resolves to nothing this index holds.
+export type TrustClass = "exact" | "likely" | "candidate";
+export type ResolvedClass = TrustClass | "unresolved";
+
+export interface EntitySummary {
+  fqn: string;
+  kind: EntityKind;
+  /// The enclosing constant path — absent at the top level.
+  namespace?: string;
+  /// EVERY file that reopens this entity, in response order.
+  files: string[];
+  trust_counts: TrustCounts;
+}
+
+/// `ruby_body.rs`'s `OPENER_*`.
+export type OpenerForm = "top-level" | "nested" | "compact" | "mixed" | "unknown";
+
+export interface DefinitionBlock {
+  path: string;
+  line_start: number;
+  line_end: number;
+  /// The blob these lines were read from — absent when the file is no longer
+  /// in the mirror.
+  blob_sha?: string;
+  /// `class` | `module` | `reopen` | `constant`.
+  kind: string;
+  /// Position in the response's definition order (0-based).
+  reopening_index: number;
+  /// The literal opener chain, read off the source.
+  opener: string;
+  opener_form: OpenerForm;
+  trust: TrustClass;
+  matched_via: string;
+  nesting: string;
+  stale: boolean;
+  /// `true` when the path carries no live bytes any more.
+  missing: boolean;
+}
+
+/// `ruby_body.rs`'s `MEMBER_KINDS`.
+export type MemberKind =
+  | "instance_method"
+  | "singleton_method"
+  | "attr_reader"
+  | "attr_writer"
+  | "attr_accessor"
+  | "constant"
+  | "alias";
+
+/// `ruby_body.rs`'s `VISIBILITIES`.
+export type Visibility = "public" | "protected" | "private" | "module_function" | "unknown";
+
+/// How a member row was FOUND — surfaced rather than folded into `trust`.
+export type MemberVia = "tree" | "macro" | "assignment";
+
+export interface MemberRow {
+  name: string;
+  kind: MemberKind;
+  visibility: Visibility;
+  /// The FQN whose body defines this member.
+  defining_type: string;
+  /// `true` only for rows that came from an ancestor or a mixin, and only
+  /// when the request asked for them (`?inherited=1`).
+  inherited: boolean;
+  path: string;
+  line: number;
+  blob_sha?: string;
+  via: MemberVia;
+  trust: TrustClass;
+}
+
+export interface Ancestor {
+  /// The constant AS WRITTEN at the reference site.
+  written: string;
+  fqn?: string;
+  resolved: ResolvedClass;
+  depth: number;
+  from_path: string;
+  from_line: number;
+}
+
+export interface Mixin {
+  kind: string;
+  written: string;
+  fqn?: string;
+  resolved: ResolvedClass;
+  from_path: string;
+  from_line: number;
+}
+
+export interface RelatedEntity {
+  fqn?: string;
+  via: string;
+  path: string;
+  line: number;
+  trust: TrustClass;
+}
+
+export interface Hierarchy {
+  ancestors: Ancestor[];
+  mixins: Mixin[];
+  descendants: RelatedEntity[];
+  implementors: RelatedEntity[];
+  notes: string[];
+}
+
+export interface UsageGroup {
+  kind: string;
+  /// The TRUE total for this kind, before `usages_per_kind` cut `rows`.
+  total: number;
+  truncated: boolean;
+  trust_census: TrustCounts;
+  /// What `trust_census` counted — `"returned"`, i.e. the rows in hand.
+  census_basis: string;
+  rows: UsageRow2[];
+}
+
+export interface UsageAnchor {
+  path: string;
+  line: number;
+  col: number;
+}
+
+export interface UsagesSection {
+  /// `ok` | `empty` | `error`.
+  state: string;
+  reason?: string;
+  anchor?: UsageAnchor;
+  groups: UsageGroup[];
+  total: number;
+  truncated: boolean;
+}
+
+export interface UnknownMember {
+  /// One of `ruby_body.rs`'s `UNKNOWN_MECHANISMS`.
+  mechanism: string;
+  name_hint?: string;
+  path: string;
+  line: number;
+  blob_sha?: string;
+  context: string;
+}
+
+export interface NamespaceChild {
+  fqn: string;
+  /// The direct child SEGMENT under the addressed entity.
+  segment: string;
+  /// `class` | `module` | `namespace`.
+  kind: string;
+  definitions: number;
+  descendants: number;
+  trust_counts: TrustCounts;
+}
+
+/// Rows the BUDGET dropped, by lane. Every key is always present.
+export interface DossierDropped {
+  definitions: number;
+  members: number;
+  ancestors: number;
+  mixins: number;
+  descendants: number;
+  implementors: number;
+  unknown_members: number;
+  namespace_tree: number;
+  usages: number;
+}
+
+export interface BudgetReport {
+  requested: number;
+  spent: number;
+  dropped: DossierDropped;
+  /// The order the budget was spent in (`LANE_PRIORITY`).
+  order: string[];
+}
+
+/// `ok` | `partial` | `empty`. An `error` is the route's own `ApiError`,
+/// never a 200 with a plausible-looking body — so it has no name here.
+export type HonestyState = "ok" | "partial" | "empty";
+
+export interface DossierHonesty {
+  state: HonestyState;
+  reason?: string;
+  budget: BudgetReport;
+  /// Every caption this response owes its reader. Always present, possibly
+  /// empty — never a silent absence.
+  notes: string[];
+}
+
+export interface ZeitwerkOut {
+  state: string;
+  roots: string[];
+  acronyms: string[];
+  collapse: string[];
+  reason?: string;
+}
+
+/// `GET /api/entity/dossier`'s body (`entities::dossier::DossierOut`).
+export interface DossierOut {
+  schema: string;
+  repo: string;
+  /// The address as it was asked.
+  ent: string;
+  entity: EntitySummary;
+  /// Non-empty ONLY when the address is ambiguous.
+  candidates: string[];
+  definitions: DefinitionBlock[];
+  members: MemberRow[];
+  hierarchy: Hierarchy;
+  usages: UsagesSection;
+  unknown_members: UnknownMember[];
+  namespace_tree: NamespaceChild[];
+  zeitwerk: ZeitwerkOut;
+  honesty: DossierHonesty;
+}

@@ -96,6 +96,43 @@ export const IMPACT_HELPER_FN = "impact_helper";
 export const IMPACT_TEST_FN = "test_impact_helper";
 export const IMPACT_COMMIT_SUBJECT = "add impact/lenses ego fixture";
 
+// V72-G1.2 — the `entity/1` dossier fixture. Ruby, because the entity index
+// is Ruby-only (`entities/mod.rs`), and this suite had no `.rb` file at all.
+//
+// TWO DELIBERATE SHAPE CHOICES, both about NOT disturbing a shared fixture:
+//
+//  1. **Top-level files, not an `app/models/…` tree.** A second top-level
+//     DIRECTORY would sort above every root file and shift the tree's row
+//     cursor — the exact hazard `doclens-fixture.ts` records from when
+//     `ambig/` was added, and the thing `nav-ramp.spec.ts`'s `openTreeScope`
+//     (one `j`, then "the focused row is a file") depends on. Flat `.rb`
+//     files sort among the existing root FILES, so that helper still lands on
+//     a file and every row stays a row. The cost is that Zeitwerk has no
+//     `app/` to read, so the dossier reports `zeitwerk: degraded` and
+//     `honesty.state: "partial"` — which is not a loss but a GIFT: the spec
+//     gets to assert the honest degraded rendering on real daemon output,
+//     and `exact` is still reachable because it comes from lexical NESTING,
+//     not from the autoload config (`entities::class_for`).
+//  2. **Folded into the EXISTING impact commit, never a new one.** A new
+//     commit on `main` bumps `feature-x`'s behind-count, which
+//     `time.spec.ts` pins verbatim; the initial commit is pinned too (its
+//     "5 root files" assertion). The impact commit is asserted by neither.
+export const RUBY_ORDER_FILE = "shop_order.rb";
+export const RUBY_RECORD_FILE = "application_record.rb";
+export const RUBY_PAYABLE_FILE = "shop_payable.rb";
+export const RUBY_INVOICE_FILE = "shop_invoice.rb";
+/// The address `?ent=` is opened with. `Shop::Order` is defined by lexical
+/// nesting (`module Shop; class Order`), so its definition block reaches
+/// `exact` with no Rails tree in sight.
+export const RUBY_ENTITY = "Shop::Order";
+/// A method the member table must list — `tree`-derived, so `exact`.
+export const RUBY_MEMBER = "to_s";
+/// The nested class the namespace tree must show as a child of the entity.
+export const RUBY_NESTED_CHILD = "Line";
+/// An inherited member that appears ONLY when `?inherited=1` re-fetches:
+/// `save` comes from `ApplicationRecord`, not from `Shop::Order`'s own body.
+export const RUBY_INHERITED_MEMBER = "save";
+
 // V3.3-U1 / stacks — a SECOND layer stacked ON feature-x (never moves
 // feature-x's tip, never touches main or the pinned initial commit).
 // Creates a 2-layer stack: main ← feature-x ← feature-x-2 for stacks.spec.
@@ -274,6 +311,63 @@ export function createFixtureRepo(dir: string): void {
       `}`,
       "",
     ].join("\n"),
+  );
+  // V72-G1.2 — the Ruby entity fixture rides THIS commit (see the constants'
+  // own doc for why it is neither a new commit nor a new directory).
+  writeFileSync(
+    join(dir, RUBY_RECORD_FILE),
+    ["class ApplicationRecord", "  def save", "    true", "  end", "end", ""].join("\n"),
+  );
+  writeFileSync(
+    join(dir, RUBY_PAYABLE_FILE),
+    [
+      "module Shop",
+      "  module Payable",
+      "    def pay",
+      "      :paid",
+      "    end",
+      "  end",
+      "end",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, RUBY_ORDER_FILE),
+    [
+      "module Shop",
+      "  class Order < ApplicationRecord",
+      "    include Payable",
+      "",
+      "    TAX_RATE = 0.2",
+      "",
+      "    attr_accessor :total",
+      "",
+      `    def ${RUBY_MEMBER}`,
+      '      "Order(#{@total})"',
+      "    end",
+      "",
+      "    private",
+      "",
+      "    def secret_rate",
+      "      TAX_RATE",
+      "    end",
+      "",
+      "    # A metaprogramming hole the index reports but cannot see through.",
+      "    define_method(:dynamic_total) { @total }",
+      "",
+      `    class ${RUBY_NESTED_CHILD}`,
+      "      def amount",
+      "        1",
+      "      end",
+      "    end",
+      "  end",
+      "end",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, RUBY_INVOICE_FILE),
+    ["module Shop", "  class Invoice < Order", "    include Payable", "  end", "end", ""].join("\n"),
   );
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", IMPACT_COMMIT_SUBJECT]);

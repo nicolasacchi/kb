@@ -25,10 +25,13 @@ import { BASE, REPO_NAME } from "./helpers";
 /// and DCB-W2.B.R fix 9 added exactly ONE new top-level directory (`ambig/`,
 /// `doclens-fixture.ts`'s `seedAmbiguityDemo`) — so the tree's row cursor
 /// starts on THAT directory, not a file (`split.spec.ts`'s own "Shift+Enter
-/// in the tree" test hit the same thing). One `j` reaches "caller.rs",
-/// alphabetically first among the fixture's root FILES — the row
-/// `rampFocusedTreeRow` (`Reader.tsx`) needs, since a directory has nowhere
-/// else to be opened.
+/// in the tree" test hit the same thing). One `j` reaches the first root
+/// FILE — the row `rampFocusedTreeRow` (`Reader.tsx`) needs, since a
+/// directory has nowhere else to be opened. V72-G1.2 added flat `.rb` entity
+/// fixtures, so that file is now `application_record.rb` rather than
+/// `caller.rs`; the assertion below deliberately checks the row's KIND and
+/// not its name, which is what lets a root file be added without touching
+/// this helper.
 async function openTreeScope(page: Page) {
   await page.goto(`${BASE}/r/${REPO_NAME}`);
   await expect(page.locator(".kbc-tree__row").first()).toBeVisible({ timeout: 10_000 });

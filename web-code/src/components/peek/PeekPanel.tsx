@@ -61,6 +61,18 @@ export interface PeekPanelProps {
   /// global keys beyond K").
   onFindRefs?(): void;
   onFindCallers?(): void;
+  /// V72-G1.2 — "Open dossier", offered when the peeked identifier is a
+  /// CONSTANT (a class or module). An actions/1-style ROW, never an
+  /// auto-navigation: D5's rule is that a row which cannot PROVE `exact`
+  /// must not jump, and this one deliberately does not even try to resolve
+  /// the entity first — it hands the identifier to `entity/1`, which
+  /// answers with the dossier, with `candidates` when the name is
+  /// ambiguous, or with an honest `entity-unknown`. Offered at every trust
+  /// class for the same reason `u` stopped gating on `exact` (V71-E2): in
+  /// Ruby, where this lane lives, `exact` is structurally hard to reach,
+  /// so gating would hide the affordance from the only language that has
+  /// it. The host supplies the callback only for a constant-shaped target.
+  onOpenDossier?(): void;
   /// V70-A6 — the Ramp (§P7). One handler for every rung on every result
   /// surface (`nav/ramp.ts`); this panel supplies the target and the host
   /// runs it. Absent ⇒ `Enter` keeps its pre-A6 behaviour (`onActivate`) and
@@ -283,6 +295,7 @@ function HoverCardView({
   onOpenDefinition,
   onFindRefs,
   onFindCallers,
+  onOpenDossier,
 }: {
   card: HoverCardT;
   currentRepo: string;
@@ -290,6 +303,7 @@ function HoverCardView({
   onOpenDefinition?: () => void;
   onFindRefs?: () => void;
   onFindCallers?: () => void;
+  onOpenDossier?: () => void;
 }) {
   const { candidate } = card;
   const sig = candidate.signature ?? null;
@@ -364,6 +378,21 @@ function HoverCardView({
               <kbd>h</kbd> callers
             </button>
           )}
+          {/* V72-G1.2 — see `onOpenDossier`'s own doc: a ROW, never a jump. */}
+          {onOpenDossier && (
+            <button
+              type="button"
+              className="kbc-peek__card-action"
+              data-kbc-peek-action="dossier"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenDossier();
+              }}
+            >
+              <kbd>Space e d</kbd> dossier
+            </button>
+          )}
         </div>
       )}
       <div className="kbc-peek__card-meta">
@@ -413,6 +442,7 @@ export default function PeekPanel({
   onClose,
   onFindRefs,
   onFindCallers,
+  onOpenDossier,
   onKeepInDrawer,
   onRamp,
   scentFor,
@@ -523,6 +553,7 @@ export default function PeekPanel({
           onOpenDefinition={() => onActivate(resolveCandidateToRow(state.card!.candidate))}
           onFindRefs={onFindRefs}
           onFindCallers={onFindCallers}
+          onOpenDossier={onOpenDossier}
         />
       ) : (
         <div className="kbc-peek__body" role="listbox" aria-label={`${MODE_LABEL[state.mode]} results`}>

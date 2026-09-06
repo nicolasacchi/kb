@@ -71,7 +71,10 @@ function everyState(): DeskState[] {
 describe("deskState — the golden round trip", () => {
   it("survives JSON serialise → parse → migrate byte-for-byte, for every reachable state", () => {
     const states = everyState();
-    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 5 * 2);
+    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `6` is
+    // `RAIL_TABS.length` — V72-G1.2 added `dossier` as a sixth tab, so this
+    // product moves with it (it was 5 through V71).
+    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 6 * 2);
     for (const s of states) {
       const back = migrateDeskState(JSON.parse(JSON.stringify(s)));
       expect(back, `round trip lost ${JSON.stringify(s)}`).toEqual(s);

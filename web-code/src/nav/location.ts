@@ -42,6 +42,7 @@ import {
   compareUrl,
   formatLineParam,
   hotspotsUrl,
+  parseEntParam,
   parseLineParam,
   parsePane2,
   parseReviewPs,
@@ -121,8 +122,12 @@ export interface Location {
   path?: string;
   /// `?sym=` — a symbol address, resolved server-side on landing.
   sym?: string;
-  /// `?ent=` — RESERVED for §P9's entity index. Parsed and re-encoded so a
-  /// link that carries one survives a round trip; nothing reads it yet.
+  /// `?ent=` — an ENTITY address (a Ruby constant path). V72-G1.2 gave it its
+  /// consumer: a location carrying one puts the reader shell into its
+  /// `dossier` center mode (`routes/Reader.tsx`), and `samePlace` below
+  /// already treats two different entities as two different PLACES, so
+  /// dossier→dossier is a push and dossier→file is a push. The string is
+  /// built and parsed by `lib/codeUrl.ts`'s `entityUrl`/`parseEntParam`.
   ent?: string;
   anchor?: Anchor;
   panes: { pane2?: PaneLoc; focused: 1 | 2 };
@@ -195,8 +200,11 @@ function pageUrl(loc: Location): string {
 }
 
 /// `Location` → URL. Every branch delegates to a `lib/codeUrl.ts` builder;
-/// the only string this function assembles itself is the `?ent=`/`?q=` tail
-/// and the trail triple (through `appendTrail`).
+/// the only string this function assembles itself is the `?sym=`/`?q=` tail
+/// and the trail triple (through `appendTrail`). V72-G1.2 moved `?ent=`'s own
+/// grammar into `codeUrl.ts` (`entityUrl`/`parseEntParam`) — the tail appended
+/// below is byte-identical to what that builder emits, and
+/// `location.test.ts` pins the two against each other.
 export function encode(loc: Location): string {
   let url: string;
   switch (loc.mode) {
@@ -389,7 +397,7 @@ export function decode(url: string, focused: 1 | 2 = 1): Location {
   if (rest.length > 0 && rest[0].startsWith("~")) return base({ repo, panes });
 
   const sym = params.get("sym") ?? undefined;
-  const ent = params.get("ent") ?? undefined;
+  const ent = parseEntParam(params.get("ent")) ?? undefined;
   return base({
     repo,
     mode: "reader",
