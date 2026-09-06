@@ -97,7 +97,7 @@ fn now_unix() -> i64 {
 // so `import_findings_route` can move an owned copy of the batch into a
 // `run_blocking` closure (validation is a store read) while the original
 // `body.findings` stays available for the anchor-derivation loop after.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingLocationBody {
     pub path: String,
     pub kind: String,
@@ -107,7 +107,7 @@ pub struct FindingLocationBody {
     pub removed: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingEvidenceBody {
     #[serde(default)]
     pub lang: Option<String>,
@@ -210,7 +210,11 @@ pub struct SetFindingDispositionBody {
 /// `slug ~ f-[a-z0-9-]+` (design doc §3.1) — hand-rolled character-class
 /// check rather than a `regex` dependency (this crate has none outside its
 /// `grep-regex` search lane) for one small, fixed pattern.
-fn is_valid_finding_slug(s: &str) -> bool {
+///
+/// `pub(crate)` (V73-K1) — `review_doc::refs`'s `finding:` scheme and
+/// `review_doc::lint` validate against this exact predicate rather than a
+/// second copy of the pattern.
+pub(crate) fn is_valid_finding_slug(s: &str) -> bool {
     match s.strip_prefix("f-") {
         Some(rest) if !rest.is_empty() => rest
             .chars()
@@ -695,6 +699,8 @@ pub async fn import_findings_route(
         })
         .await?;
 
+    let (v1_act, v1_blocking, v1_cites, v1_fp, v1_supersedes) =
+        store::ImportedFinding::v1_defaults();
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut imported = Vec::with_capacity(body.findings.len());
     for f in &body.findings {
@@ -716,6 +722,13 @@ pub async fn import_findings_route(
             anchor: anchor.anchor,
             anchor2: anchor.anchor2,
             side: anchor.side,
+            // V73-K1 — a `kbc-findings/1` row carries no v2 axes; these
+            // defaults are exactly what such a row has always meant.
+            act: v1_act.clone(),
+            blocking: v1_blocking,
+            cites_json: v1_cites.clone(),
+            fingerprint: v1_fp.clone(),
+            supersedes: v1_supersedes.clone(),
         });
     }
 
@@ -769,9 +782,13 @@ pub async fn import_findings_route(
 pub struct ComposeBody {
     #[serde(default)]
     pub schema: Option<String>,
-    /// The report's prose summary — required (Track R's "summary +
-    /// findings JSON" v0 scope); becomes `report.summary`.
-    pub summary: String,
+    /// The report's prose summary — required on the V0 path (Track R's
+    /// "summary + findings JSON" scope); becomes `report.summary`. On the
+    /// V73-K1 DOCUMENT path it is ignored and `summary_md` is used instead
+    /// (a document that says two different things in two places would be
+    /// the worst of both).
+    #[serde(default)]
+    pub summary: Option<String>,
     #[serde(default)]
     pub risk_score: Option<i64>,
     #[serde(default)]
@@ -791,7 +808,43 @@ pub struct ComposeBody {
     pub verdict: Option<String>,
     #[serde(default)]
     pub verdict_note: Option<String>,
-    pub findings: FindingsImportBody,
+    /// The V0 findings block (`kbc-findings/1`). Required on the V0 path;
+    /// absent on the document path, where `findings_v2` (or the document's
+    /// own `findings:` front matter) carries them.
+    #[serde(default)]
+    pub findings: Option<FindingsImportBody>,
+
+    // --- V73-K1: the kbc-review/1 document path -------------------------
+    /// The WHOLE `kbc-review/1` document (YAML front matter + Markdown
+    /// body). Its presence is what selects the document path; absent, this
+    /// route behaves EXACTLY as it did before V73-K1.
+    #[serde(default)]
+    pub doc_md: Option<String>,
+    /// `minimal` | `standard` | `full` — what this document promises.
+    /// Defaults to `standard`.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// The findings SIDECAR: either a bare JSON array of v2 findings, or
+    /// `{"findings": [...]}`. Overrides the document's own `findings:`
+    /// front matter when present.
+    #[serde(default)]
+    pub findings_v2: Option<serde_json::Value>,
+    /// `full` (default) | `additive` — the reconciliation mode for the
+    /// document path (the V0 path reads `findings.mode` instead).
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Patchset to compose against; defaults to latest.
+    #[serde(default)]
+    pub ps_number: Option<i64>,
+    /// The author identity threaded onto newly created findings'
+    /// annotations. Defaults to `"claude"`, as on the import path.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Lint + resolve only. Nothing is written, no event fires, and the
+    /// response carries the lint and the resolved cards so an author can
+    /// see exactly what would land.
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 pub const COMPOSE_SCHEMA: &str = "kbc-compose/1";
@@ -820,6 +873,36 @@ pub async fn compose_review_route(
     AxumPath(id): AxumPath<i64>,
     Json(body): Json<ComposeBody>,
 ) -> Result<axum::response::Response, ApiError> {
+    // V73-K1 — one route, two shapes. `doc_md` selects the `kbc-review/1`
+    // DOCUMENT path; without it this is byte-for-byte the V70-R v0 call,
+    // down to its own required fields and its response body.
+    if body.doc_md.is_some() {
+        return compose_document(state, id, body).await;
+    }
+    compose_v0(state, id, body).await
+}
+
+/// The V70-R v0 authoring call — summary + a `kbc-findings/1` block, in one
+/// transaction. Unchanged by V73-K1 except that its two required body
+/// fields are now checked here (they used to be enforced by serde, which
+/// cannot express "required unless another field is present").
+async fn compose_v0(
+    state: SharedState,
+    id: i64,
+    body: ComposeBody,
+) -> Result<axum::response::Response, ApiError> {
+    let Some(summary) = body.summary.clone() else {
+        return Err(ApiError::bad_request(
+            "compose requires `summary` (or a `doc_md` document, which carries its own \
+             `summary_md`)",
+        ));
+    };
+    let Some(findings_body) = body.findings else {
+        return Err(ApiError::bad_request(
+            "compose requires a `findings` block (kbc-findings/1), or a `doc_md` document \
+             whose findings ride its front matter or the `findings_v2` sidecar",
+        ));
+    };
     let (review, repo, repo_id) = require_review(&state, id).await?;
 
     if let Some(s) = body.schema.as_deref() {
@@ -829,13 +912,13 @@ pub async fn compose_review_route(
             )));
         }
     }
-    if body.findings.schema != IMPORT_SCHEMA {
+    if findings_body.schema != IMPORT_SCHEMA {
         return Err(ApiError::bad_request(format!(
             "unsupported findings.schema: {:?} (expected {IMPORT_SCHEMA:?})",
-            body.findings.schema
+            findings_body.schema
         )));
     }
-    let mode = match body.findings.mode.as_deref() {
+    let mode = match findings_body.mode.as_deref() {
         None | Some("full") => store::FindingsImportMode::Full,
         Some("additive") => store::FindingsImportMode::Additive,
         Some(other) => {
@@ -848,7 +931,7 @@ pub async fn compose_review_route(
         crate::reviews::parse_verdict_state(v)?;
     }
 
-    let findings_for_validate = body.findings.findings.clone();
+    let findings_for_validate = findings_body.findings.clone();
     let errors = state
         .store
         .run_blocking(move |store| validate_import_batch(store, id, &findings_for_validate))
@@ -865,7 +948,7 @@ pub async fn compose_review_route(
             .into_response());
     }
 
-    let ps_param = body.findings.ps_number.map(|n| n.to_string());
+    let ps_param = findings_body.ps_number.map(|n| n.to_string());
     let target_ps = state
         .store
         .run_blocking(move |store| -> Result<ReviewPatchsetRow, ApiError> {
@@ -876,9 +959,11 @@ pub async fn compose_review_route(
         })
         .await?;
 
+    let (v1_act, v1_blocking, v1_cites, v1_fp, v1_supersedes) =
+        store::ImportedFinding::v1_defaults();
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
-    let mut imported = Vec::with_capacity(body.findings.findings.len());
-    for f in &body.findings.findings {
+    let mut imported = Vec::with_capacity(findings_body.findings.len());
+    for f in &findings_body.findings {
         let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &f.location)?;
         imported.push(store::ImportedFinding {
             slug: f.slug.clone(),
@@ -897,10 +982,17 @@ pub async fn compose_review_route(
             anchor: anchor.anchor,
             anchor2: anchor.anchor2,
             side: anchor.side,
+            // V73-K1 — a `kbc-findings/1` row carries no v2 axes; these
+            // defaults are exactly what such a row has always meant.
+            act: v1_act.clone(),
+            blocking: v1_blocking,
+            cites_json: v1_cites.clone(),
+            fingerprint: v1_fp.clone(),
+            supersedes: v1_supersedes.clone(),
         });
     }
 
-    let mut report_obj = serde_json::json!({ "summary": body.summary });
+    let mut report_obj = serde_json::json!({ "summary": summary });
     if let Some(rs) = body.risk_score {
         report_obj["risk_score"] = serde_json::json!(rs);
     }
@@ -929,8 +1021,7 @@ pub async fn compose_review_route(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let import_batch_id = format!("batch_{}", annotations::short_random_hex());
-    let author = body
-        .findings
+    let author = findings_body
         .author
         .clone()
         .unwrap_or_else(|| "claude".to_string());
@@ -976,6 +1067,308 @@ pub async fn compose_review_route(
             },
             "report_set": outcome.report_set,
             "verdict_changed": outcome.verdict_changed,
+        })),
+    )
+        .into_response())
+}
+
+/// V73-K1 — `compose`'s `kbc-review/1` DOCUMENT path (design D9's "the one
+/// authoring transaction").
+///
+/// One call: validate the front matter against the tier, lint (including
+/// resolving every ref), reconcile the findings BY FINGERPRINT (minting
+/// never-reused `f-<n>` slugs, tombstoning what vanished, never touching a
+/// `manual` row), append the document revision, set the report, optionally
+/// set the review-level verdict — all inside ONE sqlite transaction
+/// ([`Store::compose_review_doc`]) — then emit exactly ONE
+/// `review.changed{reason:"compose"}` and return the resolved read.
+///
+/// `dry_run` stops after the lint and returns what WOULD land, writing
+/// nothing and emitting nothing. Any lint ERROR is a `400` carrying the
+/// whole lint (every problem at once, never just the first), and nothing is
+/// written.
+///
+/// The report is composed from the DOCUMENT — `summary_md` becomes
+/// `report.summary` — and normalised through the exact same
+/// `reviews::normalize_report_shape` `PUT /report` uses. It deliberately
+/// synthesises no `risk_score`: `risk` is a level plus a sentence, and
+/// coercing that into a number would be a precision the document never
+/// claimed.
+async fn compose_document(
+    state: SharedState,
+    id: i64,
+    body: ComposeBody,
+) -> Result<axum::response::Response, ApiError> {
+    use crate::review_doc::{self, routes as doc_routes, Tier};
+
+    let doc_md = body.doc_md.clone().expect("dispatched on doc_md");
+    let (review, repo, repo_id) = require_review(&state, id).await?;
+
+    if let Some(sc) = body.schema.as_deref() {
+        if sc != COMPOSE_SCHEMA && sc != review_doc::SCHEMA {
+            return Err(ApiError::bad_request(format!(
+                "unsupported schema: {sc:?} (expected {COMPOSE_SCHEMA:?} or {:?})",
+                review_doc::SCHEMA
+            )));
+        }
+    }
+    let tier = match body.tier.as_deref() {
+        None => Tier::Standard,
+        Some(t) => Tier::parse(t).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "tier must be {}, got {t:?}",
+                review_doc::TIERS.join("|")
+            ))
+        })?,
+    };
+    let mode = match body.mode.as_deref() {
+        None | Some("full") => store::FindingsImportMode::Full,
+        Some("additive") => store::FindingsImportMode::Additive,
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "mode must be full|additive, got {other:?}"
+            )))
+        }
+    };
+    if let Some(v) = body.verdict.as_deref() {
+        crate::reviews::parse_verdict_state(v)?;
+    }
+
+    // The findings SIDECAR: a bare array, or `{"findings": [...]}`. Absent
+    // ⇒ the document's own front matter carries them (and if it does not
+    // either, the tier lint says so by name).
+    let sidecar: Option<Vec<review_doc::DocFinding>> = match &body.findings_v2 {
+        None => None,
+        Some(v) => {
+            let arr = match v {
+                serde_json::Value::Array(_) => v.clone(),
+                serde_json::Value::Object(m) => m.get("findings").cloned().ok_or_else(|| {
+                    ApiError::bad_request("`findings_v2` object must carry a `findings` array")
+                })?,
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "`findings_v2` must be an array of findings or {\"findings\": [...]}",
+                    ))
+                }
+            };
+            Some(serde_json::from_value(arr).map_err(|e| {
+                ApiError::bad_request(format!("`findings_v2` is not a v2 finding list: {e}"))
+            })?)
+        }
+    };
+
+    let ps_param = body.ps_number.map(|n| n.to_string());
+    let target_ps = state
+        .store
+        .run_blocking(move |store| -> Result<ReviewPatchsetRow, ApiError> {
+            store
+                .latest_patchset(id)?
+                .ok_or_else(|| ApiError::bad_request(format!("review {id} has no patchsets")))?;
+            resolve_ps(store, id, ps_param.as_deref())
+        })
+        .await?;
+
+    let prepared = doc_routes::prepare_doc(
+        &state,
+        id,
+        repo_id,
+        &repo.path,
+        &target_ps,
+        &doc_md,
+        tier,
+        sidecar.as_deref(),
+    )
+    .await?;
+
+    let prepared = match prepared {
+        Ok(p) => p,
+        Err((lint, cards)) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(serde_json::json!({
+                    "error": "the review document failed lint; nothing written",
+                    "lint": lint,
+                    "cards": cards,
+                })),
+            )
+                .into_response());
+        }
+    };
+
+    // An EXPLICIT slug that names an existing human-authored finding is
+    // refused at the route boundary, whole-compose, nothing written — the
+    // same guard `validate_import_batch`'s `slug_conflict_manual` applies on
+    // the v1 path, for the same reason (V0024's origin rule: a `manual` row
+    // is never superseded or overwritten by an agent's compose).
+    let explicit: Vec<String> = prepared
+        .findings
+        .iter()
+        .filter_map(|f| f.slug.clone())
+        .collect();
+    if !explicit.is_empty() {
+        let explicit_c = explicit.clone();
+        let conflicts = state
+            .store
+            .run_blocking(move |store| -> Result<Vec<String>, ApiError> {
+                let mut out = Vec::new();
+                for slug in &explicit_c {
+                    if let Some(row) = store.get_review_finding(id, slug)? {
+                        if row.origin == store::FINDING_ORIGIN_MANUAL {
+                            out.push(slug.clone());
+                        }
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+        if !conflicts.is_empty() {
+            return Err(ApiError::bad_request(format!(
+                "these slugs name human-authored findings, which a compose may never \
+                 overwrite: {} — drop the explicit slug and a fresh one is minted",
+                conflicts.join(", ")
+            )));
+        }
+    }
+
+    if body.dry_run {
+        return Ok((
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({
+                "schema": review_doc::SCHEMA,
+                "dry_run": true,
+                "review_id": id,
+                "ps_number": target_ps.ps_number,
+                "tier": tier.as_str(),
+                "lint": prepared.lint,
+                "cards": prepared.cards,
+                "omitted": review_doc::omitted_blocks(&prepared.doc),
+                "would_write": {
+                    "findings": prepared.findings.len(),
+                    "doc_bytes": doc_md.len(),
+                },
+            })),
+        )
+            .into_response());
+    }
+
+    // Derive each finding's annotation anchor from the TARGET patchset's
+    // pinned blob — the same `build_finding_anchor` the v1 import path uses,
+    // so a v2 finding's carry-forward ladder is the identical one.
+    let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
+    let mut imported = Vec::with_capacity(prepared.findings.len());
+    for f in &prepared.findings {
+        let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &f.location)?;
+        imported.push(store::ImportedFinding {
+            slug: f.slug.clone().unwrap_or_default(),
+            severity: f.severity.clone(),
+            category: f.category.clone(),
+            location_kind: f.location.kind.clone(),
+            location_path: f.location.path.clone(),
+            location_lines: f.location.lines.as_deref().map(store::location_lines_json),
+            location_removed: f.location.removed,
+            title: f.title.clone(),
+            rationale: f.rationale.clone(),
+            recommendation: f.recommendation.clone(),
+            evidence_lang: f.evidence.as_ref().and_then(|e| e.lang.clone()),
+            evidence_source: f.evidence.as_ref().and_then(|e| e.source.clone()),
+            anchor_kind: anchor.anchor_kind,
+            anchor: anchor.anchor,
+            anchor2: anchor.anchor2,
+            side: anchor.side,
+            act: f.act.clone(),
+            blocking: f.blocking,
+            cites_json: if f.cites.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&f.cites).ok()
+            },
+            fingerprint: Some(f.fingerprint()),
+            supersedes: f.supersedes.clone(),
+        });
+    }
+
+    let mut report_obj = serde_json::json!({
+        "schema": review_doc::SCHEMA,
+        "summary": prepared.doc.summary_md,
+    });
+    if let Some(h) = &body.verdict_headline {
+        report_obj["verdict_headline"] = serde_json::json!(h);
+    }
+    if let Some(b) = &body.verdict_body {
+        report_obj["verdict_body"] = serde_json::json!(b);
+    }
+    if let Some(stats) = &body.stats {
+        report_obj["stats"] = stats.clone();
+    }
+    if let Some(v) = &body.verdict {
+        report_obj["verdict"] = serde_json::json!(v);
+    }
+    let mut report_obj = match crate::reviews::normalize_report_shape(report_obj) {
+        Ok(v) => v,
+        Err(problem) => return Ok(*problem),
+    };
+    let now = now_unix();
+    report_obj
+        .as_object_mut()
+        .expect("normalize_report_shape guarantees an object")
+        .insert("generated_at".to_string(), serde_json::json!(now));
+    let report_json = serde_json::to_string(&report_obj)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let import_batch_id = format!("batch_{}", annotations::short_random_hex());
+    let author = body.author.clone().unwrap_or_else(|| "claude".to_string());
+    let new_row = prepared.new_row.clone();
+    let import_batch_id_c = import_batch_id.clone();
+    let verdict_state = body.verdict.clone();
+    let verdict_note = body.verdict_note.clone();
+    let outcome = state
+        .store
+        .run_blocking(move |store| {
+            store.compose_review_doc(
+                &new_row,
+                repo_id,
+                &import_batch_id_c,
+                &author,
+                &imported,
+                mode,
+                &report_json,
+                verdict_state
+                    .as_deref()
+                    .map(|s| (s, verdict_note.as_deref())),
+                now,
+            )
+        })
+        .await?;
+
+    // ONE event for the whole transaction — never three, and never one per
+    // finding (the same rule V70-R's own `compose` follows).
+    emit_review_changed(&state.bus, id, &review.repo, "compose", false);
+
+    let (doc_out, _, _) =
+        doc_routes::load_doc_out(&state, id, Some(&target_ps.ps_number.to_string()), true).await?;
+
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "schema": review_doc::SCHEMA,
+            "dry_run": false,
+            "review_id": id,
+            "ps_number": target_ps.ps_number,
+            "revision": outcome.revision,
+            "import_batch_id": import_batch_id,
+            "findings": {
+                "created": outcome.findings.created,
+                "updated": outcome.findings.updated,
+                "superseded": outcome.findings.superseded,
+                "unchanged": outcome.findings.unchanged,
+            },
+            "report_set": outcome.report_set,
+            "verdict_changed": outcome.verdict_changed,
+            "lint": prepared.lint,
+            "doc": doc_out,
         })),
     )
         .into_response())
@@ -1099,6 +1492,15 @@ pub async fn create_manual_finding_route(
         import_batch_id: "manual".to_string(),
         origin: store::FINDING_ORIGIN_MANUAL.to_string(),
         finding_author: Some(author),
+        // V73-K1 — a human-authored finding created through the v1 route
+        // carries no v2 axes and, deliberately, no fingerprint: a manual
+        // finding is never matched by content (V0024's origin rule says a
+        // compose may not adopt or supersede one), so giving it one would
+        // suggest a reconciliation that must never happen.
+        act: "issue".to_string(),
+        blocking: false,
+        cites_json: None,
+        fingerprint: None,
     };
     let slug_c = slug.clone();
     let row = state

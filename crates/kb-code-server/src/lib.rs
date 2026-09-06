@@ -390,6 +390,9 @@ pub mod resolve;
 pub mod review_analytics;
 pub mod review_comments;
 pub mod review_distill;
+/// V73-K1 — `kbc-review/1`: the review document, its refs, cards, lint and
+/// HTML export. See `review_doc`'s own module doc for the four rules.
+pub mod review_doc;
 pub mod review_findings;
 pub mod review_gate;
 pub mod review_github_export;

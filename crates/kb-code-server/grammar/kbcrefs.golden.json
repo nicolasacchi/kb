@@ -1,0 +1,182 @@
+{
+  "schema": "kbc-refs/1",
+  "note": "GENERATED-THEN-REVIEWED fixture, shared by the Rust parser (crates/kb-code-server/src/review_doc/refs.rs) and its future TS mirror (web-code/src/lib/kbcRefs.ts, K2). Both walk THESE bytes; neither is derived from the other. `class` is one of ref | wikilink | malformed; `parsed` is the exact serde serialization of the Rust `Ref` and is present only for `class: \"ref\"`. Add a case here when you touch the grammar. The fixture lives on the CRATE side because the Rust builder stage's Docker context is `COPY crates ./crates` — web-code/ is not in it.",
+  "cases": [
+    {
+      "body": "code:app/models/order.rb:120-134@a1b2c3d",
+      "class": "ref",
+      "parsed": {
+        "scheme": "code",
+        "raw": "code:app/models/order.rb:120-134@a1b2c3d",
+        "path": "app/models/order.rb",
+        "line": 120,
+        "line_end": 134,
+        "sha": "a1b2c3d"
+      }
+    },
+    {
+      "body": "code:app/models/order.rb:12",
+      "class": "ref",
+      "parsed": {
+        "scheme": "code",
+        "raw": "code:app/models/order.rb:12",
+        "path": "app/models/order.rb",
+        "line": 12
+      }
+    },
+    {
+      "body": "code:app/models/order.rb",
+      "class": "ref",
+      "parsed": {
+        "scheme": "code",
+        "raw": "code:app/models/order.rb",
+        "path": "app/models/order.rb"
+      }
+    },
+    {
+      "body": "code:app/mail@er.rb",
+      "class": "ref",
+      "parsed": {
+        "scheme": "code",
+        "raw": "code:app/mail@er.rb",
+        "path": "app/mail@er.rb"
+      }
+    },
+    {
+      "body": "code:app/x.rb@deadbeefcafe1234",
+      "class": "ref",
+      "parsed": {
+        "scheme": "code",
+        "raw": "code:app/x.rb@deadbeefcafe1234",
+        "path": "app/x.rb",
+        "sha": "deadbeefcafe1234"
+      }
+    },
+    {
+      "body": "sym:Namespace::Class#method",
+      "class": "ref",
+      "parsed": {
+        "scheme": "sym",
+        "raw": "sym:Namespace::Class#method",
+        "container": "Namespace::Class",
+        "name": "method"
+      }
+    },
+    {
+      "body": "sym:kb_core::config::ServerSection",
+      "class": "ref",
+      "parsed": {
+        "scheme": "sym",
+        "raw": "sym:kb_core::config::ServerSection",
+        "container": "kb_core::config",
+        "name": "ServerSection"
+      }
+    },
+    {
+      "body": "sym:checkout",
+      "class": "ref",
+      "parsed": {
+        "scheme": "sym",
+        "raw": "sym:checkout",
+        "name": "checkout"
+      }
+    },
+    {
+      "body": "ent:Shop::Order",
+      "class": "ref",
+      "parsed": {
+        "scheme": "ent",
+        "raw": "ent:Shop::Order",
+        "fqn": "Shop::Order"
+      }
+    },
+    {
+      "body": "finding:f-7",
+      "class": "ref",
+      "parsed": {
+        "scheme": "finding",
+        "raw": "finding:f-7",
+        "slug": "f-7"
+      }
+    },
+    {
+      "body": "finding:f-dedup-race",
+      "class": "ref",
+      "parsed": {
+        "scheme": "finding",
+        "raw": "finding:f-dedup-race",
+        "slug": "f-dedup-race"
+      }
+    },
+    {
+      "body": "gh:comment/12345",
+      "class": "ref",
+      "parsed": {
+        "scheme": "gh",
+        "raw": "gh:comment/12345",
+        "kind": "comment",
+        "id": "12345"
+      }
+    },
+    {
+      "body": "gh:pr/42",
+      "class": "ref",
+      "parsed": {
+        "scheme": "gh",
+        "raw": "gh:pr/42",
+        "kind": "pr",
+        "id": "42"
+      }
+    },
+    {
+      "body": "kb:research/9f8b7182d433",
+      "class": "ref",
+      "parsed": {
+        "scheme": "kb",
+        "raw": "kb:research/9f8b7182d433",
+        "kb": "research",
+        "id": "9f8b7182d433"
+      }
+    },
+    {
+      "body": "hunk:app/models/order.rb@2#3",
+      "class": "ref",
+      "parsed": {
+        "scheme": "hunk",
+        "raw": "hunk:app/models/order.rb@2#3",
+        "path": "app/models/order.rb",
+        "ps": 2,
+        "index": 3
+      }
+    },
+    {
+      "body": "hunk:app/models/order.rb@ps2#0",
+      "class": "ref",
+      "parsed": {
+        "scheme": "hunk",
+        "raw": "hunk:app/models/order.rb@ps2#0",
+        "path": "app/models/order.rb",
+        "ps": 2,
+        "index": 0
+      }
+    },
+    { "body": "Order", "class": "wikilink" },
+    { "body": "Order|the order model", "class": "wikilink" },
+    { "body": "docs/design", "class": "wikilink" },
+    { "body": "notascheme:x", "class": "wikilink" },
+    { "body": "", "class": "wikilink" },
+    { "body": "code:", "class": "malformed" },
+    { "body": "code:app/x.rb:9-2", "class": "malformed" },
+    { "body": "sym:", "class": "malformed" },
+    { "body": "ent:", "class": "malformed" },
+    { "body": "ent:Shop Order", "class": "malformed" },
+    { "body": "finding:F-7", "class": "malformed" },
+    { "body": "finding:seven", "class": "malformed" },
+    { "body": "gh:nope/1", "class": "malformed" },
+    { "body": "gh:comment", "class": "malformed" },
+    { "body": "kb:solo", "class": "malformed" },
+    { "body": "hunk:app/x.rb@2", "class": "malformed" },
+    { "body": "hunk:app/x.rb@two#1", "class": "malformed" },
+    { "body": "hunk:app/x.rb@0#1", "class": "malformed" }
+  ]
+}
