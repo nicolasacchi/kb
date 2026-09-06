@@ -275,7 +275,7 @@ async fn build_doc_out(
     resolve: bool,
 ) -> Result<DocOut, ApiError> {
     let refs = review_doc::all_refs(doc);
-    let doc_c = doc.clone_for_worker();
+    let doc_c = doc.clone();
     let ps_c = ps.clone();
     let root_c = repo_root.to_path_buf();
     let changed_paths = inputs.changed_paths.clone();
@@ -842,13 +842,4 @@ pub async fn prepare_doc(
         cards,
         new_row,
     }))
-}
-
-impl ReviewDoc {
-    /// A cheap owned copy for a `run_blocking` closure. (`ReviewDoc` is
-    /// plain data; this exists only to make the move explicit at the call
-    /// site rather than reading as an accidental deep clone.)
-    fn clone_for_worker(&self) -> ReviewDoc {
-        self.clone()
-    }
 }
