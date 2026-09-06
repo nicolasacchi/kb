@@ -182,7 +182,7 @@ gix = { version = "0.85", default-features = false, features = ["blame", "revisi
 # committed yet — `gix`'s own sha1 feature only hashes objects it reads
 # FROM the object database, it has no "hash these arbitrary bytes as if
 # they were a blob" entry point.
-sha1 = "0.10.6"
+sha1 = "0.11.0"
 
 # tree-sitter 0.26.x core + the Wave-1 grammar set. Grammar crates pin
 # against the ABI-stable `tree-sitter-language` crate rather than
