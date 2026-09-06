@@ -252,7 +252,7 @@ fn char_indices_to_utf16_ranges(haystack: &str, indices: &mut Vec<u32>) -> Vec<[
 pub fn identifier_atoms(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let push = |atom: String, out: &mut Vec<String>| {
-        if !atom.is_empty() && !out.iter().any(|a| *a == atom) {
+        if !atom.is_empty() && !out.contains(&atom) {
             out.push(atom);
         }
     };

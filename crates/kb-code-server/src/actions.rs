@@ -21,10 +21,10 @@
 //! 2. **Mutating rows are ABSENT for a bearer caller, not disabled.** The
 //!    verdict is the SERVER's ([`kb_server::middleware::is_loopback_origin`]
 //!    + `[review] remote_mutations`), never a client guess — risk 9 of the
-//!    selection-actions report. The response SAYS the group was withheld and
-//!    why ([`ActionsOut::mutations`]); that is a property of the CALLER, not
-//!    a confirmation that any particular mutating route exists (the same
-//!    thing `GET /api/repos`'s `loopback` bool already reports).
+//!      selection-actions report. The response SAYS the group was withheld and
+//!      why ([`ActionsOut::mutations`]); that is a property of the CALLER, not
+//!      a confirmation that any particular mutating route exists (the same
+//!      thing `GET /api/repos`'s `loopback` bool already reports).
 //! 3. **"Ask here" on every target kind.** D5 makes it a REQUIRED row for
 //!    every kind — widening the shipped question channel — and
 //!    `every_target_kind_offers_ask_here` fails the build if a kind ever

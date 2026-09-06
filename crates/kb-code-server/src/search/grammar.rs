@@ -961,10 +961,8 @@ pub fn normalize(p: &ParsedQuery) -> String {
                     parts.push(format!("group:{}", g.as_str()));
                 }
             }
-            "facets" => {
-                if p.facets {
-                    parts.push("facets:1".to_string());
-                }
+            "facets" if p.facets => {
+                parts.push("facets:1".to_string());
             }
             _ => {}
         }
