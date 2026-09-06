@@ -1571,13 +1571,30 @@ export default function ArtifactPane({
   const isIndexFile = filename.toLowerCase() === "index.html";
 
   const handleSelection = useCallback(
-    (anchor: SelectionAnchor, rect: SelectionRect, scrollY: number) =>
-      onSelectionChange({
+    (anchor: SelectionAnchor, rect: SelectionRect, scrollY: number) => {
+      const captured: PaneSelection = {
         anchor,
         rect,
         sectionId: currentSectionRef.current,
         scrollY,
-      }),
+      };
+      // Publish the capture into `selectionRef` SYNCHRONOUSLY, before the
+      // state round trip. That ref is otherwise only assigned during render,
+      // so it lags `selection` by a commit — and the `kb:scroll` branch above
+      // reads it to decide whether the artifact has MOVED since this rect was
+      // frozen. The two debounces routinely collide right after a resume jump
+      // (the runtime's 500ms scroll beacon vs annotate.ts's 150ms relay), and
+      // a beacon landing in the same task as the `cm:selection` it follows
+      // used to find a null ref, take the `!heldSel` "nothing to protect"
+      // branch, and clear a selection that had not moved by so much as a
+      // pixel — both updates landing before paint, so the floater never
+      // rendered at all (no flash to notice, and nothing re-posts: the relay
+      // only fires on a fresh selectionchange). Writing here makes the ref
+      // mean what its only reader needs — the last selection CAPTURED, not
+      // the last one rendered.
+      selectionRef.current = captured;
+      onSelectionChange(captured);
+    },
     [onSelectionChange],
   );
 
