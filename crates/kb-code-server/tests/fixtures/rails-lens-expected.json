@@ -360,7 +360,7 @@
     "dst_path": "app/controllers/trade/rounds_controller.rb",
     "dst_symbol": "trade/rounds#index",
     "trust": "likely",
-    "extra_json": null
+    "extra_json": "{\"verb\":\"GET\",\"path\":\"/trade/rounds\"}"
   },
   {
     "kind": "route_action",
@@ -371,7 +371,7 @@
     "dst_path": "app/controllers/trade/rounds_controller.rb",
     "dst_symbol": "trade/rounds#show",
     "trust": "likely",
-    "extra_json": null
+    "extra_json": "{\"verb\":\"GET\",\"path\":\"/trade/rounds/:id\"}"
   },
   {
     "kind": "route_action",
@@ -382,7 +382,7 @@
     "dst_path": "app/controllers/trade/rounds_controller.rb",
     "dst_symbol": "trade/rounds#search_pharmacies",
     "trust": "likely",
-    "extra_json": null
+    "extra_json": "{\"verb\":\"GET\",\"path\":\"/trade/rounds/search_pharmacies\"}"
   },
   {
     "kind": "route_action",
@@ -393,7 +393,7 @@
     "dst_path": "app/controllers/trade/rounds_controller.rb",
     "dst_symbol": "trade/rounds#merge_catalogs",
     "trust": "likely",
-    "extra_json": null
+    "extra_json": "{\"verb\":\"POST\",\"path\":\"/trade/rounds/:id/merge_catalogs\"}"
   },
   {
     "kind": "route_action",
@@ -404,7 +404,7 @@
     "dst_path": "app/controllers/trade/catalogs_controller.rb",
     "dst_symbol": "trade/catalogs#create",
     "trust": "likely",
-    "extra_json": null
+    "extra_json": "{\"verb\":\"POST\",\"path\":\"/trade/rounds/:round_id/catalogs\"}"
   },
   {
     "kind": "spec_subject",

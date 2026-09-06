@@ -830,7 +830,13 @@ mod tests {
             !V71_G0_ROUTES.is_empty(),
             "the unit declares at least one route"
         );
-        for c in V71_G0_ROUTES {
+        // V72-I1 joins the SAME walk rather than starting a second one:
+        // one loop over every declared contract, so a route added to any
+        // unit's list is checked here by construction.
+        for c in V71_G0_ROUTES
+            .iter()
+            .chain(crate::rails::routes::V72_I1_ROUTES.iter())
+        {
             let nested = c
                 .path
                 .strip_prefix("/api")

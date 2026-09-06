@@ -884,6 +884,32 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // surface no consumer asked for. `cors_layer_route_set_is_pinned`
         // asserts this route carries no ACAO.
         .route("/doc-refs", get(doclens::sync::doc_refs_route))
+        // V72-I1 — `rails/1` (`GET /api/rails/*`): the Rails ENTITY INDEX,
+        // a per-request join over `entity_defs` + `rails_edges` + the
+        // mirror index, plus the orphan triage report. Ordinary
+        // `auth_bearer` browsing reads on THIS router beside
+        // `/framework/edges` and `/entity`, for the same reason: every fact
+        // they return is derived from what those two already serve, nothing
+        // mutates, and no transcript text is involved. Appended here,
+        // delimited, rather than interleaved with any concurrent route
+        // addition elsewhere in this file.
+        // `crate::rails::routes::V72_I1_ROUTES` declares this family; the
+        // same unit test that walks V71-G0's declaration walks this one
+        // against THIS file, so a route declared there and never registered
+        // here fails the build rather than shipping dead.
+        .route("/rails/home", get(crate::rails::routes::home_route))
+        .route("/rails/models", get(crate::rails::routes::models_route))
+        .route(
+            "/rails/controllers",
+            get(crate::rails::routes::controllers_route),
+        )
+        .route("/rails/actions", get(crate::rails::routes::actions_route))
+        .route("/rails/routes", get(crate::rails::routes::routes_route))
+        .route("/rails/jobs", get(crate::rails::routes::jobs_route))
+        .route("/rails/mailers", get(crate::rails::routes::mailers_route))
+        .route("/rails/views", get(crate::rails::routes::views_route))
+        .route("/rails/concerns", get(crate::rails::routes::concerns_route))
+        .route("/rails/orphans", get(crate::rails::routes::orphans_route))
         // invariant #4 — the SAME `auth_bearer` middleware kb-server runs,
         // imported rather than copied (see the Cargo.toml dependency note).
         .layer(from_fn_with_state(auth.clone(), auth_bearer));

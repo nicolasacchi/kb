@@ -867,3 +867,97 @@ Not in the HAML unit, by design: the universal `outline/1` contract and the
 injection-aware pipeline generalisation (H2a — but the HAML→Ruby fragment
 mapping is written so H2a can lift it), the SPA's consumption of HAML in
 the Rails lens (I2), and any Herb/ERB change (gated off by D7).
+
+## Rails — `rails/1`, the entity index (v7.2)
+
+kb-code v7.2 turns the `rails-lens/1` convention edges into the NOUNS a
+Rails developer names. Design of record: D7 + Track I of
+`docs/research/kb-code-v7-continuum-2026-09.html`.
+
+**`rails/1` (`GET /api/rails/*`) — the Rails entity index.** A derived VIEW
+that joins three things this daemon already stores: the entity index
+(`entities/1`, every Ruby `class`/`module` definition site), the Rails lens
+(`rails-lens/1`, the convention edges extracted at ingest) and the mirror
+index (`files`/`symbols`, for the templates that are not constants and the
+methods that are not entities). Eight nouns come out — `model`,
+`controller`, `action`, `route`, `job`, `mailer`, `view`, `concern`.
+
+Computed **per request and persisted nowhere**: there is no `rails_entity`
+table and no migration. The join is a fold over reads this daemon already
+serves, in the posture root invariant #2 states for the whole doc↔code
+bridge and that `codelens/1` and `entities/1` already hold — a derived table
+would buy latency at the price of a fourth thing that can be stale.
+
+Every row is an **address** (path, line, `blob_sha`, plus an FQN or a route
+triple) carrying its trust class and the **witnesses** that produced it —
+which convention, which edge, which definition — so a reader can check the
+arithmetic rather than trust the badge. **No row is ever `exact`**: the
+class is minted by one function whose return type is the Rails lens's own
+two-variant `Trust`, so a directory name and an English pluralisation
+structurally cannot reach the oracle bar. Two independent witnesses, a live
+blob and a Zeitwerk config that could be read buys `likely`; a drifted blob
+or a degraded config demotes to `candidate`.
+
+What it cannot say, it says: class ancestry is not indexed (there is no
+entity-edge table yet), so a "model" is a class under an `app/models` root
+corroborated by the lens's own `association`/`validation`/`scope`/`callback`
+edges — not a proven `ApplicationRecord` descendant. Method visibility is
+not indexed either, so the `action` noun resolves `public` with a cheap line
+scan of the controller source under a hard read budget; past the budget an
+action reads `visibility: "unknown"`, is flagged, and the response is
+`partial` with the budget named.
+
+Routes now carry their **address**. `rails-lens/1`'s `route_action` edges
+gained `extra_json = {"verb": "GET", "path": "/orders/:id"}`, reconstructed
+by the same DSL walk that resolves the controller (two independent axes:
+`namespace` moves both the module and the URL, `scope module:` only the
+first, `scope path:` only the second; `member` contributes `:id`, a nested
+resource the parent's `:<singular>_id`, and a leading `/` escapes the
+enclosing scope). This is additive content, **not** a `rails-lens/2` bump —
+no `kind` is added and no `kind`'s meaning changes — so an edge written by
+an older binary simply has no address until its file is re-extracted, and
+reads as unknown rather than `/`.
+
+Routes:
+
+- `GET /api/rails/home?repo=` — the **passport**: framework detection, the
+  Rails version resolved from `Gemfile.lock` (else `Gemfile`, else honestly
+  absent), TRUE totals per noun, lens freshness (edge count, source-file
+  count, orphaned source paths, grammar version, index generation), the
+  Zeitwerk read state, and `honesty`.
+- `GET /api/rails/{models|controllers|actions|routes|jobs|mailers|views|concerns}?repo=[&q=][&limit=][&offset=]`
+  — one noun's rows. `q=` is a case-insensitive substring over name and
+  path, applied BEFORE `total` is counted, so `total` stays the true one;
+  `truncated` names the gap.
+- `GET /api/rails/orphans?repo=` — the **orphan report v1**: six lanes
+  (routes with no reachable action · public actions with no route · views no
+  render edge reaches · models referenced only from their own file · jobs
+  never enqueued · locale keys never referenced). Every lane states its own
+  witness and **why it might be wrong**, and the report carries a caption
+  saying the whole thing is derived from likely/candidate convention edges —
+  a triage queue to read, never a verdict to act on unread.
+
+Every response reports one of four read states (`ok` / `empty` with a reason
+/ `partial` with the budget that bit / `error`). All ten routes are ordinary
+`auth_bearer` browsing reads, declared as `RouteContract`s in
+`kb_code_server::rails::routes::V72_I1_ROUTES` and walked from both the
+server and the CLI side by the same dead-surface tests V71-G0 added.
+
+**kbcq/1 Rails facet atoms.** The search grammar gains `model:`,
+`controller:`, `action:`, `route:` (matching either the verb+path address or
+the `controller#action` target), `job:` and the generic `rails:<noun>` —
+whose value vocabulary is `crate::rails::NOUNS` itself, so a ninth noun
+cannot exist on one surface and not the other. Each resolves ONCE per
+request to the set of files that noun lives in; the files, symbols and text
+lanes keep only hits inside it, and the narrowed section carries a
+`caption` naming the noun and the file count. Atoms are ORed with each
+other and ANDed with every other filter. They need a SINGLE repo in scope —
+with more than one the atom is not applied and the caption says why, rather
+than matching a same-named path in the wrong repo. Same lock-step
+discipline as every other key: the TS mirror (`web-code/src/lib/kbcq.ts`)
+and the one shared fixture `crates/kb-code-server/grammar/kbcq.golden.json`.
+
+CLI: `kb-code rails {home,models,controllers,actions,routes,jobs,mailers,views,concerns,orphans}
+--repo R [--q TEXT] [--limit N] [--offset N] [--json]`. The `--json` form is
+the standard envelope with `schema: "rails/1"`; the text form is compact
+enough for an agent, and every number it prints is the daemon's own.
