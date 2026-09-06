@@ -32,6 +32,24 @@ updates:
       e2e-minor-patch:
         update-types: ["minor", "patch"]
 
+  - package-ecosystem: npm
+    directory: "/web-code"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-code-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/web-code/e2e"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      web-code-e2e-minor-patch:
+        update-types: ["minor", "patch"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
