@@ -1052,18 +1052,28 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(file.lang, "erb");
-        // "We looked": the rows exist, and they are empty.
-        assert!(store.has_symbols("hashErb", lang::ERB.salt).unwrap());
         assert!(store
             .symbols_for_blob("hashErb", lang::ERB.salt)
             .unwrap()
             .is_empty());
+        // "We looked, and there is nothing" is observable on the
+        // HIGHLIGHTS side: `put_highlights` writes one row carrying the
+        // (empty) span list, so `highlights_for_blob` answers `Some([])`
+        // rather than `None`.
         assert_eq!(
             store
                 .highlights_for_blob("hashErb", lang::ERB.salt)
                 .unwrap(),
             Some(Vec::new())
         );
+        // It is NOT observable on the symbols side, and that asymmetry
+        // predates this unit: `has_symbols` is `COUNT(*) > 0` over the
+        // `symbols` rows themselves, so a zero-symbol derivation leaves no
+        // marker and `index_file` re-runs its (empty) extraction on every
+        // visit. Pinned here rather than asserted away — the wire's own
+        // "no symbols by tier" answer comes from `tier`, which is exactly
+        // why that field exists.
+        assert!(!store.has_symbols("hashErb", lang::ERB.salt).unwrap());
     }
 
     /// V72-H1 — D7's stem table, through the real pipeline: a `Rakefile`

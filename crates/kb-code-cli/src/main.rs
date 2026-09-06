@@ -5576,8 +5576,8 @@ async fn syntax_cmd(daemon: &str, json: bool) -> Result<()> {
     }
     let rows = body["rows"].as_array().cloned().unwrap_or_default();
     println!(
-        "{:<12} {:<15} {:<30} {}",
-        "LANG", "TIER", "GRAMMAR", "ADDRESSED BY"
+        "{:<12} {:<15} {:<30} ADDRESSED BY",
+        "LANG", "TIER", "GRAMMAR"
     );
     let mut notes: Vec<(String, String)> = Vec::new();
     for r in &rows {
