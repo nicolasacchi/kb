@@ -4,12 +4,15 @@
 
   This file is a worked example of the placeholder grammar, not a house
   style: `kb-code review render <id> --template <file.html>` takes the
-  operator's own template instead, and everything outside a `{{name}}` is
+  operator's own template instead, and everything outside a placeholder is
   copied byte-for-byte.
 
-  Every `{{name}}` below is one of `review_doc::render::PLACEHOLDERS`; a
+  Every placeholder below is one of `review_doc::render::PLACEHOLDERS`; a
   `{{…}}` this renderer does not know is left alone and reported in
-  `unknown_placeholders`, so a typo is never a silent hole.
+  `unknown_placeholders`, so a typo is never a silent hole. (That is why
+  this comment spells none of them out literally: the scanner does not skip
+  HTML comments, and it would honestly report a documentation example as an
+  unfilled placeholder.)
 
   kb-code deliberately does NOT emit a `<template id="kb-prompt">` here.
   That convention belongs to kb (root invariant #5), and the kb-side

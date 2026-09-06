@@ -153,5 +153,10 @@
     "version": 31,
     "name": "review_hunk_viewed",
     "checksum": "4542384527529545933"
+  },
+  {
+    "version": 32,
+    "name": "review_docs_and_findings_v2",
+    "checksum": "1911319134507379863"
   }
 ]

@@ -16881,7 +16881,7 @@ fn review_doc_request(
         query.push(("ps", p.to_string()));
     }
     if resolve {
-        query.push(("resolve", "1".to_string()));
+        query.push(("resolve", "true".to_string()));
     }
     (kb_code_server::review_doc::routes::DOC_ROUTE.path, query)
 }
