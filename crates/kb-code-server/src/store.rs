@@ -1504,23 +1504,88 @@ impl Store {
     /// so this sweep can never touch a blob whose ONLY rows are under a
     /// non-current salt (an ad hoc test fixture, a downgrade, or a
     /// not-yet-recognised future language all fall through untouched).
-    /// Call once at boot (`lib.rs`'s `bind_and_spawn`/`build_state_for_test`,
-    /// after every repo is registered), never fatal — mirrors
-    /// `doclens::pins::prune_stale_pins`'s own boot posture (caller logs the
-    /// returned counts).
+    /// Runs [`Self::sweep_stale_salt_page`] to completion. Convenience for
+    /// SMALL stores only — in-crate tests and `build_state_for_test`'s
+    /// fixture. The daemon itself must NOT call this: on a production-sized
+    /// store a full pass is hours of random I/O, so `bind_and_spawn` drives
+    /// the paged form from a background task instead (V72-B0 — see
+    /// `lib::spawn_stale_salt_sweep`).
     pub fn sweep_stale_salt_derived(&self) -> Result<StaleSaltSweepCounts> {
+        let mut totals = StaleSaltSweepCounts::default();
+        let mut cursor: Option<String> = None;
+        loop {
+            let (counts, next) =
+                self.sweep_stale_salt_page(cursor.as_deref(), STALE_SALT_SWEEP_PAGE)?;
+            totals.symbols += counts.symbols;
+            totals.highlights += counts.highlights;
+            totals.occurrences += counts.occurrences;
+            match next {
+                Some(c) => cursor = Some(c),
+                None => return Ok(totals),
+            }
+        }
+    }
+
+    /// V72-B0 — ONE bounded, resumable page of the sweep above, in its own
+    /// short transaction.
+    ///
+    /// The sweep's driver is `files.blob_hash`, so a page is "the next
+    /// `page` distinct blob hashes after `after`" (an `idx_files_blob_hash`
+    /// range scan — sequential and cheap), and the three DELETEs are
+    /// restricted to exactly those hashes. That bounds BOTH the work and,
+    /// crucially, how long this holds the store's single connection mutex.
+    /// The un-paged form's `blob_hash IN (SELECT blob_hash FROM files)` made
+    /// every statement O(all live blobs) random index seeks inside ONE
+    /// transaction — hours on a production store, with the mutex held for
+    /// all of it, so no read could proceed either.
+    ///
+    /// Returns the page's counts and the cursor to resume from; `None` once
+    /// the last page has been swept (a SHORT page is the end).
+    ///
+    /// The delete PREDICATE is unchanged — partitioning the driver cannot
+    /// change which rows match, because both remaining conditions (`salt NOT
+    /// IN cur`, and the correlated current-salt-sibling `EXISTS`) are
+    /// per-`blob_hash`, and every blob falls in exactly one page.
+    pub fn sweep_stale_salt_page(
+        &self,
+        after: Option<&str>,
+        page: usize,
+    ) -> Result<(StaleSaltSweepCounts, Option<String>)> {
         let (cte, salts) = current_salt_cte();
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        let symbols = sweep_stale_salt_table(&tx, &cte, &salts, "symbols")?;
-        let highlights = sweep_stale_salt_table(&tx, &cte, &salts, "highlights")?;
-        let occurrences = sweep_stale_salt_table(&tx, &cte, &salts, "occurrences")?;
+        let blobs: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT blob_hash FROM files WHERE blob_hash > ?1 \
+                 ORDER BY blob_hash LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![after.unwrap_or(""), page as i64], |r| r.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        if blobs.is_empty() {
+            return Ok((StaleSaltSweepCounts::default(), None));
+        }
+        let symbols = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, "symbols")?;
+        let highlights = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, "highlights")?;
+        let occurrences = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, "occurrences")?;
         tx.commit()?;
-        Ok(StaleSaltSweepCounts {
-            symbols,
-            highlights,
-            occurrences,
-        })
+        // A SHORT page means `files` held nothing after it — stop rather
+        // than pay one more empty round trip.
+        let next = if blobs.len() < page {
+            None
+        } else {
+            blobs.last().cloned()
+        };
+        Ok((
+            StaleSaltSweepCounts {
+                symbols,
+                highlights,
+                occurrences,
+            },
+            next,
+        ))
     }
 
     // --- highlights (blob-keyed) -----------------------------------------
@@ -5595,19 +5660,34 @@ impl StaleSaltSweepCounts {
     }
 }
 
-/// One table's worth of [`Store::sweep_stale_salt_derived`] — see that fn's
-/// doc for the exact delete condition. Free fn (not a `Store` method):
-/// takes an open `Transaction` so all three tables' deletes share one tx.
+/// How many distinct `files.blob_hash` values one
+/// [`Store::sweep_stale_salt_page`] covers (V72-B0). Small on purpose: this
+/// is the unit of write-mutex hold time, and on a cold production store
+/// every blob costs a handful of random index seeks (~50/s on spinning
+/// disks), so a page is seconds, not hours.
+pub const STALE_SALT_SWEEP_PAGE: usize = 128;
+
+/// One table's worth of ONE [`Store::sweep_stale_salt_page`] — see that
+/// fn's doc for the exact delete condition and why paging the driver cannot
+/// change the result set. Free fn (not a `Store` method): takes an open
+/// `Transaction` so all three tables' deletes share one tx.
+///
+/// `blobs` is this page's driver set, bound as parameters — the V72-B0 fix
+/// for the un-paged `blob_hash IN (SELECT blob_hash FROM files)`, whose
+/// per-statement cost was O(every live blob) regardless of how few rows
+/// actually needed deleting.
 fn sweep_stale_salt_table(
     tx: &Transaction<'_>,
     cte: &str,
     salts: &[&'static str],
+    blobs: &[String],
     table: &str,
 ) -> Result<u64> {
+    let blob_slots = blobs.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
         "{cte}
          DELETE FROM {table}
-         WHERE blob_hash IN (SELECT blob_hash FROM files)
+         WHERE blob_hash IN ({blob_slots})
            AND salt NOT IN (SELECT salt FROM cur)
            AND EXISTS (
                  SELECT 1 FROM {table} t2
@@ -5615,7 +5695,12 @@ fn sweep_stale_salt_table(
                )"
     );
     let mut stmt = tx.prepare(&sql)?;
-    let bind: Vec<Box<dyn rusqlite::ToSql>> = salts.iter().map(|s| Box::new(*s) as _).collect();
+    // Bind order matches the SQL: the `cur` CTE's salts are written first
+    // (`{cte}` opens the statement), then this page's blob hashes.
+    let mut bind: Vec<Box<dyn rusqlite::ToSql>> = salts.iter().map(|s| Box::new(*s) as _).collect();
+    for b in blobs {
+        bind.push(Box::new(b.clone()));
+    }
     let n = stmt.execute(rusqlite::params_from_iter(bind.iter()))?;
     Ok(n as u64)
 }
@@ -8989,6 +9074,87 @@ mod tests {
             1,
             "a fixture-only blob with no current sibling must survive the sweep"
         );
+    }
+
+    /// V72-B0 — the property the boot fix rests on: one page touches ONLY
+    /// its own slice of `files.blob_hash`, the cursor advances, the walk
+    /// terminates, and the union over pages equals the un-paged result.
+    /// A page that silently swept the whole table would put the hours-long
+    /// transaction straight back onto the store's write mutex.
+    #[test]
+    fn sweep_stale_salt_page_is_bounded_resumable_and_totals_to_a_full_sweep() {
+        let (_tmp, store) = open_temp();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        // Six blobs, each with one current-salt row and one genuinely stale
+        // sibling — deliberately more than the page size used below.
+        let hashes: Vec<String> = (0..6).map(|i| format!("hash{i}")).collect();
+        for (i, h) in hashes.iter().enumerate() {
+            store
+                .upsert_file(repo_id, &format!("f{i}.rs"), h, "rust", 10)
+                .unwrap();
+            store
+                .replace_symbols(h, crate::lang::RUST.salt, &[sample_symbol(0, "cur")])
+                .unwrap();
+            store
+                .lock()
+                .execute(
+                    "INSERT INTO symbols (blob_hash, salt, ordinal, name, kind, line_start, \
+                     line_end, col_start, col_end) VALUES (?1, 'rust@stale-fake', 0, 'old', \
+                     'fn', 1, 1, 0, 1)",
+                    params![h],
+                )
+                .unwrap();
+        }
+
+        // Page size 2 over 6 blobs: three full pages, then a short/empty one.
+        let mut cursor: Option<String> = None;
+        let mut swept = 0u64;
+        let mut seen_cursors: Vec<String> = Vec::new();
+        let mut pages = 0;
+        loop {
+            let (counts, next) = store.sweep_stale_salt_page(cursor.as_deref(), 2).unwrap();
+            pages += 1;
+            assert!(
+                counts.symbols <= 2,
+                "a page of 2 blobs can never delete more than 2 stale symbol rows, got {}",
+                counts.symbols
+            );
+            swept += counts.symbols;
+            match next {
+                Some(c) => {
+                    if let Some(prev) = seen_cursors.last() {
+                        assert!(&c > prev, "the cursor must advance strictly: {prev} -> {c}");
+                    }
+                    seen_cursors.push(c.clone());
+                    cursor = Some(c);
+                }
+                None => break,
+            }
+            assert!(pages < 20, "the paged sweep must terminate");
+        }
+        assert_eq!(swept, 6, "every blob's one stale row, exactly once");
+        assert!(pages >= 3, "6 blobs at 2 per page must take >= 3 pages");
+
+        for h in &hashes {
+            assert!(
+                store
+                    .symbols_for_blob(h, "rust@stale-fake")
+                    .unwrap()
+                    .is_empty(),
+                "{h}'s stale row must be gone"
+            );
+            assert_eq!(
+                store
+                    .symbols_for_blob(h, crate::lang::RUST.salt)
+                    .unwrap()
+                    .len(),
+                1,
+                "{h}'s current-salt row must survive"
+            );
+        }
+
+        // Idempotent: a second full walk finds nothing left to do.
+        assert_eq!(store.sweep_stale_salt_derived().unwrap().total(), 0);
     }
 
     fn sample_symbol(ordinal: u32, name: &str) -> Symbol {

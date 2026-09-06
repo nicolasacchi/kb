@@ -258,7 +258,32 @@ invariant #2 records).
     contradictory rows for the same blob under two salts, permanently.
     `Store::sweep_stale_salt_derived` is a one-time boot sweep for rows a
     PRE-FIX binary already left behind — it is a remedy for old damage, not
-    a substitute for purging on every write.
+    a substitute for purging on every write. *V72-B0 amendment (2026-09-06,
+    after a production boot hang):* "one-time" and "boot" are now literally
+    true, and the sweep NEVER runs on the boot path. It is driven from a
+    background `spawn_blocking` task (`lib::spawn_stale_salt_sweep`) in
+    bounded, resumable pages (`Store::sweep_stale_salt_page`, 128 distinct
+    `files.blob_hash` per short transaction), gated by a completion marker
+    (`<state>/kb-code/salt-sweep.marker`: the FNV-1a fingerprint of the
+    sorted `lang::ALL_LANGS` salt set, plus `done` or `after=<blob_hash>`),
+    and capped by a per-boot wall-clock budget that persists its cursor and
+    resumes on the next boot. The original shape — one un-paged
+    `blob_hash IN (SELECT blob_hash FROM files)` DELETE per table, in ONE
+    transaction, called INLINE before `TcpListener::bind` — cost O(every
+    live blob) random index seeks per table on every single boot; on the
+    production store (~165k files, ~1.6M symbol rows, spinning disks at
+    ~50 random reads/s) that is hours, and the daemon logged its migrations
+    and then never bound its port. Two rules follow, and breaking either
+    reintroduces an outage rather than a slowdown: **(a)** no whole-corpus
+    maintenance pass may ever sit between `Store::open` and the bind, and
+    **(b)** a background pass must stay PAGED — the store has ONE connection
+    mutex, so an hours-long transaction on a background thread does not fix
+    the outage, it only moves it from "never binds" to "binds and answers
+    nothing". The marker is deliberately a sidecar FILE, not a table: a new
+    migration would bump the refinery epoch and re-arm the kb-sibling/1
+    volume-ahead guard (kb invariant 2) — the same rollback trap that cost
+    13.5 h once already, and the reason the operator could not simply roll
+    back to the previous image when this hang hit.
 
 12. **The Rails lens's three read/write contracts, fixed together as one
     unit and easy to regress independently** (V70-A1, R1–R3,
