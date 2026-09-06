@@ -233,6 +233,24 @@ export function commentsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~comments`;
 }
 
+/// `railsUrl(repo, noun?)` → `/r/{repo}/~rails[?noun=view]` — V72-I2's
+/// `rails/1` dashboard. `noun` names the section the page opens on and is
+/// the ONLY thing this page puts in the URL: the per-section `q=` filter and
+/// the `limit`/`offset` page live in component state, because a push per
+/// keystroke is not a navigation (the same rule `nav/location.ts`'s
+/// transition table states for a cursor move).
+///
+/// Deliberately NOT modelled in the Location Contract's `PageId` set — same
+/// footing as `~browser?symbol=`/`~workspaces`, which also carry their own
+/// query state and round-trip verbatim through `mode: "other"`. Adding it
+/// there would require modelling `noun` on `Location` for no gain: nothing
+/// needs a push/replace RULING about moving between two `~rails` sections
+/// beyond the default (a different URL is a different place).
+export function railsUrl(repo: string, noun?: string): string {
+  const base = `${codeBasePath(repo, "")}/~rails`;
+  return noun ? `${base}?noun=${encodeURIComponent(noun)}` : base;
+}
+
 /// `hotspotsUrl(repo)` → `/r/{repo}/~hotspots` — V3.2-B3 attention hotspots.
 export function hotspotsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~hotspots`;

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import EmptyState from "../EmptyState";
 import { Icon } from "../icons";
 import TrustBadge from "../TrustBadge";
@@ -92,6 +92,12 @@ export interface PeekPanelProps {
   /// button. No new fetch: the rows handed over are the rows already on
   /// screen.
   onKeepInDrawer?(): void;
+  /// V72-I2 — an extra block rendered under the hover CARD (never under the
+  /// row list): the Rails atom table, when the hovered line carries
+  /// `rails-lens/1` edges. A `ReactNode` slot rather than a second card
+  /// component so the peek keeps ONE card body — the host owns what goes in
+  /// it, this panel owns the chrome.
+  cardExtra?: ReactNode;
 }
 
 /// V71-K4 — the keys this panel ITSELF acts on, and therefore the only
@@ -447,6 +453,7 @@ export default function PeekPanel({
   onRamp,
   scentFor,
   visitsFor,
+  cardExtra,
 }: PeekPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const bus = useCommands();
@@ -546,15 +553,18 @@ export default function PeekPanel({
         </button>
       </header>
       {state.card ? (
-        <HoverCardView
-          card={state.card}
-          currentRepo={currentRepo}
-          note={state.note}
-          onOpenDefinition={() => onActivate(resolveCandidateToRow(state.card!.candidate))}
-          onFindRefs={onFindRefs}
-          onFindCallers={onFindCallers}
-          onOpenDossier={onOpenDossier}
-        />
+        <>
+          <HoverCardView
+            card={state.card}
+            currentRepo={currentRepo}
+            note={state.note}
+            onOpenDefinition={() => onActivate(resolveCandidateToRow(state.card!.candidate))}
+            onFindRefs={onFindRefs}
+            onFindCallers={onFindCallers}
+            onOpenDossier={onOpenDossier}
+          />
+          {cardExtra}
+        </>
       ) : (
         <div className="kbc-peek__body" role="listbox" aria-label={`${MODE_LABEL[state.mode]} results`}>
           {state.loading && <div className="kbc-peek__hint kbc-peek__loading">Loading…</div>}

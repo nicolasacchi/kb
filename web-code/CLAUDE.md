@@ -1002,6 +1002,101 @@ second, quietly different answer to a question the server answers exactly.
 Absent (an older daemon), failed or in-flight all read `false`, the safe
 direction, and a refusal is still surfaced with the daemon's own message.
 
+## `~rails` and the Rails reader surfaces (`rails/1`, `V72-I2`)
+
+`routes/Rails.tsx` is a repo-scoped sentinel page mounted in `app.tsx`
+beside `~todos`/`~workspaces`/`~hotspots` — **not** a Desk center mode.
+It is deliberately NOT in `desk/centerModes.ts`'s `SHIPPED_CENTER_MODES`
+(`["reader", "dossier"]` since V72-G1.2): the landmark golden loops that
+list and asserts the five Desk regions for each entry, and `~rails` mounts
+no Desk at all — claiming `dashboard` there would make the golden green
+over nothing. A center mode is what the shell's MAIN region shows; this is
+a page beside the shell, which is the shape every other sentinel takes.
+§D1's "any new surface lands in an existing REGION" is satisfied the way
+every other sentinel satisfies it — one route, the app chrome above it.
+`~rails` is also deliberately **absent from the Location Contract's
+`PageId` set** (the `~browser?symbol=`/`~workspaces` precedent): it carries
+its own `?noun=` param and round-trips verbatim through `mode: "other"`,
+and nothing needs a push/replace ruling about moving between two of its
+sections beyond the default.
+
+**Every number on these surfaces is the daemon's.** `lib/railsCards.ts` is
+the whole pure half — card projection, facet chips, the honesty line, the
+page caption, the orphan index — and the components render it. The
+`kbc-tree/1` rule applies verbatim: *do not re-derive a count, an aggregate
+or a rank here*. Three consequences:
+
+- **One section is open at a time, and that is a COST decision.** `rails/1`
+  has no table: each noun list rebuilds the WHOLE per-request join, so
+  opening all eight on load would be ten full index builds per page view.
+  A closed section still shows its TRUE total (the passport carries every
+  count), and `RailsSection` fetches only when opened.
+- **Paging and filtering are server-side.** A section fetches
+  `/api/rails/<noun>?q=&limit=&offset=` and captions the page from that
+  response's own `offset`/`returned`/`total`/`truncated`. A client-side
+  `.filter()` or `.slice()` would make "12 of 300" a lie — `total` is on
+  the wire precisely so it cannot be.
+- **A Rails row is never drawn solid.** `trustClassOf` emits
+  `kbc-trust-likely` (dashed) or `kbc-trust-candidate` (dotted) and has no
+  `exact` branch; an unrecognised tier degrades DOWN. `styles/rails.css`
+  contains no `--exact` rule at all, so a solid Rails border cannot be
+  authored by accident. `rails::noun_trust`'s return type already makes
+  `exact` unrepresentable server-side — this is the display half of the
+  same guarantee.
+- **The orphan report is a triage queue.** Its `caption` and every lane's
+  `why` render VERBATIM, like `kbc-tree/1`'s honesty strip. Summarising
+  them turns "a row can be wrong because the lens does not read a template
+  language this app uses" into a verdict, which is the one thing
+  `orphans.rs` is written not to be.
+
+Two reader surfaces share the same language and live in the READER's
+chunk, which is why `styles/rails.css` is imported from `main.tsx` rather
+than from the lazy route:
+
+- **The Schema card** (`components/rails/SchemaCard.tsx`, a FOURTH
+  always-visible `InspectorRail` passport slot beside
+  `citedBy`/`frameworkCard`/`diagnosticsCard` — give it its own
+  `key={`schema:${path}`}` prefix, the cross-slot remount collision that
+  block documents is real). It parses the annotaterb `# == Schema
+  Information` banner out of the text `GET /api/file` already returned:
+  no second request, nothing persisted, recomputed per render, and
+  CAPTIONED as a client read rather than a daemon fact. `lib/annotaterb.ts`
+  carries the `comments/1` TODO — when `GET /api/comments/file` is on the
+  base, the block RANGE should come from its `generated` comment and the
+  caption must change with it.
+- **The Rails atom table** (`components/rails/RailsAtomCard.tsx`), rendered
+  through `PeekPanel`'s `cardExtra` slot under the hover card. It reuses
+  the ONE per-file `useFrameworkEdges` query `FrameworkCard` already makes
+  and picks the edges whose own `src_line` is the hovered line — addressing,
+  never resolving. Its action rows are `menuOrder(out.groups)` whole, in the
+  daemon's order; there is deliberately **no second executor** here, because
+  `.` (`action.panel`) at the target's address is the one home for running
+  an action. A route helper (`orders_path`) produces a SEARCH atom, not a
+  target: `frameworks::EdgeKind` has no route-helper variant, and inventing
+  a resolution the lens never minted is exactly what the trust ladder
+  exists to prevent.
+
+**D5 on both surfaces: nothing auto-navigates.** `rails-lens/1` has no
+`exact` tier by construction, so every target is an offered link.
+`rails.atom.open` (`Space l`) is not a counter-example — an explicit
+keystroke is the only thing allowed to move the reader onto a
+likely/candidate target, and with several atoms on the line it takes the
+first addressable one and says so rather than guessing.
+
+The five registry rows are `nav.rails` (`Space g R` — `Space g r` is
+Reviews; the dispatcher folds Shift into a printable character, so the
+shifted letter is one unambiguous token), `rails.section-next`/`prev`
+(`)`/`(`, the board scope's existing GROUP-step idiom under a disjoint
+`when: board == rails`), `rails.atom.open` (`Space l`, "link" — it first
+claimed `Space o`, which V73-K2b then took for `doc.card-open` in `review`
+scope; **`commands doctor`'s conflict pass cannot see a global/global
+collision at all**, since it skips any pair where either scope is `global`,
+so a leader letter must be checked against the whole registry by hand before
+it is claimed) and `rails.schema-fold`
+(`Space z` — **not** a bare `z`, which is a pure vim fold prefix inside the
+buffer; a global bare `z` would flip it to a MIXED prefix and change what
+the buffer guard does with every `z` chord).
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)
