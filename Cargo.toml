@@ -131,7 +131,7 @@ toml = "0.8"
 # Matches the version toml 0.8 already pulls into the lock (0.22.x).
 toml_edit = "0.22"
 regex = "1"
-getrandom = "0.2"
+getrandom = "0.4"
 mdns-sd = "0.13"
 
 # Text diffing for the artifact version timeline (Track V) — line-level
