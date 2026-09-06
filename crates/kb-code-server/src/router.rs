@@ -190,7 +190,8 @@
 //!
 //! **Phase N** ("Navigate") adds `GET`/`POST /bookmarks`,
 //! `PATCH`/`DELETE /bookmarks/{id}` (`bookmarks::{list,create,patch,delete}_
-//! bookmark`), `GET /todos` (`routes::list_todos`), and `GET /scopes`
+//! bookmark`), `GET /todos` (`routes::list_todos` — a filtered view over
+//! `comments/1` since V72-J1), the four `GET /comments*` reads, and `GET /scopes`
 //! (`routes::list_scopes`) — same ordinary `auth_bearer`-gated `api` router
 //! as `/sets`/`/annotations`: bookmarks are operator-owned places no more
 //! sensitive than a reading set; todos/scopes are pure index reads.
@@ -715,6 +716,28 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // Phase N — TODO index + named scopes (read-only browsing surface).
         .route("/todos", get(routes::list_todos))
         .route("/scopes", get(routes::list_scopes))
+        // V72-J1 (D8) — `comments/1`: the comment index. Ordinary
+        // `auth_bearer` READS of already-indexed metadata plus, for the
+        // `doc` lane, a bounded `git blame` behind the daemon-wide
+        // `git_fanout` semaphore — strictly less than `GET /api/blame`
+        // already serves, and nothing here mutates. `/todos` above is now
+        // a FILTERED VIEW over the same table (there is exactly one
+        // scanner over these lines); `crate::comments::V72_J1_ROUTES`
+        // declares this family and a unit test walks that declaration
+        // against THIS file.
+        .route("/comments", get(crate::comments::routes::list_comments))
+        .route(
+            "/comments/file",
+            get(crate::comments::routes::comments_file),
+        )
+        .route(
+            "/comments/summary",
+            get(crate::comments::routes::comments_summary),
+        )
+        .route(
+            "/comments/keywords",
+            get(crate::comments::routes::comments_keywords),
+        )
         // V71-G0 — `entities/1` (`GET /api/entity?repo=&ent=`) and
         // kbc-seq/1 (`GET /api/seq?repo=`). Both are ordinary
         // `auth_bearer` READS of already-indexed metadata — no working

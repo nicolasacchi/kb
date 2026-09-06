@@ -99,8 +99,16 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
     let git_repo = GitRepo::open(&repo_root).unwrap();
 
     let index_start = Instant::now();
-    let stats =
-        ingest::index_repo_working_tree(&store, &git_repo, repo_id, "HEAD", true, false).unwrap();
+    let stats = ingest::index_repo_working_tree(
+        &store,
+        &git_repo,
+        repo_id,
+        "HEAD",
+        true,
+        false,
+        &kb_code_server::comments::KeywordSet::defaults(),
+    )
+    .unwrap();
     eprintln!(
         "[latency] fixture indexed in {:?}: {} files, {} parsed, {} symbols",
         index_start.elapsed(),
@@ -476,7 +484,17 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         let bytes = src.as_bytes();
         let blob_hash = kb_code_server::ingest::git_blob_hash(bytes);
         std::fs::write(repo_root.join(syn_path), bytes).unwrap();
-        ingest::index_file(&store, repo_id, syn_path, bytes, &blob_hash, true, false).unwrap();
+        ingest::index_file(
+            &store,
+            repo_id,
+            syn_path,
+            bytes,
+            &blob_hash,
+            true,
+            false,
+            &kb_code_server::comments::KeywordSet::defaults(),
+        )
+        .unwrap();
         let li = kb_code_server::lang::detect(syn_path, Some(bytes)).unwrap();
         let syms = store.symbols_for_blob(&blob_hash, li.salt).unwrap();
         let decls: Vec<_> = syms
@@ -818,7 +836,17 @@ fn pr_room_reads_meet_their_p50_latency_budget_on_a_multi_review_fixture() {
         let bytes = src.as_bytes();
         let blob_hash = kb_code_server::ingest::git_blob_hash(bytes);
         std::fs::write(repo_root.join(syn_path), bytes).unwrap();
-        ingest::index_file(&store, repo_id, syn_path, bytes, &blob_hash, true, false).unwrap();
+        ingest::index_file(
+            &store,
+            repo_id,
+            syn_path,
+            bytes,
+            &blob_hash,
+            true,
+            false,
+            &kb_code_server::comments::KeywordSet::defaults(),
+        )
+        .unwrap();
         let li = kb_code_server::lang::detect(syn_path, Some(bytes)).unwrap();
         let symbols = store.symbols_for_blob(&blob_hash, li.salt).unwrap();
         let sites = kb_code_server::hierarchy::extract_call_sites(li.id, bytes, &symbols);

@@ -793,6 +793,41 @@ output = "index.scip"
 langs = ["rust"]
 ```
 
+### `[comments]`
+
+V72-J1's `comments/1` annotation keyword grammar (`crate::comments::
+keywords`). One key. Absent (or an all-blank list) ⇒ the shipped default
+set.
+
+**The override REPLACES the default set; it does not extend it.** That is
+the point: the default is a *vocabulary*, and a team whose codebase says
+`DEBT`/`PERF` wants those eight gone, not eight more. Matching is
+case-sensitive, at ASCII word boundaries, anywhere in a comment line, with
+the LEFTMOST hit winning; a colon is not required (RuboCop's
+`RequireColon` is a rule about how to WRITE an annotation, not about what
+exists in the tree).
+
+The effective set is part of the per-row `comments_version` key, so
+changing it re-extracts every file rather than leaving rows classified
+under the old vocabulary. It is read ONCE at boot — no live reload, same
+posture as `[occurrences]`/`[scopes]` — and `GET /api/comments/keywords`
+(`kb-code comments keywords`) reports what is actually in force.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `keywords` | [string] | `[]` | Uppercase annotation keywords. Empty ⇒ `TODO FIXME OPTIMIZE HACK REVIEW NOTE XXX BUG` — RuboCop `Style/CommentAnnotation`'s six, plus the two extra markers the pre-`comments/1` TODO index scanned. |
+
+```toml
+[comments]
+keywords = ["TODO", "FIXME", "DEBT", "PERF"]
+```
+
+**This narrows `GET /api/todos` too.** That route is a filtered view over
+the same index (`kind = annotation` and a keyword in the legacy family
+`TODO FIXME HACK XXX BUG`), so a keyword the effective set no longer names
+stops appearing there as well — the honest consequence of there being
+exactly one scanner over these lines.
+
 ### `[rails_lens]`
 
 PRR-N3's operator override for the Rails-lens auto-detection gate

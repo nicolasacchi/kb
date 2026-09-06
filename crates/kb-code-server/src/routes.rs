@@ -5661,6 +5661,29 @@ pub struct TodosListOut {
 /// ordered by path, line. Default limit 500. `scope=<name>` keeps paths
 /// matching the scope's globs; `scope=!<name>` drops them. Unknown scope
 /// name → 404.
+///
+/// **V72-J1: this is now a FILTERED VIEW over `comments/1`**
+/// (`Store::list_todo_items` reads the `comments` table; `todo_items` and
+/// `extract::extract_todos` are gone — there is exactly one scanner over
+/// these lines). The response STRUCT, its field names, the ordering, the
+/// limit/truncation semantics and the scope filter are byte-identical.
+/// The ROW SET changes in exactly two enumerated ways, both pinned by
+/// tests in `tests/http_pack/todos_route.rs`:
+///
+/// 1. **Outline-tier languages are now scanned.** `extract_todos` was
+///    gated to the eight token-level languages, so a `# TODO` in a YAML
+///    or TOML comment was structurally invisible. `comments/1` walks
+///    every grammar with comment nodes, so those markers now appear.
+/// 2. **A two-marker line reports the LEFTMOST keyword.** The deleted
+///    `find_todo_marker` iterated its hardcoded marker array in the outer
+///    loop, so `// TODO: drop this FIXME shim` reported `FIXME`.
+///
+/// The keyword vocabulary this view reports is fixed at
+/// `comments::keywords::TODO_FAMILY` (the five markers the old index
+/// scanned) — a repo whose `comments/1` set also finds `OPTIMIZE`/
+/// `REVIEW`/`NOTE` does not leak them into this route. An operator who
+/// REPLACES the set via `[comments] keywords` narrows this view along
+/// with it, which is the honest consequence of one scanner.
 pub async fn list_todos(
     State(state): State<SharedState>,
     Query(params): Query<ListTodosParams>,

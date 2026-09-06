@@ -145,7 +145,7 @@ pub const SCOPE_ATOM_SPECS: &[ScopeAtomSpec] = &[
     ScopeAtomSpec {
         key: "todo",
         values: Some(&[ANY]),
-        source: "todo_items",
+        source: "comments",
         resolver_expr: "src.todo",
         note: "`todo:any` — a path with an indexed TODO/FIXME",
     },

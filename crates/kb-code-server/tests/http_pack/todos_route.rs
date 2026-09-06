@@ -1,6 +1,14 @@
 //! Phase N — `GET /api/todos` filtering (marker, path_prefix, scope
 //! include/exclude) + `GET /api/scopes`. Boots a daemon the same way
 //! `reading_sets_route.rs` does.
+//!
+//! V72-J1: this file is UNCHANGED on purpose. `/api/todos` is now a
+//! filtered view over the `comments/1` index (`todo_items` and
+//! `extract::extract_todos` are gone), and this suite passing verbatim is
+//! the byte-compatibility proof for that subsumption. The two documented
+//! ROW-SET changes — outline-tier languages are now scanned, and a
+//! two-marker line reports the leftmost keyword — are asserted in
+//! `comments_route.rs`, since neither shape exists in this fixture.
 
 use kb_code_server::config::{KbCodeConfig, KbDaemonSection, RepoEntry, ScopesSection};
 use kb_core::paths::KbPaths;

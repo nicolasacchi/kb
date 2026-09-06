@@ -99,24 +99,6 @@ pub type Result<T> = std::result::Result<T, LangError>;
 pub const SIGNATURE_CAP: usize = 200;
 /// [`capture_doc`]'s output cap, in chars (post whitespace-collapse).
 pub const DOC_CAP: usize = 400;
-/// [`extract_todos`]'s trailing-text cap, in chars (post trim).
-pub const TODO_TEXT_CAP: usize = 200;
-
-/// Markers scanned in comment text (word-boundary, case-sensitive). Order
-/// is longest-first so a hypothetical future multi-char overlap prefers
-/// the longer form; today every marker is unique.
-pub const TODO_MARKERS: &[&str] = &["FIXME", "TODO", "HACK", "XXX", "BUG"];
-
-/// One TODO-style marker hit from a comment. `line` is 1-based (same
-/// convention as [`Symbol::line_start`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TodoHit {
-    pub line: u32,
-    pub marker: String,
-    /// Trailing text after the marker, trimmed, capped at [`TODO_TEXT_CAP`].
-    pub text: String,
-}
-
 /// One indexed definition. `line_start`/`line_end` are 1-based (tree-sitter
 /// rows are 0-based; `+1` here matches editor/human display convention).
 /// `col_start`/`col_end` are 0-based byte offsets within their line
@@ -172,94 +154,6 @@ struct Candidate<'tree> {
     name: String,
 }
 
-/// Scan comment nodes for `TODO`/`FIXME`/`HACK`/`XXX`/`BUG` (word-boundary,
-/// case-sensitive) and capture the trailing text to end-of-line (trimmed,
-/// capped at [`TODO_TEXT_CAP`]).
-///
-/// Gated to the eight full-tier / token-level languages
-/// (`lang::supports_token_level`): outline-tier files (yaml/toml/json) are
-/// skipped in v3 scope — callers still get an empty `Vec`, never an error.
-/// Comment-node detection reuses the same kind vocabulary `is_doc_comment`
-/// already knows (`line_comment`/`block_comment`/`comment`), walked via a
-/// full-tree visitor rather than the highlights query (cheaper than a
-/// second query compile, and correct for every grammar that tags comments
-/// as named nodes — which all eight full-tier languages do).
-///
-/// Scanning comment nodes (not raw lines) means a decoy `"TODO"` inside a
-/// string literal does NOT match — pinned by the unit tests below.
-pub fn extract_todos(lang_id: &str, source: &[u8]) -> Result<Vec<TodoHit>> {
-    if !lang::supports_token_level(lang_id) {
-        return Ok(Vec::new());
-    }
-    let (tree, _) = lang::parse(lang_id, source)?;
-    let mut out = Vec::new();
-    walk_comments_for_todos(tree.root_node(), source, &mut out);
-    Ok(out)
-}
-
-fn is_comment_kind(kind: &str) -> bool {
-    // Rust: line_comment / block_comment. TS/JS/Go/Ruby/Bash/Python: comment.
-    // Defensive `contains("comment")` covers a future grammar rename without
-    // silently dropping the pass.
-    matches!(kind, "comment" | "line_comment" | "block_comment") || kind.contains("comment")
-}
-
-fn walk_comments_for_todos(node: tree_sitter::Node<'_>, source: &[u8], out: &mut Vec<TodoHit>) {
-    if is_comment_kind(node.kind()) {
-        scan_comment_for_todos(node, source, out);
-        return; // never walk into a comment's children
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_comments_for_todos(child, source, out);
-    }
-}
-
-fn scan_comment_for_todos(node: tree_sitter::Node<'_>, source: &[u8], out: &mut Vec<TodoHit>) {
-    let Ok(text) = node.utf8_text(source) else {
-        return;
-    };
-    let base_row = node.start_position().row;
-    for (i, line) in text.lines().enumerate() {
-        if let Some((marker, rest)) = find_todo_marker(line) {
-            let text = cap_chars(rest.trim(), TODO_TEXT_CAP);
-            out.push(TodoHit {
-                line: (base_row + i + 1) as u32,
-                marker: marker.to_string(),
-                text,
-            });
-        }
-    }
-}
-
-/// First word-boundary match of any [`TODO_MARKERS`] entry on `line`.
-/// Returns `(marker, trailing_text_after_marker)`.
-fn find_todo_marker(line: &str) -> Option<(&'static str, &str)> {
-    let bytes = line.as_bytes();
-    for &marker in TODO_MARKERS {
-        let mut start = 0;
-        while start + marker.len() <= line.len() {
-            if let Some(rel) = line[start..].find(marker) {
-                let abs = start + rel;
-                let before_ok = abs == 0 || !is_word_byte(bytes[abs - 1]);
-                let after = abs + marker.len();
-                let after_ok = after >= bytes.len() || !is_word_byte(bytes[after]);
-                if before_ok && after_ok {
-                    return Some((marker, &line[after..]));
-                }
-                start = abs + 1;
-            } else {
-                break;
-            }
-        }
-    }
-    None
-}
-
-fn is_word_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
-
 /// What SHAPE of rows a CST-walk outline mints. The Parity Grid's
 /// `symbols` cell has to tell "symbols, as code definitions" from
 /// "symbols, as key paths" from "symbols, as selectors" — and the reason
@@ -312,7 +206,6 @@ impl OutlineShape {
         }
     }
 }
-
 /// The languages whose symbols come from a direct CST WALK rather than a
 /// `tags.scm` query, and what shape each one's rows are — see the dispatch
 /// at the top of [`extract_symbols`] and `crate::yaml`/`crate::keypath`/
@@ -1741,94 +1634,5 @@ func TopLevel(a int) int {
         let greet = find(&symbols, "greet");
         assert_eq!(greet.signature.as_deref(), Some("greet()"));
         assert_eq!(greet.doc.as_deref(), Some("Greets someone by name."));
-    }
-
-    // --- Phase N: TODO extraction ----------------------------------------
-
-    #[test]
-    fn extract_todos_rust_fixture_finds_comment_markers_not_string_literals() {
-        let src = r#"
-// TODO: wire up the sink
-fn decoy() {
-    let s = "TODO inside a string must not match";
-    // FIXME please
-    /* HACK: multi
-       line is one comment node — markers only on first scanned line of text */
-    // XXX
-    // BUG trailing
-}
-"#;
-        let todos = extract_todos("rust", src.as_bytes()).unwrap();
-        let markers: Vec<&str> = todos.iter().map(|t| t.marker.as_str()).collect();
-        assert!(
-            markers.contains(&"TODO"),
-            "expected TODO from line comment: {todos:#?}"
-        );
-        assert!(markers.contains(&"FIXME"), "expected FIXME: {todos:#?}");
-        assert!(markers.contains(&"HACK"), "expected HACK: {todos:#?}");
-        assert!(markers.contains(&"XXX"), "expected XXX: {todos:#?}");
-        assert!(markers.contains(&"BUG"), "expected BUG: {todos:#?}");
-        // String-literal "TODO" must NOT appear (comment-node scan only).
-        let texts: Vec<&str> = todos.iter().map(|t| t.text.as_str()).collect();
-        assert!(
-            !texts.iter().any(|t| t.contains("inside a string")),
-            "string-literal decoy must not match: {todos:#?}"
-        );
-        let todo = todos.iter().find(|t| t.marker == "TODO").unwrap();
-        assert_eq!(todo.text, ": wire up the sink");
-        assert!(todo.line >= 2, "1-based line of the comment: {}", todo.line);
-    }
-
-    #[test]
-    fn extract_todos_typescript_fixture_finds_comment_markers_not_string_literals() {
-        let src = r#"
-// TODO: port the reader
-export function decoy() {
-  const s = "TODO inside a string must not match";
-  // FIXME later
-  /* XXX: block comment */
-  // BUG found
-}
-"#;
-        let todos = extract_todos("typescript", src.as_bytes()).unwrap();
-        let markers: Vec<&str> = todos.iter().map(|t| t.marker.as_str()).collect();
-        assert!(markers.contains(&"TODO"), "{todos:#?}");
-        assert!(markers.contains(&"FIXME"), "{todos:#?}");
-        assert!(markers.contains(&"XXX"), "{todos:#?}");
-        assert!(markers.contains(&"BUG"), "{todos:#?}");
-        assert!(
-            !todos.iter().any(|t| t.text.contains("inside a string")),
-            "string-literal decoy must not match: {todos:#?}"
-        );
-        let todo = todos.iter().find(|t| t.marker == "TODO").unwrap();
-        assert_eq!(todo.text, ": port the reader");
-    }
-
-    #[test]
-    fn extract_todos_skips_outline_tier_languages() {
-        assert!(extract_todos("yaml", b"# TODO: no\nkey: 1\n")
-            .unwrap()
-            .is_empty());
-        assert!(extract_todos("json", b"{}\n").unwrap().is_empty());
-        assert!(extract_todos("toml", b"# TODO x\n").unwrap().is_empty());
-    }
-
-    #[test]
-    fn extract_todos_requires_word_boundary() {
-        // "TODOS" and "myTODO" must not match the TODO marker.
-        let src = "// TODOS more\n// myTODO\n// TODO real\n";
-        let todos = extract_todos("rust", src.as_bytes()).unwrap();
-        assert_eq!(todos.len(), 1, "{todos:#?}");
-        assert_eq!(todos[0].marker, "TODO");
-        assert_eq!(todos[0].text, "real");
-    }
-
-    #[test]
-    fn extract_todos_caps_trailing_text_at_200_chars() {
-        let long = "x".repeat(300);
-        let src = format!("// TODO {long}\n");
-        let todos = extract_todos("rust", src.as_bytes()).unwrap();
-        assert_eq!(todos.len(), 1);
-        assert_eq!(todos[0].text.chars().count(), TODO_TEXT_CAP);
     }
 }

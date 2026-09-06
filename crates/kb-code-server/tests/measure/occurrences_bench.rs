@@ -148,9 +148,16 @@ fn b2_occurrences_measurement_on_a_real_scale_corpus() {
         .upsert_repo("kb", repo_root.to_str().unwrap())
         .unwrap();
     let start_a = Instant::now();
-    let stats_a =
-        ingest::index_repo_working_tree(&store_a, &git_repo, repo_a_id, "HEAD", true, false)
-            .unwrap();
+    let stats_a = ingest::index_repo_working_tree(
+        &store_a,
+        &git_repo,
+        repo_a_id,
+        "HEAD",
+        true,
+        false,
+        &kb_code_server::comments::KeywordSet::defaults(),
+    )
+    .unwrap();
     let elapsed_a = start_a.elapsed();
     drop(store_a); // flush/close before stat-ing the file
     let size_a = std::fs::metadata(&db_a_path).unwrap().len();

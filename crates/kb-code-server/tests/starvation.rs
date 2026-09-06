@@ -107,12 +107,16 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         .collect();
 
     let bus = Arc::new(kb_core::events::EventBus::from_env());
+    let comment_keywords = Arc::new(kb_code_server::comments::KeywordSet::from_config(
+        &config.comments.keywords,
+    ));
     let (index_sink, _sink_worker) = kb_code_server::sink::spawn(
         store.clone(),
         repo_ids.clone(),
         bus.clone(),
         config.occurrences.clone(),
         is_rails_by_repo,
+        (*comment_keywords).clone(),
     );
     let watch_mode = kb_code_server::mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == kb_code_server::mirror::WatchMode::Poll {
@@ -198,6 +202,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         spa_dist: None,
         github: github_client,
         scopes,
+        comment_keywords: comment_keywords.clone(),
         review: review_cfg,
         behavioral: behavioral_cfg,
         doclens: doclens_cfg,

@@ -48,7 +48,7 @@ use crate::extract;
 use crate::git::{EntryKind, GitError, GitRepo};
 use crate::highlight;
 use crate::lang::{self, LangError};
-use crate::store::{NewTodoItem, Store, StoreError};
+use crate::store::{NewComment, Store, StoreError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -126,6 +126,7 @@ pub struct IngestOutcome {
 /// every non-Rails repo — kb/kb-code/research/demo-repo) means this fn never
 /// even checks whether `path` LOOKS like a routes/controller/view file, so
 /// those repos pay zero added cost.
+#[allow(clippy::too_many_arguments)]
 pub fn index_file(
     store: &Store,
     repo_id: i64,
@@ -134,6 +135,7 @@ pub fn index_file(
     blob_hash: &str,
     occurrences_enabled: bool,
     is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
 ) -> Result<IngestOutcome> {
     let size = bytes.len() as u64;
 
@@ -235,23 +237,28 @@ pub fn index_file(
         store.replace_occurrences(blob_hash, lang_info.salt, &occurrences)?;
     }
 
-    // Phase N — TODO index: file_id-keyed (not blob-hash), replaced on
-    // EVERY visit so a path that just gained a `files` row (or whose
-    // comments changed) never keeps stale markers. `extract_todos` is a
-    // no-op for outline-tier languages (returns empty); we still replace
-    // so a language reclassification clears any prior rows.
-    if let Some(file_id) = store.file_id(repo_id, path)? {
-        let todos = extract::extract_todos(lang_info.id, bytes)?;
-        let items: Vec<NewTodoItem> = todos
-            .into_iter()
-            .map(|t| NewTodoItem {
-                line: i64::from(t.line),
-                marker: t.marker,
-                text: t.text,
-            })
+    // V72-J1 — `comments/1`: the comment index, which SUBSUMES the Phase-N
+    // TODO index (`todo_items` and `extract_todos` are gone;
+    // `GET /api/todos` is a filtered view over these rows). Path-keyed with
+    // a `(blob_sha, comments_version)` freshness stamp, so an unchanged
+    // file skips the tree-sitter pass entirely — strictly cheaper than the
+    // pass it replaces, which re-parsed on every visit. Deliberately NOT
+    // inside the `if let Some(file_id)` block: these rows key on
+    // `(repo_id, path)`, never on `files.id`.
+    let comments_version = crate::comments::comments_version_for(lang_info.salt, comment_keywords);
+    if !store.has_comments(repo_id, path, blob_hash, &comments_version)? {
+        let symbols = store.symbols_for_blob(blob_hash, lang_info.salt)?;
+        let extraction =
+            crate::comments::extract_comments(lang_info.id, bytes, &symbols, comment_keywords)?;
+        let rows: Vec<NewComment> = extraction
+            .blocks
+            .iter()
+            .map(crate::comments::to_new_comment)
             .collect();
-        store.replace_todo_items(file_id, &items)?;
+        store.replace_comments(repo_id, path, blob_hash, &comments_version, &rows)?;
+    }
 
+    if let Some(file_id) = store.file_id(repo_id, path)? {
         // V3.G2 — import graph: content-addressed specs (cache by
         // blob_hash+salt) + repo-addressed edges rebuilt every visit
         // (resolution depends on the live files table).
@@ -396,6 +403,7 @@ pub fn index_repo_working_tree(
     rev: &str,
     occurrences_enabled: bool,
     is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
 ) -> Result<WalkStats> {
     let mut stats = WalkStats::default();
     walk_dir(
@@ -407,6 +415,7 @@ pub fn index_repo_working_tree(
         occurrences_enabled,
         is_rails,
         &mut stats,
+        comment_keywords,
     )?;
     // V3.G2 — second pass: rebuild import edges now that every files row
     // exists. Per-file edge resolution during the walk can miss targets
@@ -465,6 +474,7 @@ fn walk_dir(
     occurrences_enabled: bool,
     is_rails: bool,
     stats: &mut WalkStats,
+    comment_keywords: &crate::comments::KeywordSet,
 ) -> Result<()> {
     for entry in repo.list_tree(rev, dir_path)? {
         let full_path = if dir_path.is_empty() {
@@ -482,6 +492,7 @@ fn walk_dir(
                 occurrences_enabled,
                 is_rails,
                 stats,
+                comment_keywords,
             )?,
             EntryKind::File => match repo.read_blob(rev, &full_path, MAX_PARSE_BYTES) {
                 Ok(bytes) => {
@@ -493,6 +504,7 @@ fn walk_dir(
                         &entry.oid,
                         occurrences_enabled,
                         is_rails,
+                        comment_keywords,
                     )?;
                     stats.files += 1;
                     stats.symbols += outcome.symbol_count;
@@ -526,6 +538,12 @@ fn walk_dir(
 
 #[cfg(test)]
 mod tests {
+    /// Every ingest test indexes with the SHIPPED default keyword set —
+    /// `[comments] keywords` is a per-deployment override, not a test knob.
+    fn kw() -> crate::comments::KeywordSet {
+        crate::comments::KeywordSet::defaults()
+    }
+
     use super::*;
     use std::path::Path;
     use std::process::Command;
@@ -633,6 +651,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(!outcome.cache_hit);
@@ -656,6 +675,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(!first.cache_hit);
@@ -668,6 +688,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(
@@ -691,6 +712,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(store.has_occurrences("hashA", lang::RUST.salt).unwrap());
@@ -719,6 +741,7 @@ mod tests {
             "hashYaml",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(!store.has_occurrences("hashYaml", lang::YAML.salt).unwrap());
@@ -738,6 +761,7 @@ mod tests {
             "hashA",
             false,
             false,
+            &kw(),
         )
         .unwrap();
         // The occurrences gate never affects files/symbols/highlights —
@@ -765,6 +789,7 @@ mod tests {
             "hashA",
             false,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(!store.has_occurrences("hashA", lang::RUST.salt).unwrap());
@@ -777,6 +802,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(store.has_occurrences("hashA", lang::RUST.salt).unwrap());
@@ -794,6 +820,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         let first = store
@@ -827,6 +854,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         let after = store
@@ -849,12 +877,22 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
 
         let changed = b"fn add(a: i32, b: i32, c: i32) -> i32 {\n    a + b + c\n}\nfn extra() {}\n";
-        let outcome =
-            index_file(&store, repo_id, "src/lib.rs", changed, "hashB", true, false).unwrap();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "src/lib.rs",
+            changed,
+            "hashB",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
         assert!(
             !outcome.cache_hit,
             "a different blob_hash must never cache-hit"
@@ -874,6 +912,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(!first.cache_hit);
@@ -888,6 +927,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(
@@ -936,6 +976,7 @@ mod tests {
             "hashA",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert!(
@@ -971,7 +1012,17 @@ mod tests {
         let (_tmp, store) = open_store();
         let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
         let big = vec![b'a'; (MAX_PARSE_BYTES + 1) as usize];
-        let outcome = index_file(&store, repo_id, "big.rs", &big, "hashBig", true, false).unwrap();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "big.rs",
+            &big,
+            "hashBig",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
         assert_eq!(outcome.tier, TIER_TOO_LARGE);
         assert_eq!(outcome.symbol_count, 0);
         let file = store.get_file(repo_id, "big.rs").unwrap().unwrap();
@@ -985,8 +1036,17 @@ mod tests {
         let (_tmp, store) = open_store();
         let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
         let binary = vec![0xff, 0xfe, 0x00, 0x01, 0x02];
-        let outcome =
-            index_file(&store, repo_id, "blob.rs", &binary, "hashBin", true, false).unwrap();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "blob.rs",
+            &binary,
+            "hashBin",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
         assert_eq!(outcome.tier, TIER_BINARY);
         let file = store.get_file(repo_id, "blob.rs").unwrap().unwrap();
         assert_eq!(file.lang, TIER_BINARY);
@@ -998,8 +1058,17 @@ mod tests {
         let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
         let pointer =
             b"version https://git-lfs.github.com/spec/v1\noid sha256:deadbeef\nsize 12345\n";
-        let outcome =
-            index_file(&store, repo_id, "big.psd", pointer, "hashLfs", true, false).unwrap();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "big.psd",
+            pointer,
+            "hashLfs",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
         assert_eq!(outcome.tier, TIER_LFS);
         let file = store.get_file(repo_id, "big.psd").unwrap().unwrap();
         assert_eq!(file.lang, TIER_LFS);
@@ -1021,6 +1090,7 @@ mod tests {
             "hashTxt",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert_eq!(outcome.tier, TIER_UNKNOWN);
@@ -1047,6 +1117,7 @@ mod tests {
             "hashErb",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         assert_eq!(outcome.tier, "erb");
@@ -1088,8 +1159,17 @@ mod tests {
         let (_tmp, store) = open_store();
         let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
         let src = b"task :seed do\n  puts 1\nend\n";
-        let outcome =
-            index_file(&store, repo_id, "Rakefile", src, "hashRake", true, false).unwrap();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "Rakefile",
+            src,
+            "hashRake",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
         assert_eq!(outcome.tier, "ruby");
         let file = store.get_file(repo_id, "Rakefile").unwrap().unwrap();
         assert_eq!(file.lang, "ruby");
@@ -1102,6 +1182,7 @@ mod tests {
             "hashLock",
             true,
             false,
+            &kw(),
         )
         .unwrap();
         let lock = store.get_file(repo_id, "Gemfile.lock").unwrap().unwrap();
@@ -1163,7 +1244,8 @@ mod tests {
             .upsert_repo("fixture", tmp.path().to_str().unwrap())
             .unwrap();
 
-        let stats = index_repo_working_tree(&store, &repo, repo_id, "HEAD", true, false).unwrap();
+        let stats =
+            index_repo_working_tree(&store, &repo, repo_id, "HEAD", true, false, &kw()).unwrap();
 
         // .gitignore excludes ignored.rs — `git ls-tree` never lists it, so
         // it must never reach the store.
@@ -1201,7 +1283,8 @@ mod tests {
 
         // Re-running the walk on the SAME rev is all cache hits (branch
         // switch that changes nothing re-derives nothing — ADR-2).
-        let stats2 = index_repo_working_tree(&store, &repo, repo_id, "HEAD", true, false).unwrap();
+        let stats2 =
+            index_repo_working_tree(&store, &repo, repo_id, "HEAD", true, false, &kw()).unwrap();
         assert_eq!(stats2.parsed, 0);
         assert_eq!(stats2.cache_hits, 2);
     }

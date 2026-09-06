@@ -324,6 +324,9 @@ pub mod checkout;
 // rather than folded into `lip.rs`: its own request/response wire types,
 // distinct from `lip::DiagnosticsOut`. See `code_actions`'s own module doc.
 pub mod code_actions;
+/// V72-J1 — `comments/1`: the comment index, its kind taxonomy, the
+/// configurable keyword grammar, and the per-request drift oracle.
+pub mod comments;
 pub mod config;
 /// V72-H2a (D7) — the CSS/SCSS stylesheet outline.
 pub mod css;
@@ -677,6 +680,11 @@ pub async fn bind_and_spawn(
         let repos_for_walk = config.repos.clone();
         let occurrences_for_walk = config.occurrences.clone();
         let is_rails_for_walk = is_rails_by_repo.clone();
+        // V72-J1 — the same boot-resolved keyword set the sink worker gets,
+        // so the boot walk and every later watcher event classify
+        // annotations with one vocabulary.
+        let comment_keywords_for_walk =
+            comments::KeywordSet::from_config(&config.comments.keywords);
         let symbol_index_for_walk = symbol_index.clone();
         tokio::task::spawn_blocking(move || {
             for repo in &repos_for_walk {
@@ -692,6 +700,7 @@ pub async fn bind_and_spawn(
                     &repo.path,
                     occurrences_enabled,
                     is_rails,
+                    &comment_keywords_for_walk,
                 );
                 // V71-D1b — warm `search::symbols::SymbolIndex`'s cache for
                 // this repo at the END of its own boot-walk entry, still
@@ -817,6 +826,7 @@ pub async fn bind_and_spawn(
         bus.clone(),
         config.occurrences.clone(),
         is_rails_by_repo,
+        comments::KeywordSet::from_config(&config.comments.keywords),
     );
     let watch_mode = mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == mirror::WatchMode::Poll {
@@ -973,6 +983,10 @@ pub async fn bind_and_spawn(
     };
 
     let started_at = chrono::Utc::now();
+    // V72-J1 — `[comments] keywords`, resolved once and shared by the
+    // extraction pass, the sink worker and `GET /api/comments/keywords`.
+    let comment_keywords =
+        std::sync::Arc::new(comments::KeywordSet::from_config(&config.comments.keywords));
     // Phase N — scopes are read-only after boot; clone before `config.repos`
     // moves into AppState.
     let scopes = config.scopes.clone();
@@ -1091,6 +1105,8 @@ pub async fn bind_and_spawn(
         github: github_client,
         // Phase N — named path-set globs (`[scopes]`).
         scopes,
+        // V72-J1 — the same keyword set the ingest pass classifies with.
+        comment_keywords: comment_keywords.clone(),
         // V3.R1 — local review sessions (`[review]`).
         review: review_cfg,
         // V3.2-B1 — behavioral store (`[behavioral]`).
@@ -1248,6 +1264,7 @@ pub(crate) async fn build_state_for_test(
         bus.clone(),
         config.occurrences.clone(),
         is_rails_by_repo,
+        comments::KeywordSet::from_config(&config.comments.keywords),
     );
     let watch_mode = mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == mirror::WatchMode::Poll {
@@ -1286,6 +1303,8 @@ pub(crate) async fn build_state_for_test(
     let auth = Arc::new(kb_server::state::AuthConfig::default());
 
     let started_at = chrono::Utc::now();
+    let comment_keywords =
+        std::sync::Arc::new(comments::KeywordSet::from_config(&config.comments.keywords));
     let scopes = config.scopes.clone();
     let scip_cfg = config.scip.clone();
     let review_cfg = config.review.clone();
@@ -1333,6 +1352,7 @@ pub(crate) async fn build_state_for_test(
         spa_dist: None,
         github: github_client,
         scopes,
+        comment_keywords: comment_keywords.clone(),
         review: review_cfg,
         behavioral: behavioral_cfg,
         doclens: doclens_cfg,
