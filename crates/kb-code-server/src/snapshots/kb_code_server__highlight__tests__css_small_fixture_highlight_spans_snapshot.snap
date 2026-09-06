@@ -61,7 +61,7 @@ expression: spans
     Span {
         byte_start: 47,
         byte_len: 6,
-        class: String,
+        class: StringSpecial,
     },
     Span {
         byte_start: 53,

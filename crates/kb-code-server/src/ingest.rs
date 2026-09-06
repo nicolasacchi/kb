@@ -93,16 +93,48 @@ pub const TIER_BINARY: &str = "binary";
 pub const TIER_TOO_LARGE: &str = "too-large";
 pub const TIER_LFS: &str = "lfs";
 
+/// What the HIGHLIGHT cache gate did for one file (V72-H2b, D7). A
+/// SEPARATE axis from the symbol gate: a `highlight_salt` bump re-paints
+/// without re-extracting a single symbol, and vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightCache {
+    /// The blob already had spans under the CURRENT `highlight_salt`.
+    Hit,
+    /// Painted now, and stored.
+    Miss,
+    /// This file TYPE derives no spans (`syntax::Tier::None` — a
+    /// parse-only grammar like ERB). Decided before the cache is
+    /// consulted, because it is a property of the type, not of the blob.
+    SkippedTier,
+}
+
+impl HighlightCache {
+    /// The wire/CLI value (`GET /api/file`'s `highlight_cache`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HighlightCache::Hit => "hit",
+            HighlightCache::Miss => "miss",
+            HighlightCache::SkippedTier => "skipped_tier",
+        }
+    }
+}
+
 /// The result of one [`index_file`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IngestOutcome {
-    /// `true` if `(blob_hash, salt)` already had derived rows — no
-    /// parsing happened, only the `files` pointer row was (re)written.
+    /// `true` if `(blob_hash, symbol_salt)` was already DERIVED — no
+    /// symbol extraction happened. V72-H2b: this is the marker's
+    /// existence, not a row count, so a blob whose honest symbol set is
+    /// empty is a cache hit on its second visit like anything else.
     pub cache_hit: bool,
     /// The language id ("rust"/"python"/"ruby") if parsed/cached, else one
     /// of the `TIER_*` constants.
     pub tier: &'static str,
     pub symbol_count: usize,
+    /// V72-H2b — what the independent HIGHLIGHT gate did. `SkippedTier`
+    /// for every content-capped file too (nothing is painted when nothing
+    /// is parsed).
+    pub highlight_cache: HighlightCache,
 }
 
 /// Index one file's bytes at `path` (source-relative) into `repo_id`.
@@ -145,6 +177,7 @@ pub fn index_file(
             cache_hit: false,
             tier: TIER_TOO_LARGE,
             symbol_count: 0,
+            highlight_cache: HighlightCache::SkippedTier,
         });
     }
     if bytes.starts_with(LFS_POINTER_PREFIX) {
@@ -153,6 +186,7 @@ pub fn index_file(
             cache_hit: false,
             tier: TIER_LFS,
             symbol_count: 0,
+            highlight_cache: HighlightCache::SkippedTier,
         });
     }
     if std::str::from_utf8(bytes).is_err() {
@@ -161,6 +195,7 @@ pub fn index_file(
             cache_hit: false,
             tier: TIER_BINARY,
             symbol_count: 0,
+            highlight_cache: HighlightCache::SkippedTier,
         });
     }
     let Some(lang_info) = lang::detect(path, Some(bytes)) else {
@@ -169,6 +204,7 @@ pub fn index_file(
             cache_hit: false,
             tier: TIER_UNKNOWN,
             symbol_count: 0,
+            highlight_cache: HighlightCache::SkippedTier,
         });
     };
 
@@ -195,12 +231,31 @@ pub fn index_file(
             symbols: false,
         });
 
-    let outcome = if store.has_symbols(blob_hash, lang_info.salt)? {
-        let symbol_count = store.symbols_for_blob(blob_hash, lang_info.salt)?.len();
+    // V72-H2b (D7) — TWO independent gates, one per salt family. Before
+    // this unit the highlight pass lived INSIDE the symbols miss branch,
+    // so a `highlights.scm`/role-table change could only be shipped by
+    // re-extracting every symbol in the corpus, and a `tags.scm` fix
+    // re-painted every file. Each gate now asks about its own family's
+    // salt and its own marker.
+    //
+    // Both gates read `Store::is_derived` — the MARKER's existence, never
+    // a row count. `has_symbols`'s `COUNT(*) > 0` made the cache-hit
+    // branch structurally unreachable for every blob whose honest
+    // derivation is empty (V72-H1 reported it for ERB; it was equally true
+    // of an SCSS file, a comment-only Rust file and a heading-less
+    // Markdown file), so those re-parsed on every single visit.
+    let symbol_salt = lang_info.symbol_salt;
+    let highlight_salt = lang_info.highlight_salt;
+
+    let outcome = if store.is_derived(blob_hash, lang::SaltFamily::Symbol, symbol_salt)? {
+        let symbol_count = store.symbols_for_blob(blob_hash, symbol_salt)?.len();
         IngestOutcome {
             cache_hit: true,
             tier: lang_info.id,
             symbol_count,
+            // Overwritten by the highlight gate below; this value is never
+            // observed.
+            highlight_cache: HighlightCache::SkippedTier,
         }
     } else {
         let symbols = if plan.symbols {
@@ -208,18 +263,37 @@ pub fn index_file(
         } else {
             Vec::new()
         };
-        let spans = if plan.highlight {
-            highlight::extract_highlights(lang_info.id, bytes)?
-        } else {
-            Vec::new()
-        };
-        store.replace_symbols(blob_hash, lang_info.salt, &symbols)?;
-        store.put_highlights(blob_hash, lang_info.salt, &spans)?;
+        let symbol_count = symbols.len();
+        store.replace_symbols(blob_hash, symbol_salt, &symbols)?;
         IngestOutcome {
             cache_hit: false,
             tier: lang_info.id,
-            symbol_count: symbols.len(),
+            symbol_count,
+            highlight_cache: HighlightCache::SkippedTier,
         }
+    };
+
+    // The HIGHLIGHT gate. `SkippedTier` is decided FIRST and from the plan
+    // alone — it is a property of the file TYPE, so it stays the answer on
+    // the second visit as much as the first. The empty row is still
+    // written once for such a type, which is what keeps `GET /api/file`
+    // answering `Some([])` (rather than `null`) for a parse-only grammar,
+    // exactly as it did before this unit.
+    let highlight_cache = if !plan.highlight {
+        if !store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)? {
+            store.put_highlights(blob_hash, highlight_salt, &[])?;
+        }
+        HighlightCache::SkippedTier
+    } else if store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)? {
+        HighlightCache::Hit
+    } else {
+        let spans = highlight::extract_highlights(lang_info.id, bytes)?;
+        store.put_highlights(blob_hash, highlight_salt, &spans)?;
+        HighlightCache::Miss
+    };
+    let outcome = IngestOutcome {
+        highlight_cache,
+        ..outcome
     };
 
     // B2 — occurrences: a SEPARATE cache-hit check (`has_occurrences`, not
@@ -231,10 +305,10 @@ pub fn index_file(
     // not a replacement for the symbols cache decision.
     if occurrences_enabled
         && lang::supports_token_level(lang_info.id)
-        && !store.has_occurrences(blob_hash, lang_info.salt)?
+        && !store.has_occurrences(blob_hash, symbol_salt)?
     {
         let occurrences = crate::occurrences::extract_occurrences(lang_info.id, bytes)?;
-        store.replace_occurrences(blob_hash, lang_info.salt, &occurrences)?;
+        store.replace_occurrences(blob_hash, symbol_salt, &occurrences)?;
     }
 
     // V72-J1 — `comments/1`: the comment index, which SUBSUMES the Phase-N
@@ -245,9 +319,19 @@ pub fn index_file(
     // pass it replaces, which re-parsed on every visit. Deliberately NOT
     // inside the `if let Some(file_id)` block: these rows key on
     // `(repo_id, path)`, never on `files.id`.
-    let comments_version = crate::comments::comments_version_for(lang_info.salt, comment_keywords);
+    //
+    // V72-H2b — `comments/1` rides the SYMBOL salt, and is NOT
+    // double-keyed. `comments_version_for` already folds a salt together
+    // with the keyword grammar into its own freshness stamp, so the
+    // question is only WHICH salt: comment extraction reads the symbol
+    // rows (`symbols_for_blob`, for attachment) and never a highlight
+    // span, so a highlight-query or role-table bump must not invalidate a
+    // single comment row. Passing `highlight_salt` here would re-extract
+    // every comment in the corpus for a change that cannot alter one.
+    let comments_version =
+        crate::comments::comments_version_for(lang_info.symbol_salt, comment_keywords);
     if !store.has_comments(repo_id, path, blob_hash, &comments_version)? {
-        let symbols = store.symbols_for_blob(blob_hash, lang_info.salt)?;
+        let symbols = store.symbols_for_blob(blob_hash, symbol_salt)?;
         let extraction =
             crate::comments::extract_comments(lang_info.id, bytes, &symbols, comment_keywords)?;
         let rows: Vec<NewComment> = extraction
@@ -263,11 +347,11 @@ pub fn index_file(
         // blob_hash+salt) + repo-addressed edges rebuilt every visit
         // (resolution depends on the live files table).
         if crate::imports::supports(lang_info.id) {
-            let specs = if store.has_import_specs(blob_hash, lang_info.salt)? {
-                store.import_specs_for_blob(blob_hash, lang_info.salt)?
+            let specs = if store.has_import_specs(blob_hash, symbol_salt)? {
+                store.import_specs_for_blob(blob_hash, symbol_salt)?
             } else {
                 let specs = crate::import_graph::extract_import_specs(lang_info.id, bytes);
-                store.replace_import_specs(blob_hash, lang_info.salt, &specs)?;
+                store.replace_import_specs(blob_hash, symbol_salt, &specs)?;
                 specs
             };
             // Resolve against the repo root. The caller always indexes
@@ -294,14 +378,14 @@ pub fn index_file(
         // V3.1-H1 — call sites + type relations (content-addressed, same
         // salt as symbols; four proof languages only).
         if crate::hierarchy::supports_hierarchy(lang_info.id) {
-            if !store.has_call_sites(blob_hash, lang_info.salt)? {
-                let symbols = store.symbols_for_blob(blob_hash, lang_info.salt)?;
+            if !store.has_call_sites(blob_hash, symbol_salt)? {
+                let symbols = store.symbols_for_blob(blob_hash, symbol_salt)?;
                 let sites = crate::hierarchy::extract_call_sites(lang_info.id, bytes, &symbols);
-                store.replace_call_sites(blob_hash, lang_info.salt, &sites)?;
+                store.replace_call_sites(blob_hash, symbol_salt, &sites)?;
             }
-            if !store.has_type_relations(blob_hash, lang_info.salt)? {
+            if !store.has_type_relations(blob_hash, symbol_salt)? {
                 let rels = crate::hierarchy::extract_type_relations(lang_info.id, bytes);
-                store.replace_type_relations(blob_hash, lang_info.salt, &rels)?;
+                store.replace_type_relations(blob_hash, symbol_salt, &rels)?;
             }
         }
     }
@@ -357,7 +441,7 @@ pub fn index_file(
     if crate::entities::indexes_lang(lang_info.id) {
         if let Some(repo_root) = store.repo_root(repo_id)? {
             let repo_root = std::path::PathBuf::from(repo_root);
-            let symbols = store.symbols_for_blob(blob_hash, lang_info.salt)?;
+            let symbols = store.symbols_for_blob(blob_hash, symbol_salt)?;
             let zeitwerk = crate::entities::zeitwerk::zeitwerk_for(&repo_root);
             let worktree = crate::entities::worktree_key_for(&repo_root);
             let defs = crate::entities::defs_for_file(path, bytes, &symbols, &zeitwerk);
@@ -388,6 +472,22 @@ pub struct WalkStats {
     pub skipped_tier: usize,
     /// Sum of `IngestOutcome::symbol_count` across every file visited.
     pub symbols: usize,
+    /// V72-H2b — the independent HIGHLIGHT gate's own tally. These three
+    /// sum to `files`, and they are what makes a `highlight_salt` bump's
+    /// cost visible in the boot log rather than inferred from wall clock.
+    pub highlight_hits: usize,
+    pub highlight_misses: usize,
+    pub highlight_skipped: usize,
+}
+
+impl WalkStats {
+    fn record_highlight(&mut self, cache: HighlightCache) {
+        match cache {
+            HighlightCache::Hit => self.highlight_hits += 1,
+            HighlightCache::Miss => self.highlight_misses += 1,
+            HighlightCache::SkippedTier => self.highlight_skipped += 1,
+        }
+    }
 }
 
 /// Walk `repo`'s git tree at `rev` (default caller passes `"HEAD"`) and
@@ -443,8 +543,8 @@ pub fn rebuild_import_edges_for_repo(store: &Store, repo_id: i64) -> Result<()> 
         let Some(file_id) = store.file_id(repo_id, &f.path)? else {
             continue;
         };
-        let specs = store.import_specs_for_blob(&f.blob_hash, lang_info.salt)?;
-        if specs.is_empty() && !store.has_import_specs(&f.blob_hash, lang_info.salt)? {
+        let specs = store.import_specs_for_blob(&f.blob_hash, lang_info.symbol_salt)?;
+        if specs.is_empty() && !store.has_import_specs(&f.blob_hash, lang_info.symbol_salt)? {
             continue;
         }
         let resolved = crate::import_graph::resolve_import_edges(
@@ -508,6 +608,7 @@ fn walk_dir(
                     )?;
                     stats.files += 1;
                     stats.symbols += outcome.symbol_count;
+                    stats.record_highlight(outcome.highlight_cache);
                     if outcome.cache_hit {
                         stats.cache_hits += 1;
                     } else if lang::for_id(outcome.tier).is_some() {
@@ -525,6 +626,7 @@ fn walk_dir(
                     store.upsert_file(repo_id, &full_path, &entry.oid, TIER_TOO_LARGE, size)?;
                     stats.files += 1;
                     stats.skipped_tier += 1;
+                    stats.record_highlight(HighlightCache::SkippedTier);
                 }
                 Err(e) => return Err(e.into()),
             },
@@ -715,9 +817,11 @@ mod tests {
             &kw(),
         )
         .unwrap();
-        assert!(store.has_occurrences("hashA", lang::RUST.salt).unwrap());
+        assert!(store
+            .has_occurrences("hashA", lang::RUST.symbol_salt)
+            .unwrap());
         let occs = store
-            .occurrences_for_blob("hashA", lang::RUST.salt)
+            .occurrences_for_blob("hashA", lang::RUST.symbol_salt)
             .unwrap();
         assert!(
             !occs.is_empty(),
@@ -744,7 +848,9 @@ mod tests {
             &kw(),
         )
         .unwrap();
-        assert!(!store.has_occurrences("hashYaml", lang::YAML.salt).unwrap());
+        assert!(!store
+            .has_occurrences("hashYaml", lang::YAML.symbol_salt)
+            .unwrap());
     }
 
     // --- B5a: `[occurrences]` config gate -----------------------------------
@@ -768,7 +874,9 @@ mod tests {
         // only occurrences derivation.
         assert!(!outcome.cache_hit);
         assert_eq!(outcome.symbol_count, 1);
-        assert!(!store.has_occurrences("hashA", lang::RUST.salt).unwrap());
+        assert!(!store
+            .has_occurrences("hashA", lang::RUST.symbol_salt)
+            .unwrap());
         let file = store.get_file(repo_id, "src/lib.rs").unwrap().unwrap();
         assert_eq!(file.lang, "rust");
     }
@@ -792,7 +900,9 @@ mod tests {
             &kw(),
         )
         .unwrap();
-        assert!(!store.has_occurrences("hashA", lang::RUST.salt).unwrap());
+        assert!(!store
+            .has_occurrences("hashA", lang::RUST.symbol_salt)
+            .unwrap());
 
         index_file(
             &store,
@@ -805,7 +915,9 @@ mod tests {
             &kw(),
         )
         .unwrap();
-        assert!(store.has_occurrences("hashA", lang::RUST.salt).unwrap());
+        assert!(store
+            .has_occurrences("hashA", lang::RUST.symbol_salt)
+            .unwrap());
     }
 
     #[test]
@@ -824,7 +936,7 @@ mod tests {
         )
         .unwrap();
         let first = store
-            .occurrences_for_blob("hashA", lang::RUST.salt)
+            .occurrences_for_blob("hashA", lang::RUST.symbol_salt)
             .unwrap();
 
         // Manually corrupt the cached rows in a way a re-derive would fix —
@@ -833,7 +945,7 @@ mod tests {
         store
             .replace_occurrences(
                 "hashA",
-                lang::RUST.salt,
+                lang::RUST.symbol_salt,
                 &[crate::occurrences::Occurrence {
                     ordinal: 0,
                     name: "sentinel".to_string(),
@@ -858,7 +970,7 @@ mod tests {
         )
         .unwrap();
         let after = store
-            .occurrences_for_blob("hashA", lang::RUST.salt)
+            .occurrences_for_blob("hashA", lang::RUST.symbol_salt)
             .unwrap();
         assert_ne!(after, first, "the sentinel row must survive untouched");
         assert_eq!(after.len(), 1);
@@ -966,7 +1078,7 @@ mod tests {
             .replace_symbols("hashA", "rust@0.0.0-fake", &[stale])
             .unwrap();
 
-        // index_file always checks the CURRENT salt (lang::RUST.salt), so
+        // index_file always checks the CURRENT salt (lang::RUST.symbol_salt), so
         // the stale-salt row is invisible to it — a cache miss, real parse.
         let outcome = index_file(
             &store,
@@ -995,7 +1107,7 @@ mod tests {
         // the whole point of the fix (no duplicate symbols in `@` search /
         // `/api/symbols` / `/api/defs` after a real grammar/query bump).
         // This fixture's fake salt shares the "rust" prefix with the real
-        // `lang::RUST.salt` `index_file` just wrote under, so it is exactly
+        // `lang::RUST.symbol_salt` `index_file` just wrote under, so it is exactly
         // the stale row the purge exists to sweep — it must be gone, not
         // "a different cache slot."
         assert!(
@@ -1028,7 +1140,9 @@ mod tests {
         let file = store.get_file(repo_id, "big.rs").unwrap().unwrap();
         assert_eq!(file.lang, TIER_TOO_LARGE);
         assert_eq!(file.size, MAX_PARSE_BYTES + 1);
-        assert!(!store.has_symbols("hashBig", lang::RUST.salt).unwrap());
+        assert!(!store
+            .has_symbols("hashBig", lang::RUST.symbol_salt)
+            .unwrap());
     }
 
     #[test]
@@ -1128,7 +1242,7 @@ mod tests {
             .unwrap();
         assert_eq!(file.lang, "erb");
         assert!(store
-            .symbols_for_blob("hashErb", lang::ERB.salt)
+            .symbols_for_blob("hashErb", lang::ERB.symbol_salt)
             .unwrap()
             .is_empty());
         // "We looked, and there is nothing" is observable on the
@@ -1137,18 +1251,232 @@ mod tests {
         // rather than `None`.
         assert_eq!(
             store
-                .highlights_for_blob("hashErb", lang::ERB.salt)
+                .highlights_for_blob("hashErb", lang::ERB.highlight_salt)
                 .unwrap(),
             Some(Vec::new())
         );
-        // It is NOT observable on the symbols side, and that asymmetry
-        // predates this unit: `has_symbols` is `COUNT(*) > 0` over the
-        // `symbols` rows themselves, so a zero-symbol derivation leaves no
-        // marker and `index_file` re-runs its (empty) extraction on every
-        // visit. Pinned here rather than asserted away — the wire's own
-        // "no symbols by tier" answer comes from `tier`, which is exactly
-        // why that field exists.
-        assert!(!store.has_symbols("hashErb", lang::ERB.salt).unwrap());
+        assert_eq!(outcome.highlight_cache, HighlightCache::SkippedTier);
+        // V72-H2b — it is now observable on the SYMBOLS side too, and
+        // that is the whole fix. `has_symbols` (COUNT > 0) still says
+        // "no rows", which is true and useless as a gate; the MARKER says
+        // "derived", which is what stops the re-parse.
+        assert!(!store.has_symbols("hashErb", lang::ERB.symbol_salt).unwrap());
+        assert!(store
+            .is_derived("hashErb", lang::SaltFamily::Symbol, lang::ERB.symbol_salt)
+            .unwrap());
+        assert_eq!(
+            store
+                .derived_rows("hashErb", lang::SaltFamily::Symbol, lang::ERB.symbol_salt)
+                .unwrap(),
+            Some(0),
+            "Some(0) and None are different answers — that is the table's whole job"
+        );
+    }
+
+    // ── V72-H2b (D7/D16) — the salt split + the two independent gates ────
+
+    /// The defect V72-H1 reported, as a regression test. A zero-symbol
+    /// language visited twice must be a CACHE HIT the second time: before
+    /// the marker, `has_symbols`'s `COUNT(*) > 0` made that branch
+    /// structurally unreachable and every ERB/SCSS/comment-only file
+    /// re-parsed on every single visit, forever.
+    #[test]
+    fn a_zero_symbol_language_is_a_cache_hit_on_its_second_visit() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        for (path, src, hash) in [
+            (
+                "app/views/orders/show.html.erb",
+                &b"<h1><%= @order.id %></h1>\n"[..],
+                "hashErb",
+            ),
+            // Not just ERB: an SCSS file is `highlight_only` (real spans,
+            // no symbols), and a comment-only Rust file is `full` tier
+            // with an honestly empty symbol set. All three took the same
+            // damage.
+            ("app/assets/a.scss", &b"$brand: #336699;\n"[..], "hashScss"),
+            ("src/notes.rs", &b"// just a comment\n"[..], "hashNotes"),
+        ] {
+            let first = index_file(&store, repo_id, path, src, hash, true, false, &kw()).unwrap();
+            assert!(!first.cache_hit, "{path}: first visit must derive");
+            assert_eq!(first.symbol_count, 0, "{path}: fixture must be symbol-less");
+            let second = index_file(&store, repo_id, path, src, hash, true, false, &kw()).unwrap();
+            assert!(
+                second.cache_hit,
+                "{path}: a derived blob with zero symbols must be a cache hit"
+            );
+        }
+    }
+
+    /// The HIGHLIGHT gate is independent of the symbol one, in both
+    /// directions and by counter.
+    #[test]
+    fn the_highlight_gate_reports_hit_miss_and_skipped_tier() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+
+        let first = index_file(
+            &store,
+            repo_id,
+            "src/lib.rs",
+            RUST_SRC,
+            "hashA",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(first.highlight_cache, HighlightCache::Miss);
+        let second = index_file(
+            &store,
+            repo_id,
+            "src/lib.rs",
+            RUST_SRC,
+            "hashA",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(second.highlight_cache, HighlightCache::Hit);
+
+        // A tier that paints nothing says so on every visit — it is a
+        // property of the TYPE, not of the cache.
+        let erb = index_file(
+            &store,
+            repo_id,
+            "a.html.erb",
+            b"<%= 1 %>\n",
+            "hashE",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(erb.highlight_cache, HighlightCache::SkippedTier);
+        let erb2 = index_file(
+            &store,
+            repo_id,
+            "a.html.erb",
+            b"<%= 1 %>\n",
+            "hashE",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(erb2.highlight_cache, HighlightCache::SkippedTier);
+
+        // And a content-capped file never reaches either gate.
+        let big = vec![b'a'; (MAX_PARSE_BYTES + 1) as usize];
+        let huge = index_file(
+            &store,
+            repo_id,
+            "big.rs",
+            &big,
+            "hashBig",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(huge.highlight_cache, HighlightCache::SkippedTier);
+    }
+
+    /// **Salt independence.** Bumping ONE family's salt re-extracts that
+    /// family and leaves the other's rows byte-identical. This is the
+    /// property the whole unit exists for, so it is asserted on the rows
+    /// themselves rather than on a counter.
+    #[test]
+    fn bumping_one_familys_salt_leaves_the_others_rows_byte_identical() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        index_file(
+            &store,
+            repo_id,
+            "src/lib.rs",
+            RUST_SRC,
+            "hashA",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+
+        let symbols_before = store
+            .symbols_for_blob("hashA", lang::RUST.symbol_salt)
+            .unwrap();
+        let spans_before = store
+            .highlights_for_blob("hashA", lang::RUST.highlight_salt)
+            .unwrap()
+            .expect("painted");
+        assert!(!symbols_before.is_empty() && !spans_before.is_empty());
+
+        // Simulate the HIGHLIGHT half of a role-table bump: the new salt
+        // has no rows, so the highlight gate misses. The symbol gate must
+        // not notice at all.
+        let next_hl = "rust@0.24.2+h2+roles3";
+        assert!(!store
+            .is_derived("hashA", lang::SaltFamily::Highlight, next_hl)
+            .unwrap());
+        assert!(store
+            .is_derived("hashA", lang::SaltFamily::Symbol, lang::RUST.symbol_salt)
+            .unwrap());
+
+        // ... and the reverse: a symbol-salt bump leaves the painted rows
+        // exactly where they are, addressable under the UNCHANGED
+        // highlight salt.
+        let next_sym = "rust@0.24.2+q4";
+        assert!(!store
+            .is_derived("hashA", lang::SaltFamily::Symbol, next_sym)
+            .unwrap());
+        assert_eq!(
+            store
+                .highlights_for_blob("hashA", lang::RUST.highlight_salt)
+                .unwrap(),
+            Some(spans_before.clone()),
+            "a symbol-salt bump must not touch a single painted span"
+        );
+
+        // Writing the symbol family under the NEW salt purges the old
+        // symbol rows (invariant 11) and still leaves highlights alone.
+        store
+            .replace_symbols("hashA", next_sym, &symbols_before)
+            .unwrap();
+        assert!(store
+            .symbols_for_blob("hashA", lang::RUST.symbol_salt)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .highlights_for_blob("hashA", lang::RUST.highlight_salt)
+                .unwrap(),
+            Some(spans_before),
+            "the highlight family survived a symbol-family re-derive intact"
+        );
+    }
+
+    /// The walk's own tally: the three highlight counters sum to `files`,
+    /// so a `highlight_salt` bump's cost is readable off the boot log.
+    #[test]
+    fn walk_stats_highlight_counters_sum_to_the_files_visited() {
+        let mut stats = WalkStats::default();
+        for c in [
+            HighlightCache::Hit,
+            HighlightCache::Miss,
+            HighlightCache::Miss,
+            HighlightCache::SkippedTier,
+        ] {
+            stats.files += 1;
+            stats.record_highlight(c);
+        }
+        assert_eq!(stats.highlight_hits, 1);
+        assert_eq!(stats.highlight_misses, 2);
+        assert_eq!(stats.highlight_skipped, 1);
+        assert_eq!(
+            stats.highlight_hits + stats.highlight_misses + stats.highlight_skipped,
+            stats.files
+        );
     }
 
     /// V72-H1 — D7's stem table, through the real pipeline: a `Rakefile`

@@ -335,6 +335,33 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// The re-extract bill (`GET /api/reextract/bill`): what bumping a
+    /// grammar/query salt would cost on this daemon's mirror — files and
+    /// bytes per language, rows per derived table, and a TIMED sample of
+    /// the real extractors scaled to the whole repo. Run it BEFORE
+    /// shipping a salt bump; D7 asks for the number to be recorded per
+    /// milestone.
+    ///
+    /// `--bill` is currently the only mode: kb-code has no "re-extract
+    /// now" verb, because a whole-corpus maintenance pass with a trigger
+    /// is exactly the shape the V72-B0 boot-hang rules keep out of this
+    /// daemon. The mirror re-derives itself through the ordinary ingest
+    /// gates on the next visit to each file.
+    Reextract {
+        /// Price the bump. Required — see the note above.
+        #[arg(long)]
+        bill: bool,
+        #[arg(long)]
+        repo: Option<String>,
+        /// Files per language in the TIMED sample (0 = census only).
+        #[arg(long)]
+        sample: Option<usize>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `reextract-bill/1` JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
     /// `kb-code outline <PATH> --repo R [--ref REF] [--json]` —
     /// `GET /api/outline` (`outline/1`): the structure of ONE file, for
     /// every registered file type. Rust items, YAML/TOML/JSON key paths,
@@ -4104,6 +4131,13 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
         Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
         Cmd::Parity { daemon, json } => parity_cmd(&daemon, json).await,
+        Cmd::Reextract {
+            bill,
+            repo,
+            sample,
+            daemon,
+            json,
+        } => reextract_cmd(&daemon, bill, repo.as_deref(), sample, json).await,
         Cmd::Outline {
             path,
             repo,
@@ -6647,6 +6681,141 @@ fn syntax_request() -> (&'static str, Vec<(&'static str, String)>) {
 /// The `GET /api/parity` request: `(path, query)`.
 fn parity_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::PARITY_ROUTE.path, Vec::new())
+}
+
+// ── V72-H2b — `kb-code reextract --bill` ────────────────────────────────
+//
+// Same discipline as the two above: the PATH comes from the server crate's
+// own `reextract::V72_H2B_ROUTES` contract, so
+// `cli_requests_send_every_param_their_route_requires` walks this verb
+// against the route it calls.
+
+/// The `GET /api/reextract/bill` request: `(path, query)`.
+fn reextract_bill_request(
+    repo: &str,
+    sample: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(n) = sample {
+        q.push(("sample", n.to_string()));
+    }
+    (kb_code_server::reextract::BILL_ROUTE.path, q)
+}
+
+/// `--repo`, or the daemon's ONE repo when it mirrors exactly one. Never
+/// a silent "first of several": which repo a bill priced is the whole
+/// point of the number, so an ambiguous daemon is an error naming the
+/// candidates rather than a guess.
+async fn resolve_repo_arg(
+    client: &reqwest::Client,
+    daemon: &str,
+    repo: Option<&str>,
+) -> Result<String> {
+    if let Some(r) = repo {
+        return Ok(r.to_string());
+    }
+    let body = get_json(client, daemon, "/api/repos", &[]).await?;
+    let names: Vec<String> = body["repos"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| r["name"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    match names.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => anyhow::bail!("this daemon mirrors no repos"),
+        many => anyhow::bail!(
+            "this daemon mirrors {} repos ({}) — name one with --repo",
+            many.len(),
+            many.join(", ")
+        ),
+    }
+}
+
+/// `kb-code reextract --bill` — the human table over `reextract-bill/1`.
+/// Every number is printed with the label the wire gives it: EXACT for
+/// the census, MEASURED for the sample, and the projection spelled out
+/// per row rather than presented as a fact.
+async fn reextract_cmd(
+    daemon: &str,
+    bill: bool,
+    repo: Option<&str>,
+    sample: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    if !bill {
+        anyhow::bail!(
+            "kb-code reextract: pass --bill. There is no re-extract verb: a salt bump is an \
+             edit to the daemon's `lang` table plus a deploy, and the mirror re-derives \
+             itself through the ordinary ingest gates."
+        );
+    }
+    let client = http_client()?;
+    let repo = resolve_repo_arg(&client, daemon, repo).await?;
+    let (path, query) = reextract_bill_request(&repo, sample);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let num = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+    println!(
+        "{} — role table v{}, sample {} file(s)/language",
+        body["repo"].as_str().unwrap_or("?"),
+        num(&body["role_table_version"]),
+        num(&body["sample"]),
+    );
+    println!(
+        "\n{:<12} {:>7} {:>12} {:>8} {:>12} {:>12}",
+        "LANG", "FILES", "BYTES", "SAMPLED", "SYM ms(proj)", "HL ms(proj)"
+    );
+    let ms = |v: &serde_json::Value| match v.as_f64() {
+        Some(f) => format!("{f:.0}"),
+        None => "—".to_string(),
+    };
+    for l in body["languages"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "{:<12} {:>7} {:>12} {:>8} {:>12} {:>12}",
+            l["lang"].as_str().unwrap_or("?"),
+            num(&l["files"]),
+            num(&l["bytes"]),
+            num(&l["sampled_files"]),
+            ms(&l["projected_symbol_ms"]),
+            ms(&l["projected_highlight_ms"]),
+        );
+    }
+    println!("\nrows per derived table (exact for this repo's blobs):");
+    for t in body["tables"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "  {:<16} {:>10}",
+            t["table"].as_str().unwrap_or("?"),
+            num(&t["rows"])
+        );
+    }
+    let totals = &body["totals"];
+    println!(
+        "\ntotal: {} file(s), {} byte(s), {} derived row(s)",
+        num(&totals["files"]),
+        num(&totals["bytes"]),
+        num(&totals["rows"]),
+    );
+    println!(
+        "projected re-extract: symbols {} ms, highlights {} ms",
+        ms(&totals["projected_symbol_ms"]),
+        ms(&totals["projected_highlight_ms"]),
+    );
+    if !body["census_complete"].as_bool().unwrap_or(true) {
+        println!("\nNOTE: the row census hit its wall-clock budget — `tables` is a FLOOR.");
+    }
+    if !body["sample_complete"].as_bool().unwrap_or(true) {
+        println!("NOTE: the timed pass hit its budget — some languages were not sampled.");
+    }
+    if let Some(h) = body["honesty"].as_str() {
+        println!("\n{h}");
+    }
+    Ok(())
 }
 
 // --- V72-H4a: `aug-lane/1` (`kb-code lanes`) -----------------------------
@@ -23073,6 +23242,8 @@ mod tests {
             }),
             syntax_request(),
             parity_request(),
+            // V72-H2b — the re-extract bill joins the SAME walk.
+            reextract_bill_request("repo", Some(50)),
             // V72-G1.1 — the entity DOSSIER, on its own sibling path
             // beside the frozen `entities/1` index above. A route added
             // to `entities::dossier::V72_G1_ROUTES` with no verb building

@@ -221,17 +221,20 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         if !kb_code_server::hierarchy::supports_hierarchy(li.id) {
             continue;
         }
-        if store.has_call_sites(&f.blob_hash, li.salt).unwrap_or(false) {
+        if store
+            .has_call_sites(&f.blob_hash, li.symbol_salt)
+            .unwrap_or(false)
+        {
             continue;
         }
         let bytes = std::fs::read(repo_root.join(&f.path)).unwrap_or_default();
         let symbols = store
-            .symbols_for_blob(&f.blob_hash, li.salt)
+            .symbols_for_blob(&f.blob_hash, li.symbol_salt)
             .unwrap_or_default();
         let sites = kb_code_server::hierarchy::extract_call_sites(li.id, &bytes, &symbols);
-        let _ = store.replace_call_sites(&f.blob_hash, li.salt, &sites);
+        let _ = store.replace_call_sites(&f.blob_hash, li.symbol_salt, &sites);
         let rels = kb_code_server::hierarchy::extract_type_relations(li.id, &bytes);
-        let _ = store.replace_type_relations(&f.blob_hash, li.salt, &rels);
+        let _ = store.replace_type_relations(&f.blob_hash, li.symbol_salt, &rels);
     }
 
     // Pick the callable whose enclosing call-site count is minimal but >0.
@@ -256,7 +259,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         let Some(frow) = files.into_iter().find(|f| f.path == *path) else {
             continue;
         };
-        let Ok(sites) = store.call_sites_for_blob(&frow.blob_hash, li.salt) else {
+        let Ok(sites) = store.call_sites_for_blob(&frow.blob_hash, li.symbol_salt) else {
             continue;
         };
         let n = sites
@@ -409,7 +412,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
             .find(|f| f.path == path)
             .expect("impact file row");
         let salt = kb_code_server::lang::detect(&path, None)
-            .map(|l| l.salt)
+            .map(|l| l.symbol_salt)
             .unwrap_or("");
         let _ = kb_code_server::usages::usages_counts_for_name(
             &store,
@@ -496,7 +499,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         )
         .unwrap();
         let li = kb_code_server::lang::detect(syn_path, Some(bytes)).unwrap();
-        let syms = store.symbols_for_blob(&blob_hash, li.salt).unwrap();
+        let syms = store.symbols_for_blob(&blob_hash, li.symbol_salt).unwrap();
         let decls: Vec<_> = syms
             .into_iter()
             .filter(|s| matches!(s.kind.as_str(), "fn" | "function"))
@@ -516,7 +519,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
             repo_id,
             syn_path,
             &name_keys,
-            Some(li.salt),
+            Some(li.symbol_salt),
             &blob_hash,
         );
         let lenses_samples: Vec<Duration> = (0..SAMPLES)
@@ -527,7 +530,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
                     repo_id,
                     syn_path,
                     &name_keys,
-                    Some(li.salt),
+                    Some(li.symbol_salt),
                     &blob_hash,
                 );
                 start.elapsed()
@@ -848,10 +851,10 @@ fn pr_room_reads_meet_their_p50_latency_budget_on_a_multi_review_fixture() {
         )
         .unwrap();
         let li = kb_code_server::lang::detect(syn_path, Some(bytes)).unwrap();
-        let symbols = store.symbols_for_blob(&blob_hash, li.salt).unwrap();
+        let symbols = store.symbols_for_blob(&blob_hash, li.symbol_salt).unwrap();
         let sites = kb_code_server::hierarchy::extract_call_sites(li.id, bytes, &symbols);
         store
-            .replace_call_sites(&blob_hash, li.salt, &sites)
+            .replace_call_sites(&blob_hash, li.symbol_salt, &sites)
             .unwrap();
 
         let target_sym = symbols

@@ -574,8 +574,15 @@ pub struct SyntaxRowOut {
     /// The first-party scanner's schema string, or `null`. Exactly one of
     /// `grammar`/`scanner` is non-null on a row that is parsed at all.
     pub scanner: Option<&'static str>,
-    /// The derived-row cache salt, `null` in lock-step with `grammar`.
-    pub salt: Option<&'static str>,
+    /// The SYMBOL-family derived-row cache salt, `null` in lock-step with
+    /// `info`/`engine.parses()`. V72-H2b split the single `salt` field
+    /// this replaces — a reader who wants "what keys this type's rows"
+    /// now has to say which family, which is the honest question.
+    pub symbol_salt: Option<&'static str>,
+    /// The HIGHLIGHT-family salt. Non-null on exactly the same rows as
+    /// `symbol_salt` (a row either has a `LangInfo` or it does not), and
+    /// never equal to it.
+    pub highlight_salt: Option<&'static str>,
     pub injection_host: bool,
     /// The guest languages this host can contain — DERIVED from
     /// `crate::injection::guest_langs`, which is the same function the
@@ -610,7 +617,8 @@ pub fn syntax_registry() -> SyntaxOut {
             tier: r.tier.as_str(),
             grammar: r.engine.grammar(),
             scanner: r.engine.scanner(),
-            salt: r.info.map(|i| i.salt),
+            symbol_salt: r.info.map(|i| i.symbol_salt),
+            highlight_salt: r.info.map(|i| i.highlight_salt),
             injection_host: r.injection_host,
             injections: crate::injection::guest_langs(r.lang),
             extensions: r.extensions,
@@ -1454,11 +1462,12 @@ mod tests {
         assert_eq!(row.engine, Engine::Scanner(crate::haml::SCANNER_VERSION));
         assert_eq!(row.engine.grammar(), None);
         assert_eq!(row.engine.scanner(), Some(crate::haml::SCANNER_VERSION));
-        assert!(row
-            .info
-            .expect("haml salt")
-            .salt
-            .contains(crate::haml::SCANNER_VERSION));
+        let haml = row.info.expect("haml salt");
+        // BOTH families' salts name the scanner: its version is what a
+        // change to `src/haml/` moves, and both families' rows come from
+        // it (V72-H2b).
+        assert!(haml.symbol_salt.contains(crate::haml::SCANNER_VERSION));
+        assert!(haml.highlight_salt.contains(crate::haml::SCANNER_VERSION));
         assert_eq!(
             tier_for_path("app/views/orders/show.html.haml", None),
             (Tier::Full, None)

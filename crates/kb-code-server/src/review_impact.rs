@@ -240,7 +240,7 @@ pub async fn review_impact_route(
     let path_c = path.clone();
     let tip_c = tip.clone();
     let blob_hash = read.blob_hash.clone();
-    let salt = lang.salt;
+    let salt = lang.symbol_salt;
     let changed_paths_owned: HashSet<String> =
         changed_paths.iter().map(|s| (*s).to_string()).collect();
     let (changed_symbols, callers_total, callers_in_diff, callers_out_of_diff, symbols_truncated) =

@@ -64,7 +64,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#fffcf0",
     accent: "#205ea6",
     ink: "#100f0f",
-    repaired: 13,
+    repaired: 14,
   },
   {
     id: "flexoki-dark",
@@ -116,7 +116,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#faf4ed",
     accent: "#76608e",
     ink: "#575279",
-    repaired: 20,
+    repaired: 23,
   },
   {
     id: "rose-pine-moon",
@@ -142,7 +142,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#eff1f5",
     accent: "#802de5",
     ink: "#4c4f69",
-    repaired: 26,
+    repaired: 29,
   },
   {
     id: "catppuccin-mocha",
@@ -168,7 +168,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#ffffff",
     accent: "#0668d9",
     ink: "#1f2328",
-    repaired: 18,
+    repaired: 20,
   },
   {
     id: "github-dark",
@@ -194,7 +194,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#22272e",
     accent: "#58a0fb",
     ink: "#adbac7",
-    repaired: 19,
+    repaired: 21,
   },
   {
     id: "tokyo-night-day",
@@ -207,7 +207,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#e1e2e7",
     accent: "#0054b4",
     ink: "#254ba9",
-    repaired: 26,
+    repaired: 29,
   },
   {
     id: "tokyo-night",
@@ -220,7 +220,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#1a1b26",
     accent: "#7aa2f7",
     ink: "#c0caf5",
-    repaired: 4,
+    repaired: 6,
   },
   {
     id: "everforest-light",
@@ -233,7 +233,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#fdf6e3",
     accent: "#627100",
     ink: "#536169",
-    repaired: 30,
+    repaired: 33,
   },
   {
     id: "everforest-dark",
@@ -246,7 +246,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#2d353b",
     accent: "#a7c080",
     ink: "#d3c6aa",
-    repaired: 8,
+    repaired: 10,
   },
   {
     id: "gruvbox-light",
@@ -259,7 +259,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#fbf1c7",
     accent: "#885600",
     ink: "#3c3836",
-    repaired: 17,
+    repaired: 19,
   },
   {
     id: "gruvbox-dark",
@@ -272,7 +272,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#282828",
     accent: "#fabd2f",
     ink: "#ebdbb2",
-    repaired: 11,
+    repaired: 14,
   },
   {
     id: "nord-light",
@@ -285,7 +285,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#eceff4",
     accent: "#45648b",
     ink: "#2e3440",
-    repaired: 16,
+    repaired: 18,
   },
   {
     id: "nord",
@@ -298,7 +298,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#2e3440",
     accent: "#88c0d0",
     ink: "#d8dee9",
-    repaired: 12,
+    repaired: 14,
   },
   {
     id: "kanagawa-lotus",
@@ -311,7 +311,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#f2ecbc",
     accent: "#425d8f",
     ink: "#545464",
-    repaired: 22,
+    repaired: 24,
   },
   {
     id: "kanagawa-wave",
@@ -324,7 +324,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#1f1f28",
     accent: "#7e9cd8",
     ink: "#dcd7ba",
-    repaired: 8,
+    repaired: 10,
   },
   {
     id: "one-light",
@@ -337,7 +337,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#fafafa",
     accent: "#295ed6",
     ink: "#383a42",
-    repaired: 21,
+    repaired: 22,
   },
   {
     id: "one-dark",
@@ -350,7 +350,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#282c34",
     accent: "#61afef",
     ink: "#abb2bf",
-    repaired: 6,
+    repaired: 8,
   },
   {
     id: "solarized-light",
@@ -363,7 +363,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#fdf6e3",
     accent: "#006cac",
     ink: "#4d636a",
-    repaired: 25,
+    repaired: 28,
   },
   {
     id: "solarized-dark",
@@ -376,7 +376,7 @@ export const KBC_THEMES: readonly KbcThemeEntry[] = [
     bg: "#002b36",
     accent: "#3f9fe8",
     ink: "#98a9ab",
-    repaired: 25,
+    repaired: 28,
   },
 ];
 

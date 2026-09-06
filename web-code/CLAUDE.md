@@ -257,10 +257,33 @@ that needs to survive one lives in the URL (`?via=`) and in `lib/trail.ts`.
 
 ## Themes (`kbc-theme/1`, `V70-A7`)
 
+**The role list IS the theme contract.** `SYNTAX_ROLES` in
+`themes/derive.ts` is not a convenience list — it is one of THREE literals
+that must stay byte-identical to `highlight::HighlightClass`'s wire names
+(`crates/kb-code-server/src/highlight.rs`, exported there as
+`highlight::ROLES`): the others are `api/types.ts`'s `HighlightClass` union
+and `styles/tokens.css`'s `--syn-*` block, with `styles/reader.css`'s
+`.kbc-hl-*` rules downstream of both. `lib/decorations.ts`'s `cssClassFor`
+does no translation (`kbc-hl-${cls}`), which is exactly why a role added on
+the server with no entry here renders as an unstyled span rather than
+failing. V72-H2b (D16) widened the set from fifteen to EIGHTEEN
+(`string-special`, `constant-builtin`, `punctuation-special`) — adding a
+nineteenth means editing all four files, bumping
+`highlight::ROLE_TABLE_VERSION` AND every `highlight_salt` (that crate's
+CLAUDE.md invariant 11), and pricing the re-paint with `kb-code reextract
+--bill` first. The wire is kebab-case, so a multi-word role's CSS class and
+custom property are `kbc-hl-string-special` / `--syn-string-special` with
+no mapping step in between. The built-in palette in `tokens.css` carries
+seven chrome hues where a registry theme's anchors carry eleven, so each
+widened role defaults there to its PARENT role's token (byte-identical
+rendering) and gets its own hue only through `SYNTAX_SOURCE` — inventing a
+hue `tokens.css` does not have would have meant shipping an unmeasured
+contrast pair.
+
 `themes/derive.ts` is a pure, one-way, side-effect-free derivation:
 authored ANCHORS (26 OKLCH values per theme, sourced from
 `kb-code-server/themes/registry.json` — see that crate's CLAUDE.md #7) →
-~80 ROLES (CSS custom properties) → SURFACES (chrome vars, the 15
+~80 ROLES (CSS custom properties) → SURFACES (chrome vars, the 18
 `.kbc-hl-*` syntax classes, diff/age/provenance/trust lanes). The direction
 never reverses and never becomes circular — a surface never feeds back into
 a role, and a role never feeds back into an anchor. The one exception is the

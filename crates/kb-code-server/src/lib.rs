@@ -390,6 +390,9 @@ pub mod provenance;
 pub mod rails;
 pub mod reading_sets;
 pub mod recipes;
+/// V72-H2b (D7) — `reextract-bill/1`: what a salt bump would cost,
+/// measured rather than estimated.
+pub mod reextract;
 pub mod repo_state;
 pub mod resolve;
 pub mod review_analytics;
@@ -1413,8 +1416,16 @@ const SALT_SWEEP_PAUSE: std::time::Duration = std::time::Duration::from_millis(2
 /// language's other salts for the blob it is writing). Hand-rolled rather
 /// than `DefaultHasher`, whose output is explicitly not stable across Rust
 /// releases; this value is persisted, so it must be.
+///
+/// V72-H2b: BOTH families' salts are folded in. A fingerprint over the
+/// symbol salts alone would let a `highlight_salt`-only bump — the whole
+/// point of the split, and the shape a role-table widening takes — land
+/// with the sweep marked `done`, stranding every pre-bump highlight row.
 fn salt_set_fingerprint() -> String {
-    let mut salts: Vec<&str> = crate::lang::ALL_LANGS.iter().map(|l| l.salt).collect();
+    let mut salts: Vec<&str> = crate::lang::ALL_LANGS
+        .iter()
+        .flat_map(|l| [l.symbol_salt, l.highlight_salt])
+        .collect();
     salts.sort_unstable();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for s in salts {
@@ -1506,6 +1517,7 @@ fn spawn_stale_salt_sweep(store: Arc<store::Store>, state_dir: std::path::PathBu
             totals.symbols += counts.symbols;
             totals.highlights += counts.highlights;
             totals.occurrences += counts.occurrences;
+            totals.derived_status += counts.derived_status;
             pages += 1;
             cursor = next;
             let text = salt_sweep_marker_text(&fingerprint, cursor.as_deref());
@@ -1522,6 +1534,7 @@ fn spawn_stale_salt_sweep(store: Arc<store::Store>, state_dir: std::path::PathBu
                         symbols = totals.symbols,
                         highlights = totals.highlights,
                         occurrences = totals.occurrences,
+                        derived_status = totals.derived_status,
                         total = totals.total(),
                         pages,
                         elapsed_ms = started.elapsed().as_millis() as u64,

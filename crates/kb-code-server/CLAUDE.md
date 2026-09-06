@@ -245,9 +245,70 @@ invariant #2 records).
     (invariant 3) for the adjacent discipline over the process this crate
     DOES spawn.
 
-11. **A symbol/highlight-cache write must purge every OTHER salt of the
-    SAME language for a blob before writing the fresh derivation**
-    (V70-A3X's stale-salt fix, `store.rs`/`lang.rs`). `replace_symbols`,
+11. **Two salts, two independently-gated families; a cache write purges
+    every OTHER salt of the SAME language AND family for that blob; and a
+    salt bump is a MEASURED decision** (V70-A3X, V72-B0, V72-H2b —
+    `store.rs`/`lang.rs`/`ingest.rs`/`reextract.rs`). *V72-H2b amendment
+    (2026-09-07, D7 + D16), stated first because everything below is now
+    read per family:* `LangInfo` carries `symbol_salt`
+    (`{id}@{grammar}+qN` — keys `symbols`, `occurrences`, `import_specs`,
+    `call_sites`, `type_relations`) and `highlight_salt`
+    (`{id}@{grammar}+hN+rolesM` — keys `highlights`), and `salt_for` is
+    the ONE function that turns a `SaltFamily` into a string, so no call
+    site picks the wrong one by habit. `M` is
+    `highlight::ROLE_TABLE_VERSION`, pinned to every language's salt by
+    test — widening `HighlightClass` is one edit that invalidates every
+    painted row and cannot be forgotten for one language. The two sets are
+    disjoint by construction, which is what keeps "is this row's salt in
+    the CURRENT set" a per-FAMILY question with no join back through
+    `files.lang`; `current_salt_cte` therefore TAKES a family, and passing
+    the wrong one to a read hides every current row of the other family —
+    passing it to the SWEEP deletes them. `store::SWEEP_TABLES` is the
+    declaration that keeps the two apart (one pass per `(table, family)`,
+    plus the `family` column predicate on the one table holding both), and
+    `lib::salt_set_fingerprint` folds BOTH sets, so a highlight-only bump
+    re-arms the V72-B0 marker rather than landing under a `done` one. No
+    migration was needed for the split itself: two strings in the same
+    `salt` TEXT column each family's table already had. **Two further
+    rules.** (i) *The gate is a MARKER, never a row count.* `derived_status`
+    (V0037 — and the NUMBER is a rule, see below; `(blob_hash, family,
+    salt) -> rows`) is written inside the same
+    transaction as the derivation it describes, and `Store::is_derived` —
+    its EXISTENCE — is what `ingest::index_file`'s two gates ask.
+    `has_symbols`'s `COUNT(*) > 0` cannot distinguish "not derived" from
+    "derived, and zero rows was the honest answer", so every zero-symbol
+    blob re-parsed on every visit forever (ERB, SCSS, a comment-only Rust
+    file, a heading-less Markdown file — V72-H1 reported the ERB case and
+    read it as being about ERB). Any FUTURE pass whose honest output can be
+    empty owes itself a marker rather than a `has_*` count; `occurrences`,
+    `import_specs`, `call_sites` and `type_relations` still carry the old
+    shape and are a NAMED, unfixed instance of the same defect. (ii) *Price
+    a bump before you ship it.* `kb-code reextract --bill` /
+    `GET /api/reextract/bill` measure what a salt change costs on the
+    configured mirror — exact census, timed sample, extrapolation labelled
+    as one. D7 asks for the number per milestone. There is deliberately no
+    verb that PERFORMS a re-extract: that would be a whole-corpus
+    maintenance pass with a trigger, which is exactly what (a)/(b) below
+    exist to keep out of this daemon. **(iii) A new migration takes the
+    embedded set's CURRENT MAX + 1 — never a reserved slot, never a
+    gap-fill.** The milestone ledger used to pre-assign numbers to
+    in-flight units, on the belief (frozen into
+    `V0034__review_docs_and_findings_v2.sql`'s own header, which must NOT
+    be edited — changing an applied migration's bytes is this invariant's
+    other trap) that "refinery applies by version, so a gap is inert". A
+    gap IS inert; a gap-FILL is not. `refinery-core`'s
+    `traits::get_unapplied_migrations` selects only `version > current`,
+    and `abort_missing` — default `true`, which `Store::open` uses — makes
+    an embedded migration BELOW the applied maximum a hard
+    `MissingVersion`: a volume already migrated past a reserved slot
+    REFUSES TO BOOT when the gap-fill merges. Not a skipped table, a dead
+    daemon, and the same class of outage as the 13.5 h rollback. V72-H2b
+    was holding such a slot (V0033) when this was found; it renumbered to
+    V0037 and left 33 permanently empty.
+    `store::tests::v72_b1::embedded_migration_versions_are_contiguous` now
+    enforces it, with `PERMANENTLY_SKIPPED_VERSIONS` as the debt ledger
+    for 33 — a list that may never grow.
+    The original rule, unchanged in substance: `replace_symbols`,
     `replace_occurrences` and `put_highlights` all do this on WRITE; the
     matching READS (`symbols_for_repo`, the three occurrence
     `*_in_repo` queries) restrict to the blob's CURRENT salt, falling back
@@ -256,6 +317,9 @@ invariant #2 records).
     grammar/query bump (a `symbol_salt`/`highlight_salt` change) that
     writes without purging the old salt first leaves duplicate,
     contradictory rows for the same blob under two salts, permanently.
+    V72-H2b: that purge is scoped by FAMILY as well as by language prefix
+    — a symbol-salt bump that erased the highlight marker would silently
+    re-paint a corpus it was never supposed to touch.
     `Store::sweep_stale_salt_derived` is a one-time boot sweep for rows a
     PRE-FIX binary already left behind — it is a remedy for old damage, not
     a substitute for purging on every write. *V72-B0 amendment (2026-09-06,
@@ -561,7 +625,15 @@ invariant #2 records).
     content skip markers): the tier is a property of the file TYPE,
     decided before a byte is read, and the `tier`/`tier_reason` fields on
     `GET /api/file` and per-file `GET /api/symbols` say only that — never
-    that a particular blob has been derived.
+    that a particular blob has been derived. *V72-H2b amendment:* the
+    plan is consulted once and feeds TWO independent gates, not one —
+    `plan.highlight` is decided before either cache is asked, because
+    "this type paints nothing" is a property of the type and stays the
+    answer on the hundredth visit (`GET /api/file`'s `highlight_cache`
+    reports `skipped_tier`, `hit` or `miss`, and the third is what a
+    `highlight_salt` bump looks like from the outside). What a blob HAS
+    been derived is invariant 11's `derived_status` marker, and the two
+    axes must not be conflated on the wire either.
     (c) **The grid is derived, and golden-pinned.** Every Parity Grid cell
     is computed from the predicate that actually gates that lane
     (`lang::tags_query`, `extract::CST_OUTLINE_LANG_IDS`,
