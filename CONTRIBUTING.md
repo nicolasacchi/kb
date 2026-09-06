@@ -69,7 +69,7 @@ matching entry before changing a load-bearing subsystem.
 bindings), `e2e` (Playwright iframe/SPA smoke), `embedder-lint` +
 `embedder-test` (the ORT-linking surface), `code-lint` + `code-test` +
 `code-spa` + `code-e2e` (the kb-code sibling daemon, its CLI, kb-lip and the
-web-code SPA), `web` (SPA typecheck + vitest), and `supply-chain`
+web-code SPA), `web-unit` (SPA typecheck + vitest), and `supply-chain`
 (`cargo-deny`). Lint and test lanes are split so the heavy test lane owns each
 rust-cache family. A separate workflow (`dco.yml`) gates the DCO sign-off
 described above. All of it must be green before merge.
@@ -120,7 +120,7 @@ first: it documents the load-bearing constraints (single-writer-per-kb
 storage, deterministic atlas, fail-closed security) that break silently at
 runtime rather than at compile time.
 
-Note: the `CLAUDE.md` files throughout this repo (root, `crates/kb-core/`)
+Note: the `CLAUDE.md` files throughout this repo (root, `crates/kb-core/`, `crates/kb-code-server/`, `web-code/`)
 are instructions for AI coding agents working in this codebase, not
 contributor documentation — useful background reading, but not written for a
 human contributor's first PR.

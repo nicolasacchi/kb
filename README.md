@@ -40,6 +40,10 @@ store is your filesystem, recall costs no tokens, and it is all MIT.
 
 ## Install
 
+> Status: the first public tag has not been cut yet. Until it is, no release
+> tarball or image is published and building from source (option C below) is
+> the working path.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nicolasacchi/kb/main/scripts/install.sh | sh
 ```
@@ -94,7 +98,8 @@ proxy — it refuses a token-less public bind. Longer walkthrough:
 ## Use it from Claude Code
 
 This repo is a Claude Code plugin marketplace — `claude plugin marketplace add
-nicolasacchi/kb`. Every plugin is LLM-free: hooks and commands drive the `kb`
+nicolasacchi/kb` from a shell, or `/plugin marketplace add nicolasacchi/kb`
+inside a Claude Code session. Every plugin is LLM-free: hooks and commands drive the `kb`
 CLI against a running daemon. The CLI *is* the protocol; there is no MCP
 server, a [recorded refusal](#non-goals) with re-open triggers.
 

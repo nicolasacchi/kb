@@ -64,6 +64,6 @@ resources to keep the canon aligned with topic 07.
 
 The full raw bundle (including the React/Babel prototype, alt layout
 explorations, and the design canvas) lives at
-[`../claude-design-handoff/web-gallery/`](../claude-design-handoff/web-gallery/).
+`../claude-design-handoff/web-gallery/` (kept outside this repository).
 The TUI handoff bundle is its sibling at
-[`../claude-design-handoff/tui-platform/`](../claude-design-handoff/tui-platform/).
+`../claude-design-handoff/tui-platform/` (kept outside this repository).
