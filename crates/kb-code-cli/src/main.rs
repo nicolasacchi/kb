@@ -16888,6 +16888,39 @@ async fn workspace_export_cmd(daemon: &str, repo: &str, name_or_id: &str) -> Res
 // a request omits a param the route declares required — the exact v7.0
 // defect where `review impact` never sent the param its route needed.
 
+/// V73-K1 — the three `kbc-review/1` document reads. Each is addressed by a
+/// PATH parameter (the review id), so their `required_params` lists are
+/// empty; they join the walk anyway, because the half of it that matters
+/// here is "a `kb-code` verb exists that addresses this route at all" — the
+/// v7.0 dead-surface defect in its CLI-side shape.
+fn review_doc_request(resolve: bool) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query: Vec<(&'static str, String)> = Vec::new();
+    if resolve {
+        query.push(("resolve", "1".to_string()));
+    }
+    (kb_code_server::review_doc::routes::DOC_ROUTE.path, query)
+}
+
+fn review_doc_lint_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::review_doc::routes::DOC_LINT_ROUTE.path,
+        Vec::new(),
+    )
+}
+
+fn review_doc_render_request(
+    template: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query: Vec<(&'static str, String)> = Vec::new();
+    if let Some(t) = template {
+        query.push(("template", t.to_string()));
+    }
+    (
+        kb_code_server::review_doc::routes::DOC_RENDER_ROUTE.path,
+        query,
+    )
+}
+
 /// The `GET /api/entity` request: `(path, query)`.
 fn entity_request(
     repo: &str,

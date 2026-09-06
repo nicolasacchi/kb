@@ -766,6 +766,10 @@ fn pr_room_reads_meet_their_p50_latency_budget_on_a_multi_review_fixture() {
                 import_batch_id: "pr-room-fixture".to_string(),
                 origin: FINDING_ORIGIN_MANUAL.to_string(),
                 finding_author: Some("pr-room-fixture".to_string()),
+                act: "issue".to_string(),
+                blocking: false,
+                cites_json: None,
+                fingerprint: None,
             };
             store.insert_review_finding(&finding, now).unwrap();
         }
