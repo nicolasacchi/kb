@@ -582,25 +582,51 @@ mod tests {
                 std::slice::from_ref(&card),
                 &ctx(payload, &omitted),
             );
-            // The assertions are about TAG and ATTRIBUTE boundaries, not
-            // about substrings: `&lt;img src=x onerror=alert(1)&gt;` legitimately
-            // CONTAINS "onerror=alert" and is perfectly inert, so testing
-            // for the substring alone would be testing the wrong thing.
-            for tag in ["<script", "<img", "<iframe", "<svg"] {
+            // The assertion is about the TAG boundary, and only that:
+            // element-content text is allowed to contain any character that
+            // cannot open a tag. `&lt;img src=x onerror=alert(1)&gt;`
+            // legitimately CONTAINS "onerror=alert" and is perfectly inert,
+            // and a bare apostrophe inside a `<p>` is just an apostrophe —
+            // testing for those substrings would be testing the wrong
+            // thing, and would fail on correct output.
+            //
+            // The ATTRIBUTE half of the proof is
+            // `esc_never_leaves_a_character_that_can_close_a_tag_or_an_attribute`
+            // below: every dynamic value this module interpolates into a
+            // quoted attribute goes through `esc`, and `esc` is pinned to
+            // emit none of `< > " '`.
+            for tag in ["<script", "<img", "<iframe", "<svg", "<object", "<embed"] {
                 assert!(
                     !out.html.contains(tag),
                     "payload {payload:?} opened a live {tag} tag"
                 );
             }
             assert!(
-                !out.html.contains("\" onmouseover=\"") && !out.html.contains("' onload='"),
-                "payload {payload:?} broke out of its quoted attribute"
-            );
-            assert!(
                 out.html.contains("&lt;script&gt;") || !payload.contains("<script>"),
                 "payload {payload:?} vanished instead of being escaped"
             );
         }
+    }
+
+    #[test]
+    fn esc_never_leaves_a_character_that_can_close_a_tag_or_an_attribute() {
+        for payload in XSS {
+            let e = esc(payload);
+            for c in ['<', '>', '"', '\''] {
+                assert!(
+                    !e.contains(c),
+                    "esc({payload:?}) left a bare {c:?} — every dynamic attribute value in \
+                     this module goes through it, so one raw quote is an escape hatch out of \
+                     `class=\"…\"`"
+                );
+            }
+            assert!(
+                e.contains("&lt;") || !payload.contains('<'),
+                "esc({payload:?}) dropped the character instead of escaping it"
+            );
+        }
+        // Ampersand first, so an already-escaped entity is not double-read.
+        assert_eq!(esc("&lt;"), "&amp;lt;");
     }
 
     #[test]
