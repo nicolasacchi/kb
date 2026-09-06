@@ -810,7 +810,7 @@ invariant #2 records).
     both sides.
 22. **`kbc-review/1` is a MARKDOWN document with a closed ref grammar; the
     slug is identity and is never reused; `compose` is the ONE authoring
-    transaction** (V73-K1, `src/review_doc/`, migration V0032, design
+    transaction** (V73-K1, `src/review_doc/`, migration V0034, design
     D9/D9-a). Four rules, separate to state and easy to break one at a time.
     (a) **The stored body is Markdown; HTML is only ever an EXPORT.** D9-a's
     recorded departure from the operator's original ask — HTML is a
@@ -857,7 +857,7 @@ invariant #2 records).
     ledger makes "never reused" true.** `f-<n>` slugs are minted from
     `review_finding_slugs`, whose counter reads BOTH that ledger and the
     ordinals already on `review_findings`, so it cannot walk backwards for a
-    pre-V0032 review or after a hand-deleted row. Document-path
+    pre-V0034 review or after a hand-deleted row. Document-path
     reconciliation matches by FINGERPRINT (`FindingIdentity::Fingerprint`,
     the SAME `reconcile_findings_import_on` core the v1 slug-keyed path uses
     — one implementation, two identity rules), so re-wording a finding keeps

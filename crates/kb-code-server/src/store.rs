@@ -6831,9 +6831,9 @@ pub struct ReviewFindingRow {
     pub import_batch_id: String,
     pub created_at: i64,
     pub updated_at: i64,
-    // --- findings v2 (V73-K1, migration V0032) ---------------------------
+    // --- findings v2 (V73-K1, migration V0034) ---------------------------
     /// The SPEECH-ACT axis (`review_doc::ACTS`) — route-validated on the
-    /// `compose` path, `'issue'` by DEFAULT on every pre-V0032 row so an
+    /// `compose` path, `'issue'` by DEFAULT on every pre-V0034 row so an
     /// existing finding reads back exactly as it always meant.
     pub act: String,
     /// The reviewer's OWN call, deliberately not derived from `severity`:
@@ -6844,7 +6844,7 @@ pub struct ReviewFindingRow {
     /// follows). The PRIMARY location is still `annotation_id`.
     pub cites_json: Option<String>,
     /// The CHANGE DETECTOR (`review_doc::fingerprint`). `None` on every
-    /// pre-V0032 row and never backfilled — nothing computed one for those
+    /// pre-V0034 row and never backfilled — nothing computed one for those
     /// rows, and inventing one would let a re-compose silently adopt a
     /// finding it did not write.
     pub fingerprint: Option<String>,
@@ -8135,7 +8135,7 @@ fn reconcile_findings_import_on(
             if !seen.contains(slug) && !row.superseded && row.origin == FINDING_ORIGIN_IMPORT {
                 // `superseded_by` is written ONLY when an incoming finding
                 // declared `supersedes: [this slug]`. Never inferred — see
-                // migration V0032's own comment on why guessing which new
+                // migration V0034's own comment on why guessing which new
                 // finding "is really" an old one is the wrong-exact class.
                 let by = supersede_declarations.get(slug);
                 tx.execute(
@@ -8202,7 +8202,7 @@ pub fn slug_ordinal(slug: &str) -> Option<i64> {
 ///
 /// The counter is `1 + max(ledger ordinals, ordinals of slugs already on
 /// `review_findings`)`. Reading BOTH is what makes the rule true for a
-/// review that predates V0032 (its `f-1`/`f-2` slugs exist as rows but have
+/// review that predates V0034 (its `f-1`/`f-2` slugs exist as rows but have
 /// no ledger entry yet) as well as for one whose highest-numbered finding a
 /// human deleted out from under the ledger. Both sources are monotonic and
 /// neither is ever pruned, so the counter cannot walk backwards — D9's
@@ -8340,7 +8340,7 @@ pub struct ComposeDocOutcome {
 impl Store {
     /// The newest revision of this review's document at `ps_number`, or
     /// `None` when it has none. "Newest wins" is the whole read rule —
-    /// revisions are append-only (migration V0032).
+    /// revisions are append-only (migration V0034).
     pub fn latest_review_doc(
         &self,
         review_id: i64,
