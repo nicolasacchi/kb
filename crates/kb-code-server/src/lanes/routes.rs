@@ -193,7 +193,11 @@ pub async fn lanes_route(
             // Every instance the operator declared, in config order.
             for id in &state.lanes.enabled {
                 if let Some(r) = super::resolve(id) {
-                    if std::ptr::eq(r.spec, spec) {
+                    // Compared by ID, not by pointer: `LANES` is a `const`,
+                    // so each use promotes its own allocation and
+                    // `ptr::eq` on two `&'static LaneSpec` from different
+                    // uses is not guaranteed to hold.
+                    if r.spec.id == spec.id {
                         lanes.push(entry(&state, spec, id.clone(), &by_lane));
                     }
                 }
