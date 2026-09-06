@@ -68,7 +68,7 @@ test.describe("branches page", () => {
     await expect(featureRow).toBeVisible();
     await expect(featureRow.locator("[data-kbc-branch-head]")).toHaveCount(0);
     await expect(featureRow.locator("[data-kbc-branch-ahead]")).toHaveText("1");
-    // `main` has moved 8 commits ahead of the `feature-x` fork point since
+    // `main` has moved 9 commits ahead of the `feature-x` fork point since
     // (C7 `story.rs`, the todos fixture, v3.1's H3a trait/impl + H3b
     // `impact_extra.rs` additions, DCB W2.B's additive rev_remap demo —
     // TWO commits creating then shifting `doclens_remap_fixture.rs`,
@@ -78,9 +78,10 @@ test.describe("branches page", () => {
     // the cited-by demo fixture file (`seedCitedByDemo`) — all committed
     // directly on `main`, see `fixture-repo.ts`) — `feature-x` is
     // unaffected in its OWN 1 commit (still `ahead: 1`), but is now behind
-    // `main` by those 8. This number moves whenever a lane extends the
-    // fixture on main; that is expected.
-    await expect(featureRow.locator("[data-kbc-branch-behind]")).toHaveText("8");
+    // `main` by those 9 — V72-I2's Rails fixture app is the ninth. This
+    // number moves whenever a lane extends the fixture on main; that is
+    // expected.
+    await expect(featureRow.locator("[data-kbc-branch-behind]")).toHaveText("9");
 
     await featureRow.locator("[data-kbc-branch-ahead] a").click();
     await expect(page).toHaveURL(new RegExp(`~compare\\?from=main&to=${FEATURE_BRANCH}`));
