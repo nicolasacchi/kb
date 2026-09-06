@@ -5916,8 +5916,8 @@ async fn lanes_list_cmd(daemon: &str, repo: Option<&str>, json: bool) -> Result<
     let empty = Vec::new();
     let lanes = body["lanes"].as_array().unwrap_or(&empty);
     println!(
-        "{:<22} {:<9} {:<9} {:<9} {:>8} {:>8}  {}",
-        "LANE", "KIND", "STATE", "CEILING", "FACTS", "RUNS", "LAST INGEST"
+        "{:<22} {:<9} {:<9} {:<9} {:>8} {:>8}  LAST INGEST",
+        "LANE", "KIND", "STATE", "CEILING", "FACTS", "RUNS"
     );
     for l in lanes {
         let id = l["id"].as_str().unwrap_or("?");
@@ -5929,7 +5929,8 @@ async fn lanes_list_cmd(daemon: &str, repo: Option<&str>, json: bool) -> Result<
             "off"
         };
         let num = |v: &serde_json::Value| -> String {
-            v.as_i64().map(|n| n.to_string()).unwrap_or("-".into())
+            v.as_i64()
+                .map_or_else(|| "-".to_string(), |n| n.to_string())
         };
         let last = l["last_ingest_at"]
             .as_i64()

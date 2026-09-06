@@ -163,7 +163,7 @@ mod tests {
         let (_tmp, store, repo_id) = store();
         let now = chrono::Utc::now().timestamp();
         seed(&store, repo_id, "rubocop", "old", now - 30 * 86_400, 3);
-        seed(&store, repo_id, "rubocop", "new", now - 1 * 86_400, 2);
+        seed(&store, repo_id, "rubocop", "new", now - 86_400, 2);
 
         let (counts, pages) = run_pass(&store, &cfg(&["rubocop"], &[("rubocop", 14)])).await;
         assert_eq!(counts.runs, 1);
