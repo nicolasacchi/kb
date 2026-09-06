@@ -86,7 +86,8 @@
         "canvas",
         "player",
         "lens",
-        "boards"
+        "boards",
+        "rails"
       ],
       "note": "which board surface is mounted. V74-L2 added `boards` — the kbc-canvas/1 board (`~boards/{slug}`), which is a DIFFERENT surface from `canvas` (V3.4-C2's frozen working-set canvas) and gates its own rows so the two sets are provably disjoint."
     },
@@ -329,7 +330,7 @@
       "id": "board",
       "title": "Board + players",
       "depth": 20,
-      "covers": "the non-text centre modes: `~canvas`, `~browser`, `~boards` (kbc-canvas/1) and the tour/story players",
+      "covers": "the non-text centre modes: `~canvas`, `~browser`, `~rails`, `~boards` (kbc-canvas/1) and the tour/story players",
       "coactive_with": [
         "global",
         "tree",
@@ -7699,6 +7700,137 @@
       "lifecycle": "shipped",
       "dispatch": "central",
       "note": "Asks the same `/api/actions` the `.` panel asks and takes the DEFAULT target, so the leader and the menu can never disagree about what \"this\" is. Registered in `Reader.tsx` (the only surface with a caret); elsewhere CommandRoot's \"nothing owns it here\" branch leaves the key alone."
+    },
+    {
+      "id": "nav.rails",
+      "title": "Go to Rails",
+      "aka": [
+        "rails",
+        "~rails",
+        "entity index"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g R"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g R"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code rails home",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V72-I2. `Space g r` is Reviews, so Rails takes the SHIFTED letter — the dispatcher folds Shift into the character for a printable key (`tokenOf`), so `Space g R` is one unambiguous token sequence, not a modifier chord. The page is `/r/:repo/~rails`, a repo-scoped sentinel mounted beside `~todos`/`~workspaces`; on a repo-less surface this degrades to Home like every other `nav.*` row."
+    },
+    {
+      "id": "rails.section-next",
+      "title": "Next noun section",
+      "aka": [
+        "next rails section"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          ")"
+        ],
+        "plain": [],
+        "helix": [
+          ")"
+        ]
+      },
+      "scope": "board",
+      "when": "board == rails",
+      "cli": "kb-code rails home",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V72-I2. `)`/`(` are the board scope's existing GROUP-step idiom (`lens.group-next`/`prev`); a noun section is that page's group, so it takes the same keys under a disjoint `when`. Expands the section it lands on and focuses its heading."
+    },
+    {
+      "id": "rails.section-prev",
+      "title": "Previous noun section",
+      "aka": [
+        "previous rails section"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "("
+        ],
+        "plain": [],
+        "helix": [
+          "("
+        ]
+      },
+      "scope": "board",
+      "when": "board == rails",
+      "cli": "kb-code rails home",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "rails.atom.open",
+      "title": "Open the hovered Rails atom's target",
+      "aka": [
+        "open rails target",
+        "rails atom"
+      ],
+      "group": "Act",
+      "keys": {
+        "vim": [
+          "Space l"
+        ],
+        "plain": [],
+        "helix": [
+          "Space l"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "file"
+      ],
+      "cli": "kb-code framework",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V72-I2. The hover card (`K`) lists the rails-lens edges on the cursor's line; this opens the first ADDRESSABLE one. An explicit keystroke is the only thing allowed to move the reader onto a likely/candidate target — D5's rule bans AUTO-navigation, not a deliberate one — and with several atoms on the line the command takes the first and says so rather than guessing. `Space l` (\"link\") rather than the `Space o` this row first claimed: V73-K2b landed `doc.card-open` on `Space o` in `review` scope, and a GLOBAL row owning that key would fail the shadowing lint on THEIR row, not this one. Note the conflict pass cannot see a global/global collision at all (it skips any pair where either scope is `global`), so a leader letter must be checked against the whole registry by hand before it is claimed."
+    },
+    {
+      "id": "rails.schema-fold",
+      "title": "Fold the annotaterb schema banner",
+      "aka": [
+        "schema fold",
+        "annotate block"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space z"
+        ],
+        "plain": [],
+        "helix": [
+          "Space z"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local buffer folding, like every other reading-mode pref",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V72-I2. The same call the Schema card's own Fold button makes. `Space z` rather than a bare `z`: `z` is a pure vim FOLD prefix inside the buffer, and adding a global bare `z` would change what the buffer guard does with every `z` chord (web-code/CLAUDE.md's `every, never any` rule, from the other direction)."
     }
   ]
 }

@@ -2127,3 +2127,64 @@ export function archiveBoard(repo: string, slug: string): Promise<BoardStatusOut
     `/api/boards/${encodeURIComponent(slug)}/archive?repo=${encodeURIComponent(repo)}`,
   );
 }
+
+// --- V72-I2 — `rails/1` (`GET /api/rails/*`) --------------------------------
+//
+// Ten routes, three shapes. `RAILS_NOUN_SEGMENT` is the ONE place the noun →
+// URL-segment pluralisation lives on this side; the server's own closed
+// vocabulary is `rails::NOUNS` (mirrored for the search grammar in
+// `lib/kbcq.ts`'s `RAILS_NOUNS`), and `railsNounSegment` is total over it so
+// a ninth noun on the wire degrades to a named 404 rather than a silent
+// wrong-lane fetch.
+
+import type { RailsHomeOut, RailsListOut, RailsOrphansOut } from "./types";
+
+/// noun → the `/api/rails/<segment>` path segment. English pluralisation is
+/// irregular enough (`mailer` → `mailers`, but the segment set is fixed
+/// server-side) that a table beats a rule.
+const RAILS_NOUN_SEGMENT: Readonly<Record<string, string>> = {
+  model: "models",
+  controller: "controllers",
+  action: "actions",
+  route: "routes",
+  job: "jobs",
+  mailer: "mailers",
+  view: "views",
+  concern: "concerns",
+};
+
+export function railsNounSegment(noun: string): string | null {
+  return RAILS_NOUN_SEGMENT[noun] ?? null;
+}
+
+/// `GET /api/rails/home?repo=` — the passport.
+export function fetchRailsHome(repo: string): Promise<RailsHomeOut> {
+  return getJson<RailsHomeOut>("/api/rails/home", { repo });
+}
+
+/// `GET /api/rails/<plural>?repo=[&q=][&limit=][&offset=]` — one noun's page.
+/// Paging is the SERVER's (`limit`/`offset` with a TRUE `total`); this client
+/// never slices a page it already holds.
+export function fetchRailsNoun(q: {
+  repo: string;
+  noun: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<RailsListOut> {
+  const seg = railsNounSegment(q.noun);
+  if (!seg) {
+    return Promise.reject(new Error(`unknown rails/1 noun ${JSON.stringify(q.noun)}`));
+  }
+  return getJson<RailsListOut>(`/api/rails/${seg}`, {
+    repo: q.repo,
+    q: q.q,
+    limit: q.limit !== undefined ? String(q.limit) : undefined,
+    offset: q.offset !== undefined ? String(q.offset) : undefined,
+  });
+}
+
+/// `GET /api/rails/orphans?repo=` — the six-lane triage queue.
+export function fetchRailsOrphans(repo: string): Promise<RailsOrphansOut> {
+  return getJson<RailsOrphansOut>("/api/rails/orphans", { repo });
+}

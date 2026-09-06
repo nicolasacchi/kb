@@ -150,6 +150,30 @@ export const FEATURE_X2_BRANCH = "feature-x-2";
 export const FEATURE_X2_FILE = "feature_x2.rs";
 export const FEATURE_X2_COMMIT_SUBJECT = "add feature-x-2 stack layer";
 
+// V72-I2 — a tiny, synthetic RAILS app inside the fixture repo, so `~rails`
+// (`rails/1`) has something to detect. `detect_is_rails` needs exactly two
+// things — a `config/routes.rb` and a `Gemfile` declaring `gem "rails"` —
+// and the rest is the smallest tree that produces at least one row of the
+// nouns the spec reads, plus the two facts V72-I2 exists to prove:
+//
+//   * an annotaterb `# == Schema Information` banner on the model, which the
+//     reader's Schema card parses and the buffer folds;
+//   * a `.haml` view, which the Rails lens must read exactly like an `.erb`
+//     one (`app/views/acme_orders/_haml_row.html.haml` is rendered FROM
+//     HAML, so it must not appear in the orphan report's
+//     `view_never_rendered` lane).
+//
+// The controller/model are named `AcmeOrder*` so nothing here can collide
+// with the Rust fixture symbols the other specs pin.
+export const RAILS_MODEL_FILE = "app/models/acme_order.rb";
+export const RAILS_CONTROLLER_FILE = "app/controllers/acme_orders_controller.rb";
+export const RAILS_HAML_VIEW = "app/views/acme_orders/summary.html.haml";
+export const RAILS_HAML_PARTIAL = "app/views/acme_orders/_haml_row.html.haml";
+/// A view NOTHING renders — the `view_never_rendered` orphan lane's fixture.
+export const RAILS_ORPHAN_VIEW = "app/views/acme_orders/_never_rendered.html.erb";
+export const RAILS_COMMIT_SUBJECT = "add the rails fixture app";
+
+
 function git(dir: string, args: string[]) {
   execFileSync("git", ["-C", dir, ...args], { stdio: "inherit" });
 }
@@ -403,6 +427,86 @@ export function createFixtureRepo(dir: string): void {
   );
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", IMPACT_COMMIT_SUBJECT]);
+
+  // V72-I2 — the Rails fixture app, as its own additive commit on `main`
+  // (never the pinned initial commit, never `feature-x`), written BEFORE the
+  // `feature-x-2` block below so HEAD is still on `main` here.
+  mkdirSync(join(dir, "config"), { recursive: true });
+  mkdirSync(join(dir, "config", "locales"), { recursive: true });
+  mkdirSync(join(dir, "app", "models"), { recursive: true });
+  mkdirSync(join(dir, "app", "controllers"), { recursive: true });
+  mkdirSync(join(dir, "app", "views", "acme_orders"), { recursive: true });
+  writeFileSync(join(dir, "Gemfile"), 'source "https://rubygems.org"\n\ngem "rails", "8.1.0"\n');
+  writeFileSync(
+    join(dir, "config", "routes.rb"),
+    [
+      "Rails.application.routes.draw do",
+      "  resources :acme_orders, only: %i[index] do",
+      "    collection do",
+      "      get :summary",
+      "    end",
+      "  end",
+      "end",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, "config", "locales", "en.yml"),
+    [
+      "en:",
+      "  acme_orders:",
+      "    summary:",
+      '      heading: "Order summary"',
+      "",
+    ].join("\n"),
+  );
+  // The annotaterb banner the Schema card reads and the buffer folds.
+  writeFileSync(
+    join(dir, RAILS_MODEL_FILE),
+    [
+      "# == Schema Information",
+      "#",
+      "# Table name: acme_orders",
+      "#",
+      "#  id         :bigint           not null, primary key",
+      '#  state      :string           default("new"), not null',
+      "#  created_at :datetime         not null",
+      "#",
+      "class AcmeOrder < ApplicationRecord",
+      "  has_many :acme_lines",
+      "end",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, RAILS_CONTROLLER_FILE),
+    [
+      "class AcmeOrdersController < ApplicationController",
+      "  def index",
+      "    @acme_orders = AcmeOrder.all",
+      "  end",
+      "",
+      "  # No explicit render: the lens resolves this action's template by",
+      "  # convention, and that template is HAML.",
+      "  def summary",
+      "  end",
+      "end",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, RAILS_HAML_VIEW),
+    [
+      "%section.acme-summary",
+      '  %h2= t(".heading")',
+      '  = render "haml_row"',
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(join(dir, RAILS_HAML_PARTIAL), ["%tr.acme-row", "  %td summary row", ""].join("\n"));
+  writeFileSync(join(dir, RAILS_ORPHAN_VIEW), "<p>nothing renders this</p>\n");
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", RAILS_COMMIT_SUBJECT]);
 
   // V3.3-U1 — feature-x-2 stacked on feature-x's tip (one commit). HEAD
   // returns to main; feature-x tip is never moved (branch -f / checkout

@@ -56,6 +56,10 @@ const ROUND_TRIP_URLS = [
   "/session/abc/diff?repo=kb",
   "/~lens/notes/by-path/a/b.html",
   "/r/kb/~browser?symbol=foo",
+  // V72-I2 — `~rails` deliberately stays unmodelled (see `codeUrl.ts`'s
+  // `railsUrl` doc): both shapes must survive verbatim.
+  "/r/kb/~rails",
+  "/r/kb/~rails?noun=view",
   "/r/kb/~range-diff?old=a&new=b",
   "/r/kb/~lens/notes/doc1",
 ];

@@ -68,6 +68,11 @@ export interface Prefs {
   diffSyntaxHighlight?: boolean;
   /// V3.N2 — sticky context lines above the editor (default ON).
   stickyContext?: boolean;
+  /// V72-I2 — fold the annotaterb `# == Schema Information` banner in the
+  /// buffer. Default ON (opt-OUT), because the banner is generated noise
+  /// above the class a reader opened the file for; the rail's Schema card
+  /// carries the same facts in a form that fits.
+  schemaFold?: boolean;
   /// V3.1-H3a — param-name inlay hints at call sites (default ON).
   paramHints?: boolean;
   /// V3.1-H3b — Code Vision lens chips above declarations (default ON).
@@ -127,6 +132,7 @@ const DEFAULT_PREFS: Prefs = {
   diffMode: "unified",
   diffSyntaxHighlight: true,
   stickyContext: true,
+  schemaFold: true,
   paramHints: true,
   codeLenses: true,
   attentionOverlay: false,
@@ -384,6 +390,19 @@ export function saveStickyContext(on: boolean): void {
   const cur = loadPrefs();
   if (cur.stickyContext === on) return;
   savePrefs({ ...cur, stickyContext: on });
+}
+
+/// V72-I2 — the annotaterb schema fold (default true when unset — an
+/// opt-OUT, the same shape `stickyContext`/`paramHints`/`codeLenses` use).
+export function loadSchemaFold(): boolean {
+  const v = loadPrefs().schemaFold;
+  return v !== false;
+}
+
+export function saveSchemaFold(on: boolean): void {
+  const cur = loadPrefs();
+  if (cur.schemaFold === on) return;
+  savePrefs({ ...cur, schemaFold: on });
 }
 
 /// V3.1-H3a — param-name inlay hints (default true when unset).

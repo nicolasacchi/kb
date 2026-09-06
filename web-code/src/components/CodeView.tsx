@@ -9,6 +9,7 @@ import { highlightField, highlightRangesFacet } from "../editor/highlightField";
 import { createLineGutter, type LineGutterHandlers, type LineMarkerSpec } from "../editor/lineGutter";
 import { linkifyExtension, type LinkifyCallbacks } from "../editor/linkify";
 import { occurrenceHighlightExtension } from "../editor/occurrenceHighlight";
+import { schemaFoldExtension, type SchemaFoldSpec } from "../editor/schemaFold";
 import { paramHintsExtension, paramHintsRefreshEffect } from "../editor/paramHints";
 import {
   applyLensDecorations,
@@ -230,6 +231,15 @@ export interface CodeViewProps {
   /// the pre-SH.C3 hardcoded value for callers that don't pass it).
   fontSize?: number;
 
+  // --- V72-I2 — the annotaterb schema fold -------------------------------
+  /// The `# == Schema Information` banner's own line range + placeholder
+  /// label (`lib/annotaterb.ts`), or `null`/absent when this file carries no
+  /// banner or the reader has turned the fold off. Threaded through its own
+  /// `Compartment` for the same reason `wrap` is: toggling it must not
+  /// remount the view. See `editor/schemaFold.ts` for why this is a replace
+  /// decoration rather than `@codemirror/language`'s fold service.
+  schemaFold?: SchemaFoldSpec | null;
+
   // --- V70-A6 — inline peek + the identifier hover tooltip ---------------
   /// Handlers for the inline-peek block widget (`editor/inlinePeek.ts`).
   /// Omitted leaves the widget inert — the same "missing callback = no-op"
@@ -371,6 +381,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     onLensAuthor,
     wrap = false,
     fontSize = 13,
+    schemaFold = null,
     inlinePeek,
     hoverRepo = null,
     hoverPath = null,
@@ -623,6 +634,14 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   // above) and reused across every `blobHash`-triggered view recreation.
   const wrapCompartment = useRef(new Compartment()).current;
   const fontSizeCompartment = useRef(new Compartment()).current;
+  // V72-I2 — a THIRD compartment, same lifetime rule: the schema fold is a
+  // live toggle (a rail button, `rails.schema-fold`, the placeholder's own
+  // click) and must never cost a view remount.
+  const schemaFoldCompartment = useRef(new Compartment()).current;
+  // The LIVE spec, read at reconfigure time — the effect below keys on the
+  // spec's value identity, never on the object.
+  const schemaFoldRef = useRef<SchemaFoldSpec | null>(schemaFold);
+  schemaFoldRef.current = schemaFold;
 
   const dirtyRef = useRef(false);
   const vimStatusRef = useRef<{ mode: string; pending: string } | null>(null);
@@ -695,6 +714,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
           // pref toggle reconfigures the LIVE view (see the two effects
           // below) instead of forcing this whole `new EditorView` to re-run.
           wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
+          schemaFoldCompartment.of(schemaFoldExtension(schemaFold ?? null)),
           fontSizeCompartment.of(readerThemeExtension(fontSize)),
         ],
       }),
@@ -838,6 +858,19 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     if (!view) return;
     view.dispatch({ effects: fontSizeCompartment.reconfigure(readerThemeExtension(fontSize)) });
   }, [fontSize, fontSizeCompartment]);
+
+  // V72-I2 — the schema fold, reconfigured in place. `schemaFoldKey` is the
+  // VALUE identity of the spec (a fresh object each render would otherwise
+  // re-dispatch forever), the same guard `useCommandScope` uses for its ctx.
+  const schemaFoldKey = schemaFold
+    ? `${schemaFold.startLine}:${schemaFold.endLine}:${schemaFold.label}`
+    : "";
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: schemaFoldCompartment.reconfigure(schemaFoldExtension(schemaFoldRef.current)) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schemaFoldKey, schemaFoldCompartment]);
 
   // V70-A4 — the Desk makes this box resizable, so CM6 has to be TOLD.
   // Marijn's guidance (https://discuss.codemirror.net/t/resizing-

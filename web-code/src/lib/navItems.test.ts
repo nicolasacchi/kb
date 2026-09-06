@@ -52,6 +52,8 @@ describe("NAV_ITEMS catalog", () => {
       "todos",
       // V72-J2 — comments/1's dashboard (the richer surface `todos` links to).
       "comments",
+      // V72-I2 — `~rails` (`rails/1`).
+      "rails",
       "recipes",
       "stacks",
       "canvas",
