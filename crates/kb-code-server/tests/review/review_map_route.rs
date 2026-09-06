@@ -96,7 +96,23 @@ async fn boot(name: &str, path: &Path) -> (tempfile::TempDir, String) {
     (tmp, format!("http://{addr}"))
 }
 
-/// Wait on file_count AND symbol_count — never file_count alone.
+/// Wait on file_count AND symbol_count — never file_count alone, and
+/// never `symbol_count > 0` either.
+///
+/// V72-H2a: `> 0` was the gate, and it is satisfied the moment the FIRST
+/// file finishes its symbol pass — while the other three are still in
+/// flight. The map is then built from a partial `call_sites` table and
+/// reports a partial edge set, which surfaces as an intermittent
+/// "mid→util call edge missing" (observed once on a hosted runner; the
+/// same run passed unchanged on a rerun, which is what a race looks
+/// like). `inputs_missing_for` cannot catch it: it asks whether ANY call
+/// site exists, not whether every file has contributed one.
+///
+/// Each of this fixture's four files defines exactly one exported
+/// function, so `symbol_count >= expected_files` is precisely "every file
+/// has been through the symbol pass" — and `call_sites` are written in
+/// the same per-file unit as `symbols`, so it is also "every call site
+/// this test asserts on has landed".
 async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
     let client = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(45);
@@ -109,7 +125,7 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
                 {
                     let count = entry["file_count"].as_u64().unwrap_or(0) as usize;
                     let symbols = entry["symbol_count"].as_u64().unwrap_or(0);
-                    if count >= expected_files && symbols > 0 {
+                    if count >= expected_files && symbols >= expected_files as u64 {
                         return;
                     }
                 }
@@ -117,7 +133,7 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
         }
         assert!(
             Instant::now() < deadline,
-            "index timeout waiting for symbol_count"
+            "index timeout waiting for symbol_count >= {expected_files}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
