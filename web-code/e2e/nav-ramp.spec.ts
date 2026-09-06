@@ -22,21 +22,33 @@ import { BASE, REPO_NAME } from "./helpers";
 
 /// The repo root: no file open, so the reader publishes the `tree` scope.
 /// `sortTreeEntries` always ranks directories before files (`lib/tree.ts`),
-/// and DCB-W2.B.R fix 9 added exactly ONE new top-level directory (`ambig/`,
-/// `doclens-fixture.ts`'s `seedAmbiguityDemo`) — so the tree's row cursor
-/// starts on THAT directory, not a file (`split.spec.ts`'s own "Shift+Enter
-/// in the tree" test hit the same thing). One `j` reaches the first root
-/// FILE — the row `rampFocusedTreeRow` (`Reader.tsx`) needs, since a
-/// directory has nowhere else to be opened. V72-G1.2 added flat `.rb` entity
-/// fixtures, so that file is now `application_record.rb` rather than
-/// `caller.rs`; the assertion below deliberately checks the row's KIND and
-/// not its name, which is what lets a root file be added without touching
-/// this helper.
+/// and DCB-W2.B.R fix 9 added a top-level directory (`ambig/`,
+/// `doclens-fixture.ts`'s `seedAmbiguityDemo`); V72-I2 added two more
+/// (`app/`, `config/` — the Rails fixture app) — so the tree's row cursor
+/// starts on a DIRECTORY, not a file (`split.spec.ts`'s own "Shift+Enter
+/// in the tree" test hit the same thing). The helper steps down to the
+/// first root FILE — the row `rampFocusedTreeRow` (`Reader.tsx`) needs,
+/// since a directory has nowhere else to be opened. The assertion checks
+/// the row's KIND and not its name, which is what lets a root file be
+/// added without touching this helper.
 async function openTreeScope(page: Page) {
   await page.goto(`${BASE}/r/${REPO_NAME}`);
   await expect(page.locator(".kbc-tree__row").first()).toBeVisible({ timeout: 10_000 });
-  await page.keyboard.press("j");
-  await expect(page.locator(".kbc-tree__row--focused")).toHaveAttribute("data-kbc-kind", "file");
+  // V72-I2 — was a single `j`, which encoded "exactly one root DIRECTORY
+  // sorts above the first root file". That number is a property of the
+  // fixture, not of the Ramp, and it has now changed twice (`ambig/`, then
+  // this unit's `app/` + `config/` Rails tree). Step until the cursor is on
+  // a file, bounded, so the next lane that adds a root directory does not
+  // have to find this helper by breaking six tests.
+  const focused = page.locator(".kbc-tree__row--focused");
+  for (let i = 0; i < 12; i++) {
+    await page.keyboard.press("j");
+    if ((await focused.getAttribute("data-kbc-kind")) === "file") break;
+  }
+  await expect(focused, "no root FILE row within 12 `j` presses").toHaveAttribute(
+    "data-kbc-kind",
+    "file",
+  );
 }
 
 /// Focus the row for `file` by clicking it (which also sets the tree's own
