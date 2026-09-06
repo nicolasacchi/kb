@@ -260,6 +260,16 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// The languages whose symbols come from a direct CST WALK (a hierarchical
+/// key-path outline) rather than a `tags.scm` query — see the dispatch at
+/// the top of [`extract_symbols`] and `crate::yaml`/`crate::keypath`'s
+/// module docs. Named as a const (V72-H1) because the `syntax/1` Parity
+/// Grid has to tell "symbols, as code definitions" from "symbols, as key
+/// paths" without restating this list; the dispatch below is still the
+/// implementation and `extract_symbols_dispatch_matches_the_cst_outline_set`
+/// pins the two together.
+pub const CST_OUTLINE_LANG_IDS: &[&str] = &["yaml", "toml", "json"];
+
 pub fn extract_symbols(lang_id: &str, source: &[u8]) -> Result<Vec<Symbol>> {
     // YAML has no tags.scm at all (ADR-7) — a hierarchical key-path outline
     // via a direct CST walk instead; see `crate::yaml`'s module doc. TOML
@@ -859,6 +869,40 @@ fn go_container_of(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// V72-H1 — the const and the dispatch must not drift: every id in
+    /// [`CST_OUTLINE_LANG_IDS`] must reach a CST-walk arm (proven by
+    /// producing symbols with NO tags query available), and no id outside
+    /// it may.
+    #[test]
+    fn extract_symbols_dispatch_matches_the_cst_outline_set() {
+        for id in CST_OUTLINE_LANG_IDS {
+            assert!(
+                lang::tags_query(id).is_none(),
+                "{id}: a CST-outline language must have no tags query"
+            );
+            // A one-key document in each of the three formats — enough to
+            // prove the walk ran rather than the query path.
+            let src: &[u8] = match *id {
+                "yaml" => b"a: 1\n",
+                "toml" => b"a = 1\n",
+                "json" => b"{\"a\": 1}",
+                other => panic!("no fixture for {other}"),
+            };
+            let symbols = extract_symbols(id, src).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert!(!symbols.is_empty(), "{id}: CST outline produced no rows");
+            assert!(
+                symbols.iter().all(|s| s.kind == "key"),
+                "{id}: a CST outline mints key rows"
+            );
+        }
+        for id in lang::TAGS_LANG_IDS {
+            assert!(
+                !CST_OUTLINE_LANG_IDS.contains(id),
+                "{id}: a tags language must not also be a CST-outline language"
+            );
+        }
+    }
 
     fn names(symbols: &[Symbol]) -> Vec<(&str, &str, Option<&str>)> {
         symbols

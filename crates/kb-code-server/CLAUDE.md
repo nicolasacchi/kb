@@ -504,6 +504,56 @@ invariant #2 records).
     UNSCOPED tree with the reason captioned. `tree::V71_F1_ROUTES` joins
     invariant 15's `RouteContract` walk from both sides.
 
+18. **`syntax/1` is the ONE file-type declaration, the tier is ONE
+    short-circuit, and the Parity Grid is DERIVED** (V72-H1, D7,
+    `src/syntax.rs`). Three rules, separate to state and easy to break
+    independently.
+    (a) **One declaration.** `syntax::REGISTRY` owns which file is which
+    language — extensions, D7's filename-stem table (`Gemfile`,
+    `Rakefile`, `Guardfile`, `Capfile`, `.rake`/`.jbuilder`/`.gemspec`/
+    `.ru`) and the `#!` interpreter table — plus the grammar, the
+    extraction tier and the injection-host flag. `lang::detect` is a
+    FAÇADE over it and its contract is unchanged and load-bearing: `Some`
+    means "a grammar exists and `salt` keys this file's derived rows", so
+    a grammar-less row (`sql`, `dockerfile` — NAMED so the gap is visible
+    on the two read surfaces) is invisible to every existing caller.
+    Adding a language means adding a row, never a second `match` on an
+    extension; `lang::ALL_LANGS`, `lang::for_id` and the registry are
+    pinned to each other by test, as are the extension/filename/
+    interpreter keys' uniqueness (two rows claiming `sh` would make
+    detection order-dependent).
+    (b) **One short-circuit.** `SyntaxRow::plan` is the whole HIGHLIGHT_ONLY
+    mechanism: `ingest::index_file` consults it ONCE, at the top of the
+    derivation, and writes spans with an explicitly EMPTY symbol set —
+    never an aborted walk, and never a mid-pipeline `if lang_id == …`
+    added somewhere else. The structural guarantee behind that is a test:
+    no non-`Full` language may appear in ANY downstream pass's own gate
+    (`lang::supports_token_level`, `imports::supports`, `locals::supports`,
+    `hierarchy::supports_hierarchy`, `entities::indexes_lang`), so a
+    highlight-only file can never reach a pass that needs the symbols the
+    tier just skipped. `syntax::Tier` is a DIFFERENT axis from
+    `ingest::TIER_*`/`files.lang` (`unknown`/`binary`/`too-large`/`lfs`,
+    content skip markers): the tier is a property of the file TYPE,
+    decided before a byte is read, and the `tier`/`tier_reason` fields on
+    `GET /api/file` and per-file `GET /api/symbols` say only that — never
+    that a particular blob has been derived.
+    (c) **The grid is derived, and golden-pinned.** Every Parity Grid cell
+    is computed from the predicate that actually gates that lane
+    (`lang::tags_query`, `extract::CST_OUTLINE_LANG_IDS`,
+    `lang::supports_token_level`, `lang::locals_query`), never hand-typed
+    — a hand-written matrix is exactly the thing that rots into a claim
+    the daemon cannot back. Every non-`yes` cell carries a REASON,
+    including every `no`: the grid's job is to be an honest map of where
+    the instrument is weak, and an unexplained gap is not a map.
+    `tests/fixtures/parity.golden.json` pins the whole wire, so a
+    capability change is a deliberate golden update reviewable in the diff
+    that causes it. HIGHLIGHT_ONLY currently has NO production row (the
+    first arrive with H2a's SCSS/CSS/Markdown grammars) and a test records
+    that emptiness with its reason rather than leaving it to be
+    discovered — the `usages2::UNMINTED_KINDS` precedent.
+    `syntax::V72_H1_ROUTES` joins invariant 15's `RouteContract` walk from
+    both sides.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside `kb-code-server` (or its

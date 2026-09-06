@@ -408,6 +408,10 @@ pub mod store;
 pub mod suggestions;
 // PRR-N5 — `GET /api/resolve-symbol`; see that module's own doc.
 pub mod symbol_addr;
+// V72-H1 (D7) — `syntax/1`: the ONE file-type registry (grammar, extraction
+// tier, injection host, extensions/stems/shebangs) plus the Parity Grid
+// derived from it. `lang::detect` is a thin façade over this table.
+pub mod syntax;
 pub mod transcripts;
 /// V71-F1 — kbc-tree/1: the projected, decorated file tree (`GET
 /// /api/tree/2`) and kbc-scope/1, its path-set algebra.

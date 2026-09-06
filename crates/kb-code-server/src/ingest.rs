@@ -30,10 +30,19 @@
 //! 2. **Git LFS pointer** (bytes start with `"version https://git-lfs"`) →
 //!    `files` row only, `lang = "lfs"`.
 //! 3. **Non-UTF8** → `files` row only, `lang = "binary"`.
-//! 4. **No grammar for the extension** ([`lang::detect`] returns `None`) →
-//!    `files` row only, `lang = "unknown"`.
+//! 4. **No grammar for this file type** ([`lang::detect`] returns `None`)
+//!    → `files` row only, `lang = "unknown"`.
 //!
-//! Anything past all four gets parsed (or served from the blob-hash cache).
+//! Anything past all four gets parsed (or served from the blob-hash cache)
+//! according to its `syntax/1` extraction TIER (`crate::syntax`): `Full`
+//! derives symbols and highlight spans, `HighlightOnly` derives spans and
+//! skips symbols by ONE short-circuit, `None` (a parse-only grammar like
+//! ERB) derives neither. The tier never aborts the walk — the `files` row
+//! and the derived rows are written either way, an empty set being the
+//! honest answer rather than a missing one. Note that `IngestOutcome.tier`
+//! and the four `TIER_*` constants above are a DIFFERENT axis (content
+//! skip markers in `files.lang`) from `syntax::Tier` (the file type's
+//! extraction tier); see `syntax`'s module doc.
 
 use crate::extract;
 use crate::git::{EntryKind, GitError, GitRepo};
@@ -166,6 +175,24 @@ pub fn index_file(
     // (repo_id, path) row pointing at the shared derived data.
     store.upsert_file(repo_id, path, blob_hash, lang_info.id, size)?;
 
+    // V72-H1 (D7) — the syntax/1 extraction TIER, as ONE short-circuit at
+    // the top of the derivation. A `HighlightOnly` row writes spans and
+    // an explicitly EMPTY symbol set; a `None` row (a parse-only grammar
+    // like ERB) writes neither. Never an aborted walk: the `files` row is
+    // already written above, the rows below are written either way, and
+    // nothing here can return an error a whole-repo walk would propagate.
+    //
+    // NOTE the name collision this crate lives with: `IngestOutcome.tier`
+    // (and the `TIER_*` consts) are the CONTENT skip markers stored in
+    // `files.lang`; `syntax::Tier` is the file TYPE's extraction tier.
+    // Different axes — see `syntax`'s module doc.
+    let plan = crate::syntax::row_for_path(path, Some(bytes))
+        .map(|row| row.plan())
+        .unwrap_or(crate::syntax::Plan {
+            highlight: false,
+            symbols: false,
+        });
+
     let outcome = if store.has_symbols(blob_hash, lang_info.salt)? {
         let symbol_count = store.symbols_for_blob(blob_hash, lang_info.salt)?.len();
         IngestOutcome {
@@ -174,8 +201,16 @@ pub fn index_file(
             symbol_count,
         }
     } else {
-        let symbols = extract::extract_symbols(lang_info.id, bytes)?;
-        let spans = highlight::extract_highlights(lang_info.id, bytes)?;
+        let symbols = if plan.symbols {
+            extract::extract_symbols(lang_info.id, bytes)?
+        } else {
+            Vec::new()
+        };
+        let spans = if plan.highlight {
+            highlight::extract_highlights(lang_info.id, bytes)?
+        } else {
+            Vec::new()
+        };
         store.replace_symbols(blob_hash, lang_info.salt, &symbols)?;
         store.put_highlights(blob_hash, lang_info.salt, &spans)?;
         IngestOutcome {
@@ -987,6 +1022,76 @@ mod tests {
         assert_eq!(outcome.tier, TIER_UNKNOWN);
         let file = store.get_file(repo_id, "README.md").unwrap().unwrap();
         assert_eq!(file.lang, TIER_UNKNOWN);
+    }
+
+    /// V72-H1 — the `syntax/1` tier, end to end through the pipeline. ERB
+    /// is the `Tier::None` row that exists today (a parse-only grammar):
+    /// it gets a `files` row under its own lang, and BOTH derived sets are
+    /// written EMPTY rather than skipped — the walk is never aborted and a
+    /// reader can tell "we looked, and the tier says there is nothing"
+    /// from "we never looked".
+    #[test]
+    fn a_none_tier_language_gets_rows_but_neither_symbols_nor_spans() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let src = b"<h1><%= @order.id %></h1>\n";
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "app/views/orders/show.html.erb",
+            src,
+            "hashErb",
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(outcome.tier, "erb");
+        assert_eq!(outcome.symbol_count, 0);
+        let file = store
+            .get_file(repo_id, "app/views/orders/show.html.erb")
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.lang, "erb");
+        // "We looked": the rows exist, and they are empty.
+        assert!(store.has_symbols("hashErb", lang::ERB.salt).unwrap());
+        assert!(store
+            .symbols_for_blob("hashErb", lang::ERB.salt)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .highlights_for_blob("hashErb", lang::ERB.salt)
+                .unwrap(),
+            Some(Vec::new())
+        );
+    }
+
+    /// V72-H1 — D7's stem table, through the real pipeline: a `Rakefile`
+    /// is Ruby source and now indexes as Ruby, where it used to land in
+    /// `TIER_UNKNOWN` (Ruby the instrument silently ignored).
+    #[test]
+    fn a_stem_table_file_indexes_as_its_real_language() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let src = b"task :seed do\n  puts 1\nend\n";
+        let outcome =
+            index_file(&store, repo_id, "Rakefile", src, "hashRake", true, false).unwrap();
+        assert_eq!(outcome.tier, "ruby");
+        let file = store.get_file(repo_id, "Rakefile").unwrap().unwrap();
+        assert_eq!(file.lang, "ruby");
+        // And `Gemfile.lock` beside it stays plain, as D7 asks.
+        index_file(
+            &store,
+            repo_id,
+            "Gemfile.lock",
+            b"GEM\n  remote: https://rubygems.org/\n",
+            "hashLock",
+            true,
+            false,
+        )
+        .unwrap();
+        let lock = store.get_file(repo_id, "Gemfile.lock").unwrap().unwrap();
+        assert_eq!(lock.lang, TIER_UNKNOWN);
     }
 
     // --- index_repo_working_tree ------------------------------------------
