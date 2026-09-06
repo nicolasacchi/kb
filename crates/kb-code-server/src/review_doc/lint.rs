@@ -632,9 +632,14 @@ mod tests {
             .filter(|r| r.rule == "tier_unmet")
             .map(|r| r.message.as_str())
             .collect();
-        assert_eq!(msgs.len(), 2, "{msgs:#?}");
+        assert_eq!(
+            msgs.len(),
+            3,
+            "`full` promises risk, an author block and at least one named section: {msgs:#?}"
+        );
         assert!(msgs.iter().any(|m| m.contains("`risk`")), "{msgs:#?}");
         assert!(msgs.iter().any(|m| m.contains("`author`")), "{msgs:#?}");
+        assert!(msgs.iter().any(|m| m.contains("`blocks`")), "{msgs:#?}");
     }
 
     #[test]

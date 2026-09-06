@@ -3,7 +3,7 @@
 //!
 //! | route | posture | what |
 //! |---|---|---|
-//! | `GET /api/reviews/{id}/doc` | bearer | the stored document, with `?resolve=1` for live cards |
+//! | `GET /api/reviews/{id}/doc` | bearer | the stored document, with `?resolve=true` for live cards |
 //! | `GET /api/reviews/{id}/doc/lint` | bearer | lint the STORED document |
 //! | `GET /api/reviews/{id}/doc/render` | bearer | render through a REGISTERED template |
 //! | `POST /api/reviews/{id}/doc/render` | loopback-only | render through the operator's own template bytes |
@@ -60,9 +60,11 @@ pub struct DocParams {
     /// `ReviewCommentsParams::ps` / `reviews::resolve_ps` use.
     #[serde(default)]
     pub ps: Option<String>,
-    /// Resolve every ref into a live card. Off by default: card resolution
-    /// reads git blobs and the symbol index, and a caller that only wants
-    /// the prose should not pay for it.
+    /// Resolve every ref into a live card (`?resolve=true`). Off by
+    /// default: card resolution reads git blobs and the symbol index, and a
+    /// caller that only wants the prose should not pay for it. Spelled
+    /// `true`/`false` — the same bool spelling `?all=` and
+    /// `?include_superseded=` use on this route family.
     #[serde(default)]
     pub resolve: bool,
 }
@@ -175,7 +177,7 @@ pub struct DocOut {
     /// Every optional block this document does NOT carry. Always present,
     /// even when empty — an absence is stated, never discovered.
     pub omitted: Vec<String>,
-    /// `null` unless `?resolve=1`.
+    /// `null` unless `?resolve=true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cards: Option<Vec<Card>>,
     pub cards_resolved: bool,
@@ -397,7 +399,7 @@ fn derive_reading_order(
 
 // --- GET /api/reviews/{id}/doc ---------------------------------------------
 
-/// `GET /api/reviews/{id}/doc?ps=latest|N&resolve=1` — the stored
+/// `GET /api/reviews/{id}/doc?ps=latest|N&resolve=true` — the stored
 /// `kbc-review/1` document. Bearer.
 pub async fn get_review_doc(
     State(state): State<SharedState>,
@@ -411,7 +413,7 @@ pub async fn get_review_doc(
 // --- GET /api/reviews/{id}/doc/lint ----------------------------------------
 
 /// `GET /api/reviews/{id}/doc/lint?ps=` — lint the STORED document. Pure:
-/// this route writes nothing and resolves refs the same way `?resolve=1`
+/// this route writes nothing and resolves refs the same way `?resolve=true`
 /// does. Bearer.
 ///
 /// Linting a document that is NOT yet stored is `POST …/compose` with
@@ -743,10 +745,18 @@ pub const DOC_RENDER_ROUTE: RouteContract = RouteContract {
 
 fn doc_params_accept_without(omit: &str) -> bool {
     let mut map = serde_json::Map::new();
-    for (k, v) in [("ps", "latest"), ("resolve", "true")] {
-        if k != omit {
-            map.insert(k.to_string(), Value::String(v.to_string()));
-        }
+    if omit != "ps" {
+        map.insert("ps".to_string(), Value::String("latest".to_string()));
+    }
+    if omit != "resolve" {
+        // `resolve` is a BOOL on the wire — `?resolve=true`, the same
+        // spelling `?all=true` / `?include_superseded=true` already use on
+        // this route family. `serde_urlencoded` parses a bool with
+        // `str::parse::<bool>()`, which accepts `true`/`false` and NOTHING
+        // else, so `?resolve=1` is a 400 with a plain-text body rather than
+        // this crate's JSON error shape — pinned here rather than
+        // rediscovered.
+        map.insert("resolve".to_string(), Value::Bool(true));
     }
     serde_json::from_value::<DocParams>(Value::Object(map)).is_ok()
 }
