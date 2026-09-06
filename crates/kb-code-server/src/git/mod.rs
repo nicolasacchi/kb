@@ -250,6 +250,13 @@ impl GitRepo {
     pub fn blob_oid(&self, rev: &str, path: &str) -> Result<Option<String>> {
         blob::blob_oid(self, rev, path)
     }
+
+    /// Read a blob addressed by its OWN object id — see
+    /// `blob::read_blob_by_oid`'s doc for why `kbc-review/1` needs a
+    /// revision-free blob read and what constrains the id it is given.
+    pub fn read_blob_by_oid(&self, oid: &str, max_bytes: u64) -> Result<Vec<u8>> {
+        blob::read_blob_by_oid(self, oid, max_bytes)
+    }
 }
 
 #[cfg(test)]

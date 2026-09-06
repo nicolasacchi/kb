@@ -20,6 +20,7 @@ mod remote_mutations_gate;
 mod review_analytics;
 mod review_comments;
 mod review_distill;
+mod review_doc;
 mod review_findings;
 mod review_github_export;
 mod review_github_threads;
