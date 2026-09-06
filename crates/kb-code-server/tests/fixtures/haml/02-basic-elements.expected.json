@@ -1,0 +1,62 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "section",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "h1",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "Orders"
+          },
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "A paragraph."
+          },
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "ul",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": [
+            {
+              "kind": "tag",
+              "name": "li",
+              "attributes": {},
+              "self_closing": false,
+              "inline": {
+                "text": "One"
+              },
+              "children": []
+            },
+            {
+              "kind": "tag",
+              "name": "li",
+              "attributes": {},
+              "self_closing": false,
+              "inline": {
+                "text": "Two"
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

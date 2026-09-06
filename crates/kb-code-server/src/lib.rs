@@ -346,6 +346,7 @@ pub mod frameworks;
 pub mod git;
 pub mod git_status;
 pub mod github;
+pub mod haml;
 pub mod hierarchy;
 pub mod highlight;
 pub mod history;

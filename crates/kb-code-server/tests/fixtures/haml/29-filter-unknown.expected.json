@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {
+      "kind": "filter",
+      "name": "wat",
+      "text": "whatever this is\nit stays opaque",
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

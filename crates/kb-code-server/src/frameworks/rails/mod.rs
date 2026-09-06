@@ -115,6 +115,21 @@ pub fn extract(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkEdge>
         out.extend(i18n::extract_from_erb(repo_root, path, bytes));
         return out;
     }
+    // V72-H3 — the same four Ruby-fragment extractors over a `.haml` view,
+    // through `support::walk_haml_ruby_fragments`. `stimulus::extract` is
+    // deliberately ABSENT: it regex-scans the ERB CST's raw HTML `content`
+    // nodes, and HAML has no HTML text to scan — a `data-controller` lives
+    // either in an HTML-style attribute group or inside a Ruby hash, which
+    // is a different extraction with its own resolution questions. Naming
+    // the gap here beats shipping a Stimulus lane that silently reports
+    // nothing for half a monolith's views.
+    if is_haml_view_file(path) {
+        let mut out = views::extract_haml(repo_root, path, bytes);
+        out.extend(view_component::extract_from_haml(repo_root, path, bytes));
+        out.extend(jobs_mailers::extract_from_haml(repo_root, path, bytes));
+        out.extend(i18n::extract_from_haml(repo_root, path, bytes));
+        return out;
+    }
     if is_component_ruby_file(path) {
         let mut out = view_component::extract_component_class(repo_root, path, bytes);
         out.extend(view_component::extract_from_ruby(repo_root, path, bytes));
@@ -126,6 +141,11 @@ pub fn extract(repo_root: &Path, path: &str, bytes: &[u8]) -> Vec<FrameworkEdge>
         let mut out = view_component::extract_from_erb(repo_root, path, bytes);
         out.extend(stimulus::extract(repo_root, path, bytes));
         out.extend(i18n::extract_from_erb(repo_root, path, bytes));
+        return out;
+    }
+    if is_component_haml_template_file(path) {
+        let mut out = view_component::extract_from_haml(repo_root, path, bytes);
+        out.extend(i18n::extract_from_haml(repo_root, path, bytes));
         return out;
     }
     if is_model_file(path) {
@@ -168,6 +188,19 @@ pub fn is_erb_view_file(path: &str) -> bool {
 /// PRR-N4: a ViewComponent Ruby class file — `app/components/**/*.rb`.
 pub fn is_component_ruby_file(path: &str) -> bool {
     path.starts_with("app/components/") && path.ends_with(".rb")
+}
+
+/// V72-H3: a `.haml` view — `app/views/**/*.haml`. The `.erb` predicate's
+/// exact shape, one extension over, and deliberately a SEPARATE predicate:
+/// the two dispatch to different walks, and a single `ends_with` over both
+/// extensions would hide which one a path took.
+pub fn is_haml_view_file(path: &str) -> bool {
+    path.starts_with("app/views/") && path.ends_with(".haml")
+}
+
+/// V72-H3: a ViewComponent's co-located `.haml` template.
+pub fn is_component_haml_template_file(path: &str) -> bool {
+    path.starts_with("app/components/") && path.ends_with(".haml")
 }
 
 /// PRR-N4: a ViewComponent's co-located template — `app/components/**/*.erb`
@@ -255,6 +288,18 @@ mod tests {
             "app/views/trade/rounds/merge_complete.turbo_stream.erb"
         ));
         assert!(!is_erb_view_file("app/views/trade/rounds/show.html.haml"));
+        // V72-H3: it is a HAML view instead — the two predicates partition
+        // the view tree, they never both claim a path.
+        assert!(is_haml_view_file("app/views/trade/rounds/show.html.haml"));
+        assert!(is_haml_view_file("app/views/trade/rounds/_row.haml"));
+        assert!(!is_haml_view_file("app/views/trade/rounds/show.html.erb"));
+        assert!(!is_haml_view_file("app/components/row_component.html.haml"));
+        assert!(is_component_haml_template_file(
+            "app/components/row_component.html.haml"
+        ));
+        assert!(!is_component_haml_template_file(
+            "app/components/row_component.html.erb"
+        ));
     }
 
     #[test]

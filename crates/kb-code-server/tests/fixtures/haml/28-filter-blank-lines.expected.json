@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {
+      "kind": "filter",
+      "name": "markdown",
+      "text": "# Title\n\nSome text\n\nMore text",
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

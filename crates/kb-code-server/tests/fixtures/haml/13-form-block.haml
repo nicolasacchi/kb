@@ -1,0 +1,5 @@
+= form_for @order do |f|
+  = f.text_field :name
+  = f.submit
+  - if @order.persisted?
+    = link_to "Delete", @order

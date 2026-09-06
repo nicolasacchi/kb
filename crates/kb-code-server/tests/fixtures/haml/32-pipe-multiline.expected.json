@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "h(  \"a\" + \"b\")  %q a b"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "r",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

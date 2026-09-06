@@ -81,6 +81,72 @@ pub fn walk_erb_ruby_fragments(
     }
 }
 
+/// The HAML counterpart of [`walk_erb_ruby_fragments`] — and the reason
+/// V72-H3 needed no second Rails extractor.
+///
+/// `.haml` has no tree-sitter grammar, so there is no per-tag `code` node
+/// to re-parse. `crate::haml` instead produces ONE synthesized Ruby
+/// program out of the whole template (every script line, interpolation,
+/// attribute hash and object reference, with `end`s derived from the
+/// indentation tree) plus a LINE MAP back to HAML lines. This walk parses
+/// that program once and hands its root to the SAME `scan` callback the
+/// ERB walk uses, so every caller — `views`, `i18n`, `view_component`,
+/// `jobs_mailers` — resolves HAML call sites with byte-identical logic and
+/// mints the same edge kinds at the same trust classes.
+///
+/// Two differences from the ERB walk, both deliberate:
+///
+/// * `line_offset` is `0`. The program's own rows ARE the addressing unit,
+///   and the re-anchoring happens once, HERE, after `scan` returns —
+///   rather than being folded into an offset the callback would have to
+///   understand. Every callback stays unchanged.
+/// * an edge whose program row maps to a SYNTHETIC line (an `end` this
+///   module invented) is DROPPED. No call site can live on such a line, so
+///   this is unreachable in practice; the alternative — emitting the edge
+///   with a borrowed neighbouring line — would be a fabricated location,
+///   which this crate does not do.
+///
+/// Unlike ERB's per-tag re-parse, this DOES reconstruct control flow
+/// spanning multiple constructs (`- if` … `- else` is one Ruby `if`), so
+/// the "accepted ceiling" `views`'s module doc records for ERB does not
+/// apply to HAML.
+#[allow(clippy::type_complexity)]
+pub fn walk_haml_ruby_fragments(
+    source: &[u8],
+    out: &mut Vec<FrameworkEdge>,
+    scan: &mut dyn FnMut(Node, &[u8], u32, &mut Vec<FrameworkEdge>),
+) {
+    let src = match std::str::from_utf8(source) {
+        Ok(s) => s,
+        Err(e) => std::str::from_utf8(&source[..e.valid_up_to()]).unwrap_or(""),
+    };
+    let doc = crate::haml::parser::parse_str(src);
+    let program = crate::haml::extract::ruby_program(&doc, src);
+    if program.source.trim().is_empty() {
+        return;
+    }
+    let Ok((tree, _language)) = crate::lang::parse("ruby", program.source.as_bytes()) else {
+        return;
+    };
+    let mut minted = Vec::new();
+    scan(tree.root_node(), program.source.as_bytes(), 0, &mut minted);
+    for mut edge in minted {
+        match edge.src_line {
+            // `src_line` is 1-based (`support::src_line` adds the 1), so
+            // the program ROW is one less.
+            Some(line) => match program.haml_line(line.saturating_sub(1) as usize) {
+                Some(haml_line) => {
+                    edge.src_line = Some(haml_line);
+                    out.push(edge);
+                }
+                None => continue,
+            },
+            // A file-level edge has no line to re-anchor.
+            None => out.push(edge),
+        }
+    }
+}
+
 fn find_erb_code_child(node: Node<'_>) -> Option<Node<'_>> {
     let mut cursor = node.walk();
     let found = node.children(&mut cursor).find(|c| c.kind() == "code");

@@ -1,0 +1,46 @@
+{
+  "nodes": [
+    {
+      "kind": "comment",
+      "conditional": "[if IE]",
+      "text": "",
+      "children": [
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "old browser"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "comment",
+      "conditional": "[if lt IE 9]",
+      "text": "",
+      "children": [
+        {
+          "kind": "tag",
+          "name": "script",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+- content_for :title do
+  = t(".title")
+
+%section.orders{data: {controller: "orders"}}
+  %h1= t(".heading")
+  - if @orders.any?
+    %ul
+      - @orders.each do |order|
+        %li[order]
+          = render "orders/row", order: order
+          %span= number_to_currency(order.total)
+  - else
+    %p.empty= t(".empty")
+
+  = render OrderSummaryComponent.new(orders: @orders)
+  = link_to t(".new"), new_order_path

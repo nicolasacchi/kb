@@ -1,0 +1,40 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "li",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "div",
+      "attributes": {
+        "class": "row"
+      },
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "span",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "td",
+      "attributes": {
+        "class": "cell"
+      },
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    }
+  ]
+}

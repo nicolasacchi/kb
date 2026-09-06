@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "kind": "script",
+      "ruby": "form_for @order do |f|",
+      "keyword": null,
+      "children": [
+        {
+          "kind": "script",
+          "ruby": "f.text_field :name",
+          "keyword": null,
+          "children": []
+        },
+        {
+          "kind": "script",
+          "ruby": "f.submit",
+          "keyword": null,
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "if @order.persisted?",
+          "keyword": "if",
+          "children": [
+            {
+              "kind": "script",
+              "ruby": "link_to \"Delete\", @order",
+              "keyword": null,
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

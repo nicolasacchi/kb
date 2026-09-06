@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {
+      "kind": "filter",
+      "name": "css",
+      "text": ".a { color: red; }\n.b { color: blue; }",
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

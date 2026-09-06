@@ -72,7 +72,7 @@
 //! |---|---|---|---|
 //! | `route_action` | routes file line | `controller_action` | `resources :users` → `UsersController#index/show/…` |
 //! | `route_file` | `config/routes.rb` line | `routes_file` | `draw(:trade)` → `config/routes/trade.rb` |
-//! | `render_partial` | ERB/controller call site | `partial` | `<%= render 'users/row' %>` → `app/views/users/_row.html.erb` |
+//! | `render_partial` | ERB/HAML/controller call site | `partial` | `<%= render 'users/row' %>` → `app/views/users/_row.html.erb` |
 //! | `render_view` | controller action (implicit or explicit) | `view` | `UsersController#show` → `app/views/users/show.html.erb` |
 //! | `turbo_stream_target` | ERB/controller | `dom_id`\|`partial` | `turbo_stream.replace "row_1", partial: …` |
 //! | `view_component_render` | Ruby/ERB call site, OR the component file itself | `component_class`\|`component_template` | `render(RowComponent.new)`; co-location |
@@ -347,6 +347,8 @@ pub fn rails_lens_relevant_path(path: &str) -> bool {
     rails::is_routes_file(path)
         || rails::is_controller_file(path)
         || rails::is_erb_view_file(path)
+        || rails::is_haml_view_file(path)
+        || rails::is_component_haml_template_file(path)
         || rails::is_component_ruby_file(path)
         || rails::is_component_template_file(path)
         || rails::is_model_file(path)

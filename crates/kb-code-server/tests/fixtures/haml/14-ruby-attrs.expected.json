@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "a",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "Show"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "div",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "input",
+      "attributes": {},
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    }
+  ]
+}

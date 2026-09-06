@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "\"#{h({a: \"x\"}[:a])}\""
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "\"a #{\"nested #{inner}\"} b\""
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "\"\\#{not_interpolated}\""
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "a",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "Go"
+      },
+      "children": []
+    }
+  ]
+}

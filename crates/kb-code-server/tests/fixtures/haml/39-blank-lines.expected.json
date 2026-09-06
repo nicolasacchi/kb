@@ -1,0 +1,53 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "a"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "b"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "section",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "span",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "child of section"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "c"
+      },
+      "children": []
+    }
+  ]
+}

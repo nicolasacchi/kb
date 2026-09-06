@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    {
+      "kind": "script",
+      "ruby": "render \"shared/menu\"",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "render partial: \"orders/row\", locals: {order: @order}",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "script",
+      "ruby": "render template: \"layouts/box\"",
+      "keyword": null,
+      "children": []
+    },
+    {
+      "kind": "silent_script",
+      "ruby": "@orders.each do |o|",
+      "keyword": null,
+      "children": [
+        {
+          "kind": "script",
+          "ruby": "render \"orders/row\", order: o",
+          "keyword": null,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

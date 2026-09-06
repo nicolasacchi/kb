@@ -1,0 +1,38 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "a",
+      "attributes": {
+        "data-turbo": "false",
+        "href": "/orders"
+      },
+      "self_closing": false,
+      "inline": {
+        "text": "Orders"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "input",
+      "attributes": {
+        "name": "q",
+        "type": "text"
+      },
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "img",
+      "attributes": {
+        "src": "/logo.png"
+      },
+      "self_closing": true,
+      "inline": null,
+      "children": []
+    }
+  ]
+}

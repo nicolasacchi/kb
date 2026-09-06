@@ -1,0 +1,5 @@
+= render "shared/menu"
+= render partial: "orders/row", locals: {order: @order}
+= render template: "layouts/box"
+- @orders.each do |o|
+  = render "orders/row", order: o

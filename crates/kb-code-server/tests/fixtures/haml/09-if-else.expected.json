@@ -1,0 +1,63 @@
+{
+  "nodes": [
+    {
+      "kind": "silent_script",
+      "ruby": "if @order",
+      "keyword": "if",
+      "children": [
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "script": "@order.name"
+          },
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "elsif @draft",
+          "keyword": "elsif",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "draft"
+          },
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "else",
+          "keyword": "else",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "none"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "footer",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "done"
+      },
+      "children": []
+    }
+  ]
+}

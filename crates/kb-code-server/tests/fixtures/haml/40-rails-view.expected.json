@@ -1,0 +1,116 @@
+{
+  "nodes": [
+    {
+      "kind": "silent_script",
+      "ruby": "content_for :title do",
+      "keyword": null,
+      "children": [
+        {
+          "kind": "script",
+          "ruby": "t(\".title\")",
+          "keyword": null,
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "section",
+      "attributes": {
+        "class": "orders"
+      },
+      "self_closing": false,
+      "inline": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "h1",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "script": "t(\".heading\")"
+          },
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "if @orders.any?",
+          "keyword": "if",
+          "children": [
+            {
+              "kind": "tag",
+              "name": "ul",
+              "attributes": {},
+              "self_closing": false,
+              "inline": null,
+              "children": [
+                {
+                  "kind": "silent_script",
+                  "ruby": "@orders.each do |order|",
+                  "keyword": null,
+                  "children": [
+                    {
+                      "kind": "tag",
+                      "name": "li",
+                      "attributes": {},
+                      "self_closing": false,
+                      "inline": null,
+                      "children": [
+                        {
+                          "kind": "script",
+                          "ruby": "render \"orders/row\", order: order",
+                          "keyword": null,
+                          "children": []
+                        },
+                        {
+                          "kind": "tag",
+                          "name": "span",
+                          "attributes": {},
+                          "self_closing": false,
+                          "inline": {
+                            "script": "number_to_currency(order.total)"
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "silent_script",
+              "ruby": "else",
+              "keyword": "else",
+              "children": []
+            },
+            {
+              "kind": "tag",
+              "name": "p",
+              "attributes": {
+                "class": "empty"
+              },
+              "self_closing": false,
+              "inline": {
+                "script": "t(\".empty\")"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "kind": "script",
+          "ruby": "render OrderSummaryComponent.new(orders: @orders)",
+          "keyword": null,
+          "children": []
+        },
+        {
+          "kind": "script",
+          "ruby": "link_to t(\".new\"), new_order_path",
+          "keyword": null,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

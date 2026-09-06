@@ -1,0 +1,57 @@
+{
+  "nodes": [
+    {
+      "kind": "silent_script",
+      "ruby": "@items.each do |item|",
+      "keyword": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "li",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "script": "item.name"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "silent_script",
+      "ruby": "@rows.each_with_index do |row, i|",
+      "keyword": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "tr",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": [
+            {
+              "kind": "tag",
+              "name": "td",
+              "attributes": {},
+              "self_closing": false,
+              "inline": {
+                "script": "i"
+              },
+              "children": []
+            },
+            {
+              "kind": "tag",
+              "name": "td",
+              "attributes": {},
+              "self_closing": false,
+              "inline": {
+                "script": "row"
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

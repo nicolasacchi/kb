@@ -1,0 +1,28 @@
+{
+  "nodes": [
+    {
+      "kind": "filter",
+      "name": "plain",
+      "text": "literal text",
+      "children": []
+    },
+    {
+      "kind": "filter",
+      "name": "preserve",
+      "text": "kept",
+      "children": []
+    },
+    {
+      "kind": "filter",
+      "name": "escaped",
+      "text": "<b>escaped</b>",
+      "children": []
+    },
+    {
+      "kind": "filter",
+      "name": "erb",
+      "text": "<%= x %>",
+      "children": []
+    }
+  ]
+}

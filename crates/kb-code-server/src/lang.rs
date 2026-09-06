@@ -107,19 +107,41 @@ pub const ERB: LangInfo = LangInfo {
     salt: "erb@0.25.0+q1",
 };
 
+/// V72-H3 — HAML. The ONE language whose rows are derived by a FIRST-PARTY
+/// scanner (`crate::haml`) rather than a tree-sitter grammar: no viable
+/// HAML grammar exists, and D7's ruling is to own the scanner rather than
+/// rest a "no hard stops" instrument on a 13-star dependency. Its
+/// `syntax/1` row therefore carries `Engine::Scanner`, and
+/// [`ts_language`] deliberately has NO arm for it — `lang::parse("haml",
+/// …)` is `Unsupported`, which is the honest answer and which every
+/// caller already degrades on.
+///
+/// The salt's version component is the SCANNER's version
+/// (`crate::haml::SCANNER_VERSION`), not a grammar's, and bumping one
+/// means bumping the other — the same contract a grammar bump has, applied
+/// to code this crate owns.
+pub const HAML: LangInfo = LangInfo {
+    id: "haml",
+    salt: "haml@haml/1+q1",
+};
+
 /// Detect a language from `path` (and, for an extensionless file with a
 /// `#!` line, `content`) — a thin façade over the `syntax/1` registry
 /// (`crate::syntax`), which owns the extension table, D7's filename-stem
 /// table and the interpreter table as ONE declaration.
 ///
-/// The contract is unchanged and load-bearing: `Some` means "there is a
-/// tree-sitter grammar for this file, and `salt` keys its derived rows".
-/// A registry row with NO grammar (`sql`, `dockerfile` — named so the gap
-/// is visible on `GET /api/syntax` and the Parity Grid) is therefore
-/// invisible here, exactly as it was before V72-H1; reach for
-/// `syntax::row_for_path` when you want the row rather than the grammar.
-/// `None` still means "no grammar for this file" (a `files` row via
-/// `ingest::index_file`, tagged `lang = "unknown"`, but no symbols or
+/// The contract is load-bearing: `Some` means "something in this build
+/// PARSES this file, and `salt` keys its derived rows". V72-H1 could say
+/// "a tree-sitter grammar" there; V72-H3 widens it by exactly one engine
+/// (`syntax::Engine::Scanner` — HAML, parsed by `crate::haml`), so a
+/// caller that reads `Some` and then reaches for `lang::parse` must handle
+/// its `Unsupported` — every one already does, since that is also what an
+/// unregistered id returns. A registry row nothing parses (`sql`,
+/// `dockerfile` — named so the gap is visible on `GET /api/syntax` and the
+/// Parity Grid) is invisible here, exactly as it was before V72-H1; reach
+/// for `syntax::row_for_path` when you want the row rather than the
+/// parser. `None` still means "nothing parses this file" (a `files` row
+/// via `ingest::index_file`, tagged `lang = "unknown"`, but no symbols or
 /// highlights).
 ///
 /// `content` is `None` at call sites that never had the bytes handy in the
@@ -144,7 +166,7 @@ pub fn detect(path: &str, content: Option<&[u8]>) -> Option<LangInfo> {
 /// set" is equivalent to "is its salt the CURRENT one for whichever
 /// language it names," with no need to also join back through `files.lang`.
 pub(crate) const ALL_LANGS: &[LangInfo] = &[
-    RUST, PYTHON, RUBY, TYPESCRIPT, TSX, JAVASCRIPT, BASH, YAML, GO, TOML, JSON, ERB,
+    RUST, PYTHON, RUBY, TYPESCRIPT, TSX, JAVASCRIPT, BASH, YAML, GO, TOML, JSON, ERB, HAML,
 ];
 
 /// Resolve a language id (as stored in `symbols.salt`'s language or
@@ -164,6 +186,7 @@ pub fn for_id(id: &str) -> Option<LangInfo> {
         "toml" => Some(TOML),
         "json" => Some(JSON),
         "erb" => Some(ERB),
+        "haml" => Some(HAML),
         _ => None,
     }
 }
@@ -429,14 +452,18 @@ mod tests {
     }
 
     #[test]
-    fn all_langs_covers_every_for_id_entry_including_erb() {
+    fn all_langs_covers_every_for_id_entry_including_erb_and_haml() {
         // V70-A3X: `ALL_LANGS` backs the store's stale-salt filtering — it
         // must never silently drop a language `for_id` still resolves (that
         // language's CURRENT rows would then look "stale" and get swept),
         // and every salt in it must be unique (two languages sharing a salt
         // string would break "salt IN (current set) implies current for
         // whichever language it names").
-        for id in ALL_LANG_IDS.iter().chain(["erb"].iter()) {
+        // `erb` (parse-only grammar) and `haml` (first-party scanner) are
+        // not in `ALL_LANG_IDS` — neither has a highlights query, which is
+        // what that list asserts — but both have live salts the sweep must
+        // treat as current.
+        for id in ALL_LANG_IDS.iter().chain(["erb", "haml"].iter()) {
             assert!(
                 ALL_LANGS.iter().any(|l| l.id == *id),
                 "ALL_LANGS is missing {id:?}"
