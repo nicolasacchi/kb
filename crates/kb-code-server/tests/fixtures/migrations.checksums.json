@@ -163,5 +163,10 @@
     "version": 34,
     "name": "review_docs_and_findings_v2",
     "checksum": "17713638116754585906"
+  },
+  {
+    "version": 36,
+    "name": "canvas",
+    "checksum": "9588831319662241427"
   }
 ]

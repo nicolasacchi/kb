@@ -915,6 +915,25 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // V3.4-C1 — canvas sets (reads; mutations on loopback-only).
         .route("/canvas", get(canvas::list_canvas))
         .route("/canvas/{id}", get(canvas::get_canvas))
+        // V74-L1 (D10, Track L) — `kbc-canvas/1` BOARDS. A separate family
+        // from the v3.4-C1 canvas sets directly above, on its own prefix:
+        // `GET /api/canvas/{id}` (an i64 row id) and `GET
+        // /api/canvas/{slug}` are the same axum route pattern, so the two
+        // could not coexist, and `canvas_sets` is FROZEN rather than
+        // redefined (the `/api/usages` -> `/api/usages/2` treatment).
+        // Literal `/boards/sweep` sits ahead of the `{slug}` param route —
+        // axum resolves literals over params regardless of registration
+        // order; `boards::routes::RESERVED_SLUGS` refuses a board named
+        // `sweep` or `apply` at apply time so nothing is silently shadowed.
+        // `crate::boards::V74_L1_ROUTES` declares the four READS and a unit
+        // test walks that declaration against THIS file.
+        .route("/boards", get(crate::boards::routes::list_boards))
+        .route("/boards/sweep", get(crate::boards::routes::sweep_boards))
+        .route("/boards/{slug}", get(crate::boards::routes::get_board))
+        .route(
+            "/boards/{slug}/export",
+            get(crate::boards::routes::export_board),
+        )
         .route("/events", get(routes::events))
         // 2026-08-16 drift repair — the SSE schema surface (see the module
         // doc above and `crate::schema`'s own doc).
@@ -1136,6 +1155,30 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/canvas/{id}",
             put(canvas::update_canvas).delete(canvas::delete_canvas),
+        )
+        // V74-L1 (D10 + D21, Track L) — `kbc-canvas/1` board mutations.
+        // Same loopback-only family as the canvas-set mutations directly
+        // above and as every review mutation: NOT `auth_bearer`, and NOT
+        // the `review_remote` gate. D10 sketches a later graduation onto a
+        // named-family `[review] remote_mutations = ["review", "canvas"]`
+        // allowlist; that is its own unit, and nothing here weakens kb root
+        // invariant #4. `accept` is the ONLY writer of the `accepted`
+        // status (D21: an agent-proposed board is PENDING until a human
+        // accepts it) — `apply`'s own lint refuses to author that status at
+        // all, so the rule holds for a loopback caller too, not just by
+        // virtue of this gate.
+        .route("/boards/apply", post(crate::boards::routes::apply_board))
+        .route(
+            "/boards/{slug}/accept",
+            post(crate::boards::routes::accept_board),
+        )
+        .route(
+            "/boards/{slug}/archive",
+            post(crate::boards::routes::archive_board),
+        )
+        .route(
+            "/boards/{slug}",
+            delete(crate::boards::routes::delete_board),
         )
         .layer(from_fn_with_state(
             auth.clone(),
