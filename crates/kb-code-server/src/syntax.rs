@@ -1,8 +1,9 @@
 //! `syntax/1` (V72-H1, design D7) — the ONE table that says, for a file
-//! type, *what this daemon can do with it*: which tree-sitter grammar (if
-//! any) parses it, which EXTRACTION TIER the ingest pipeline runs, whether
-//! the type is an injection host, and which extensions / exact filenames /
-//! `#!` interpreters address it.
+//! type, *what this daemon can do with it*: which ENGINE parses it (a
+//! tree-sitter grammar, V72-H3's first-party HAML scanner, or nothing at
+//! all), which EXTRACTION TIER the ingest pipeline runs, whether the type
+//! is an injection host, and which extensions / exact filenames / `#!`
+//! interpreters address it.
 //!
 //! Before this module, "which language is this file" lived in one `match`
 //! on `Path::extension()` inside [`crate::lang::detect`], and "what do we
@@ -27,11 +28,22 @@
 //!   symbols by tier" rather than being shown an empty list that looks
 //!   like a bug.
 //! * **`None`** — neither pass runs. Two distinct shapes both land here
-//!   and the `grammar` field tells them apart: a type with NO grammar
-//!   linked in this build (`sql`, `dockerfile` — the row exists so the
-//!   gap is NAMED and the Parity Grid can show it), and a parse-only
-//!   grammar (`erb`, registered so `frameworks::rails::views` can walk
-//!   tag boundaries, with no tags/highlights query of its own).
+//!   and the [`Engine`] tells them apart: a type NOTHING parses in this
+//!   build (`sql`, `dockerfile` — the row exists so the gap is NAMED and
+//!   the Parity Grid can show it), and a parse-only grammar (`erb`,
+//!   registered so `frameworks::rails::views` can walk tag boundaries,
+//!   with no tags/highlights query of its own).
+//!
+//! # The engine (V72-H3)
+//!
+//! [`Engine`] is orthogonal to the tier: it says WHO parses, the tier says
+//! WHAT is derived. `Engine::Scanner` exists because D7 rules that HAML
+//! gets a first-party Rust scanner rather than a dependency on the best
+//! available grammar. A scanner row is `Full`-tier with NO grammar, which
+//! is a shape V72-H1's assertions could not express — so the tier-backing
+//! test, the symbol cell and the hover cell all consult the engine, and a
+//! dedicated test proves no scanner row is gated into a pass that would
+//! start by calling `lang::parse` (which has no arm for it).
 //!
 //! **`Tier` is NOT `ingest::TIER_*`.** Those four constants
 //! (`unknown`/`binary`/`too-large`/`lfs`) are CONTENT skip markers written
@@ -55,12 +67,12 @@
 //!    basename is version-stripped (`python3.11` → `python`, `ksh93` →
 //!    `ksh`) and looked up in the registry's own `interpreters` lists.
 //!
-//! [`crate::lang::detect`] is now a thin façade over step 1–3: it returns
-//! the matched row's [`crate::lang::LangInfo`], which exists exactly when
-//! the row has a grammar. That keeps its contract byte-identical — `Some`
-//! has always meant "there is a grammar, and `salt` keys its derived rows"
-//! — so a grammar-less registry row (`sql`, `dockerfile`) is invisible to
-//! every existing caller and shows up only on the two new read surfaces.
+//! [`crate::lang::detect`] is a thin façade over step 1–3: it returns the
+//! matched row's [`crate::lang::LangInfo`], which exists exactly when the
+//! row's engine parses. `Some` means "something parses this, and `salt`
+//! keys its derived rows" — so a row nothing parses (`sql`, `dockerfile`)
+//! is invisible to every existing caller and shows up only on the two read
+//! surfaces.
 //!
 //! # The Parity Grid
 //!
@@ -114,6 +126,62 @@ pub struct Plan {
     pub symbols: bool,
 }
 
+/// WHO parses a row's files. `syntax/1` shipped tree-sitter-only (V72-H1);
+/// V72-H3 adds the second engine because D7 rules that HAML — roughly half
+/// a Rails monolith's views — gets a FIRST-PARTY scanner rather than a
+/// dependency on the best available grammar, which is a 13-star repository
+/// nvim-treesitter does not even register.
+///
+/// The engine is the ONE place "is this type parsed, and by what" is
+/// declared. `grammar`/`scanner` on the `syntax/1` wire are derived from
+/// it, the tier's own backing assertion consults it, and the Parity Grid's
+/// symbol/hover cells branch on it — so a third engine (a second scanner,
+/// a future LSP-only tier) is a variant here plus the cells that care,
+/// never a new parallel field that can disagree with this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// A linked tree-sitter grammar, named by its crate.
+    TreeSitter(&'static str),
+    /// A first-party Rust scanner in this crate, named by its own versioned
+    /// schema string (`crate::haml::SCANNER_VERSION`). `lang::parse` has no
+    /// arm for such a row — asking it for one is `Unsupported`, which is
+    /// the honest answer and which every caller already degrades on.
+    Scanner(&'static str),
+    /// Nothing in this build parses this type. The row exists so the gap is
+    /// NAMED on the two read surfaces.
+    None,
+}
+
+impl Engine {
+    /// True when SOMETHING parses this type — the property `info` is in
+    /// lock-step with (test-pinned).
+    pub fn parses(self) -> bool {
+        !matches!(self, Engine::None)
+    }
+
+    /// The tree-sitter grammar crate, for the `syntax/1` wire. `None` for a
+    /// scanner row: it has no grammar, and saying `null` there is the whole
+    /// point of splitting the field.
+    pub fn grammar(self) -> Option<&'static str> {
+        match self {
+            Engine::TreeSitter(g) => Some(g),
+            _ => None,
+        }
+    }
+
+    /// The first-party scanner's schema string, for the `syntax/1` wire.
+    pub fn scanner(self) -> Option<&'static str> {
+        match self {
+            Engine::Scanner(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn is_scanner(self) -> bool {
+        matches!(self, Engine::Scanner(_))
+    }
+}
+
 /// One file type. Rows are `'static` data; the table below is the source
 /// of truth and every other language-shaped list in this crate is either
 /// derived from it or pinned against it by a test.
@@ -122,13 +190,13 @@ pub struct SyntaxRow {
     /// The language id — the same string `files.lang`, `lang::for_id` and
     /// every salt use.
     pub lang: &'static str,
-    /// `Some` exactly when a tree-sitter grammar is linked for this row;
-    /// carries the cache salt. `None` means the type is NAMED but has no
-    /// grammar in this build.
+    /// `Some` exactly when SOMETHING in this build parses the row (a
+    /// grammar, or V72-H3's first-party scanner); carries the cache salt.
+    /// `None` means the type is NAMED but nothing parses it. In lock-step
+    /// with `engine.parses()` (test-pinned).
     pub info: Option<LangInfo>,
-    /// The grammar crate, for the `syntax/1` wire. `Some`/`None` in
-    /// lock-step with `info` (test-pinned).
-    pub grammar: Option<&'static str>,
+    /// Who parses it — see [`Engine`].
+    pub engine: Engine,
     pub tier: Tier,
     /// This type embeds other languages (ERB hosts Ruby + HTML). Declared
     /// for H2a's injection-aware pipeline, which is what will consume it;
@@ -169,13 +237,14 @@ const NO_GRAMMAR: &str =
     "no tree-sitter grammar linked in this build — the type is named so the gap is visible";
 
 /// The registry. Order is the wire order and the Parity Grid's row order:
-/// the eleven grammar languages in `lang.rs`'s own declaration order,
-/// then the parse-only grammar, then the named-but-grammar-less types.
+/// the eleven grammar languages in `lang.rs`'s own declaration order, then
+/// the parse-only grammar, then V72-H3's first-party-scanner row, then the
+/// named-but-unparsed types.
 pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "rust",
         info: Some(lang::RUST),
-        grammar: Some("tree-sitter-rust"),
+        engine: Engine::TreeSitter("tree-sitter-rust"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["rs"],
@@ -186,7 +255,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "python",
         info: Some(lang::PYTHON),
-        grammar: Some("tree-sitter-python"),
+        engine: Engine::TreeSitter("tree-sitter-python"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["py"],
@@ -200,7 +269,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "ruby",
         info: Some(lang::RUBY),
-        grammar: Some("tree-sitter-ruby"),
+        engine: Engine::TreeSitter("tree-sitter-ruby"),
         tier: Tier::Full,
         injection_host: false,
         // D7's Ruby-by-another-name set. `.ru` is `config.ru` (Rack),
@@ -216,7 +285,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "typescript",
         info: Some(lang::TYPESCRIPT),
-        grammar: Some("tree-sitter-typescript"),
+        engine: Engine::TreeSitter("tree-sitter-typescript"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["ts", "mts", "cts"],
@@ -227,7 +296,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "tsx",
         info: Some(lang::TSX),
-        grammar: Some("tree-sitter-typescript"),
+        engine: Engine::TreeSitter("tree-sitter-typescript"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["tsx"],
@@ -238,7 +307,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "javascript",
         info: Some(lang::JAVASCRIPT),
-        grammar: Some("tree-sitter-javascript"),
+        engine: Engine::TreeSitter("tree-sitter-javascript"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["js", "jsx", "mjs", "cjs"],
@@ -249,7 +318,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "bash",
         info: Some(lang::BASH),
-        grammar: Some("tree-sitter-bash"),
+        engine: Engine::TreeSitter("tree-sitter-bash"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["sh", "bash"],
@@ -260,7 +329,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "yaml",
         info: Some(lang::YAML),
-        grammar: Some("tree-sitter-yaml"),
+        engine: Engine::TreeSitter("tree-sitter-yaml"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["yml", "yaml"],
@@ -271,7 +340,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "go",
         info: Some(lang::GO),
-        grammar: Some("tree-sitter-go"),
+        engine: Engine::TreeSitter("tree-sitter-go"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["go"],
@@ -282,7 +351,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "toml",
         info: Some(lang::TOML),
-        grammar: Some("tree-sitter-toml-ng"),
+        engine: Engine::TreeSitter("tree-sitter-toml-ng"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["toml"],
@@ -293,7 +362,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "json",
         info: Some(lang::JSON),
-        grammar: Some("tree-sitter-json"),
+        engine: Engine::TreeSitter("tree-sitter-json"),
         tier: Tier::Full,
         injection_host: false,
         extensions: &["json"],
@@ -304,7 +373,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "erb",
         info: Some(lang::ERB),
-        grammar: Some("tree-sitter-embedded-template"),
+        engine: Engine::TreeSitter("tree-sitter-embedded-template"),
         tier: Tier::None,
         // ERB is the injection host this crate already parses (Ruby
         // inside HTML); the pipeline that would USE that is H2a's.
@@ -318,9 +387,28 @@ pub const REGISTRY: &[SyntaxRow] = &[
         ),
     },
     SyntaxRow {
+        lang: "haml",
+        info: Some(lang::HAML),
+        // V72-H3 (D7): the ONE non-tree-sitter engine. No viable HAML
+        // grammar exists, so this crate owns the scanner
+        // (`crate::haml`) — highlight spans, a template outline, and the
+        // Ruby fragment stream the EXISTING Rails-lens extractors consume
+        // unchanged.
+        engine: Engine::Scanner(crate::haml::SCANNER_VERSION),
+        tier: Tier::Full,
+        // HAML hosts Ruby the way ERB does, and unlike ERB something
+        // already READS that here: `haml::extract::ruby_fragments` is what
+        // H2a's injection-aware pipeline will lift.
+        injection_host: true,
+        extensions: &["haml"],
+        filenames: &[],
+        interpreters: &[],
+        note: None,
+    },
+    SyntaxRow {
         lang: "dockerfile",
         info: None,
-        grammar: None,
+        engine: Engine::None,
         tier: Tier::None,
         injection_host: false,
         extensions: &[],
@@ -331,7 +419,7 @@ pub const REGISTRY: &[SyntaxRow] = &[
     SyntaxRow {
         lang: "sql",
         info: None,
-        grammar: None,
+        engine: Engine::None,
         tier: Tier::None,
         injection_host: false,
         extensions: &["sql"],
@@ -430,8 +518,12 @@ pub fn tier_for_path(path: &str, content: Option<&[u8]>) -> (Tier, Option<&'stat
 pub struct SyntaxRowOut {
     pub lang: &'static str,
     pub tier: &'static str,
-    /// The tree-sitter grammar crate, or `null` when none is linked.
+    /// The tree-sitter grammar crate, or `null` when none is linked —
+    /// which now includes a row parsed by a first-party `scanner`.
     pub grammar: Option<&'static str>,
+    /// The first-party scanner's schema string, or `null`. Exactly one of
+    /// `grammar`/`scanner` is non-null on a row that is parsed at all.
+    pub scanner: Option<&'static str>,
     /// The derived-row cache salt, `null` in lock-step with `grammar`.
     pub salt: Option<&'static str>,
     pub injection_host: bool,
@@ -461,7 +553,8 @@ pub fn syntax_registry() -> SyntaxOut {
         .map(|r| SyntaxRowOut {
             lang: r.lang,
             tier: r.tier.as_str(),
-            grammar: r.grammar,
+            grammar: r.engine.grammar(),
+            scanner: r.engine.scanner(),
             salt: r.info.map(|i| i.salt),
             injection_host: r.injection_host,
             extensions: r.extensions,
@@ -528,6 +621,16 @@ fn no_pass_reason(row: &SyntaxRow) -> Option<&'static str> {
     Some(row.note.unwrap_or(NO_GRAMMAR))
 }
 
+/// What a row's outline rows ARE, for the two cells that describe them.
+/// Derived from the engine so the wording can never claim `key`-path rows
+/// for a template (or the reverse) — the reason text is part of the
+/// contract the golden pins.
+const SCANNER_SYMBOLS_REASON: &str =
+    "template outline rows (elements and filters) from a first-party scanner — the embedded \
+     Ruby fragments get no symbols of their own";
+const KEYPATH_SYMBOLS_REASON: &str =
+    "key-path outline rows (kind \"key\") — a data outline, not code definitions";
+
 fn cell_highlight(row: &SyntaxRow) -> ParityCell {
     if row.plan().highlight {
         cell("highlight", STATE_YES, None)
@@ -549,12 +652,11 @@ fn cell_symbols(row: &SyntaxRow) -> ParityCell {
     if lang::tags_query(row.lang).is_some() {
         return cell("symbols", STATE_YES, None);
     }
+    if row.engine.is_scanner() {
+        return cell("symbols", STATE_PARTIAL, Some(SCANNER_SYMBOLS_REASON));
+    }
     if crate::extract::CST_OUTLINE_LANG_IDS.contains(&row.lang) {
-        return cell(
-            "symbols",
-            STATE_PARTIAL,
-            Some("key-path outline rows (kind \"key\") — a data outline, not code definitions"),
-        );
+        return cell("symbols", STATE_PARTIAL, Some(KEYPATH_SYMBOLS_REASON));
     }
     cell(
         "symbols",
@@ -582,6 +684,22 @@ fn cell_outline(row: &SyntaxRow) -> ParityCell {
 
 fn cell_usages(row: &SyntaxRow) -> ParityCell {
     if !lang::supports_token_level(row.lang) {
+        // A row with no occurrences index can still answer `usages` — from
+        // the Rails lens's convention edges, which `resolve.rs` reads by
+        // `src_path`. That needs the type's declared pipeline to run at
+        // all, which is what `tier == Full` says; a `none`-tier injection
+        // host (ERB) derives nothing under the plan and keeps its honest
+        // `no` here, unchanged from V72-H1.
+        if row.tier == Tier::Full && row.injection_host {
+            return cell(
+                "usages",
+                STATE_PARTIAL,
+                Some(
+                    "convention edges only (render / i18n / component, likely|candidate) — no \
+                     occurrences index, so the ladder has no exact tier",
+                ),
+            );
+        }
         return cell(
             "usages",
             STATE_NO,
@@ -609,7 +727,12 @@ fn cell_hover(row: &SyntaxRow) -> ParityCell {
         return cell(
             "hover",
             STATE_PARTIAL,
-            Some("word-scan resolve over key-path rows — no occurrences index to bind a position"),
+            Some(if row.engine.is_scanner() {
+                "word-scan resolve over template outline rows — no occurrences index to bind a \
+                 position"
+            } else {
+                "word-scan resolve over key-path rows — no occurrences index to bind a position"
+            }),
         );
     }
     cell(
@@ -865,8 +988,13 @@ mod tests {
         for r in REGISTRY {
             assert_eq!(
                 r.info.is_some(),
-                r.grammar.is_some(),
-                "{}: info and grammar must be Some/None together",
+                r.engine.parses(),
+                "{}: info and engine must agree about whether anything parses this row",
+                r.lang
+            );
+            assert!(
+                r.engine.grammar().is_none() || r.engine.scanner().is_none(),
+                "{}: a row is parsed by a grammar OR a scanner, never both",
                 r.lang
             );
             assert_eq!(
@@ -950,8 +1078,9 @@ mod tests {
             let plan = r.plan();
             if plan.highlight {
                 assert!(
-                    lang::highlights_query(r.lang).is_some(),
-                    "{}: tier {} promises highlight spans but has no highlights query",
+                    lang::highlights_query(r.lang).is_some() || r.engine.is_scanner(),
+                    "{}: tier {} promises highlight spans but has neither a highlights query \
+                     nor a first-party scanner",
                     r.lang,
                     r.tier.as_str()
                 );
@@ -959,9 +1088,10 @@ mod tests {
             if plan.symbols {
                 assert!(
                     lang::tags_query(r.lang).is_some()
-                        || crate::extract::CST_OUTLINE_LANG_IDS.contains(&r.lang),
-                    "{}: tier full promises symbols but has neither a tags query nor a CST \
-                     outline",
+                        || crate::extract::CST_OUTLINE_LANG_IDS.contains(&r.lang)
+                        || r.engine.is_scanner(),
+                    "{}: tier full promises symbols but has no tags query, no CST outline and \
+                     no first-party scanner",
                     r.lang
                 );
             }
@@ -1103,6 +1233,26 @@ mod tests {
         assert_eq!(find("yaml", "symbols").state, STATE_PARTIAL);
         assert_eq!(find("yaml", "usages").state, STATE_NO);
         assert_eq!(find("yaml", "lens").state, STATE_NO);
+        // A first-party-scanner row: highlighted and outlined by code this
+        // crate owns, convention-edged by the Rails lens, and honestly
+        // short of an occurrences index. Every non-`yes` cell says which.
+        assert_eq!(find("haml", "highlight").state, STATE_YES);
+        assert_eq!(find("haml", "symbols").state, STATE_PARTIAL);
+        assert!(find("haml", "symbols")
+            .reason
+            .expect("haml symbols explains itself")
+            .contains("first-party scanner"));
+        assert_eq!(find("haml", "usages").state, STATE_PARTIAL);
+        assert!(find("haml", "usages")
+            .reason
+            .expect("haml usages explains itself")
+            .contains("likely|candidate"));
+        assert_eq!(find("haml", "hover").state, STATE_PARTIAL);
+        // The code LENS is callable/type declarations with occurrence-backed
+        // counts. HAML has neither, and the Rails lens is a DIFFERENT lane —
+        // claiming `partial` here because render/i18n edges exist would be
+        // exactly the over-claim invariant 18(c) exists to prevent.
+        assert_eq!(find("haml", "lens").state, STATE_NO);
         // A parse-only grammar, and a type with no grammar at all: every
         // cell `no`, every `no` explained.
         for lang in ["erb", "sql", "dockerfile"] {
@@ -1126,6 +1276,81 @@ mod tests {
              If the capability change is intended, replace the golden with the JSON \
              below (this is exactly `kb-code parity --json`):\n{actual}"
         );
+    }
+
+    // ── V72-H3: the scanner engine ───────────────────────────────────────
+
+    /// `.haml` resolves, and to a row whose derived rows are keyed by the
+    /// SCANNER's own version — not a grammar's, because there is no
+    /// grammar. Bumping `haml::SCANNER_VERSION` without bumping the salt
+    /// would leave every cached row derived by the old scanner live.
+    #[test]
+    fn haml_detects_to_the_scanner_row_and_its_salt_names_the_scanner() {
+        assert_eq!(
+            lang::detect("app/views/orders/show.html.haml", None).map(|l| l.id),
+            Some("haml")
+        );
+        assert_eq!(
+            lang::detect("app/views/orders/_row.haml", None).map(|l| l.id),
+            Some("haml")
+        );
+        let row = row_for_path("app/views/orders/show.html.haml", None).expect("haml row");
+        assert_eq!(row.tier, Tier::Full);
+        assert_eq!(row.engine, Engine::Scanner(crate::haml::SCANNER_VERSION));
+        assert_eq!(row.engine.grammar(), None);
+        assert_eq!(row.engine.scanner(), Some(crate::haml::SCANNER_VERSION));
+        assert!(row
+            .info
+            .expect("haml salt")
+            .salt
+            .contains(crate::haml::SCANNER_VERSION));
+        assert_eq!(
+            tier_for_path("app/views/orders/show.html.haml", None),
+            (Tier::Full, None)
+        );
+    }
+
+    /// The structural guarantee that makes a grammar-less `Full` row safe:
+    /// `lang::parse` cannot serve a scanner row, so no pass that starts by
+    /// parsing a tree-sitter tree may be gated on one. Break this and a
+    /// `.haml` file reaches a pass whose very first call returns
+    /// `Unsupported` — an empty result dressed as a derivation.
+    #[test]
+    fn no_scanner_language_is_in_any_tree_sitter_gated_pass() {
+        for r in REGISTRY.iter().filter(|r| r.engine.is_scanner()) {
+            let id = r.lang;
+            assert!(!lang::supports_token_level(id), "{id}: token-level");
+            assert!(!crate::imports::supports(id), "{id}: imports");
+            assert!(!crate::locals::supports(id), "{id}: locals");
+            assert!(!crate::hierarchy::supports_hierarchy(id), "{id}: hierarchy");
+            assert!(!crate::entities::indexes_lang(id), "{id}: entities");
+            assert!(
+                !crate::extract::CST_OUTLINE_LANG_IDS.contains(&id),
+                "{id}: CST outline — that dispatch parses a grammar this row has not got"
+            );
+            assert!(lang::tags_query(id).is_none(), "{id}: tags query");
+            assert!(
+                lang::highlights_query(id).is_none(),
+                "{id}: highlights query"
+            );
+        }
+    }
+
+    /// Both derivation entry points answer for a scanner row without ever
+    /// reaching `lang::parse` — the arm each one grew in V72-H3.
+    #[test]
+    fn the_scanner_row_derives_through_its_own_dispatch_not_lang_parse() {
+        let src = b"%section#hero.big\n  %p= t('.title')\n";
+        let symbols = crate::extract::extract_symbols("haml", src).expect("haml symbols");
+        assert_eq!(
+            symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["section#hero.big", "p"]
+        );
+        let spans = crate::highlight::extract_highlights("haml", src).expect("haml spans");
+        assert!(!spans.is_empty(), "a scanner row must produce real spans");
+        // And the grammar path still refuses, which is what the two arms
+        // above exist to route around.
+        assert!(lang::parse("haml", src).is_err());
     }
 
     // ── the declaration↔handler walk ─────────────────────────────────────

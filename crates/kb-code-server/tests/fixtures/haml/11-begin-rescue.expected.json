@@ -1,0 +1,49 @@
+{
+  "nodes": [
+    {
+      "kind": "silent_script",
+      "ruby": "begin",
+      "keyword": "begin",
+      "children": [
+        {
+          "kind": "script",
+          "ruby": "risky_call",
+          "keyword": null,
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "rescue => e",
+          "keyword": "rescue",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "script": "e.message"
+          },
+          "children": []
+        },
+        {
+          "kind": "silent_script",
+          "ruby": "ensure",
+          "keyword": "ensure",
+          "children": []
+        },
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "always"
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

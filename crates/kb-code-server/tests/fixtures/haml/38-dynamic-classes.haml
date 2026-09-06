@@ -1,0 +1,4 @@
+%li{class: "item-#{index}"}
+%div.row{class: dynamic_class}
+%span{id: "id-#{@order.id}", class: "static"}
+%td.cell{class: [("odd" if odd?), "cell"]}

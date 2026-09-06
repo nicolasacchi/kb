@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "a",
+      "attributes": {
+        "class": "btn",
+        "href": "/x",
+        "id": "go"
+      },
+      "self_closing": false,
+      "inline": {
+        "text": "Go"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "div",
+      "attributes": {
+        "class": "a b",
+        "id": "main",
+        "role": "main"
+      },
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    }
+  ]
+}

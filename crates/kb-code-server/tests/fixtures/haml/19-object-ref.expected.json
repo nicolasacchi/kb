@@ -1,0 +1,32 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "li",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "@item.name"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "tr",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "div",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "Text"
+      },
+      "children": []
+    }
+  ]
+}

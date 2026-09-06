@@ -1,0 +1,37 @@
+{
+  "nodes": [
+    {
+      "kind": "comment",
+      "conditional": null,
+      "text": "a rendered comment",
+      "children": []
+    },
+    {
+      "kind": "comment",
+      "conditional": null,
+      "text": "",
+      "children": [
+        {
+          "kind": "tag",
+          "name": "p",
+          "attributes": {},
+          "self_closing": false,
+          "inline": {
+            "text": "nested inside the comment"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

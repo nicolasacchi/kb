@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {
+      "kind": "filter",
+      "name": "ruby",
+      "text": "total = items.sum(&:price)\nlabel = t(\".total\")",
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "total"
+      },
+      "children": []
+    }
+  ]
+}

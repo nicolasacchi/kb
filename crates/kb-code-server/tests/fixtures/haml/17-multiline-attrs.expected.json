@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "a",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "Go"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "after"
+      },
+      "children": []
+    }
+  ]
+}

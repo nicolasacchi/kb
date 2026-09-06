@@ -1,0 +1,46 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "a",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": [
+        {
+          "kind": "tag",
+          "name": "b",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": [
+            {
+              "kind": "tag",
+              "name": "c",
+              "attributes": {},
+              "self_closing": false,
+              "inline": null,
+              "children": []
+            }
+          ]
+        },
+        {
+          "kind": "tag",
+          "name": "d",
+          "attributes": {},
+          "self_closing": false,
+          "inline": null,
+          "children": []
+        }
+      ]
+    },
+    {
+      "kind": "tag",
+      "name": "e",
+      "attributes": {},
+      "self_closing": false,
+      "inline": null,
+      "children": []
+    }
+  ]
+}

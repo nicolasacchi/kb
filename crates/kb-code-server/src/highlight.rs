@@ -94,6 +94,14 @@ pub fn extract_highlights(lang_id: &str, source: &[u8]) -> Result<Vec<Span>> {
     if lang_id == "erb" {
         return Ok(Vec::new());
     }
+    // V72-H3 (D7) — HAML's spans come from `crate::haml`'s own scanner
+    // (template tokens) PLUS this module's Ruby query run over every Ruby
+    // fragment the scanner found, shifted into HAML coordinates. There is
+    // no `haml` grammar and no `haml-highlights.scm`; the tier's highlight
+    // promise is backed by `syntax/1`'s `Engine::Scanner` instead.
+    if lang_id == "haml" {
+        return Ok(crate::haml::highlights(source));
+    }
     let (tree, language) = lang::parse(lang_id, source)?;
     let hl_src = lang::highlights_query(lang_id)
         .ok_or_else(|| LangError::Unsupported(lang_id.to_string()))?;

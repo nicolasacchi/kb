@@ -1,0 +1,46 @@
+{
+  "nodes": [
+    {
+      "kind": "tag",
+      "name": "p",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "Ünïcödé — ok ✓"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "span",
+      "attributes": {
+        "class": "categor"
+      },
+      "self_closing": false,
+      "inline": {
+        "text": "ía Español"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "li",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "text": "日本語のテキスト"
+      },
+      "children": []
+    },
+    {
+      "kind": "tag",
+      "name": "em",
+      "attributes": {},
+      "self_closing": false,
+      "inline": {
+        "script": "t(\"café.menu\")"
+      },
+      "children": []
+    }
+  ]
+}

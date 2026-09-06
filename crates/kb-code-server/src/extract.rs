@@ -293,6 +293,14 @@ pub fn extract_symbols(lang_id: &str, source: &[u8]) -> Result<Vec<Symbol>> {
     if lang_id == "erb" {
         return Ok(Vec::new());
     }
+    // V72-H3 (D7) — HAML has no tree-sitter grammar at all; its rows come
+    // from this crate's OWN scanner (`crate::haml`, `syntax/1`'s
+    // `Engine::Scanner`). Structurally the same dispatch as the three CST
+    // outline languages above, one line earlier than `lang::parse` would
+    // fail with `Unsupported`.
+    if lang_id == "haml" {
+        return Ok(crate::haml::outline(source));
+    }
     let (tree, language) = lang::parse(lang_id, source)?;
     let tags_src =
         lang::tags_query(lang_id).ok_or_else(|| LangError::Unsupported(lang_id.to_string()))?;
@@ -771,8 +779,19 @@ fn go_type_kind(type_spec: tree_sitter::Node<'_>) -> &'static str {
 /// column: every row already carries `kind`, so this needs no migration and
 /// can never drift out of sync with a hand-constructed row the way a
 /// separate boolean flag could.
+/// Symbol kinds that describe a file's SHAPE rather than a definition
+/// anything can call or import: YAML/TOML/JSON's key-path rows and V72-H3's
+/// HAML template rows. Every one of them is a real `symbols` row (the
+/// structure popup renders them) and none of them belongs in a repo map,
+/// which is a map of DEFINITIONS.
+pub const OUTLINE_ONLY_KINDS: &[&str] = &[
+    "key",
+    crate::haml::extract::KIND_ELEMENT,
+    crate::haml::extract::KIND_FILTER,
+];
+
 pub fn is_repo_map_symbol(kind: &str) -> bool {
-    kind != "key"
+    !OUTLINE_ONLY_KINDS.contains(&kind)
 }
 
 /// Per-language "container-worthy" ancestor kinds: `(node_kind,
