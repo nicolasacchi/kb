@@ -80,7 +80,7 @@ comrak = { version = "0.52", default-features = false, features = ["syntect"] }
 # Archive (folder download → .zip; deflate backend reuses flate2, already
 # in the graph). default-features off to skip bzip2/zstd/aes codecs we
 # don't emit.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Filesystem watcher (debouncer pinned ≥0.7 per topic 03 / dedup bug #711 fix)
 notify = "8"
