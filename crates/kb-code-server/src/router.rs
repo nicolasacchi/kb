@@ -511,6 +511,14 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // fails the build rather than shipping dead.
         .route("/syntax", get(crate::syntax::syntax_route))
         .route("/parity", get(crate::syntax::parity_route))
+        // V72-H4a (D7, §P8) — `aug-lane/1`'s three READS. A bearer caller
+        // may read facts; only loopback may write them, so the ingest
+        // route lives on `transcripts_api` below rather than here.
+        // `crate::lanes::V72_H4A_ROUTES` declares all four and a unit test
+        // walks that declaration against THIS file.
+        .route("/lanes", get(crate::lanes::routes::lanes_route))
+        .route("/lanes/facts", get(crate::lanes::routes::facts_route))
+        .route("/lanes/summary", get(crate::lanes::routes::summary_route))
         .route("/tree", get(routes::tree))
         .route("/file", get(routes::file))
         .route("/symbols", get(routes::symbols))
@@ -931,6 +939,20 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // module doc above for why this rides loopback-only rather than
         // auth_bearer. V4.S1's apply route (below) is the second.
         .route("/checkout", post(routes::checkout_route))
+        // V72-H4a — `aug-lane/1` claim ingest. Third member of the
+        // loopback-only mutation family, and for the design's own reason
+        // (§P8 security posture #2): the OPERATOR ran the tool on their
+        // box, and only a loopback caller may put its output into this
+        // daemon. A bearer caller reads facts through `/api/lanes/facts`
+        // and writes nothing. The body limit is raised above axum's 2 MiB
+        // default so THIS route's own 413 — the one that states the byte
+        // count and the cap — is what a large tool run hits.
+        .route(
+            "/lanes/{lane}/ingest",
+            post(crate::lanes::ingest::ingest_route).layer(axum::extract::DefaultBodyLimit::max(
+                crate::lanes::ingest::MAX_BODY_BYTES + crate::lanes::ingest::BODY_LIMIT_SLACK,
+            )),
+        )
         // V4.S1 — splice a stored suggestion into the working tree. Same
         // loopback-only family as checkout: the exact-match guard is the
         // dirty-tree policy, and the live-mirror watcher sees the write

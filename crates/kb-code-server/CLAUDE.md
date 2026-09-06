@@ -649,6 +649,64 @@ invariant #2 records).
     question and legitimately returns many entities, a dossier is about
     exactly one — and `dossier::V72_G1_ROUTES` joins invariant 15's
     `RouteContract` walk from both sides.
+20. **`aug-lane/1` has one enablement gate, one classing function, and
+    two lane kinds because the daemon runs no tool** (V72-H4a, `src/lanes/`,
+    migration V0030, design §P8/D7). Three rules, separate to state and
+    easy to break one at a time.
+    (a) **A lane is enabled ONLY by `[lanes]` in kb-code.toml.** Never by
+    a route, never by a request, and never by a file inside a REPOSITORY —
+    a committed `.kbc/lanes.toml` would be remote code execution by `git
+    clone` (the `.vscode/tasks.json` trap the design's security posture
+    names). `lanes::LANES` is a Rust table this binary ships and
+    `config::LanesSection` is the only thing that turns a row of it on;
+    the default is EMPTY, which is what keeps every other response
+    byte-identical on a daemon that has never heard of lanes. The
+    `sarif.*` row is a FAMILY TEMPLATE and is deliberately not
+    addressable: a SARIF ingest into one shared bucket would make two
+    scanners indistinguishable, so the operator declares one instance per
+    tool (`sarif.brakeman`) and a typo is reported by name rather than
+    silently becoming a lane that never runs.
+    (b) **Two kinds, because of invariant 10.** The design sketches four
+    source kinds (`git`/`file`/`http`/`exec`); this crate has two —
+    `derived` (computed here, from `git` and the mirror, through
+    `history::run_git_raw`) and `ingested` (POSTed by `kb-code lanes
+    ingest`, which ran the tool on the operator's box, over the
+    loopback-only mutation lane). The `exec` kind is not a server feature
+    at all; it is the CLI, which is also why the three adapters live in
+    THIS crate (one home for the fact shape, golden-pinned by `cargo test
+    -p kb-code-server`) while only the parsed facts cross the wire. There
+    is no configuration flag that could create a third path.
+    (c) **The class is computed per request and never persisted, and
+    `sha_source` is what makes `exact` reachable at all.** `lane_facts`
+    has no class column (invariant 13's posture, and root invariant #2's
+    "kb-code mints classes, nothing is cached", applied to somebody else's
+    tool output). `lanes::classing::class_for` is the ONE function:
+    `min(lane ceiling, per-fact cap, anchor state)`, pure, with the whole
+    rules table in its own doc. `exact` requires BOTH that the fact's blob
+    is the file's current one AND that `sha_source = "tool"` — a blob the
+    DAEMON attributed at ingest because the tool named none is
+    `mirror_at_ingest` and caps at `likely` forever, because reading it
+    back as `exact` would be a wrong `exact`, which is a release blocker.
+    Re-anchoring calls the ONE Ladder this crate already has
+    (`annotations::anchor_for_line`/`resolve` +
+    `review_comments::line_matches_snippet`) rather than growing a second,
+    and the snippet it re-resolves is captured at ingest ONLY when the
+    fact's blob is what is on disk at that moment — a fact about some
+    other blob carries none and becomes an honest orphan instead of a
+    manufactured match. The per-fact cap exists for exactly one shipped
+    case and is not decoration: `git.behavior`'s `last_touch` reaches
+    `exact` on a PRESENT `Kb-Session:` trailer (evidence) and caps itself
+    at `likely` on an ABSENT one (absence of evidence is not evidence of a
+    human). `lane_facts` is registered in `Store::delete_file`'s
+    transaction beside `rails_edges` and `entity_defs`, for the identical
+    reason: its reads are `(repo_id, path)`-keyed. An ingest REPLACES on
+    that same key — the batch's paths PLUS `clear_paths` — which is
+    invariant 12(a) restated and the only way "the offense was fixed" is
+    expressible. Retention is a PAGED background sweep on V72-B0's shape
+    (spawned before the bind, never awaited, one short transaction per
+    page), and a DISABLED lane is never swept out from under a re-enable.
+    `lanes::V72_H4A_ROUTES` joins invariant 15's `RouteContract` walk from
+    both sides.
 
 20. **`rails/1` is a per-request VIEW over three tables it does not own,
     and its trust ceiling is a TYPE** (V72-I1, `src/rails/`, design D7 +

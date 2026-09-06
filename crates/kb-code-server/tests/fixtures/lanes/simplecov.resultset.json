@@ -1,0 +1,12 @@
+{
+  "RSpec": {
+    "coverage": {
+      "/repo/app/models/widget.rb": {
+        "lines": [null, 1, 0, null, 3, 0],
+        "branches": []
+      },
+      "/repo/lib/legacy.rb": [null, 2, 2]
+    },
+    "timestamp": 1756000000
+  }
+}
