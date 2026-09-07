@@ -58,7 +58,6 @@ export interface DocPanelProps {
   cardsFolded: boolean;
   onSetCardsFolded: (folded: boolean) => void;
   focusedRef: string | null;
-  onFocusRef: (ref: string | null) => void;
 }
 
 export default function DocPanel({
@@ -70,7 +69,6 @@ export default function DocPanel({
   cardsFolded,
   onSetCardsFolded,
   focusedRef,
-  onFocusRef,
 }: DocPanelProps) {
   const cards = useMemo(() => cardIndex(doc.cards), [doc.cards]);
   const resolved = doc.cards_resolved;
@@ -393,20 +391,13 @@ export default function DocPanel({
       <DocMarkdown blocks={bodyBlocks} {...mdProps} />
 
       {/* The rail's own jump list lives in `RefCardsCard`; this is the
-          keyboard focus target's announcement so `] r`/`[ r` are legible
-          without one. */}
+          keyboard focus target's announcement, so `] r`/`[ r` are legible to
+          a screen reader without one. */}
       {focusedRef && (
         <p className="kbc-sr-only" role="status" data-kbc-doc-focused-ref={focusedRef}>
           focused ref {focusedRef}
         </p>
       )}
-      <button
-        type="button"
-        className="kbc-sr-only"
-        onClick={() => onFocusRef(null)}
-        aria-label="clear the focused ref"
-        data-kbc-doc-clear-focus
-      />
     </section>
   );
 }

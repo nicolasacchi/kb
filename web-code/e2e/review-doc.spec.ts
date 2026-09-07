@@ -64,11 +64,15 @@ test.describe("review document (kbc-review/1)", () => {
       data: { schema: "kbc-compose/1", doc_md: DOC_MD, tier: "minimal" },
     });
     if (!composeRes.ok()) {
-      // Degrade path: a daemon without the V73-K1 document surface. The
-      // cockpit hides the tab entirely, and THAT is the behaviour to assert.
+      // Degrade path: a daemon without the V73-K1 document surface (or one
+      // that refuses this document). Assert the cockpit still renders and
+      // stop — deliberately NOT "the Document tab is absent": the tab's
+      // availability gate is the SAME optimistic one Map/Order/Timeline use
+      // (`data !== null || (!isFetched && !isError)`), so before its query
+      // has run the tab is present by design, and the 404 is what sends the
+      // reader back to Files with a toast.
       await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
       await expect(page.locator("[data-kbc-review-title]")).toBeVisible({ timeout: 10_000 });
-      expect(await page.locator('[data-kbc-review-view="doc"]').count()).toBe(0);
       return;
     }
 
