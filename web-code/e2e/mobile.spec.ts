@@ -85,8 +85,9 @@ test.describe("Reader mobile shell (390×844)", () => {
     // The full icon rail rides inside the sheet — same tabs as desktop.
     // V70-A4 re-cut the six SOURCE tabs into the design's TASK tabs: All,
     // Understand, History, Notes (Review appears only with an open review
-    // for this file, and this fixture has none).
-    await expect(sheet.locator("[data-kbc-itab]")).toHaveCount(4);
+    // for this file, and this fixture has none). V72-J2 added Comments,
+    // UNCONDITIONAL like the first four.
+    await expect(sheet.locator("[data-kbc-itab]")).toHaveCount(5);
 
     await sheet.locator('[data-kbc-itab="notes"]').click();
     await expect(sheet.locator(".kbc-annotations")).toBeVisible();

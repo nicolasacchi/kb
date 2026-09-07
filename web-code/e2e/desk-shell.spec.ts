@@ -225,11 +225,14 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
   test("tab one is All, and Review is absent without a review for this file", async ({ page }) => {
     await openReader(page, "?desk=read");
     const tabs = page.locator("[data-kbc-itab]");
-    await expect(tabs).toHaveCount(4);
+    // V72-J2 — comments/1's Comments tab joined the rail, UNCONDITIONAL
+    // (unlike Review/Dossier): five tabs now, not four.
+    await expect(tabs).toHaveCount(5);
     await expect(tabs.nth(0)).toHaveAttribute("data-kbc-itab", "all");
     await expect(tabs.nth(1)).toHaveAttribute("data-kbc-itab", "understand");
     await expect(tabs.nth(2)).toHaveAttribute("data-kbc-itab", "history");
     await expect(tabs.nth(3)).toHaveAttribute("data-kbc-itab", "notes");
+    await expect(tabs.nth(4)).toHaveAttribute("data-kbc-itab", "comments");
     await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
   });
 
@@ -237,7 +240,7 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
     await openReader(page, "?desk=read");
     const body = page.locator("[data-kbc-rail-body]");
     await expect(body).toHaveAttribute("data-kbc-rail-body", "all");
-    for (const s of ["outline", "entity", "provenance", "history", "annotations", "bookmarks"]) {
+    for (const s of ["outline", "entity", "provenance", "history", "annotations", "bookmarks", "comments"]) {
       await expect(page.locator(`[data-kbc-rail-section="${s}"]`)).toHaveCount(1);
     }
 
