@@ -61,7 +61,14 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn refuse(rule: &'static str, at: Option<String>, message: impl Into<String>) -> Self {
+    // `pub(crate)` — V74-L3b's `tours::lint` adds its OWN rules to the SAME
+    // report rather than starting a second lint (D10: one step model, and
+    // therefore one place that says a step is malformed).
+    pub(crate) fn refuse(
+        rule: &'static str,
+        at: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             rule,
             severity: Severity::Refuse,
@@ -69,7 +76,7 @@ impl Finding {
             message: message.into(),
         }
     }
-    fn warn(rule: &'static str, at: Option<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn warn(rule: &'static str, at: Option<String>, message: impl Into<String>) -> Self {
         Self {
             rule,
             severity: Severity::Warn,

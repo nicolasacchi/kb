@@ -1730,7 +1730,9 @@ fn exec_boards(ctx: &RunCtx<'_>, args: &Args) -> Result<StepOutput, String> {
     let mut census = StepCensus::new();
     let boards = ctx
         .store
-        .list_canvas_boards(ctx.repo_id, status)
+        // V74-L3b — the kind is REQUIRED now (a tour is a `canvas_boards`
+        // row too, V0039); the `boards` op means BOARDS.
+        .list_canvas_boards(ctx.repo_id, crate::tours::BOARD_KIND_BOARD, status)
         .map_err(|e| e.to_string())?;
     census.input("boards", boards.len() as i64);
     if boards.is_empty() {

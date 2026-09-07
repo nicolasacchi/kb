@@ -322,6 +322,8 @@ pub mod bookmarks;
 pub mod canvas;
 pub mod checkout;
 pub mod claims;
+pub mod tours;
+pub mod trails;
 // S2-C (design-s2.md § S2-C) — LSP code actions as suggestions. Alone
 // rather than folded into `lip.rs`: its own request/response wire types,
 // distinct from `lip::DiagnosticsOut`. See `code_actions`'s own module doc.
@@ -648,6 +650,14 @@ pub async fn bind_and_spawn(
     // window) and needs no marker — the cutoff is recomputed per page from
     // the clock. A daemon with no ingested lane enabled starts no task.
     lanes::gc::spawn_lane_retention_gc(store.clone(), config.lanes.clone());
+
+    // V74-L3b — `kbc-trail/1`'s retention sweep. The SAME V72-B0 shape
+    // again (spawned, never awaited; paged inside), and it starts no task
+    // at all when `[trails] enabled` is false (the DEFAULT) or
+    // `retention_days = 0` — see `trails::gc`'s module doc. Retention is
+    // one of the three controls D17 requires to ship in the same milestone
+    // as the ledger itself; it is not a follow-up.
+    trails::gc::spawn_trail_retention_gc(store.clone(), config.trails.clone());
 
     // W1.6 (a) — initial background index: a HEAD-tree walk per repo
     // (W1.5's `ingest::index_repo_working_tree`), spawned so it never delays
@@ -1084,6 +1094,7 @@ pub async fn bind_and_spawn(
         symbol_index: symbol_index.clone(),
         search_factors: search_factors_config,
         lanes: config.lanes.clone(),
+        trails: config.trails.clone(),
         status_index: Arc::new(git_status::StatusIndex::new()),
         semantic: semantic_config,
         semantic_chunk_store,
@@ -1352,6 +1363,7 @@ pub(crate) async fn build_state_for_test(
         symbol_index: Arc::new(search::SymbolIndex::new()),
         search_factors: config.search.factors(),
         lanes: config.lanes.clone(),
+        trails: config.trails.clone(),
         status_index: Arc::new(git_status::StatusIndex::new()),
         semantic: config.semantic,
         semantic_chunk_store: None,

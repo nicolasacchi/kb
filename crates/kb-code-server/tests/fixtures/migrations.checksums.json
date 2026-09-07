@@ -183,5 +183,10 @@
     "version": 38,
     "name": "recipes",
     "checksum": "311446134290708671"
+  },
+  {
+    "version": 39,
+    "name": "tours_and_trails",
+    "checksum": "1442098713088158797"
   }
 ]

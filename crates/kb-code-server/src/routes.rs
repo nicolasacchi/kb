@@ -375,6 +375,12 @@ impl From<StoreError> for ApiError {
             // a `reading_sets(repo_id, name)` collision is a client error
             // (`409`), not a server fault.
             StoreError::NameConflict(_) => ApiError::new(StatusCode::CONFLICT, e.to_string()),
+            // V74-L3b — the same class one table over: a tour and a board
+            // share `canvas_boards`' slug space (V0039), so a collision
+            // across the two families is a client error too.
+            StoreError::SlugTakenByOtherKind { .. } => {
+                ApiError::new(StatusCode::CONFLICT, e.to_string())
+            }
             // V4.C2 — batch unknown-id path. 400 (not 404) so a batch
             // never reports a partial apply via a not-found status.
             StoreError::NotFound(_) => ApiError::bad_request(e.to_string()),
@@ -2192,6 +2198,12 @@ pub struct AnnotationView {
     /// byte-identical on the wire).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub set_id: Option<String>,
+    /// V74-L3b — `trails.id` when this annotation is a DISSENT note on an
+    /// agent-authored trail. `skip_serializing_if` for `set_id`'s reason:
+    /// every pre-V0039 / non-trail annotation stays byte-identical on the
+    /// wire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trail_id: Option<String>,
 }
 
 fn corrupt_anchor_error(id: &str, field: &str, e: impl std::fmt::Display) -> ApiError {
@@ -2266,6 +2278,7 @@ pub(crate) fn annotation_view(
             ps_number: row.ps_number,
             side: row.side,
             set_id: row.set_id,
+            trail_id: row.trail_id,
         });
     }
 
@@ -2303,6 +2316,7 @@ pub(crate) fn annotation_view(
             ps_number: row.ps_number,
             side: row.side,
             set_id: row.set_id,
+            trail_id: row.trail_id,
         });
     }
 
@@ -2334,6 +2348,7 @@ pub(crate) fn annotation_view(
             ps_number: row.ps_number,
             side: row.side,
             set_id: row.set_id,
+            trail_id: row.trail_id,
         });
     }
 
@@ -2430,6 +2445,7 @@ pub(crate) fn annotation_view(
         ps_number: row.ps_number,
         side: row.side,
         set_id: row.set_id,
+        trail_id: row.trail_id,
     })
 }
 
@@ -2659,6 +2675,15 @@ pub struct CreateAnnotationBody {
     /// uses.
     #[serde(default)]
     pub set_id: Option<String>,
+    /// V74-L3b — when set, this annotation is a DISSENT note on an
+    /// agent-AUTHORED `kbc-trail/1` trail (`trails.id`). Independent of
+    /// `review_id`/`set_id`; validated to exist and belong to `repo`
+    /// (`resolve_trail_scope`). A reply inherits it from its parent and
+    /// 400s on a conflicting value — the SAME `inherit_scope_field`
+    /// ladder, third instance. Notes REUSE this store rather than growing
+    /// a second comments table (D10's node-thread ruling, one layer over).
+    #[serde(default)]
+    pub trail_id: Option<String>,
 }
 
 /// V4.C1 — inherit review scope from `parent`, 400 if the body tries to
@@ -2846,6 +2871,16 @@ fn assemble_reply_annotation(
         "a reply cannot set set_id on a parent that is not workspace-scoped",
         "a reply's set_id must match its parent's",
     )?;
+    // V74-L3b — the SAME ladder again, for a trail dissent note: a reply
+    // under a trail-scoped parent stays on that SAME trail, which is what
+    // keeps `Store::trail_notes` a single `WHERE trail_id = ?` rather than
+    // a parent/reply two-step.
+    let trail_id = inherit_scope_field(
+        parent.trail_id.clone(),
+        payload.trail_id.clone(),
+        "a reply cannot set trail_id on a parent that is not trail-scoped",
+        "a reply's trail_id must match its parent's",
+    )?;
     let intent = payload
         .intent
         .as_deref()
@@ -2873,6 +2908,7 @@ fn assemble_reply_annotation(
         ps_number,
         side,
         set_id,
+        trail_id,
     })
 }
 
@@ -2936,6 +2972,34 @@ async fn resolve_set_scope_async(
         .await
 }
 
+/// V74-L3b — the SAME validation, third instance: an optional `trail_id`
+/// on a top-level create must name a trail that exists and belongs to
+/// `repo_id`. `None` when absent (every ordinary annotation, unchanged).
+fn resolve_trail_scope(
+    store: &Store,
+    trail_id: Option<&str>,
+    repo_id: i64,
+) -> Result<Option<String>, ApiError> {
+    let Some(trail_id) = trail_id else {
+        return Ok(None);
+    };
+    store
+        .get_trail(repo_id, trail_id)?
+        .ok_or_else(|| ApiError::bad_request(format!("no such trail: {trail_id:?}")))?;
+    Ok(Some(trail_id.to_string()))
+}
+
+async fn resolve_trail_scope_async(
+    state: &SharedState,
+    trail_id: Option<String>,
+    repo_id: i64,
+) -> Result<Option<String>, ApiError> {
+    state
+        .store
+        .run_blocking(move |store| resolve_trail_scope(store, trail_id.as_deref(), repo_id))
+        .await
+}
+
 async fn assemble_top_level_annotation(
     state: &SharedState,
     repo: &RepoEntry,
@@ -2970,6 +3034,10 @@ async fn assemble_top_level_annotation(
     // the later uses are only reachable on the path where an earlier move
     // didn't happen (every branch that consumes it also `return`s).
     let set_id = resolve_set_scope_async(state, payload.set_id.clone(), repo_id).await?;
+    // V74-L3b — resolved the same way, and independently: a note may be
+    // workspace-scoped, review-scoped, trail-scoped, several of those, or
+    // none.
+    let trail_id = resolve_trail_scope_async(state, payload.trail_id.clone(), repo_id).await?;
 
     // PRR-R3 (design arbitration #6) — a review-scoped, PATH-LESS "general
     // question": no working-tree file to anchor against at all, so this
@@ -3008,6 +3076,7 @@ async fn assemble_top_level_annotation(
                 ps_number: Some(scope.ps.ps_number),
                 side: Some(scope.side),
                 set_id,
+                trail_id,
             },
             view_content: String::new(),
         });
@@ -3046,6 +3115,7 @@ async fn assemble_top_level_annotation(
                 ps_number: None,
                 side: None,
                 set_id: Some(set_id),
+                trail_id,
             },
             view_content: String::new(),
         });
@@ -3196,6 +3266,7 @@ async fn assemble_top_level_annotation(
             ps_number,
             side,
             set_id,
+            trail_id,
         },
         view_content,
     })
@@ -3800,6 +3871,7 @@ pub async fn batch_annotations(
                 // therefore unscoped, same as an omitted `set_id` on a
                 // plain `POST /api/annotations`.
                 set_id: None,
+                trail_id: None,
             };
             Some(assemble_top_level_annotation(&state, repo, repo_id, &rel, &create, now).await?)
         } else {
@@ -3884,6 +3956,7 @@ pub async fn batch_annotations(
                             // batch reply under a workspace-scoped parent
                             // still inherits that `set_id` correctly.
                             set_id: None,
+                            trail_id: None,
                         };
                         let row =
                             assemble_reply_annotation(store, repo_id, &parent.path, &create, now)?;

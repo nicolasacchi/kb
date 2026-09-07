@@ -185,6 +185,13 @@ pub enum StoreError {
     /// Mapped to `400` so a batch never 500s on an unknown id.
     #[error("{0} not found")]
     NotFound(String),
+    /// V74-L3b — `canvas_boards`' `UNIQUE (repo_id, slug)` spans BOTH
+    /// kinds (a tour is a board row, migration V0039), so an apply can
+    /// collide with a slug the caller cannot see from its own family's
+    /// list. Mapped to `409` beside [`StoreError::NameConflict`] rather
+    /// than surfacing as an opaque sqlite constraint error.
+    #[error("the slug {slug:?} is already taken in this repo by a {kind}")]
+    SlugTakenByOtherKind { slug: String, kind: String },
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -2659,9 +2666,11 @@ impl Store {
     // `generation` only invalidates the files/symbols search lanes' caches,
     // which annotations have nothing to do with.
     //
-    // Every SELECT below spells out the SAME 17-column order (matching
-    // `annotation_row_from`'s positional `r.get(0..16)` reads — V70-A10
-    // appended `set_id` LAST, at index 16, after `side`) rather than
+    // Every SELECT below spells out the SAME 18-column order (matching
+    // `annotation_row_from`'s positional `r.get(0..17)` reads — V70-A10
+    // appended `set_id` at index 16 after `side`, and V74-L3b appended
+    // `trail_id` LAST at index 17, which is why the two queries that also
+    // select a correlated `reply_count` now read it at 18) rather than
     // pulling it into a shared string constant — mirrors this file's
     // existing convention of repeating a table's column list per query
     // (see e.g. `symbols_for_blob`/`symbols_for_repo`) rather than
@@ -2674,8 +2683,9 @@ impl Store {
             "INSERT INTO annotations
                 (id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                  body, author, created_at, updated_at, resolved,
-                 review_id, ps_number, side, set_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 review_id, ps_number, side, set_id, trail_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                     ?18)",
             params![
                 row.id,
                 row.repo_id,
@@ -2694,6 +2704,7 @@ impl Store {
                 row.ps_number,
                 row.side,
                 row.set_id,
+                row.trail_id,
             ],
         )?;
         Ok(())
@@ -2711,7 +2722,7 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                     body, author, created_at, updated_at, resolved,
-                    review_id, ps_number, side, set_id
+                    review_id, ps_number, side, set_id, trail_id
              FROM annotations WHERE repo_id = ?1 AND path = ?2
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -2734,7 +2745,7 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                     body, author, created_at, updated_at, resolved,
-                    review_id, ps_number, side, set_id
+                    review_id, ps_number, side, set_id, trail_id
              FROM annotations WHERE set_id = ?1
              ORDER BY created_at ASC, id ASC",
         )?;
@@ -2753,7 +2764,7 @@ impl Store {
             .query_row(
                 "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                         body, author, created_at, updated_at, resolved,
-                        review_id, ps_number, side, set_id
+                        review_id, ps_number, side, set_id, trail_id
                  FROM annotations WHERE id = ?1",
                 params![id],
                 annotation_row_from,
@@ -2855,7 +2866,7 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT a.id, a.repo_id, a.path, a.anchor, a.anchor_kind, a.anchor2, a.parent_id,
                     a.intent, a.body, a.author, a.created_at, a.updated_at, a.resolved,
-                    a.review_id, a.ps_number, a.side, a.set_id,
+                    a.review_id, a.ps_number, a.side, a.set_id, a.trail_id,
                     (SELECT COUNT(*) FROM annotations r WHERE r.parent_id = a.id) AS reply_count
              FROM annotations a
              WHERE a.repo_id = ?1 AND a.resolved = 0 AND a.parent_id IS NULL
@@ -2866,7 +2877,7 @@ impl Store {
         )?;
         let rows = stmt
             .query_map(params![repo_id, intent, like, limit_plus_one as i64], |r| {
-                Ok((annotation_row_from(r)?, r.get::<_, i64>(17)?))
+                Ok((annotation_row_from(r)?, r.get::<_, i64>(18)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
@@ -2905,7 +2916,7 @@ impl Store {
         let sql = format!(
             "SELECT a.id, a.repo_id, a.path, a.anchor, a.anchor_kind, a.anchor2, a.parent_id,
                     a.intent, a.body, a.author, a.created_at, a.updated_at, a.resolved,
-                    a.review_id, a.ps_number, a.side, a.set_id,
+                    a.review_id, a.ps_number, a.side, a.set_id, a.trail_id,
                     (SELECT COUNT(*) FROM annotations r WHERE r.parent_id = a.id) AS reply_count
              FROM annotations a
              WHERE a.repo_id = ?1 AND a.resolved = 0 AND a.parent_id IS NULL
@@ -2923,7 +2934,7 @@ impl Store {
         }
         let rows = stmt
             .query_map(rusqlite::params_from_iter(params_vec), |r| {
-                Ok((annotation_row_from(r)?, r.get::<_, i64>(17)?))
+                Ok((annotation_row_from(r)?, r.get::<_, i64>(18)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
@@ -2948,14 +2959,14 @@ impl Store {
         let sql = if include_resolved {
             "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                     body, author, created_at, updated_at, resolved,
-                    review_id, ps_number, side, set_id
+                    review_id, ps_number, side, set_id, trail_id
              FROM annotations
              WHERE review_id = ?1
              ORDER BY created_at ASC, id ASC"
         } else {
             "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                     body, author, created_at, updated_at, resolved,
-                    review_id, ps_number, side, set_id
+                    review_id, ps_number, side, set_id, trail_id
              FROM annotations
              WHERE review_id = ?1
                AND (
@@ -3003,7 +3014,7 @@ impl Store {
             format!(
                 "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                         body, author, created_at, updated_at, resolved,
-                        review_id, ps_number, side, set_id
+                        review_id, ps_number, side, set_id, trail_id
                  FROM annotations
                  WHERE review_id IN ({placeholders})
                  ORDER BY review_id ASC, created_at ASC, id ASC"
@@ -3012,7 +3023,7 @@ impl Store {
             format!(
                 "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                         body, author, created_at, updated_at, resolved,
-                        review_id, ps_number, side, set_id
+                        review_id, ps_number, side, set_id, trail_id
                  FROM annotations
                  WHERE review_id IN ({placeholders})
                    AND (
@@ -4783,7 +4794,7 @@ impl Store {
         let sql = format!(
             "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id,
                     intent, body, author, created_at, updated_at, resolved,
-                    review_id, ps_number, side, set_id
+                    review_id, ps_number, side, set_id, trail_id
              FROM annotations
              WHERE repo_id = ?1 AND resolved = 0 AND parent_id IS NULL
                AND path IN ({placeholders})
@@ -5347,9 +5358,17 @@ impl Store {
     /// correlated scalar sub-queries — the `list_reading_sets` shape — so a
     /// board with no nodes reports a true 0 rather than vanishing from an
     /// inner join.
+    ///
+    /// V74-L3b — `kind` is REQUIRED, never defaulted. A tour is a
+    /// `canvas_boards` row too (`tours::BOARD_KIND_TOUR`, migration
+    /// V0039), so a read that forgot to say which family it wanted would
+    /// silently list the other one; making the caller name it is what
+    /// keeps `GET /api/boards` and `GET /api/tours` disjoint by
+    /// construction rather than by convention.
     pub fn list_canvas_boards(
         &self,
         repo_id: i64,
+        kind: &str,
         status: Option<&str>,
     ) -> Result<Vec<CanvasBoardSummaryRow>> {
         let conn = self.lock();
@@ -5358,11 +5377,11 @@ impl Store {
                           (SELECT COUNT(*) FROM canvas_edges e WHERE e.board_id = b.id),
                           (SELECT COUNT(*) FROM canvas_steps s WHERE s.board_id = b.id)
                    FROM canvas_boards b
-                   WHERE b.repo_id = ?1 AND (?2 IS NULL OR b.status = ?2)
+                   WHERE b.repo_id = ?1 AND b.kind = ?3 AND (?2 IS NULL OR b.status = ?2)
                    ORDER BY b.updated_unix DESC, b.slug ASC";
         let mut stmt = conn.prepare(sql)?;
         let rows = stmt
-            .query_map(params![repo_id, status], |r| {
+            .query_map(params![repo_id, status, kind], |r| {
                 Ok(CanvasBoardSummaryRow {
                     id: r.get(0)?,
                     slug: r.get(1)?,
@@ -5380,14 +5399,23 @@ impl Store {
     }
 
     /// One board by its `(repo_id, slug)` identity — the pair
-    /// `canvas_boards`' own UNIQUE constraint indexes.
-    pub fn get_canvas_board(&self, repo_id: i64, slug: &str) -> Result<Option<CanvasBoardRow>> {
+    /// `canvas_boards`' own UNIQUE constraint indexes — NARROWED to one
+    /// `kind` (V74-L3b). That UNIQUE spans both kinds, so a slug names at
+    /// most one row either way; the filter is what makes
+    /// `GET /api/boards/{slug}` 404 honestly on a TOUR's slug instead of
+    /// rendering a tour as a board.
+    pub fn get_canvas_board(
+        &self,
+        repo_id: i64,
+        kind: &str,
+        slug: &str,
+    ) -> Result<Option<CanvasBoardRow>> {
         self.lock()
             .query_row(
                 "SELECT id, repo_id, slug, title, description_md, status, authored_ref,
                         content_hash, revision, created_unix, updated_unix
-                 FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2",
-                params![repo_id, slug],
+                 FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2 AND kind = ?3",
+                params![repo_id, slug, kind],
                 canvas_board_row_from,
             )
             .optional()
@@ -5448,13 +5476,15 @@ impl Store {
     pub fn canvas_board_steps(&self, board_id: i64) -> Result<Vec<CanvasStepRow>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT node_id, caption FROM canvas_steps WHERE board_id = ?1 ORDER BY ordinal ASC",
+            "SELECT node_id, caption, camera_json FROM canvas_steps \
+             WHERE board_id = ?1 ORDER BY ordinal ASC",
         )?;
         let rows = stmt
             .query_map(params![board_id], |r| {
                 Ok(CanvasStepRow {
                     node_id: r.get(0)?,
                     caption: r.get(1)?,
+                    camera_json: r.get(2)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -5491,11 +5521,31 @@ impl Store {
         let existing: Option<(i64, String, i64, String)> = tx
             .query_row(
                 "SELECT id, content_hash, revision, status FROM canvas_boards
-                 WHERE repo_id = ?1 AND slug = ?2",
-                params![repo_id, board.slug],
+                 WHERE repo_id = ?1 AND slug = ?2 AND kind = ?3",
+                params![repo_id, board.slug, board.kind],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
+        // V74-L3b — the slug space is SHARED across kinds (`canvas_boards`'
+        // UNIQUE spans both), so an apply that would collide with the OTHER
+        // family must say so rather than fail on a constraint the caller
+        // cannot see.
+        if existing.is_none() {
+            let taken: Option<String> = tx
+                .query_row(
+                    "SELECT kind FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2",
+                    params![repo_id, board.slug],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(other) = taken {
+                tx.commit()?;
+                return Err(StoreError::SlugTakenByOtherKind {
+                    slug: board.slug.clone(),
+                    kind: other,
+                });
+            }
+        }
 
         if let Some((id, hash, revision, status)) = &existing {
             if *hash == board.content_hash {
@@ -5546,8 +5596,8 @@ impl Store {
                 tx.execute(
                     "INSERT INTO canvas_boards
                         (repo_id, slug, title, description_md, status, authored_ref,
-                         content_hash, revision, created_unix, updated_unix)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)",
+                         content_hash, revision, created_unix, updated_unix, kind)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, ?9)",
                     params![
                         repo_id,
                         board.slug,
@@ -5556,7 +5606,8 @@ impl Store {
                         board.status,
                         board.authored_ref,
                         board.content_hash,
-                        now
+                        now,
+                        board.kind
                     ],
                 )?;
                 (tx.last_insert_rowid(), true, 1)
@@ -5608,11 +5659,17 @@ impl Store {
         }
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO canvas_steps (board_id, ordinal, node_id, caption)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO canvas_steps (board_id, ordinal, node_id, caption, camera_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             for (i, s) in steps.iter().enumerate() {
-                stmt.execute(params![board_id, i as i64, s.node_id, s.caption])?;
+                stmt.execute(params![
+                    board_id,
+                    i as i64,
+                    s.node_id,
+                    s.caption,
+                    s.camera_json
+                ])?;
             }
         }
         tx.commit()?;
@@ -5632,6 +5689,7 @@ impl Store {
     pub fn set_canvas_board_status(
         &self,
         repo_id: i64,
+        kind: &str,
         slug: &str,
         status: &str,
         now: i64,
@@ -5640,8 +5698,8 @@ impl Store {
         let tx = conn.transaction()?;
         let n = tx.execute(
             "UPDATE canvas_boards SET status = ?3, revision = revision + 1, updated_unix = ?4
-             WHERE repo_id = ?1 AND slug = ?2",
-            params![repo_id, slug, status, now],
+             WHERE repo_id = ?1 AND slug = ?2 AND kind = ?5",
+            params![repo_id, slug, status, now, kind],
         )?;
         if n == 0 {
             tx.commit()?;
@@ -5651,8 +5709,8 @@ impl Store {
             .query_row(
                 "SELECT id, repo_id, slug, title, description_md, status, authored_ref,
                         content_hash, revision, created_unix, updated_unix
-                 FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2",
-                params![repo_id, slug],
+                 FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2 AND kind = ?3",
+                params![repo_id, slug, kind],
                 canvas_board_row_from,
             )
             .optional()?;
@@ -5665,10 +5723,10 @@ impl Store {
     /// the `review_findings` route rather than `delete_reading_set`'s
     /// Rust-owned cascade), so this is one statement — but it still runs
     /// with `foreign_keys = ON`, which `Store::open` sets unconditionally.
-    pub fn delete_canvas_board(&self, repo_id: i64, slug: &str) -> Result<bool> {
+    pub fn delete_canvas_board(&self, repo_id: i64, kind: &str, slug: &str) -> Result<bool> {
         let n = self.lock().execute(
-            "DELETE FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2",
-            params![repo_id, slug],
+            "DELETE FROM canvas_boards WHERE repo_id = ?1 AND slug = ?2 AND kind = ?3",
+            params![repo_id, slug, kind],
         )?;
         Ok(n > 0)
     }
@@ -5678,17 +5736,28 @@ impl Store {
     /// invariant 14's layer is unchanged (nothing is created, moved or
     /// merged here), and unlike a `canvas_sets` row a board reports a TRUE
     /// node count rather than the honest `null` an opaque payload forces.
-    pub fn seq_canvas_boards(&self, repo_id: i64) -> Result<Vec<SeqProjectionRow>> {
+    ///
+    /// V74-L3b — `projection` is a PARAMETER now, because one table backs
+    /// two projections: `canvas_boards.kind` is `board` or `tour` (V0039),
+    /// and a tour must appear under kbc-seq/1's `tour` name, not under
+    /// `board`. Still a layer: nothing is created, moved or merged, and
+    /// `source` still names the table the row physically lives in.
+    pub fn seq_canvas_boards(
+        &self,
+        repo_id: i64,
+        kind: &str,
+        projection: &str,
+    ) -> Result<Vec<SeqProjectionRow>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT b.slug, b.title, b.updated_unix,
                     (SELECT COUNT(*) FROM canvas_nodes n WHERE n.board_id = b.id)
-             FROM canvas_boards b WHERE b.repo_id = ?1 ORDER BY b.slug ASC",
+             FROM canvas_boards b WHERE b.repo_id = ?1 AND b.kind = ?2 ORDER BY b.slug ASC",
         )?;
         let rows = stmt
-            .query_map(params![repo_id], |r| {
+            .query_map(params![repo_id, kind], |r| {
                 Ok(SeqProjectionRow {
-                    projection: crate::seq::PROJECTION_BOARD.to_string(),
+                    projection: projection.to_string(),
                     id: r.get(0)?,
                     name: r.get(1)?,
                     size: Some(r.get(3)?),
@@ -5696,6 +5765,420 @@ impl Store {
                     workspace_id: None,
                     source: "canvas_boards",
                     updated_at: r.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // --- V74-L3b: kbc-trail/1 -------------------------------------------
+    //
+    // Every function here is bounded and paged where it could not be.
+    // `trails`/`trail_steps` are the only tables in this crate whose rows
+    // describe a PERSON rather than a repository, so three of them
+    // (`purge_trails`, `sweep_trail_retention_page`, `delete_trail`) exist
+    // solely to remove rows, and the one agent-facing read
+    // (`aggregate_trail_steps`) groups by day and never selects
+    // `entered_at` at all. See `trails`'s module doc for the four
+    // structural properties those choices implement.
+
+    /// The persisted opt-in mode, or `None` on a volume that has never
+    /// opted in — which every read treats as `off`. The absence of a row
+    /// is the absence of a decision (D17: "off on first boot").
+    pub fn trails_state(&self) -> Result<Option<(String, i64)>> {
+        self.lock()
+            .query_row(
+                "SELECT mode, changed_unix FROM trails_state WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Set the opt-in mode. The ONLY writer is the loopback-only, audited
+    /// `POST /api/trails/state`.
+    pub fn set_trails_state(&self, mode: &str, now: i64) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO trails_state (id, mode, changed_unix) VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET mode = ?1, changed_unix = ?2",
+            params![mode, now],
+        )?;
+        Ok(())
+    }
+
+    /// The trail a recorded step belongs to right now: the repo's
+    /// unforked trail for `day`, created if it does not exist yet. One
+    /// transaction, so two concurrent batches on a day boundary cannot
+    /// mint two trails for one day (the partial unique index
+    /// `idx_trails_day` is the assertion behind this).
+    pub fn current_trail_for_day(
+        &self,
+        repo_id: i64,
+        day: &str,
+        session_hint: Option<&str>,
+        now: i64,
+    ) -> Result<String> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT id FROM trails
+                 WHERE repo_id = ?1 AND day = ?2 AND parent_id IS NULL",
+                params![repo_id, day],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let id = match existing {
+            Some(id) => id,
+            None => {
+                let id = crate::trails::new_trail_id();
+                tx.execute(
+                    "INSERT INTO trails
+                        (id, repo_id, origin, title, day, parent_id, parent_ordinal,
+                         session_hint, created_unix, updated_unix)
+                     VALUES (?1, ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, ?6)",
+                    params![
+                        id,
+                        repo_id,
+                        crate::trails::ORIGIN_RECORDED,
+                        day,
+                        session_hint,
+                        now
+                    ],
+                )?;
+                id
+            }
+        };
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Append a batch of steps to one trail, in ONE transaction, after the
+    /// per-trail cap. Returns `(appended, total_after)`.
+    ///
+    /// The cap is a REFUSAL, not a truncation: a caller that would cross
+    /// [`crate::trails::MAX_STEPS_PER_TRAIL`] gets `NotFound`-free,
+    /// explicit feedback from the route with both numbers. This function
+    /// reports the total so the route can make that call before writing.
+    pub fn append_trail_steps(
+        &self,
+        trail_id: &str,
+        steps: &[NewTrailStep],
+        now: i64,
+    ) -> Result<(usize, i64)> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let next: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(ordinal) + 1, 0) FROM trail_steps WHERE trail_id = ?1",
+            params![trail_id],
+            |r| r.get(0),
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO trail_steps
+                    (trail_id, ordinal, via, path, line_start, line_end, symbol, blob_sha,
+                     entered_at, dwell_secs, day, note)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?;
+            for (i, s) in steps.iter().enumerate() {
+                stmt.execute(params![
+                    trail_id,
+                    next + i as i64,
+                    s.via,
+                    s.path,
+                    s.line_start,
+                    s.line_end,
+                    s.symbol,
+                    s.blob_sha,
+                    s.entered_at,
+                    s.dwell_secs,
+                    s.day,
+                    s.note
+                ])?;
+            }
+        }
+        tx.execute(
+            "UPDATE trails SET updated_unix = ?2 WHERE id = ?1",
+            params![trail_id, now],
+        )?;
+        tx.commit()?;
+        Ok((steps.len(), next + steps.len() as i64))
+    }
+
+    /// How many steps a trail already holds — the cap check's input.
+    pub fn trail_step_count(&self, trail_id: &str) -> Result<i64> {
+        self.lock()
+            .query_row(
+                "SELECT COUNT(*) FROM trail_steps WHERE trail_id = ?1",
+                params![trail_id],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Create a trail outright — an AUTHORED one (`POST /api/trails`) or a
+    /// FORK (`POST /api/trails/{id}/fork`). Both carry a NULL `day`, which
+    /// is what keeps them out of `idx_trails_day`'s one-per-day rule.
+    pub fn create_trail(&self, repo_id: i64, t: &NewTrail, now: i64) -> Result<String> {
+        let id = crate::trails::new_trail_id();
+        self.lock().execute(
+            "INSERT INTO trails
+                (id, repo_id, origin, title, day, parent_id, parent_ordinal, session_hint,
+                 created_unix, updated_unix)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, ?8)",
+            params![
+                id,
+                repo_id,
+                t.origin,
+                t.title,
+                t.parent_id,
+                t.parent_ordinal,
+                t.session_hint,
+                now
+            ],
+        )?;
+        Ok(id)
+    }
+
+    /// Trails in one repo, newest first, with their step counts.
+    pub fn list_trails(&self, repo_id: i64, limit: usize) -> Result<Vec<TrailSummaryRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.origin, t.title, t.day, t.parent_id, t.parent_ordinal,
+                    t.created_unix, t.updated_unix,
+                    (SELECT COUNT(*) FROM trail_steps s WHERE s.trail_id = t.id),
+                    (SELECT COALESCE(SUM(s.dwell_secs), 0) FROM trail_steps s
+                      WHERE s.trail_id = t.id)
+             FROM trails t WHERE t.repo_id = ?1
+             ORDER BY t.created_unix DESC, t.id ASC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id, limit as i64], |r| {
+                Ok(TrailSummaryRow {
+                    id: r.get(0)?,
+                    origin: r.get(1)?,
+                    title: r.get(2)?,
+                    day: r.get(3)?,
+                    parent_id: r.get(4)?,
+                    parent_ordinal: r.get(5)?,
+                    created_unix: r.get(6)?,
+                    updated_unix: r.get(7)?,
+                    steps: r.get(8)?,
+                    dwell_secs: r.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// One trail by id, scoped to a repo so a caller cannot read another
+    /// repo's trail by guessing an id.
+    pub fn get_trail(&self, repo_id: i64, id: &str) -> Result<Option<TrailSummaryRow>> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT t.id, t.origin, t.title, t.day, t.parent_id, t.parent_ordinal,
+                    t.created_unix, t.updated_unix,
+                    (SELECT COUNT(*) FROM trail_steps s WHERE s.trail_id = t.id),
+                    (SELECT COALESCE(SUM(s.dwell_secs), 0) FROM trail_steps s
+                      WHERE s.trail_id = t.id)
+             FROM trails t WHERE t.repo_id = ?1 AND t.id = ?2",
+            params![repo_id, id],
+            |r| {
+                Ok(TrailSummaryRow {
+                    id: r.get(0)?,
+                    origin: r.get(1)?,
+                    title: r.get(2)?,
+                    day: r.get(3)?,
+                    parent_id: r.get(4)?,
+                    parent_ordinal: r.get(5)?,
+                    created_unix: r.get(6)?,
+                    updated_unix: r.get(7)?,
+                    steps: r.get(8)?,
+                    dwell_secs: r.get(9)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// One trail's steps, in order, optionally from an ordinal (the
+    /// FORK read: everything from the branch point on).
+    pub fn trail_steps(
+        &self,
+        trail_id: &str,
+        from_ordinal: i64,
+        limit: usize,
+    ) -> Result<Vec<TrailStepRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT ordinal, via, path, line_start, line_end, symbol, blob_sha,
+                    entered_at, dwell_secs, day, note
+             FROM trail_steps WHERE trail_id = ?1 AND ordinal >= ?2
+             ORDER BY ordinal ASC LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![trail_id, from_ordinal, limit as i64], |r| {
+                Ok(TrailStepRow {
+                    ordinal: r.get(0)?,
+                    via: r.get(1)?,
+                    path: r.get(2)?,
+                    line_start: r.get(3)?,
+                    line_end: r.get(4)?,
+                    symbol: r.get(5)?,
+                    blob_sha: r.get(6)?,
+                    entered_at: r.get(7)?,
+                    dwell_secs: r.get(8)?,
+                    day: r.get(9)?,
+                    note: r.get(10)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The ONLY agent-facing read: counts per `(path, symbol)` over a DAY
+    /// window. `entered_at` is never selected, never grouped on and never
+    /// returned — D17's "no ordering below the day", as a query rather than
+    /// a promise. `since`/`until` are DAY strings (`YYYY-MM-DD`) for the
+    /// same reason.
+    pub fn aggregate_trail_steps(
+        &self,
+        repo_id: i64,
+        since: Option<&str>,
+        until: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<TrailAggregateRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT s.path, s.symbol, COUNT(*), COALESCE(SUM(s.dwell_secs), 0),
+                    COUNT(DISTINCT s.day), MIN(s.day), MAX(s.day)
+             FROM trail_steps s
+             JOIN trails t ON t.id = s.trail_id
+             WHERE t.repo_id = ?1
+               AND (?2 IS NULL OR s.day >= ?2)
+               AND (?3 IS NULL OR s.day <= ?3)
+             GROUP BY s.path, s.symbol
+             ORDER BY COUNT(*) DESC, s.path ASC, s.symbol ASC
+             LIMIT ?4",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id, since, until, limit as i64], |r| {
+                Ok(TrailAggregateRow {
+                    path: r.get(0)?,
+                    symbol: r.get(1)?,
+                    steps: r.get(2)?,
+                    dwell_secs: r.get(3)?,
+                    days: r.get(4)?,
+                    first_day: r.get(5)?,
+                    last_day: r.get(6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// WHOLESALE purge, in one transaction: every trail in a repo (or
+    /// every one created strictly before `before_unix`). Returns
+    /// `(trails, steps)` removed.
+    ///
+    /// `annotations` rows carrying a `trail_id` are deliberately LEFT
+    /// ALONE — see `trails`'s module doc and invariant 23(a): a dissent
+    /// note is the human's own authored words, not derived movement data.
+    pub fn purge_trails(&self, repo_id: i64, before_unix: Option<i64>) -> Result<(usize, usize)> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let steps: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM trail_steps s JOIN trails t ON t.id = s.trail_id
+             WHERE t.repo_id = ?1 AND (?2 IS NULL OR t.created_unix < ?2)",
+            params![repo_id, before_unix],
+            |r| r.get(0),
+        )?;
+        // The child rows go first and explicitly: `trail_steps`' FK carries
+        // ON DELETE CASCADE, but deleting them by the same predicate makes
+        // the count above and the rows removed provably the same set.
+        tx.execute(
+            "DELETE FROM trail_steps WHERE trail_id IN
+                (SELECT id FROM trails WHERE repo_id = ?1 AND (?2 IS NULL OR created_unix < ?2))",
+            params![repo_id, before_unix],
+        )?;
+        let trails = tx.execute(
+            "DELETE FROM trails WHERE repo_id = ?1 AND (?2 IS NULL OR created_unix < ?2)",
+            params![repo_id, before_unix],
+        )?;
+        tx.commit()?;
+        Ok((trails, steps as usize))
+    }
+
+    /// Delete ONE trail and its steps.
+    pub fn delete_trail(&self, repo_id: i64, id: &str) -> Result<bool> {
+        let n = self.lock().execute(
+            "DELETE FROM trails WHERE repo_id = ?1 AND id = ?2",
+            params![repo_id, id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// ONE PAGE of the retention sweep: up to `page` trails older than
+    /// `cutoff_unix`, with their steps, in one short transaction. Returns
+    /// `((trails, steps), more)` — the `sweep_lane_retention_page` shape,
+    /// and for the same V72-B0 reason: this store has ONE connection
+    /// mutex, so a background pass must never hold it for an unbounded
+    /// stretch.
+    pub fn sweep_trail_retention_page(
+        &self,
+        cutoff_unix: i64,
+        page: usize,
+    ) -> Result<((usize, usize), bool)> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let ids: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM trails WHERE created_unix < ?1 ORDER BY created_unix ASC LIMIT ?2",
+            )?;
+            let v = stmt
+                .query_map(params![cutoff_unix, page as i64], |r| r.get(0))?
+                .collect::<std::result::Result<Vec<String>, _>>()?;
+            v
+        };
+        if ids.is_empty() {
+            tx.commit()?;
+            return Ok(((0, 0), false));
+        }
+        let mut steps = 0usize;
+        let mut trails = 0usize;
+        for id in &ids {
+            steps += tx.execute("DELETE FROM trail_steps WHERE trail_id = ?1", params![id])?;
+            trails += tx.execute("DELETE FROM trails WHERE id = ?1", params![id])?;
+        }
+        tx.commit()?;
+        let more = ids.len() == page;
+        Ok(((trails, steps), more))
+    }
+
+    /// A trail's DISSENT notes — `annotations` rows carrying its id, the
+    /// drain behind `kb-code trail notes`. Parents and replies alike carry
+    /// the same `trail_id` (`routes::inherit_scope_field`), which is what
+    /// keeps this one predicate rather than a two-step.
+    pub fn trail_notes(&self, trail_id: &str, limit: usize) -> Result<Vec<TrailNoteRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, parent_id, author, intent, body, path, resolved, created_at
+             FROM annotations WHERE trail_id = ?1
+             ORDER BY created_at ASC, id ASC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![trail_id, limit as i64], |r| {
+                Ok(TrailNoteRow {
+                    id: r.get(0)?,
+                    parent_id: r.get(1)?,
+                    author: r.get(2)?,
+                    intent: r.get(3)?,
+                    body: r.get(4)?,
+                    path: r.get(5)?,
+                    resolved: r.get::<_, i64>(6)? != 0,
+                    created_at: r.get(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -7071,6 +7554,7 @@ fn annotation_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotationRow>
         ps_number: r.get(14)?,
         side: r.get(15)?,
         set_id: r.get(16)?,
+        trail_id: r.get(17)?,
     })
 }
 
@@ -7119,7 +7603,7 @@ fn get_annotation_on(tx: &Transaction<'_>, id: &str) -> Result<Option<Annotation
     tx.query_row(
         "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
                 body, author, created_at, updated_at, resolved,
-                review_id, ps_number, side, set_id
+                review_id, ps_number, side, set_id, trail_id
          FROM annotations WHERE id = ?1",
         params![id],
         annotation_row_from,
@@ -7432,6 +7916,18 @@ pub struct AnnotationRow {
     /// (`routes::assemble_reply_annotation`), so this is never a case
     /// where a top-level row and its own reply disagree.
     pub set_id: Option<String>,
+    /// V74-L3b (`kbc-trail/1`) — `trails.id` when this row is a DISSENT
+    /// note on an agent-AUTHORED trail (D12: "the human walks `]`/`[` and
+    /// dissents inline"). `None` for every annotation that is not one
+    /// (every pre-V0039 row). TEXT (matches `trails.id`'s own TEXT PK),
+    /// no SQL FK; a reply inherits it through the SAME
+    /// `routes::inherit_scope_field` ladder `set_id`/`review_id` use.
+    ///
+    /// Deliberately NOT removed by a trail purge: a note is the human's
+    /// own authored words, and invariant 23(a) rules that authored
+    /// content is not derived data. A note whose trail was purged reads
+    /// back saying so rather than vanishing with it.
+    pub trail_id: Option<String>,
 }
 
 /// One `annotation_suggestions` row (V4.C1 / V0023). V4.C2 owns the
@@ -7785,11 +8281,17 @@ pub struct CanvasEdgeRow {
 pub struct CanvasStepRow {
     pub node_id: String,
     pub caption: Option<String>,
+    /// V74-L3b — the per-step CAMERA, JSON, `None` on every board step.
+    /// Parsed by `tours::Camera`, never by this module.
+    pub camera_json: Option<String>,
 }
 
 /// The board half of an apply payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewCanvasBoard {
+    /// V74-L3b — `board` or `tour` (`tours::BOARD_KINDS`). Required, never
+    /// defaulted: see [`Store::list_canvas_boards`].
+    pub kind: String,
     pub slug: String,
     pub title: String,
     pub description_md: String,
@@ -7831,6 +8333,100 @@ pub struct NewCanvasEdge {
 pub struct NewCanvasStep {
     pub node_id: String,
     pub caption: Option<String>,
+    /// V74-L3b — the per-step camera, already serialized by the caller
+    /// AFTER the lint validated it.
+    pub camera_json: Option<String>,
+}
+
+// --- V74-L3b: kbc-trail/1 rows -------------------------------------------
+
+/// One step of an ingest batch, AFTER the route derived and quantised its
+/// dwell. There is no `left_at` field: it was an input to `dwell_secs`, not
+/// a fact worth keeping (see `trails`'s module doc, property 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTrailStep {
+    pub via: String,
+    pub path: Option<String>,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+    pub symbol: Option<String>,
+    pub blob_sha: Option<String>,
+    pub entered_at: i64,
+    pub dwell_secs: i64,
+    pub day: String,
+    pub note: Option<String>,
+}
+
+/// An explicitly created trail — AUTHORED or a FORK. Both carry a NULL
+/// `day`, which is what exempts them from the one-recorded-trail-per-day
+/// unique index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTrail {
+    pub origin: String,
+    pub title: Option<String>,
+    pub parent_id: Option<String>,
+    pub parent_ordinal: Option<i64>,
+    pub session_hint: Option<String>,
+}
+
+/// One `trails` row plus its two derived counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailSummaryRow {
+    pub id: String,
+    pub origin: String,
+    pub title: Option<String>,
+    pub day: Option<String>,
+    pub parent_id: Option<String>,
+    pub parent_ordinal: Option<i64>,
+    pub created_unix: i64,
+    pub updated_unix: i64,
+    pub steps: i64,
+    pub dwell_secs: i64,
+}
+
+/// One `trail_steps` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailStepRow {
+    pub ordinal: i64,
+    pub via: String,
+    pub path: Option<String>,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+    pub symbol: Option<String>,
+    pub blob_sha: Option<String>,
+    pub entered_at: i64,
+    pub dwell_secs: i64,
+    pub day: String,
+    pub note: Option<String>,
+}
+
+/// One row of the aggregate read. No timestamp finer than a day exists on
+/// this struct, and that is the privacy contract rather than an oversight —
+/// `trails::tests::an_aggregate_row_carries_no_timestamp_finer_than_a_day`
+/// pins the wire shape it feeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailAggregateRow {
+    pub path: Option<String>,
+    pub symbol: Option<String>,
+    pub steps: i64,
+    pub dwell_secs: i64,
+    pub days: i64,
+    pub first_day: String,
+    pub last_day: String,
+}
+
+/// One dissent note on an AUTHORED trail — an ordinary `annotations` row,
+/// read back by its `trail_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailNoteRow {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub author: String,
+    pub intent: String,
+    pub body: String,
+    pub path: String,
+    pub resolved: bool,
+    pub created_at: i64,
 }
 
 /// What an apply DID — every field a caller needs to render the outcome
@@ -8605,6 +9201,7 @@ fn insert_review_finding_on(
         ps_number: Some(f.ps_number),
         side: f.side.clone(),
         set_id: None,
+        trail_id: None,
     };
     insert_annotation_on(tx, &ann_row)?;
     tx.execute(
@@ -10262,6 +10859,13 @@ impl LaneGcCounts {
 /// own thousands of facts (V72-B0 rule (b) — a background pass that takes
 /// one long transaction has only moved the outage, not fixed it).
 pub const LANE_GC_PAGE: usize = 32;
+
+/// V74-L3b — how many expired `trails` one
+/// [`Store::sweep_trail_retention_page`] covers. Same size and the same
+/// reasoning as [`LANE_GC_PAGE`]: one trail can own thousands of steps
+/// ([`crate::trails::MAX_STEPS_PER_TRAIL`]), and this number is the unit
+/// of write-mutex hold time on an IO-bound host.
+pub const TRAIL_GC_PAGE: usize = 32;
 
 /// Hard bound on the rows `GET /api/lanes/summary` groups over. The route
 /// STATES this number and whether it was hit — a summary that silently
@@ -13348,6 +13952,7 @@ mod tests {
             ps_number: None,
             side: None,
             set_id: None,
+            trail_id: None,
         }
     }
 
@@ -13494,6 +14099,7 @@ mod tests {
             ps_number: parent.ps_number,
             side: parent.side.clone(),
             set_id: parent.set_id.clone(),
+            trail_id: parent.trail_id.clone(),
         }
     }
 
@@ -15200,6 +15806,7 @@ mod tests {
                 ps_number: Some(1),
                 side: Some("new".to_string()),
                 set_id: None,
+                trail_id: None,
             })
             .unwrap();
 
