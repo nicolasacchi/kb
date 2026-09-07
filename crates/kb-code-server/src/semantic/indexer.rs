@@ -230,7 +230,7 @@ fn classify_blob(store: &Store, file: &FileRow) -> Result<BlobStatus> {
     let Some(lang_info) = lang::for_id(&file.lang) else {
         return Ok(BlobStatus::NoGrammar);
     };
-    if store.has_chunks(&file.blob_hash, lang_info.salt)? {
+    if store.has_chunks(&file.blob_hash, lang_info.symbol_salt)? {
         return Ok(BlobStatus::CacheHit);
     }
     Ok(BlobStatus::NeedsEmbedding(lang_info))
@@ -319,7 +319,9 @@ pub async fn reindex_repo_incremental(
             // — mark it so we don't re-check this blob every pass.
             let blob_hash_c = blob_hash.clone();
             store
-                .run_blocking(move |store| store.mark_chunked(&blob_hash_c, lang_info.salt, 0))
+                .run_blocking(move |store| {
+                    store.mark_chunked(&blob_hash_c, lang_info.symbol_salt, 0)
+                })
                 .await?;
             continue;
         }
@@ -386,7 +388,9 @@ pub async fn reindex_repo_incremental(
             .await?;
         let blob_hash_c = blob_hash.clone();
         store
-            .run_blocking(move |store| store.mark_chunked(&blob_hash_c, lang_info.salt, row_count))
+            .run_blocking(move |store| {
+                store.mark_chunked(&blob_hash_c, lang_info.symbol_salt, row_count)
+            })
             .await?;
         stats.embedded_blobs += 1;
         stats.embedded_chunks += row_count;
@@ -475,9 +479,9 @@ mod tests {
             .unwrap();
         let file = store.get_file(repo_id, "a.rs").unwrap().unwrap();
 
-        let salt = lang::for_id("rust").unwrap().salt;
+        let salt = lang::for_id("rust").unwrap().symbol_salt;
         match classify_blob(&store, &file).unwrap() {
-            BlobStatus::NeedsEmbedding(li) => assert_eq!(li.salt, salt),
+            BlobStatus::NeedsEmbedding(li) => assert_eq!(li.symbol_salt, salt),
             other => panic!("expected NeedsEmbedding, got {other:?}"),
         }
 
@@ -499,7 +503,7 @@ mod tests {
         store
             .upsert_file(repo_id, "live.rs", "hashLive", "rust", 10)
             .unwrap();
-        let salt = lang::for_id("rust").unwrap().salt;
+        let salt = lang::for_id("rust").unwrap().symbol_salt;
         store.mark_chunked("hashLive", salt, 1).unwrap();
         store.mark_chunked("hashGone", salt, 1).unwrap();
         let dim = chunk_store.dim() as usize;

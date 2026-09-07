@@ -10,30 +10,71 @@
 //! ## Capture-name → class mapping
 //!
 //! `highlights.scm` capture names are dotted scopes (`function.method`,
-//! `punctuation.bracket`, `variable.parameter`, ...). We bucket on the
-//! TOP-LEVEL scope word — everything before the first `.` — into a small
-//! fixed `HighlightClass` set (`map_class`). Observed top-level scopes
-//! across all eight v1 languages' bundled `highlights.scm` files:
-//! `attribute`, `boolean`, `comment`, `constant`, `constructor`, `embedded`,
-//! `escape`, `function`, `keyword`, `label`, `number`, `operator`,
-//! `property`, `punctuation`, `string`, `type`, `variable`. `constructor`
-//! maps to `Function` (a constructor call reads like a function call);
-//! `boolean` (new in W2.2, from YAML's own query — `true`/`false`/`~`
-//! literals) maps to `Constant` rather than growing a 16th class (kb-code's
-//! W2.2 scope keeps the SAME fixed 15-class bucketing every language maps
-//! into, never a new `HighlightClass` variant); anything else unmapped
-//! (`embedded` — an injection-content marker, not a real highlight) falls
-//! into `Other` rather than being silently dropped.
+//! `punctuation.bracket`, `variable.parameter`, ...). `map_class` buckets
+//! them into the fixed [`HighlightClass`] set, and the lookup is TWO
+//! levels deep (V72-H2b): the first two scope words joined by a `.` are
+//! tried first, then the top-level word alone. That is the whole widening
+//! mechanism — a sub-scope earns a class only by being listed, and
+//! everything else keeps falling back to exactly the bucket it had before.
+//! `comment.documentation` still reads as `Comment`, `string.escape` still
+//! as `String`.
 //!
-//! V72-H2a adds three grammars and one scope with them: CSS's `tag`
-//! (`div`, `a`, `nesting_selector`, `universal_selector`) maps to `Type`,
-//! the same bucket HAML's scanner already paints a tag name into.
-//! Markdown's block query brings `text` (`text.title`/`.literal`/`.uri`/
-//! `.reference`) and `none`, and SCSS's brings `spell`; all three stay
-//! `Other`, deliberately — folding a heading, a URI and a spell-check
-//! marker into one of the fifteen code classes would be a worse lie than
-//! an honest "unclassified", and the fixed 15-class set is the contract
-//! `kbc-theme/1` binds to.
+//! Observed top-level scopes across the bundled `highlights.scm` files:
+//! `attribute`, `boolean`, `comment`, `constant`, `constructor`,
+//! `embedded`, `escape`, `function`, `keyword`, `label`, `number`,
+//! `operator`, `property`, `punctuation`, `string`, `tag`, `text`, `type`,
+//! `variable`, plus SCSS's `spell` and Markdown's `none`. `constructor`
+//! maps to `Function` (a constructor call reads like a function call);
+//! CSS's `tag` (`div`, `a`, `nesting_selector`, `universal_selector`) maps
+//! to `Type`, the same bucket HAML's scanner already paints a tag name
+//! into; Markdown's `text`/`none` and SCSS's `spell` stay `Other`
+//! deliberately — folding a heading, a URI and a spell-check marker into a
+//! CODE class would be a worse lie than an honest "unclassified".
+//! `embedded` (an injection-content marker, not a real highlight) is
+//! `Other` for the same reason. Anything unmapped falls into `Other`
+//! rather than being silently dropped.
+//!
+//! ## The role table (V72-H2b, D16)
+//!
+//! The class set IS the `kbc-theme/1` contract — every member is bound to
+//! a `--syn-*` CSS variable in `web-code/src/styles/tokens.css`, derived
+//! per theme by `web-code/src/themes/derive.ts`, and rendered as
+//! `.kbc-hl-<role>` (`web-code/src/lib/decorations.ts`). D16 widens it
+//! from fifteen to EIGHTEEN, and the three new members were picked by
+//! counting the capture names the queries in this build actually emit —
+//! not by wish. Coverage, over the fourteen `highlights.scm` sources
+//! `lang::highlights_query` returns (TypeScript and TSX both concatenate
+//! JavaScript's):
+//!
+//! | new class            | capture names                                                              | grammars |
+//! |----------------------|----------------------------------------------------------------------------|----------|
+//! | `ConstantBuiltin`    | `constant.builtin`, plus YAML/TOML's top-level `boolean`                    | 9        |
+//! | `PunctuationSpecial` | `punctuation.special`                                                       | 7        |
+//! | `StringSpecial`      | `string.special`, `string.special.regex`, `.symbol`, `.key`                 | 7        |
+//!
+//! `boolean` moves with them: `true`/`false`/`~`/`null` ARE builtin
+//! constants, and painting them as user constants was the closest honest
+//! bucket only while `ConstantBuiltin` did not exist.
+//!
+//! MEASURED AND NOT ADOPTED, so the choice is on record rather than an
+//! oversight (the `usages2::UNMINTED_KINDS` precedent, pinned by
+//! `deferred_role_candidates_are_recorded_with_their_evidence`):
+//! `constructor` (6 grammars), `variable.parameter` (5 — JavaScript emits
+//! it only from `highlights-params.scm`, which `HIGHLIGHT_QUERY` does not
+//! include), `type.builtin` (3), `namespace` (**0** — no grammar in this
+//! build emits it AT ALL; CSS has an `@namespace` AT-RULE, which is a
+//! keyword in the query's pattern text and not a capture name, and reading
+//! one for the other is exactly the mistake a COUNTED table exists to
+//! catch), and Markdown's `text.*` family
+//! (1 grammar, 4 captures — one bucket for headings, links, literals and
+//! references would be a fold, and four would spend every remaining slot
+//! on one file type). D16's budget is "~18"; these are what 21 would have
+//! been.
+//!
+//! Widening this set bumps [`ROLE_TABLE_VERSION`], which every language's
+//! `lang::LangInfo::highlight_salt` embeds — so the whole corpus re-paints
+//! exactly once and no symbol row is touched. Price it first:
+//! `kb-code reextract --bill`.
 //!
 //! **An `Other` never OVERWRITES a real class for the same exact range**
 //! (V72-H2a). SCSS's query captures its `//` comments twice
@@ -82,25 +123,83 @@ use tree_sitter::StreamingIterator;
 
 pub type Result<T> = std::result::Result<T, LangError>;
 
+/// The ROLE TABLE version, embedded in every
+/// `lang::LangInfo::highlight_salt` (pinned by
+/// `lang::tests::the_two_salt_families_are_disjoint_and_role_versioned`).
+///
+/// `1` = the fifteen classes shipped from W1 through v7.1. `2` = V72-H2b's
+/// eighteen. Bump it in the SAME edit that adds, removes or re-buckets a
+/// [`HighlightClass`], and bump every `highlight_salt` with it: cached
+/// spans carry class values, so a re-bucketing that leaves the salts alone
+/// serves rows painted under the old vocabulary forever.
+pub const ROLE_TABLE_VERSION: u32 = 2;
+
+/// Every role, in wire order — the vocabulary `kbc-theme/1` binds to.
+/// Declared as strings beside the enum (rather than derived from it) for
+/// exactly one reason: it is the list the SPA mirrors
+/// (`web-code/src/api/types.ts`, `themes/derive.ts`'s `SYNTAX_ROLES`,
+/// `styles/tokens.css`'s `--syn-*`), and a lock-step contract needs a
+/// literal on each side. `roles_match_the_serialized_class_names` pins it
+/// to the enum's own serde output, so the two can never drift.
+pub const ROLES: &[&str] = &[
+    "keyword",
+    "string",
+    "string-special",
+    "comment",
+    "function",
+    "type",
+    "number",
+    "variable",
+    "constant",
+    "constant-builtin",
+    "operator",
+    "punctuation",
+    "punctuation-special",
+    "property",
+    "attribute",
+    "label",
+    "escape",
+    "other",
+];
+
+/// The eighteen highlight roles. `kebab-case` on the wire: every one of
+/// the fifteen pre-V72-H2b members is a single word and serializes
+/// byte-identically under `kebab-case` and `snake_case`
+/// (`the_fifteen_legacy_roles_serialize_byte_identically` pins that), and
+/// the three new members read better as `constant-builtin` than
+/// `constant_builtin` in a CSS class and a custom property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum HighlightClass {
     Keyword,
     String,
+    /// V72-H2b — `string.special` and its sub-scopes: a Ruby symbol or
+    /// regex literal, a JS template/regex, a JSON object KEY, a CSS/TOML
+    /// url. Not a plain string, and reading a JSON file where the keys and
+    /// the values are one colour is the case that made this a role.
+    StringSpecial,
     Comment,
     Function,
     Type,
     Number,
     Variable,
     Constant,
+    /// V72-H2b — `constant.builtin` (`nil`, `None`, `true`, `self`,
+    /// `null`) plus YAML/TOML's top-level `boolean`. The language owns
+    /// these; a user constant is a different thing.
+    ConstantBuiltin,
     Operator,
     Punctuation,
+    /// V72-H2b — `punctuation.special`: interpolation delimiters (`#{`,
+    /// `${`), YAML's directive/document markers, Markdown's block markers.
+    PunctuationSpecial,
     Property,
     Attribute,
     Label,
     Escape,
-    /// Any `highlights.scm` top-level scope not in the fixed set above
-    /// (e.g. `embedded`) — kept rather than silently dropped.
+    /// Any `highlights.scm` scope not in the fixed set above (e.g.
+    /// `embedded`, Markdown's `text.*`) — kept rather than silently
+    /// dropped.
     Other,
 }
 
@@ -175,8 +274,10 @@ pub fn extract_highlights_host_only(lang_id: &str, source: &[u8]) -> Result<Vec<
     while let Some((m, capture_index)) = captures.next() {
         let cap = m.captures[*capture_index];
         let cname = capture_names[cap.index as usize];
-        let scope = cname.split('.').next().unwrap_or(cname);
-        let class = map_class(scope);
+        // V72-H2b: the FULL capture name, not its top-level word —
+        // `map_class` owns the two-level lookup so there is exactly one
+        // place that decides how specific a scope is allowed to be.
+        let class = map_class(cname);
         // Last-write-wins, EXCEPT that an unclassifiable capture never
         // displaces a classified one — see the module doc's `@spell`
         // paragraph for the case that made this necessary.
@@ -207,8 +308,36 @@ pub fn extract_highlights_host_only(lang_id: &str, source: &[u8]) -> Result<Vec<
     Ok(spans)
 }
 
-fn map_class(scope: &str) -> HighlightClass {
-    match scope {
+/// The first TWO dotted scope words of `cname`, and the first alone —
+/// `map_class`'s two lookup keys, in priority order. Pure and total: a
+/// capture with no dot yields the same string twice, and the specific
+/// lookup simply misses.
+fn scope_keys(cname: &str) -> (&str, &str) {
+    let top = cname.split('.').next().unwrap_or(cname);
+    let two = match cname[top.len()..].strip_prefix('.') {
+        Some(rest) => {
+            let second = rest.split('.').next().unwrap_or(rest);
+            &cname[..top.len() + 1 + second.len()]
+        }
+        None => top,
+    };
+    (two, top)
+}
+
+/// Bucket a capture name into a role. V72-H2b: the SPECIFIC (two-word)
+/// scope wins when it is listed, else the top-level word decides exactly as
+/// it did before — so every unlisted sub-scope keeps its historical class.
+fn map_class(cname: &str) -> HighlightClass {
+    let (specific, top) = scope_keys(cname);
+    match specific {
+        // V72-H2b (D16) — the three widened roles. Every other dotted
+        // scope falls through to the top-level match below.
+        "constant.builtin" => return HighlightClass::ConstantBuiltin,
+        "punctuation.special" => return HighlightClass::PunctuationSpecial,
+        "string.special" => return HighlightClass::StringSpecial,
+        _ => {}
+    }
+    match top {
         "keyword" => HighlightClass::Keyword,
         "string" => HighlightClass::String,
         "comment" => HighlightClass::Comment,
@@ -219,10 +348,11 @@ fn map_class(scope: &str) -> HighlightClass {
         "type" | "tag" => HighlightClass::Type,
         "number" => HighlightClass::Number,
         "variable" => HighlightClass::Variable,
-        // `boolean` (YAML's `true`/`false`/`~` literals — W2.2) folds into
-        // the same bucket as other literal constants rather than growing a
-        // 16th class — see the module doc.
-        "constant" | "boolean" => HighlightClass::Constant,
+        "constant" => HighlightClass::Constant,
+        // V72-H2b — YAML/TOML's `boolean` (`true`/`false`/`~`/`null`) is a
+        // BUILTIN constant; it rode `Constant` only for as long as there
+        // was no honest bucket for it. See the module doc.
+        "boolean" => HighlightClass::ConstantBuiltin,
         "operator" => HighlightClass::Operator,
         "punctuation" => HighlightClass::Punctuation,
         "property" => HighlightClass::Property,
@@ -451,5 +581,204 @@ mod tests {
         }
         assert_eq!(map_class("embedded"), HighlightClass::Other);
         assert_eq!(map_class("something-unheard-of"), HighlightClass::Other);
+    }
+
+    // ── V72-H2b (D16) — the eighteen-role table ──────────────────────────
+
+    /// Every capture name the queries in THIS BUILD emit, per language id.
+    /// The evidence the widening was picked from, read from the grammars
+    /// rather than restated from a note.
+    fn capture_names_for(lang_id: &str) -> Vec<String> {
+        let src = lang::highlights_query(lang_id).expect("a highlights query");
+        // `lang::parse` is the public door to the compiled grammar (it
+        // hands back the `Language` beside the tree); parsing empty bytes
+        // is the cheapest way through it.
+        let (_tree, language) = lang::parse(lang_id, b"").expect("a grammar");
+        let query = lang::compile_query(lang_id, &language, &src).expect("compiles");
+        query
+            .capture_names()
+            .iter()
+            .map(|n| (*n).to_string())
+            .collect()
+    }
+
+    /// How many of this build's grammars emit a capture whose two-level
+    /// scope key is `key`.
+    fn grammars_emitting(key: &str) -> usize {
+        lang::ALL_LANG_IDS
+            .iter()
+            .filter(|id| capture_names_for(id).iter().any(|n| scope_keys(n).0 == key))
+            .count()
+    }
+
+    /// The three roles D16 adopted, and the exact coverage that picked
+    /// them. A grammar bump that moves one of these numbers is precisely
+    /// when the choice deserves re-reading — so the numbers are asserted,
+    /// not narrated.
+    #[test]
+    fn every_widened_role_is_reachable_from_the_queries_in_this_build() {
+        let adopted = [
+            ("constant.builtin", 9usize, HighlightClass::ConstantBuiltin),
+            ("punctuation.special", 7, HighlightClass::PunctuationSpecial),
+            ("string.special", 7, HighlightClass::StringSpecial),
+        ];
+        for (key, expected, class) in adopted {
+            let n = grammars_emitting(key);
+            assert_eq!(
+                n, expected,
+                "{key}: {n} grammar(s) emit it, the module doc's table says {expected} —                  update the table (and re-read the choice) in the same edit"
+            );
+            assert_eq!(map_class(key), class);
+        }
+    }
+
+    /// MEASURED AND NOT ADOPTED — the `usages2::UNMINTED_KINDS` precedent.
+    /// Each candidate keeps its historical class, and its coverage is
+    /// pinned so "we looked" stays true rather than becoming folklore.
+    #[test]
+    fn deferred_role_candidates_are_recorded_with_their_evidence() {
+        let deferred = [
+            ("constructor", 6usize, HighlightClass::Function),
+            ("variable.parameter", 5, HighlightClass::Variable),
+            ("type.builtin", 3, HighlightClass::Type),
+            ("namespace", 0, HighlightClass::Other),
+        ];
+        for (key, expected, folds_into) in deferred {
+            let n = grammars_emitting(key);
+            assert_eq!(
+                n, expected,
+                "{key}: {n} grammar(s) emit it, the module doc's table says {expected}"
+            );
+            assert_eq!(
+                map_class(key),
+                folds_into,
+                "{key} is deferred — it must keep folding into its historical class"
+            );
+        }
+        // Markdown's `text.*` family: one grammar, four captures.
+        let md = capture_names_for("markdown");
+        assert_eq!(
+            md.iter().filter(|n| scope_keys(n).1 == "text").count(),
+            4,
+            "markdown's text.* family: {md:?}"
+        );
+        for n in &md {
+            if scope_keys(n).1 == "text" {
+                assert_eq!(map_class(n), HighlightClass::Other);
+            }
+        }
+    }
+
+    /// [`ROLES`] is what the SPA mirrors; the enum is what the wire
+    /// carries. They are two literals, so they get one test.
+    #[test]
+    fn roles_match_the_serialized_class_names() {
+        let all = [
+            HighlightClass::Keyword,
+            HighlightClass::String,
+            HighlightClass::StringSpecial,
+            HighlightClass::Comment,
+            HighlightClass::Function,
+            HighlightClass::Type,
+            HighlightClass::Number,
+            HighlightClass::Variable,
+            HighlightClass::Constant,
+            HighlightClass::ConstantBuiltin,
+            HighlightClass::Operator,
+            HighlightClass::Punctuation,
+            HighlightClass::PunctuationSpecial,
+            HighlightClass::Property,
+            HighlightClass::Attribute,
+            HighlightClass::Label,
+            HighlightClass::Escape,
+            HighlightClass::Other,
+        ];
+        let wire: Vec<String> = all
+            .iter()
+            .map(|c| {
+                serde_json::to_value(c)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(wire, ROLES, "ROLES must be the serde names, in wire order");
+        assert_eq!(ROLES.len(), 18, "D16's budget is eighteen roles");
+        assert_eq!(ROLE_TABLE_VERSION, 2);
+    }
+
+    /// The `snake_case` → `kebab-case` switch is byte-identical for every
+    /// role that existed before V72-H2b — the reason it was safe to make.
+    #[test]
+    fn the_fifteen_legacy_roles_serialize_byte_identically() {
+        for (class, legacy) in [
+            (HighlightClass::Keyword, "keyword"),
+            (HighlightClass::String, "string"),
+            (HighlightClass::Comment, "comment"),
+            (HighlightClass::Function, "function"),
+            (HighlightClass::Type, "type"),
+            (HighlightClass::Number, "number"),
+            (HighlightClass::Variable, "variable"),
+            (HighlightClass::Constant, "constant"),
+            (HighlightClass::Operator, "operator"),
+            (HighlightClass::Punctuation, "punctuation"),
+            (HighlightClass::Property, "property"),
+            (HighlightClass::Attribute, "attribute"),
+            (HighlightClass::Label, "label"),
+            (HighlightClass::Escape, "escape"),
+            (HighlightClass::Other, "other"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(class).unwrap(),
+                serde_json::json!(legacy)
+            );
+        }
+    }
+
+    /// The two-level lookup promotes ONLY what is listed; every other
+    /// dotted scope keeps the class its top-level word always gave it.
+    #[test]
+    fn the_two_level_lookup_only_promotes_listed_sub_scopes() {
+        assert_eq!(
+            scope_keys("string.special.regex"),
+            ("string.special", "string")
+        );
+        assert_eq!(scope_keys("comment"), ("comment", "comment"));
+        assert_eq!(
+            scope_keys("function.method.builtin"),
+            ("function.method", "function")
+        );
+        for (cname, class) in [
+            ("comment.documentation", HighlightClass::Comment),
+            ("string.escape", HighlightClass::String),
+            ("function.macro", HighlightClass::Function),
+            ("function.method.builtin", HighlightClass::Function),
+            ("punctuation.bracket", HighlightClass::Punctuation),
+            ("punctuation.delimiter", HighlightClass::Punctuation),
+            ("variable.builtin", HighlightClass::Variable),
+            ("keyword.return", HighlightClass::Keyword),
+            ("text.title", HighlightClass::Other),
+        ] {
+            assert_eq!(map_class(cname), class, "{cname}");
+        }
+        // The promoted three, at every depth they actually occur.
+        for cname in [
+            "string.special",
+            "string.special.key",
+            "string.special.symbol",
+        ] {
+            assert_eq!(map_class(cname), HighlightClass::StringSpecial, "{cname}");
+        }
+        assert_eq!(
+            map_class("constant.builtin"),
+            HighlightClass::ConstantBuiltin
+        );
+        assert_eq!(map_class("boolean"), HighlightClass::ConstantBuiltin);
+        assert_eq!(map_class("constant"), HighlightClass::Constant);
+        assert_eq!(
+            map_class("punctuation.special"),
+            HighlightClass::PunctuationSpecial
+        );
     }
 }

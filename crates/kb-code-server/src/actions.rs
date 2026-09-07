@@ -390,6 +390,14 @@ const SYMBOL_SPECS: &[Spec] = &[
         "Bookmark this line",
         "Adds a bookmark at the caret, with an optional note.",
     ),
+    mut_spec(
+        "collect.board",
+        1,
+        "collect",
+        Some("B"),
+        "Add to board…",
+        "A kbc-canvas/1 board card for this target — a REFERENCE the board re-resolves on every read, never a copy.",
+    ),
     spec(
         "provenance.copy-sym",
         1,
@@ -465,6 +473,14 @@ const ENCLOSING_SPECS: &[Spec] = &[
         "Callers",
         "Call hierarchy inbound; four proof languages only.",
     ),
+    mut_spec(
+        "collect.board",
+        1,
+        "collect",
+        Some("B"),
+        "Add to board…",
+        "A kbc-canvas/1 board card for this target — a REFERENCE the board re-resolves on every read, never a copy.",
+    ),
     spec(
         "provenance.copy-permalink",
         1,
@@ -531,6 +547,14 @@ const RANGE_SPECS: &[Spec] = &[
         Some("b"),
         "Bookmark this range",
         "Adds a bookmark at the range start.",
+    ),
+    mut_spec(
+        "collect.board",
+        1,
+        "collect",
+        Some("B"),
+        "Add to board…",
+        "A kbc-canvas/1 board card for this target — a REFERENCE the board re-resolves on every read, never a copy.",
     ),
     spec(
         "provenance.copy-permalink",
@@ -607,6 +631,14 @@ const TEXT_SPECS: &[Spec] = &[
         "Search as a symbol name",
         "The symbols lane, ranked by the one matcher.",
     ),
+    mut_spec(
+        "collect.board",
+        1,
+        "collect",
+        Some("B"),
+        "Add to board…",
+        "A kbc-canvas/1 board card for this target — a REFERENCE the board re-resolves on every read, never a copy.",
+    ),
     spec(
         "provenance.copy-cli",
         1,
@@ -665,6 +697,14 @@ const PATH_SPECS: &[Spec] = &[
         Some("b"),
         "Bookmark this file",
         "Adds a bookmark at the file's first line.",
+    ),
+    mut_spec(
+        "collect.board",
+        1,
+        "collect",
+        Some("B"),
+        "Add to board…",
+        "A kbc-canvas/1 board card for this target — a REFERENCE the board re-resolves on every read, never a copy.",
     ),
     spec(
         "provenance.copy-permalink",
@@ -1244,6 +1284,23 @@ fn op_for(repo: &str, t: &ActionTarget, id: &str) -> Option<OpBuild> {
             enabled,
             None,
         ),
+        // V74-L2 — the ONE door for "add to board" on every surface this menu
+        // serves. The op only names the SINK; the SPA composes the whole
+        // kbc-canvas/1 document (`web-code/src/lib/boardDoc.ts`) and applies it,
+        // because `POST /api/boards/apply` takes a document and there is no
+        // partial-patch route for this daemon to offer here.
+        //
+        // It is `mut_spec`, so a caller the server has not cleared for
+        // mutations never sees the row at all (rule 2: ABSENT, not disabled) —
+        // board mutations are loopback-only, and offering a row that will 404
+        // is the dead surface this whole module is about.
+        "collect.board" => (
+            ActionOp::Collect { sink: "board" },
+            Some("kb-code canvas apply --from-file board.json".to_string()),
+            None,
+            enabled,
+            None,
+        ),
         "provenance.copy-sym" => {
             let value = t.name.clone();
             (
@@ -1413,7 +1470,7 @@ pub async fn actions_route(
                 crate::resolve::word_at(l.as_bytes(), col as usize)
             });
             let symbols = match (&blob_sha, lang) {
-                (Some(h), Some(l)) => store.symbols_for_blob(h, l.salt).unwrap_or_default(),
+                (Some(h), Some(l)) => store.symbols_for_blob(h, l.symbol_salt).unwrap_or_default(),
                 _ => Vec::new(),
             };
             if symbols.is_empty() && read.is_some() {
@@ -1616,11 +1673,11 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "symbol = navigate:nav.peek-definition@1 navigate:nav.definition@1 navigate:nav.open-pane2@1 understand:understand.hover@1 find:find.usages@1 find:find.callers@1 find:find.text@1 collect:collect.bookmark@1 provenance:provenance.copy-sym@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-cli@1 agent:agent.ask@1 agent:agent.annotate@1 mutate:mutate.suggest@1",
-                "range = understand:understand.blame-range@1 understand:understand.why@1 find:find.text@1 collect:collect.bookmark@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-snippet@1 provenance:provenance.copy-cli@1 agent:agent.ask@1 agent:agent.annotate@1 mutate:mutate.suggest@1",
-                "text = find:find.text@1 find:find.regex@1 find:find.symbol@1 provenance:provenance.copy-cli@1 agent:agent.ask@1",
-                "path = navigate:nav.open@1 navigate:nav.open-pane2@1 understand:understand.diagnostics@1 understand:understand.framework@1 collect:collect.bookmark@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-cli@1 agent:agent.ask@1",
-                "enclosing = navigate:nav.goto-enclosing@1 find:find.usages@1 find:find.callers@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-cli@1 agent:agent.ask@1 mutate:mutate.suggest@1",
+                "symbol = navigate:nav.peek-definition@1 navigate:nav.definition@1 navigate:nav.open-pane2@1 understand:understand.hover@1 find:find.usages@1 find:find.callers@1 find:find.text@1 collect:collect.bookmark@1 collect:collect.board@1 provenance:provenance.copy-sym@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-cli@1 agent:agent.ask@1 agent:agent.annotate@1 mutate:mutate.suggest@1",
+                "range = understand:understand.blame-range@1 understand:understand.why@1 find:find.text@1 collect:collect.bookmark@1 collect:collect.board@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-snippet@1 provenance:provenance.copy-cli@1 agent:agent.ask@1 agent:agent.annotate@1 mutate:mutate.suggest@1",
+                "text = find:find.text@1 find:find.regex@1 find:find.symbol@1 collect:collect.board@1 provenance:provenance.copy-cli@1 agent:agent.ask@1",
+                "path = navigate:nav.open@1 navigate:nav.open-pane2@1 understand:understand.diagnostics@1 understand:understand.framework@1 collect:collect.bookmark@1 collect:collect.board@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-cli@1 agent:agent.ask@1",
+                "enclosing = navigate:nav.goto-enclosing@1 find:find.usages@1 find:find.callers@1 collect:collect.board@1 provenance:provenance.copy-permalink@1 provenance:provenance.copy-cli@1 agent:agent.ask@1 mutate:mutate.suggest@1",
             ]
         );
     }

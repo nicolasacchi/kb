@@ -858,9 +858,52 @@ own unit and nothing here weakens root invariant #4.
 
 CLI: `kb-code canvas {boards,show,apply,accept,archive,rm,export,sweep}`.
 `canvas list` keeps its pre-existing meaning — the v3.4-C1 canvas SETS — so
-no script breaks; `canvas boards` lists kbc-canvas/1 boards. The board SPA
-(rendering, fold/expand, the keyboard model, walkthrough mode, add-to-board
-from every surface) is L2 and is not in this unit.
+no script breaks; `canvas boards` lists kbc-canvas/1 boards.
+
+**The SPA (V74-L2).** `/r/{repo}/~boards` is the list (status filter, per-board
+counts, a "check drift" panel over `GET /api/boards/sweep`) and
+`/r/{repo}/~boards/{slug}` renders one board. `~canvas` — V3.4-C2's
+working-set canvas — stays mounted and FROZEN beside it, linked once from a
+"Legacy" section at the bottom of the list with the difference stated: a
+`canvas_sets` payload is opaque by contract and cannot be re-resolved, which
+is the whole point of a board. Nothing was migrated and neither page reads the
+other's data.
+
+Layout is `web-code/src/lib/boardLayout.ts`, which is an ADAPTER over
+`egoGraph.ts`'s `layoutLayeredDag` — the one engine (D10) — plus two things
+the engine has no notion of: card-sized pitch, and pins. A pinned card keeps
+its authored position exactly and is not flowed, mirroring the server's
+export-only `boards::layout::place`. A `code` node renders through the SAME
+`LiveRefCard` the review document uses (server spans, state badge, fold), so
+there is one live code card in the SPA rather than two that could disagree
+about what `carried` looks like; every other kind gets an address card that
+shows the daemon's own `address`, `state` and `reason`. `?ctx=1` fetches the
+± context expansion (never synthesised), `?live=1` re-runs the query cards
+under a caption, and `?step=` is the walkthrough's position — Location
+Contract params, appended last, each omitted at its default and each with a
+total parser (`lib/boardsUrl.ts`).
+
+Keys: nineteen `scope: "board"` rows gated `when: board == boards` (the
+`board` context key gains a fifth value), split into a reading half
+(`!walkthrough`: `j`/`k`/`Enter`, `z c`/`z o`/`z a`/`z M`/`z R`, `+`/`-`,
+`Space b {t,p,u,A,s}`) and a walking half (`walkthrough`: `n`/`k`/`p`) that
+`commands doctor` can prove disjoint; plus `Space g w` (`nav.boards`) and
+`Space b a` (`boards.add`). `Escape` leaves the walkthrough through the
+existing `dismiss.mode` rung — no new Escape row.
+
+Add-to-board is an actions/1 row, `collect.board`, on all five target kinds.
+It is a `mut_spec`, so a caller the server has not cleared for mutations never
+sees it (rule 2: ABSENT, not disabled) — board mutations are loopback-only.
+The SPA composes the WHOLE next document from the board already on the wire
+plus one node (`web-code/src/lib/boardDoc.ts`; there is no partial-patch
+route), checks itself against the lint's own `coordinates` rule before
+sending, and renders a refusal's findings with their rule ids verbatim.
+Node threads reuse the annotations store: the first comment creates an
+ordinary annotation at the node's anchor and the board records its id through
+`apply` — if that second write is refused the comment survives and the panel
+says only the LINK could not be recorded. A node with no path and no line
+(a `note`, a `turn`) is told it cannot carry a thread rather than being given
+an invented anchor.
 
 **kbc-tree/1 (V71-F1) — `GET /api/tree/2?repo=[&view=][&root=][&depth=]
 [&expand=][&scope=][&filter=][&mode=][&decorate=][&base=][&review=]
@@ -1138,11 +1181,104 @@ reviewable in the diff that causes it. CLI: `kb-code syntax [--json]`,
 `kb-code parity [--json]` — daemon reads, because the honest answer is what
 the DAEMON's build can do.
 
-Not in this unit, by design: new grammars (SCSS/CSS/Markdown), the
+Not in that unit, by design: new grammars (SCSS/CSS/Markdown), the
 injection-aware pipeline, the universal `outline/1` contract, and the
-`symbol_salt`/`highlight_salt` split. `highlight_only` therefore ships as a
-mechanism with no production row yet, recorded by a test that fails when
-the first one lands.
+`symbol_salt`/`highlight_salt` split. `highlight_only` therefore shipped as
+a mechanism with no production row (SCSS became the first, in V72-H2a); the
+salt split is V72-H2b, below.
+
+**The salt split, the highlight cache gate and the eighteen roles
+(V72-H2b, D7 + D16).** One salt used to key every derived row per file, so
+a highlight-query or role-table change re-extracted SYMBOLS too, and a
+`tags.scm` fix re-painted the corpus. `crates/kb-code-server/src/lang.rs`'s
+`LangInfo` now carries two, and each derived family is invalidated on its
+own:
+
+| salt | format | keys |
+|------|--------|------|
+| `symbol_salt` | `{id}@{grammar}+qN` | `symbols`, `occurrences`, `import_specs`, `call_sites`, `type_relations` |
+| `highlight_salt` | `{id}@{grammar}+hN+rolesM` | `highlights` |
+
+`M` is `highlight::ROLE_TABLE_VERSION`, and a test pins every language's
+salt to it — widening the role vocabulary is one edit that invalidates
+every painted row and cannot be forgotten for one language. The two sets
+are disjoint by construction (`+q` vs `+h`), which is what lets the store
+keep asking "is this row's salt in the CURRENT set" per FAMILY with no join
+back through `files.lang`. The V70-A3X stale-salt sweep runs one pass per
+`(table, family)` pair (`store::SWEEP_TABLES`), so a family is stale only
+when ITS OWN salt moved; the V72-B0 completion marker folds BOTH sets into
+its fingerprint, so a highlight-only bump re-arms it. **No migration was
+needed for the split** — two salt strings live in the same `salt` TEXT
+column their family's table already had.
+
+The **highlight cache gate** is the second half. Highlights used to be
+written only inside the symbols cache-MISS branch, so the two could not be
+invalidated separately even in principle. They are now two independent
+gates in `ingest::index_file`, and both ask a new question: `derived_status`
+(migration V0037 — a new migration takes the embedded set's current max +
+1, never a reserved slot: refinery's `abort_missing` makes a gap-FILL a
+hard boot refusal on any volume already migrated past it, which
+`embedded_migration_versions_are_contiguous` now prevents) records
+`(blob_hash, family, salt) → rows`, and the gate
+is the row's EXISTENCE. The old gate was `COUNT(*) > 0` over the derived
+rows themselves, which cannot tell "not derived" from "derived, and zero
+rows was the honest answer" — so every zero-symbol file re-parsed on
+**every visit, forever**: ERB templates (tier `none`, the case V72-H1
+reported), SCSS files (tier `highlight_only`), comment-only Rust files,
+heading-less Markdown. `GET /api/file` gains an additive
+`highlight_cache: "hit" | "miss" | "skipped_tier"` reporting what the gate
+would say for that blob, and the boot walk logs `highlight_hits` /
+`highlight_misses` / `highlight_skipped` beside its existing counters.
+
+The **role table** widens from fifteen classes to **eighteen** (D16), which
+is what the split makes affordable. The three additions were picked by
+counting the capture names the grammars in this build actually emit, and
+the counts are asserted, not narrated:
+
+| role | capture names | grammars |
+|------|---------------|----------|
+| `constant-builtin` | `constant.builtin`, and YAML/TOML's top-level `boolean` | 9 |
+| `punctuation-special` | `punctuation.special` | 7 |
+| `string-special` | `string.special{,.regex,.symbol,.key}` | 7 |
+
+`map_class`'s lookup is now two levels deep — the first two dotted scope
+words, then the top-level word — so every unlisted sub-scope keeps exactly
+the class it always had (`comment.documentation` is still `comment`,
+`string.escape` still `string`). Measured and NOT adopted, recorded by a
+test with their evidence: `constructor` (6 grammars), `variable.parameter`
+(5), `type.builtin` (3), `namespace` (0 — no grammar in this build emits it
+at all; CSS's `@namespace` is an at-rule KEYWORD in the query's pattern
+text, not a capture name), Markdown's `text.*` family (1 grammar, 4
+captures). The wire is kebab-case (`rename_all` moved from
+`snake_case`, byte-identical for all fifteen legacy single-word names), and
+the SPA mirrors the list in three places kept in lock-step by test:
+`api/types.ts`'s `HighlightClass`, `themes/derive.ts`'s `SYNTAX_ROLES`, and
+`styles/tokens.css`'s `--syn-*`. Registry themes give each new role its own
+hue; the built-in palette carries seven chrome hues rather than eleven, so
+there each new role defaults to its parent's token and the widening renders
+byte-identically until a theme separates it.
+
+**The re-extract bill — `GET /api/reextract/bill?repo=[&sample=]`,
+`kb-code reextract --bill [--repo R] [--sample N] [--json]`
+(`reextract-bill/1`).** D7 asks for the cost of a salt bump to be MEASURED
+and recorded per milestone, so the bill has three parts and labels each
+with how it was obtained. (1) The **census** is exact: files and bytes per
+`files.lang`, and rows per derived table over the blobs this repo reaches
+— paged and wall-clock-budgeted for the V72-B0 reason (the un-paged
+`blob_hash IN (SELECT …)` shape is O(every live blob) random seeks per
+table with the store's single connection mutex held), and it says
+`census_complete: false` rather than presenting a partial count as a total.
+(2) The **timed sample** is measured: up to 200 files per language
+(deterministically the first in `path` order, so two runs compare), read
+from the working tree and pushed through the REAL
+`extract::extract_symbols` / `highlight::extract_highlights` with the
+results discarded — the bill writes nothing, because a bill that mutated
+the cache it prices would be measuring its own second run. (3) The
+**projection** is extrapolated and says so on every row: the sample's
+milliseconds scaled by `total bytes / sampled bytes`, with the scale factor
+printed. There is deliberately no verb that PERFORMS a re-extract: bumping
+a salt is an edit to `lang.rs` plus a deploy, and the mirror re-derives
+itself through the ordinary two gates on the next visit to each file.
 
 **`haml/1` (V72-H3, D7) — the first-party HAML scanner.** HAML is the one
 file type kb-code parses with code it owns rather than a tree-sitter
@@ -1318,6 +1454,55 @@ with more than one the atom is not applied and the caption says why, rather
 than matching a same-named path in the wrong repo. Same lock-step
 discipline as every other key: the TS mirror (`web-code/src/lib/kbcq.ts`)
 and the one shared fixture `crates/kb-code-server/grammar/kbcq.golden.json`.
+
+**The `~rails` surface (V72-I2).** `/r/:repo/~rails` is the dashboard over
+that wire — a repo-scoped sentinel page beside `~todos`/`~workspaces`, not a
+new shell. It shows the passport (detection, version and its source, the
+TRUE per-noun totals, lens freshness, the Zeitwerk read state, the read
+state), then one section per noun with a card per row: the model's table
+name and its association/validation/scope/callback counts, a route's
+verb+path and the action it reaches (flagged when it reaches none), an
+action's visibility, a job's enqueue-site count, a view's inbound render
+count, a concern's includers. Each card is ONE address the reader opens, a
+set of facet chips that pre-fill the search box with the matching `kbcq/1`
+atom (`model:`, `controller:`, `action:`, `route:`, `job:`, `rails:<noun>`),
+its witness count, and a trust LINE STYLE — dashed for `likely`, dotted for
+`candidate`, never solid, because `rails/1` has no exact tier. Paging and
+the `q=` filter are the SERVER's, so the "showing 1–25 of 312" caption is
+always true. The orphan report renders every lane with its own `why`
+verbatim and the report's caption above them, and a row that appears in a
+lane gets a badge on its card naming the lane.
+
+Two reader surfaces come with it. A model file carrying an annotaterb
+`# == Schema Information` banner gets a **Schema card** in the inspector
+rail — the column table, parsed in the browser out of the text `GET
+/api/file` already returned, captioned as a client read rather than a daemon
+fact (`comments/1`'s `GET /api/comments/file` landed on main mid-unit and is
+the named follow-up source for the block's RANGE) — and the banner itself is FOLDED in the buffer behind a one-line
+placeholder (a browser-local opt-out pref, `Space z`, or the card's own
+button). Hovering (`K`) a line that produced rails-lens edges adds a **Rails
+atom table** to the hover card: the association/render/i18n/enqueue targets
+on that line, each with its own trust and address, plus the `kbc-actions/1`
+rows for the target, rendered whole in the daemon's order. Nothing on either
+surface auto-navigates. A route helper (`orders_path`) is shown as a SEARCH
+over the route index rather than a resolved target — `rails-lens/1` mints no
+route-helper edge, and the card says so instead of inventing one.
+
+**HAML in the lens, verified (V72-I2).** The `.haml` dispatch was already
+correct at V72-I1 — `rails::extract` has its own HAML arm,
+`rails_lens_relevant_path` lists both `.haml` predicates, `lang::detect`
+resolves `.haml` to the first-party scanner, and `find_view_files` matches a
+template by its STEM rather than its extension. What was missing was a test
+that any of it survives the real pipeline: every fixture running through
+`ingest::index_file` → `replace_rails_edges` → `GET /api/rails/*` was 100%
+ERB, and the only HAML lens assertions call `frameworks::extract_edges`
+directly, bypassing `is_rails`, the store and the daemon. The `acme-app`
+fixture now ships a `.haml` view (a partial render, a lazy `t(".key")`, a
+route helper) and `tests/rails_route.rs` asserts through the SHIPPED path
+that the partial rendered from HAML is not in the `view_never_rendered`
+orphan lane and that a locale key referenced only from HAML is not reported
+unused — with the genuinely-unused key as the negative control, so an
+emptied lane cannot pass either.
 
 CLI: `kb-code rails {home,models,controllers,actions,routes,jobs,mailers,views,concerns,orphans}
 --repo R [--q TEXT] [--limit N] [--offset N] [--json]`. The `--json` form is
@@ -2194,3 +2379,265 @@ any one importer's current bugs.
   `pr_meta_json.checks` snapshot when the document names none. A `ci:` ref
   is `is_inert` (a snapshot read, never a fresh GitHub call), the same
   posture `gh:`/`kb:` already take.
+
+## Recipes — `kbc-recipe/1` (v7.4, Track L)
+
+A **recipe** is a named, parameterised, deterministic question asked of
+kb-code's own indexes. Two families share one surface:
+
+- **`recipes/1`** (v3.3-Q1, `GET /api/recipes`, `GET /api/recipes/{name}`)
+  — six compiled-in ranked queries. **FROZEN** and byte-compatible for the
+  SPA's existing Recipes page, with two deliberate behaviour changes from
+  the repair round below.
+- **`kbc-recipe/1`** (v7.4, `GET /api/recipe*`) — the typed runner: a DAG
+  over a closed op set, typed params, kbc-scope/1 scoping, four result
+  views, a per-step census, and trust-on-first-use for recipes a repo
+  carries. The six `recipes/1` bodies are **adopted** here as native
+  adapters, so all fourteen run, show and lint the same way.
+
+The two prefixes are separate for the reason `canvas` and `boards` are:
+`/api/recipes/{name}` already owns the depth-2 param slot, so the new
+family gets its own singular prefix rather than shadowing a recipe that
+happens to be named after a literal segment.
+
+### What a recipe is
+
+```toml
+slug = "orient:hot-and-cold"        # the FILE NAME is the slug for a repo file
+title = "Hot and cold"
+intent = "orienting"                # orienting|reviewing|checking-tests|rails|hygiene
+description_md = "…"
+scope = "$context.scope"            # a kbc-scope/1 expression; default = the reader's own
+
+params = [
+  { name = "top", type = "int", default = 25, min = 1, max = 500 },
+]
+
+steps = [
+  { id = "churn",  op = "churn",   args = { min_revisions = "$p.min_revisions" } },
+  { id = "ranked", op = "set_ops", args = { mode = "sort", from = "$steps.churn", by = "churn" } },
+]
+
+views = [
+  { id = "hot", kind = "table", step = "ranked", columns = [
+    { header = "Path", field = "path" },
+    { header = "Churn", field = { scalar = "churn" } },
+  ]},
+]
+```
+
+Param types: `string` · `int` · `float` · `bool` · `enum` (with `values`)
+· `path` (rejected by the same lexical guard every content route uses) ·
+`symbol` · `ref` (constructed through `git::revspec::Revspec`, so
+invariant 3 holds for a recipe-supplied ref too). `min`/`max` are
+inclusive and a violation is a 400 naming the field, the value and the
+bound.
+
+An arg is a literal, `$p.<name>`, `$context.<field>`
+(`repo|path|symbol|ref|scope`) or `$steps.<id>`. There is **no
+interpolation** — `"$p.a and $p.b"` is a literal string, because a
+template would be the beginning of a query language (D21). A field
+projection goes through the `map` op, whose transforms are type-checked;
+`$steps.<id>.<field>` is refused at load.
+
+Every result cell is an **address** — `path`, `line`, `symbol`, `entity`,
+`commit`, `id`, `blob`, `trust`, `kind`, `address`, or `{ scalar = "…" }`
+for one of the emitting op's own derived numbers. `blob` and `trust` are
+always present: an engine that reported neither says `unknown`, never a
+blank and never a zero.
+
+### The op set (closed)
+
+| op | args | consumes | produces |
+|---|---|---|---|
+| `search` | `q` (kbcq/1), `lane`, `limit` | — | `file` \| `symbol` \| `line` (per `lane`) |
+| `usages` | `from`, `trust`, `limit` | `symbol` | `line` |
+| `entity` | `from`, `name`, `kind`, `limit` | `file` | `entity` |
+| `outline` | `from`, `kinds`, `limit` | `file` | `symbol` |
+| `comments` | `from`, `kind`, `keyword`, `state`, `limit` | `file` | `comment` |
+| `facts` | `lane`, `from`, `kind`, `min_severity`, `limit` | `file` | `fact` |
+| `rails` | `noun` \| `orphans`, `limit` | — | `entity` \| `file` |
+| `tree` | `scope`, `ext`, `limit` | — | `file` |
+| `git_log` | `since`, `range`, `emit`, `limit` | — | `commit` \| `file` (per `emit`) |
+| `blame` | `from`, `limit` | `file`/`symbol`/`line` | `line` |
+| `churn` | `min_revisions`, `limit` | — | `file` |
+| `boards` | `status`, `limit` | — | `node` |
+| `review` | `kind`, `state`, `severity`, `disposition`, `limit` | — | `finding` |
+| `set_ops` | `mode`, `from`, `with`, `by`, `desc`, `n`, `trust`, `path_prefix`, `min`, `max` | any (one kind) | its input's kind |
+| `map` | `from`, `to` | varies | varies |
+
+`set_ops` modes: `union` · `intersect` · `diff` · `filter` · `sort` ·
+`limit`. `map` transforms: `file-of` · `symbol-of` · `entity-of` ·
+`definitions-of`.
+
+**A recipe can never reference an exec lane.** Not because a check
+rejects one — because no variant of the op enum names one (D21;
+kb-code-server invariant 10, "the daemon never spawns a non-git
+process"). The `facts` op reads `lane_facts` rows the operator's own CLI
+already ingested and cannot cause a tool to run; its lane must still be
+enabled in `[lanes]`, which no recipe can do.
+
+The DAG is **type-checked at load**: a step fed the wrong address kind
+fails by NAME (`steps.uses: arg "from" carries file addresses, but op
+`usages` accepts symbol`), as does a forward reference, an unknown arg,
+an undeclared param, a `set_ops` whose inputs disagree on kind, and a
+view over a step that does not exist.
+
+### Where a recipe lives, and trust
+
+| home | source | trust |
+|---|---|---|
+| `builtin` | the eight DAG recipes + six native adapters this binary ships | always trusted |
+| `server` | `kb-code recipe new --from-json -` (loopback) | always trusted |
+| `repo` | `.kbc/recipes/<slug>.toml` at the repo's **default ref** | trust-on-first-use |
+
+A repo file is read **only from the default ref, only through the ODB** —
+never the working tree, never whatever branch is checked out. First sight
+is `untrusted` and refuses to run with a 403 naming the state and the
+command that accepts it (`urn:kb:errors:recipe-untrusted`). A changed
+content hash is `changed` **with a unified diff**, and does not inherit
+the old decision. Caps: 64 KiB per file, 64 files per repo.
+
+A repo file **wins** on a slug collision and the catalog reports what it
+shadowed (`shadowed_by`). A file whose declared `slug` disagrees with its
+file name is a reported problem, not a silent rename.
+
+### Running one
+
+`GET /api/recipe/{slug}/run?repo=&p.<name>=&ctx.<field>=&scope=&limit=&view=`
+— a bearer **read**; it mutates nothing, which is also what makes a run
+URL shareable. The response is `kbc-recipe-run/1`:
+
+```jsonc
+{
+  "schema": "kbc-recipe-run/1",
+  "recipe": "…", "home": "repo", "source": "repo:.kbc/recipes/x.toml@<blob>",
+  "trust": "trusted",
+  "scope": { "expression": "…", "applied": true, "matched": 42, "notes": [] },
+  "steps": [ { "id": "…", "op": "churn", "rows": [ /* addresses */ ],
+               "total": 120, "truncated": true, "ms": 8,
+               "census": { "empty_reason": "lane-disabled",
+                           "inputs": { "path_stats": 120 },
+                           "filters_applied": [ "…" ], "notes": [] } } ],
+  "views": [ { "id": "hot", "kind": "table", "columns": [ … ], "rows": [ [ "…" ] ] } ],
+  "honesty": { "generation": 41, "as_of": "…", "budget_ms": 20000,
+               "elapsed_ms": 91, "budget_exhausted": false, "notes": [] }
+}
+```
+
+- **`limit` over 500 is a 400 naming both numbers.** Never a silent clamp.
+- **A scope with any diagnostic is not applied**: the run proceeds
+  UNSCOPED with the reason captioned (`scope.applied: false`), because a
+  silent narrowing is worse than an honest widening.
+- **A run is deterministic for a given mirror state.** Every op sorts on
+  the address itself, identical step calls are memoised, and two runs
+  against one `generation` are byte-identical.
+
+### The census — why is this empty
+
+Every step carries one. `empty_reason` is a closed vocabulary and exactly
+**one** value means "nothing to worry about":
+
+| reason | means |
+|---|---|
+| `filtered-out` | rows existed and every one failed this step's filters — **the only clean one** |
+| `no-inputs` | the step reads per-address and got none |
+| `upstream-empty` | the previous step returned nothing |
+| `scope-excluded` | the scope removed every row |
+| `lane-disabled` | an `aug-lane/1` lane is off in `[lanes]` |
+| `lane-unknown` | no lane by that name |
+| `lane-unavailable` | a known lane could not answer |
+| `no-index` | the index this step reads has no rows (the reason names the command that builds it) |
+| `not-a-rails-app` | rails/1 found no Rails structure |
+| `param-empty` | a param resolved to an empty value |
+| `budget-exhausted` | the 20 s run budget was spent before this step started |
+
+`inputs` names what the step actually READ, so a reader can see where the
+funnel narrowed; `filters_applied` names what it applied.
+
+### The shipped catalog
+
+| slug | intent | params | views | CLI |
+|---|---|---|---|---|
+| `orient:entry-points` | orienting | `top` | doors · routes · classes | `kb-code recipe run orient:entry-points --repo R` |
+| `orient:hot-and-cold` | orienting | `min_revisions`, `top` | hot · inside | `kb-code recipe run orient:hot-and-cold --repo R` |
+| `review:blast-radius` | reviewing | `since`*, `test_prefix`, `top` | callers · tests · changed · prior | `kb-code recipe run review:blast-radius --repo R --p since=30d` |
+| `review:untested-changes` | reviewing | `since`*, `test_scope`, `lane` | untested · covered · tests | `kb-code recipe run review:untested-changes --repo R --p since=30d` |
+| `tests:flaky-candidates` | checking-tests | `test_scope`, `min_revisions`, `top` | top | `kb-code recipe run tests:flaky-candidates --repo R` |
+| `rails:orphans` | rails | `lane` (enum), `top` | orphans | `kb-code recipe run rails:orphans --repo R --p lane=action_without_route` |
+| `hygiene:aged-todos` | hygiene | `top` | both · aged | `kb-code recipe run hygiene:aged-todos --repo R` |
+| `hygiene:drifted-docs` | hygiene | `top` | drifted · files | `kb-code recipe run hygiene:drifted-docs --repo R` |
+
+Plus the six natives, adapted: `new-public-api` (`since`*),
+`god-functions`, `agent-only-symbols`, `complexity-climbers` (`since`*),
+`unreviewed-hotspots`, `failure-tainted`. Their bodies stay in
+`recipes.rs` — `new-public-api`'s language-specific visibility rules and
+`god-functions`' fan-in/fan-out fold are not expressible in the op set,
+and growing the set one recipe-shaped variant at a time is exactly what
+D21 forbids. What they gain is everything around the body: typed params,
+the cap refusal, scoping, a census, and views that render the columns
+both old presenters dropped.
+
+### The `recipes/1` repair round
+
+D11's list, each with a test named after it:
+
+| defect | fix |
+|---|---|
+| `complexity-climbers` mapped every `read_blob` failure to `Complexity{0,0}`, so a file added after `since` topped the list with a delta equal to its whole size | a baseline that could not be read is `terms.then_state` (`absent`/`too-large`/`unreadable`) with `score: null`, listed last and never ranked as a climb |
+| `agent-only-symbols`' gate read `author_stats OR commit_sessions` while its row test read only `commit_sessions` | the gate reads the SAME table, and an empty result over a missing input says which one (`commit_sessions` vs `agent_attribution`); the per-sha lookup is memoised |
+| `failure-tainted`'s `terms.fail_count` was a permanent zero (its only writer hardcodes `0`) | the term is **retired** rather than reported as measured-and-zero; the note says so |
+| `limit > 500` was silently clamped | a 400 naming both numbers, on `recipes/1` **and** `kbc-recipe/1` |
+| the CLI's 10 s client timeout made the two blame-heavy recipes unusable | `kb-code recipe` uses a 600 s client |
+| the CLI's `error_for_status()` discarded the server's message | error bodies are rendered (`recipe: p.since: required (string) (HTTP 400)`) |
+| `new-public-api` returned a confident empty set on the four-fifths of languages it has no rule for | the note names the rule set and the per-language count it did **not** examine; a run with nothing examinable reports `inputs_missing` |
+| the note said "working tree HEAD", which is not a thing | it names the working tree |
+
+Two of these change behaviour on the frozen wire on purpose: `limit >
+500` now 400s (the SPA's own control tops out at 500, so it is
+unaffected), and `complexity-climbers` rows can carry `score: null` (the
+SPA already renders a null score as `—`).
+
+### Routes
+
+| route | gate | note |
+|---|---|---|
+| `GET /api/recipe?repo=` | bearer | catalog: home, trust, CLI line, load problems |
+| `GET /api/recipe/{slug}?repo=` | bearer | params, steps, views, trust diff |
+| `GET /api/recipe/{slug}/lint?repo=` | bearer | a LIST of problems, never a first error |
+| `GET /api/recipe/{slug}/run?repo=&p.…` | bearer | the run — mutates nothing |
+| `GET /api/recipe/runs/{id}` | bearer | replay a materialised run; says whether it is stale |
+| `POST /api/recipe/{slug}/materialise?…` | loopback | run + store a replayable snapshot |
+| `POST /api/recipe/{slug}/trust` | loopback | accept the bytes at the default ref NOW |
+| `POST /api/recipe/new` | loopback | store an agent-authored recipe on the daemon |
+| `DELETE /api/recipe/{slug}` | loopback | remove a server-stored recipe only |
+
+### CLI
+
+```
+kb-code recipe list  --repo R [--intent orienting]
+kb-code recipe show  <slug> --repo R
+kb-code recipe lint  <slug> --repo R            # exit 3 on a refuse
+kb-code recipe run   <slug> --repo R [--p name=value …] [--ctx path=… ]
+                                     [--scope 'path:app//*'] [--limit N] [--view id]
+                                     [--materialise] [--save-as-set NAME]
+kb-code recipe new   --from-json -  [--repo R]
+kb-code recipe trust <slug> --repo R
+kb-code recipe runs  <run_id>
+kb-code recipe delete <slug>
+kb-code recipes                                  # the FROZEN recipes/1 catalog
+```
+
+**CLI break (v7.4):** the pre-v7.4 `kb-code recipe <NAME> --repo R` is now
+`kb-code recipe run <NAME> --repo R`. `--save-as-set` posts the chosen
+view's addresses to the existing `POST /api/sets` — this CLI never grows a
+second set-creation path, and addresses with no path are reported as
+skipped rather than lost.
+
+### Not built here (L3a)
+
+The recipe **home** SPA, the auto-form and the result-view UI are L3c;
+tours/trails are L3b. The SHOULDs D11 marks — fixtures, the inbox drift
+lane, save-as board/tour, trend and property-diff — are not built, and
+`review` in `timeline` mode reports the finding-shaped events only,
+saying so in its census rather than inventing an address for a verdict.

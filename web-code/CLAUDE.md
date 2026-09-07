@@ -257,10 +257,33 @@ that needs to survive one lives in the URL (`?via=`) and in `lib/trail.ts`.
 
 ## Themes (`kbc-theme/1`, `V70-A7`)
 
+**The role list IS the theme contract.** `SYNTAX_ROLES` in
+`themes/derive.ts` is not a convenience list — it is one of THREE literals
+that must stay byte-identical to `highlight::HighlightClass`'s wire names
+(`crates/kb-code-server/src/highlight.rs`, exported there as
+`highlight::ROLES`): the others are `api/types.ts`'s `HighlightClass` union
+and `styles/tokens.css`'s `--syn-*` block, with `styles/reader.css`'s
+`.kbc-hl-*` rules downstream of both. `lib/decorations.ts`'s `cssClassFor`
+does no translation (`kbc-hl-${cls}`), which is exactly why a role added on
+the server with no entry here renders as an unstyled span rather than
+failing. V72-H2b (D16) widened the set from fifteen to EIGHTEEN
+(`string-special`, `constant-builtin`, `punctuation-special`) — adding a
+nineteenth means editing all four files, bumping
+`highlight::ROLE_TABLE_VERSION` AND every `highlight_salt` (that crate's
+CLAUDE.md invariant 11), and pricing the re-paint with `kb-code reextract
+--bill` first. The wire is kebab-case, so a multi-word role's CSS class and
+custom property are `kbc-hl-string-special` / `--syn-string-special` with
+no mapping step in between. The built-in palette in `tokens.css` carries
+seven chrome hues where a registry theme's anchors carry eleven, so each
+widened role defaults there to its PARENT role's token (byte-identical
+rendering) and gets its own hue only through `SYNTAX_SOURCE` — inventing a
+hue `tokens.css` does not have would have meant shipping an unmeasured
+contrast pair.
+
 `themes/derive.ts` is a pure, one-way, side-effect-free derivation:
 authored ANCHORS (26 OKLCH values per theme, sourced from
 `kb-code-server/themes/registry.json` — see that crate's CLAUDE.md #7) →
-~80 ROLES (CSS custom properties) → SURFACES (chrome vars, the 15
+~80 ROLES (CSS custom properties) → SURFACES (chrome vars, the 18
 `.kbc-hl-*` syntax classes, diff/age/provenance/trust lanes). The direction
 never reverses and never becomes circular — a surface never feeds back into
 a role, and a role never feeds back into an anchor. The one exception is the
@@ -883,6 +906,200 @@ shape `Reader.tsx` got in V70: a shell that owns state, with regions that own
 none. The `live` bag stayed in the shell deliberately — it closes over two
 dozen shell values, and threading them into a hook and back would add surface
 without removing coupling.
+
+## Boards (`kbc-canvas/1`, `V74-L2`, design §D10)
+
+`routes/Boards.tsx` (`~boards`) and `routes/BoardDetail.tsx`
+(`~boards/{slug}`) render a board of REFERENCES the daemon re-resolves on
+every read. Five rules, each with a home.
+
+**Geometry comes from the engine, and only from the engine.**
+`lib/boardLayout.ts` is an ADAPTER over `lib/egoGraph.ts`'s
+`layoutLayeredDag` — D10's "layout stays in TypeScript, ONE engine" — and it
+computes no topology of its own: no layering, no cycle break, no
+within-layer ordering. It adds exactly two things the engine has no notion
+of: card-sized pitch (`CANVAS_CARD_W/H` + the engine's own gaps, so a JSON
+Canvas export and this surface land on one grid), and PINS. Row order inside
+a layer is expressed AS the engine's sort key (`rankKey`) rather than
+re-sorted afterwards, so there is no second ordering that could disagree
+with it. If you find yourself adding a traversal to `boardLayout.ts`, widen
+the engine and its golden instead. `BoardCanvas.tsx` renders positions and
+computes none.
+
+**A coordinate reaches the daemon through the PIN ACTION, and nowhere else.**
+A board is stored coordinate-free plus a `pins` map, so dragging the surface
+pans the CAMERA and never writes a position (there is no freehand drawing
+either — D21's refusal list). `lib/boardDoc.ts`'s `coordinateKeysOutsidePins`
+is a local mirror of `boards::lint`'s `coordinates` rule and every
+composition is checked against it BEFORE the request, so a bug here is a
+refusal in the browser naming the offending path rather than a 400 the user
+reads as "the server is broken". The daemon's lint is still the gate.
+
+**A `code` node is rendered by the review document's card.** `LiveRefCard`
+(split out of `components/reviews/RefCard.tsx` for this unit, with two
+optional props that both default to the review's own behaviour) paints the
+snippet with the SERVER's spans, shows the state badge and owns the fold —
+so this SPA has ONE live code card, not two that could disagree about what
+`carried` looks like. Board code nodes carry NO trust class, deliberately:
+the daemon mints none, and `trustTierFrom` classifies a missing class DOWN
+to `candidate`, which would be a claim nobody made. Every other kind gets an
+address card; a node with no honest destination (an orphan, or an
+`annotation`/`turn`/`bookmark` this SPA has no route for) shows its address
+UNLINKED rather than being given a guessed one — `cardHref`'s own ruling.
+
+**An identifier in a card resolves exactly as in the reader, and that is a
+GOLDEN.** `lib/identResolve.ts` owns the two steps between "the human
+pointed at a character" and "the daemon is asked a question"
+(`identAtColumn` + `resolveQueryFor`), and `editor/vimReader.ts`'s
+`wordAtCursor` calls the same function — so the buffer and a card cannot
+drift into asking subtly different questions. `identResolve.test.ts` drives
+both paths through their own arithmetic (CM6's real `EditorState` on one
+side, a card's `snippet_start + lineIndex` on the other) and compares the
+requests; the case it exists for is the same name appearing on two lines of
+one window, which a dropped snippet offset would collapse onto the first.
+One rung is structurally unavailable and is named rather than faked: `gd`'s
+single-candidate INLINE peek is a CM6 block widget, and a card is not an
+editor, so `hooks/useIdentPeek.ts` opens the peek PANEL for one candidate
+too.
+
+**Keys: the board scope is shared, so every row is `when`-gated.** `board`
+scope (depth 20) already covered `~canvas`, `~browser`, `~lens` and the tour
+player; this unit adds the fifth `board` context value, `boards`, and gates
+all nineteen surface rows on `board == boards`. They then split into a
+READING half (`!walkthrough`) and a WALKING half (`walkthrough`, a new
+context key), which is what lets `k` mean "previous card" and "previous
+step" without either shadowing the other — `whenDisjoint` proves it, so
+neither pair needs a ratification. What DOES need one is every same-depth
+coactive collision (`j`/`k`/`Enter`/`p`/`n`/`+`/`-`/`z c`/`z o`/`z a` against
+`reader`/`diff`/`review`/`branches` rows), and all twenty-two pairs are
+mutually ratified in `registry.json` — the `board.row-next` precedent,
+followed exactly. `z` stays a PURE-vim prefix inside a `CodeView` because
+`shouldWithholdFromBuffer` resolves in `"reader"` scope and never sees a
+board row, exactly as diff v2's own `z` folds left it. `Escape` leaves the
+walkthrough through the EXISTING `dismiss.mode` rung (order 7,
+`when: mode.active`) — a second Escape row would be a second home for one
+keystroke, and `commands doctor`'s check 7 would refuse the duplicate
+`dismiss_order` anyway. `commands/boards.test.ts` is the per-surface gate
+`deadRows.test.ts` structurally cannot be, in the shape `diffV2.test.ts`
+established.
+
+**Add-to-board is one server-rendered ROW, not a per-surface button.**
+`collect.board` (actions/1, all five target kinds) arrives on the `.` panel,
+the right-click menu and the drag-select pill from the SAME list, and
+`Reader.tsx`'s `runAction` routes its `collect` sink to the picker;
+`Space b a` asks the same `/api/actions` and takes the DEFAULT target, so the
+leader and the menu can never disagree about what "this" is. The picker
+composes the WHOLE next document (there is no partial-patch route) and says
+BEFORE the click when the apply will reset an accepted board to `pending`
+(D21 — a human accepted a specific board, not a slug).
+
+**What to offer for a loopback-only mutation is the DAEMON's verdict.**
+`GET /api/repos` answers `{ repos, loopback }`, computed by the same
+`is_loopback_origin` the gate itself applies; `lib/loopback.ts` reads it and
+`hooks/useLoopback.ts` rides the `["repos"]` query every route already
+holds. Do not re-derive this from `window.location.hostname` — that is a
+second, quietly different answer to a question the server answers exactly.
+Absent (an older daemon), failed or in-flight all read `false`, the safe
+direction, and a refusal is still surfaced with the daemon's own message.
+
+## `~rails` and the Rails reader surfaces (`rails/1`, `V72-I2`)
+
+`routes/Rails.tsx` is a repo-scoped sentinel page mounted in `app.tsx`
+beside `~todos`/`~workspaces`/`~hotspots` — **not** a Desk center mode.
+It is deliberately NOT in `desk/centerModes.ts`'s `SHIPPED_CENTER_MODES`
+(`["reader", "dossier"]` since V72-G1.2): the landmark golden loops that
+list and asserts the five Desk regions for each entry, and `~rails` mounts
+no Desk at all — claiming `dashboard` there would make the golden green
+over nothing. A center mode is what the shell's MAIN region shows; this is
+a page beside the shell, which is the shape every other sentinel takes.
+§D1's "any new surface lands in an existing REGION" is satisfied the way
+every other sentinel satisfies it — one route, the app chrome above it.
+`~rails` is also deliberately **absent from the Location Contract's
+`PageId` set** (the `~browser?symbol=`/`~workspaces` precedent): it carries
+its own `?noun=` param and round-trips verbatim through `mode: "other"`,
+and nothing needs a push/replace ruling about moving between two of its
+sections beyond the default.
+
+**Every number on these surfaces is the daemon's.** `lib/railsCards.ts` is
+the whole pure half — card projection, facet chips, the honesty line, the
+page caption, the orphan index — and the components render it. The
+`kbc-tree/1` rule applies verbatim: *do not re-derive a count, an aggregate
+or a rank here*. Three consequences:
+
+- **One section is open at a time, and that is a COST decision.** `rails/1`
+  has no table: each noun list rebuilds the WHOLE per-request join, so
+  opening all eight on load would be ten full index builds per page view.
+  A closed section still shows its TRUE total (the passport carries every
+  count), and `RailsSection` fetches only when opened.
+- **Paging and filtering are server-side.** A section fetches
+  `/api/rails/<noun>?q=&limit=&offset=` and captions the page from that
+  response's own `offset`/`returned`/`total`/`truncated`. A client-side
+  `.filter()` or `.slice()` would make "12 of 300" a lie — `total` is on
+  the wire precisely so it cannot be.
+- **A Rails row is never drawn solid.** `trustClassOf` emits
+  `kbc-trust-likely` (dashed) or `kbc-trust-candidate` (dotted) and has no
+  `exact` branch; an unrecognised tier degrades DOWN. `styles/rails.css`
+  contains no `--exact` rule at all, so a solid Rails border cannot be
+  authored by accident. `rails::noun_trust`'s return type already makes
+  `exact` unrepresentable server-side — this is the display half of the
+  same guarantee.
+- **The orphan report is a triage queue.** Its `caption` and every lane's
+  `why` render VERBATIM, like `kbc-tree/1`'s honesty strip. Summarising
+  them turns "a row can be wrong because the lens does not read a template
+  language this app uses" into a verdict, which is the one thing
+  `orphans.rs` is written not to be.
+
+Two reader surfaces share the same language and live in the READER's
+chunk, which is why `styles/rails.css` is imported from `main.tsx` rather
+than from the lazy route:
+
+- **The Schema card** (`components/rails/SchemaCard.tsx`, a FOURTH
+  always-visible `InspectorRail` passport slot beside
+  `citedBy`/`frameworkCard`/`diagnosticsCard` — give it its own
+  `key={`schema:${path}`}` prefix, the cross-slot remount collision that
+  block documents is real). It parses the annotaterb `# == Schema
+  Information` banner out of the text `GET /api/file` already returned:
+  no second request, nothing persisted, recomputed per render, and
+  CAPTIONED as a client read rather than a daemon fact. `GET
+  /api/comments/file` (`comments/1`, V72-J1) did not exist on this unit's
+  base and landed on main while it was in flight; `lib/annotaterb.ts`
+  carries the precise follow-up — the block RANGE should come from that
+  route's `generated` comment, the column-table parse stays client-side
+  (the daemon classifies comment RUNS, it does not read annotaterb's column
+  grammar), and the caption must change with it, because a daemon
+  classification and a client guess are different facts.
+- **The Rails atom table** (`components/rails/RailsAtomCard.tsx`), rendered
+  through `PeekPanel`'s `cardExtra` slot under the hover card. It reuses
+  the ONE per-file `useFrameworkEdges` query `FrameworkCard` already makes
+  and picks the edges whose own `src_line` is the hovered line — addressing,
+  never resolving. Its action rows are `menuOrder(out.groups)` whole, in the
+  daemon's order; there is deliberately **no second executor** here, because
+  `.` (`action.panel`) at the target's address is the one home for running
+  an action. A route helper (`orders_path`) produces a SEARCH atom, not a
+  target: `frameworks::EdgeKind` has no route-helper variant, and inventing
+  a resolution the lens never minted is exactly what the trust ladder
+  exists to prevent.
+
+**D5 on both surfaces: nothing auto-navigates.** `rails-lens/1` has no
+`exact` tier by construction, so every target is an offered link.
+`rails.atom.open` (`Space l`) is not a counter-example — an explicit
+keystroke is the only thing allowed to move the reader onto a
+likely/candidate target, and with several atoms on the line it takes the
+first addressable one and says so rather than guessing.
+
+The five registry rows are `nav.rails` (`Space g R` — `Space g r` is
+Reviews; the dispatcher folds Shift into a printable character, so the
+shifted letter is one unambiguous token), `rails.section-next`/`prev`
+(`)`/`(`, the board scope's existing GROUP-step idiom under a disjoint
+`when: board == rails`), `rails.atom.open` (`Space l`, "link" — it first
+claimed `Space o`, which V73-K2b then took for `doc.card-open` in `review`
+scope; **`commands doctor`'s conflict pass cannot see a global/global
+collision at all**, since it skips any pair where either scope is `global`,
+so a leader letter must be checked against the whole registry by hand before
+it is claimed) and `rails.schema-fold`
+(`Space z` — **not** a bare `z`, which is a pure vim fold prefix inside the
+buffer; a global bare `z` would flip it to a MIXED prefix and change what
+the buffer guard does with every `z` chord).
 
 ## When to update this file
 

@@ -25,6 +25,11 @@ import { Icon } from "../components/icons";
 import InspectorRail, { type InspectorRailHandle } from "../components/InspectorRail";
 import KeyboardHelp from "../components/KeyboardHelp";
 import { useCommandHandlers, useCommandScope, useCommands } from "../commands/CommandRoot";
+import SchemaCard from "../components/rails/SchemaCard";
+import RailsAtomCard from "../components/rails/RailsAtomCard";
+import { foldLabel, isFoldable, parseSchemaBlock } from "../lib/annotaterb";
+import { atomsForLine, routeHelperAtom, type RailsAtom } from "../lib/railsAtoms";
+import { useFrameworkEdges } from "../hooks/useFrameworkEdges";
 import { GdCoachMark, useGdCoachMark } from "../commands/learn";
 import LineHistoryPopup from "../components/LineHistoryPopup";
 import RecentLocations from "../components/RecentLocations";
@@ -40,6 +45,7 @@ import DossierView from "../components/entity/DossierView";
 import PeekPanel, { type PeekAnchor } from "../components/peek/PeekPanel";
 import UsagesDock from "../components/usages/UsagesDock";
 import ActionMenu, { ActionPill } from "../components/actions/ActionMenu";
+import AddToBoardDialog from "../components/boards/AddToBoardDialog";
 import RepoStateBanner from "../components/RepoStateBanner";
 import AddToSetMenu from "../components/sets/AddToSetMenu";
 import BlameChip from "../components/provenance/BlameChip";
@@ -82,7 +88,7 @@ import {
   type UsageChips,
 } from "../lib/usages2";
 import { pillRows, resolveOp } from "../lib/actionOps";
-import type { ActionRow, ActionsOut, Usages2Out, UsageRow2 } from "../api/types";
+import type { ActionRow, ActionsOut, ActionTarget, Usages2Out, UsageRow2 } from "../api/types";
 import type { LinkifyCallbacks } from "../editor/linkify";
 import type { LineMarkerSpec } from "../editor/lineGutter";
 import { copyToClipboard, type LineSel, type VimReaderCallbacks, type WordPos } from "../editor/vimReader";
@@ -208,6 +214,7 @@ import {
   loadParamHints,
   loadReaderFontSize,
   loadStickyContext,
+  loadSchemaFold,
   loadWrap,
   READER_FONT_SIZE_MAX,
   READER_FONT_SIZE_MIN,
@@ -215,6 +222,7 @@ import {
   saveCommentGutterMode,
   saveParamHints,
   saveReaderFontSize,
+  saveSchemaFold,
   saveStickyContext,
   saveWrap,
 } from "../lib/prefs";
@@ -1581,6 +1589,65 @@ export default function Reader() {
     <CitedBy key={`citedby:${focusedPath}`} repo={repo} path={focusedPath} />
   ) : null;
 
+  // V72-I2 — the annotaterb overlay. The block is parsed from the text
+  // `useFile` ALREADY returned (no second request, nothing persisted,
+  // recomputed per render — `lib/annotaterb.ts`'s posture, and the reason
+  // that module carries the `comments/1` TODO).
+  //
+  // TWO pieces of state, deliberately not one:
+  //
+  //   * `schemaFoldOn` is the browser-local PREF (default ON — the banner is
+  //     generated noise above the class the reader opened the file for).
+  //     The Schema card's button and `rails.schema-fold` both flip it, which
+  //     is the documented opt-OUT door, and it applies to every model.
+  //   * `schemaUnfoldedFor` is a transient per-FILE override — "show me this
+  //     one" — set by the buffer placeholder's own click and by jumping to a
+  //     column line. It keys on the PATH, so unfolding one model never
+  //     silently unfolds the next, and it never writes the pref.
+  //
+  // Read the file from the two pane queries directly: `focusedFileData` is
+  // declared further down, next to the render, and this block runs above it.
+  const focusedFileForSchema = focusedPane === 1 ? file.data : pane2File.data;
+  const focusedContent =
+    focusedFileForSchema && focusedFileForSchema.encoding === "utf8"
+      ? focusedFileForSchema.content
+      : undefined;
+  const schemaBlock = focusedContent === undefined ? null : parseSchemaBlock(focusedContent);
+  const [schemaFoldOn, setSchemaFoldOn] = useState(() => loadSchemaFold());
+  const [schemaUnfoldedFor, setSchemaUnfoldedFor] = useState<string | null>(null);
+  const schemaFolded =
+    schemaFoldOn && isFoldable(schemaBlock) && schemaUnfoldedFor !== (focusedPath ?? "");
+  function toggleSchemaFold() {
+    const next = !schemaFoldOn;
+    setSchemaFoldOn(next);
+    saveSchemaFold(next);
+    // The pref is the answer now; a stale per-file override would make the
+    // next toggle look like a no-op.
+    setSchemaUnfoldedFor(null);
+  }
+  const schemaFoldSpec =
+    schemaBlock && schemaFolded
+      ? {
+          startLine: schemaBlock.startLine,
+          endLine: schemaBlock.endLine,
+          label: foldLabel(schemaBlock),
+          onUnfold: () => setSchemaUnfoldedFor(focusedPath ?? ""),
+        }
+      : null;
+  const schemaCard = focusedPath ? (
+    <SchemaCard
+      key={`schema:${focusedPath}`}
+      content={focusedContent}
+      foldEnabled={schemaFoldOn}
+      onToggleFold={toggleSchemaFold}
+      onJumpLine={(line) => {
+        setSchemaUnfoldedFor(focusedPath);
+        jumpToLine(focusedPane, line);
+        paneRepoPath(focusedPane).viewRef.current?.focus();
+      }}
+    />
+  ) : null;
+
   // T1 (design-ui.md §9.4a) — the Framework card, mounted the SAME
   // always-visible way `citedBy` is above: `FrameworkCard` owns its own
   // `useFrameworkEdges` fetch and renders nothing at all until that fetch
@@ -1690,6 +1757,22 @@ export default function Reader() {
   // first `K` press; never read while `peek.card` is unset.
   const lastHoverPosRef = useRef<{ pane: 1 | 2; pos: WordPos } | null>(null);
 
+  // V72-I2 — the Rails ATOM table under the hover card. It reuses the ONE
+  // per-file edge query `FrameworkCard` already makes (react-query dedupes
+  // on the shared key), and `lib/railsAtoms.ts` picks the edges whose own
+  // `src_line` is the line `K` was pressed on. Nothing is resolved here and
+  // nothing auto-navigates: `rails-lens/1` has no exact tier, so D5's rule
+  // applies to every row (`railsAtoms.ts`'s `neverAutoNavigates`).
+  const railsEdges = useFrameworkEdges(repo, focusedPath);
+  const hoverPos = lastHoverPosRef.current?.pos;
+  const railsAtoms: RailsAtom[] = hoverPos
+    ? (() => {
+        const out = atomsForLine(repo, railsEdges.data?.edges, hoverPos.line);
+        const helper = routeHelperAtom(hoverPos.word, hoverPos.line);
+        return helper ? [...out, helper] : out;
+      })()
+    : [];
+
   // ── V71-E2 — the Usages dock's state, and the action menu's ───────────
   //
   // The dock's ROWS live here rather than in `drawerSets.ts` on purpose:
@@ -1735,6 +1818,10 @@ export default function Reader() {
     pill: boolean;
   }
   const [actionMenu, setActionMenu] = useState<ActionMenuState | null>(null);
+  /// V74-L2 — the add-to-board picker's target, when one is open. Held here
+  /// (not in `ActionMenuState`) because the leader key opens it WITHOUT the
+  /// menu, and the dialog outlives the menu it may have come from.
+  const [addToBoard, setAddToBoard] = useState<ActionTarget | null>(null);
   const actionReqRef = useRef(0);
 
   function capturePeekAnchor(pane: 1 | 2): PeekAnchor | null {
@@ -1999,6 +2086,37 @@ export default function Reader() {
     void loadActions(next);
   }
 
+  /// `Space b a` — the leader's own door to add-to-board. Asks the same
+  /// `/api/actions` the panel asks (so the two agree about what "this" is),
+  /// takes the DEFAULT target and opens the picker. A failure is an honest
+  /// toast; nothing is guessed when the daemon cannot answer.
+  async function addCaretToBoard() {
+    const pane = focusedPane;
+    const { path: panePath } = paneRepoPath(pane);
+    if (!panePath) return;
+    const sel = (pane === 1 ? lastSelRef1 : lastSelRef2).current;
+    const cursorLine = (pane === 1 ? cursorLineRef1 : cursorLineRef2).current;
+    const line = sel?.start ?? cursorLine ?? 1;
+    try {
+      const out = await fetchActions({
+        repo,
+        path: panePath,
+        line,
+        col: 0,
+        ref: gitRef,
+        endLine: sel && sel.end > sel.start ? sel.end : undefined,
+      });
+      const target = out.targets[out.active];
+      if (!target) {
+        toast.warn("no target here — put the caret on a line first");
+        return;
+      }
+      setAddToBoard(target);
+    } catch (e) {
+      toast.err(`couldn't read actions here: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function loadActions(st: ActionMenuState) {
     const reqId = ++actionReqRef.current;
     try {
@@ -2118,6 +2236,14 @@ export default function Reader() {
         inspectorRef.current?.openTab("annotations");
         return;
       case "collect":
+        // V74-L2 — `collect.board` is the ONE door for "add to board" on every
+        // surface the action panel serves (D10). It arrives on the `.` panel,
+        // the right-click menu and the drag-select pill from the SAME
+        // server-rendered list, so there is no per-surface hand-picked row.
+        if (resolved.sink === "board") {
+          setAddToBoard(target);
+          return;
+        }
         inspectorRef.current?.openTab("notes");
         toast.ok("bookmarks live in the rail's notes tab");
         return;
@@ -3230,6 +3356,32 @@ export default function Reader() {
     // mobile sheet, so toggling the region is right in both shells — only
     // the DOCK needs `toggleDock`'s branch).
     "desk.toggle.drawer": () => desk.toggleRegion("drawer"),
+    // V72-I2 — the annotaterb schema fold (`Space z`), and the hovered Rails
+    // atom's target (`Space l`). Both are `scope: global` leader chords (the
+    // Space family is
+    // the door that already works from INSIDE the buffer, V70-K1) and both
+    // dispatch EXACTLY the call their own mouse affordance makes — the
+    // Schema card's Fold button, and a click on an atom's target link.
+    "rails.schema-fold": () => {
+      toggleSchemaFold();
+      if (!schemaBlock) {
+        // The pref still flipped — it is global — but say so, rather than
+        // leaving a keystroke that looks dead on a file with no banner.
+        toast.warn("No annotaterb schema banner in this file");
+      }
+    },
+    // NOT an auto-navigation: this is an explicit keystroke, which is the
+    // only thing that may move the reader onto a likely/candidate target
+    // (D5). With several atoms on the line it takes the FIRST addressable
+    // one and says so, rather than guessing which one was meant.
+    "rails.atom.open": () => {
+      const target = railsAtoms.flatMap((a) => a.targets).find((t) => t.href);
+      if (!target) {
+        toast.warn("No addressable Rails atom on the hovered line");
+        return;
+      }
+      navigate(target.href as string);
+    },
     // V71-K3 — the seventeen rows `commands/deadRows.test.ts` pinned as
     // `KNOWN_UNREGISTERED`: mouse-only since V70-A4/A6, every one of them
     // dispatches EXACTLY the call its own button already makes (see each
@@ -3339,6 +3491,12 @@ export default function Reader() {
     // V71-E2 — walk the active usages set from anywhere the reader is up.
     "usages.next": () => stepUsages(1),
     "usages.prev": () => stepUsages(-1),
+    // V74-L2 — `Space b a`: add what is under the caret to a board, without
+    // going through the menu first. It asks the SAME `/api/actions` the panel
+    // asks and takes the default target (index 0, "the one the gesture
+    // implies" — `actions.rs`), so the leader and the menu can never disagree
+    // about what "this" means.
+    "boards.add": () => void addCaretToBoard(),
   });
 
   // F5 — Esc closes the mobile reader-tools sheet (mirrors `MobileDrawer`'s
@@ -3965,6 +4123,7 @@ export default function Reader() {
                       linkify={linkifyCallbacksForPane(1)}
                       conflictActive={!!activeFile && conflictedPaths.has(activeFile)}
                       wrap={wrapEnabled}
+                      schemaFold={focusedPane === 1 ? schemaFoldSpec : null}
                       fontSize={readerFontSize}
                       inlinePeek={inlinePeekHandlers}
                       hoverRepo={repo}
@@ -4078,6 +4237,7 @@ export default function Reader() {
                           linkify={linkifyCallbacksForPane(2)}
                           conflictActive={!!pane2Loc?.path && conflictedPaths.has(pane2Loc.path)}
                           wrap={wrapEnabled}
+                          schemaFold={focusedPane === 2 ? schemaFoldSpec : null}
                           fontSize={readerFontSize}
                           inlinePeek={inlinePeekHandlers}
                           hoverRepo={repo}
@@ -4103,6 +4263,7 @@ export default function Reader() {
               onRamp={handlePeekRamp}
               scentFor={peekRowTarget}
               visitsFor={(row) => ramp.visits(peekRowTarget(row))}
+              cardExtra={<RailsAtomCard repo={repo} atoms={railsAtoms} gitRef={gitRef} />}
               // T1 — the hover card's "usages"/"callers" footer hints
               // (design-ui.md §9.1) reissue gr/gc against the position `K`
               // was pressed at; absent until a hover has actually happened.
@@ -4246,6 +4407,7 @@ export default function Reader() {
               citedBy={citedBy}
               frameworkCard={frameworkCard}
               diagnosticsCard={diagnosticsCard}
+              schemaCard={schemaCard}
               repo={repo}
               path={focusedPath ?? ""}
               annotationActiveLine={annotationActiveLine}
@@ -4456,6 +4618,13 @@ export default function Reader() {
             asSheet={isMobile}
           />
         ))}
+      {addToBoard && (
+        <AddToBoardDialog
+          repo={repo}
+          target={addToBoard}
+          onClose={() => setAddToBoard(null)}
+        />
+      )}
       {saveWorkspaceOpen &&
         (() => {
           const lines = capturedWorkspaceLines();

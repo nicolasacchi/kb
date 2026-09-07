@@ -28,6 +28,12 @@ export interface RepoListEntry {
 
 export interface ReposResponse {
   repos: RepoListEntry[];
+  /// V74-L2 — the daemon's OWN verdict about this caller
+  /// (`kb_server::middleware::is_loopback_origin`, computed from the peer
+  /// address and the trusted-proxy chain): can it reach the loopback-only
+  /// mutating routes at all? Optional on the wire, since it is read here for
+  /// the first time — absent reads as `false` (`lib/loopback.ts`).
+  loopback?: boolean;
 }
 
 export type EntryKind = "file" | "dir" | "symlink" | "submodule";
@@ -142,19 +148,25 @@ export interface Symbol {
   doc: string | null;
 }
 
-// Mirrors `highlight::HighlightClass`'s `#[serde(rename_all = "snake_case")]`
-// — one CSS class per bucket (`styles/reader.css` `.kbc-hl-*`).
+// Mirrors `highlight::HighlightClass`'s `#[serde(rename_all = "kebab-case")]`
+// — one CSS class per bucket (`styles/reader.css` `.kbc-hl-*`), and the
+// role vocabulary `themes/derive.ts`'s SYNTAX_ROLES binds. V72-H2b (D16)
+// widened it from fifteen to EIGHTEEN; the fifteen legacy names are
+// byte-identical under kebab-case, so nothing here moved.
 export type HighlightClass =
   | "keyword"
   | "string"
+  | "string-special"
   | "comment"
   | "function"
   | "type"
   | "number"
   | "variable"
   | "constant"
+  | "constant-builtin"
   | "operator"
   | "punctuation"
+  | "punctuation-special"
   | "property"
   | "attribute"
   | "label"
@@ -4500,4 +4512,403 @@ export interface CommentsSummaryOut {
   by_state: Record<string, number>;
   state_basis: CommentStateBasisOut;
   keywords: CommentKeywordsOut;
+}
+
+// ── kbc-canvas/1 — boards (V74-L1 wire, V74-L2 SPA) ────────────────────────
+//
+// `crates/kb-code-server/src/boards/`. Every one of these fields is the
+// daemon's: the state, the reason, the address, the snippet, its highlight
+// spans, every count on `honesty`, and the caps under `honesty.budget`. The
+// board itself is COORDINATE-FREE — `pins` is the ONLY geometry on the wire
+// and it is AUTHORED, never derived (`lib/boardLayout.ts` computes the rest,
+// and only in the browser).
+
+/// The one authored coordinate: a human's explicit override for one card.
+export interface BoardPin {
+  x: number;
+  y: number;
+}
+
+/// A `code` node's live card. `range` is where the bytes are NOW;
+/// `authored_range` is where the author put them, kept beside it so a reader
+/// SEES the move instead of inferring it.
+export interface BoardCodeCard {
+  path: string;
+  symbol?: string | null;
+  range: [number, number];
+  context?: [number, number] | null;
+  authored_range: [number, number];
+  shifted_by: number;
+  authored_blob_sha?: string | null;
+  current_blob_sha?: string | null;
+  /// `null` for an ORPHAN — there is no current text to show.
+  snippet?: string | null;
+  snippet_truncated: boolean;
+  /// Byte offsets already REBASED onto `snippet`. `null` means "we did not
+  /// look" (no grammar / not derived yet), never "no highlights".
+  highlights?: Span[] | null;
+  /// The one line this node was anchored to when it was written — present on
+  /// an ORPHAN too, which is what lets a dead card keep its text.
+  anchor_snippet?: string | null;
+  /// Only when the read asked for `ctx=1` and the context range resolved.
+  context_snippet?: string | null;
+}
+
+/// A `query` node's card. `current_count` is absent unless the read was
+/// `live` — a stale number is never presented as a fresh one.
+export interface BoardQueryCard {
+  query: string;
+  authored_count?: number | null;
+  current_count?: number | null;
+  delta?: number | null;
+  /// Always `"page"` when `current_count` is present.
+  basis?: string | null;
+  truncated?: boolean | null;
+}
+
+/// A node thread. There is no second comments table: the id is an
+/// `annotations.id` and the thread is that annotation's replies.
+export interface BoardThread {
+  id: string;
+  resolved: boolean;
+  replies: number;
+}
+
+/// One resolved node. The kind-specific REFERENCE fields are flattened onto
+/// it by the server (`boards::RefFields`), which is why `path`/`review`/
+/// `session`/… sit beside `code`/`query_card`.
+export interface BoardNode {
+  id: string;
+  kind: string;
+  title?: string | null;
+  /// Authored Markdown, verbatim and inert. The daemon never renders it.
+  body_md?: string | null;
+  group?: string | null;
+  /// One of `BOARD_NODE_STATES`.
+  state: string;
+  /// One of `BOARD_NODE_REASONS`.
+  reason: string;
+  address: string;
+  /// What this resolution could NOT establish. Rendered verbatim.
+  note?: string | null;
+  code?: BoardCodeCard | null;
+  /// The QUERY CARD. Named `query_card` on the wire because the flattened
+  /// reference fields below already own the key `query` (the kbcq/1 string).
+  query_card?: BoardQueryCard | null;
+  thread?: BoardThread | null;
+  pin?: BoardPin | null;
+  // --- the flattened reference fields, as authored -------------------------
+  path?: string | null;
+  symbol?: string | null;
+  range?: [number, number] | null;
+  context?: [number, number] | null;
+  blob_sha?: string | null;
+  guard_hash?: string | null;
+  /// The kbcq/1 query STRING (a `query` node's reference).
+  query?: string | null;
+  authored_count?: number | null;
+  review?: number | null;
+  patchset?: number | null;
+  hunk?: string | null;
+  finding?: string | null;
+  annotation?: string | null;
+  session?: string | null;
+  turn?: string | null;
+  bookmark?: number | null;
+  members?: string[] | null;
+  url?: string | null;
+}
+
+export interface BoardEdge {
+  from: string;
+  to: string;
+  kind: string;
+  label?: string | null;
+  /// `authored` | `derived`.
+  provenance: string;
+  /// Only ever on a DERIVED edge — a human's arrow is not a claim.
+  trust?: string | null;
+}
+
+export interface BoardStep {
+  node: string;
+  caption?: string | null;
+}
+
+export interface BoardBudget {
+  max_nodes: number;
+  max_edges: number;
+  max_snippet_lines: number;
+}
+
+/// Every count on a board, stated once by the daemon. Never re-derived here.
+export interface BoardHonesty {
+  nodes: number;
+  edges: number;
+  steps: number;
+  pinned: number;
+  carried: number;
+  orphans: number;
+  present: number;
+  inert: number;
+  truncated_snippets: number;
+  stale_pins: number;
+  live_queries: boolean;
+  budget: BoardBudget;
+  notes: string[];
+}
+
+/// `GET /api/boards/{slug}?repo=[&ctx=1][&live=1]`.
+export interface BoardOut {
+  schema: string;
+  repo: string;
+  slug: string;
+  title: string;
+  description_md: string;
+  status: string;
+  authored_ref?: string | null;
+  revision: number;
+  content_hash: string;
+  created_unix: number;
+  updated_unix: number;
+  nodes: BoardNode[];
+  edges: BoardEdge[];
+  steps: BoardStep[];
+  pins: Record<string, BoardPin>;
+  honesty: BoardHonesty;
+}
+
+export interface BoardSummary {
+  slug: string;
+  title: string;
+  status: string;
+  revision: number;
+  updated_unix: number;
+  nodes: number;
+  edges: number;
+  steps: number;
+}
+
+/// `GET /api/boards?repo=[&status=]`.
+export interface BoardsListOut {
+  schema: string;
+  repo: string;
+  /// The whole status vocabulary, so the page never infers it from the rows
+  /// it happens to see.
+  statuses_available: string[];
+  boards: BoardSummary[];
+}
+
+export interface BoardSweepNode {
+  node: string;
+  kind: string;
+  state: string;
+  reason: string;
+  address: string;
+  shifted_by?: number | null;
+  delta?: number | null;
+  stale_pin: boolean;
+}
+
+export interface BoardSweepBoard {
+  slug: string;
+  title: string;
+  status: string;
+  drifted: boolean;
+  orphans: number;
+  carried: number;
+  query_deltas: number;
+  stale_pins: number;
+  nodes: BoardSweepNode[];
+}
+
+/// `GET /api/boards/sweep?repo=[&slug=]` — the drift report. NEVER mutates.
+export interface BoardSweepOut {
+  schema: string;
+  repo: string;
+  boards: BoardSweepBoard[];
+  drifted: boolean;
+  checked: number;
+}
+
+/// One `boards::lint::Finding`. `rule` is the stable id an agent branches on.
+export interface BoardLintFinding {
+  rule: string;
+  severity: "refuse" | "warn";
+  at?: string | null;
+  message: string;
+}
+
+export interface BoardLintReport {
+  findings: BoardLintFinding[];
+  components: string[][];
+}
+
+/// `POST /api/boards/apply` — LOOPBACK-ONLY.
+export interface BoardApplyOut {
+  schema: string;
+  repo: string;
+  slug: string;
+  created: boolean;
+  unchanged: boolean;
+  revision: number;
+  status: string;
+  status_reset: boolean;
+  dry_run: boolean;
+  lint: BoardLintReport;
+  resolution_warnings: string[];
+  honesty: BoardHonesty;
+}
+
+/// `POST /api/boards/{slug}/accept|archive` — LOOPBACK-ONLY.
+export interface BoardStatusOut {
+  schema: string;
+  repo: string;
+  slug: string;
+  status: string;
+  revision: number;
+}
+
+// --- V72-I2 — `rails/1` (`GET /api/rails/*`, the Rails entity index) -------
+//
+// Mirrors `crates/kb-code-server/src/rails/` field-for-field: `mod.rs`'s
+// `Honesty`/`Witness`/`RouteTriple`/`RailsRow`/`LensFreshness`/`ZeitwerkNote`,
+// `routes.rs`'s `RailsHomeOut`/`RailsListOut` and `orphans.rs`'s
+// `OrphanRow`/`OrphanLane`/`OrphansOut`. Closed vocabularies (`noun`,
+// `state`, `trust`, a witness `kind`) travel as plain `string` here, the same
+// open-string-on-the-wire posture `FrameworkEdge` above documents — a client
+// build can lag a daemon that has grown a ninth noun, and an unknown value
+// must render as itself rather than crash a card.
+//
+// EVERY NUMBER ON THESE TYPES IS THE DAEMON'S. `counts`, `total`, `returned`,
+// a lane's `total` — the SPA renders them verbatim and never re-derives one
+// from `rows.length` (root CLAUDE.md's usages/tree rule, restated for this
+// wire in `web-code/CLAUDE.md`'s `~rails` section).
+
+/// The four read states every `rails/1` response reports (`rails::STATE_*`).
+/// `error` is unreachable from the handlers — a genuine failure is an
+/// `ApiError` — and is listed so the vocabulary is complete.
+export interface RailsHonesty {
+  state: string;
+  reason?: string;
+}
+
+/// Where a fact came from: `convention` (a path rule), `entity` (an indexed
+/// definition site), `rails-edge` (a `rails-lens/1` row, carrying its own
+/// trust) or `symbol` (a mirror-index symbol).
+export interface RailsWitness {
+  kind: string;
+  detail: string;
+  path?: string;
+  line?: number;
+  trust?: string;
+}
+
+/// A route's address. `verb`/`path` are absent for an edge written before the
+/// extractor recorded them, or one whose pattern was not literal — unknown,
+/// never `/`.
+export interface RailsRouteTriple {
+  verb?: string;
+  path?: string;
+  target: string;
+}
+
+/// One Rails noun, as an ADDRESS plus its evidence. `trust` is `"likely"` or
+/// `"candidate"` — `rails::noun_trust`'s return type has no `exact` variant,
+/// so a Rails row is NEVER drawn solid.
+export interface RailsRow {
+  noun: string;
+  name: string;
+  path: string;
+  line?: number;
+  blob_sha?: string;
+  fqn?: string;
+  route?: RailsRouteTriple;
+  table?: string;
+  visibility?: string;
+  counts?: Record<string, number>;
+  flags?: string[];
+  trust: string;
+  witnesses: RailsWitness[];
+}
+
+/// How far behind the live tree the lens is. `generation` is the store's
+/// monotonic index generation, NOT a commit distance.
+export interface RailsLensFreshness {
+  edges_total: number;
+  source_files: number;
+  stale_source_files: number;
+  orphan_source_files: number;
+  grammar_version: string;
+  generation: number;
+}
+
+export interface RailsZeitwerkNote {
+  state: string;
+  reason?: string;
+}
+
+/// `GET /api/rails/home`'s body — the passport.
+export interface RailsHomeOut {
+  schema: string;
+  repo: string;
+  detected: boolean;
+  rails_version?: string;
+  version_source?: string;
+  /// TRUE totals per noun — the whole index, not a page of it.
+  counts: Record<string, number>;
+  nouns: string[];
+  lens: RailsLensFreshness;
+  zeitwerk: RailsZeitwerkNote;
+  honesty: RailsHonesty;
+  notes: string[];
+}
+
+/// `GET /api/rails/{noun-plural}`'s body — one page of one noun.
+export interface RailsListOut {
+  schema: string;
+  repo: string;
+  noun: string;
+  rows: RailsRow[];
+  /// Rows matching the query across the WHOLE index — never `rows.length`.
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  honesty: RailsHonesty;
+  notes: string[];
+}
+
+export interface RailsOrphanRow {
+  name: string;
+  path: string;
+  line?: number;
+  trust: string;
+  witnesses: RailsWitness[];
+}
+
+export interface RailsOrphanLane {
+  id: string;
+  title: string;
+  /// The witness, stated: what produced this lane and why it may be wrong.
+  /// Rendered VERBATIM — summarising it re-creates the failure the caption
+  /// exists to prevent.
+  why: string;
+  rows: RailsOrphanRow[];
+  total: number;
+  returned: number;
+  truncated: boolean;
+  state: string;
+  reason?: string;
+}
+
+/// `GET /api/rails/orphans`'s body — the triage queue, never a verdict.
+export interface RailsOrphansOut {
+  schema: string;
+  repo: string;
+  caption: string;
+  lanes: RailsOrphanLane[];
+  honesty: RailsHonesty;
+  notes: string[];
 }

@@ -321,7 +321,7 @@ pub(crate) fn resolve_position(
     }
 
     let lang_info = crate::lang::detect(path, Some(&read.bytes));
-    let salt = lang_info.map(|l| l.salt);
+    let salt = lang_info.map(|l| l.symbol_salt);
 
     let has_occurrences = match salt {
         Some(salt) => store.has_occurrences(&read.blob_hash, salt)?,
@@ -454,7 +454,10 @@ pub(crate) fn resolve_position(
                                     let search_name =
                                         origin.alias_of.as_deref().unwrap_or(ident.as_str());
                                     let mut hits: Vec<Candidate> = store
-                                        .symbols_for_blob(&file_row.blob_hash, target_lang.salt)?
+                                        .symbols_for_blob(
+                                            &file_row.blob_hash,
+                                            target_lang.symbol_salt,
+                                        )?
                                         .into_iter()
                                         .filter(|s| s.name == search_name)
                                         .map(|s| {
@@ -544,7 +547,7 @@ pub(crate) fn resolve_position(
             if targets.is_empty() {
                 if let (Some(li), Some(root)) = (lang_info, store.repo_root(repo_id)?) {
                     if crate::imports::supports(li.id) {
-                        let specs = store.import_specs_for_blob(&read.blob_hash, li.salt)?;
+                        let specs = store.import_specs_for_blob(&read.blob_hash, li.symbol_salt)?;
                         if !specs.is_empty() {
                             let resolved = crate::import_graph::resolve_import_edges(
                                 std::path::Path::new(&root),
@@ -930,11 +933,11 @@ mod tests {
             .unwrap();
         let symbols = crate::extract::extract_symbols("rust", src.as_bytes()).unwrap();
         store
-            .replace_symbols(&blob_hash, crate::lang::RUST.salt, &symbols)
+            .replace_symbols(&blob_hash, crate::lang::RUST.symbol_salt, &symbols)
             .unwrap();
         let occs = crate::occurrences::extract_occurrences("rust", src.as_bytes()).unwrap();
         store
-            .replace_occurrences(&blob_hash, crate::lang::RUST.salt, &occs)
+            .replace_occurrences(&blob_hash, crate::lang::RUST.symbol_salt, &occs)
             .unwrap();
 
         // Click on the CALL SITE "widget();" — line 6, col 4 (0-based, on
@@ -985,7 +988,7 @@ mod tests {
             .unwrap();
         let symbols = crate::extract::extract_symbols("python", src.as_bytes()).unwrap();
         store
-            .replace_symbols(&blob_hash, crate::lang::PYTHON.salt, &symbols)
+            .replace_symbols(&blob_hash, crate::lang::PYTHON.symbol_salt, &symbols)
             .unwrap();
 
         let out = resolve_position(
@@ -1032,7 +1035,7 @@ mod tests {
         store
             .replace_symbols(
                 &hash_a,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src_a.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1046,7 +1049,7 @@ mod tests {
         store
             .replace_symbols(
                 &hash_b,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src_b.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1089,14 +1092,14 @@ mod tests {
         store
             .replace_symbols(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
         store
             .replace_occurrences(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::occurrences::extract_occurrences("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1110,7 +1113,7 @@ mod tests {
         store
             .replace_symbols(
                 &b_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", b_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1129,7 +1132,7 @@ mod tests {
         store
             .replace_symbols(
                 &c_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", c_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1188,14 +1191,14 @@ mod tests {
         store
             .replace_symbols(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
         store
             .replace_occurrences(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::occurrences::extract_occurrences("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1209,7 +1212,7 @@ mod tests {
         store
             .replace_symbols(
                 &b_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", b_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1263,14 +1266,14 @@ mod tests {
         store
             .replace_symbols(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
         store
             .replace_occurrences(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::occurrences::extract_occurrences("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1323,14 +1326,14 @@ mod tests {
         store
             .replace_symbols(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
         store
             .replace_occurrences(
                 &lib_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::occurrences::extract_occurrences("rust", lib_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1344,7 +1347,7 @@ mod tests {
         store
             .replace_symbols(
                 &b_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", b_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1391,11 +1394,11 @@ mod tests {
             .unwrap();
         let symbols = crate::extract::extract_symbols("rust", src.as_bytes()).unwrap();
         store
-            .replace_symbols(&blob_hash, crate::lang::RUST.salt, &symbols)
+            .replace_symbols(&blob_hash, crate::lang::RUST.symbol_salt, &symbols)
             .unwrap();
         let occs = crate::occurrences::extract_occurrences("rust", src.as_bytes()).unwrap();
         store
-            .replace_occurrences(&blob_hash, crate::lang::RUST.salt, &occs)
+            .replace_occurrences(&blob_hash, crate::lang::RUST.symbol_salt, &occs)
             .unwrap();
 
         // A DECOY same-named symbol in a different directory — pure global
@@ -1415,7 +1418,7 @@ mod tests {
         store
             .replace_symbols(
                 &decoy_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", decoy_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1426,7 +1429,7 @@ mod tests {
         store
             .replace_scip_occurrences(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &[crate::store::ScipOccurrenceIn {
                     name: "widget".to_string(),
                     role: "def".to_string(),
@@ -1499,7 +1502,7 @@ mod tests {
         store
             .replace_scip_occurrences(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &[crate::store::ScipOccurrenceIn {
                     name: "widget".to_string(),
                     role: "def".to_string(),
@@ -1564,7 +1567,7 @@ mod tests {
         store
             .replace_symbols(
                 &decoy_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", decoy_src.as_bytes()).unwrap(),
             )
             .unwrap();
@@ -1643,7 +1646,7 @@ mod tests {
         store
             .replace_symbols(
                 &blob_hash,
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &crate::extract::extract_symbols("rust", src.as_bytes()).unwrap(),
             )
             .unwrap();

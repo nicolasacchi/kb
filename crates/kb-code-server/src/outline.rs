@@ -328,7 +328,7 @@ pub async fn outline_route(
             // still wrapped so it can never park this async worker.
             state
                 .store
-                .run_blocking(move |store| store.symbols_for_blob(&blob_hash, li.salt))
+                .run_blocking(move |store| store.symbols_for_blob(&blob_hash, li.symbol_salt))
                 .await?
         }
         None => Vec::new(),

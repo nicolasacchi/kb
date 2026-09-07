@@ -94,6 +94,7 @@ html:root[data-kbc-theme="kbc-dark"] {
   --syn-attribute: #d8a04b;
   --syn-comment: #8a857d;
   --syn-constant: #d77a6a;
+  --syn-constant-builtin: #aaa2ff;
   --syn-escape: #aaa2ff;
   --syn-function: #7aa9ff;
   --syn-keyword: #aaa2ff;
@@ -103,7 +104,9 @@ html:root[data-kbc-theme="kbc-dark"] {
   --syn-other: #8a857d;
   --syn-property: #7aa9ff;
   --syn-punctuation: #8a857d;
+  --syn-punctuation-special: #e0a0b8;
   --syn-string: #7eb98f;
+  --syn-string-special: #7ac9b9;
   --syn-type: #d8a04b;
   --syn-variable: #e8e6df;
   --trust-hue: #8a7fff;
@@ -183,6 +186,7 @@ html:root[data-kbc-theme="kbc-light"] {
   --syn-attribute: #78541f;
   --syn-comment: #68635b;
   --syn-constant: #954131;
+  --syn-constant-builtin: #5546e0;
   --syn-escape: #5546e0;
   --syn-function: #385a9a;
   --syn-keyword: #5546e0;
@@ -192,7 +196,9 @@ html:root[data-kbc-theme="kbc-light"] {
   --syn-other: #68635b;
   --syn-property: #385a9a;
   --syn-punctuation: #68635b;
+  --syn-punctuation-special: #8e4a63;
   --syn-string: #366547;
+  --syn-string-special: #2f6b5e;
   --syn-type: #78541f;
   --syn-variable: #1c1b19;
   --trust-hue: #6150ee;
@@ -210,6 +216,7 @@ html:root[data-kbc-theme="kbc-light"] {
 /* repaired --syn-number: #bc5215 → #b14801 (3.93:1 → 4.5:1 vs #eae8de, floor 4.5) */
 /* repaired --syn-constant: #bc5215 → #b14801 (3.93:1 → 4.5:1 vs #eae8de, floor 4.5) */
 /* repaired --syn-operator: #24837b → #0a756d (3.71:1 → 4.55:1 vs #eae8de, floor 4.5) */
+/* repaired --syn-punctuation-special: #ce5d97 → #ad3f7a (3.04:1 → 4.52:1 vs #eae8de, floor 4.5) */
 /* repaired --syn-attribute: #ad8301 → #856400 (2.84:1 → 4.5:1 vs #eae8de, floor 4.5) */
 /* repaired --syn-escape: #ce5d97 → #ad3f7a (3.04:1 → 4.52:1 vs #eae8de, floor 4.5) */
 /* repaired --diff-add-fg: #66800b → #597100 (3.67:1 → 4.51:1 vs #eae8de, floor 4.5) */
@@ -282,6 +289,7 @@ html:root[data-kbc-theme="flexoki-light"] {
   --syn-attribute: #856400;
   --syn-comment: #696863;
   --syn-constant: #b14801;
+  --syn-constant-builtin: #5e409d;
   --syn-escape: #ad3f7a;
   --syn-function: #205ea6;
   --syn-keyword: #5e409d;
@@ -291,7 +299,9 @@ html:root[data-kbc-theme="flexoki-light"] {
   --syn-other: #696863;
   --syn-property: #1c6c66;
   --syn-punctuation: #696863;
+  --syn-punctuation-special: #ad3f7a;
   --syn-string: #597100;
+  --syn-string-special: #1c6c66;
   --syn-type: #856400;
   --syn-variable: #100f0f;
   --trust-hue: #205ea6;
@@ -375,6 +385,7 @@ html:root[data-kbc-theme="flexoki-dark"] {
   --syn-attribute: #d0a215;
   --syn-comment: #878580;
   --syn-constant: #da702c;
+  --syn-constant-builtin: #8b7ec8;
   --syn-escape: #e47da8;
   --syn-function: #4789c2;
   --syn-keyword: #8b7ec8;
@@ -384,7 +395,9 @@ html:root[data-kbc-theme="flexoki-dark"] {
   --syn-other: #878580;
   --syn-property: #5abdac;
   --syn-punctuation: #878580;
+  --syn-punctuation-special: #e47da8;
   --syn-string: #879a39;
+  --syn-string-special: #5abdac;
   --syn-type: #d0a215;
   --syn-variable: #cecdc3;
   --trust-hue: #4789c2;
@@ -461,6 +474,7 @@ html:root[data-kbc-theme="modus-operandi"] {
   --syn-attribute: #6f5500;
   --syn-comment: #595959;
   --syn-constant: #972500;
+  --syn-constant-builtin: #531ab6;
   --syn-escape: #8f0075;
   --syn-function: #0031a9;
   --syn-keyword: #531ab6;
@@ -470,7 +484,9 @@ html:root[data-kbc-theme="modus-operandi"] {
   --syn-other: #595959;
   --syn-property: #005f5f;
   --syn-punctuation: #595959;
+  --syn-punctuation-special: #8f0075;
   --syn-string: #006800;
+  --syn-string-special: #005f5f;
   --syn-type: #6f5500;
   --syn-variable: #000000;
   --trust-hue: #0031a9;
@@ -547,6 +563,7 @@ html:root[data-kbc-theme="modus-vivendi"] {
   --syn-attribute: #d0bc00;
   --syn-comment: #989898;
   --syn-constant: #ff6b55;
+  --syn-constant-builtin: #b6a0ff;
   --syn-escape: #feacd0;
   --syn-function: #2fafff;
   --syn-keyword: #b6a0ff;
@@ -556,7 +573,9 @@ html:root[data-kbc-theme="modus-vivendi"] {
   --syn-other: #989898;
   --syn-property: #6ae4b9;
   --syn-punctuation: #989898;
+  --syn-punctuation-special: #feacd0;
   --syn-string: #44bc44;
+  --syn-string-special: #6ae4b9;
   --syn-type: #d0bc00;
   --syn-variable: #ffffff;
   --trust-hue: #2fafff;
@@ -570,10 +589,13 @@ html:root[data-kbc-theme="modus-vivendi"] {
 /* repaired --ink-mute: #797593 → #676380 (3.49:1 → 4.57:1 vs #eae5d8, floor 4.5) */
 /* repaired --accent: #907aa9 → #76608e (3.16:1 → 4.56:1 vs #f2e9e1, floor 4.5) */
 /* repaired --syn-keyword: #907aa9 → #725d8a (3.01:1 → 4.57:1 vs #eae5d8, floor 4.5) */
+/* repaired --syn-string-special: #56949f → #306f7a (2.72:1 → 4.54:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-type: #ea9d34 → #905a00 (1.78:1 → 4.58:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-number: #d7827e → #9e4f4d (2.26:1 → 4.54:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-constant: #d7827e → #9e4f4d (2.26:1 → 4.54:1 vs #eae5d8, floor 4.5) */
+/* repaired --syn-constant-builtin: #907aa9 → #725d8a (3.01:1 → 4.57:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-operator: #56949f → #306f7a (2.72:1 → 4.54:1 vs #eae5d8, floor 4.5) */
+/* repaired --syn-punctuation-special: #d7827e → #9e4f4d (2.26:1 → 4.54:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-property: #56949f → #306f7a (2.72:1 → 4.54:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-attribute: #ea9d34 → #905a00 (1.78:1 → 4.58:1 vs #eae5d8, floor 4.5) */
 /* repaired --syn-label: #907aa9 → #725d8a (3.01:1 → 4.57:1 vs #eae5d8, floor 4.5) */
@@ -653,6 +675,7 @@ html:root[data-kbc-theme="rose-pine-dawn"] {
   --syn-attribute: #905a00;
   --syn-comment: #676380;
   --syn-constant: #9e4f4d;
+  --syn-constant-builtin: #725d8a;
   --syn-escape: #9e4f4d;
   --syn-function: #286983;
   --syn-keyword: #725d8a;
@@ -662,7 +685,9 @@ html:root[data-kbc-theme="rose-pine-dawn"] {
   --syn-other: #676380;
   --syn-property: #306f7a;
   --syn-punctuation: #676380;
+  --syn-punctuation-special: #9e4f4d;
   --syn-string: #286983;
+  --syn-string-special: #306f7a;
   --syn-type: #905a00;
   --syn-variable: #575279;
   --trust-hue: #76608e;
@@ -748,6 +773,7 @@ html:root[data-kbc-theme="rose-pine-moon"] {
   --syn-attribute: #f6c177;
   --syn-comment: #9a96b4;
   --syn-constant: #f6c177;
+  --syn-constant-builtin: #c4a7e7;
   --syn-escape: #ea9a97;
   --syn-function: #53a3c5;
   --syn-keyword: #c4a7e7;
@@ -757,7 +783,9 @@ html:root[data-kbc-theme="rose-pine-moon"] {
   --syn-other: #9a96b4;
   --syn-property: #9ccfd8;
   --syn-punctuation: #9a96b4;
+  --syn-punctuation-special: #ea9a97;
   --syn-string: #53a3c5;
+  --syn-string-special: #9ccfd8;
   --syn-type: #f6c177;
   --syn-variable: #e0def4;
   --trust-hue: #c4a7e7;
@@ -775,11 +803,14 @@ html:root[data-kbc-theme="rose-pine-moon"] {
 /* repaired --accent: #8839ef → #802de5 (3.99:1 → 4.51:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-keyword: #8839ef → #802de5 (3.99:1 → 4.51:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-string: #40a02b → #1c7100 (2.46:1 → 4.51:1 vs #d9dde7, floor 4.5) */
+/* repaired --syn-string-special: #179299 → #006d73 (2.76:1 → 4.51:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-function: #1e66f5 → #0a55e3 (3.62:1 → 4.54:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-type: #df8e1d → #8c5500 (1.93:1 → 4.5:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-number: #fe640b → #a93e00 (2.2:1 → 4.57:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-constant: #fe640b → #a93e00 (2.2:1 → 4.57:1 vs #d9dde7, floor 4.5) */
+/* repaired --syn-constant-builtin: #8839ef → #802de5 (3.99:1 → 4.51:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-operator: #04a5e5 → #006893 (2.06:1 → 4.52:1 vs #d9dde7, floor 4.5) */
+/* repaired --syn-punctuation-special: #dd7878 → #a24346 (2.2:1 → 4.53:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-property: #179299 → #006d73 (2.76:1 → 4.51:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-attribute: #df8e1d → #8c5500 (1.93:1 → 4.5:1 vs #d9dde7, floor 4.5) */
 /* repaired --syn-label: #ea76cb → #a33489 (1.94:1 → 4.52:1 vs #d9dde7, floor 4.5) */
@@ -860,6 +891,7 @@ html:root[data-kbc-theme="catppuccin-latte"] {
   --syn-attribute: #8c5500;
   --syn-comment: #5d6076;
   --syn-constant: #a93e00;
+  --syn-constant-builtin: #802de5;
   --syn-escape: #a24346;
   --syn-function: #0a55e3;
   --syn-keyword: #802de5;
@@ -869,7 +901,9 @@ html:root[data-kbc-theme="catppuccin-latte"] {
   --syn-other: #5d6076;
   --syn-property: #006d73;
   --syn-punctuation: #5d6076;
+  --syn-punctuation-special: #a24346;
   --syn-string: #1c7100;
+  --syn-string-special: #006d73;
   --syn-type: #8c5500;
   --syn-variable: #4c4f69;
   --trust-hue: #802de5;
@@ -946,6 +980,7 @@ html:root[data-kbc-theme="catppuccin-mocha"] {
   --syn-attribute: #f9e2af;
   --syn-comment: #a6adc8;
   --syn-constant: #fab387;
+  --syn-constant-builtin: #cba6f7;
   --syn-escape: #f2cdcd;
   --syn-function: #89b4fa;
   --syn-keyword: #cba6f7;
@@ -955,7 +990,9 @@ html:root[data-kbc-theme="catppuccin-mocha"] {
   --syn-other: #a6adc8;
   --syn-property: #94e2d5;
   --syn-punctuation: #a6adc8;
+  --syn-punctuation-special: #f2cdcd;
   --syn-string: #a6e3a1;
+  --syn-string-special: #94e2d5;
   --syn-type: #f9e2af;
   --syn-variable: #cdd6f4;
   --trust-hue: #cba6f7;
@@ -976,6 +1013,8 @@ html:root[data-kbc-theme="catppuccin-mocha"] {
 /* repaired --syn-type: #9a6700 → #926200 (4.17:1 → 4.54:1 vs #eaeef2, floor 4.5) */
 /* repaired --syn-number: #bc4c00 → #b74a00 (4.32:1 → 4.54:1 vs #eaeef2, floor 4.5) */
 /* repaired --syn-constant: #bc4c00 → #b74a00 (4.32:1 → 4.54:1 vs #eaeef2, floor 4.5) */
+/* repaired --syn-constant-builtin: #8250df → #7f4cdb (4.33:1 → 4.56:1 vs #eaeef2, floor 4.5) */
+/* repaired --syn-punctuation-special: #e85aad → #be3188 (2.77:1 → 4.53:1 vs #eaeef2, floor 4.5) */
 /* repaired --syn-attribute: #9a6700 → #926200 (4.17:1 → 4.54:1 vs #eaeef2, floor 4.5) */
 /* repaired --syn-label: #bf3989 → #bb3585 (4.33:1 → 4.55:1 vs #eaeef2, floor 4.5) */
 /* repaired --syn-escape: #e85aad → #be3188 (2.77:1 → 4.53:1 vs #eaeef2, floor 4.5) */
@@ -1050,6 +1089,7 @@ html:root[data-kbc-theme="github-light"] {
   --syn-attribute: #926200;
   --syn-comment: #646d76;
   --syn-constant: #b74a00;
+  --syn-constant-builtin: #7f4cdb;
   --syn-escape: #be3188;
   --syn-function: #0668d9;
   --syn-keyword: #7f4cdb;
@@ -1059,7 +1099,9 @@ html:root[data-kbc-theme="github-light"] {
   --syn-other: #646d76;
   --syn-property: #116329;
   --syn-punctuation: #646d76;
+  --syn-punctuation-special: #be3188;
   --syn-string: #167d35;
+  --syn-string-special: #116329;
   --syn-type: #926200;
   --syn-variable: #1f2328;
   --trust-hue: #0668d9;
@@ -1140,6 +1182,7 @@ html:root[data-kbc-theme="github-dark"] {
   --syn-attribute: #d29922;
   --syn-comment: #8b949e;
   --syn-constant: #db6d28;
+  --syn-constant-builtin: #a371f7;
   --syn-escape: #f778ba;
   --syn-function: #3082f8;
   --syn-keyword: #a371f7;
@@ -1149,7 +1192,9 @@ html:root[data-kbc-theme="github-dark"] {
   --syn-other: #8b949e;
   --syn-property: #7ee787;
   --syn-punctuation: #8b949e;
+  --syn-punctuation-special: #f778ba;
   --syn-string: #3fb950;
+  --syn-string-special: #7ee787;
   --syn-type: #d29922;
   --syn-variable: #e6edf3;
   --trust-hue: #3082f8;
@@ -1171,6 +1216,8 @@ html:root[data-kbc-theme="github-dark"] {
 /* repaired --syn-type: #c69026 → #cb952d (4.3:1 → 4.57:1 vs #2f363f, floor 4.5) */
 /* repaired --syn-number: #cc6b2c → #e78447 (3.31:1 → 4.52:1 vs #2f363f, floor 4.5) */
 /* repaired --syn-constant: #cc6b2c → #e78447 (3.31:1 → 4.52:1 vs #2f363f, floor 4.5) */
+/* repaired --syn-constant-builtin: #b083f0 → #b588f5 (4.26:1 → 4.53:1 vs #2f363f, floor 4.5) */
+/* repaired --syn-punctuation-special: #e275ad → #e87ab2 (4.28:1 → 4.54:1 vs #2f363f, floor 4.5) */
 /* repaired --syn-attribute: #c69026 → #cb952d (4.3:1 → 4.57:1 vs #2f363f, floor 4.5) */
 /* repaired --syn-label: #c96198 → #e67bb2 (3.27:1 → 4.54:1 vs #2f363f, floor 4.5) */
 /* repaired --syn-escape: #e275ad → #e87ab2 (4.28:1 → 4.54:1 vs #2f363f, floor 4.5) */
@@ -1245,6 +1292,7 @@ html:root[data-kbc-theme="github-dark-dimmed"] {
   --syn-attribute: #cb952d;
   --syn-comment: #93a0ae;
   --syn-constant: #e78447;
+  --syn-constant-builtin: #b588f5;
   --syn-escape: #e87ab2;
   --syn-function: #58a0fb;
   --syn-keyword: #b588f5;
@@ -1254,7 +1302,9 @@ html:root[data-kbc-theme="github-dark-dimmed"] {
   --syn-other: #93a0ae;
   --syn-property: #8ddb8c;
   --syn-punctuation: #93a0ae;
+  --syn-punctuation-special: #e87ab2;
   --syn-string: #5cb05f;
+  --syn-string-special: #8ddb8c;
   --syn-type: #cb952d;
   --syn-variable: #adbac7;
   --trust-hue: #58a0fb;
@@ -1273,11 +1323,14 @@ html:root[data-kbc-theme="github-dark-dimmed"] {
 /* repaired --accent: #2e7de9 → #0054b4 (2.56:1 → 4.57:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-keyword: #7847bd → #6e3cb1 (3.9:1 → 4.56:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-string: #587539 → #446024 (3.33:1 → 4.54:1 vs #c3cef0, floor 4.5) */
+/* repaired --syn-string-special: #118c74 → #006452 (2.66:1 → 4.55:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-function: #2e7de9 → #0054b4 (2.56:1 → 4.57:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-type: #8c6c3e → #725324 (3.09:1 → 4.5:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-number: #b15c00 → #894600 (3.04:1 → 4.54:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-constant: #b15c00 → #894600 (3.04:1 → 4.54:1 vs #c3cef0, floor 4.5) */
+/* repaired --syn-constant-builtin: #7847bd → #6e3cb1 (3.9:1 → 4.56:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-operator: #007197 → #005f7f (3.51:1 → 4.56:1 vs #c3cef0, floor 4.5) */
+/* repaired --syn-punctuation-special: #ff007c → #ae0053 (2.41:1 → 4.57:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-property: #118c74 → #006452 (2.66:1 → 4.55:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-attribute: #8c6c3e → #725324 (3.09:1 → 4.5:1 vs #c3cef0, floor 4.5) */
 /* repaired --syn-label: #9854f1 → #762ac9 (2.75:1 → 4.54:1 vs #c3cef0, floor 4.5) */
@@ -1357,6 +1410,7 @@ html:root[data-kbc-theme="tokyo-night-day"] {
   --syn-attribute: #725324;
   --syn-comment: #50567c;
   --syn-constant: #894600;
+  --syn-constant-builtin: #6e3cb1;
   --syn-escape: #ae0053;
   --syn-function: #0054b4;
   --syn-keyword: #6e3cb1;
@@ -1366,7 +1420,9 @@ html:root[data-kbc-theme="tokyo-night-day"] {
   --syn-other: #50567c;
   --syn-property: #006452;
   --syn-punctuation: #50567c;
+  --syn-punctuation-special: #ae0053;
   --syn-string: #446024;
+  --syn-string-special: #006452;
   --syn-type: #725324;
   --syn-variable: #254ba9;
   --trust-hue: #0054b4;
@@ -1378,6 +1434,8 @@ html:root[data-kbc-theme="tokyo-night-day"] {
 /* repaired --ink-mute: #565f89 → #858fbc (2.32:1 → 4.56:1 vs #24293d, floor 4.5) */
 /* repaired --ink-dim: #686f93 → #6b7296 (2.95:1 → 3.05:1 vs #24293d, floor 3) */
 /* repaired --syn-keyword: #9d7cd8 → #a180dc (4.31:1 → 4.52:1 vs #24293d, floor 4.5) */
+/* repaired --syn-constant-builtin: #9d7cd8 → #a180dc (4.31:1 → 4.52:1 vs #24293d, floor 4.5) */
+/* repaired --syn-punctuation-special: #ff007c → #ff4b8b (3.79:1 → 4.54:1 vs #24293d, floor 4.5) */
 /* repaired --syn-escape: #ff007c → #ff4b8b (3.79:1 → 4.54:1 vs #24293d, floor 4.5) */
 html:root[data-kbc-theme="tokyo-night"] {
   --accent: #7aa2f7;
@@ -1447,6 +1505,7 @@ html:root[data-kbc-theme="tokyo-night"] {
   --syn-attribute: #e0af68;
   --syn-comment: #858fbc;
   --syn-constant: #ff9e64;
+  --syn-constant-builtin: #a180dc;
   --syn-escape: #ff4b8b;
   --syn-function: #7aa2f7;
   --syn-keyword: #a180dc;
@@ -1456,7 +1515,9 @@ html:root[data-kbc-theme="tokyo-night"] {
   --syn-other: #858fbc;
   --syn-property: #1abc9c;
   --syn-punctuation: #858fbc;
+  --syn-punctuation-special: #ff4b8b;
   --syn-string: #9ece6a;
+  --syn-string-special: #1abc9c;
   --syn-type: #e0af68;
   --syn-variable: #c0caf5;
   --trust-hue: #7aa2f7;
@@ -1475,11 +1536,14 @@ html:root[data-kbc-theme="tokyo-night"] {
 /* repaired --accent: #8da101 → #627100 (2.42:1 → 4.51:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-keyword: #df69ba → #af3d8e (2.55:1 → 4.51:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-string: #8da101 → #627100 (2.42:1 → 4.51:1 vs #efebd4, floor 4.5) */
+/* repaired --syn-string-special: #35a77c → #007955 (2.51:1 → 4.54:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-function: #3a94c5 → #0171a0 (2.81:1 → 4.54:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-type: #dfa000 → #8b6200 (1.91:1 → 4.53:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-number: #f57d26 → #aa4f00 (2.23:1 → 4.55:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-constant: #f57d26 → #aa4f00 (2.23:1 → 4.55:1 vs #efebd4, floor 4.5) */
+/* repaired --syn-constant-builtin: #df69ba → #af3d8e (2.55:1 → 4.51:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-operator: #35a77c → #007955 (2.51:1 → 4.54:1 vs #efebd4, floor 4.5) */
+/* repaired --syn-punctuation-special: #df69ba → #af3d8e (2.55:1 → 4.51:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-property: #35a77c → #007955 (2.51:1 → 4.54:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-attribute: #dfa000 → #8b6200 (1.91:1 → 4.53:1 vs #efebd4, floor 4.5) */
 /* repaired --syn-label: #df69ba → #af3d8e (2.55:1 → 4.51:1 vs #efebd4, floor 4.5) */
@@ -1563,6 +1627,7 @@ html:root[data-kbc-theme="everforest-light"] {
   --syn-attribute: #8b6200;
   --syn-comment: #5f6e5e;
   --syn-constant: #aa4f00;
+  --syn-constant-builtin: #af3d8e;
   --syn-escape: #af3d8e;
   --syn-function: #0171a0;
   --syn-keyword: #af3d8e;
@@ -1572,7 +1637,9 @@ html:root[data-kbc-theme="everforest-light"] {
   --syn-other: #5f6e5e;
   --syn-property: #007955;
   --syn-punctuation: #5f6e5e;
+  --syn-punctuation-special: #af3d8e;
   --syn-string: #627100;
+  --syn-string-special: #007955;
   --syn-type: #8b6200;
   --syn-variable: #536169;
   --trust-hue: #627100;
@@ -1586,6 +1653,8 @@ html:root[data-kbc-theme="everforest-light"] {
 /* repaired --syn-keyword: #d699b6 → #dd9fbc (4.24:1 → 4.56:1 vs #3a454a, floor 4.5) */
 /* repaired --syn-number: #e69875 → #eb9d7a (4.25:1 → 4.51:1 vs #3a454a, floor 4.5) */
 /* repaired --syn-constant: #e69875 → #eb9d7a (4.25:1 → 4.51:1 vs #3a454a, floor 4.5) */
+/* repaired --syn-constant-builtin: #d699b6 → #dd9fbc (4.24:1 → 4.56:1 vs #3a454a, floor 4.5) */
+/* repaired --syn-punctuation-special: #d699b6 → #dd9fbc (4.24:1 → 4.56:1 vs #3a454a, floor 4.5) */
 /* repaired --syn-label: #d699b6 → #dd9fbc (4.24:1 → 4.56:1 vs #3a454a, floor 4.5) */
 /* repaired --syn-escape: #d699b6 → #dd9fbc (4.24:1 → 4.56:1 vs #3a454a, floor 4.5) */
 /* repaired --diff-del-fg: #e67e80 → #fc9293 (3.58:1 → 4.52:1 vs #3a454a, floor 4.5) */
@@ -1657,6 +1726,7 @@ html:root[data-kbc-theme="everforest-dark"] {
   --syn-attribute: #dbbc7f;
   --syn-comment: #a6b3aa;
   --syn-constant: #eb9d7a;
+  --syn-constant-builtin: #dd9fbc;
   --syn-escape: #dd9fbc;
   --syn-function: #7fbbb3;
   --syn-keyword: #dd9fbc;
@@ -1666,7 +1736,9 @@ html:root[data-kbc-theme="everforest-dark"] {
   --syn-other: #a6b3aa;
   --syn-property: #83c092;
   --syn-punctuation: #a6b3aa;
+  --syn-punctuation-special: #dd9fbc;
   --syn-string: #a7c080;
+  --syn-string-special: #83c092;
   --syn-type: #dbbc7f;
   --syn-variable: #d3c6aa;
   --trust-hue: #a7c080;
@@ -1681,10 +1753,12 @@ html:root[data-kbc-theme="everforest-dark"] {
 /* repaired --ink-dim: #8f806f → #897a69 (2.79:1 → 3.03:1 vs #ebdbb2, floor 3) */
 /* repaired --accent: #b57614 → #885600 (2.76:1 → 4.54:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-string: #79740e → #686400 (3.56:1 → 4.52:1 vs #ebdbb2, floor 4.5) */
+/* repaired --syn-string-special: #689d6a → #386c3b (2.32:1 → 4.57:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-type: #b57614 → #885600 (2.76:1 → 4.54:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-number: #af3a03 → #ae3901 (4.48:1 → 4.56:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-constant: #af3a03 → #ae3901 (4.48:1 → 4.56:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-operator: #427b58 → #336c4a (3.66:1 → 4.56:1 vs #ebdbb2, floor 4.5) */
+/* repaired --syn-punctuation-special: #b16286 → #93476b (3.1:1 → 4.57:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-property: #689d6a → #386c3b (2.32:1 → 4.57:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-attribute: #b57614 → #885600 (2.76:1 → 4.54:1 vs #ebdbb2, floor 4.5) */
 /* repaired --syn-label: #b16286 → #93476b (3.1:1 → 4.57:1 vs #ebdbb2, floor 4.5) */
@@ -1760,6 +1834,7 @@ html:root[data-kbc-theme="gruvbox-light"] {
   --syn-attribute: #885600;
   --syn-comment: #6c5f54;
   --syn-constant: #ae3901;
+  --syn-constant-builtin: #8f3f71;
   --syn-escape: #93476b;
   --syn-function: #076678;
   --syn-keyword: #8f3f71;
@@ -1769,7 +1844,9 @@ html:root[data-kbc-theme="gruvbox-light"] {
   --syn-other: #6c5f54;
   --syn-property: #386c3b;
   --syn-punctuation: #6c5f54;
+  --syn-punctuation-special: #93476b;
   --syn-string: #686400;
+  --syn-string-special: #386c3b;
   --syn-type: #885600;
   --syn-variable: #3c3836;
   --trust-hue: #885600;
@@ -1782,7 +1859,10 @@ html:root[data-kbc-theme="gruvbox-light"] {
 /* repaired --blue: #83a598 → #85a79a (4.43:1 → 4.56:1 vs #3a3634, floor 4.5) */
 /* repaired --ink-mute: #928374 → #ad9e8e (3.25:1 → 4.56:1 vs #3a3634, floor 4.5) */
 /* repaired --syn-keyword: #d3869b → #d78a9f (4.35:1 → 4.55:1 vs #3a3634, floor 4.5) */
+/* repaired --syn-string-special: #689d6a → #76ac78 (3.76:1 → 4.51:1 vs #3a3634, floor 4.5) */
 /* repaired --syn-function: #83a598 → #85a79a (4.43:1 → 4.56:1 vs #3a3634, floor 4.5) */
+/* repaired --syn-constant-builtin: #d3869b → #d78a9f (4.35:1 → 4.55:1 vs #3a3634, floor 4.5) */
+/* repaired --syn-punctuation-special: #d3869b → #d78a9f (4.35:1 → 4.55:1 vs #3a3634, floor 4.5) */
 /* repaired --syn-property: #689d6a → #76ac78 (3.76:1 → 4.51:1 vs #3a3634, floor 4.5) */
 /* repaired --syn-label: #b16286 → #d986ab (2.82:1 → 4.51:1 vs #3a3634, floor 4.5) */
 /* repaired --syn-escape: #d3869b → #d78a9f (4.35:1 → 4.55:1 vs #3a3634, floor 4.5) */
@@ -1857,6 +1937,7 @@ html:root[data-kbc-theme="gruvbox-dark"] {
   --syn-attribute: #fabd2f;
   --syn-comment: #ad9e8e;
   --syn-constant: #fe8019;
+  --syn-constant-builtin: #d78a9f;
   --syn-escape: #d78a9f;
   --syn-function: #85a79a;
   --syn-keyword: #d78a9f;
@@ -1866,7 +1947,9 @@ html:root[data-kbc-theme="gruvbox-dark"] {
   --syn-other: #ad9e8e;
   --syn-property: #76ac78;
   --syn-punctuation: #ad9e8e;
+  --syn-punctuation-special: #d78a9f;
   --syn-string: #b8bb26;
+  --syn-string-special: #76ac78;
   --syn-type: #fabd2f;
   --syn-variable: #ebdbb2;
   --trust-hue: #fabd2f;
@@ -1880,11 +1963,13 @@ html:root[data-kbc-theme="gruvbox-dark"] {
 /* repaired --blue: #46658c → #45648b (4.44:1 → 4.52:1 vs #d8dee9, floor 4.5) */
 /* repaired --accent: #46658c → #45648b (4.44:1 → 4.52:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-string: #5a7247 → #51693e (3.95:1 → 4.53:1 vs #d8dee9, floor 4.5) */
+/* repaired --syn-string-special: #3f6f6b → #3a6a66 (4.2:1 → 4.5:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-function: #46658c → #45648b (4.44:1 → 4.52:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-type: #8a6d2f → #7a5e1e (3.61:1 → 4.5:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-number: #a35c38 → #954f2b (3.75:1 → 4.52:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-constant: #a35c38 → #954f2b (3.75:1 → 4.52:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-operator: #3d6b78 → #3b6976 (4.35:1 → 4.5:1 vs #d8dee9, floor 4.5) */
+/* repaired --syn-punctuation-special: #a35b78 → #914b68 (3.59:1 → 4.56:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-property: #3f6f6b → #3a6a66 (4.2:1 → 4.5:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-attribute: #8a6d2f → #7a5e1e (3.61:1 → 4.5:1 vs #d8dee9, floor 4.5) */
 /* repaired --syn-label: #8f4f7d → #8b4c79 (4.34:1 → 4.57:1 vs #d8dee9, floor 4.5) */
@@ -1959,6 +2044,7 @@ html:root[data-kbc-theme="nord-light"] {
   --syn-attribute: #7a5e1e;
   --syn-comment: #4c566a;
   --syn-constant: #954f2b;
+  --syn-constant-builtin: #7b5675;
   --syn-escape: #914b68;
   --syn-function: #45648b;
   --syn-keyword: #7b5675;
@@ -1968,7 +2054,9 @@ html:root[data-kbc-theme="nord-light"] {
   --syn-other: #4c566a;
   --syn-property: #3a6a66;
   --syn-punctuation: #4c566a;
+  --syn-punctuation-special: #914b68;
   --syn-string: #51693e;
+  --syn-string-special: #3a6a66;
   --syn-type: #7a5e1e;
   --syn-variable: #2e3440;
   --trust-hue: #45648b;
@@ -1984,6 +2072,8 @@ html:root[data-kbc-theme="nord-light"] {
 /* repaired --syn-function: #81a1c1 → #93b4d4 (3.66:1 → 4.55:1 vs #3b4455, floor 4.5) */
 /* repaired --syn-number: #d08770 → #e89d86 (3.46:1 → 4.51:1 vs #3b4455, floor 4.5) */
 /* repaired --syn-constant: #d08770 → #e89d86 (3.46:1 → 4.51:1 vs #3b4455, floor 4.5) */
+/* repaired --syn-constant-builtin: #b48ead → #cba4c4 (3.48:1 → 4.53:1 vs #3b4455, floor 4.5) */
+/* repaired --syn-punctuation-special: #b48ead → #cba4c4 (3.48:1 → 4.53:1 vs #3b4455, floor 4.5) */
 /* repaired --syn-label: #b48ead → #cba4c4 (3.48:1 → 4.53:1 vs #3b4455, floor 4.5) */
 /* repaired --syn-escape: #b48ead → #cba4c4 (3.48:1 → 4.53:1 vs #3b4455, floor 4.5) */
 /* repaired --diff-del-fg: #bf616a → #f7939b (2.41:1 → 4.51:1 vs #3b4455, floor 4.5) */
@@ -2057,6 +2147,7 @@ html:root[data-kbc-theme="nord"] {
   --syn-attribute: #ebcb8b;
   --syn-comment: #a5b0c7;
   --syn-constant: #e89d86;
+  --syn-constant-builtin: #cba4c4;
   --syn-escape: #cba4c4;
   --syn-function: #93b4d4;
   --syn-keyword: #cba4c4;
@@ -2066,7 +2157,9 @@ html:root[data-kbc-theme="nord"] {
   --syn-other: #a5b0c7;
   --syn-property: #8fbcbb;
   --syn-punctuation: #a5b0c7;
+  --syn-punctuation-special: #cba4c4;
   --syn-string: #a3be8c;
+  --syn-string-special: #8fbcbb;
   --syn-type: #ebcb8b;
   --syn-variable: #d8dee9;
   --trust-hue: #88c0d0;
@@ -2083,11 +2176,13 @@ html:root[data-kbc-theme="nord"] {
 /* repaired --ink-dim: #827e6a → #7e7a65 (2.81:1 → 3:1 vs #dfd8ae, floor 3) */
 /* repaired --accent: #4d699b → #425d8f (3.81:1 → 4.52:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-string: #6f894e → #4c642a (2.7:1 → 4.56:1 vs #dfd8ae, floor 4.5) */
+/* repaired --syn-string-special: #597b75 → #43645e (3.21:1 → 4.51:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-function: #4d699b → #425d8f (3.81:1 → 4.52:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-type: #77713f → #655f2d (3.44:1 → 4.52:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-number: #cc6d00 → #904b00 (2.52:1 → 4.55:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-constant: #cc6d00 → #904b00 (2.52:1 → 4.55:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-operator: #4e8ca2 → #25657a (2.59:1 → 4.51:1 vs #dfd8ae, floor 4.5) */
+/* repaired --syn-punctuation-special: #b35b79 → #95405f (3.09:1 → 4.57:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-property: #597b75 → #43645e (3.21:1 → 4.51:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-attribute: #77713f → #655f2d (3.44:1 → 4.52:1 vs #dfd8ae, floor 4.5) */
 /* repaired --syn-label: #766b90 → #63587c (3.39:1 → 4.54:1 vs #dfd8ae, floor 4.5) */
@@ -2165,6 +2260,7 @@ html:root[data-kbc-theme="kanagawa-lotus"] {
   --syn-attribute: #655f2d;
   --syn-comment: #605d50;
   --syn-constant: #904b00;
+  --syn-constant-builtin: #624c83;
   --syn-escape: #95405f;
   --syn-function: #425d8f;
   --syn-keyword: #624c83;
@@ -2174,7 +2270,9 @@ html:root[data-kbc-theme="kanagawa-lotus"] {
   --syn-other: #605d50;
   --syn-property: #43645e;
   --syn-punctuation: #605d50;
+  --syn-punctuation-special: #95405f;
   --syn-string: #4c642a;
+  --syn-string-special: #43645e;
   --syn-type: #655f2d;
   --syn-variable: #545464;
   --trust-hue: #425d8f;
@@ -2187,6 +2285,8 @@ html:root[data-kbc-theme="kanagawa-lotus"] {
 /* repaired --ink-mute: #727169 → #97968d (2.76:1 → 4.55:1 vs #2d2d3c, floor 4.5) */
 /* repaired --ink-dim: #7c746e → #7d756f (2.95:1 → 3:1 vs #2d2d3c, floor 3) */
 /* repaired --syn-keyword: #957fb8 → #a18bc5 (3.88:1 → 4.53:1 vs #2d2d3c, floor 4.5) */
+/* repaired --syn-constant-builtin: #957fb8 → #a18bc5 (3.88:1 → 4.53:1 vs #2d2d3c, floor 4.5) */
+/* repaired --syn-punctuation-special: #e46876 → #eb6e7c (4.22:1 → 4.56:1 vs #2d2d3c, floor 4.5) */
 /* repaired --syn-escape: #e46876 → #eb6e7c (4.22:1 → 4.56:1 vs #2d2d3c, floor 4.5) */
 /* repaired --diff-add-fg: #76946a → #7f9e73 (4.01:1 → 4.54:1 vs #2d2d3c, floor 4.5) */
 /* repaired --diff-del-fg: #c34043 → #f26b69 (2.67:1 → 4.55:1 vs #2d2d3c, floor 4.5) */
@@ -2259,6 +2359,7 @@ html:root[data-kbc-theme="kanagawa-wave"] {
   --syn-attribute: #e6c384;
   --syn-comment: #97968d;
   --syn-constant: #ffa066;
+  --syn-constant-builtin: #a18bc5;
   --syn-escape: #eb6e7c;
   --syn-function: #7e9cd8;
   --syn-keyword: #a18bc5;
@@ -2268,7 +2369,9 @@ html:root[data-kbc-theme="kanagawa-wave"] {
   --syn-other: #97968d;
   --syn-property: #7aa89f;
   --syn-punctuation: #97968d;
+  --syn-punctuation-special: #eb6e7c;
   --syn-string: #98bb6c;
+  --syn-string-special: #7aa89f;
   --syn-type: #e6c384;
   --syn-variable: #dcd7ba;
   --trust-hue: #7e9cd8;
@@ -2285,6 +2388,7 @@ html:root[data-kbc-theme="kanagawa-wave"] {
 /* repaired --ink-dim: #878992 → #81838c (2.8:1 → 3.03:1 vs #e6e6e7, floor 3) */
 /* repaired --accent: #4078f2 → #295ed6 (3.25:1 → 4.56:1 vs #e6e6e7, floor 4.5) */
 /* repaired --syn-string: #50a14f → #227624 (2.57:1 → 4.57:1 vs #e6e6e7, floor 4.5) */
+/* repaired --syn-string-special: #0184bc → #006e9d (3.35:1 → 4.54:1 vs #e6e6e7, floor 4.5) */
 /* repaired --syn-function: #4078f2 → #295ed6 (3.25:1 → 4.56:1 vs #e6e6e7, floor 4.5) */
 /* repaired --syn-type: #c18401 → #8c5e00 (2.56:1 → 4.53:1 vs #e6e6e7, floor 4.5) */
 /* repaired --syn-number: #986801 → #8b5e00 (3.9:1 → 4.54:1 vs #e6e6e7, floor 4.5) */
@@ -2366,6 +2470,7 @@ html:root[data-kbc-theme="one-light"] {
   --syn-attribute: #8c5e00;
   --syn-comment: #636671;
   --syn-constant: #8b5e00;
+  --syn-constant-builtin: #a626a4;
   --syn-escape: #ca1243;
   --syn-function: #295ed6;
   --syn-keyword: #a626a4;
@@ -2375,7 +2480,9 @@ html:root[data-kbc-theme="one-light"] {
   --syn-other: #636671;
   --syn-property: #006e9d;
   --syn-punctuation: #636671;
+  --syn-punctuation-special: #ca1243;
   --syn-string: #227624;
+  --syn-string-special: #006e9d;
   --syn-type: #8c5e00;
   --syn-variable: #383a42;
   --trust-hue: #295ed6;
@@ -2387,6 +2494,8 @@ html:root[data-kbc-theme="one-light"] {
 /* repaired --red: #e06c75 → #f88189 (3.51:1 → 4.54:1 vs #353b48, floor 4.5) */
 /* repaired --ink-mute: #5c6370 → #9ea6b4 (1.85:1 → 4.55:1 vs #353b48, floor 4.5) */
 /* repaired --syn-keyword: #c678dd → #d687ed (3.81:1 → 4.56:1 vs #353b48, floor 4.5) */
+/* repaired --syn-constant-builtin: #c678dd → #d687ed (3.81:1 → 4.56:1 vs #353b48, floor 4.5) */
+/* repaired --syn-punctuation-special: #c678dd → #d687ed (3.81:1 → 4.56:1 vs #353b48, floor 4.5) */
 /* repaired --syn-label: #c678dd → #d687ed (3.81:1 → 4.56:1 vs #353b48, floor 4.5) */
 /* repaired --syn-escape: #c678dd → #d687ed (3.81:1 → 4.56:1 vs #353b48, floor 4.5) */
 /* repaired --diff-del-fg: #e06c75 → #f88189 (3.51:1 → 4.54:1 vs #353b48, floor 4.5) */
@@ -2458,6 +2567,7 @@ html:root[data-kbc-theme="one-dark"] {
   --syn-attribute: #e5c07b;
   --syn-comment: #9ea6b4;
   --syn-constant: #d19a66;
+  --syn-constant-builtin: #d687ed;
   --syn-escape: #d687ed;
   --syn-function: #61afef;
   --syn-keyword: #d687ed;
@@ -2467,7 +2577,9 @@ html:root[data-kbc-theme="one-dark"] {
   --syn-other: #9ea6b4;
   --syn-property: #56b6c2;
   --syn-punctuation: #9ea6b4;
+  --syn-punctuation-special: #d687ed;
   --syn-string: #98c379;
+  --syn-string-special: #56b6c2;
   --syn-type: #e5c07b;
   --syn-variable: #abb2bf;
   --trust-hue: #61afef;
@@ -2486,11 +2598,14 @@ html:root[data-kbc-theme="one-dark"] {
 /* repaired --accent: #268bd2 → #006cac (3:1 → 4.56:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-keyword: #6c71c4 → #5d60b2 (3.57:1 → 4.53:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-string: #859900 → #606f00 (2.62:1 → 4.52:1 vs #eee8d5, floor 4.5) */
+/* repaired --syn-string-special: #2aa198 → #00756e (2.58:1 → 4.52:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-function: #268bd2 → #006cac (3:1 → 4.56:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-type: #b58900 → #846300 (2.62:1 → 4.56:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-number: #cb4b16 → #bb3e00 (3.76:1 → 4.52:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-constant: #cb4b16 → #bb3e00 (3.76:1 → 4.52:1 vs #eee8d5, floor 4.5) */
+/* repaired --syn-constant-builtin: #6c71c4 → #5d60b2 (3.57:1 → 4.53:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-operator: #2aa198 → #00756e (2.58:1 → 4.52:1 vs #eee8d5, floor 4.5) */
+/* repaired --syn-punctuation-special: #d33682 → #c22274 (3.71:1 → 4.54:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-property: #2aa198 → #00756e (2.58:1 → 4.52:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-attribute: #b58900 → #846300 (2.62:1 → 4.56:1 vs #eee8d5, floor 4.5) */
 /* repaired --syn-label: #d33682 → #c22274 (3.71:1 → 4.54:1 vs #eee8d5, floor 4.5) */
@@ -2569,6 +2684,7 @@ html:root[data-kbc-theme="solarized-light"] {
   --syn-attribute: #846300;
   --syn-comment: #5e6b6b;
   --syn-constant: #bb3e00;
+  --syn-constant-builtin: #5d60b2;
   --syn-escape: #c22274;
   --syn-function: #006cac;
   --syn-keyword: #5d60b2;
@@ -2578,7 +2694,9 @@ html:root[data-kbc-theme="solarized-light"] {
   --syn-other: #5e6b6b;
   --syn-property: #00756e;
   --syn-punctuation: #5e6b6b;
+  --syn-punctuation-special: #c22274;
   --syn-string: #606f00;
+  --syn-string-special: #00756e;
   --syn-type: #846300;
   --syn-variable: #4d636a;
   --trust-hue: #006cac;
@@ -2596,11 +2714,14 @@ html:root[data-kbc-theme="solarized-light"] {
 /* repaired --accent: #268bd2 → #3f9fe8 (3.53:1 → 4.54:1 vs #073642, floor 4.5) */
 /* repaired --syn-keyword: #6c71c4 → #8a91e7 (2.97:1 → 4.5:1 vs #073642, floor 4.5) */
 /* repaired --syn-string: #859900 → #8da218 (4.06:1 → 4.52:1 vs #073642, floor 4.5) */
+/* repaired --syn-string-special: #2aa198 → #35a99f (4.12:1 → 4.51:1 vs #073642, floor 4.5) */
 /* repaired --syn-function: #268bd2 → #3f9fe8 (3.53:1 → 4.54:1 vs #073642, floor 4.5) */
 /* repaired --syn-type: #b58900 → #be9218 (4.05:1 → 4.51:1 vs #073642, floor 4.5) */
 /* repaired --syn-number: #cb4b16 → #f57243 (2.82:1 → 4.56:1 vs #073642, floor 4.5) */
 /* repaired --syn-constant: #cb4b16 → #f57243 (2.82:1 → 4.56:1 vs #073642, floor 4.5) */
+/* repaired --syn-constant-builtin: #6c71c4 → #8a91e7 (2.97:1 → 4.5:1 vs #073642, floor 4.5) */
 /* repaired --syn-operator: #2aa198 → #35a99f (4.12:1 → 4.51:1 vs #073642, floor 4.5) */
+/* repaired --syn-punctuation-special: #d33682 → #fd5fa5 (2.86:1 → 4.54:1 vs #073642, floor 4.5) */
 /* repaired --syn-property: #2aa198 → #35a99f (4.12:1 → 4.51:1 vs #073642, floor 4.5) */
 /* repaired --syn-attribute: #b58900 → #be9218 (4.05:1 → 4.51:1 vs #073642, floor 4.5) */
 /* repaired --syn-label: #d33682 → #fd5fa5 (2.86:1 → 4.54:1 vs #073642, floor 4.5) */
@@ -2680,6 +2801,7 @@ html:root[data-kbc-theme="solarized-dark"] {
   --syn-attribute: #be9218;
   --syn-comment: #859da4;
   --syn-constant: #f57243;
+  --syn-constant-builtin: #8a91e7;
   --syn-escape: #fd5fa5;
   --syn-function: #3f9fe8;
   --syn-keyword: #8a91e7;
@@ -2689,7 +2811,9 @@ html:root[data-kbc-theme="solarized-dark"] {
   --syn-other: #859da4;
   --syn-property: #35a99f;
   --syn-punctuation: #859da4;
+  --syn-punctuation-special: #fd5fa5;
   --syn-string: #8da218;
+  --syn-string-special: #35a99f;
   --syn-type: #be9218;
   --syn-variable: #98a9ab;
   --trust-hue: #3f9fe8;

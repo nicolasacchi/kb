@@ -40,6 +40,11 @@ import "./styles/usages.css";
 // for the same reason every other surface is: its own ≤860px block must stay
 // overridable by the shared mobile-shell rules.
 import "./styles/dossier.css";
+// V72-I2 — `~rails` plus the two reader surfaces that share its language
+// (the Schema card in the inspector rail, the Rails atom table under the
+// hover card). Global rather than imported from `routes/Rails.tsx`, because
+// two of the three consumers live in the READER's chunk, not the dashboard's.
+import "./styles/rails.css";
 // F5 — media-queried mobile-shell overrides; imported LAST so they win over
 // every desktop rule above (mirrors kb's own `main.tsx` import order).
 import "./styles/mobile.css";

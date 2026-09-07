@@ -21,7 +21,7 @@
 //
 // **Trust is LINE STYLE.** The tier rides the shared `TrustBadge`
 // (kbc-theme/1's Lane Budget) and never a hue this feature picks.
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { ReviewDocCard } from "../../api/types";
 import { Icon } from "../icons";
@@ -144,7 +144,7 @@ export default function RefCard({
     return <>[[{span.body}]]</>;
   }
   return (
-    <ResolvedCard
+    <LiveRefCard
       card={span.card}
       repo={repo}
       reviewId={reviewId}
@@ -155,13 +155,31 @@ export default function RefCard({
   );
 }
 
-function ResolvedCard({
+/**
+ * The RESOLVED card — the live snippet, its state badge, its trust tier and
+ * its address — split out and exported by V74-L2 so `kbc-canvas/1` boards
+ * render code nodes through THIS component rather than a second one that
+ * could disagree about what `carried` looks like (D10's "cards carry the
+ * reader's link affordances"). The two props it gained are both optional and
+ * both default to the review document's own behaviour, so this file's
+ * pre-V74 render is byte-identical:
+ *
+ * - `href` — `undefined` (the default) derives the link exactly as before;
+ *   passing `null` or a string overrides it, which is what lets a board card
+ *   link into the READER while a review card links into the review.
+ * - `orphanNote` — the sentence an orphan carries. The review document's
+ *   own wording names "this patchset"; a board has no patchset, and a card
+ *   that borrowed the wrong sentence would be honest about the wrong thing.
+ */
+export function LiveRefCard({
   card,
   repo,
   reviewId,
   folded,
   focused,
   onToggleFold,
+  href: hrefOverride,
+  orphanNote,
 }: {
   card: ReviewDocCard;
   repo: string;
@@ -169,8 +187,10 @@ function ResolvedCard({
   folded: boolean;
   focused?: boolean;
   onToggleFold?: (ref: string) => void;
+  href?: string | null;
+  orphanNote?: ReactNode;
 }) {
-  const href = refCardHref(card, repo, reviewId);
+  const href = hrefOverride !== undefined ? hrefOverride : refCardHref(card, repo, reviewId);
   const lines = useMemo(() => snippetLines(card), [card]);
   const spansByLine = useMemo(
     () =>
@@ -244,8 +264,12 @@ function ResolvedCard({
       )}
       {!folded && card.state === "orphan" && (
         <span className="kbc-refcard__orphan" data-kbc-refcard-orphan>
-          The author wrote <code>[[{card.ref}]]</code>. Nothing in this patchset matches it
-          honestly, so no position is reported — a guessed line would be worse than this hole.
+          {orphanNote ?? (
+            <>
+              The author wrote <code>[[{card.ref}]]</code>. Nothing in this patchset matches it
+              honestly, so no position is reported — a guessed line would be worse than this hole.
+            </>
+          )}
         </span>
       )}
     </span>

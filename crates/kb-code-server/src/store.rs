@@ -682,10 +682,177 @@ impl Store {
         Ok(rows)
     }
 
+    // --- the re-extract bill's own reads (V72-H2b) ------------------------
+
+    /// `(lang, files, bytes)` per `files.lang` for one repo — the bill's
+    /// exact half. One indexed GROUP BY over `(repo_id)`; the content skip
+    /// markers (`unknown`/`binary`/`too-large`/`lfs`) come back as their
+    /// own rows, which is what makes "how much of this repo the instrument
+    /// cannot see" visible beside what a bump would cost.
+    pub fn files_by_lang(&self, repo_id: i64) -> Result<Vec<(String, u64, u64)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT lang, COUNT(*), COALESCE(SUM(size), 0) FROM files \
+             WHERE repo_id = ?1 GROUP BY lang ORDER BY lang",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, i64>(2)? as u64,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The first `limit` paths of one language in `repo_id`, in `path`
+    /// order. DETERMINISTIC on purpose: the bill's timed sample must be
+    /// the same set on two consecutive runs, or its numbers cannot be
+    /// compared to each other.
+    pub fn sample_paths_for_lang(
+        &self,
+        repo_id: i64,
+        lang: &str,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT path FROM files WHERE repo_id = ?1 AND lang = ?2 ORDER BY path LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id, lang, limit as i64], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// One PAGE of the bill's derived-row census: the next `page` distinct
+    /// `files.blob_hash` values after `after`, and the row count each
+    /// derived table holds for them.
+    ///
+    /// Paged for the reason [`Store::sweep_stale_salt_page`] is (V72-B0):
+    /// the un-paged `blob_hash IN (SELECT blob_hash FROM files)` shape is
+    /// O(every live blob) random seeks per table and would hold the
+    /// store's single connection mutex for the whole of it — on a
+    /// production-sized mirror that is a self-inflicted outage, and a
+    /// measurement tool that takes the daemon down is not a measurement
+    /// tool. Returns the cursor to resume from, `None` at the end.
+    pub fn derived_row_census_page(&self, after: Option<&str>, page: usize) -> Result<CensusPage> {
+        let conn = self.lock();
+        let blobs: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT blob_hash FROM files WHERE blob_hash > ?1 \
+                 ORDER BY blob_hash LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![after.unwrap_or(""), page as i64], |r| r.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        if blobs.is_empty() {
+            return Ok(CensusPage {
+                counts: Vec::new(),
+                blobs: 0,
+                next: None,
+            });
+        }
+        let slots = blobs.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let mut counts: Vec<(&'static str, u64)> = Vec::new();
+        for table in BILL_TABLES {
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE blob_hash IN ({slots})");
+            let n: i64 =
+                conn.query_row(&sql, rusqlite::params_from_iter(blobs.iter()), |r| r.get(0))?;
+            counts.push((table, n as u64));
+        }
+        let next = if blobs.len() < page {
+            None
+        } else {
+            blobs.last().cloned()
+        };
+        Ok(CensusPage {
+            counts,
+            blobs: blobs.len(),
+            next,
+        })
+    }
+
+    // --- derived_status: the per-family "extracted" marker (V72-H2b) -----
+    //
+    // The cache-hit gates used to be ROW-COUNT questions, which cannot tell
+    // "not derived yet" from "derived, and zero rows was the honest
+    // answer" — so every zero-symbol file re-parsed on every visit (an ERB
+    // template, an SCSS file, a comment-only Rust file). These four fns are
+    // the fix: the marker's EXISTENCE is the gate, `rows` is bookkeeping
+    // for the re-extract bill and never consulted by one.
+
+    /// `true` if `(blob_hash, family, salt)` has been derived — the gate
+    /// `ingest::index_file` uses, deliberately independent of how many rows
+    /// the derivation produced.
+    pub fn is_derived(
+        &self,
+        blob_hash: &str,
+        family: crate::lang::SaltFamily,
+        salt: &str,
+    ) -> Result<bool> {
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM derived_status \
+             WHERE blob_hash = ?1 AND family = ?2 AND salt = ?3",
+            params![blob_hash, family.as_str(), salt],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// The recorded row count for a derivation, or `None` when there is no
+    /// marker. `Some(0)` and `None` are DIFFERENT answers and the whole
+    /// reason this table exists.
+    pub fn derived_rows(
+        &self,
+        blob_hash: &str,
+        family: crate::lang::SaltFamily,
+        salt: &str,
+    ) -> Result<Option<i64>> {
+        Ok(self
+            .lock()
+            .query_row(
+                "SELECT rows FROM derived_status \
+                 WHERE blob_hash = ?1 AND family = ?2 AND salt = ?3",
+                params![blob_hash, family.as_str(), salt],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Record a derivation outside a derived-table write — the direct door
+    /// for tests and for a future pass that derives nothing at all. The
+    /// production writers ([`Store::replace_symbols`],
+    /// [`Store::put_highlights`]) mark inside their OWN transaction via
+    /// [`mark_derived_in`], so the marker and the rows it describes can
+    /// never land apart.
+    pub fn mark_derived(
+        &self,
+        blob_hash: &str,
+        family: crate::lang::SaltFamily,
+        salt: &str,
+        rows: usize,
+    ) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        mark_derived_in(&tx, blob_hash, family, salt, rows)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // --- symbols (blob-keyed) -------------------------------------------
 
-    /// `true` if `(blob_hash, salt)` already has derived symbol rows — the
-    /// cache-hit check `ingest::index_file` uses to skip re-parsing.
+    /// `true` if `(blob_hash, salt)` already has derived symbol ROWS.
+    ///
+    /// **Not the cache gate.** It was until V72-H2b, and `COUNT(*) > 0`
+    /// cannot distinguish "not derived" from "derived, zero symbols", so
+    /// every zero-symbol blob re-parsed on every visit. The gate is now
+    /// [`Store::is_derived`]; this stays as the honest "are there rows"
+    /// question its name asks, for callers that mean exactly that.
     pub fn has_symbols(&self, blob_hash: &str, salt: &str) -> Result<bool> {
         let n: i64 = self.lock().query_row(
             "SELECT COUNT(*) FROM symbols WHERE blob_hash = ?1 AND salt = ?2",
@@ -739,6 +906,17 @@ impl Store {
                 ])?;
             }
         }
+        // V72-H2b — the SYMBOL family's derivation marker, in the same
+        // transaction as the rows it describes, so "derived" and "these
+        // are the rows" can never disagree. An empty `symbols` slice is a
+        // real derivation with a real marker; that is the fix.
+        mark_derived_in(
+            &tx,
+            blob_hash,
+            crate::lang::SaltFamily::Symbol,
+            salt,
+            symbols.len(),
+        )?;
         tx.commit()?;
         // Belt-and-suspenders: `index_file` always calls `upsert_file`
         // first (which already bumps the generation), so this is a
@@ -808,7 +986,7 @@ impl Store {
     /// fuzzy-match lane (nucleo-backed ranking) is W2.1's job.
     pub fn symbols_for_repo(&self, repo_id: i64) -> Result<Vec<(String, Symbol)>> {
         let conn = self.lock();
-        let (cte, salts) = current_salt_cte();
+        let (cte, salts) = current_salt_cte(crate::lang::SaltFamily::Symbol);
         let sql = format!(
             "{cte}
              SELECT f.path, s.ordinal, s.name, s.kind, s.line_start, s.line_end,
@@ -1395,7 +1573,7 @@ impl Store {
                 continue;
             };
             let lang = crate::lang::detect(p, None);
-            let salt = lang.map(|l| l.salt).unwrap_or("");
+            let salt = lang.map(|l| l.symbol_salt).unwrap_or("");
             if salt.is_empty() {
                 continue;
             }
@@ -1431,7 +1609,7 @@ impl Store {
                 continue;
             };
             let lang = crate::lang::detect(p, None);
-            let salt = lang.map(|l| l.salt).unwrap_or("");
+            let salt = lang.map(|l| l.symbol_salt).unwrap_or("");
             if salt.is_empty() {
                 continue;
             }
@@ -1491,7 +1669,7 @@ impl Store {
             return Ok(Vec::new());
         }
         let conn = self.lock();
-        let (cte, salts) = current_salt_cte();
+        let (cte, salts) = current_salt_cte(crate::lang::SaltFamily::Symbol);
         let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "{cte}
@@ -1537,7 +1715,7 @@ impl Store {
         name: &str,
     ) -> Result<Vec<(String, crate::occurrences::Occurrence)>> {
         let conn = self.lock();
-        let (cte, salts) = current_salt_cte();
+        let (cte, salts) = current_salt_cte(crate::lang::SaltFamily::Symbol);
         let sql = format!(
             "{cte}
              SELECT f.path, o.ordinal, o.name, o.role, o.line, o.col_start, o.col_end,
@@ -1577,7 +1755,7 @@ impl Store {
         name: &str,
     ) -> Result<Vec<(String, crate::occurrences::Occurrence)>> {
         let conn = self.lock();
-        let (cte, salts) = current_salt_cte();
+        let (cte, salts) = current_salt_cte(crate::lang::SaltFamily::Symbol);
         let sql = format!(
             "{cte}
              SELECT f.path, o.ordinal, o.name, o.role, o.line, o.col_start, o.col_end,
@@ -1667,7 +1845,6 @@ impl Store {
         after: Option<&str>,
         page: usize,
     ) -> Result<(StaleSaltSweepCounts, Option<String>)> {
-        let (cte, salts) = current_salt_cte();
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         let blobs: Vec<String> = {
@@ -1683,9 +1860,28 @@ impl Store {
         if blobs.is_empty() {
             return Ok((StaleSaltSweepCounts::default(), None));
         }
-        let symbols = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, "symbols")?;
-        let highlights = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, "highlights")?;
-        let occurrences = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, "occurrences")?;
+        // V72-H2b: each table is swept against the salt set of the family
+        // that keys IT. Sweeping `highlights` against the SYMBOL salts
+        // would find every current highlight row "not in cur" and delete
+        // it the moment a symbol-salted sibling existed — the exact damage
+        // this sweep exists to undo.
+        let mut counts = StaleSaltSweepCounts::default();
+        for (table, family, family_value) in SWEEP_TABLES {
+            let (cte, salts) = current_salt_cte(*family);
+            let n = sweep_stale_salt_table(&tx, &cte, &salts, &blobs, table, *family_value)?;
+            match *table {
+                "symbols" => counts.symbols += n,
+                "highlights" => counts.highlights += n,
+                "occurrences" => counts.occurrences += n,
+                _ => counts.derived_status += n,
+            }
+        }
+        let StaleSaltSweepCounts {
+            symbols,
+            highlights,
+            occurrences,
+            derived_status,
+        } = counts;
         tx.commit()?;
         // A SHORT page means `files` held nothing after it — stop rather
         // than pay one more empty round trip.
@@ -1699,6 +1895,7 @@ impl Store {
                 symbols,
                 highlights,
                 occurrences,
+                derived_status,
             },
             next,
         ))
@@ -1741,6 +1938,17 @@ impl Store {
             "INSERT INTO highlights (blob_hash, salt, spans) VALUES (?1, ?2, ?3)
              ON CONFLICT(blob_hash, salt) DO UPDATE SET spans = excluded.spans",
             params![blob_hash, salt, bytes],
+        )?;
+        // V72-H2b — the HIGHLIGHT family's marker, same transaction, same
+        // reason as `replace_symbols`'s. `salt` here is a
+        // `LangInfo::highlight_salt`; passing a symbol salt would key the
+        // marker under a string the highlight gate never asks about.
+        mark_derived_in(
+            &tx,
+            blob_hash,
+            crate::lang::SaltFamily::Highlight,
+            salt,
+            spans.len(),
         )?;
         tx.commit()?;
         Ok(())
@@ -6008,7 +6216,7 @@ impl Store {
         prefix: &str,
     ) -> Result<Vec<(String, Symbol)>> {
         let conn = self.lock();
-        let (cte, salts) = current_salt_cte();
+        let (cte, salts) = current_salt_cte(crate::lang::SaltFamily::Symbol);
         let sql = format!(
             "{cte}
              SELECT f.path, s.ordinal, s.name, s.kind, s.line_start, s.line_end,
@@ -6590,8 +6798,13 @@ pub struct DoclensSyncCursor {
 /// GENUINE salt bump leaves an old-salt derivation coexisting with a new
 /// one for the SAME blob, a current-salt sibling now exists, so the
 /// fallback doesn't fire and the stale generation is correctly hidden.
-fn current_salt_cte() -> (String, Vec<&'static str>) {
-    let salts: Vec<&'static str> = crate::lang::ALL_LANGS.iter().map(|l| l.salt).collect();
+///
+/// V72-H2b: the set is per-FAMILY. `symbols`/`occurrences` are read
+/// against the SYMBOL salts, `highlights` against the HIGHLIGHT ones —
+/// passing the wrong family declares every current row of the other
+/// family stale, which for the sweep would mean deleting it.
+fn current_salt_cte(family: crate::lang::SaltFamily) -> (String, Vec<&'static str>) {
+    let salts = crate::lang::current_salts(family);
     let values = salts.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
     (format!("WITH cur(salt) AS (VALUES {values})"), salts)
 }
@@ -6603,6 +6816,9 @@ pub struct StaleSaltSweepCounts {
     pub symbols: u64,
     pub highlights: u64,
     pub occurrences: u64,
+    /// V72-H2b — the per-family derivation markers, swept against their
+    /// OWN family's salt set (see [`SWEEP_TABLES`]).
+    pub derived_status: u64,
 }
 
 impl StaleSaltSweepCounts {
@@ -6610,11 +6826,11 @@ impl StaleSaltSweepCounts {
     /// caller can skip logging a no-op sweep (mirrors `prune_stale_pins`'s
     /// `Ok(0) => {}` boot-log convention).
     pub fn is_empty(&self) -> bool {
-        self.symbols == 0 && self.highlights == 0 && self.occurrences == 0
+        self.total() == 0
     }
 
     pub fn total(&self) -> u64 {
-        self.symbols + self.highlights + self.occurrences
+        self.symbols + self.highlights + self.occurrences + self.derived_status
     }
 }
 
@@ -6640,28 +6856,97 @@ fn sweep_stale_salt_table(
     salts: &[&'static str],
     blobs: &[String],
     table: &str,
+    family_value: Option<&str>,
 ) -> Result<u64> {
     let blob_slots = blobs.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    // V72-H2b — `derived_status` holds BOTH families in one table, so its
+    // two passes each add `family = ?`. The predicate rides the
+    // correlated EXISTS too: a blob's SYMBOL marker must never count as
+    // the current-salt sibling that authorises deleting its HIGHLIGHT one.
+    let (family_pred, sibling_pred) = match family_value {
+        Some(_) => (
+            format!("AND {table}.family = ?"),
+            format!("AND t2.family = {table}.family"),
+        ),
+        None => (String::new(), String::new()),
+    };
     let sql = format!(
         "{cte}
          DELETE FROM {table}
          WHERE blob_hash IN ({blob_slots})
+           {family_pred}
            AND salt NOT IN (SELECT salt FROM cur)
            AND EXISTS (
                  SELECT 1 FROM {table} t2
                  WHERE t2.blob_hash = {table}.blob_hash AND t2.salt IN (SELECT salt FROM cur)
+                 {sibling_pred}
                )"
     );
     let mut stmt = tx.prepare(&sql)?;
     // Bind order matches the SQL: the `cur` CTE's salts are written first
-    // (`{cte}` opens the statement), then this page's blob hashes.
+    // (`{cte}` opens the statement), then this page's blob hashes, then
+    // the optional family.
     let mut bind: Vec<Box<dyn rusqlite::ToSql>> = salts.iter().map(|s| Box::new(*s) as _).collect();
     for b in blobs {
         bind.push(Box::new(b.clone()));
     }
+    if let Some(f) = family_value {
+        bind.push(Box::new(f.to_string()));
+    }
     let n = stmt.execute(rusqlite::params_from_iter(bind.iter()))?;
     Ok(n as u64)
 }
+
+/// Every table [`Store::sweep_stale_salt_page`] sweeps, with the salt
+/// FAMILY that keys it and (for the one table holding both families) the
+/// `family` value to restrict to. V72-H2b: the family column is what makes
+/// "a family is stale only when ITS salt moved" a property of the SQL
+/// rather than of the caller's memory. Adding a derived table means adding
+/// a row here — an omission is a table that accumulates stale rows
+/// forever, which is the defect V70-A3X shipped this sweep for.
+/// Every blob-keyed derived table the re-extract bill counts (V72-H2b).
+/// Deliberately WIDER than [`SWEEP_TABLES`]: the bill prices what a salt
+/// bump re-derives, and `import_specs`/`call_sites`/`type_relations` ride
+/// the SYMBOL salt even though the V70-A3X sweep never learned to prune
+/// them (a known, named gap — see `crates/kb-code-server/CLAUDE.md`
+/// invariant 11).
+/// One page of [`Store::derived_row_census_page`] — a named struct rather
+/// than a three-tuple so the bill's loop reads as what it is.
+#[derive(Debug, Clone)]
+pub struct CensusPage {
+    /// Per-table row counts for THIS page's blobs, in [`BILL_TABLES`] order.
+    pub counts: Vec<(&'static str, u64)>,
+    /// Distinct blob hashes this page actually covered.
+    pub blobs: usize,
+    /// Cursor to resume from; `None` once the last page has been counted.
+    pub next: Option<String>,
+}
+
+pub(crate) const BILL_TABLES: &[&str] = &[
+    "symbols",
+    "highlights",
+    "occurrences",
+    "import_specs",
+    "call_sites",
+    "type_relations",
+    "derived_status",
+];
+
+const SWEEP_TABLES: &[(&str, crate::lang::SaltFamily, Option<&str>)] = &[
+    ("symbols", crate::lang::SaltFamily::Symbol, None),
+    ("occurrences", crate::lang::SaltFamily::Symbol, None),
+    ("highlights", crate::lang::SaltFamily::Highlight, None),
+    (
+        "derived_status",
+        crate::lang::SaltFamily::Symbol,
+        Some("symbols"),
+    ),
+    (
+        "derived_status",
+        crate::lang::SaltFamily::Highlight,
+        Some("highlights"),
+    ),
+];
 
 /// V70-A3X — a `LIKE` pattern matching every salt of `salt`'s OWN language
 /// (e.g. `salt = "rust@0.24.2+q3"` → `"rust@%"`), used to purge a blob's
@@ -6676,6 +6961,32 @@ fn sweep_stale_salt_table(
 /// concern for the prefix itself.
 fn lang_prefix_pattern(salt: &str) -> String {
     format!("{}@%", salt.split('@').next().unwrap_or(salt))
+}
+
+/// Write the `(blob_hash, family, salt)` derivation marker inside an
+/// already-open transaction, purging every OTHER salt of this blob's
+/// language FOR THIS FAMILY first (invariant 11's purge-on-write rule,
+/// applied to the marker table). Scoped by `family` as well as by language
+/// prefix: a symbol-salt bump must not erase the highlight marker, which is
+/// the entire point of V72-H2b's split.
+fn mark_derived_in(
+    tx: &Transaction<'_>,
+    blob_hash: &str,
+    family: crate::lang::SaltFamily,
+    salt: &str,
+    rows: usize,
+) -> Result<()> {
+    tx.execute(
+        "DELETE FROM derived_status \
+         WHERE blob_hash = ?1 AND family = ?2 AND salt LIKE ?3 AND salt != ?4",
+        params![blob_hash, family.as_str(), lang_prefix_pattern(salt), salt],
+    )?;
+    tx.execute(
+        "INSERT INTO derived_status (blob_hash, family, salt, rows) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(blob_hash, family, salt) DO UPDATE SET rows = excluded.rows",
+        params![blob_hash, family.as_str(), salt, rows as i64],
+    )?;
+    Ok(())
 }
 
 /// Read a `Symbol` starting at column `offset` (ordinal … param_max).
@@ -10231,6 +10542,205 @@ impl Store {
             params![repo_id, path],
         )? as u64)
     }
+
+    // -----------------------------------------------------------------
+    // V74-L3a (kbc-recipe/1, migration V0038) — recipe trust, the server
+    // recipe home, and materialised runs.
+    //
+    // None of these bump the generation: a recipe is a QUESTION asked of
+    // the index, never an input to it (the `canvas_boards` precedent
+    // directly above, for the same reason).
+    // -----------------------------------------------------------------
+
+    /// The trust-on-first-use row for one repo-versioned recipe.
+    pub fn get_recipe_trust(&self, repo_id: i64, slug: &str) -> Result<Option<RecipeTrustRow>> {
+        self.lock()
+            .query_row(
+                "SELECT repo_id, slug, source_path, content_hash, trusted_body, trusted_unix \
+                 FROM recipe_trust WHERE repo_id = ?1 AND slug = ?2",
+                params![repo_id, slug],
+                |r| {
+                    Ok(RecipeTrustRow {
+                        repo_id: r.get(0)?,
+                        slug: r.get(1)?,
+                        source_path: r.get(2)?,
+                        content_hash: r.get(3)?,
+                        trusted_body: r.get(4)?,
+                        trusted_unix: r.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Record (or re-record) trust. Keyed on `(repo_id, slug)`, so
+    /// accepting a CHANGED file replaces the old bytes — which is exactly
+    /// what "trust this version now" means.
+    pub fn put_recipe_trust(
+        &self,
+        repo_id: i64,
+        slug: &str,
+        source_path: &str,
+        content_hash: &str,
+        trusted_body: &str,
+        now: i64,
+    ) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO recipe_trust \
+             (repo_id, slug, source_path, content_hash, trusted_body, trusted_unix) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(repo_id, slug) DO UPDATE SET \
+               source_path = excluded.source_path, \
+               content_hash = excluded.content_hash, \
+               trusted_body = excluded.trusted_body, \
+               trusted_unix = excluded.trusted_unix",
+            params![repo_id, slug, source_path, content_hash, trusted_body, now],
+        )?;
+        Ok(())
+    }
+
+    /// Every server-stored recipe visible to `repo` — the rows scoped to
+    /// it plus the repo-agnostic ones.
+    pub fn list_recipes_server(&self, repo: Option<&str>) -> Result<Vec<RecipeServerRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT slug, repo, title, body_json, created_unix, updated_unix \
+             FROM recipes_server WHERE repo IS NULL OR ?1 IS NULL OR repo = ?1 \
+             ORDER BY slug ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![repo], |r| {
+                Ok(RecipeServerRow {
+                    slug: r.get(0)?,
+                    repo: r.get(1)?,
+                    title: r.get(2)?,
+                    body_json: r.get(3)?,
+                    created_unix: r.get(4)?,
+                    updated_unix: r.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn put_recipe_server(
+        &self,
+        slug: &str,
+        repo: Option<&str>,
+        title: &str,
+        body_json: &str,
+        now: i64,
+    ) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO recipes_server \
+             (slug, repo, title, body_json, created_unix, updated_unix) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
+             ON CONFLICT(slug) DO UPDATE SET \
+               repo = excluded.repo, title = excluded.title, \
+               body_json = excluded.body_json, updated_unix = excluded.updated_unix",
+            params![slug, repo, title, body_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_recipe_server(&self, slug: &str) -> Result<bool> {
+        let n = self
+            .lock()
+            .execute("DELETE FROM recipes_server WHERE slug = ?1", params![slug])?;
+        Ok(n > 0)
+    }
+
+    /// Store a MATERIALISED run. `generation` is the mirror generation it
+    /// was computed at, so a replay can caption itself stale rather than
+    /// reading as live.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_recipe_run(
+        &self,
+        id: &str,
+        repo_id: i64,
+        slug: &str,
+        params_json: &str,
+        scope: Option<&str>,
+        generation: u64,
+        result_json: &str,
+        now: i64,
+    ) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO recipe_runs \
+             (id, repo_id, slug, params_json, scope, generation, result_json, created_unix) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                repo_id,
+                slug,
+                params_json,
+                scope,
+                generation as i64,
+                result_json,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_recipe_run(&self, id: &str) -> Result<Option<RecipeRunRow>> {
+        self.lock()
+            .query_row(
+                "SELECT id, repo_id, slug, params_json, scope, generation, result_json, \
+                 created_unix FROM recipe_runs WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(RecipeRunRow {
+                        id: r.get(0)?,
+                        repo_id: r.get(1)?,
+                        slug: r.get(2)?,
+                        params_json: r.get(3)?,
+                        scope: r.get(4)?,
+                        generation: r.get::<_, i64>(5)? as u64,
+                        result_json: r.get(6)?,
+                        created_unix: r.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+}
+
+/// V74-L3a — one `recipe_trust` row (migration V0038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeTrustRow {
+    pub repo_id: i64,
+    pub slug: String,
+    pub source_path: String,
+    pub content_hash: String,
+    pub trusted_body: String,
+    pub trusted_unix: i64,
+}
+
+/// V74-L3a — one `recipes_server` row (migration V0038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeServerRow {
+    pub slug: String,
+    pub repo: Option<String>,
+    pub title: String,
+    pub body_json: String,
+    pub created_unix: i64,
+    pub updated_unix: i64,
+}
+
+/// V74-L3a — one materialised `recipe_runs` row (migration V0038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeRunRow {
+    pub id: String,
+    pub repo_id: i64,
+    pub slug: String,
+    pub params_json: String,
+    pub scope: Option<String>,
+    pub generation: u64,
+    pub result_json: String,
+    pub created_unix: i64,
 }
 
 #[cfg(test)]
@@ -10352,6 +10862,78 @@ mod tests {
                 MIGRATIONS_CHECKSUMS_GOLDEN.trim_end(),
                 "an applied migration's content changed — either revert the edit or ship \
                  a repair like V72-B1 and bump this golden deliberately\n{actual}"
+            );
+        }
+
+        /// Version numbers this project deliberately SKIPPED and will never
+        /// use — the debt ledger for [`embedded_migration_versions_are_contiguous`].
+        ///
+        /// `33` was reserved for V72-H2b's own `derived_status` under the
+        /// old pre-assign-a-slot ledger. When that ledger was found unsafe
+        /// (below), this unit renumbered to main's max + 1 and left 33
+        /// permanently empty. That is INERT and is the point: refinery only
+        /// ever refuses an embedded migration that exists BELOW the applied
+        /// maximum, so a version that never exists cannot be refused. The
+        /// dangerous thing is not the hole — it is filling it.
+        ///
+        /// This list may SHRINK (never), and must never GROW: adding to it
+        /// means a slot was reserved again.
+        const PERMANENTLY_SKIPPED_VERSIONS: &[u32] = &[33];
+
+        /// V72-H2b — no embedded migration may be numbered below the
+        /// highest one, except for the permanently-skipped versions above.
+        ///
+        /// The milestone ledger used to pre-assign version numbers to
+        /// in-flight units and let them land out of order, on the belief
+        /// (written into `V0034__review_docs_and_findings_v2.sql`'s own
+        /// header, which is frozen because editing an applied migration's
+        /// bytes is itself the trap invariant 11 records) that "refinery
+        /// applies by version, so a gap is inert". **A gap is inert; a
+        /// gap-FILL is not.** `refinery-core`'s
+        /// `traits::get_unapplied_migrations` selects only migrations with
+        /// `version > current`, and with `abort_missing` at its default
+        /// `true` — which `Store::open` uses — an embedded migration BELOW
+        /// the applied maximum is a hard `MissingVersion` error. A volume
+        /// already migrated past a reserved slot therefore REFUSES TO BOOT
+        /// the moment the gap-fill merges: not a skipped table, a dead
+        /// daemon. V72-H2b caught this while holding such a slot.
+        ///
+        /// This test makes it unrepeatable. It is about the EMBEDDED set
+        /// only (what this binary ships), needs no database, and fails at
+        /// the one moment a human can still act on it — the PR that adds
+        /// the migration.
+        #[test]
+        fn embedded_migration_versions_are_contiguous() {
+            let versions: Vec<u32> = embedded_checksums().iter().map(|r| r.version).collect();
+            assert!(!versions.is_empty(), "no embedded migrations at all");
+            // `embedded_checksums` already sorts by version.
+            let (lo, hi) = (versions[0], *versions.last().unwrap());
+            let missing: Vec<u32> = (lo..=hi)
+                .filter(|v| !versions.contains(v))
+                .filter(|v| !PERMANENTLY_SKIPPED_VERSIONS.contains(v))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "embedded migration versions have gap(s) at {missing:?} (present: {lo}..={hi}) — \
+                 refinery's abort_missing refuses gap-fills: renumber to main's max + 1"
+            );
+            // A skipped version must stay skipped: filling one is exactly
+            // the boot-refusal this test exists to prevent.
+            for v in PERMANENTLY_SKIPPED_VERSIONS {
+                assert!(
+                    !versions.contains(v),
+                    "V{v:04} is in PERMANENTLY_SKIPPED_VERSIONS but a migration now claims it — \
+                     refinery's abort_missing refuses gap-fills: renumber to main's max + 1"
+                );
+            }
+            // Belt and braces: no duplicate version can hide behind the
+            // range check above.
+            let mut dedup = versions.clone();
+            dedup.dedup();
+            assert_eq!(
+                dedup.len(),
+                versions.len(),
+                "two embedded migrations share a version: {versions:?}"
             );
         }
 
@@ -11214,7 +11796,7 @@ mod tests {
         // V70-A3X — the actual production bug: a blob re-derived under a
         // NEW salt (grammar/query bump) used to leave the OLD salt's rows
         // visible ALONGSIDE the new ones in this un-salted join, doubling
-        // every symbol. `lang::RUST.salt` is the one genuinely "current"
+        // every symbol. `lang::RUST.symbol_salt` is the one genuinely "current"
         // salt `current_salt_cte` knows about; a fake old salt stands in
         // for a pre-bump derivation.
         let (_tmp, store) = open_temp();
@@ -11227,7 +11809,7 @@ mod tests {
         store
             .replace_symbols(
                 "hashA",
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &[sample_symbol(0, "new_name")],
             )
             .unwrap();
@@ -11291,7 +11873,7 @@ mod tests {
         store
             .replace_symbols(
                 "sharedBlob",
-                crate::lang::PYTHON.salt,
+                crate::lang::PYTHON.symbol_salt,
                 &[sample_symbol(0, "py_fn")],
             )
             .unwrap();
@@ -11310,7 +11892,7 @@ mod tests {
         store
             .replace_symbols(
                 "sharedBlob",
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &[sample_symbol(0, "new_rust_fn")],
             )
             .unwrap();
@@ -11320,12 +11902,12 @@ mod tests {
             .unwrap();
         assert!(rust_rows.is_empty(), "old rust salt must be purged");
         let new_rust = store
-            .symbols_for_blob("sharedBlob", crate::lang::RUST.salt)
+            .symbols_for_blob("sharedBlob", crate::lang::RUST.symbol_salt)
             .unwrap();
         assert_eq!(new_rust.len(), 1);
         assert_eq!(new_rust[0].name, "new_rust_fn");
         let py_rows = store
-            .symbols_for_blob("sharedBlob", crate::lang::PYTHON.salt)
+            .symbols_for_blob("sharedBlob", crate::lang::PYTHON.symbol_salt)
             .unwrap();
         assert_eq!(
             py_rows.len(),
@@ -11343,7 +11925,11 @@ mod tests {
             .upsert_file(repo_id, "a.rs", "hashA", "rust", 10)
             .unwrap();
         store
-            .replace_symbols("hashA", crate::lang::RUST.salt, &[sample_symbol(0, "cur")])
+            .replace_symbols(
+                "hashA",
+                crate::lang::RUST.symbol_salt,
+                &[sample_symbol(0, "cur")],
+            )
             .unwrap();
         // "hashA" ALSO carries a genuinely stale row — direct INSERT
         // (bypassing `replace_symbols`'s own write-side purge), simulating
@@ -11406,7 +11992,7 @@ mod tests {
                 .upsert_file(repo_id, &format!("f{i}.rs"), h, "rust", 10)
                 .unwrap();
             store
-                .replace_symbols(h, crate::lang::RUST.salt, &[sample_symbol(0, "cur")])
+                .replace_symbols(h, crate::lang::RUST.symbol_salt, &[sample_symbol(0, "cur")])
                 .unwrap();
             store
                 .lock()
@@ -11458,7 +12044,7 @@ mod tests {
             );
             assert_eq!(
                 store
-                    .symbols_for_blob(h, crate::lang::RUST.salt)
+                    .symbols_for_blob(h, crate::lang::RUST.symbol_salt)
                     .unwrap()
                     .len(),
                 1,
@@ -11468,6 +12054,157 @@ mod tests {
 
         // Idempotent: a second full walk finds nothing left to do.
         assert_eq!(store.sweep_stale_salt_derived().unwrap().total(), 0);
+    }
+
+    // ── V72-H2b — the sweep understands BOTH salt families ───────────────
+
+    /// A family is stale only when ITS OWN salt moved. The sweep runs one
+    /// pass per (table, family) pair, so a highlight row keyed by the
+    /// current HIGHLIGHT salt must survive even though that string is not
+    /// in the symbol set at all — the bug a single shared `cur` set would
+    /// have introduced the moment the two salts diverged.
+    #[test]
+    fn the_sweep_keeps_each_familys_current_rows_and_prunes_only_its_own_stale_ones() {
+        let (_tmp, store) = open_temp();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        store
+            .upsert_file(repo_id, "a.rs", "hashA", "rust", 10)
+            .unwrap();
+        // Current rows for both families, written the production way.
+        store
+            .replace_symbols(
+                "hashA",
+                crate::lang::RUST.symbol_salt,
+                &[sample_symbol(0, "cur")],
+            )
+            .unwrap();
+        store
+            .put_highlights(
+                "hashA",
+                crate::lang::RUST.highlight_salt,
+                &[crate::highlight::Span {
+                    byte_start: 0,
+                    byte_len: 2,
+                    class: crate::highlight::HighlightClass::Keyword,
+                }],
+            )
+            .unwrap();
+        // A PRE-SPLIT highlight row: painted under the SYMBOL salt, which
+        // is exactly what every mirror on disk carries at the moment this
+        // unit deploys. Direct INSERT, bypassing the write-side purge, the
+        // same way the V70-A3X test simulates old damage.
+        store
+            .lock()
+            .execute(
+                "INSERT INTO highlights (blob_hash, salt, spans) VALUES ('hashA', ?1, X'5B5D')",
+                params![crate::lang::RUST.symbol_salt],
+            )
+            .unwrap();
+
+        let counts = store.sweep_stale_salt_derived().unwrap();
+        assert_eq!(
+            counts.highlights, 1,
+            "the pre-split highlight row is stale FOR ITS FAMILY and goes"
+        );
+        assert_eq!(counts.symbols, 0, "no symbol row was ever stale here");
+        assert_eq!(counts.derived_status, 0);
+
+        // The survivors, by family.
+        assert_eq!(
+            store
+                .highlights_for_blob("hashA", crate::lang::RUST.highlight_salt)
+                .unwrap()
+                .map(|v| v.len()),
+            Some(1),
+            "the CURRENT highlight salt's row must survive its own sweep"
+        );
+        assert_eq!(
+            store
+                .symbols_for_blob("hashA", crate::lang::RUST.symbol_salt)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .is_derived(
+                "hashA",
+                crate::lang::SaltFamily::Symbol,
+                crate::lang::RUST.symbol_salt
+            )
+            .unwrap());
+        assert!(store
+            .is_derived(
+                "hashA",
+                crate::lang::SaltFamily::Highlight,
+                crate::lang::RUST.highlight_salt
+            )
+            .unwrap());
+    }
+
+    /// The marker table's own two rules: existence is the gate (`Some(0)`
+    /// is a real answer), and a write purges only the SAME family's other
+    /// salts for that blob.
+    #[test]
+    fn the_derivation_marker_is_per_family_and_records_a_zero_row_derivation() {
+        let (_tmp, store) = open_temp();
+        store.replace_symbols("blobZ", "rust@old+q1", &[]).unwrap();
+        assert!(store
+            .is_derived("blobZ", crate::lang::SaltFamily::Symbol, "rust@old+q1")
+            .unwrap());
+        assert_eq!(
+            store
+                .derived_rows("blobZ", crate::lang::SaltFamily::Symbol, "rust@old+q1")
+                .unwrap(),
+            Some(0),
+            "an empty derivation is still a derivation"
+        );
+        assert!(
+            !store.has_symbols("blobZ", "rust@old+q1").unwrap(),
+            "and the row-count question still honestly answers no"
+        );
+
+        // The HIGHLIGHT family is untouched by a symbol-family write ...
+        store
+            .put_highlights("blobZ", "rust@old+h1+roles2", &[])
+            .unwrap();
+        assert!(store
+            .is_derived(
+                "blobZ",
+                crate::lang::SaltFamily::Highlight,
+                "rust@old+h1+roles2"
+            )
+            .unwrap());
+
+        // ... and a symbol-salt bump purges the previous SYMBOL marker
+        // without touching the highlight one.
+        store.replace_symbols("blobZ", "rust@new+q2", &[]).unwrap();
+        assert!(!store
+            .is_derived("blobZ", crate::lang::SaltFamily::Symbol, "rust@old+q1")
+            .unwrap());
+        assert!(store
+            .is_derived("blobZ", crate::lang::SaltFamily::Symbol, "rust@new+q2")
+            .unwrap());
+        assert!(
+            store
+                .is_derived(
+                    "blobZ",
+                    crate::lang::SaltFamily::Highlight,
+                    "rust@old+h1+roles2"
+                )
+                .unwrap(),
+            "a symbol-salt bump must never erase the highlight family's marker"
+        );
+
+        // A DIFFERENT language's marker for the same blob (degenerate
+        // content shared across extensions) survives too — the purge is
+        // language-prefixed, `lang_prefix_pattern`'s own rule.
+        store.replace_symbols("blobZ", "python@x+q1", &[]).unwrap();
+        store
+            .replace_symbols("blobZ", "rust@newer+q3", &[])
+            .unwrap();
+        assert!(store
+            .is_derived("blobZ", crate::lang::SaltFamily::Symbol, "python@x+q1")
+            .unwrap());
     }
 
     fn sample_symbol(ordinal: u32, name: &str) -> Symbol {
@@ -11980,7 +12717,7 @@ mod tests {
         store
             .replace_occurrences(
                 "hashA",
-                crate::lang::RUST.salt,
+                crate::lang::RUST.symbol_salt,
                 &[occ(0, "widget", "ref", 2)],
             )
             .unwrap();
@@ -12037,11 +12774,11 @@ mod tests {
             .put_highlights("sharedBlob", "rust@old-fake", &old_spans)
             .unwrap();
         store
-            .put_highlights("sharedBlob", crate::lang::PYTHON.salt, &old_spans)
+            .put_highlights("sharedBlob", crate::lang::PYTHON.symbol_salt, &old_spans)
             .unwrap();
 
         store
-            .put_highlights("sharedBlob", crate::lang::RUST.salt, &old_spans)
+            .put_highlights("sharedBlob", crate::lang::RUST.symbol_salt, &old_spans)
             .unwrap();
 
         assert!(store
@@ -12049,12 +12786,12 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(store
-            .highlights_for_blob("sharedBlob", crate::lang::RUST.salt)
+            .highlights_for_blob("sharedBlob", crate::lang::RUST.symbol_salt)
             .unwrap()
             .is_some());
         assert!(
             store
-                .highlights_for_blob("sharedBlob", crate::lang::PYTHON.salt)
+                .highlights_for_blob("sharedBlob", crate::lang::PYTHON.symbol_salt)
                 .unwrap()
                 .is_some(),
             "a DIFFERENT language's highlights for the same blob_hash must survive"
@@ -15301,7 +16038,7 @@ mod tests {
         store
             .replace_scip_occurrences(
                 "hash-a",
-                lang.salt,
+                lang.symbol_salt,
                 &[ScipOccurrenceIn {
                     name: "widget".to_string(),
                     role: "def".to_string(),
@@ -15318,7 +16055,7 @@ mod tests {
         store
             .replace_occurrences(
                 "hash-b",
-                lang.salt,
+                lang.symbol_salt,
                 &[crate::occurrences::Occurrence {
                     ordinal: 0,
                     name: "other".to_string(),
