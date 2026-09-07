@@ -79,7 +79,19 @@ describe("the board rows", () => {
       // check 8 refuses it (only `reader`/`global` may), and the CM6 buffer
       // would then be a second executor for a key this page owns.
       expect(row?.vimKind).toBeUndefined();
-      expect(row?.when, `${id} must gate on the boards surface`).toContain("board == boards");
+      // V74-L3b — the three `walkthrough.*` rows are SHARED with the
+      // kbc-tour/1 playback (a tour IS a board whose nodes are its steps), so
+      // their surface atom was dropped: the `when` grammar is `&&`-only, so
+      // "boards OR tours" cannot be spelled, and `walkthrough` is published by
+      // exactly the two surfaces that have one. Every OTHER board row still
+      // gates on this surface by name, which is what this assertion protects.
+      if (id.startsWith("walkthrough.")) {
+        expect(row?.when, `${id} gates on the walkthrough, shared with ~tours`).toBe(
+          "walkthrough",
+        );
+      } else {
+        expect(row?.when, `${id} must gate on the boards surface`).toContain("board == boards");
+      }
     }
   });
 

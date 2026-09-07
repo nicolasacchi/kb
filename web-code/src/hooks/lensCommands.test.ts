@@ -3,7 +3,15 @@ import { KBC_ACTIVE_COMMANDS } from "../commands/registry.gen";
 import { LENS_COMMAND_IDS } from "./lensCommands";
 
 describe("doc↔code lens (~lens) — declaration ↔ handler walk", () => {
-  const declared = KBC_ACTIVE_COMMANDS.filter((c) => c.scope === "board" && c.when === "board == lens");
+    // V74-L3b — a PREFIX match, not an exact one. The surface atom is still
+    // the first atom of every row this page owns, but a row may now carry a
+    // second (`&& !walkthrough`, added so `whenDisjoint` can prove it apart
+    // from the shared `walkthrough.*` family). Matching the whole string
+    // would silently drop such a row out of this walk — which is the exact
+    // dead-row blindness the walk exists to prevent.
+  const declared = KBC_ACTIVE_COMMANDS.filter(
+    (c) => c.scope === "board" && (c.when ?? "").startsWith("board == lens"),
+  );
 
   it("has at least one row (a scope with no rows is a dead scope)", () => {
     expect(declared.length).toBeGreaterThan(0);

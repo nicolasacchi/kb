@@ -47,6 +47,10 @@ const TAB_META: Record<InspectorTab, { label: string; icon: ReactNode; hint: str
   comments: { label: "Comments", icon: <Icon.Comment />, hint: "what does the source say about itself?" },
   review: { label: "Review", icon: <Icon.ClipboardCheck />, hint: "what's contested?" },
   dossier: { label: "Dossier", icon: <Icon.List />, hint: "what does this entity have?" },
+  // V74-L3b — kbc-trail/1's own read. "Where have I been?" is a question
+  // about the reader, not about the file, which is why this tab's body does
+  // not change when the open file does.
+  trail: { label: "Trail", icon: <Icon.Record />, hint: "where have I been?" },
 };
 
 export interface InspectorRailHandle {
@@ -171,6 +175,11 @@ export interface InspectorRailProps {
   /// Badge count — the number of ACTIONABLE (drifted/aged/unreasoned)
   /// comments/1 rows in the open file, off the wire (never re-derived here).
   commentsBadgeCount?: number;
+
+  /// V74-L3b — the Trail tab's body (`components/trail/TrailRail.tsx`).
+  /// Supplied by whoever mounts the rail; absent renders the honest "nothing
+  /// is reading your trail here" hint rather than an empty panel.
+  trailPanel?: ReactNode | null;
 }
 
 function SubjectChip({
@@ -288,6 +297,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     workspaceNotesPanel = null,
     commentsPanel = null,
     commentsBadgeCount = 0,
+    trailPanel = null,
   },
   handleRef,
 ) {
@@ -347,6 +357,11 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
   );
   const commentsBody = commentsPanel ?? (
     <div className="kbc-inspector__hint">No file open.</div>
+  );
+  const trailBody = trailPanel ?? (
+    <div className="kbc-inspector__hint" data-kbc-rail-no-trail>
+      Your trail is not readable here.
+    </div>
   );
   const dossierBody = hasDossierContext ? (
     (dossierPanel ?? <div className="kbc-inspector__hint">No members in this dossier.</div>)
@@ -465,6 +480,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
           </>
         )}
         {tab === "comments" && <Section title="Comments">{commentsBody}</Section>}
+        {tab === "trail" && <Section title="Trail">{trailBody}</Section>}
         {tab === "review" && <Section title="Review">{reviewBody}</Section>}
         {tab === "dossier" && <Section title="Members">{dossierBody}</Section>}
       </div>

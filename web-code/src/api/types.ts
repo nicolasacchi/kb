@@ -5433,3 +5433,212 @@ export interface RailsOrphansOut {
   honesty: RailsHonesty;
   notes: string[];
 }
+
+// ── kbc-tour/1 + kbc-trail/1 (V74-L3b) ─────────────────────────────────────
+//
+// A TOUR is a board whose nodes are its steps (D10 — server invariant 26), so
+// every step's resolved reference is a `BoardNode` VERBATIM: same states, same
+// reasons, same `code` card. There is deliberately no `TourNode` type here —
+// a second shape for one thing is exactly what "do not build two" forbids,
+// and it would let the two drift about what `carried` looks like.
+//
+// A TRAIL is the operator's own movement record. Note what its types do NOT
+// carry: `TrailAggregateRow` has no timestamp field at all, and `TrailStepOut`
+// carries a `day`, never a wall-clock second. That is the wire half of the
+// daemon's D17 posture, and this file is where a future field would first
+// have to appear for it to be broken.
+
+/// A tour step's CAMERA — what the reader should SHOW, never where anything
+/// SITS. There is no `x`/`y` and there never will be: the boards coordinate
+/// lint runs over a tour document unchanged.
+export interface TourCamera {
+  fold?: boolean | null;
+  context?: number | null;
+}
+
+/// One resolved step. `node` is a `BoardNode` because a tour step IS a board
+/// node — the SAME resolver produced it.
+export interface TourStep {
+  /// 0-based position in the walk — what `?step=` addresses (1-based on the
+  /// wire; `lib/toursUrl.ts` owns the single conversion).
+  ordinal: number;
+  node: BoardNode;
+  camera?: TourCamera | null;
+  /// The kbc-review/1 ref string this step's reference PROJECTS to, when it
+  /// projects to one. A projection for a reader, never a second address.
+  ref?: string | null;
+}
+
+/// `GET /api/tours/{slug}?repo=[&ctx=1]`. `honesty` is `BoardHonesty`
+/// unchanged — a tour counts its pinned, carried and ORPHAN steps exactly as
+/// a board counts its nodes.
+export interface TourOut {
+  schema: string;
+  repo: string;
+  slug: string;
+  title: string;
+  description_md: string;
+  status: string;
+  authored_ref?: string | null;
+  revision: number;
+  content_hash: string;
+  created_unix: number;
+  updated_unix: number;
+  steps: TourStep[];
+  honesty: BoardHonesty;
+}
+
+export interface TourSummary {
+  slug: string;
+  title: string;
+  status: string;
+  revision: number;
+  updated_unix: number;
+  /// A tour's node count and step count are the same number by construction,
+  /// so the daemon reports ONE.
+  steps: number;
+}
+
+/// `GET /api/tours?repo=[&status=]`.
+export interface ToursListOut {
+  schema: string;
+  repo: string;
+  statuses_available: string[];
+  tours: TourSummary[];
+}
+
+export interface TourApplyOut {
+  schema: string;
+  repo: string;
+  slug: string;
+  created: boolean;
+  unchanged: boolean;
+  dry_run: boolean;
+  status: string;
+  status_reset: boolean;
+  revision: number;
+  steps: number;
+  lint: { findings: BoardLintFinding[]; components: string[][] };
+}
+
+/// `GET /api/trails/state` — the INDICATOR's source of truth.
+///
+/// `enabled` is the daemon's `[trails] enabled`; `mode` is the persisted
+/// opt-in. They mean different things and both are needed: a daemon can
+/// permit the feature while nobody has turned it on. `mutable` says whether
+/// THIS caller could change the mode, so the SPA hides a control rather than
+/// offering a button that 403s.
+export interface TrailStateOut {
+  schema: string;
+  enabled: boolean;
+  mode: string;
+  modes_available: string[];
+  retention_days: number;
+  step_granularity_secs: number;
+  changed_unix?: number | null;
+  mutable: boolean;
+  notes: string[];
+}
+
+export interface TrailSummary {
+  id: string;
+  origin: string;
+  title?: string | null;
+  day?: string | null;
+  parent_id?: string | null;
+  parent_ordinal?: number | null;
+  /// NOT `steps` — `TrailOut` flattens this beside its own step ARRAY, and
+  /// two keys of one name would make the count unreachable on the wire.
+  step_count: number;
+  dwell_secs: number;
+  created_unix: number;
+  updated_unix: number;
+}
+
+export interface TrailsListOut {
+  schema: string;
+  repo: string;
+  enabled: boolean;
+  mode: string;
+  origins_available: string[];
+  trails: TrailSummary[];
+  notes: string[];
+}
+
+/// One step of the operator's own read. `day` is the finest time this type
+/// carries — there is deliberately no `entered_at`.
+export interface TrailStepOut {
+  ordinal: number;
+  via: string;
+  path?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+  symbol?: string | null;
+  blob_sha?: string | null;
+  /// `pinned` | `carried` | `orphan` | `inert`, computed on THIS read.
+  state: string;
+  dwell_secs: number;
+  day: string;
+  note?: string | null;
+}
+
+export interface TrailNoteOut {
+  id: string;
+  parent_id?: string | null;
+  author: string;
+  intent: string;
+  body: string;
+  path: string;
+  resolved: boolean;
+  created_at: number;
+}
+
+/// `GET /api/trails/{id}?repo=` — LOOPBACK-ONLY. The summary is FLATTENED
+/// onto this object by the daemon, which is why `id`/`origin`/`step_count`
+/// sit beside `steps`.
+export type TrailOut = TrailSummary & {
+  schema: string;
+  repo: string;
+  steps: TrailStepOut[];
+  notes_list?: TrailNoteOut[] | null;
+  notes: string[];
+};
+
+/// One row of the ONLY agent-facing read. Counts per file/symbol over whole
+/// DAYS — no per-line span, no step timestamp, no ordering below the day.
+export interface TrailAggregateRow {
+  path?: string | null;
+  symbol?: string | null;
+  steps: number;
+  dwell_secs: number;
+  days: number;
+  first_day: string;
+  last_day: string;
+}
+
+export interface TrailAggregateOut {
+  schema: string;
+  repo: string;
+  enabled: boolean;
+  rows: TrailAggregateRow[];
+  truncated: boolean;
+  notes: string[];
+}
+
+export interface TrailCreatedOut {
+  schema: string;
+  id: string;
+  origin: string;
+  steps: number;
+  parent_id?: string | null;
+  parent_ordinal?: number | null;
+  notes: string[];
+}
+
+export interface TrailPurgeOut {
+  schema: string;
+  repo: string;
+  trails: number;
+  steps: number;
+  notes: string[];
+}

@@ -1,0 +1,384 @@
+/* `kbc-tour/1` + `kbc-trail/1` (V74-L3b).
+ *
+ * Every colour is a kbc-theme/1 token — no literal hex, no `rgb()`, which is
+ * what `scripts/theme-lint.mjs` enforces and what lets all 27 themes work
+ * without a per-theme override here. The state colours reuse the BOARD
+ * state tokens rather than minting a second vocabulary: a `carried` step and
+ * a `carried` board node are the same fact, and two palettes for one fact is
+ * the drift the one-ladder rule exists to prevent.
+ */
+
+.kbc-tours,
+.kbc-tour {
+  padding: var(--sp-4);
+  max-width: 72rem;
+  margin: 0 auto;
+}
+
+.kbc-tours__title,
+.kbc-tour__title {
+  font-size: var(--type-h1);
+  margin: 0;
+}
+
+.kbc-tours__hint,
+.kbc-tour__desc,
+.kbc-tour__caption,
+.kbc-tours__row-meta {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+}
+
+.kbc-tours__controls {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  margin: var(--sp-3) 0;
+}
+
+.kbc-tours__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kbc-tours__row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.kbc-tours__row-name {
+  font-weight: 600;
+}
+
+.kbc-tours__status {
+  font-size: var(--type-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--sp-2);
+  color: var(--fg-muted);
+}
+
+.kbc-tours__status--accepted {
+  color: var(--ok-fg);
+  border-color: var(--ok-border);
+}
+
+.kbc-tours__status--pending {
+  color: var(--warn-fg);
+  border-color: var(--warn-border);
+}
+
+.kbc-tours__sibling,
+.kbc-tours__sibling p {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  margin-top: var(--sp-5);
+}
+
+/* --- one tour --------------------------------------------------------- */
+
+.kbc-tour__title-row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.kbc-tour__census {
+  list-style: none;
+  margin: var(--sp-2) 0;
+  padding: 0;
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+}
+
+.kbc-tour__gate {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.kbc-tour__bar {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.kbc-tour__step {
+  padding: var(--sp-3) 0;
+}
+
+.kbc-tour__step-title {
+  font-size: var(--type-h2);
+  margin: 0 0 var(--sp-2);
+}
+
+.kbc-tour__step-foot {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  margin-top: var(--sp-2);
+  font-size: var(--type-sm);
+}
+
+.kbc-tour__strip {
+  list-style: none;
+  margin: var(--sp-4) 0 0;
+  padding: 0;
+  display: flex;
+  gap: var(--sp-2);
+  overflow-x: auto;
+}
+
+.kbc-tour__strip-item {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.kbc-tour__strip-item.is-current {
+  border-color: var(--accent-border);
+  background: var(--bg-selected);
+}
+
+.kbc-tour__strip-state--orphan {
+  color: var(--danger-fg);
+}
+
+.kbc-tour__strip-state--carried {
+  color: var(--warn-fg);
+}
+
+/* --- the recorder + composer ------------------------------------------ */
+
+.kbc-tourrec {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  font-size: var(--type-sm);
+}
+
+.kbc-tourrec__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.kbc-tourcomposer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-drawer);
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kbc-tourcomposer__panel {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--sp-4);
+  width: min(48rem, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.kbc-tourcomposer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kbc-tourcomposer__hint,
+.kbc-tourcomposer__note,
+.kbc-tourcomposer__step-note,
+.kbc-tourcomposer__cap {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+}
+
+.kbc-tourcomposer__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0;
+}
+
+.kbc-tourcomposer__steps {
+  list-style: none;
+  margin: var(--sp-3) 0;
+  padding: 0;
+}
+
+.kbc-tourcomposer__steps > li {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.kbc-tourcomposer__step-head {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.kbc-tourcomposer__step-title {
+  flex: 1;
+}
+
+.kbc-tourcomposer__step-ref {
+  display: block;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: var(--sp-1) 0;
+}
+
+.kbc-tourcomposer__problems {
+  color: var(--danger-fg);
+  font-size: var(--type-sm);
+  margin: var(--sp-2) 0;
+  padding-left: var(--sp-4);
+}
+
+.kbc-tourcomposer__foot {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: var(--sp-3);
+}
+
+/* --- the trail indicator + rail --------------------------------------- */
+
+.kbc-trailind {
+  position: relative;
+}
+
+.kbc-trailind__btn {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+.kbc-trailind__label {
+  font-size: var(--type-xs);
+}
+
+.kbc-trailind__btn--recording {
+  color: var(--danger-fg);
+}
+
+.kbc-trailind__btn--paused {
+  color: var(--warn-fg);
+}
+
+.kbc-trailind__btn--off {
+  color: var(--fg-muted);
+}
+
+.kbc-trailind__pop {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: var(--z-popover);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--sp-3);
+  width: 22rem;
+}
+
+.kbc-trailind__meta,
+.kbc-trailind__gate,
+.kbc-trailind__notes {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.kbc-trailind__actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0;
+}
+
+.kbc-trailrail__head {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kbc-trailrail__mode {
+  font-size: var(--type-xs);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+}
+
+.kbc-trailrail__hint,
+.kbc-trailrail__note,
+.kbc-trailrail__parent,
+.kbc-trailrail__dwell {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.kbc-trailrail__steps {
+  list-style: none;
+  margin: var(--sp-2) 0;
+  padding: 0;
+}
+
+.kbc-trailrail__steps > li {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.kbc-trailrail__steps > li.is-focused {
+  background: var(--bg-selected);
+}
+
+.kbc-trailrail__via {
+  font-size: var(--type-xs);
+  color: var(--fg-muted);
+}
+
+.kbc-trailrail__state--orphan {
+  color: var(--danger-fg);
+}
+
+.kbc-trailrail__state--carried {
+  color: var(--warn-fg);
+}
+
+.kbc-trailrail__state {
+  font-size: var(--type-xs);
+}
+
+.kbc-trailrail__fork {
+  font-size: var(--type-xs);
+}

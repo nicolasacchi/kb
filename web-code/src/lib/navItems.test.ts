@@ -57,6 +57,8 @@ describe("NAV_ITEMS catalog", () => {
       "recipes",
       "stacks",
       "canvas",
+      // V74-L3b — `~tours` (kbc-tour/1).
+      "tours",
       // S2-A — unified inbox (design-s2.md §S2-A).
       "inbox",
     ]);

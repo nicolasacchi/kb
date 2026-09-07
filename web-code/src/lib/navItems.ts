@@ -14,6 +14,7 @@ import {
   railsUrl,
   recipesPageUrl,
   reviewsUrl,
+  toursPageUrl,
   stacksPageUrl,
   todosUrl,
 } from "./codeUrl";
@@ -50,6 +51,7 @@ export type NavKey =
   | "recipes"
   | "stacks"
   | "canvas"
+  | "tours"
   | "inbox";
 
 export interface NavItem {
@@ -84,6 +86,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { key: "recipes", label: "Recipes", icon: Icon.Terminal, group: "explore", url: recipesPageUrl },
   { key: "stacks", label: "Stacks", icon: Icon.Layers, group: "explore", url: stacksPageUrl },
   { key: "canvas", label: "Canvas", icon: Icon.Graph, group: "explore", url: canvasPageUrl },
+  // V74-L3b — `~tours` (kbc-tour/1). In the catalog for the same reason
+  // `~rails` is: the Explore popover, the mobile nav sheet and active-item
+  // highlighting all read THIS array, so a keyboard-only door (`Space g T`)
+  // would otherwise be the surface's only one.
+  { key: "tours", label: "Tours", icon: Icon.Spark, group: "explore", url: toursPageUrl },
   // S2-A — unified inbox (design-s2.md §S2-A). Repo-less; see `inboxUrl`'s
   // own doc above for why its `url` ignores `repo`.
   { key: "inbox", label: "Inbox", icon: Icon.List, group: "explore", url: inboxUrl },
