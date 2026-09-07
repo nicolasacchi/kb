@@ -22,8 +22,9 @@
 // offers the `kb-code review compose` line to copy, and nothing else.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { ReviewDocLintOut, ReviewDocOut } from "../../api/types";
+import type { ClaimOut, ReviewDocLintOut, ReviewDocOut } from "../../api/types";
 import { Icon } from "../icons";
+import ClaimRegister from "./ClaimRegister";
 import DocLintPanel from "./DocLintPanel";
 import DocMarkdown from "./DocMarkdown";
 import RefCard from "./RefCard";
@@ -58,6 +59,11 @@ export interface DocPanelProps {
   cardsFolded: boolean;
   onSetCardsFolded: (folded: boolean) => void;
   focusedRef: string | null;
+  /// V73-K2c (kbc-claim/1, design D18) — this review's claims, fetched once
+  /// by `ReviewDetail.tsx` (the SAME "one fetch, two consumers" precedent
+  /// `githubThreadsQ` already establishes) and rendered here in the SAME
+  /// wire order the server sent (surfaced, never scored).
+  claims: ClaimOut[];
 }
 
 export default function DocPanel({
@@ -69,6 +75,7 @@ export default function DocPanel({
   cardsFolded,
   onSetCardsFolded,
   focusedRef,
+  claims,
 }: DocPanelProps) {
   const cards = useMemo(() => cardIndex(doc.cards), [doc.cards]);
   const resolved = doc.cards_resolved;
@@ -398,6 +405,11 @@ export default function DocPanel({
           focused ref {focusedRef}
         </p>
       )}
+
+      {/* V73-K2c — the claim register, distinct from the document's own
+          `[[…]]` cards above: those are FACTS the daemon can re-derive, this
+          is agent PROSE it cannot (design D18). */}
+      <ClaimRegister repo={repo} reviewId={id} claims={claims} scopeLabel="this review" />
     </section>
   );
 }

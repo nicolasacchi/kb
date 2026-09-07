@@ -1080,3 +1080,101 @@
   margin-top: 2px;
   cursor: help;
 }
+
+/* V73-K2c (review-timeline/2) — the lane bar, filters and paging. */
+.kbc-timeline__lanes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.kbc-timeline__lane {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule-hi);
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.kbc-timeline__lane--hidden {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.kbc-timeline__lane--ok {
+  border-color: color-mix(in srgb, var(--green) 40%, var(--rule-hi));
+}
+.kbc-timeline__lane--skipped {
+  color: var(--ink-faint);
+}
+.kbc-timeline__lane--refused {
+  border-style: dashed;
+  color: var(--ink-faint);
+}
+.kbc-timeline__lane--degraded {
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--rule-hi));
+  color: var(--warn);
+}
+.kbc-timeline__lane-count {
+  font-size: 9px;
+  background: var(--bg-card-hi);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.kbc-timeline__lane-cycle {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--rule-hi);
+  background: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.kbc-timeline__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: var(--fs-sm);
+}
+.kbc-timeline__filters select,
+.kbc-timeline__filters input[type="text"],
+.kbc-timeline__filters input[type="date"] {
+  font-size: var(--fs-sm);
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule-hi);
+  background: var(--bg-card);
+  color: var(--ink);
+}
+.kbc-timeline__github-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.kbc-timeline__author {
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  margin-top: 2px;
+}
+.kbc-timeline__drift {
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  margin-top: 2px;
+  cursor: help;
+}
+.kbc-timeline__paging {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: var(--fs-sm);
+  color: var(--ink-faint);
+}

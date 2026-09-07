@@ -125,6 +125,10 @@ export interface InspectorRailProps {
   /// file with no `# == Schema Information` banner (`DiagnosticsCard`'s own
   /// "absent" idiom, not `FrameworkCard`'s named-empty one).
   schemaCard?: ReactNode | null;
+  /// V73-K2c (kbc-claim/1, design D18) — the Claims card: a RAIL ROW (never
+  /// a gutter slot, the Lane Budget's own rule), mounted the SAME always-
+  /// visible way `diagnosticsCard`/`frameworkCard`/`citedBy` are.
+  claimsCard?: ReactNode | null;
 
   // --- V70-A4 additions --------------------------------------------------
   /// The Review tab's body. `null` + `hasReviewContext: false` renders
@@ -272,6 +276,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     frameworkCard = null,
     diagnosticsCard = null,
     schemaCard = null,
+    claimsCard = null,
     reviewPanel = null,
     hasReviewContext = false,
     subject,
@@ -425,6 +430,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
       {frameworkCard}
       {diagnosticsCard}
       {schemaCard}
+      {claimsCard}
       <div className="kbc-inspector__body" data-kbc-rail-body={tab}>
         {tab === "all" && (
           <>

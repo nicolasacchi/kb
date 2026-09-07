@@ -98,7 +98,19 @@ describe("timelineRow — every closed-vocab kind", () => {
 
   it("comment — top-level note, labels kind · intent · author", () => {
     const row = timelineRow(
-      { at: 130, kind: "comment", annotation_id: "note-1", path: "a.rb", intent: "note", author: "you", is_reply: false },
+      {
+        at: 130,
+        kind: "comment",
+        annotation_id: "note-1",
+        path: "a.rb",
+        intent: "note",
+        // V73-K2c: the wire's `author` is the v2 envelope object (the
+        // server used to ALSO clobber it with a duplicate flat string —
+        // see review_timeline.rs's fix — `authorNameOf` still tolerates a
+        // bare string too, but this fixture reflects the corrected wire).
+        author: { kind: "human", name: "you" },
+        is_reply: false,
+      },
       "myrepo",
       7,
     );
@@ -109,7 +121,15 @@ describe("timelineRow — every closed-vocab kind", () => {
 
   it("comment — a reply labels itself 'reply', not 'comment'", () => {
     const row = timelineRow(
-      { at: 260, kind: "comment", annotation_id: "reply-1", path: "a.rb", intent: "question", author: "claude", is_reply: true },
+      {
+        at: 260,
+        kind: "comment",
+        annotation_id: "reply-1",
+        path: "a.rb",
+        intent: "question",
+        author: { kind: "agent", name: "claude" },
+        is_reply: true,
+      },
       "r",
       1,
     );
@@ -118,7 +138,15 @@ describe("timelineRow — every closed-vocab kind", () => {
 
   it("comment with no path still builds a diff href (no file segment)", () => {
     const row = timelineRow(
-      { at: 130, kind: "comment", annotation_id: "note-1", path: "", intent: "note", author: "you", is_reply: false },
+      {
+        at: 130,
+        kind: "comment",
+        annotation_id: "note-1",
+        path: "",
+        intent: "note",
+        author: { kind: "human", name: "you" },
+        is_reply: false,
+      },
       "myrepo",
       7,
     );
@@ -151,5 +179,132 @@ describe("timelineRows", () => {
 
   it("is empty for an empty event list", () => {
     expect(timelineRows([], "r", 1)).toEqual([]);
+  });
+});
+
+// V73-K2c — review-timeline/2's five new lanes' kinds, plus the envelope
+// (author/drift) every kind now carries.
+describe("timelineRow — the V73-K2c kinds", () => {
+  it("pr_body links into the pseudo-file view and carries a blob prefix", () => {
+    const row = timelineRow(
+      { at: 700, kind: "pr_body", path: "~review/pr-body.md", blob_sha: "0123456789abcdef" },
+      "myrepo",
+      7,
+    );
+    expect(row.icon).toBe("pr_body");
+    expect(row.detail).toBe("0123456789");
+    expect(row.href).toBe("/r/myrepo/~reviews/7/diff/~review/pr-body.md");
+  });
+
+  it("pr_body carries the drift caption when the wire sent one", () => {
+    const row = timelineRow(
+      {
+        at: 700,
+        kind: "pr_body",
+        path: "~review/pr-body.md",
+        blob_sha: "abc",
+        drift: { kind: "pr_head", note: "the newest patchset moved past this snapshot" },
+      },
+      "r",
+      1,
+    );
+    expect(row.driftNote).toBe("the newest patchset moved past this snapshot");
+  });
+
+  it("wt_comment is labelled distinctly from a review comment", () => {
+    const row = timelineRow(
+      {
+        at: 800,
+        kind: "wt_comment",
+        path: "app/models/order.rb",
+        intent: "note",
+        author: { kind: "human", name: "you" },
+        is_reply: false,
+      },
+      "myrepo",
+      7,
+    );
+    expect(row.icon).toBe("wt_comment");
+    expect(row.label).toBe("working-tree · comment · note · you");
+    expect(row.detail).toBe("app/models/order.rb");
+  });
+
+  it("doc_revision names the revision and links to ~review/review.md", () => {
+    const row = timelineRow(
+      { at: 900, kind: "doc_revision", revision: 2, ps_number: 3, tier: "full" },
+      "myrepo",
+      7,
+    );
+    expect(row.icon).toBe("doc_revision");
+    expect(row.label).toBe("review document revision 2 (ps3)");
+    expect(row.detail).toBe("tier: full");
+    expect(row.href).toBe("/r/myrepo/~reviews/7/diff/~review/review.md");
+  });
+
+  it("report names the verdict when present", () => {
+    expect(timelineRow({ at: 950, kind: "report", verdict: "approve" }, "r", 1).label).toBe(
+      "agent report: approve",
+    );
+    expect(timelineRow({ at: 950, kind: "report" }, "r", 1).label).toBe("agent report set");
+  });
+
+  it("claim names its kind, subject and ladder state", () => {
+    const row = timelineRow(
+      { at: 960, kind: "claim", claim_kind: "decision", subject: "checkout flow", state: "pinned" },
+      "r",
+      1,
+    );
+    expect(row.icon).toBe("claim");
+    expect(row.label).toBe("decision on checkout flow");
+    expect(row.detail).toBe("pinned");
+  });
+
+  it("github_comment links into the diff and carries the external html_url", () => {
+    const row = timelineRow(
+      { at: 970, kind: "github_comment", path: "a.rb", html_url: "https://github.com/x/y/pull/1#c1" },
+      "myrepo",
+      7,
+    );
+    expect(row.icon).toBe("github");
+    expect(row.href).toBe("/r/myrepo/~reviews/7/diff/a.rb");
+    expect(row.external).toBe("https://github.com/x/y/pull/1#c1");
+  });
+
+  it("turn names the tool + path + tier and links to the session's turn", () => {
+    const row = timelineRow(
+      {
+        at: 980,
+        kind: "turn",
+        tool: "Edit",
+        path: "app/models/order.rb",
+        tier: "exact",
+        session_id: "sess-1",
+        turn_id: "t-0189aa112233",
+      },
+      "myrepo",
+      7,
+    );
+    expect(row.icon).toBe("turn");
+    expect(row.label).toBe("Edit touched app/models/order.rb");
+    expect(row.detail).toBe("exact");
+    expect(row.external).toContain("t-0189aa112233");
+  });
+
+  it("every kind carries the author register when the wire sends one", () => {
+    const row = timelineRow(
+      { at: 100, kind: "review_created", author: { kind: "system" } },
+      "r",
+      1,
+    );
+    expect(row.author).toEqual({ kind: "system" });
+  });
+
+  it("a malformed author object is never surfaced as the register", () => {
+    const row = timelineRow(
+      { at: 100, kind: "review_created", author: "not-an-object" as unknown as ReviewTimelineEvent["author"] },
+      "r",
+      1,
+    );
+    expect(row.author).toBeUndefined();
   });
 });
