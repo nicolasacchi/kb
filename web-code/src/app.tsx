@@ -12,6 +12,7 @@ import { coldSeedRepo, cycleTheme, loadLastRepo, saveLastRepo } from "./lib/pref
 import { readerUrl } from "./lib/breadcrumbs";
 import {
   boardsPageUrl,
+  toursPageUrl,
   branchesUrl,
   canvasPageUrl,
   commentsUrl,
@@ -27,6 +28,8 @@ import { setsUrl } from "./lib/setsUrl";
 import { browserPageUrl } from "./lib/codeUrl";
 import TrailOriginChip from "./components/nav/TrailOriginChip";
 import { useTrailLink } from "./hooks/useTrailLink";
+import LinkedStepChip from "./components/trail/LinkedStepChip";
+import TourRecorder from "./components/tours/TourRecorder";
 import { codeUrl } from "./lib/codeUrl";
 import { enterRing, goForward } from "./lib/navHistory";
 import { parseDeskParam } from "./lib/deskParam";
@@ -113,6 +116,11 @@ const Canvas = lazy(() => import("./routes/Canvas"));
 // which stays mounted and frozen (`routes/Boards.tsx`'s header says why).
 const Boards = lazy(() => import("./routes/Boards"));
 const BoardDetail = lazy(() => import("./routes/BoardDetail"));
+// V74-L3b — `kbc-tour/1`. `routes/Tour.tsx` (Phase E4's tour mode over ONE
+// reading set's spans) is a DIFFERENT surface and keeps its own route below;
+// these two are the tour DOCUMENT list and its playback.
+const Tours = lazy(() => import("./routes/Tours"));
+const TourDetail = lazy(() => import("./routes/TourDetail"));
 // V3.4-C3 — symbol-first browser (Smalltalk lens).
 const Browser = lazy(() => import("./routes/Browser"));
 // DCB W2.B — the doc↔code lens: repo-scoped page (`Lens`) plus two
@@ -316,6 +324,7 @@ function AppShell() {
     "nav.prs": () => navigate(repoRoute(prsUrl)),
     "nav.canvas": () => navigate(repoRoute(canvasPageUrl)),
     "nav.boards": () => navigate(repoRoute(boardsPageUrl)),
+    "nav.tours": () => navigate(repoRoute(toursPageUrl)),
     "nav.browser": () => navigate(repoRoute(browserPageUrl)),
     "nav.hotspots": () => navigate(repoRoute(hotspotsUrl)),
     "nav.recipes": () => navigate(repoRoute(recipesPageUrl)),
@@ -349,6 +358,20 @@ function AppShell() {
             />
           </div>
         )}
+        {/* V74-L3b — the same bar, for a tab linked to a SERVER sequence. The
+            two are mutually exclusive by construction: `LinkedStepChip`
+            renders only for a link that carries `src=`, and `trailHop` can
+            only be non-null for one that does not (`useTrailLink` skips local
+            resolution for a server source). */}
+        {trailLink.link?.src && (
+          <div className="kbc-trailbar" data-region="trailbar">
+            <LinkedStepChip repo={repoFor} link={trailLink.link} />
+          </div>
+        )}
+        {/* V74-L3b — record-a-tour. Mounted once, above the routes, because
+            the recording window spans navigation: it is a mark in the trail
+            ring, not a per-route mode. */}
+        <TourRecorder repo={repoFor} />
         <div className="kbc-approute">
           <ErrorBoundary resetKey={loc.pathname}>
             <Suspense fallback={<RouteFallback />}>
@@ -399,6 +422,11 @@ function AppShell() {
                 <Route path="/r/:repo/~canvas" element={<Canvas />} />
                 <Route path="/r/:repo/~boards" element={<Boards />} />
                 <Route path="/r/:repo/~boards/:slug" element={<BoardDetail />} />
+                {/* V74-L3b — the kbc-tour/1 pair. Distinct from
+                    `~sets/:id/~tour` above (Phase E4's set-span walk), which
+                    is nested under a set and stays exactly as it was. */}
+                <Route path="/r/:repo/~tours" element={<Tours />} />
+                <Route path="/r/:repo/~tours/:slug" element={<TourDetail />} />
                 <Route path="/r/:repo/~browser" element={<Browser />} />
                 {/* DCB W2.B (R2/D14) — the repo-scoped lens, no splat: the
                     artifact id is the doc key on every DCB wire/route. */}

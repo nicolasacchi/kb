@@ -73,6 +73,17 @@ kbs = ["${DOCLENS_KB}"]
 
 [transcripts]
 enabled = false
+
+# V74-L3b: kbc-trail/1 is OFF by default (design D17). This key PERMITS the
+# feature; the runtime opt-in (the trails_state row) is still off on a fresh
+# volume, so the harness reproduces first-boot exactly. Without it the whole
+# surface would be untestable: every write would refuse with "disabled" and
+# the indicator would never render at all.
+[trails]
+enabled = true
+# A 5-second floor, so trails.spec.ts's 12s and 3s hops prove the
+# QUANTISATION (12 -> 10, 3 -> 0) rather than passing through unchanged.
+step_granularity_secs = 5
 `;
   writeFileSync(path, body, "utf-8");
 }

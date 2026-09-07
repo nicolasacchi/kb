@@ -231,6 +231,12 @@ import { sessionUrl } from "../lib/searchLanes";
 import { toast } from "../lib/toast";
 import type { AttributionOut, EntryKind, LensDeclaration, Span } from "../api/types";
 import { useLenses } from "../hooks/useLenses";
+import { useLoopback } from "../hooks/useLoopback";
+import TrailRail from "../components/trail/TrailRail";
+import {
+  TRAIL_FOCUS_EVENT,
+  type TrailFocusDetail,
+} from "../components/trail/LinkedStepChip";
 
 const DIFF_SENTINEL = "~diff";
 /// Phase C7 — like `DIFF_SENTINEL` above, a FILE-scoped sentinel trailing an
@@ -3447,6 +3453,7 @@ export default function Reader() {
     "rail.tab.history": () => selectRailTab("history"),
     "rail.tab.notes": () => selectRailTab("notes"),
     "rail.tab.comments": () => selectRailTab("comments"),
+    "rail.tab.trail": () => selectRailTab("trail"),
     "rail.tab.review": () => selectRailTab("review"),
     // V72-J2 (D8) — comments/1: the gutter mode cycle, buffer navigation
     // (`]m`/`[m`, deliberately no `vim_kind` — see the registry row's own
@@ -3643,6 +3650,28 @@ export default function Reader() {
   /// `!railAvailable` half — a rail with no subject renders nothing
   /// either way, so expanding it here is the same harmless no-op the
   /// button already performs in that state.
+  // V74-L3b — the linked-tab chip's "re-focus this step" request. The chip
+  // lives in the app chrome and the rail lives here, so the crossing is ONE
+  // `CustomEvent` (the `kbc:omnibox.open` precedent) rather than a store: a
+  // second home for the rail's selected step is exactly the drift the Location
+  // Contract exists to prevent, and this is a transient focus, not view state
+  // a reload should reproduce.
+  const [trailFocus, setTrailFocus] = useState<TrailFocusDetail | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => {
+      const detail = (e as CustomEvent<TrailFocusDetail>).detail;
+      if (!detail) return;
+      setTrailFocus(detail);
+      selectRailTab("trail");
+    };
+    window.addEventListener(TRAIL_FOCUS_EVENT, on);
+    return () => window.removeEventListener(TRAIL_FOCUS_EVENT, on);
+    // `selectRailTab` is a stable function declaration in this component body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loopback = useLoopback();
+
   function selectRailTab(tab: RailTab) {
     desk.setRailTab(tab);
     if (isMobile) setInspectorOpen(true);
@@ -4437,6 +4466,11 @@ export default function Reader() {
               }}
               unresolvedAnnotations={unresolvedAnnotationsCount}
               commentsBadgeCount={commentsBadgeCount}
+              // V74-L3b — kbc-trail/1's own read, in the rail. It is the
+              // OPERATOR's read of their own movement record, which the daemon
+              // serves over loopback only; the panel renders that absence in
+              // its own words rather than as an error.
+              trailPanel={<TrailRail repo={repo} loopback={loopback} focus={trailFocus} />}
               commentsPanel={
                 <CommentsPanel
                   repo={repo}

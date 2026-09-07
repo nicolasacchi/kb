@@ -226,13 +226,16 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
     await openReader(page, "?desk=read");
     const tabs = page.locator("[data-kbc-itab]");
     // V72-J2 — comments/1's Comments tab joined the rail, UNCONDITIONAL
-    // (unlike Review/Dossier): five tabs now, not four.
-    await expect(tabs).toHaveCount(5);
+    // (unlike Review/Dossier): five tabs, not four. V74-L3b added Trail,
+    // also unconditional — with the ledger off it says so, and off is a state
+    // to render rather than an absence to hide (design D17). Six now.
+    await expect(tabs).toHaveCount(6);
     await expect(tabs.nth(0)).toHaveAttribute("data-kbc-itab", "all");
     await expect(tabs.nth(1)).toHaveAttribute("data-kbc-itab", "understand");
     await expect(tabs.nth(2)).toHaveAttribute("data-kbc-itab", "history");
     await expect(tabs.nth(3)).toHaveAttribute("data-kbc-itab", "notes");
     await expect(tabs.nth(4)).toHaveAttribute("data-kbc-itab", "comments");
+    await expect(tabs.nth(5)).toHaveAttribute("data-kbc-itab", "trail");
     await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
   });
 
