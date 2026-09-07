@@ -238,7 +238,8 @@
         "rail",
         "drawer",
         "palette",
-        "search"
+        "search",
+        "recipe"
       ]
     },
     {
@@ -354,6 +355,16 @@
       ]
     },
     {
+      "id": "recipe",
+      "title": "Recipe home",
+      "depth": 20,
+      "covers": "`~recipes` (V74-L3c) — the recipe home's intent groups, the auto-form, and the four result views (list/table/tree/graph) with their per-step census",
+      "coactive_with": [
+        "global",
+        "palette"
+      ]
+    },
+    {
       "id": "rail",
       "title": "Inspector rail",
       "depth": 30,
@@ -402,7 +413,8 @@
         "board",
         "rail",
         "drawer",
-        "search"
+        "search",
+        "recipe"
       ]
     }
   ],
@@ -6678,6 +6690,358 @@
       "dispatch": "surface",
       "owner": "search",
       "note": "vim's `:colder`."
+    },
+    {
+      "id": "recipe.run",
+      "title": "Run the current recipe",
+      "aka": [
+        "run recipe",
+        "execute"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-Enter"
+        ],
+        "plain": [
+          "Alt-Enter"
+        ],
+        "helix": [
+          "Alt-Enter"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "kb-code recipe run <slug> --repo <repo>",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe",
+      "note": "Distinct from `recipe.open` (bare Enter) — a run has server cost + a 20s budget, so it is never bound to a key an auto-form's inputs also see."
+    },
+    {
+      "id": "recipe.view-next",
+      "title": "Next result view (list/table/tree/graph)",
+      "aka": [
+        "cycle view",
+        "next view"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-]"
+        ],
+        "plain": [
+          "Alt-]"
+        ],
+        "helix": [
+          "Alt-]"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:the view switcher selects among an already-fetched run's own `views` array, no separate call",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.view-prev",
+      "title": "Previous result view",
+      "aka": [
+        "cycle view back"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-["
+        ],
+        "plain": [
+          "Alt-["
+        ],
+        "helix": [
+          "Alt-["
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:the view switcher selects among an already-fetched run's own `views` array, no separate call",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.step-next",
+      "title": "Focus the next step",
+      "aka": [
+        "next step"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Tab"
+        ],
+        "plain": [
+          "Tab"
+        ],
+        "helix": [
+          "Tab"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:step focus is browser-local navigation across one run's already-fetched steps",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.step-prev",
+      "title": "Focus the previous step",
+      "aka": [
+        "previous step"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Shift-Tab"
+        ],
+        "plain": [
+          "Shift-Tab"
+        ],
+        "helix": [
+          "Shift-Tab"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:step focus is browser-local navigation across one run's already-fetched steps",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.census-open",
+      "title": "Expand the focused step's census detail",
+      "aka": [
+        "why is this empty",
+        "census"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-c"
+        ],
+        "plain": [
+          "Alt-c"
+        ],
+        "helix": [
+          "Alt-c"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:the census panel's one-line reason is always rendered; this expands inputs/filters/notes already present on the fetched StepCensus, no separate call",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.materialise",
+      "title": "Materialise this run as a replayable snapshot",
+      "aka": [
+        "materialise",
+        "save run"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-m"
+        ],
+        "plain": [
+          "Alt-m"
+        ],
+        "helix": [
+          "Alt-m"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "kb-code recipe run <slug> --repo <repo> --materialise",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe",
+      "note": "LOOPBACK-ONLY — the affordance is absent for a non-loopback caller (actions/1's rule); the key is inert when the button isn't rendered."
+    },
+    {
+      "id": "recipe.save-as-set",
+      "title": "Save the active view's addresses as a reading set",
+      "aka": [
+        "save as set"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-s"
+        ],
+        "plain": [
+          "Alt-s"
+        ],
+        "helix": [
+          "Alt-s"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "kb-code recipe run <slug> --repo <repo> --save-as-set <name>",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe",
+      "note": "Goes through the existing `POST /api/sets` path (`createSet`) — kbc-recipe/1 grows no second set-creation route."
+    },
+    {
+      "id": "recipe.trust",
+      "title": "Trust this recipe's current bytes",
+      "aka": [
+        "trust recipe",
+        "accept diff"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-t"
+        ],
+        "plain": [
+          "Alt-t"
+        ],
+        "helix": [
+          "Alt-t"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "kb-code recipe trust <slug> --repo <repo>",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe",
+      "note": "LOOPBACK-ONLY — absent for `untrusted`/`trusted` recipes with nothing to accept, and for a non-loopback caller."
+    },
+    {
+      "id": "recipe.copy-cli",
+      "title": "Copy the `kb-code recipe run` line for this configuration",
+      "aka": [
+        "copy cli",
+        "yank command"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Alt-y"
+        ],
+        "plain": [
+          "Alt-y"
+        ],
+        "helix": [
+          "Alt-y"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "kb-code recipe run",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe",
+      "note": "The CLI-parity affordance, same idiom as `search.copy-cli`: the auto-form + scope chip together compose the same line this copies."
+    },
+    {
+      "id": "recipe.row-next",
+      "title": "Next result row",
+      "aka": [
+        "down",
+        "next hit"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Down"
+        ],
+        "plain": [
+          "Down"
+        ],
+        "helix": [
+          "Down"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:browser-local result-row cursor over an already-fetched view",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.row-prev",
+      "title": "Previous result row",
+      "aka": [
+        "up"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Up"
+        ],
+        "plain": [
+          "Up"
+        ],
+        "helix": [
+          "Up"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "none:browser-local result-row cursor over an already-fetched view",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe"
+    },
+    {
+      "id": "recipe.open",
+      "title": "Open the focused row's address",
+      "aka": [
+        "go",
+        "jump to row"
+      ],
+      "group": "Recipe home",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "recipe",
+      "cli": "kb-code cat",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "recipe",
+      "note": "Row-nav + open work for the list/table views (a linear order); the tree/graph views are click-only — see `RecipeResultViews.tsx`'s doc."
     },
     {
       "id": "usages.next",

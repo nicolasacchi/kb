@@ -227,3 +227,466 @@
   margin: 0;
   font-family: var(--font-mono, monospace);
 }
+
+/* V74-L3c — the recipe HOME (D11): intent groups, the legacy details
+ * panel, the auto-form, the CLI bar, the four result views, per-step
+ * census, and the recipe-level trust badge. `.kbc-recipes` above stays the
+ * outer page shell; everything below is additive. */
+
+.kbc-recipes__back-link {
+  display: inline-block;
+  color: var(--ink-mute);
+  font-size: 12px;
+  text-decoration: none;
+  margin-bottom: 6px;
+}
+.kbc-recipes__back-link:hover {
+  text-decoration: underline;
+}
+.kbc-recipes__legacy {
+  margin-top: 32px;
+  border-top: 1px solid var(--rule);
+  padding-top: 12px;
+}
+.kbc-recipes__legacy-title {
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 12px;
+}
+
+/* -- recipe home: intent groups --------------------------------------- */
+.kbc-recipe-home {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.kbc-recipe-home__group-title {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+.kbc-recipe-home__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.kbc-recipe-home__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  padding: 12px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.kbc-recipe-home__card:hover {
+  border-color: var(--accent);
+}
+.kbc-recipe-home__card-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.kbc-recipe-home__card-chips {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.kbc-recipe-home__home-chip {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+.kbc-recipe-home__card-desc {
+  font-size: 12px;
+  color: var(--ink-mute);
+  line-height: 1.35;
+}
+.kbc-recipe-home__card-shadow {
+  font-size: 11px;
+  color: var(--warn);
+}
+
+/* -- recipe-level trust badge (line style, kbc-theme/1's Lane Budget) --
+ * A DIFFERENT vocabulary from the per-cell `.kbc-trust-*` (exact/likely/
+ * candidate) — see `RecipeTrustBadge.tsx`'s doc for why it isn't reused. */
+.kbc-recipe-trust {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentcolor;
+}
+.kbc-recipe-trust-trusted {
+  border-style: solid;
+  color: var(--green, var(--accent));
+}
+.kbc-recipe-trust-untrusted {
+  border-style: dotted;
+  color: var(--ink-mute);
+}
+.kbc-recipe-trust-changed {
+  border-style: dashed;
+  color: var(--warn);
+}
+
+/* -- the trust gate (untrusted/changed) -------------------------------- */
+.kbc-recipe-trust-gate {
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn) 10%, var(--bg-card));
+  padding: 12px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.kbc-recipe-trust-gate__diff {
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+/* -- the auto-form ------------------------------------------------------ */
+.kbc-recipe-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+  align-items: start;
+}
+.kbc-recipe-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kbc-recipe-form__label {
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-recipe-form__required {
+  color: var(--red);
+  margin-left: 2px;
+}
+.kbc-recipe-form__field input[type="text"],
+.kbc-recipe-form__field input[type="number"],
+.kbc-recipe-form__field select {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 9px;
+}
+.kbc-recipe-form__hint {
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin: 0;
+}
+.kbc-recipe-form__range {
+  font-size: 10px;
+  color: var(--ink-faint, var(--ink-mute));
+  margin: 0;
+}
+.kbc-recipe-form__error {
+  font-size: 11px;
+  color: var(--red);
+  margin: 0;
+}
+.kbc-recipe-form__context {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--rule);
+  padding-top: 8px;
+  font-size: 12px;
+}
+.kbc-recipe-form__context > summary {
+  cursor: pointer;
+  color: var(--ink-mute);
+}
+.kbc-recipe-form__context-chip {
+  font-size: 11px;
+  color: var(--accent);
+  margin: 6px 0;
+}
+
+/* -- the CLI bar (D11: copyable, live-updating) ------------------------- */
+.kbc-recipe-cli-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.kbc-recipe-cli-line {
+  flex: 1;
+  min-width: 200px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.kbc-recipe-cli-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.kbc-recipe-cli-bar button:hover {
+  border-color: var(--accent);
+}
+.kbc-recipe-cli-bar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* -- run honesty + steps ------------------------------------------------ */
+.kbc-recipe-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.kbc-recipe-step {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.kbc-recipe-step--focus {
+  border-color: var(--accent);
+}
+.kbc-recipe-step__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.kbc-recipe-step__meta {
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-weight: 400;
+}
+
+/* -- census panel: the one-line "why is this empty" reason -------------- */
+.kbc-recipe-census {
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-recipe-census__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.kbc-recipe-census__icon {
+  flex: none;
+  color: var(--warn);
+}
+.kbc-recipe-census__toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 0 0;
+  cursor: pointer;
+}
+.kbc-recipe-census__detail {
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+}
+.kbc-recipe-census__detail div {
+  display: flex;
+  gap: 8px;
+}
+.kbc-recipe-census__detail dt {
+  min-width: 8em;
+  color: var(--ink-faint, var(--ink-mute));
+}
+.kbc-recipe-census__detail dd {
+  margin: 0;
+}
+
+/* -- the view switcher tabs ---------------------------------------------- */
+.kbc-recipe-views__tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.kbc-recipe-views__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.kbc-recipe-views__tab--active {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.kbc-recipe-views__tab-icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* -- an address cell (every result view's atomic unit) ------------------ */
+.kbc-recipe-addr {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kbc-recipe-addr__link {
+  color: var(--accent);
+  text-decoration: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.kbc-recipe-addr__link:hover {
+  text-decoration: underline;
+}
+.kbc-recipe-addr__text {
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+/* -- list view ------------------------------------------------------------ */
+.kbc-recipe-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-recipe-list__row {
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+}
+.kbc-recipe-list__row--focus {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* -- table view ------------------------------------------------------------ */
+.kbc-recipe-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+.kbc-recipe-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.kbc-recipe-table th,
+.kbc-recipe-table td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+.kbc-recipe-table th {
+  color: var(--ink-mute);
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kbc-recipe-table__row--focus {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* -- tree view -------------------------------------------------------------- */
+.kbc-recipe-tree__root,
+.kbc-recipe-tree__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-recipe-tree__dir-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-mute);
+  padding: 3px 0;
+}
+.kbc-recipe-tree__dir-icon {
+  width: 12px;
+  height: 12px;
+}
+.kbc-recipe-tree__leaf {
+  padding: 3px 0;
+}
+.kbc-recipe-tree__ungrouped {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rule);
+}
+.kbc-recipe-tree__ungrouped-caption {
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin: 0 0 4px;
+}
+
+/* -- graph view (isolated-node layout, honestly captioned) ------------------ */
+.kbc-recipe-graph__caption {
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin: 0 0 8px;
+}
+.kbc-recipe-graph__svg {
+  width: 100%;
+  height: auto;
+  max-height: 480px;
+}
+.kbc-recipe-graph__node {
+  font-size: 11px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

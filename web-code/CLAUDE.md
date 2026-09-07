@@ -1234,6 +1234,137 @@ both already taken globally by `rails.schema-fold`/`rails.atom.open` — and
 moved to `Space q`/`Space j` only because a manual full-registry scan
 caught it during a rebase, not because any automated gate did.
 
+## The recipe home (`kbc-recipe/1`, `V74-L3c`, design §D11)
+
+`routes/Recipes.tsx` (`~recipes`) is now the recipe HOME: intent-group
+sections over `GET /api/recipe`'s catalog (`components/recipes/RecipeHome.tsx`),
+an auto-form generated from a recipe's typed `params` spec
+(`RecipeAutoForm.tsx`), four result views per step (`RecipeResultViews.tsx`),
+a per-step census (`CensusPanel.tsx`), and `~recipes/runs/{id}` for a
+materialised replay — all on the SAME route component (`Recipes.tsx`
+branches on the presence of a `:id` param), sharing one lazy chunk.
+
+**Coexistence with `recipes/1` (the old six): a plain, always-mounted page
+section, not a hidden fallback.** The pre-existing catalog+run panel
+(`LegacyRecipesBody`, ported near-verbatim, same `data-kbc-recipes-*`
+attributes `e2e/recipes.spec.ts` already asserts on) renders BELOW the new
+home, unconditionally — never behind a `<details>` disclosure, because that
+would hide it from a bare `~recipes` visit and break the existing "catalog
+is visible with no query params" test. The six `recipes/1` slugs also run on
+the new engine now (adopted as `home: "builtin"` native adapters in the
+`kbc-recipe/1` catalog), so a user who wants the richer runner picks the
+same recipe from an intent-group card instead; nothing routes between the
+two UIs automatically. `lib/recipesUrl.ts` (`?recipe=&since=&limit=`) and
+`lib/recipeUrl.ts` (`?slug=&p.<name>=&ctx.<field>=&scope=&limit=&view=`) are
+two disjoint query-key grammars on one route, deliberately, so a bookmark in
+either survives the other's presence.
+
+**Every result cell is an address, or a scalar derived from one — never a
+free-floating string.** `lib/recipeAddr.ts`'s `addrHref` is the ONE
+`KbcAddr → URL` mapping, an exhaustive switch over the nine `KbcAddrKind`
+values (a `never` default — an unhandled future kind is a compile error
+here, not a silently unlinked cell, `lib/actionOps.ts`'s `resolveOp`
+precedent). `AddressCell.tsx` is the one component every view renders a row
+through; a `null` href (the row carries no addressable target) renders
+plain unlinked text, never a fabricated link. In `TableView`, only the FIRST
+column links (a row is fundamentally one address); every other column is
+the view's own pre-rendered scalar for that same row, `field: "trust"`
+excepted (renders `TrustBadge`). The `KbcStepRun.rows[i]` ↔ `KbcViewRun.rows[i]`
+correlation (same index, same order, no per-view filter) is what makes this
+safe — never parse a view's pre-rendered cell string back into a path/line;
+resolve the address from the correlated step row instead.
+
+**An empty step ALWAYS renders its census reason — never a blank table.**
+`CensusPanel.tsx` renders `censusExplain()`'s one-line sentence
+unconditionally whenever `StepCensus.empty_reason` is set (`lib/recipeAddr.ts`'s
+`censusExplain`, a client-side mirror of the server's own
+`StepCensus::explain()`, kept in lock-step deliberately rather than
+inventing new copy); `inputs`/`filters_applied`/`notes` sit behind a
+disclosure toggle (`recipe.census-open`, Alt-c) for the SAME reason the
+one-liner is never optional — additional detail is a nice-to-have, the
+reason itself is not.
+
+**Trust is a recipe-file property, not a per-cell tier — don't conflate the
+two vocabularies.** A recipe's own `trusted|untrusted|changed` (whether its
+BYTES are accepted; `RecipeTrustBadge.tsx`) is a closed 3-value enum about
+the FILE, rendered with its own `.kbc-recipe-trust-*` line-style classes.
+A per-cell `KbcAddr.trust` (`exact|likely|candidate|…`) rides the EXISTING
+`TrustBadge`/`trustTierFrom` vocabulary instead. Feeding one through the
+other's classifier would silently misclassify every value — keep them
+apart. `untrusted`/`changed` BLOCKS the run entirely (no auto-fire, no 403
+flash) rather than surfacing a raw server refusal: `RecipeRunPage` checks
+`useRecipeShow`'s `recipe.trust` before ever calling `useRecipeRunV2`, and
+renders the trust gate (diff, when `changed`; the copyable `kb-code recipe
+trust <slug> --repo <repo>` line always) in its place.
+
+**Every loopback-only affordance is ABSENT for a non-loopback caller, never
+disabled.** `Trust`, `Materialise`, and (as a consequence, since `--save-as-set`
+rides the ordinary `POST /api/sets`, NOT loopback-gated) `Save as set` follow
+`hooks/useLoopback.ts`'s existing rule (`GET /api/repos`'s own `loopback`
+verdict, never `window.location.hostname`) — `doMaterialise`/`doTrust` are
+only reachable when `useLoopback()` is true, and their buttons render
+conditionally rather than rendering-disabled. `Save as set` renders for
+every caller (`createSet` is an ordinary bearer route); a row with no
+`path` (an `entity`/`commit`/bare `finding`/`node`) is REPORTED as skipped
+(`lib/recipeAddr.ts`'s `addrsToSetSpans`), never silently dropped.
+
+**A recipe's DRAFT form state and its COMMITTED run are two different
+things, on purpose.** Typing in the auto-form updates local React state
+only (`draftParams`/`draftScope`/`draftCtx` in `RecipeRunPage`) and the
+copyable CLI line (`lib/recipeUrl.ts`'s `recipeCliLine`) recomposes from it
+on every keystroke — a pure string build, no network call. Only an explicit
+`recipe.run` (Alt-Enter, or the Run button) commits the draft into the URL
+(`lib/recipeUrl.ts`'s `recipeRunUrl`), which is what `useRecipeRunV2` is
+keyed on — the same draft/committed split the pre-existing `recipes/1` panel
+already used (`sinceDraft`/`limitDraft`), so a real (budgeted, server-side)
+run never fires from typing. A reload reproduces the run because the URL
+alone drives the fetch.
+
+**The graph view never fabricates edges.** `KbcRunOut` carries only flat
+`rows: Addr[]` per step — no from/to structure rides the wire. `GraphView`
+in `RecipeResultViews.tsx` lays out every row as an ISOLATED node (reusing
+`lib/egoGraph.ts`'s `layoutLayeredDag` purely for deterministic positioning,
+an empty `edges` array) and captions the honest reason plainly. Inventing
+edges from guessed column names would misrepresent what the recipe actually
+returned — if a future recipe's op set gains real edge data, widen the wire
+(`KbcStepRun`/`KbcViewRun`) and this view together, don't heuristic it. The
+tree view similarly does NOT reuse `components/FileTree.tsx` (that
+component drives its OWN live `GET /api/tree/2` fetch, scoped/filtered
+server-side — a recipe step's rows are already a bounded, server-picked set
+with no server-side "this exact set, as a tree" to re-fetch); `lib/recipeTree.ts`'s
+`buildRecipeTree` is a pure, local path-segment grouping over the rows
+already in hand, with a row that has no `path` at all reported in an
+honest "ungrouped" tail rather than dropped.
+
+**Row-nav (`Down`/`Up`/`Enter`) works for `list`/`table`, not `tree`/`graph`.**
+A directory tree and a laid-out graph have no single "next" direction that
+survives the view's own layout the way a linear list row does; every
+address in all four views is still an ordinary clickable link (mouse
+always works), row-nav is a keyboard ENHANCEMENT for the two linear views
+only — see `RecipeResultViews.tsx`'s module doc.
+
+**Keys: a NEW `recipe` scope (depth 20), modeled on `search`'s, not
+`board`'s.** `~recipes` is a plain standalone route (like `~sets`/`~todos`),
+not a Desk center mode and not one of the non-text "board" surfaces — so it
+gets its own scope, `coactive_with: ["global", "palette"]` only (mirroring
+`search`'s minimal, correct definition, added symmetrically to `global` and
+`palette`'s own lists per `commands doctor`'s check 3). That non-coactivity
+with `reader`/`diff`/`review`/`branches`/`board`/`search` is what lets
+`recipe.*` reuse `Alt-y`/`Alt-s`/`Space r`-adjacent idioms other scopes
+already use (`Alt-y` = copy-cli mirrors `search.copy-cli` exactly; `commands
+conflicts`'s algorithm only flags a collision between COACTIVE, SAME-DEPTH
+scopes — see `crates/kb-code-cli/src/commands.rs`'s `conflicts()`). **Opening
+the home reuses the EXISTING `nav.recipes` row (`Space g e`)** — `Space g r`
+(the brief's first guess) is already `nav.reviews`; no new "go to page" row
+was needed or added. Every `recipe.*` row is `dispatch: "surface"`,
+`mutation: "none"` (loopback-gating is a component-level `useLoopback()`
+check, not a registry field — the schema has no such field, see
+`commands.rs`'s `Command` struct), and none binds a bare single typeable
+character (`routes/recipeCommands.test.ts`'s own guard, mirroring
+`searchCommands.test.ts`'s "would be swallowed by [the query box / a form
+field]" check) — the auto-form's text/number/enum inputs would otherwise
+eat it.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)

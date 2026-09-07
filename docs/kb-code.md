@@ -2788,6 +2788,23 @@ lane, save-as board/tour, trend and property-diff — are not built, and
 `review` in `timeline` mode reports the finding-shaped events only,
 saying so in its census rather than inventing an address for a verdict.
 
+### The SPA surface (`V74-L3c`)
+
+`web-code/src/routes/Recipes.tsx` (`~recipes`) is the recipe HOME:
+intent-group cards over the catalog above, a typed auto-form
+(`components/recipes/RecipeAutoForm.tsx`, client-validated to the same
+`min`/`max`/`required`/enum rules this page documents), a live-updating
+copyable `kb-code recipe run …` line, four result views per step
+(`RecipeResultViews.tsx` — list/table/tree/graph, every cell an address or a
+scalar derived from one), a per-step census panel that is never a blank
+table, `Materialise`/`Trust` as loopback-only affordances, and `Save as set`
+through the existing `POST /api/sets`. `~recipes/runs/{id}` replays a
+materialised run. The pre-existing `recipes/1` catalog+run panel stays a
+plain page section beneath the new home (unchanged wire, unchanged
+`e2e/recipes.spec.ts`) — see `web-code/CLAUDE.md`'s own "recipe home"
+section for the full set of SPA-side rules (address-cell mapping, the
+census/trust/loopback contracts, the new `recipe` keyboard scope).
+
 ## Workspaces, worktrees and the `@ref` frame table (v7.5, V75-M1)
 
 ### Two nouns, and one older word that collides with them

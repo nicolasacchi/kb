@@ -80,6 +80,12 @@ import type {
   ReviewRiskOut,
   RecipesCatalogOut,
   RecipeRunOut,
+  KbcCatalogOut,
+  KbcShowOut,
+  KbcLintOut,
+  KbcRunOut,
+  KbcMaterialiseOut,
+  KbcTrustOut,
   ReviewDocLintOut,
   ReviewDocOut,
   ReviewMapOut,
@@ -1370,6 +1376,88 @@ export function fetchRecipeRun(params: FetchRecipeRunParams): Promise<RecipeRunO
     limit: params.limit !== undefined ? String(params.limit) : undefined,
     scope: params.scope,
   });
+}
+
+// --- V74-L3a/c — `kbc-recipe/1`, the typed recipe runner --------------------
+
+/// `GET /api/recipe?repo=` — every built-in, server-stored and
+/// repo-versioned recipe for this repo, home + trust state + CLI line.
+export function fetchRecipeCatalog(repo: string): Promise<KbcCatalogOut> {
+  return getJson<KbcCatalogOut>("/api/recipe", { repo });
+}
+
+/// `GET /api/recipe/{slug}?repo=` — one recipe's full document (params,
+/// steps, views, source, and — for a changed repo file — the trust diff).
+export function fetchRecipeShow(slug: string, repo: string): Promise<KbcShowOut> {
+  return getJson<KbcShowOut>(`/api/recipe/${encodeURIComponent(slug)}`, { repo });
+}
+
+/// `GET /api/recipe/{slug}/lint?repo=` — would it load, would it run; a
+/// LIST of problems, never a first error.
+export function fetchRecipeLint(slug: string, repo: string): Promise<KbcLintOut> {
+  return getJson<KbcLintOut>(`/api/recipe/${encodeURIComponent(slug)}/lint`, { repo });
+}
+
+/// The dynamic `p.<name>=`/`ctx.<field>=` keys ride straight through — same
+/// grammar the browser URL already carries (`lib/recipeUrl.ts`), so a
+/// caller can pass `parseRecipeSearch(location.search)`'s `params`/`ctx`
+/// maps verbatim.
+export interface RecipeRunQuery {
+  slug: string;
+  repo: string;
+  scope?: string;
+  limit?: number;
+  params?: Record<string, string>;
+  ctx?: Record<string, string>;
+}
+
+function recipeRunQueryParams(q: RecipeRunQuery): Record<string, string | undefined> {
+  const params: Record<string, string | undefined> = { repo: q.repo };
+  if (q.scope) params.scope = q.scope;
+  if (q.limit !== undefined) params.limit = String(q.limit);
+  for (const [k, v] of Object.entries(q.params ?? {})) {
+    if (v !== "") params[`p.${k}`] = v;
+  }
+  for (const [k, v] of Object.entries(q.ctx ?? {})) {
+    if (v !== "") params[`ctx.${k}`] = v;
+  }
+  return params;
+}
+
+/// `GET /api/recipe/{slug}/run?repo=&p.<name>=&ctx.<field>=&scope=&limit=`
+/// — mutates nothing. Every view is fetched at once (no `view=` sent) so
+/// the client-side view switcher (`Recipes.tsx`) never re-fetches on a
+/// switch — see that file's doc.
+export function fetchRecipeRunV2(q: RecipeRunQuery): Promise<KbcRunOut> {
+  return getJson<KbcRunOut>(`/api/recipe/${encodeURIComponent(q.slug)}/run`, recipeRunQueryParams(q));
+}
+
+/// `GET /api/recipe/runs/{id}` — replay a materialised run. A stale
+/// snapshot (the corpus has since re-indexed) says so via `replay.stale`
+/// rather than silently reading as live.
+export function fetchRecipeReplay(id: string): Promise<KbcRunOut> {
+  return getJson<KbcRunOut>(`/api/recipe/runs/${encodeURIComponent(id)}`, {});
+}
+
+/// `POST /api/recipe/{slug}/materialise?…` — LOOPBACK ONLY. Same query
+/// shape as `fetchRecipeRunV2`; the daemon re-runs and stores a replayable
+/// snapshot rather than returning one, so the caller navigates to
+/// `recipeReplayUrl(repo, run_id)` on success.
+export async function postRecipeMaterialise(q: RecipeRunQuery): Promise<KbcMaterialiseOut> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(recipeRunQueryParams(q))) {
+    if (v !== undefined) qs.set(k, v);
+  }
+  return sendJson<KbcMaterialiseOut>(
+    "POST",
+    `/api/recipe/${encodeURIComponent(q.slug)}/materialise?${qs.toString()}`,
+  );
+}
+
+/// `POST /api/recipe/{slug}/trust` — LOOPBACK ONLY. Accepts the repo file's
+/// bytes RIGHT NOW; a later change re-arms the prompt with a fresh diff.
+export function postRecipeTrust(slug: string, repo: string): Promise<KbcTrustOut> {
+  return sendJson<KbcTrustOut>("POST", `/api/recipe/${encodeURIComponent(slug)}/trust`, { repo });
 }
 
 // --- V3.3-S1 — review map + reading order ---------------------------------
