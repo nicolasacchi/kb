@@ -42,6 +42,18 @@ export function useTrailLink(): TrailLinkState {
       setState({ link: null, trail: null, settled: true });
       return;
     }
+    // V74-L3b — a link that names a SERVER source (`src=trail|tour`) is not
+    // in this tab's `sessionStorage` and never will be, so the two local
+    // resolution paths below are skipped entirely: broadcasting a
+    // `trail.request` for a `trl_`-shaped id would ask every other tab a
+    // question none of them can answer. `components/trail/LinkedStepChip.tsx`
+    // resolves those two through the daemon instead; this hook still returns
+    // the LINK, so `nav.back`'s trail branch and the tab registry keep
+    // working unchanged.
+    if (link.src) {
+      setState({ link, trail: null, settled: true });
+      return;
+    }
     let live = true;
     const local = loadTrail(link.id);
     if (local) {

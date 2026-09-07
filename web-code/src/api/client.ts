@@ -121,6 +121,14 @@ import type {
   BoardStatusOut,
   BoardSweepOut,
   BoardsListOut,
+  ToursListOut,
+  TourOut,
+  TourApplyOut,
+  TrailStateOut,
+  TrailsListOut,
+  TrailOut,
+  TrailPurgeOut,
+  TrailCreatedOut,
 } from "./types";
 
 // V70-A2 (SEC-02) — every mutating request carries `X-Kbc-Request: 1`.
@@ -2233,6 +2241,109 @@ export function archiveBoard(repo: string, slug: string): Promise<BoardStatusOut
     "POST",
     `/api/boards/${encodeURIComponent(slug)}/archive?repo=${encodeURIComponent(repo)}`,
   );
+}
+
+// ── kbc-tour/1 + kbc-trail/1 (V74-L3b) ─────────────────────────────────────
+//
+// Tours mirror boards exactly (four bearer reads, two loopback mutations)
+// because a tour IS a board — see `api/types.ts`'s own note.
+//
+// Trails split the OTHER way, and the split is the privacy posture rather
+// than a convenience: `state` and `aggregate` are ordinary bearer reads (the
+// indicator has to render, and the aggregate IS the agent-facing surface),
+// while the two HUMAN reads and every write are loopback-only. A non-loopback
+// browser therefore gets an honest 404 from `fetchTrails`, which
+// `hooks/useTrails.ts` folds into "not available here" rather than an error
+// toast.
+
+/// `GET /api/tours?repo=[&status=]`.
+export function fetchTours(repo: string, status?: string): Promise<ToursListOut> {
+  return getJson<ToursListOut>("/api/tours", { repo, status });
+}
+
+/// `GET /api/tours/{slug}?repo=[&ctx=1]` — every step re-resolved NOW.
+export function fetchTour(
+  repo: string,
+  slug: string,
+  opts: { ctx?: boolean } = {},
+): Promise<TourOut> {
+  return getJson<TourOut>(`/api/tours/${encodeURIComponent(slug)}`, {
+    repo,
+    ctx: opts.ctx ? "1" : undefined,
+  });
+}
+
+/// `POST /api/tours/apply` — LOOPBACK-ONLY. The WHOLE document by slug;
+/// `lib/tourDoc.ts` composes it.
+export function applyTour(doc: unknown, opts: { dryRun?: boolean } = {}): Promise<TourApplyOut> {
+  const path = opts.dryRun ? "/api/tours/apply?dry_run=1" : "/api/tours/apply";
+  return sendJson<TourApplyOut>("POST", path, doc);
+}
+
+/// `DELETE /api/tours/{slug}?repo=` — LOOPBACK-ONLY.
+export function deleteTour(repo: string, slug: string): Promise<void> {
+  return sendJson<void>(
+    "DELETE",
+    `/api/tours/${encodeURIComponent(slug)}?repo=${encodeURIComponent(repo)}`,
+  );
+}
+
+/// `GET /api/trails/state` — bearer. Always answers, even with the ledger
+/// off: "off" is a state to render, not an error.
+export function fetchTrailState(): Promise<TrailStateOut> {
+  return getJson<TrailStateOut>("/api/trails/state", {});
+}
+
+/// `POST /api/trails/state` — LOOPBACK-ONLY and audited. The ONLY writer of
+/// the opt-in.
+export function setTrailState(mode: string): Promise<TrailStateOut> {
+  return sendJson<TrailStateOut>("POST", "/api/trails/state", { mode });
+}
+
+/// `GET /api/trails?repo=[&limit=]` — LOOPBACK-ONLY (the operator's own
+/// movement record never leaves their box).
+export function fetchTrails(repo: string, limit?: number): Promise<TrailsListOut> {
+  return getJson<TrailsListOut>("/api/trails", {
+    repo,
+    limit: limit === undefined ? undefined : String(limit),
+  });
+}
+
+/// `GET /api/trails/{id}?repo=[&from=][&notes=1]` — LOOPBACK-ONLY.
+export function fetchTrail(
+  repo: string,
+  id: string,
+  opts: { from?: number; notes?: boolean } = {},
+): Promise<TrailOut> {
+  return getJson<TrailOut>(`/api/trails/${encodeURIComponent(id)}`, {
+    repo,
+    from: opts.from === undefined ? undefined : String(opts.from),
+    notes: opts.notes ? "1" : undefined,
+  });
+}
+
+/// `POST /api/trails/purge` — LOOPBACK-ONLY and audited. WHOLESALE unless an
+/// `id` narrows it. Deliberately NOT gated on `[trails] enabled`: an operator
+/// who just turned the feature off must still be able to delete what it
+/// recorded.
+export function purgeTrails(repo: string, opts: { id?: string } = {}): Promise<TrailPurgeOut> {
+  return sendJson<TrailPurgeOut>("POST", "/api/trails/purge", { repo, ...(opts.id ? { id: opts.id } : {}) });
+}
+
+/// `POST /api/trails/{id}/fork` — LOOPBACK-ONLY. Carries a COPY of the steps
+/// from the branch point, so a fork reads as "I went another way from here"
+/// rather than as an empty trail with a pointer.
+export function forkTrail(
+  repo: string,
+  id: string,
+  fromOrdinal: number,
+  title?: string,
+): Promise<TrailCreatedOut> {
+  return sendJson<TrailCreatedOut>("POST", `/api/trails/${encodeURIComponent(id)}/fork`, {
+    repo,
+    from_ordinal: fromOrdinal,
+    ...(title ? { title } : {}),
+  });
 }
 
 // --- V72-I2 — `rails/1` (`GET /api/rails/*`) --------------------------------

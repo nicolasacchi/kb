@@ -350,4 +350,40 @@ export const Icon = {
       <circle cx="10.9" cy="6.2" r=".9" fill="currentColor" stroke="none" />
     </svg>
   ),
+  // V74-L3b — the three STATE-BEARING glyphs kbc-trail/1's indicator needs
+  // (D17: the opt-in must be VISIBLE), plus `Fork` for a trail step's "I
+  // went another way from here" chip. Three glyphs rather than one plus a
+  // title string, for the same R11 reason the theme control was re-cut in
+  // V70-A7: a control whose only signal is a `title` attribute is not an
+  // indicator.
+  //
+  // `Pause` and `Dot` ALREADY EXIST in `web/`'s icon set, so their bodies
+  // here are that file's, byte-for-byte — `lib/iconParity.test.ts` compares
+  // SHARED names and a "close enough" copy is exactly the drift it exists to
+  // catch. `Record` and `Fork` are new names in both senses (absent from
+  // `web/`), so the golden does not constrain them.
+  Record: (p: P) => (
+    <svg {...base(14)} {...p}>
+      <circle cx="8" cy="8" r="4.2" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  Pause: (p: P) => (
+    <svg {...base(14)} {...p} strokeLinecap="round">
+      <path d="M5.6 3.2v9.6M10.4 3.2v9.6" />
+    </svg>
+  ),
+  Dot: (p: P) => (
+    <svg viewBox="0 0 8 8" width="8" height="8" {...p}>
+      <circle cx="4" cy="4" r="3" fill="currentColor" />
+    </svg>
+  ),
+  Fork: (p: P) => (
+    <svg {...base(14)} {...p} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 2.8v4.4a2 2 0 0 0 2 2h4" />
+      <path d="M5 9.2v4" />
+      <circle cx="5" cy="2" r="1.4" />
+      <circle cx="12.2" cy="9.2" r="1.4" />
+      <circle cx="5" cy="14" r="1.4" />
+    </svg>
+  ),
 };

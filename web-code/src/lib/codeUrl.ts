@@ -544,6 +544,20 @@ export function boardUrl(repo: string, slug: string): string {
   return `${boardsPageUrl(repo)}/${encodeURIComponent(slug)}`;
 }
 
+/// `toursPageUrl(repo)` → `/r/{repo}/~tours` — V74-L3b, the kbc-tour/1 tour
+/// list. A SEPARATE surface from `~sets/{id}/~tour` (Phase E4's tour mode
+/// over ONE reading set's spans), which stays exactly where it is: that one
+/// walks a set, this one walks a tour document on the Ladder.
+/// Query state (`status`/`step`/`ctx`) is owned by `lib/toursUrl.ts`.
+export function toursPageUrl(repo: string): string {
+  return `${codeBasePath(repo, "")}/~tours`;
+}
+
+/// `tourUrl(repo, slug)` → `/r/{repo}/~tours/{slug}` — one tour.
+export function tourUrl(repo: string, slug: string): string {
+  return `${toursPageUrl(repo)}/${encodeURIComponent(slug)}`;
+}
+
 // --- Phase C7 ("story mode") -----------------------------------------------
 //
 // `~story` is a FILE-scoped sentinel — unlike `~commit`/`~compare`/
@@ -731,11 +745,29 @@ const TRAIL_VIA_SET: ReadonlySet<string> = new Set<TrailVia>([
   "manual",
 ]);
 
+/// V74-L3b — WHICH sequence the `trail`/`step` pair indexes.
+///
+/// `local` (the DEFAULT, and what every pre-L3b link means) is the
+/// browser-local `kbc-trail/0` in `lib/trail.ts`. `trail` is a server
+/// `kbc-trail/1` trail (`trl_` + 12 hex); `tour` is a `kbc-tour/1` tour, whose
+/// "id" is its slug.
+///
+/// One grammar, not three: the alternative was a second `?tour=&tstep=` pair,
+/// which would mean two parsers, two strip lists and two chips for one idea
+/// ("this tab came from somewhere, here is the way back"). The source is a
+/// DISCRIMINATOR on the existing pair, and it is omitted at its default so
+/// every pre-L3b URL is byte-identical.
+export type TrailLinkSource = "local" | "trail" | "tour";
+
+const TRAIL_SRC_SET: ReadonlySet<string> = new Set<TrailLinkSource>(["local", "trail", "tour"]);
+
 export interface TrailLink {
   id: string;
   /// 0-based ordinal of this hop within the trail.
   step: number;
   via?: TrailVia;
+  /// Absent ⇒ `local`. See [`TrailLinkSource`].
+  src?: TrailLinkSource;
 }
 
 /// Append `trail`/`step`/`via` to an already-built URL from any builder in
@@ -748,6 +780,11 @@ export function appendTrail(url: string, link: TrailLink | null | undefined): st
   const step = Number.isFinite(link.step) ? Math.max(0, Math.floor(link.step)) : 0;
   const params = [`trail=${encodeURIComponent(link.id)}`, `step=${step}`];
   if (link.via && TRAIL_VIA_SET.has(link.via)) params.push(`via=${encodeURIComponent(link.via)}`);
+  // Omitted at its default, which is what keeps every pre-V74-L3b link
+  // byte-identical (rule 1 above).
+  if (link.src && link.src !== "local" && TRAIL_SRC_SET.has(link.src)) {
+    params.push(`src=${encodeURIComponent(link.src)}`);
+  }
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}${params.join("&")}`;
 }
@@ -764,7 +801,15 @@ export function parseTrailLink(params: URLSearchParams): TrailLink | null {
   if (!Number.isFinite(step) || !Number.isInteger(step) || step < 0) return null;
   const rawVia = params.get("via");
   const via = rawVia !== null && TRAIL_VIA_SET.has(rawVia) ? (rawVia as TrailVia) : undefined;
-  return via ? { id, step, via } : { id, step };
+  // Total, like `via`: an unknown `src` degrades to the DEFAULT rather than
+  // being fabricated. A link that claimed a source this build cannot resolve
+  // would render a chip pointing at nothing.
+  const rawSrc = params.get("src");
+  const src =
+    rawSrc !== null && TRAIL_SRC_SET.has(rawSrc) && rawSrc !== "local"
+      ? (rawSrc as TrailLinkSource)
+      : undefined;
+  return { id, step, ...(via ? { via } : {}), ...(src ? { src } : {}) };
 }
 
 /// Strip the three trail params from a URL — what the Location Contract's
@@ -785,7 +830,7 @@ export function stripTrail(url: string): string {
     .filter((pair) => {
       const eq = pair.indexOf("=");
       const key = eq === -1 ? pair : pair.slice(0, eq);
-      return key !== "trail" && key !== "step" && key !== "via";
+      return key !== "trail" && key !== "step" && key !== "via" && key !== "src";
     });
   return kept.length > 0 ? `${url.slice(0, q)}?${kept.join("&")}` : url.slice(0, q);
 }

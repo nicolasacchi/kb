@@ -4,6 +4,7 @@ import RepoPill from "./RepoPill";
 import NavMenu from "./NavMenu";
 import NavSheet from "./NavSheet";
 import { Icon } from "./icons";
+import TrailIndicator from "./trail/TrailIndicator";
 import { SpaceHint } from "../commands/learn";
 import { useExplicitRepo } from "../hooks/useActiveRepo";
 import { useIsMobile } from "../hooks/useIsMobile";
@@ -83,6 +84,13 @@ export default function TopBar() {
           `?`". One chip, in the chrome, on every route. Hidden on mobile,
           where there is no keyboard to teach (recon R9). */}
       {!isMobile && <SpaceHint />}
+      {/* V74-L3b — D17 requires the kbc-trail/1 opt-in to carry "a visible
+          indicator", so it lives in the ONE chrome bar every route shares,
+          beside the other always-present state control. It renders NOTHING on
+          a daemon where `[trails] enabled` is false: a permanent "off" chip
+          for a feature that will never record anything is noise, not an
+          indicator (see the component's own rule 1). */}
+      <TrailIndicator />
       <ThemeControl />
       <button
         type="button"

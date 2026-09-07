@@ -63,7 +63,19 @@ export type ResizeTarget = DeskRegionId | "panes";
 /// `review`/`dossier`: every file the scanner covers has an honest
 /// (possibly empty) comments/1 list, so there is no "no context for this
 /// tab" gate to write.
-export type RailTab = "all" | "understand" | "history" | "notes" | "comments" | "review" | "dossier";
+/// V74-L3b added `trail` (kbc-trail/1's own read) — UNCONDITIONAL like
+/// `comments`, because the tab always has an honest body: with the ledger off
+/// it says so, and off is a state to render rather than an absence to hide
+/// (design D17's "visible indicator", one surface over).
+export type RailTab =
+  | "all"
+  | "understand"
+  | "history"
+  | "notes"
+  | "comments"
+  | "review"
+  | "dossier"
+  | "trail";
 
 export const RAIL_TABS: readonly RailTab[] = [
   "all",
@@ -73,6 +85,7 @@ export const RAIL_TABS: readonly RailTab[] = [
   "comments",
   "review",
   "dossier",
+  "trail",
 ];
 
 export interface DeskRegionState {

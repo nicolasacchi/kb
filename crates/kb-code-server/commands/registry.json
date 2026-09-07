@@ -87,9 +87,10 @@
         "player",
         "lens",
         "boards",
-        "rails"
+        "rails",
+        "tours"
       ],
-      "note": "which board surface is mounted. V74-L2 added `boards` — the kbc-canvas/1 board (`~boards/{slug}`), which is a DIFFERENT surface from `canvas` (V3.4-C2's frozen working-set canvas) and gates its own rows so the two sets are provably disjoint."
+      "note": "which board surface is mounted. V74-L2 added `boards` — the kbc-canvas/1 board (`~boards/{slug}`), which is a DIFFERENT surface from `canvas` (V3.4-C2's frozen working-set canvas) and gates its own rows so the two sets are provably disjoint. V74-L3b added `tours` — the kbc-tour/1 playback (`~tours/{slug}`), which shares the WALKTHROUGH rows with `boards` (a tour IS a board whose nodes are its steps, server invariant 26(a)) and gates nothing else on this key."
     },
     {
       "key": "help.open",
@@ -1665,6 +1666,33 @@
       "lifecycle": "shipped",
       "dispatch": "central",
       "note": "V72-J2 (D8) — the current file's comments/1 blocks (doc/annotation/directive/…), ALWAYS offered (unlike Review/Dossier, comments/1 has no conditional gate — every file the scanner covers has an honest, possibly-empty, list)."
+    },
+    {
+      "id": "rail.tab.trail",
+      "title": "Rail: Trail",
+      "aka": [
+        "trail tab",
+        "where have I been"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R t"
+        ],
+        "plain": [
+          "Space R t"
+        ],
+        "helix": [
+          "Space R t"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code trail show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "The eighth rail tab (V74-L3b). Its body is the operator's own trail, which the daemon serves over loopback only — the tab renders that absence in its own words rather than being hidden."
     },
     {
       "id": "action.panel",
@@ -5577,7 +5605,7 @@
         ]
       },
       "scope": "board",
-      "when": "board == browser",
+      "when": "board == browser && !walkthrough",
       "cli": "kb-code symbols",
       "mutation": "none",
       "side_effect": "none",
@@ -5589,7 +5617,8 @@
         "diff.hunk-prev",
         "move.up",
         "review.prev"
-      ]
+      ],
+      "note": "V74-L3b added `!walkthrough`: the three `walkthrough.*` rows are now shared between `~boards` and `~tours` and so gate on `walkthrough` ALONE (the `when` grammar is `&&`-only, so \"boards OR tours\" cannot be spelled). This surface never publishes `walkthrough`, so the atom holds trivially here and NOTHING about this row's behaviour changes — it exists so `whenDisjoint` can still prove the pair apart, which is what `commands doctor`'s conflict check demands and what stopped this widening from making the key ambiguous on three other surfaces."
     },
     {
       "id": "board.drill",
@@ -5725,14 +5754,14 @@
         ]
       },
       "scope": "board",
-      "when": "board == player",
+      "when": "board == player && !walkthrough",
       "cli": "kb-code story",
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
       "owner": "storyPlayer",
-      "note": "MOVED in V70-A5: autoplay was `Space`, and D2 makes `Space` the leader and ONLY the leader. V70-A6: `p` is also `pane.pin` in the reader scope (a provisional pane's own chip names the key). Ratified on both rows — the tour player and the code buffer are never the same surface, but the gate cannot prove that from two `when` predicates, and a ratification is the right instrument for exactly that.",
+      "note": "MOVED in V70-A5: autoplay was `Space`, and D2 makes `Space` the leader and ONLY the leader. V70-A6: `p` is also `pane.pin` in the reader scope (a provisional pane's own chip names the key). Ratified on both rows — the tour player and the code buffer are never the same surface, but the gate cannot prove that from two `when` predicates, and a ratification is the right instrument for exactly that. V74-L3b added `!walkthrough`: the three `walkthrough.*` rows are now shared between `~boards` and `~tours` and so gate on `walkthrough` ALONE (the `when` grammar is `&&`-only, so \"boards OR tours\" cannot be spelled). This surface never publishes `walkthrough`, so the atom holds trivially here and NOTHING about this row's behaviour changes — it exists so `whenDisjoint` can still prove the pair apart, which is what `commands doctor`'s conflict check demands and what stopped this widening from making the key ambiguous on three other surfaces.",
       "ratified_conflicts": [
         "pane.pin"
       ]
@@ -5788,7 +5817,7 @@
         ]
       },
       "scope": "board",
-      "when": "board == lens",
+      "when": "board == lens && !walkthrough",
       "targets": [
         "reference"
       ],
@@ -5803,7 +5832,8 @@
         "diff.hunk-prev",
         "move.up",
         "review.prev"
-      ]
+      ],
+      "note": "V74-L3b added `!walkthrough`: the three `walkthrough.*` rows are now shared between `~boards` and `~tours` and so gate on `walkthrough` ALONE (the `when` grammar is `&&`-only, so \"boards OR tours\" cannot be spelled). This surface never publishes `walkthrough`, so the atom holds trivially here and NOTHING about this row's behaviour changes — it exists so `whenDisjoint` can still prove the pair apart, which is what `commands doctor`'s conflict check demands and what stopped this widening from making the key ambiguous on three other surfaces."
     },
     {
       "id": "lens.group-next",
@@ -7979,7 +8009,7 @@
         ]
       },
       "scope": "board",
-      "when": "board == boards && walkthrough",
+      "when": "walkthrough",
       "cli": "none:browser-local presentation mode",
       "mutation": "none",
       "side_effect": "none",
@@ -7987,7 +8017,8 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "find.next"
-      ]
+      ],
+      "note": "V74-L3b: the surface atom was dropped (`board == boards && walkthrough` -> `walkthrough`) so the kbc-tour/1 playback shares these three rows rather than declaring a second set. The `when` grammar is `&&`-only, so \"boards OR tours\" cannot be spelled; `walkthrough` is published by exactly the two surfaces that HAVE one and the rows stay `scope: board`, so the widening is precise rather than loose."
     },
     {
       "id": "walkthrough.prev",
@@ -8008,7 +8039,7 @@
         ]
       },
       "scope": "board",
-      "when": "board == boards && walkthrough",
+      "when": "walkthrough",
       "cli": "none:browser-local presentation mode",
       "mutation": "none",
       "side_effect": "none",
@@ -8019,7 +8050,8 @@
         "diff.hunk-prev",
         "move.up",
         "review.prev"
-      ]
+      ],
+      "note": "V74-L3b: the surface atom was dropped (`board == boards && walkthrough` -> `walkthrough`) so the kbc-tour/1 playback shares these three rows rather than declaring a second set. The `when` grammar is `&&`-only, so \"boards OR tours\" cannot be spelled; `walkthrough` is published by exactly the two surfaces that HAVE one and the rows stay `scope: board`, so the widening is precise rather than loose."
     },
     {
       "id": "walkthrough.play",
@@ -8041,16 +8073,97 @@
         ]
       },
       "scope": "board",
-      "when": "board == boards && walkthrough",
+      "when": "walkthrough",
       "cli": "none:browser-local presentation mode",
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
-      "note": "One step every six seconds, with a visible indicator; ANY key stops the run.",
+      "note": "One step every six seconds, with a visible indicator; ANY key stops the run. V74-L3b: the surface atom was dropped (`board == boards && walkthrough` -> `walkthrough`) so the kbc-tour/1 playback shares these three rows rather than declaring a second set. The `when` grammar is `&&`-only, so \"boards OR tours\" cannot be spelled; `walkthrough` is published by exactly the two surfaces that HAVE one and the rows stay `scope: board`, so the widening is precise rather than loose.",
       "ratified_conflicts": [
         "pane.pin"
       ]
+    },
+    {
+      "id": "tour.record",
+      "title": "Record a tour from here",
+      "aka": [
+        "record tour",
+        "start recording"
+      ],
+      "group": "Tour",
+      "keys": {
+        "vim": [
+          "Space k r"
+        ],
+        "plain": [
+          "Space k r"
+        ],
+        "helix": [
+          "Space k r"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local recording mark (the APPLY is `kb-code tour apply`)",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Marks the current end of this tab's browser-local trail ring (`lib/trail.ts`) as a window start. Records nothing new: the ring is already being appended to by the Ramp. `Space k` is a free leader — `Space t` is `view.theme-cycle`."
+    },
+    {
+      "id": "tour.record-stop",
+      "title": "Stop recording and compose the tour",
+      "aka": [
+        "stop recording",
+        "compose tour"
+      ],
+      "group": "Tour",
+      "keys": {
+        "vim": [
+          "Space k s"
+        ],
+        "plain": [
+          "Space k s"
+        ],
+        "helix": [
+          "Space k s"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code tour apply",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Opens the composer prefilled with the hops since the mark. Nothing is written until the human applies, and the apply is loopback-only."
+    },
+    {
+      "id": "trail.pause",
+      "title": "Pause / resume trail recording",
+      "aka": [
+        "pause trail",
+        "resume trail"
+      ],
+      "group": "Trail",
+      "keys": {
+        "vim": [
+          "Space k p"
+        ],
+        "plain": [
+          "Space k p"
+        ],
+        "helix": [
+          "Space k p"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code trail state --mode paused",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "D17 pairs the pause with a VISIBLE indicator, so this key and the TopBar chip are one thing: pressing it changes the chip. The write is `POST /api/trails/state`, which is LOOPBACK-ONLY and audited (`mutation: metadata` is the registry's own vocabulary — it writes a daemon row, never the working tree); it refuses with a stated reason on a daemon where `[trails] enabled` is false, and for a non-loopback caller the indicator shows the state without offering the control."
     },
     {
       "id": "nav.boards",
@@ -8079,6 +8192,34 @@
       "lifecycle": "shipped",
       "dispatch": "central",
       "note": "`w` for the WALK a board is: D10's own framing is that a board is something an agent authors and a human walks. `Space g m` went to `nav.comments` (V72-J2) and `Space g c` stays the FROZEN working-set canvas (`~canvas`), which is a different surface."
+    },
+    {
+      "id": "nav.tours",
+      "title": "Go to tours",
+      "aka": [
+        "tours",
+        "walkthroughs",
+        "kbc-tour"
+      ],
+      "group": "Go to",
+      "keys": {
+        "vim": [
+          "Space g T"
+        ],
+        "plain": [
+          "Space g T"
+        ],
+        "helix": [
+          "Space g T"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code tour list",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Capital `T` because `Space g t` is `nav.todos` and `Space t` is `view.theme-cycle` (vim/helix) — `Space g R` (nav.rails) already set the capital precedent for a second destination on a taken letter. NOT to be confused with `~sets/{id}/~tour`, Phase E4's walk over ONE reading set's spans, which has no key of its own."
     },
     {
       "id": "boards.add",

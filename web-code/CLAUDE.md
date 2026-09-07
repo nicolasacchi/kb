@@ -1364,6 +1364,104 @@ character (`routes/recipeCommands.test.ts`'s own guard, mirroring
 `searchCommands.test.ts`'s "would be swallowed by [the query box / a form
 field]" check) — the auto-form's text/number/enum inputs would otherwise
 eat it.
+## Tours and trails (`kbc-tour/1` + `kbc-trail/1`, `V74-L3b`, design §D12/§D17)
+
+**A tour reuses the board's machinery, and that is the rule, not a
+shortcut.** On the daemon a tour IS a board whose nodes are its steps
+(server invariant 26(a)), so on this side: a step's card is `BoardCard`
+(which is in turn the review document's `LiveRefCard` for a `code` node),
+its census comes off the same `honesty` block, and its walkthrough is the
+board's — the SAME `walkthrough.next`/`prev`/`play` registry rows, the same
+`walkthrough` context key, the same `dismiss.mode` rung for Escape, and a
+`?step=` whose 1-based↔0-based conversion lives in exactly one module.
+`lib/toursUrl.ts` MIRRORS `lib/boardsUrl.ts` rather than generalising it (a
+shared parser would have to be parameterised by a param name that is the
+same string on both surfaces, which buys nothing and makes each grammar
+unreadable alone) — and `toursUrl.test.ts` pins that the two `parseStep`
+functions agree on every input, including the shared `Number()` looseness
+that makes `?step=1e0` step one on both. If you find yourself writing a
+second card, a second census or a second step parser, that is the thing D10
+forbids.
+
+**`~tours` is not `~sets/:id/~tour`.** Phase E4's tour mode walks ONE reading
+set's ordered spans and keeps its route, its `routes/Tour.tsx`, its
+`lib/tourPlayer.ts` and its `lib/tourUrlSync.ts` untouched. The kbc-tour/1
+pair is `routes/Tours.tsx` + `routes/TourDetail.tsx`. Two surfaces share a
+word and nothing else; neither reads the other's data. The one behavioural
+difference from `~boards` is deliberate: a tour is ALWAYS being walked, so an
+absent `?step=` means step one rather than "not walking" — a board is a map
+you may simply look at, a tour is not.
+
+**Record-a-tour is a WINDOW over the ring, not new recording.**
+`lib/trail.ts` (`kbc-trail/0`, V70-A6) has been appending typed hops per tab
+since the Ramp shipped. `Space k r` writes ONE integer into `sessionStorage`
+— the ring's current end — and `Space k s` hands `hopsToDraft` the slice
+since. Nothing new is observed and nothing is written until a human applies
+the composer, because a recorded path is raw material and a tour is prose
+about it. Two rules inside `lib/tourDoc.ts` are load-bearing: a step's ref
+NEVER carries an `@sha` (the recording did not observe one; the daemon
+captures the witness at apply time under its own exact rule, and a sha
+guessed here would manufacture a `pinned` that was never true), and a hop
+that landed on a file with no line becomes a PROSE step with a stated note
+rather than a `code` step with an invented range. The composer checks itself
+against the daemon's own coordinate rule (`coordinateKeysOutsidePins`,
+reused from `lib/boardDoc.ts`) before sending, so a violation is a refusal
+here naming the path, never a 400 that reads as "the server is broken".
+
+**The trail indicator is MANDATORY and it may not lie.** D17 permits a
+server-side attention ledger only behind "an explicit opt-in that is off on
+first boot with a visible indicator", so `components/trail/TrailIndicator.tsx`
+lives in the ONE chrome bar every route shares. Three rules: it renders
+whenever the daemon PERMITS the feature (off is a state, shown, not an
+absence) and nothing at all when `[trails] enabled` is false; its mode goes
+through `normalizeTrailMode`, which fails CLOSED to `off` exactly as
+`trails::mode_static` does server-side, because an indicator saying
+"recording" for a mode this build cannot interpret is the one lie the surface
+exists to prevent; and the mode control is ABSENT — not disabled — for a
+caller the daemon reports as not `mutable`. `Space k p` and the chip are ONE
+thing: the key toggles the mode and the chip changes, which is what D17's
+"pausable with a visible indicator" means as a pair.
+
+**The trail rail is the operator's own read, and its empty state is
+honest.** The two human trail reads are loopback-only on the daemon, so
+`useTrails` folds a 404/403 into `TRAILS_NOT_LOOPBACK` — an empty list with
+the REASON — rather than an error toast: your movement record not leaving
+your box is the design, not a fault. Every state on a step is the daemon's,
+computed on that read, and a `carried` step is NOT re-anchored to a guessed
+line. Purge goes through the ONE confirm host (invariant #32's posture), and
+the fork chip is absent rather than disabled off loopback.
+
+**The linked-tab chip rides ONE grammar.** A tab opened from a tour or trail
+step carries `?trail=<id>&step=<n>&src=tour|trail` — the SAME linkage
+`TrailOriginChip` has used since V70-A6, with a `src` DISCRIMINATOR rather
+than a second `?tour=&tstep=` pair. `src` is omitted at its default, so every
+pre-L3b URL is byte-identical; `parseTrailLink` degrades an unknown value to
+the default rather than fabricating one; and `stripTrail` drops it with the
+rest, so two locations differing only in linkage are still one place.
+`useTrailLink` SKIPS local resolution for a server source (broadcasting a
+`trail.request` for a `trl_`-shaped id would ask every other tab a question
+none can answer) and `components/trail/LinkedStepChip.tsx` resolves those
+through the daemon instead — rendering NOTHING when it cannot, because a chip
+that cannot go back is worse than no chip. Following a tour chip lands on
+that tour at THAT step; a trail chip fires one `kbc:trail.focus` CustomEvent
+(the `kbc:omnibox.open` precedent) that `Reader.tsx` turns into "open the
+Trail rail on this step".
+
+**Keys: `Space t` is the theme, so the family lives under `Space k`.**
+`view.theme-cycle` binds `Space t` in the vim and helix presets, so a
+`Space t r` chord would be shadowed in two of three presets — the exact
+class of collision `commands doctor` cannot see (it checks conflicts between
+coactive rows at a modal depth, not leader PREFIXES) and that V72-I2 and
+V73-K2c both shipped. The five rows are therefore `Space g T` (`nav.tours` —
+capital because `Space g t` is `nav.todos`, following `Space g R`'s
+precedent), `Space k r`/`Space k s` (`tour.record`/`tour.record-stop`),
+`Space k p` (`trail.pause`) and `Space R t` (`rail.tab.trail`, the eighth
+rail tab). All five are `scope: global`, `dispatch: central`, so
+`deadRows.test.ts` is their gate; `commands/tours.test.ts` is the
+per-surface gate that suite structurally cannot be, and its collision case
+runs the WHOLE-registry prefix scan by hand in all three presets. **Run that
+scan by hand whenever you add a leader chord** — it is three lines and it is
+the only thing that catches a chord shadowed by a complete binding.
 
 ## When to update this file
 

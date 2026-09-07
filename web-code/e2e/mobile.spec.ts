@@ -86,8 +86,9 @@ test.describe("Reader mobile shell (390×844)", () => {
     // V70-A4 re-cut the six SOURCE tabs into the design's TASK tabs: All,
     // Understand, History, Notes (Review appears only with an open review
     // for this file, and this fixture has none). V72-J2 added Comments,
-    // UNCONDITIONAL like the first four.
-    await expect(sheet.locator("[data-kbc-itab]")).toHaveCount(5);
+    // UNCONDITIONAL like the first four, and V74-L3b added Trail on the same
+    // footing (design D17: off is a state the rail renders, not an absence).
+    await expect(sheet.locator("[data-kbc-itab]")).toHaveCount(6);
 
     await sheet.locator('[data-kbc-itab="notes"]').click();
     await expect(sheet.locator(".kbc-annotations")).toBeVisible();
