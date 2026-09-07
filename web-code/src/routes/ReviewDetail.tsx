@@ -516,7 +516,6 @@ export default function ReviewDetail() {
                 cardsFolded={cardsFolded}
                 onSetCardsFolded={setCardsFolded}
                 focusedRef={focusedRef}
-                onFocusRef={setFocusedRef}
               />
             ) : (
               <div className="kbc-reader__hint">
