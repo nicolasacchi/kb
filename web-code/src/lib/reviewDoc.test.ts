@@ -170,6 +170,23 @@ describe("splitRefRuns", () => {
     expect(splitRefRuns(run, cards, true)).toEqual([run]);
   });
 
+  it("measures a span's width in CODE POINTS, so an astral char inside it does not eat text", () => {
+    // `scanLine` reports 1-based CODE-POINT columns and slices a code-point
+    // array; measuring the body with `String.length` (UTF-16 units) would
+    // over-advance by one per astral character and swallow the prose after
+    // the span — here, the leading space of " tail".
+    const runs = splitRefRuns(
+      { kind: "text", text: "a [[\u{1F600}b]] tail" },
+      cards,
+      true,
+    );
+    expect(runs).toEqual([
+      { kind: "text", text: "a " },
+      { kind: "text", text: "[[\u{1F600}b]]" },
+      { kind: "text", text: " tail" },
+    ]);
+  });
+
   it("handles two refs on one line without losing the text between them", () => {
     const runs = splitRefRuns(
       { kind: "text", text: "[[code:app/a.rb:12]] and [[code:]] end" },

@@ -163,8 +163,13 @@ export function splitRefRuns(
   const chars = Array.from(run.text);
   let at = 0;
   for (const f of found) {
+    // `scanLine` counts columns in CODE POINTS (what an editor shows, and
+    // what `refs::scan_line` reports), so the body's own width must be
+    // measured the same way — `String.length` is UTF-16 units and would
+    // slice one short per astral character, silently eating text after a
+    // ref on any line containing an emoji.
     const start = f.col - 1;
-    const end = start + f.body.length + 4; // `[[` + body + `]]`
+    const end = start + Array.from(f.body).length + 4; // `[[` + body + `]]`
     if (start > at) out.push({ kind: run.kind, text: chars.slice(at, start).join("") });
     const span = refSpanFor(f.body, cards, cardsResolved);
     if (span.kind === "wikilink") {
@@ -262,7 +267,10 @@ export function cardAddress(card: ReviewDocCard): string {
  * Four destinations, each through the EXISTING builder (root CLAUDE.md #35 —
  * this side never assembles a second URL grammar):
  *
- * - `hunk:` → the review diff at that file, with the hunk selected;
+ * - `hunk:` → the review diff at that file. NOT at the hunk: `?hunk=` takes
+ *   a `kbc-hunkid/1` content address, which is computed in the BROWSER from
+ *   a parsed diff (`lib/diffHunks.ts`) and is not something a card carries —
+ *   naming the file is the honest maximum;
  * - `finding:` → the review's own finding permalink;
  * - anything with a resolved `path` → the reader at that line range;
  * - `gh:`/`kb:` → `null`. They are INERT by construction: kb-code never
