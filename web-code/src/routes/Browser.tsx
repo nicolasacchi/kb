@@ -20,6 +20,9 @@ import {
 } from "../lib/browserUrl";
 import { isTypeIshKind } from "../lib/hierarchyState";
 import { speedFilterItems } from "../lib/speedSearch";
+import { resolve as resolveCommand, tokenOf } from "../commands/dispatch";
+import { useCommandScope } from "../commands/CommandRoot";
+import type { BrowserHandlers } from "./browserCommands";
 import "../styles/browser.css";
 
 /** Kinds shown in the containers/types pane (classes, traits, free functions). */
@@ -274,7 +277,120 @@ export default function BrowserPage() {
     retry: false,
   });
 
-  // Keyboard: j/k within focused pane, Enter drills, h/l pane focus.
+  // Keyboard (V73-K6: kbc-cmd/1 handlers, scope `board`, `board == browser`)
+  // — j/k within focused pane, Enter drills, h/l pane focus. Previously five
+  // hard-coded `e.key === …` checks with no registry involvement at all — a
+  // SECOND home for these keys (`board.pane-prev`/`board.pane-next`/
+  // `board.row-next`/`board.row-prev`/`board.drill` shipped in
+  // `registry.json` since before this unit, always with this real behaviour,
+  // but nothing here ever asked what a keystroke MEANT). `onKey` below now
+  // asks `dispatch.ts`'s `resolve()` — the same resolver `CommandRoot`
+  // uses — and runs the returned id's handler from `handlers`; see
+  // `browserCommands.ts` for the declaration↔handler contract and
+  // `browserCommands.test.ts` for the bidirectional walk.
+  useCommandScope("board", { board: "browser" });
+
+  function panePrev() {
+    setFocusPane((p) =>
+      p === "calls"
+        ? "source"
+        : p === "source"
+          ? "members"
+          : p === "members"
+            ? "containers"
+            : "containers",
+    );
+  }
+  function paneNext() {
+    setFocusPane((p) =>
+      p === "containers"
+        ? "members"
+        : p === "members"
+          ? "source"
+          : p === "source"
+            ? "calls"
+            : "calls",
+    );
+  }
+  /// Shared by `board.row-next`/`board.row-prev` — `delta` is `+1`/`-1`.
+  function moveRow(delta: number) {
+    if (focusPane === "containers" && containers.length > 0) {
+      const idx = Math.max(0, containers.findIndex((c) => refMatches(selectedContainer, c)));
+      const next = Math.max(0, Math.min(containers.length - 1, idx + delta));
+      const c = containers[next];
+      if (c) setSymbol({ path: c.path, name: c.name, line: c.line_start });
+      return;
+    }
+    if (focusPane === "members" && members.length > 0 && selectedContainer) {
+      const idx = Math.max(
+        0,
+        members.findIndex(
+          (m) =>
+            selectedMember &&
+            m.name === selectedMember.name &&
+            (selectedMember.line == null || m.line_start === selectedMember.line),
+        ),
+      );
+      const base = idx < 0 ? 0 : idx;
+      const next = Math.max(0, Math.min(members.length - 1, base + delta));
+      const m = members[next];
+      if (m) {
+        const contKind = containers.find((c) => refMatches(selectedContainer, c))?.kind ?? "";
+        setSymbol({
+          path: selectedContainer.path,
+          name: m.name,
+          line: m.line_start,
+          container: isTypeIshKind(contKind) ? selectedContainer.name : undefined,
+        });
+      }
+    }
+  }
+  function drill() {
+    if (focusPane === "containers" && containers.length > 0) {
+      const idx = Math.max(0, containers.findIndex((c) => refMatches(selectedContainer, c)));
+      const c = containers[idx] ?? containers[0];
+      if (c) {
+        setSymbol({ path: c.path, name: c.name, line: c.line_start });
+        setFocusPane("members");
+      }
+      return;
+    }
+    if (focusPane === "members" && members.length > 0 && selectedContainer) {
+      const idx = Math.max(
+        0,
+        members.findIndex(
+          (m) =>
+            selectedMember &&
+            m.name === selectedMember.name &&
+            (selectedMember.line == null || m.line_start === selectedMember.line),
+        ),
+      );
+      const m = members[idx >= 0 ? idx : 0];
+      if (m) {
+        setSymbol({
+          path: selectedContainer.path,
+          name: m.name,
+          line: m.line_start,
+          container: isTypeIshKind(
+            containers.find((c) => refMatches(selectedContainer, c))?.kind ?? "",
+          )
+            ? selectedContainer.name
+            : undefined,
+        });
+        setFocusPane("source");
+      }
+    }
+  }
+
+  // Every id `browserCommands.ts` declares, or this does not compile.
+  const handlers: BrowserHandlers = {
+    "board.pane-prev": panePrev,
+    "board.pane-next": paneNext,
+    "board.row-next": () => moveRow(1),
+    "board.row-prev": () => moveRow(-1),
+    "board.drill": drill,
+  };
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
@@ -282,102 +398,26 @@ export default function BrowserPage() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-      if (e.key === "h") {
-        e.preventDefault();
-        setFocusPane((p) =>
-          p === "calls"
-            ? "source"
-            : p === "source"
-              ? "members"
-              : p === "members"
-                ? "containers"
-                : "containers",
-        );
-        return;
-      }
-      if (e.key === "l") {
-        e.preventDefault();
-        setFocusPane((p) =>
-          p === "containers"
-            ? "members"
-            : p === "members"
-              ? "source"
-              : p === "source"
-                ? "calls"
-                : "calls",
-        );
-        return;
-      }
-
-      if (e.key !== "j" && e.key !== "k" && e.key !== "Enter" && e.key !== "ArrowDown" && e.key !== "ArrowUp") {
-        return;
-      }
-
-      if (focusPane === "containers" && containers.length > 0) {
-        e.preventDefault();
-        const idx = Math.max(
-          0,
-          containers.findIndex((c) => refMatches(selectedContainer, c)),
-        );
-        if (e.key === "Enter") {
-          const c = containers[idx] ?? containers[0];
-          if (c) {
-            setSymbol({ path: c.path, name: c.name, line: c.line_start });
-            setFocusPane("members");
-          }
-          return;
-        }
-        const delta = e.key === "j" || e.key === "ArrowDown" ? 1 : -1;
-        const next = Math.max(0, Math.min(containers.length - 1, idx + delta));
-        const c = containers[next];
-        if (c) setSymbol({ path: c.path, name: c.name, line: c.line_start });
-        return;
-      }
-
-      if (focusPane === "members" && members.length > 0 && selectedContainer) {
-        e.preventDefault();
-        const idx = Math.max(
-          0,
-          members.findIndex(
-            (m) =>
-              selectedMember &&
-              m.name === selectedMember.name &&
-              (selectedMember.line == null || m.line_start === selectedMember.line),
-          ),
-        );
-        if (e.key === "Enter") {
-          const m = members[idx >= 0 ? idx : 0];
-          if (m) {
-            setSymbol({
-              path: selectedContainer.path,
-              name: m.name,
-              line: m.line_start,
-              container: isTypeIshKind(
-                containers.find((c) => refMatches(selectedContainer, c))?.kind ?? "",
-              )
-                ? selectedContainer.name
-                : undefined,
-            });
-            setFocusPane("source");
-          }
-          return;
-        }
-        const delta = e.key === "j" || e.key === "ArrowDown" ? 1 : -1;
-        const base = idx < 0 ? 0 : idx;
-        const next = Math.max(0, Math.min(members.length - 1, base + delta));
-        const m = members[next];
-        if (m) {
-          const contKind =
-            containers.find((c) => refMatches(selectedContainer, c))?.kind ?? "";
-          setSymbol({
-            path: selectedContainer.path,
-            name: m.name,
-            line: m.line_start,
-            container: isTypeIshKind(contKind) ? selectedContainer.name : undefined,
-          });
-        }
-      }
+      const token = tokenOf(e);
+      const ctx = { board: "browser" as const };
+      // Pre-registry this page accepted BOTH the vim letter and the plain
+      // arrow for every row (`e.key === "j" || e.key === "ArrowDown"`, one
+      // literal check, no preset in sight) — `board.pane-prev`/
+      // `board.pane-next`/`board.row-next`/`board.row-prev` all carry a
+      // DIFFERENT `plain` key than their `vim`/`helix` one (`h`/`j` vs.
+      // `ArrowLeft`/`ArrowDown`), so resolving under the live preset alone
+      // would silently drop whichever column isn't selected — a real
+      // regression from what shipped. Trying `vim` then `plain` keeps both
+      // working regardless of the SPA's preset setting, matching the
+      // original behaviour exactly (and, for pane switching, finally makes
+      // the registry's own `plain` column — declared since before this
+      // unit, never wired — actually do something).
+      const cmd = resolveCommand(token, "board", ctx, "vim") ?? resolveCommand(token, "board", ctx, "plain");
+      if (!cmd) return;
+      const handler = (handlers as Record<string, (() => void) | undefined>)[cmd.id];
+      if (!handler) return;
+      e.preventDefault();
+      handler();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

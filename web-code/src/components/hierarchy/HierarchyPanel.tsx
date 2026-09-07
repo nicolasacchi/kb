@@ -176,21 +176,33 @@ export default function HierarchyPanel({
 
   if (!state.open) return null;
 
+  // V73-K6 — this panel is one of `overlayPanels`' several independent
+  // owners of the `drawer`-scope rows: `registry.json`'s own
+  // `dismiss.overlay` note already says "Each panel owns execution" for
+  // Escape, and it holds for the row/activate/collapse/expand rows too —
+  // `PeekPanel.tsx`/`EgoGraph.tsx` claim a subset of the same ids
+  // independently (no `h`/`l` collapse-expand there; a peek/ego-graph row
+  // has no children to fold), never through `commands/CommandRoot.tsx`'s
+  // bus (`commands/surfaceRows.test.ts`'s `OWNER_FILES` lists every file in
+  // the group; a row is claimed once ANY of them shows it).
   function onKeyDown(e: React.KeyboardEvent) {
     e.stopPropagation();
     switch (e.key) {
       case "ArrowDown":
       case "j":
+        // kbc-owns: "drawer.row-next":
         e.preventDefault();
         onMove(1);
         return;
       case "ArrowUp":
       case "k":
+        // kbc-owns: "drawer.row-prev":
         e.preventDefault();
         onMove(-1);
         return;
       case "ArrowRight":
       case "l": {
+        // kbc-owns: "drawer.expand":
         e.preventDefault();
         const row = currentHierarchyRow(state);
         if (row && !row.expanded && !row.cycle && !row.truncatedNote) onToggleExpand(row);
@@ -198,18 +210,21 @@ export default function HierarchyPanel({
       }
       case "ArrowLeft":
       case "h": {
+        // kbc-owns: "drawer.collapse":
         e.preventDefault();
         const row = currentHierarchyRow(state);
         if (row?.expanded) onToggleExpand(row);
         return;
       }
       case "Enter": {
+        // kbc-owns: "drawer.activate":
         e.preventDefault();
         const row = currentHierarchyRow(state);
         if (row && row.path && !row.truncatedNote) onActivate(row);
         return;
       }
       case "Escape":
+        // kbc-owns: "dismiss.overlay":
         e.preventDefault();
         onClose();
         return;

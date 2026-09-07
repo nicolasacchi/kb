@@ -15,6 +15,7 @@ import {
   useReviewFiles,
   useReviewFindings,
   useReviewInterdiff,
+  useReviewPseudoList,
   useReviewReadingOrder,
 } from "../hooks/useReviews";
 import { indexThreads, type DiffSide } from "../lib/reviewComments";
@@ -65,6 +66,7 @@ import {
   type ReviewDraft,
 } from "../lib/reviewDrafts";
 import { mapChapters, type MapRowState } from "../lib/reviewMapColumn";
+import { pseudoPath } from "../lib/pseudoFiles";
 import { postAnnotationsBatch } from "../api/client";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useIsMobile } from "../hooks/useIsMobile";
@@ -139,6 +141,9 @@ export default function ReviewDiff() {
   const reviewQ = useReview(repo, idOk ? id : undefined);
   const filesQ = useReviewFiles(repo, idOk ? id : undefined, psQuery);
   const orderQ = useReviewReadingOrder(repo, idOk ? id : undefined, true);
+  // V73-K2c (kbc-pseudo/1) — the map column's chapter zero. 404→null degrade
+  // (older server) mirrors every other optional review surface's own hook.
+  const pseudoQ = useReviewPseudoList(repo, idOk ? id : undefined, psQuery, true);
   const commentsQ = useReviewComments(repo, idOk ? id : undefined, psQuery, true);
   const findingsQ = useReviewFindings(repo, idOk ? id : undefined, { ps: psQuery });
   const dispositionMut = useReviewFindingDispositionMutations(repo, idOk ? id : 0);
@@ -254,6 +259,13 @@ export default function ReviewDiff() {
   const [parsedByPath, setParsedByPath] = useState<Map<string, ParsedDiff>>(new Map());
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [expandByHunk, setExpandByHunk] = useState<Map<string, ExpandRequest>>(new Map());
+  // V73-K2c (kbc-hunk-turns/1) — at most ONE hunk's turns panel open at a
+  // time, globally (a `kbc-hunkid/1` id already encodes its own path, so
+  // there is never an ambiguity about which file it belongs to). Browser-
+  // local, ephemeral state, same posture `folded`/`expandByHunk` above
+  // already take — a reload is entitled to reset it, and mounting the panel
+  // IS the fetch trigger (never auto-fetched for every hunk).
+  const [turnsOpenId, setTurnsOpenId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<DraftsState>(EMPTY_DRAFTS);
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -409,6 +421,16 @@ export default function ReviewDiff() {
       return;
     }
     apply({ type: "gotoFile", fileIdx: idx });
+  }
+
+  /// V73-K2c (kbc-pseudo/1) — "the map column's chapter zero" opener. A
+  /// pseudo path is never one of `paths`/`ordered` (it is not a diffed
+  /// file at all), so this ALWAYS navigates to the path-segment route
+  /// (which is what puts the page in single-file-focus mode,
+  /// `single = focusPath.length > 0` above) rather than reusing `goFile`'s
+  /// index-based lookup.
+  function openPseudo(name: string) {
+    navigate(withQuery(reviewDiffHref(repo, id, pseudoPath(name))));
   }
 
   /// `] p` / `[ p` — step the HEAD patchset. A range keeps its base and
@@ -725,6 +747,10 @@ export default function ReviewDiff() {
     return m;
   }, [ordered, fileRollup, findingsCountByPath, draftsByPath, fileNoiseByPath]);
 
+  const onToggleTurns = useCallback((hunkId: string) => {
+    setTurnsOpenId((cur) => (cur === hunkId ? null : hunkId));
+  }, []);
+
   const v2: DiffV2Api = useMemo(
     () => ({
       ctx: ctxDial,
@@ -741,6 +767,8 @@ export default function ReviewDiff() {
       onToggleFold: toggleFold,
       onExpandHunk: expandHunkBy,
       onDraftCreate: draftCreate,
+      turnsOpenId,
+      onToggleTurns,
     }),
     [
       ctxDial,
@@ -755,6 +783,8 @@ export default function ReviewDiff() {
       toggleFold,
       expandHunkBy,
       draftCreate,
+      turnsOpenId,
+      onToggleTurns,
     ],
   );
   /// Per-file specialisation of `v2` — the file's own noise labels and
@@ -946,6 +976,20 @@ export default function ReviewDiff() {
     "diff.drafts": gated(() => setDraftsOpen((v) => !v)),
     "diff.publish": gated(() => publishDrafts()),
     "diff.drafts-discard": gated(() => discardDrafts()),
+    // V73-K2c — kbc-hunk-turns/1, the on-demand loopback join for the
+    // CURSOR hunk (the same `cursorHunkId` the `Space h`/`z c` family
+    // already act on).
+    "diff.hunk-turns": gated(() => {
+      if (cursorHunkId) onToggleTurns(cursorHunkId);
+    }),
+    // V73-K2c — kbc-pseudo/1, chapter zero. Four fixed rows rather than a
+    // `Space {1-9}`-style wildcard (`drawer.tab`'s own precedent): these
+    // name four SPECIFIC, permanent files, not an open-ended list, so a
+    // dedicated id per file is the honest shape.
+    "diff.pseudo.pr-body": gated(() => openPseudo("pr-body.md")),
+    "diff.pseudo.review-md": gated(() => openPseudo("review.md")),
+    "diff.pseudo.findings": gated(() => openPseudo("findings.json")),
+    "diff.pseudo.commits": gated(() => openPseudo("commits.md")),
     // The four menu picks are `when: diff.menu` rows, so they only resolve
     // while the menu is up — no local gate needed, and no swallow: any other
     // key is blocked by `gated` above rather than by a blanket preventDefault.
@@ -1158,6 +1202,8 @@ export default function ReviewDiff() {
         v2For={v2For}
         withQuery={withQuery}
         reviewDiffHref={reviewDiffHref}
+        pseudoFiles={pseudoQ.data?.files ?? []}
+        onPickPseudo={openPseudo}
       />
       <ReviewDiffRail
         filesOpen={filesOpen}

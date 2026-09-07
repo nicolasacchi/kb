@@ -17,6 +17,7 @@ import { Icon } from "../../components/icons";
 // chip's on-demand expansion, `FileDiffBody`'s own doc).
 import DiagnosticsCard from "../../components/provenance/DiagnosticsCard";
 import type { HunkView } from "../../components/diff/HunkStrip";
+import HunkTurnsPanel from "../../components/reviews/HunkTurnsPanel";
 import { useDiagnostics } from "../../hooks/useDiagnostics";
 import { useDiff } from "../../hooks/useDiff";
 import { useFile } from "../../hooks/useFile";
@@ -93,6 +94,13 @@ export interface DiffV2Api {
     body: string,
     intent: string,
   ) => Promise<void>;
+  /// V73-K2c (kbc-hunk-turns/1) — the ONE currently-open hunk's turns panel,
+  /// globally (a `kbc-hunkid/1` id already encodes its own path, so it only
+  /// ever matches the ONE hunk it was computed from — `FileDiffBody` below
+  /// checks membership against ITS OWN `hunkViews` before building the
+  /// panel). `onToggleTurns` flips it open/closed; `null` means none open.
+  turnsOpenId: string | null;
+  onToggleTurns: (hunkId: string) => void;
 }
 
 export function FileDiffBody({
@@ -282,6 +290,17 @@ export function FileDiffBody({
     [githubThreads, overlay, path],
   );
 
+  // V73-K2c (kbc-hunk-turns/1) — the currently-open hunk's turns panel,
+  // scoped to whether IT belongs to this file at all (`hunkId` already
+  // factors in `path`, so it can only ever match one file's own
+  // `hunkViews`). Mounting `<HunkTurnsPanel>` here IS the on-demand fetch
+  // trigger — never built for a hunk nobody asked about.
+  const turnsOpenHunkId =
+    v2?.turnsOpenId && hunkViews?.some((hv) => hv.id === v2.turnsOpenId) ? v2.turnsOpenId : null;
+  const turnsPanelNode = turnsOpenHunkId ? (
+    <HunkTurnsPanel repo={repo} reviewId={reviewId} ps={ps} hunkId={turnsOpenHunkId} />
+  ) : null;
+
   if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
   if (error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
   if (!parsed) return null;
@@ -311,6 +330,12 @@ export function FileDiffBody({
         const view = hunkViews?.[hi];
         if (view) v2?.onExpandHunk(view.id, dir);
       }}
+      onHunkTurns={(hi) => {
+        const view = hunkViews?.[hi];
+        if (view) v2?.onToggleTurns(view.id);
+      }}
+      turnsOpenId={turnsOpenHunkId}
+      turnsPanel={turnsPanelNode}
       diagnosticsChip={diagChip}
       diagnosticsByLine={diagByLine}
       onDiagnosticsClick={() => setDiagCardOpen((v) => !v)}

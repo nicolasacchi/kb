@@ -76,6 +76,21 @@ registered in every reachable ROUTE (`app.tsx`'s shell registers many, but
 `Reader.tsx` owns the desk verbs and unmounts with the route) — which
 needs a route graph this suite does not have.
 
+**Every shipped `dispatch: "surface"` row needs the SAME proof, and until
+`V73-K6` nothing gave it one.** `deadRows.test.ts` gates `central` rows
+only, so each prior unit that shipped a surface family built its own
+bespoke per-surface gate (`diffV2.test.ts`, `reviewDoc.test.ts`,
+`boards.test.ts`) and the rest — the pre-existing `board.row-next`/
+`board.row-prev`/`board.drill`/`board.pan` and the whole `lens.*`/
+`palette.*`/`drawer.*`/`dismiss.*` families — shipped with no proof at all,
+found by generalizing the question: `commands/surfaceRows.test.ts` requires
+every shipped surface row to be claimed by a `useCommandHandlers`
+registration, a `vimKind`, or an `owner` field naming a registered surface
+whose source contains the row's id (a real handler map, `searchCommands.ts`'s
+pattern, or an inline `kbc-owns` marker for a surface that cannot route
+through the shared resolver at all — `Canvas.tsx`'s bare `Alt` press being
+the case that can't).
+
 **A bare key can be swallowed by the CM6 buffer guard — the predicate is
 precise, and getting it wrong breaks either one key or thirty-five.**
 `CommandRoot`'s guard 2 (`shouldWithholdFromBuffer`, exported from
@@ -1100,6 +1115,124 @@ it is claimed) and `rails.schema-fold`
 (`Space z` — **not** a bare `z`, which is a pure vim fold prefix inside the
 buffer; a global bare `z` would flip it to a MIXED prefix and change what
 the buffer guard does with every `z` chord).
+
+## Timeline v2, the claim register, hunk↔turn chips and pseudo-files (`V73-K2c`, design §D18/D9/D25)
+
+Four surfaces from `review-timeline/2`'s wire (`docs/kb-code.md`'s own
+section), each with a home. Three rules, each stated once here rather than
+re-derived at each call site.
+
+**The claim register is visually distinct from a fact, on purpose.**
+`components/reviews/ClaimRegister.tsx` is ONE component, mounted THREE
+places (the Document tab, beside the Report tab's findings, and the
+reader's inspector rail via `components/lens/ClaimsCard.tsx`) — the "one
+projection, two renderers" rule kbc-tree/1 states, applied a third time.
+Its CSS (`styles/reader.css`, loaded globally via `main.tsx` so all three
+mount points have it) never rides `.kbc-trust`'s LINE-STYLE channel
+(`kbc-trust-{exact,likely,candidate}`) or that channel's hue — a claim's
+ladder state (`pinned`/`drifted`/`unanchored`, computed per request by
+`claims.rs`, never a stored trust column) gets its OWN small badge
+(`.kbc-claim__ladder--*`), and the body renders in italic inside a dashed-
+border card, composed from EXISTING generic roles rather than a new theme
+hue. `confidence` renders as AGENT-DECLARED TEXT (`lib/claims.ts`'s
+`confidenceText`, "agent-declared 0.7" / "agent-declared — not stated"),
+never a bar or a percentage meter. `ClaimRegister` renders `claims[]` in
+WIRE order through `lib/claims.ts`'s `claimsRenderOrder` — an identity
+function that exists so "never sorted by confidence" is a named, testable
+seam (`claims.test.ts`'s referential-equality pin) rather than an unstated
+property of "the component doesn't call `.sort()`". Evidence refs render as
+small cards (`evidenceRefView`) that link only the schemes this register can
+honestly resolve (`code:`/`sym:`/`ent:`/`finding:`) — `gh:`/`kb:`/`hunk:`
+are named, never linked, the same "no host it could resolve" posture
+`RefCard.tsx` already takes for an inert doc-tab card.
+
+**Turn chips are on-demand and LOOPBACK-ONLY — never auto-fetched per
+hunk.** `HunkStrip.tsx`'s "turns" button toggles whether
+`components/reviews/HunkTurnsPanel.tsx` is even MOUNTED; mounting it IS the
+fetch trigger (`useHunkTurns`'s own doc). State lives in
+`routes/ReviewDiff.tsx`'s `DiffV2Api` bag (`turnsOpenId`/`onToggleTurns`,
+alongside `folded`/`expand` — the same per-hunk-state precedent), at most
+ONE hunk's panel open at a time globally (a `kbc-hunkid/1` id already
+encodes its own path, so this is never ambiguous). The badge is
+`components/reviews/TurnTierBadge.tsx` — deliberately NOT `TrustBadge`: the
+join's own vocabulary is `exact`/`likely` with NO candidate tier
+(`docs/kb-code.md`'s own wording — a wrong `exact` is this crate's release
+blocker, and a candidate-shaped fallback is exactly where an uncertain
+match would hide), so forcing it through the three-tier fact badge would
+silently offer a reading this join structurally cannot produce. The route
+has no dedicated bearer-visible refusal shape (LOOPBACK is a router-level
+gate ahead of the handler), so `HunkTurnsPanel` renders any non-2xx
+`ApiError.message` verbatim as the refusal — never a blank panel, never a
+guessed reason.
+
+**Pseudo-files are addressed like any other diffed path, with one
+structural difference: no revision chain.** `lib/pseudoFiles.ts` is the
+ONE place that knows the `~review/` prefix and the four reserved names;
+every consumer (the map column's chapter zero, the diff center's
+single-file branch, `lib/reviewTimeline.ts`'s `pr_body`/`doc_revision`
+link-outs) goes through it rather than a second `.startsWith()` check.
+Opening one ALWAYS navigates to the path-segment route
+(`reviewDiffHref(repo, id, pseudoPath(name))`, which is what puts the page
+in single-file focus — `pseudoPath` names are never reachable through
+`?file=` alone) — `routes/reviewDiff/ReviewDiffCenter.tsx` checks
+`pseudoNameFromPath(focusPath)` BEFORE the normal `ordered`/`single`
+branches and renders `components/reviews/PseudoFileView.tsx` instead of a
+diff. Comments attach through the EXISTING `useReviewDiffComments` hook
+with `side: "new"` (a pseudo file has no "old" side) — the server's ladder
+already resolves anchors against pseudo bytes, so this is the SAME thread
+system a real file's diff uses, never a second one. There is no fold/
+expand/context-dial affordance here (those are diff-v2 concepts over a
+`ParsedDiff` this view never has) and no carry-forward rung for a stale
+comment — `docs/kb-code.md`'s own wording: "the same line, moved" is not a
+thing that can happen to a pseudo-file, so the header states the blob hash
+and the "regenerated whole on every read" caption rather than implying a
+history that doesn't exist.
+
+**Every timeline lane always renders its own status.** `TimelinePanel.tsx`
+owns its OWN `useReviewTimeline` fetch now (`ReviewDetail.tsx` keeps a
+separate, cheap, UNFILTERED call purely for the tab-availability gate +
+404→redirect toast — two fetches, deliberately, rather than threading
+filter state through a route that has nothing else to do with it). All
+eleven lanes (`lib/timelineLanes.ts`'s `TIMELINE_LANES`) render in the lane
+bar with their wire `sources[].state` — `ok`/`skipped`/`refused`/
+`degraded` — ALWAYS, even when hidden by the reader's own client-side
+visibility toggle (`toggleLane`/`cycleLaneStep`, a PURE client filter over
+the already-fetched page; the wire has no `?lane=`). Hiding the STATUS
+chip would be exactly the "quietly lying about what was skipped" failure
+`review-timeline/2`'s own per-lane reporting exists to prevent — a hidden
+lane's row disappears from the feed, its CHIP never does. `kind`/`author`/
+`since`/`until`/`github` round-trip to the server as real query params;
+paging (`limit`/`offset`) reports `data.returned`/`data.total` verbatim,
+never a client-side count. The v1 client-side GitHub-thread interleave
+(`lib/githubThreads.ts`'s `githubTimelineRows`/`mergeTimelineRows`) is
+RETIRED from this panel: `review-timeline/2`'s own `github` lane natively
+carries `github_comment` events now (the same live `list_pull_comments`
+call), and merging both would double the rows.
+
+**A genuine server-side wire bug, found and fixed in this unit:**
+`review_timeline.rs`'s `comment`/`wt_comment` builders used to ALSO call
+`.with("author", serde_json::json!(a.author))` — a flat STRING under the
+exact same `"author"` JSON key the struct's own typed `author: EventAuthor`
+field (declared earlier in the struct, from `author_for(Some(&a.author))`)
+already serializes to. Because `detail` is `#[serde(flatten)]` and declared
+AFTER `author`, `TimelineEvent::to_value()` silently let the later-inserted
+flat string win, clobbering the v2 envelope for exactly these two of
+seventeen kinds (confirmed with a standalone serde repro before touching
+the fix; both regression tests in `review_timeline.rs` assert
+`event["author"]["kind"]`/`["name"]` post-fix). The duplicate lines were
+deleted, not renamed — the raw name was already redundant with
+`author.name`. `lib/reviewTimeline.ts`'s `authorNameOf` still tolerates a
+bare string too (an unfixed/older daemon, or a hand-built fixture), but the
+envelope object is what a fixed daemon actually sends.
+
+**A leader letter must be checked against the WHOLE registry by hand,
+never just `commands doctor`.** As the `~rails` section above states:
+the doctor's conflict pass skips any pair where either scope is `global`,
+so a global/global collision is invisible to it. `review.claims-toggle`
+and `review.timeline.lane-cycle` originally claimed `Space z`/`Space l` —
+both already taken globally by `rails.schema-fold`/`rails.atom.open` — and
+moved to `Space q`/`Space j` only because a manual full-registry scan
+caught it during a rebase, not because any automated gate did.
 
 ## When to update this file
 

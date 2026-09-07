@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { GithubThread } from "../../api/types";
 import type { DiffLine, ParsedDiff } from "../../lib/diff";
 import type { DiagnosticGutterMark } from "../../lib/diagnostics";
@@ -74,6 +74,15 @@ export interface UnifiedHunksProps {
   onHunkExpand?: (hunkIdx: number, dir: "up" | "down") => void;
   /// The cursor's hunk index — `j`/`k` and `?hunk=` both land here.
   currentHunk?: number | null;
+  /// V73-K2c (kbc-hunk-turns/1) — the ONE currently-open hunk's turns
+  /// affordance (at most one at a time across the whole file, mirroring
+  /// the composer's own single-at-a-time posture above). `turnsPanel` is
+  /// the caller's already-built `<HunkTurnsPanel>` element for
+  /// `turnsOpenId` — `HunkStrip.tsx` renders it only for the hunk whose id
+  /// matches.
+  onHunkTurns?: (hunkIdx: number) => void;
+  turnsOpenId?: string | null;
+  turnsPanel?: ReactNode;
 }
 
 function lineSpans(highlights: DiffHighlights | null | undefined, line: DiffLine): LineSpan[] | undefined {
@@ -183,6 +192,9 @@ export default function UnifiedHunks({
   onHunkViewed,
   onHunkExpand,
   currentHunk,
+  onHunkTurns,
+  turnsOpenId,
+  turnsPanel,
 }: UnifiedHunksProps) {
   const reviewMode = !!comments;
   const canComment = !reviewMode && !!repo && !!sha;
@@ -234,6 +246,9 @@ export default function UnifiedHunks({
               onToggleFold={() => onHunkFold?.(hi)}
               onToggleViewed={() => onHunkViewed?.(hi)}
               onExpand={(dir) => onHunkExpand?.(hi, dir)}
+              onToggleTurns={onHunkTurns ? () => onHunkTurns(hi) : undefined}
+              turnsOpen={turnsOpenId === view.id}
+              turnsPanel={turnsOpenId === view.id ? turnsPanel : undefined}
             />
           ) : (
             <div className="kbc-diff__hunk-header">{hunk.header}</div>

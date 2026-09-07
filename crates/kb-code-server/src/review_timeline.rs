@@ -440,7 +440,18 @@ pub(crate) fn core_events(
         .with("annotation_id", serde_json::json!(a.id))
         .with("path", serde_json::json!(a.path))
         .with("intent", serde_json::json!(a.intent))
-        .with("author", serde_json::json!(a.author))
+        // V73-K2c fix: this used to ALSO `.with("author", serde_json::json!(a.author))`
+        // — a flat string under the SAME "author" key the struct's own
+        // typed `author: EventAuthor` field (just above, from
+        // `author_for(Some(&a.author))`) already serializes as. Because
+        // `detail` is declared AFTER `author` in the struct and is
+        // `#[serde(flatten)]`, `TimelineEvent::to_value` silently let the
+        // flat string win, clobbering the v2 envelope's own structured
+        // author for every `comment` event (confirmed via a standalone
+        // serde repro: `to_value` on a struct shaped like this one drops
+        // the typed field and keeps only the flattened duplicate). The raw
+        // name is not lost — `author_for` already carries it as
+        // `author.name` — so this line is deleted rather than renamed.
         .with("is_reply", serde_json::json!(a.parent_id.is_some()))
         .with_body(a.body.clone());
         if !a.path.is_empty() {
@@ -619,7 +630,10 @@ pub(crate) fn wt_comment_events(annotations: &[store::AnnotationRow]) -> Vec<Tim
             .with("annotation_id", serde_json::json!(a.id))
             .with("path", serde_json::json!(a.path))
             .with("intent", serde_json::json!(a.intent))
-            .with("author", serde_json::json!(a.author))
+            // V73-K2c fix — same collision `core_events`'s comment loop had
+            // (see its own comment): drop the duplicate flat "author"
+            // string, since `author_for` above already carries it as
+            // `author.name` on the struct's own typed field.
             .with("resolved", serde_json::json!(a.resolved))
             .with("is_reply", serde_json::json!(a.parent_id.is_some()))
             .with_ref(code_ref(&a.path, None))
@@ -1458,6 +1472,15 @@ mod tests {
         assert!(comment_evts
             .iter()
             .any(|e| e["annotation_id"] == "reply-1" && e["is_reply"] == true));
+        // V73-K2c regression test: a `comment` event's v2 envelope `author`
+        // must survive as the STRUCTURED object, not be clobbered by a
+        // duplicate flat "author" string in `detail` (both `note()` fixture
+        // rows are authored "you", a human). Before the fix this failed —
+        // `e["author"]` was the bare string `"you"`, so `e["author"]["kind"]`
+        // indexed into a JSON string and read back `Value::Null`.
+        assert!(comment_evts
+            .iter()
+            .all(|e| e["author"]["kind"] == "human" && e["author"]["name"] == "you"));
     }
 
     #[test]
@@ -1774,6 +1797,14 @@ mod v2_tests {
         );
         assert_eq!(evs[0].kind, "wt_comment");
         assert_eq!(evs[0].detail["annotation_id"], "wt-1");
+        // V73-K2c regression test: same collision as the `comment` lane's
+        // own (see `composes_every_kind_in_ascending_at_order`'s tail) —
+        // must be checked through `to_value()`, since the in-memory
+        // `.detail` map above never collides with the struct's own
+        // `author` field (only the FLATTENED serialization does).
+        let v = evs[0].to_value();
+        assert_eq!(v["author"]["kind"], "human");
+        assert_eq!(v["author"]["name"], "you");
     }
 
     #[test]

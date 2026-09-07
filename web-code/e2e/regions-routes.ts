@@ -120,6 +120,11 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
     },
     { name: "prs", url: `${BASE}/r/${REPO_NAME}/~prs` },
     { name: "sets", url: `${BASE}/r/${REPO_NAME}/~sets` },
+    // V70-A10 ("Workspaces v0") — the list page IS the only workspace
+    // surface (`lib/setsUrl.ts`'s `workspacesUrl` doc: "unlike `~sets`,
+    // there is no separate detail route"), so unlike `set-detail` below this
+    // needs no fixture at all — a bare visit is the whole route.
+    { name: "workspaces", url: `${BASE}/r/${REPO_NAME}/~workspaces` },
     { name: "todos", url: `${BASE}/r/${REPO_NAME}/~todos` },
     { name: "comments", url: `${BASE}/r/${REPO_NAME}/~comments` },
     // V72-I2 — `~rails`. Reachable in this fixture because `fixture-repo.ts`

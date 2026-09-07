@@ -20,7 +20,7 @@ import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useReviewComments } from "../hooks/useReviewComments";
 import {
-  useGithubThreads,
+  useClaims,
   useReview,
   useReviewDoc,
   useReviewDocLint,
@@ -198,12 +198,14 @@ export default function ReviewDetail() {
   const [focusedRef, setFocusedRef] = useState<string | null>(null);
   const docCards = useMemo(() => cardList(docQ.data), [docQ.data]);
 
-  // ── PRR-F (design-addendum-2.md §A) — GitHub threads, fetched once the
-  // review's `pr_number` is known (the hook itself stays disabled until
-  // then). Shared across the Timeline tab (interleave) and the side panel's
-  // "GitHub (N)" filter chip — one fetch, two consumers.
+  // ── PRR-F (design-addendum-2.md §A) — the PR number the side panel's
+  // publish-preview + `TimelinePanel`'s `github=` default both key off.
+  // V73-K2c retired this route's own `useGithubThreads` call: the Timeline
+  // tab's client-side GitHub-thread interleave is gone now that
+  // `review-timeline/2`'s own `github` lane natively carries
+  // `github_comment` events (`TimelinePanel.tsx`'s own doc) — merging the
+  // two would double the rows.
   const prNumberForThreads = (review as ReviewDetailPr | undefined)?.pr_number;
-  const githubThreadsQ = useGithubThreads(repo, idOk ? id : undefined, prNumberForThreads);
 
   // PRR-U2 — Report tab. `reportQ` is fetched unconditionally (cheap, bearer,
   // prefix-invalidated with the rest of the review surface) so the header's
@@ -211,6 +213,14 @@ export default function ReviewDetail() {
   // without a second round-trip once the tab is opened.
   const reportQ = useReviewReport(repo, idOk ? id : undefined);
   const reportAvailable = hasReviewReport(reportQ.data);
+
+  // V73-K2c (kbc-claim/1, design D18) — the claim register's ONE fetch,
+  // shared by the Document tab (`DocPanel`) and the Report tab's
+  // beside-findings register (`ReportPanel`), same "one fetch, two
+  // consumers" precedent `githubThreadsQ` above establishes. Cheap bearer
+  // read, fetched unconditionally like `reportQ`.
+  const claimsQ = useClaims(idOk ? { repo, review: id } : undefined, idOk);
+  const claims = claimsQ.data?.claims ?? [];
   const [tabDefaulted, setTabDefaulted] = useState(false);
   useEffect(() => {
     if (tabDefaulted || !reportQ.isFetched) return;
@@ -343,6 +353,28 @@ export default function ReviewDetail() {
       const el = document.querySelector("[data-kbc-doc-compose-copy]");
       if (el instanceof HTMLElement) el.click();
     },
+    // V73-K2c — the claim register is mounted on BOTH the Document and
+    // Report tabs (never both at once, since `cockpitView` renders exactly
+    // one), so this is a plain DOM-click delegation with no tab gate, same
+    // pattern `doc.compose-copy` above already uses.
+    "review.claims-toggle": () => {
+      const el = document.querySelector("[data-kbc-claims-toggle]");
+      if (el instanceof HTMLElement) el.click();
+    },
+    // V73-K2c — the Timeline tab's own lane visibility + GitHub toggle.
+    // Both are plain DOM-click delegation onto `TimelinePanel.tsx`'s own
+    // buttons, same pattern `doc.compose-copy`/`review.claims-toggle`
+    // already use — gated on the tab so the keys are inert elsewhere.
+    "review.timeline.lane-cycle": () => {
+      if (cockpitView !== "timeline") return;
+      const el = document.querySelector("[data-kbc-timeline-lane-cycle]");
+      if (el instanceof HTMLElement) el.click();
+    },
+    "review.timeline.github-toggle": () => {
+      if (cockpitView !== "timeline") return;
+      const el = document.querySelector("[data-kbc-timeline-github-toggle]");
+      if (el instanceof HTMLElement) el.click();
+    },
   });
 
   const files = filesQ.data?.files ?? [];
@@ -470,6 +502,7 @@ export default function ReviewDetail() {
               review={review as ReviewDetailPr}
               ps={psQuery}
               onOpenFilesTab={() => setCockpitView("files")}
+              claims={claims}
             />
           ) : !compareMode && cockpitView === "map" ? (
             <ReviewMapPanel
@@ -491,14 +524,7 @@ export default function ReviewDetail() {
               onOpenFile={(path) => navigate(readerUrl(repo, path))}
             />
           ) : !compareMode && cockpitView === "timeline" ? (
-            <TimelinePanel
-              repo={repo}
-              reviewId={id}
-              loading={timelineQ.isLoading}
-              error={timelineQ.error as Error | null}
-              data={timelineQ.data}
-              githubThreads={githubThreadsQ.data}
-            />
+            <TimelinePanel repo={repo} reviewId={id} prBound={prNumberForThreads != null} />
           ) : !compareMode && cockpitView === "doc" ? (
             docQ.isLoading ? (
               <div className="kbc-reader__hint">Loading the review document…</div>
@@ -516,6 +542,7 @@ export default function ReviewDetail() {
                 cardsFolded={cardsFolded}
                 onSetCardsFolded={setCardsFolded}
                 focusedRef={focusedRef}
+                claims={claims}
               />
             ) : (
               <div className="kbc-reader__hint">

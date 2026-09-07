@@ -35,6 +35,8 @@ export interface RawCommand {
   browser_passthrough?: boolean;
   note?: string;
   ratified_conflicts?: string[];
+  owner?: string;
+  retired_reason?: string;
 }
 
 export interface RawScope {
@@ -89,6 +91,8 @@ const KNOWN_COMMAND_FIELDS = new Set([
   "browser_passthrough",
   "note",
   "ratified_conflicts",
+  "owner",
+  "retired_reason",
 ]);
 
 function j(v: unknown): string {
@@ -128,6 +132,8 @@ function emitCommand(c: RawCommand): string {
   if (c.note !== undefined) out.push(`    note: ${j(c.note)},`);
   if (c.ratified_conflicts !== undefined)
     out.push(`    ratifiedConflicts: ${j(c.ratified_conflicts)},`);
+  if (c.owner !== undefined) out.push(`    owner: ${j(c.owner)},`);
+  if (c.retired_reason !== undefined) out.push(`    retiredReason: ${j(c.retired_reason)},`);
   return `  {\n${out.join("\n")}\n  },`;
 }
 
@@ -155,7 +161,15 @@ export type KbcMutation = "none" | "metadata" | "working-tree";
 
 export type KbcSideEffect = "none" | "remote";
 
-export type KbcLifecycle = "shipped" | "planned";
+/// \`retired\` (V73-K6) — the row existed, describes a real key, but nothing
+/// executes it anymore and nothing should: excluded from \`KBC_ACTIVE_COMMANDS\`
+/// below (the palette, the \`?\` sheet, the which-key overlay and the
+/// dispatcher all read that filtered list, never \`KBC_COMMANDS\` directly) —
+/// \`KBC_COMMANDS\` itself keeps the row for the drift golden and the audit
+/// trail. Distinct from \`planned\` (not built YET, still surfaced as
+/// "planned" so the intent stays visible): a retired row is closed history,
+/// invisible on purpose.
+export type KbcLifecycle = "shipped" | "planned" | "retired";
 
 /// Who fires the binding at the WINDOW layer. \`central\` — \`CommandRoot\`'s
 /// single listener. \`surface\` — declared here for the sheet, the palette and
@@ -200,6 +214,16 @@ export interface KbcCommand {
   readonly browserPassthrough?: boolean;
   readonly note?: string;
   readonly ratifiedConflicts?: readonly string[];
+  /// V73-K6 — the surface that claims a \`dispatch: "surface"\` row's
+  /// execution when no \`useCommandHandlers\` registration names it and it
+  /// carries no \`vimKind\` (the CM6 layer's own claim). Verified by
+  /// \`commands/surfaceRows.test.ts\` against a fixed per-owner file set —
+  /// see that file for the mechanism and \`web-code/CLAUDE.md\`'s keyboard
+  /// section for the rule.
+  readonly owner?: string;
+  /// V73-K6 — present only when \`lifecycle === "retired"\`: why the row is
+  /// no longer live.
+  readonly retiredReason?: string;
 }
 
 export interface KbcScopeDef {
@@ -261,6 +285,15 @@ ${r.scopes
 export const KBC_COMMANDS: readonly KbcCommand[] = [
 ${r.commands.map(emitCommand).join("\n")}
 ];
+
+/// V73-K6 — \`KBC_COMMANDS\` minus \`lifecycle: "retired"\` rows: what "exists
+/// right now" means to every LIVE consumer (the resolver, the palette, the
+/// \`?\` sheet, the which-key overlay). \`KBC_COMMANDS\` stays the full,
+/// byte-for-byte mirror of the registry — retired rows included — for the
+/// drift golden (\`registry.gen.test.ts\`) and anything reading it as history.
+export const KBC_ACTIVE_COMMANDS: readonly KbcCommand[] = KBC_COMMANDS.filter(
+  (c) => c.lifecycle !== "retired",
+);
 `;
   return head;
 }

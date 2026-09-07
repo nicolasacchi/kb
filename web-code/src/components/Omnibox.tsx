@@ -165,13 +165,30 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
     }
   }
 
+  // V73-K6 — this box is one of `pickers`' several owners of the `palette`
+  // scope's rows (`registry.json`'s own `covers` text for that scope: "the
+  // omnibox and the transient pick-one-from-a-list overlays" —
+  // `StructurePopup.tsx`/`RecentLocations.tsx`/`LineHistoryPopup.tsx` claim
+  // `palette.row-next`/`palette.row-prev` too, each independently, which is
+  // that scope's own `j`/`k`-only-while-the-filter-is-empty note). Routing
+  // this through `commands/dispatch.ts`'s shared `resolve()` was considered
+  // and rejected: `commandMode`'s row list is built from `bus.scope`/
+  // `bus.ctx` (`commandRows(q, bus.scope, bus.ctx, bus.preset)`, above) —
+  // deliberately the UNDERLYING route's scope, so `>` lists that surface's
+  // own commands — and publishing `useCommandScope("palette", …)` here
+  // would overwrite exactly that value while the box is open, breaking the
+  // one property command mode depends on. A direct listener, kept exactly
+  // as it already was, is the correct, working owner; only the doc comments
+  // below (and the `owner` field on each row) are new.
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
       if (popoverHit) {
+        // kbc-owns: "dismiss.popover":
         setPopoverHit(null);
         return;
       }
+      // kbc-owns: "dismiss.palette":
       onClose();
       return;
     }
@@ -180,6 +197,7 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
     // show-unavailable toggle, which is a registry row like any other).
     if (commandMode) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        // kbc-owns: "palette.row-next": / "palette.row-prev":
         e.preventDefault();
         const delta = e.key === "ArrowDown" ? 1 : -1;
         setCmdCursor((c) => {
@@ -189,6 +207,7 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
         return;
       }
       if (e.key === "Enter") {
+        // kbc-owns: "palette.activate":
         e.preventDefault();
         const row = visibleRows[cmdCursor];
         if (row) void runCommand(row);
@@ -198,6 +217,7 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
       // printable folds into the character — see the registry's
       // `reserved_chords.note`).
       if (e.key === "H" && e.ctrlKey) {
+        // kbc-owns: "palette.show-unavailable":
         e.preventDefault();
         setShowUnavailable((v) => !v);
         return;
@@ -205,21 +225,25 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
       return;
     }
     if (e.key === "Tab") {
+      // kbc-owns: "palette.section-next": / "palette.section-prev":
       e.preventDefault();
       dispatch({ type: "MOVE_SECTION", delta: e.shiftKey ? -1 : 1 });
       return;
     }
     if (e.key === "ArrowDown") {
+      // kbc-owns: "palette.row-next":
       e.preventDefault();
       dispatch({ type: "MOVE_ROW", delta: 1 });
       return;
     }
     if (e.key === "ArrowUp") {
+      // kbc-owns: "palette.row-prev":
       e.preventDefault();
       dispatch({ type: "MOVE_ROW", delta: -1 });
       return;
     }
     if (e.key === "Enter") {
+      // kbc-owns: "palette.activate":
       e.preventDefault();
       activate(resolveSearchTarget(sections, state.cursor, repo, q));
       return;

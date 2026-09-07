@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ReviewFileRow } from "../../api/types";
+import type { PseudoFile, ReviewFileRow } from "../../api/types";
 import { Icon } from "../icons";
 import { mapCensusText, mapRowTitle, type MapChapter, type MapRowState } from "../../lib/reviewMapColumn";
 
@@ -22,6 +22,15 @@ export interface ReviewMapColumnProps {
   derived: boolean;
   onPick: (path: string) => void;
   onClose: () => void;
+  /// V73-K2c (kbc-pseudo/1) — "chapter zero": the four review-scoped
+  /// pseudo-files, listed BEFORE every real chapter (`docs/kb-code.md`'s
+  /// own wording: "a reviewer who reads the code before the description is
+  /// reading it without the question it was meant to answer"). A structurally
+  /// DIFFERENT shape from `ReviewFileRow` (no diff stats, just `present`/
+  /// `blob_sha`/`lines`), so this is its own small row renderer rather than
+  /// a `MapChapter.files` entry.
+  pseudoFiles: PseudoFile[];
+  onPickPseudo: (name: string) => void;
 }
 
 function Chip({
@@ -62,6 +71,8 @@ export default function ReviewMapColumn({
   derived,
   onPick,
   onClose,
+  pseudoFiles,
+  onPickPseudo,
 }: ReviewMapColumnProps) {
   const currentRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -86,6 +97,38 @@ export default function ReviewMapColumn({
           <Icon.X />
         </button>
       </header>
+      {pseudoFiles.length > 0 && (
+        <section className="kbc-rmap__chapter kbc-rmap__chapter--zero" data-kbc-rdiff-map-chapter-zero>
+          <h2 className="kbc-rmap__chapter-head">
+            The review itself
+            <span className="kbc-rmap__chapter-n">{pseudoFiles.length}</span>
+          </h2>
+          <ul className="kbc-rmap__list">
+            {pseudoFiles.map((f) => (
+              <li key={f.name}>
+                <button
+                  type="button"
+                  className={
+                    "kbc-rmap__row kbc-rmap__row--pseudo" +
+                    (currentPath === `~review/${f.name}` ? " is-current" : "")
+                  }
+                  disabled={!f.present}
+                  title={f.present ? f.source : (f.reason ?? "not present")}
+                  onClick={() => onPickPseudo(f.name)}
+                  data-kbc-rdiff-map-pseudo={f.name}
+                >
+                  <span className="kbc-rmap__path">{f.path}</span>
+                  {!f.present && (
+                    <span className="kbc-rmap__chips" data-kbc-rdiff-map-pseudo-absent={f.name}>
+                      {f.reason ?? "not present"}
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {derived && (
         <p className="kbc-rmap__note" data-kbc-rdiff-map-derived>
           chapters derived from the reading order&rsquo;s own reasons — the wire carries no authored

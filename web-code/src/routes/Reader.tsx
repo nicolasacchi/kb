@@ -57,6 +57,7 @@ import StoryTimeline from "../components/provenance/StoryTimeline";
 import WhyPanel from "../components/provenance/WhyPanel";
 import HistoryPanel from "../components/history/HistoryPanel";
 import CitedBy from "../components/lens/CitedBy";
+import ClaimsCard from "../components/lens/ClaimsCard";
 import RefPicker from "../components/RefPicker";
 import StoryPlayer from "../components/story/StoryPlayer";
 import WorkingSetStrip, { type ActiveWorkspaceChip } from "../components/WorkingSetStrip";
@@ -1675,6 +1676,14 @@ export default function Reader() {
         paneRepoPath(focusedPane).viewRef.current?.focus();
       }}
     />
+  ) : null;
+
+  // V73-K2c (kbc-claim/1, design D18) — the Claims card, mounted the SAME
+  // always-visible way `diagnosticsCard`/`frameworkCard`/`citedBy` are
+  // above. `ClaimsCard` owns its own `useFileClaims` fetch and renders
+  // nothing when the file has zero claims (its own doc).
+  const claimsCard = focusedPath ? (
+    <ClaimsCard key={`claims:${focusedPath}`} repo={repo} path={focusedPath} />
   ) : null;
 
   // --- W4.5 — live-mirror auto-refresh heuristic, one instance per pane ----
@@ -4408,6 +4417,7 @@ export default function Reader() {
               frameworkCard={frameworkCard}
               diagnosticsCard={diagnosticsCard}
               schemaCard={schemaCard}
+              claimsCard={claimsCard}
               repo={repo}
               path={focusedPath ?? ""}
               annotationActiveLine={annotationActiveLine}
