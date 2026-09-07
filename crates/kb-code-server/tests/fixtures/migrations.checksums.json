@@ -188,5 +188,10 @@
     "version": 39,
     "name": "tours_and_trails",
     "checksum": "1442098713088158797"
+  },
+  {
+    "version": 40,
+    "name": "workspace_rekey",
+    "checksum": "17343273670871537693"
   }
 ]

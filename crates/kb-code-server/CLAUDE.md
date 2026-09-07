@@ -1177,6 +1177,98 @@ invariant #2 records).
     `recipe::routes::V74_L3A_ROUTES` joins invariant 15's `RouteContract`
     walk from both sides; the four mutations are absent from it for the
     reason `boards`' own four are.
+26. **The Workspace re-key: every repo-keyed table declares WHICH identity
+    owns its rows, the value comes from a TRIGGER, and the epoch it bumps
+    is a one-way door with a backup and a rehearsal** (V75-M1, D13/D14,
+    `src/workspace.rs` + `src/rekey/` + `src/backup.rs` + `src/frames.rs`,
+    migration V0040). Five rules, separate to state and easy to break one
+    at a time.
+    (a) **Two nouns, and a third word that is not one of them.** A
+    *Workspace* is one shared git OBJECT STORE (id = canonical
+    `--git-common-dir` + root commit); a *Worktree* is one CHECKOUT (id =
+    the admin-dir name, or the reserved `(main)`) whose **path is a mutable
+    attribute** — `git worktree move` changes the path and never the
+    identity, which is the whole reason the path is not the key. D26's
+    kbc-seq/1 ALREADY owns the identifier `reading_sets.workspace_id`
+    (V0029), where it means a reading set of kind `workspace` (the Desk);
+    that is a different concept and `kb-code workspace` (singular) is its
+    verb. The re-key therefore never adds a column called `workspace_id` to
+    a table that could be read as a Desk — which is one of the two reasons
+    the four authored, path-anchored projection tables take `worktree_id`,
+    and why invariant 14's "canvas_sets deliberately has no `workspace_id`"
+    is still literally true.
+    (b) **`rekey::REPO_KEYED_TABLES` is the declaration, and the walk is
+    the teeth.** `object` = a row that is a function of the object store (a
+    blob, a commit, git history), so two checkouts derive the identical row
+    → `workspace_id`. `worktree` = a row that is a property of a PATH ON
+    DISK in one checkout (the mirror, its attention lane, working-tree
+    annotations, review checkouts, the authored path-anchored projections),
+    where sharing would be a WRONG ANSWER rather than a saving →
+    `worktree_id`. `meta` = about the daemon, not about code (`repos`, the
+    audit ledger — re-keying it would rewrite history — and the
+    cross-daemon doc-lens pin). `store::tests::v75_m1::
+    every_repo_keyed_table_is_classified` walks `sqlite_master` against the
+    list from BOTH ends, so a table added later with a `repo_id`/`repo`
+    column fails the build until it declares a class. The blob-keyed
+    derived tables (`symbols`/`highlights`/`occurrences`/… ) are OUTSIDE it
+    because ADR-2 keyed them by `(blob_hash, salt)` in V0001 and they have
+    always been shared — absent by design, not forgotten, and a test says
+    so.
+    (c) **The value is written by a TRIGGER, next to the column.** V0040
+    creates one `AFTER INSERT … WHEN NEW.<key> IS NULL` trigger per keyed
+    table, reading the identity off the `repos` row the row already points
+    at. That is the one-home rule applied to a denormalisation: a future
+    `INSERT` cannot forget a column list it never touches, no `Store` write
+    signature changed, and `every_keyed_table_has_a_trigger_that_writes_its_key`
+    fails by name on a keyed table without one. `Store::set_repo_identity`
+    is the ONLY writer of `repos.workspace_id`/`worktree_id`, and
+    resolution runs in the background pass, never on the bind path — it
+    shells `git rev-list --max-parents=0 HEAD`, which walks the whole
+    reachable history, and it is paid ONCE per volume because the recorded
+    root commit is reused on later boots. `src/workspace.rs` spawns no git
+    process of its own (every read goes through `history::run_git_raw`),
+    which is why its fixture-building tests live in `tests/`, outside
+    invariant 3's scanned tree.
+    (d) **The key was added; the rows were NOT collapsed, and that is a
+    ruling.** No read widens from `repo_id = ?` to `workspace_id = ?`. A
+    shared read over two repo ids returns each row TWICE; sharing needs the
+    PRIMARY KEY to become `(workspace_id, …)`, which in SQLite is a table
+    REBUILD, which is O(every row) INSIDE a migration — i.e. exactly the
+    whole-corpus pass between `Store::open` and the bind that invariant
+    11's V72-B0(a) forbids. And no surface today registers two worktrees of
+    one workspace as two repos, so a widened read would be code no
+    configuration can reach (the v7.0 dead-surface defect).
+    `rekey::READS_NOT_WIDENED` is the ledger — cross-checked against the
+    object class BOTH ways by test — and the collapse belongs with the
+    worktree lifecycle verbs, under its own backup + epoch + rehearsal. The
+    ONE read that does go through the new key is the per-workspace
+    derived-row census on `GET /api/workspaces`.
+    (e) **An epoch bump owes a backup and a rehearsal.** `backup::
+    ensure_for_epoch_crossing` runs inside `Store::open`, after
+    `refuse_if_volume_ahead` and before the refinery runner: the first boot
+    that would carry a volume across `backup::REKEY_EPOCH` takes a `VACUUM
+    INTO` snapshot named for the epoch it restores to, writes a
+    `kbc-backup/1` receipt, and REFUSES the boot when it cannot — because
+    `refuse_if_volume_ahead`'s only remedy is "restore the backup matching
+    epoch V\<n\>", and the 13.5 h kbc outage was that sentence being true
+    with no such backup. `REKEY_EPOCH` is a LITERAL, not
+    `store::schema_epoch()`: the gate must keep firing for exactly this
+    crossing after V0041 lands and must not re-fire for every routine
+    additive migration. `KB_CODE_I_HAVE_A_BACKUP=1` is the one override and
+    logs a warning naming itself. `kb-code backup` and `kb-code
+    rehearse-migration` are LOCAL FILE verbs with no route and no daemon —
+    a backup you can only take through a running daemon is the one you
+    cannot take when the daemon refuses to boot. The rehearsal's row census
+    is the contract it proves: **a re-key adds columns, never rows.**
+    (f) **`kbc-frames/1` is D14's table, and this unit consumes none of
+    it.** `frames::FRAMES` says per lane where its answer comes from off
+    the working tree and what it may claim there; `off_head` is a CEILING,
+    never a promise, and `ref_aware: false` means the lane IGNORES a ref,
+    which a reader must say rather than silently substitute. Golden-pinned
+    (`tests/fixtures/frames.golden.json`) and served verbatim, so every
+    future off-HEAD banner DERIVES from these bytes instead of restating
+    them — invariant 17(a)'s one-projection-two-renderers rule, stated
+    before the second renderer exists.
 
 26. **`kbc-tour/1` is a BOARD (one step model), and `kbc-trail/1` is OFF
     by default with pause, purge and retention shipped in the same unit**
