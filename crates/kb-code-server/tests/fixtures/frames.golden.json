@@ -1,0 +1,81 @@
+{
+  "schema": "kbc-frames/1",
+  "sources": [
+    "working_tree",
+    "odb",
+    "git",
+    "refused"
+  ],
+  "classes": [
+    "exact",
+    "likely",
+    "candidate",
+    "refused"
+  ],
+  "frames": [
+    {
+      "lane": "text",
+      "source": "working_tree",
+      "off_head": "refused",
+      "ref_aware": false,
+      "why": "the text lane searches the mirror's indexed working-tree content; there is no ref-scoped full-text index, and grepping the ODB per keystroke is not a budget this daemon has"
+    },
+    {
+      "lane": "symbols",
+      "source": "working_tree",
+      "off_head": "refused",
+      "ref_aware": false,
+      "why": "symbol rows are keyed by (blob_hash, salt) and reachable only through the mirror's path -> blob map, which points at the CHECKED-OUT blob; a ref whose blobs were never indexed has no rows to return"
+    },
+    {
+      "lane": "files",
+      "source": "working_tree",
+      "off_head": "refused",
+      "ref_aware": false,
+      "why": "the files lane ranks the mirror's path set plus its own recency blend, both properties of the checkout"
+    },
+    {
+      "lane": "tree",
+      "source": "odb",
+      "off_head": "exact",
+      "ref_aware": true,
+      "why": "a tree listing at a ref is an ODB read and is exact by construction: the ref names the tree object"
+    },
+    {
+      "lane": "file_at_ref",
+      "source": "odb",
+      "off_head": "exact",
+      "ref_aware": true,
+      "why": "the blob at a ref is the blob; highlight spans still come from the store and are null for a blob nothing indexed, which GET /api/file already reports"
+    },
+    {
+      "lane": "blame",
+      "source": "git",
+      "off_head": "exact",
+      "ref_aware": true,
+      "why": "git blame takes the ref itself, so an off-HEAD blame is as exact as an on-HEAD one"
+    },
+    {
+      "lane": "usages",
+      "source": "working_tree",
+      "off_head": "likely",
+      "ref_aware": false,
+      "why": "usages resolve through occurrence rows derived from the CHECKED-OUT blobs; read against another ref they describe code that may have moved, so the engine's exact rung is unreachable and every row is capped at likely"
+    },
+    {
+      "lane": "framework_edges",
+      "source": "working_tree",
+      "off_head": "candidate",
+      "ref_aware": false,
+      "why": "rails-lens/1 edges are convention-derived and already capped at likely on HEAD (invariant 20(b)); off HEAD the witness blob is not the one on disk, which demotes the whole lane one rung"
+    },
+    {
+      "lane": "lsp_live",
+      "source": "refused",
+      "off_head": "refused",
+      "ref_aware": true,
+      "why": "kb-lip hashes the bytes ON DISK before and after every LSP round trip and refuses on a mismatch — that guard is what lets lsp-live mint exact at all, and it cannot be satisfied for a blob that is not checked out"
+    }
+  ],
+  "note": "off_head is a CEILING, not a promise: a lane may report a class below it. ref_aware=false means the lane ignores a ref and answers for the checkout — a reader must say so rather than silently substituting."
+}
