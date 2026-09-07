@@ -147,37 +147,66 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
 /// early, and one further identical read guards against catching the
 /// pipeline mid-write. A fixture change that empties a noun fails here, by
 /// name, rather than silently re-introducing the flake.
+///
+/// **V72-I2 — the counts alone were not enough EITHER, and the gap is worth
+/// naming because it is not obvious.** Every noun count is derived from
+/// `files` rows and `entity_defs`, both of which land in the mirror walk;
+/// `rails_edges` land LATER, in a separate pass. So the eight counts reach
+/// their final values — and stay there across two reads — while the lens is
+/// still writing edges. On a slow runner that is a real window, and CI
+/// caught it: `counts` byte-identical to the golden, `lens.edges_total` 23
+/// against the golden's 26 and `source_files` 7 against 8, i.e. the HAML
+/// view's edges had simply not landed yet. Nothing about the counts could
+/// ever have detected that, because no noun count moves when an edge is
+/// added.
+///
+/// The settle key therefore includes the LENS's own freshness numbers
+/// (`edges_total` + `source_files`), which is the thing the three goldens
+/// and `the_rails_lens_reads_haml_through_the_real_ingest_path` actually
+/// depend on. Deliberately still fixture-AGNOSTIC — no magic edge count is
+/// hard-coded here, only "these numbers stopped moving" — so a fixture that
+/// grows a file needs no edit, while a lens that genuinely never emits the
+/// HAML edges now fails as a NAMED timeout printing the numbers rather than
+/// as a golden diff three tests later.
 async fn wait_for_rails_settled(base: &str, repo: &str) {
     let client = reqwest::Client::new();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(90);
     let mut previous: Option<serde_json::Value> = None;
     loop {
-        let counts = client
+        let body = client
             .get(format!("{base}/api/rails/home?repo={repo}"))
             .send()
             .await
             .ok()
             .and_then(|r| r.status().is_success().then_some(r));
-        let counts = match counts {
-            Some(r) => r
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .map(|b| b["counts"].clone()),
+        let body = match body {
+            Some(r) => r.json::<serde_json::Value>().await.ok(),
             None => None,
         };
-        if let Some(counts) = counts {
-            let complete = counts
+        // The settle KEY: the eight noun counts plus the lens's own two
+        // freshness numbers. See this function's doc for why the counts on
+        // their own are blind to the edge pass.
+        let key = body.map(|b| {
+            serde_json::json!({
+                "counts": b["counts"].clone(),
+                "edges_total": b["lens"]["edges_total"].clone(),
+                "source_files": b["lens"]["source_files"].clone(),
+            })
+        });
+        if let Some(key) = key {
+            let complete = key["counts"]
                 .as_object()
-                .is_some_and(|o| o.len() == 8 && o.values().all(|v| v.as_u64().unwrap_or(0) > 0));
-            if complete && previous.as_ref() == Some(&counts) {
+                .is_some_and(|o| o.len() == 8 && o.values().all(|v| v.as_u64().unwrap_or(0) > 0))
+                && key["edges_total"].as_u64().unwrap_or(0) > 0
+                && key["source_files"].as_u64().unwrap_or(0) > 0;
+            if complete && previous.as_ref() == Some(&key) {
                 return;
             }
-            previous = Some(counts);
+            previous = Some(key);
         }
         assert!(
             Instant::now() < deadline,
-            "the rails/1 index never settled for {repo:?} — last counts: {previous:?}"
+            "the rails/1 index never settled for {repo:?} — last reading: {previous:?}"
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
