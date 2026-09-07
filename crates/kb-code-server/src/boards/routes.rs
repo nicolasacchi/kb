@@ -113,7 +113,11 @@ pub async fn list_boards(
     let out = state
         .store
         .run_blocking(move |store| {
-            let rows = store.list_canvas_boards(repo_id, status.as_deref())?;
+            let rows = store.list_canvas_boards(
+                repo_id,
+                crate::tours::BOARD_KIND_BOARD,
+                status.as_deref(),
+            )?;
             Ok::<_, ApiError>(ListOut {
                 schema: SCHEMA,
                 repo: repo_name,
@@ -201,7 +205,7 @@ pub(crate) fn resolve_board(
     want_context: bool,
 ) -> Result<resolve::BoardOut, ApiError> {
     let row = store
-        .get_canvas_board(repo_id, slug)?
+        .get_canvas_board(repo_id, crate::tours::BOARD_KIND_BOARD, slug)?
         .ok_or_else(|| ApiError::not_found(format!("board {slug:?} in {}", repo.name)))?;
     let nodes = store.canvas_board_nodes(row.id)?;
     let edges = store.canvas_board_edges(row.id)?;
@@ -418,9 +422,14 @@ pub async fn apply_board(
                 .map(|s| NewCanvasStep {
                     node_id: s.node.clone(),
                     caption: s.caption.clone(),
+                    // V74-L3b — a per-step CAMERA is a tour's, never a
+                    // board's: a board's walkthrough camera is the SPA's
+                    // own viewport state, not authored content.
+                    camera_json: None,
                 })
                 .collect();
             let new_board = NewCanvasBoard {
+                kind: crate::tours::BOARD_KIND_BOARD.to_string(),
                 slug: doc.slug.clone(),
                 title: doc.title.trim().to_string(),
                 description_md: doc.description_md.clone(),
@@ -434,7 +443,9 @@ pub async fn apply_board(
                 // would, or it is not a rehearsal.
                 let outcome = crate::store::CanvasApplyOutcome {
                     board_id: 0,
-                    created: store.get_canvas_board(repo_id, &doc.slug)?.is_none(),
+                    created: store
+                        .get_canvas_board(repo_id, crate::tours::BOARD_KIND_BOARD, &doc.slug)?
+                        .is_none(),
                     unchanged: false,
                     revision: 0,
                     status: new_board.status.clone(),
@@ -521,7 +532,11 @@ fn refusal(report: &lint::Report) -> ApiError {
 /// records the current blob as the authoring one). A snippet captured
 /// against some other bytes would manufacture a match later instead of
 /// admitting an orphan.
-fn build_nodes(repo: &crate::config::RepoEntry, doc: &BoardDoc) -> Vec<NewCanvasNode> {
+/// `pub(crate)` — V74-L3b's `tours::routes::apply_tour` lowers a tour to a
+/// `BoardDoc` and calls THIS, rather than a second copy of the capture
+/// rule (D10: one step model, and therefore one place that decides when a
+/// snippet may honestly be taken).
+pub(crate) fn build_nodes(repo: &crate::config::RepoEntry, doc: &BoardDoc) -> Vec<NewCanvasNode> {
     doc.nodes
         .iter()
         .map(|n| {
@@ -685,7 +700,15 @@ async fn set_status(
     let slug_bg = slug.clone();
     let row = state
         .store
-        .run_blocking(move |store| store.set_canvas_board_status(repo_id, &slug_bg, status, now))
+        .run_blocking(move |store| {
+            store.set_canvas_board_status(
+                repo_id,
+                crate::tours::BOARD_KIND_BOARD,
+                &slug_bg,
+                status,
+                now,
+            )
+        })
         .await?
         .ok_or_else(|| ApiError::not_found(format!("board {slug:?} in {repo_name}")))?;
     let repo_name = repo_entry.name.clone();
@@ -712,7 +735,9 @@ pub async fn delete_board(
     let slug_bg = slug.clone();
     let ok = state
         .store
-        .run_blocking(move |store| store.delete_canvas_board(repo_id, &slug_bg))
+        .run_blocking(move |store| {
+            store.delete_canvas_board(repo_id, crate::tours::BOARD_KIND_BOARD, &slug_bg)
+        })
         .await?;
     if !ok {
         return Err(ApiError::not_found(format!(
@@ -856,7 +881,7 @@ pub async fn sweep_boards(
             let slugs: Vec<String> = match &only {
                 Some(s) => vec![s.clone()],
                 None => store
-                    .list_canvas_boards(repo_id, None)?
+                    .list_canvas_boards(repo_id, crate::tours::BOARD_KIND_BOARD, None)?
                     .into_iter()
                     .map(|b| b.slug)
                     .collect(),

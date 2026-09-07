@@ -85,6 +85,12 @@ pub struct AppState {
     /// struct's own doc). A lane is enabled ONLY from here — never by a
     /// route, never by a request, never by a file inside a repo.
     pub lanes: crate::config::LanesSection,
+    /// V74-L3b — `kbc-trail/1`'s three knobs, resolved ONCE at boot (same
+    /// no-live-reload posture as `lanes` above). `enabled` is the
+    /// operator's master switch and defaults to `false`; every trail write
+    /// checks it AND the persisted opt-in mode, and
+    /// `GET /api/trails/state` reports both.
+    pub trails: crate::config::TrailsSection,
     /// V70-A3X — `GET /api/status`'s per-repo cache, same generation-gated
     /// shape (and same per-boot-singleton convention) as `file_index`/
     /// `symbol_index` above — see `git_status`'s module doc.
