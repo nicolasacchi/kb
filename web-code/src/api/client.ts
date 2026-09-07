@@ -1679,6 +1679,7 @@ import type {
   PublishVerdictOut,
   ReviewGithubExportOut,
   ReviewTimelineOut,
+  ReviewTimelineParams,
 } from "./types";
 
 export interface FetchReviewExportGithubParams {
@@ -1730,8 +1731,27 @@ export function publishVerdict(
 
 /// `GET /api/reviews/{id}/timeline` — bearer read; pure server-side
 /// composition, no new storage (`review_timeline.rs`'s module doc).
-export function fetchReviewTimeline(id: number): Promise<ReviewTimelineOut> {
-  return getJson<ReviewTimelineOut>(`/api/reviews/${id}/timeline`, {});
+///
+/// V73-K2c widens this to `review-timeline/2`'s full param set. Every param
+/// is omitted at its default (absent ⇒ "the daemon's own default", never a
+/// value invented here) so a plain "open the tab" request stays the short
+/// URL it always was. `github`/`hunk` are the two conditional lanes — see
+/// `ReviewTimelineParams`'s own doc.
+export function fetchReviewTimeline(
+  id: number,
+  params: ReviewTimelineParams = {},
+): Promise<ReviewTimelineOut> {
+  return getJson<ReviewTimelineOut>(`/api/reviews/${id}/timeline`, {
+    kind: params.kind,
+    author: params.author,
+    since: params.since !== undefined ? String(params.since) : undefined,
+    until: params.until !== undefined ? String(params.until) : undefined,
+    limit: params.limit !== undefined ? String(params.limit) : undefined,
+    offset: params.offset !== undefined ? String(params.offset) : undefined,
+    github: params.github !== undefined ? (params.github ? "true" : "false") : undefined,
+    hunk: params.hunk,
+    ps: params.ps,
+  });
 }
 
 /// Structured 409 from `POST /api/annotations/apply-batch` — the
@@ -2058,7 +2078,6 @@ export function fetchDossier(q: DossierQuery): Promise<DossierOut> {
   });
 }
 
-
 // ── kbc-canvas/1 — boards (V74-L2) ─────────────────────────────────────────
 //
 // Four READS on the ordinary bearer surface and two loopback-only MUTATIONS.
@@ -2187,4 +2206,62 @@ export function fetchRailsNoun(q: {
 /// `GET /api/rails/orphans?repo=` — the six-lane triage queue.
 export function fetchRailsOrphans(repo: string): Promise<RailsOrphansOut> {
   return getJson<RailsOrphansOut>("/api/rails/orphans", { repo });
+}
+
+// ── V73-K2c — kbc-claim/1, kbc-pseudo/1, kbc-hunk-turns/1 (SPA half of
+// the review-timeline/2 stream: the claim register, pseudo-files, and the
+// on-demand hunk↔turn join). Own import statement, same append-only
+// precedent every prior PRR-*/V7* block in this file already established.
+import type {
+  ClaimsListOut,
+  FetchClaimsParams,
+  HunkTurnsOut,
+  PseudoFileOut,
+  PseudoSetOut,
+} from "./types";
+
+/// `GET /api/claims?repo=&subject=&subject_kind=&path=&review=&kind=&limit=&offset=`
+/// — bearer, `repo` REQUIRED (`claims.rs`'s `CLAIMS_ROUTE` contract). Every
+/// other param narrows; omitted means "every claim in the repo", so a caller
+/// scoping to one review must pass `review` explicitly.
+export function fetchClaims(params: FetchClaimsParams): Promise<ClaimsListOut> {
+  return getJson<ClaimsListOut>("/api/claims", {
+    repo: params.repo,
+    subject: params.subject,
+    subject_kind: params.subject_kind,
+    path: params.path,
+    review: params.review !== undefined ? String(params.review) : undefined,
+    kind: params.kind,
+    limit: params.limit !== undefined ? String(params.limit) : undefined,
+    offset: params.offset !== undefined ? String(params.offset) : undefined,
+  });
+}
+
+/// `GET /api/reviews/{id}/pseudo?ps=` (`kbc-pseudo/1`) — the four pseudo-file
+/// names, content-free (the list read never carries `content`).
+export function fetchReviewPseudoList(id: number, ps?: string): Promise<PseudoSetOut> {
+  return getJson<PseudoSetOut>(`/api/reviews/${id}/pseudo`, { ps });
+}
+
+/// `GET /api/reviews/{id}/pseudo/{name}?ps=` — the single-file read, with
+/// `content` populated. `name` is one of the four reserved leaf names
+/// (`pr-body.md`/`review.md`/`findings.json`/`commits.md`), never the
+/// `~review/`-prefixed path.
+export function fetchReviewPseudoFile(
+  id: number,
+  name: string,
+  ps?: string,
+): Promise<PseudoFileOut> {
+  return getJson<PseudoFileOut>(`/api/reviews/${id}/pseudo/${encodeURIComponent(name)}`, { ps });
+}
+
+/// `GET /api/reviews/{id}/hunks/{hunk}/turns?ps=` (`kbc-hunk-turns/1`) —
+/// LOOPBACK-ONLY: the join reads raw transcript content (D19's
+/// `raw-transcript` sensitivity class). Off loopback this rejects the same
+/// way any other loopback-gated route does (`ApiError`); callers render
+/// `e.message` as the honest refusal rather than assuming a specific status
+/// code, since the route is mounted behind the loopback sub-router rather
+/// than an in-handler check.
+export function fetchHunkTurns(id: number, hunk: string, ps?: string): Promise<HunkTurnsOut> {
+  return getJson<HunkTurnsOut>(`/api/reviews/${id}/hunks/${encodeURIComponent(hunk)}/turns`, { ps });
 }

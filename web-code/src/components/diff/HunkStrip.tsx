@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { DiffLine } from "../../lib/diff";
 import { noiseLabelText, type NoiseLabel } from "../../lib/diffNoise";
 import { EXPAND_STEP } from "../../lib/diffContext";
@@ -50,6 +51,15 @@ export interface HunkStripProps {
   /// Absent on the surfaces with no review behind them (Commit/Compare/
   /// SessionDiff): those render the plain header they always did.
   reviewMode: boolean;
+  /// V73-K2c (kbc-hunk-turns/1) — the "turns" affordance. `onToggleTurns` is
+  /// present only on the ONE surface that can call the loopback-only join
+  /// (`routes/ReviewDiff.tsx`); `turnsOpen`/`turnsPanel` are a PAIR: the
+  /// panel is the caller's own `<HunkTurnsPanel>` element (built once,
+  /// mounting it IS the on-demand fetch trigger — never auto-fetched for
+  /// every hunk) and is rendered only while `turnsOpen`.
+  onToggleTurns?: () => void;
+  turnsOpen?: boolean;
+  turnsPanel?: ReactNode;
 }
 
 /// The per-hunk header strip. Replaces the bare `@@ … @@` text row with
@@ -63,8 +73,12 @@ export default function HunkStrip({
   onToggleViewed,
   onExpand,
   reviewMode,
+  onToggleTurns,
+  turnsOpen,
+  turnsPanel,
 }: HunkStripProps) {
   return (
+    <>
     <div
       className={
         "kbc-hunkstrip" +
@@ -165,6 +179,20 @@ export default function HunkStrip({
           />
         </label>
       )}
+      {onToggleTurns && (
+        <button
+          type="button"
+          className={"kbc-hunkstrip__turns" + (turnsOpen ? " is-open" : "")}
+          onClick={onToggleTurns}
+          aria-expanded={!!turnsOpen}
+          title="Which agent turn wrote this hunk? (loopback only, fetched on demand)"
+          data-kbc-hunk-turns={view.id}
+        >
+          turns
+        </button>
+      )}
     </div>
+    {turnsOpen && turnsPanel}
+    </>
   );
 }

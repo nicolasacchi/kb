@@ -3436,22 +3436,248 @@ export interface PublishVerdictOut {
   verdict_published_url: string | null;
 }
 
-/// `GET /api/reviews/{id}/timeline` body (`review-timeline/1`). Event
-/// payloads vary per `kind` (the server's own closed vocab —
+/// `GET /api/reviews/{id}/timeline` body (`review-timeline/2`, V73-K2c). Event
+/// payloads still vary per `kind` (the server's own closed vocab —
 /// `review_timeline.rs`'s module doc); typed as a loose record here —
 /// `lib/reviewTimeline.ts`'s `timelineRow` is the ONE place that narrows
 /// per-kind, so an unrecognized future kind degrades to a plain label
-/// instead of a shape mismatch anywhere a consumer reads this type.
+/// instead of a shape mismatch anywhere a consumer reads this type. The
+/// widening is ADDITIVE over v1: `at`/`kind` keep their byte-identical
+/// meaning, `ts`/`lane`/`author`/`ref`/`body_md`/`drift` are new envelope
+/// fields every event now carries.
+export interface ReviewTimelineAuthor {
+  /// `human` | `agent` | `system` — a NAME convention (kb's own harness
+  /// vocabulary + `agent`), never authentication (root CLAUDE.md's
+  /// "identity is attribution, not authorization" ruling).
+  kind: string;
+  name?: string;
+  model?: string;
+  session_id?: string;
+}
+/// Present only when the daemon can name BOTH sides of what moved — never
+/// a guess (`review_timeline.rs`'s `Drift`).
+export interface ReviewTimelineDrift {
+  kind: string;
+  note: string;
+}
 export interface ReviewTimelineEvent {
   at: number;
+  /// v2's name for the same instant — both are emitted so a v1 reader keeps
+  /// working; this client should read `ts` (byte-identical to `at`) when
+  /// present, falling back to `at` (a v1-shaped fixture / older server).
+  ts?: number;
   kind: string;
+  /// Which of the eleven lanes produced this event — lets the panel group
+  /// without a second kind→lane table. Optional so a v1-shaped payload (no
+  /// lane at all) still satisfies this type.
+  lane?: string;
+  author?: ReviewTimelineAuthor;
+  /// A `kbc-review/1` ref (K1's grammar) when the event has a location.
+  /// Absent, never fabricated, when it does not.
+  ref?: string;
+  body_md?: string;
+  drift?: ReviewTimelineDrift;
   [key: string]: unknown;
+}
+/// `ok` | `skipped` | `refused` | `degraded` — every lane reports its own
+/// state; anything not `ok` carries a `reason`. A lane that failed is never
+/// silently empty (the v6.0 One-Inbox per-lane precedent).
+export type ReviewTimelineLaneState = "ok" | "skipped" | "refused" | "degraded";
+export interface ReviewTimelineLaneStatus {
+  lane: string;
+  state: ReviewTimelineLaneState;
+  /// Events this lane contributed BEFORE filtering — a filter that hides a
+  /// lane is never mistaken for a lane that produced nothing.
+  count: number;
+  reason?: string;
+}
+export interface ReviewTimelineFilters {
+  kinds: string[];
+  author?: string;
+  since?: number;
+  until?: number;
+}
+/// `GET /api/reviews/{id}/timeline` query params — round-trip to the
+/// server (`?kind=`/`?author=`/`?since=`/`?until=`/`?limit=`/`?offset=`/
+/// `?github=`/`?hunk=`/`?ps=`). Lane VISIBILITY (which of the eleven lanes
+/// render) is a client-side filter over the already-fetched `events[]`
+/// (the wire has no `?lane=`) — these are only the params that round-trip.
+export interface ReviewTimelineParams {
+  /// CSV over the closed `kind` vocabulary.
+  kind?: string;
+  /// `human` | `agent` | `system`, or a literal author name.
+  author?: string;
+  since?: number;
+  until?: number;
+  limit?: number;
+  offset?: number;
+  /// Include the LIVE GitHub lane. Server defaults to on for a PR-bound
+  /// review; `false` sends `?github=0`.
+  github?: boolean;
+  /// A `kbc-hunkid/1` address — turns on the `turns` lane (loopback only).
+  hunk?: string;
+  ps?: string;
 }
 export interface ReviewTimelineOut {
   schema: string;
   review_id: number;
   repo: string;
+  ps_number: number;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  filters: ReviewTimelineFilters;
+  sources: ReviewTimelineLaneStatus[];
   events: ReviewTimelineEvent[];
+}
+
+// ── V73-K2c — kbc-claim/1, kbc-pseudo/1, kbc-hunk-turns/1 ──────────────────
+
+/// `kbc-claim/1` (`claims.rs`'s `ClaimOut`) — the agent prose register.
+/// Surfaced, never scored (root CLAUDE.md invariant #10's sibling rule for
+/// this crate): nothing here is a ranking term.
+export type ClaimSubjectKind = "path" | "sym" | "ent" | "commit" | "hunk" | "review" | "branch";
+export type ClaimKind = "explain" | "alternative" | "decision" | "story" | "note" | "answer";
+/// Computed PER REQUEST by comparing the claim's own witness blob against
+/// the file's live blob — never a stored column (`claims.rs`'s doc (c)).
+export type ClaimLadderState = "pinned" | "drifted" | "unanchored";
+export interface ClaimOut {
+  schema: string;
+  id: string;
+  repo: string;
+  subject_kind: ClaimSubjectKind;
+  subject: string;
+  subject_path?: string;
+  review_id?: number;
+  kind: ClaimKind;
+  body_md: string;
+  /// The AGENT'S OWN declaration, 0..=1, surfaced verbatim — nothing
+  /// multiplies it into anything.
+  confidence?: number;
+  /// `kbc-review/1` ref strings, stored as written (never re-resolved into
+  /// a card server-side for this list — a resolved position is a
+  /// per-request derivation, and persisting one would make a stale answer
+  /// indistinguishable from a fresh one).
+  evidence: string[];
+  session_id?: string;
+  model?: string;
+  blob_sha?: string;
+  current_blob?: string;
+  state: ClaimLadderState;
+  /// Always present — the ladder's human-readable explanation, including
+  /// the "unanchored" case (a decision about a branch has no blob).
+  caption: string;
+  created_at: number;
+}
+export interface ClaimsListOut {
+  schema: string;
+  repo: string;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  claims: ClaimOut[];
+}
+export interface FetchClaimsParams {
+  repo: string;
+  subject?: string;
+  subject_kind?: ClaimSubjectKind;
+  path?: string;
+  review?: number;
+  kind?: ClaimKind;
+  limit?: number;
+  offset?: number;
+}
+
+/// `kbc-pseudo/1` (`review_pseudo.rs`) — the four review-scoped pseudo-files
+/// under the reserved `~review/` prefix, each with a real git blob hash.
+/// Nothing is stored: every read regenerates the bytes whole, so there is
+/// deliberately no revision chain and no carry-forward rung for a comment
+/// anchor (a change is detectable via `blob_sha` moving, never recoverable
+/// as a diff).
+export type PseudoFileName = "pr-body.md" | "review.md" | "findings.json" | "commits.md";
+export interface PseudoFile {
+  name: PseudoFileName;
+  /// `~review/<name>` — verbatim, the reserved address `[[code:…]]` refs
+  /// resolve through the same card ladder a tracked path takes.
+  path: string;
+  blob_sha: string;
+  byte_len: number;
+  lines: number;
+  /// A human-readable sentence naming where the bytes came from (e.g. "the
+  /// pr_meta snapshot").
+  source: string;
+  present: boolean;
+  reason?: string;
+  /// Present on the single-file read (`GET …/pseudo/{name}`); always
+  /// absent on the list read (`GET …/pseudo`), which is deliberately
+  /// content-free.
+  content?: string;
+}
+export interface PseudoSetOut {
+  schema: string;
+  review_id: number;
+  ps_number: number;
+  files: PseudoFile[];
+}
+export interface PseudoFileOut {
+  schema: string;
+  review_id: number;
+  ps_number: number;
+  file: PseudoFile;
+}
+
+/// `kbc-hunk-turns/1` (`review_turns.rs`) — LOOPBACK-ONLY. "Which agent
+/// turn wrote this hunk?" Two tiers only, by design: a wrong `exact` is
+/// this crate's release blocker, so there is no fuzzy third tier where an
+/// uncertain match could hide.
+export type TurnTier = "exact" | "likely";
+export type TurnCommitBasis = "hunk_exact" | "path_in_range" | "none";
+export interface TurnMatch {
+  /// `t-<uuid12>` — kb-core's own stable turn id; the session reader's
+  /// `#t-<uuid12>` deep-link fragment addresses it directly.
+  turn_id: string;
+  session_id: string;
+  uuid: string;
+  /// Unix MILLISECONDS.
+  ts: number;
+  tool: string;
+  path: string;
+  tier: TurnTier;
+  /// Why this tier, in one sentence — the evidence a reader would otherwise
+  /// have to reconstruct by hand.
+  why: string;
+  commit?: string;
+  join_via?: string;
+  matched_bytes: number;
+  /// The literal CLI line to read this turn's own transcript
+  /// (`kb sessions read <session> --turn <turn_id>`) — the bearer-visible
+  /// half stops here; the surrounding assistant text never leaves loopback.
+  kb_read: string;
+}
+export interface HunkTurnsOut {
+  schema: string;
+  review_id: number;
+  repo: string;
+  ps_number: number;
+  hunk_id: string;
+  path?: string;
+  commit_basis: TurnCommitBasis;
+  commit_basis_caption: string;
+  commits: string[];
+  /// Server order — exact first, then newest first. Never re-sorted here.
+  turns: TurnMatch[];
+  /// Present iff `turns` is empty (or the hunk could not be located) —
+  /// the honest "no match: <reason>" this join is built to say instead of
+  /// guessing.
+  reason?: string;
+  partial: boolean;
+  notes: string[];
+  /// `ok` | `degraded` — the kb sibling join's own health; every tier caps
+  /// at `likely` while degraded, and the request itself never fails.
+  kb_lane: "ok" | "degraded";
+  kb_lane_reason?: string;
 }
 
 // --- PRR-R10 — multi-file suggestion batch apply (addendum-2 §F) ----------

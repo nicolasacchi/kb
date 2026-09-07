@@ -4,12 +4,19 @@
 // into the Files tab), Section 04 CI checks, and (v1, this unit's placement
 // call — see this unit's own report) Section 05 GitHub conversation.
 import { useMemo } from "react";
-import type { ReviewDetailPr, ReviewFinding, ReviewReport, ReviewReportOut } from "../../api/types";
+import type {
+  ClaimOut,
+  ReviewDetailPr,
+  ReviewFinding,
+  ReviewReport,
+  ReviewReportOut,
+} from "../../api/types";
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
 import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
 import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
 import AgentVerdictCard from "./AgentVerdictCard";
 import CiChecksCard from "./CiChecksCard";
+import ClaimRegister from "./ClaimRegister";
 import FindingCard, { severityRank } from "./FindingCard";
 import GithubConversationCard from "./GithubConversationCard";
 
@@ -134,9 +141,12 @@ export interface ReportPanelProps {
   review: ReviewDetailPr;
   ps: string;
   onOpenFilesTab: () => void;
+  /// V73-K2c (kbc-claim/1, design D18) — this review's claims, fetched once
+  /// by `ReviewDetail.tsx` and rendered beside the findings list below.
+  claims: ClaimOut[];
 }
 
-export default function ReportPanel({ repo, review, ps, onOpenFilesTab }: ReportPanelProps) {
+export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }: ReportPanelProps) {
   const reportQ = useReviewReport(repo, review.id);
   const findingsQ = useReviewFindings(repo, review.id, { ps });
   const filesQ = useReviewFiles(repo, review.id, ps);
@@ -226,6 +236,12 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab }: Report
       ) : (
         sorted.map((f) => <FindingCard key={f.slug} repo={repo} reviewId={review.id} finding={f} ps={ps} />)
       )}
+
+      {/* V73-K2c (kbc-claim/1, design D18) — the claim register, BESIDE the
+          findings list rather than folded into it: a claim is agent PROSE
+          the daemon cannot re-derive, a finding is a disposition-bearing
+          judgement — two different registers on the same page. */}
+      <ClaimRegister repo={repo} reviewId={review.id} claims={claims} scopeLabel="this review" />
 
       <div className="kbc-eyebrow">Section 03 · Files</div>
       {files.length === 0 ? (

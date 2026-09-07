@@ -1854,3 +1854,177 @@ span.kbc-diff__impact-chip {
     border-radius: var(--radius-2, 8px) var(--radius-2, 8px) 0 0;
   }
 }
+
+/* V73-K2c (kbc-hunk-turns/1) — the per-hunk "turns" affordance + its
+ * on-demand panel. */
+.kbc-hunkstrip__turns {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  color: var(--ink-mute);
+  background: none;
+  border: 1px dashed var(--rule-hi);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.kbc-hunkstrip__turns.is-open,
+.kbc-hunkstrip__turns:hover {
+  color: var(--ink);
+  border-color: var(--ink-mute);
+}
+.kbc-hunkturns {
+  padding: 8px 10px;
+  margin: 0 0 6px;
+  border: 1px dashed var(--rule-hi);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 60%, transparent);
+  font-size: var(--fs-sm);
+}
+.kbc-hunkturns__basis {
+  color: var(--ink-mute);
+  margin: 0 0 6px;
+}
+.kbc-hunkturns__degraded {
+  color: var(--warn);
+  margin: 0 0 6px;
+}
+.kbc-hunkturns__refusal,
+.kbc-hunkturns__empty {
+  color: var(--ink-faint);
+  margin: 0;
+}
+.kbc-hunkturns__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-hunkturns__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-hunkturns__tool {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+.kbc-hunkturns__path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbc-hunkturns__commit {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.kbc-hunkturns__link {
+  font-size: var(--fs-xs);
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.kbc-hunkturns__link:hover {
+  text-decoration: underline;
+}
+.kbc-hunkturns__why {
+  flex: 1 1 100%;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+}
+.kbc-hunkturns__notes {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+}
+
+/* V73-K2c (kbc-pseudo/1) — the map column's chapter zero + the pseudo-file
+ * read-only buffer view. */
+.kbc-rmap__chapter--zero {
+  border-bottom: 1px dashed var(--rule-hi);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+.kbc-rmap__row--pseudo[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+.kbc-pseudo {
+  padding: 8px 0;
+}
+.kbc-pseudo__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.kbc-pseudo__path {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ink);
+}
+.kbc-pseudo__blob {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  cursor: help;
+}
+.kbc-pseudo__reason {
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+.kbc-pseudo__note {
+  flex: 1 1 100%;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+}
+.kbc-pseudo__buffer {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.kbc-pseudo__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 1px 0;
+}
+.kbc-pseudo__row:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-pseudo__lineno {
+  flex: 0 0 auto;
+  width: 3em;
+  text-align: right;
+  color: var(--ink-faint);
+  user-select: none;
+}
+.kbc-pseudo__text {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kbc-pseudo__comment-add {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  visibility: hidden;
+}
+.kbc-pseudo__row:hover .kbc-pseudo__comment-add {
+  visibility: visible;
+}
+.kbc-pseudo__orphans {
+  margin-top: 10px;
+}

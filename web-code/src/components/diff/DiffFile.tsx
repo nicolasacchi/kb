@@ -63,6 +63,11 @@ export interface DiffFileProps {
   onHunkViewed?: (hunkIdx: number) => void;
   onHunkExpand?: (hunkIdx: number, dir: "up" | "down") => void;
   currentHunk?: number | null;
+  /// V73-K2c (kbc-hunk-turns/1) — see `UnifiedHunks`/`SplitHunks`'s own doc;
+  /// forwarded verbatim to whichever renderer is mounted.
+  onHunkTurns?: (hunkIdx: number) => void;
+  turnsOpenId?: string | null;
+  turnsPanel?: ReactNode | null;
 }
 
 /// Orchestrator every call site uses: header (path / stats / optional
@@ -93,6 +98,9 @@ export default function DiffFile({
   onHunkViewed,
   onHunkExpand,
   currentHunk,
+  onHunkTurns,
+  turnsOpenId,
+  turnsPanel,
 }: DiffFileProps) {
   const isMobile = useIsMobile();
   const effectiveMode: DiffMode = isMobile ? "unified" : mode;
@@ -185,6 +193,9 @@ export default function DiffFile({
           onHunkViewed={onHunkViewed}
           onHunkExpand={onHunkExpand}
           currentHunk={currentHunk}
+          onHunkTurns={onHunkTurns}
+          turnsOpenId={turnsOpenId}
+          turnsPanel={turnsPanel}
         />
       ) : (
         <UnifiedHunks
@@ -202,6 +213,9 @@ export default function DiffFile({
           onHunkViewed={onHunkViewed}
           onHunkExpand={onHunkExpand}
           currentHunk={currentHunk}
+          onHunkTurns={onHunkTurns}
+          turnsOpenId={turnsOpenId}
+          turnsPanel={turnsPanel}
         />
       )}
     </div>
