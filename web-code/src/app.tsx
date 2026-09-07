@@ -390,6 +390,11 @@ function AppShell() {
                     relative to them is irrelevant. */}
                 <Route path="/r/:repo/~reviews/:id/f/:slug" element={<FindingEntry />} />
                 <Route path="/r/:repo/~recipes" element={<Recipes />} />
+                {/* V74-L3c — a materialised kbc-recipe/1 run replay. Same
+                    lazy chunk as the bare route above (mirrors the
+                    `~reviews/:id/diff` + `~reviews/:id/diff/*` precedent),
+                    `Recipes.tsx` branches on the `:id` param itself. */}
+                <Route path="/r/:repo/~recipes/runs/:id" element={<Recipes />} />
                 <Route path="/r/:repo/~stacks" element={<Stacks />} />
                 <Route path="/r/:repo/~canvas" element={<Canvas />} />
                 <Route path="/r/:repo/~boards" element={<Boards />} />

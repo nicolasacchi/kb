@@ -2273,6 +2273,301 @@ export interface RecipeRunOut {
   truncated: boolean;
 }
 
+// --- V74-L3a/c — `kbc-recipe/1`, the typed recipe runner --------------------
+//
+// Mirrors `crates/kb-code-server/src/recipe/*`. A SEPARATE wire from the
+// `recipes/1` types just above (different route prefix — `/api/recipe`,
+// singular, vs. `/api/recipes` — by design, see `routes.rs`'s own comment);
+// the two are never mixed on one response. `Kbc`-prefixed to avoid colliding
+// with the old `Recipe*` names, matching `commands/registry.gen.ts`'s own
+// prefix convention for another kbc-*/1 schema.
+
+export type KbcAddrKind =
+  | "file"
+  | "line"
+  | "symbol"
+  | "entity"
+  | "commit"
+  | "comment"
+  | "fact"
+  | "finding"
+  | "node";
+
+/// One addressable result row. `blob`/`trust` are ALWAYS present (an
+/// `"unknown"` sentinel, never omitted/null) — every other field is
+/// present only for the `kind`s that carry it. Never re-derive a URL from
+/// `scalars` — the kind-specific fields above are the only addressable
+/// identity; `scalars` is display-only extra data a view's columns may cite.
+export interface KbcAddr {
+  kind: KbcAddrKind;
+  repo: string;
+  path?: string;
+  line?: number;
+  symbol?: string;
+  entity?: string;
+  commit?: string;
+  id?: string;
+  blob: string;
+  trust: string;
+  scalars?: Record<string, number | string | boolean>;
+}
+
+export type KbcParamType = "string" | "int" | "float" | "bool" | "enum" | "path" | "symbol" | "ref";
+
+export type KbcArgVal = boolean | number | string | string[];
+
+export interface KbcParamSpec {
+  name: string;
+  type: KbcParamType;
+  required: boolean;
+  default?: KbcArgVal;
+  min?: number;
+  max?: number;
+  values?: string[];
+  description?: string;
+}
+
+export type KbcHome = "builtin" | "repo" | "server";
+export type KbcTrustState = "trusted" | "untrusted" | "changed";
+export type KbcViewKind = "list" | "table" | "tree" | "graph";
+
+/// A column's cell source: nine unit selectors (bare kebab-case strings) or
+/// an arbitrary `scalars` lookup (the one non-unit variant, `{scalar: name}`).
+export type KbcColField =
+  | "path"
+  | "line"
+  | "symbol"
+  | "entity"
+  | "commit"
+  | "id"
+  | "blob"
+  | "trust"
+  | "kind"
+  | "address"
+  | { scalar: string };
+
+export interface KbcColumnSpec {
+  header?: string;
+  field: KbcColField;
+}
+
+export interface KbcViewSpec {
+  id: string;
+  kind: KbcViewKind;
+  title?: string;
+  step: string;
+  columns?: KbcColumnSpec[];
+}
+
+/// One of the five closed intent groups (section order on the recipe home).
+export const KBC_RECIPE_INTENTS = [
+  "orienting",
+  "reviewing",
+  "checking-tests",
+  "rails",
+  "hygiene",
+] as const;
+export type KbcRecipeIntent = (typeof KBC_RECIPE_INTENTS)[number];
+
+/// A recipe document, repo-file/server/builtin shape alike.
+export interface KbcRecipeDoc {
+  slug: string;
+  title: string;
+  intent: string;
+  description_md?: string;
+  params?: KbcParamSpec[];
+  scope: string;
+  steps?: Array<{ id: string; op?: string; [key: string]: unknown }>;
+  views?: KbcViewSpec[];
+  native?: string;
+}
+
+/// `KbcRecipeDoc` plus load provenance — `GET /api/recipe/{slug}` and every
+/// catalog row.
+export interface KbcLoadedRecipe extends KbcRecipeDoc {
+  home: KbcHome;
+  source: string;
+  trust: KbcTrustState;
+  /// Present only when `trust === "changed"` — a unified diff of the bytes.
+  trust_diff?: string;
+  /// Present only when a repo file shadowed a server-stored row of the same
+  /// slug — never dropped silently.
+  shadowed_by?: KbcHome;
+}
+
+export interface KbcCatalogEntry extends KbcLoadedRecipe {
+  /// The copy-pasteable `kb-code recipe run <slug> …` line, server-composed.
+  cli: string;
+}
+
+export interface KbcLoadProblem {
+  path: string;
+  message: string;
+}
+
+/// `GET /api/recipe?repo=` body.
+export interface KbcCatalogOut {
+  schema: string;
+  repo: string;
+  intents: string[];
+  recipes: KbcCatalogEntry[];
+  problems: KbcLoadProblem[];
+}
+
+/// `GET /api/recipe/{slug}?repo=` body.
+export interface KbcShowOut {
+  schema: string;
+  repo: string;
+  recipe: KbcLoadedRecipe;
+  cli: string;
+  ops: string[];
+}
+
+export interface KbcLintProblem {
+  severity: "refuse" | "warn";
+  at: string;
+  message: string;
+}
+
+/// `GET /api/recipe/{slug}/lint?repo=` body.
+export interface KbcLintOut {
+  schema: string;
+  recipe: string;
+  ok: boolean;
+  report: KbcLintProblem[];
+}
+
+export interface KbcScopeReport {
+  expression: string;
+  applied: boolean;
+  normalized?: string;
+  matched?: number;
+  /// Omitted (not `[]`) when empty — `#[serde(skip_serializing_if =
+  /// "Vec::is_empty")]` on the Rust side. Never read without `?? []`.
+  notes?: string[];
+}
+
+/// The 11-value closed set naming WHY a step returned nothing — never a
+/// blank table. `filtered-out` is the only "clean" one (rows existed and
+/// every one failed the step's own filter); every other value means the
+/// step had nothing to work with in the first place.
+export type KbcEmptyReason =
+  | "no-inputs"
+  | "upstream-empty"
+  | "filtered-out"
+  | "scope-excluded"
+  | "lane-disabled"
+  | "lane-unknown"
+  | "lane-unavailable"
+  | "no-index"
+  | "not-a-rails-app"
+  | "param-empty"
+  | "budget-exhausted";
+
+export interface KbcStepCensus {
+  /// Omitted iff the step's `rows` is non-empty.
+  empty_reason?: KbcEmptyReason;
+  inputs?: Record<string, number>;
+  filters_applied?: string[];
+  notes?: string[];
+}
+
+export interface KbcStepRun {
+  id: string;
+  /// One of the closed op set — omitted for a native (adapted-builtin) step.
+  op?: string;
+  /// Set INSTEAD of `op` for a native adapter (the engine name that
+  /// produced these rows, e.g. a `recipes/1` builtin).
+  engine?: string;
+  title?: string;
+  rows: KbcAddr[];
+  /// The TRUE count before any cap — may exceed `rows.length`.
+  total: number;
+  truncated: boolean;
+  ms: number;
+  census: KbcStepCensus;
+}
+
+export interface KbcViewColumn {
+  header: string;
+  field: KbcColField;
+}
+
+/// A pure column PROJECTION over one step's `rows`, same index/order — see
+/// `StepRun.rows[i]` correlation note on `KbcRunOut`. Cells are pre-rendered
+/// display strings; NEVER parse one back into an address — resolve the
+/// address from the correlated `KbcStepRun.rows[i]` instead.
+export interface KbcViewRun {
+  id: string;
+  kind: KbcViewKind;
+  title?: string;
+  step: string;
+  columns: KbcViewColumn[];
+  rows: string[][];
+}
+
+export interface KbcHonesty {
+  generation: number;
+  as_of: string;
+  budget_ms: number;
+  elapsed_ms: number;
+  budget_exhausted: boolean;
+  /// Omitted (not `[]`) when empty — `#[serde(skip_serializing_if =
+  /// "Vec::is_empty")]` on the Rust side (the COMMON case: most runs hit
+  /// no special note at all). Never read without `?? []` — this exact
+  /// omission crashed `RunHonesty` on a real corpus before this fix
+  /// (`h.notes.length` with no guard).
+  notes?: string[];
+}
+
+export interface KbcReplay {
+  run_id: string;
+  created_unix: number;
+  generation: number;
+  current_generation: number;
+  stale: boolean;
+}
+
+/// `GET /api/recipe/{slug}/run?…` and `GET /api/recipe/runs/{id}` body
+/// (`kbc-recipe-run/1`). For a given `view`, `view.rows[i]` and
+/// `steps.find(s => s.id === view.step).rows[i]` describe the SAME address
+/// at the SAME index — a view has no filter of its own, only a column
+/// projection, so the two arrays never diverge in length or order.
+export interface KbcRunOut {
+  schema: string;
+  recipe: string;
+  title: string;
+  intent: string;
+  home: KbcHome;
+  source: string;
+  trust: KbcTrustState;
+  repo: string;
+  params: Record<string, KbcArgVal>;
+  scope: KbcScopeReport;
+  steps: KbcStepRun[];
+  views: KbcViewRun[];
+  honesty: KbcHonesty;
+  /// Present only on `GET /api/recipe/runs/{id}` (a materialised replay).
+  replay?: KbcReplay;
+}
+
+/// `POST /api/recipe/{slug}/materialise` body (loopback-only).
+export interface KbcMaterialiseOut {
+  schema: string;
+  run_id: string;
+  generation: number;
+  created_unix: number;
+}
+
+/// `POST /api/recipe/{slug}/trust` body (loopback-only).
+export interface KbcTrustOut {
+  schema: string;
+  recipe: string;
+  trusted: true;
+  source: string;
+  content_hash: string;
+}
+
 // --- V3.3-S1 — review map + reading order ----------------------------------
 //
 // Mirror `crates/kb-code-server/src/review_map.rs`. `agent_touched` is
