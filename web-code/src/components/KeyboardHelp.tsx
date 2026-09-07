@@ -3,7 +3,7 @@ import { Icon } from "./icons";
 import { useCommands } from "../commands/CommandRoot";
 import { displayKey } from "../commands/dispatch";
 import {
-  KBC_COMMANDS,
+  KBC_ACTIVE_COMMANDS,
   KBC_PRESETS,
   KBC_SCOPES,
   type KbcCommand,
@@ -73,11 +73,13 @@ export function scopeSections(context: KeyboardHelpContext): {
   global: HelpGroup[];
 } {
   const scope = normaliseContext(context);
+  // V73-K6 — `KBC_ACTIVE_COMMANDS`: a retired row has no key that does
+  // anything, so it has no business on the sheet even mislabelled "planned".
   if (scope === "all") {
-    return { primary: groupCommands(KBC_COMMANDS), global: [] };
+    return { primary: groupCommands(KBC_ACTIVE_COMMANDS), global: [] };
   }
-  const local = KBC_COMMANDS.filter((c) => c.scope === scope);
-  const global = KBC_COMMANDS.filter((c) => c.scope === "global");
+  const local = KBC_ACTIVE_COMMANDS.filter((c) => c.scope === scope);
+  const global = KBC_ACTIVE_COMMANDS.filter((c) => c.scope === "global");
   if (local.length === 0) {
     // A scope with no rows of its own is still entitled to the global sheet
     // rather than an empty dialog.

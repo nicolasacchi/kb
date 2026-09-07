@@ -5484,6 +5484,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "browser",
       "ratified_conflicts": [
         "move.left"
       ]
@@ -5511,6 +5512,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "browser",
       "ratified_conflicts": [
         "move.right"
       ]
@@ -5538,6 +5540,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "browser",
       "ratified_conflicts": [
         "branches.next",
         "diff.hunk-next",
@@ -5568,6 +5571,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "browser",
       "ratified_conflicts": [
         "branches.prev",
         "diff.hunk-prev",
@@ -5598,6 +5602,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "browser",
       "ratified_conflicts": [
         "branches.compare",
         "review.open-diff"
@@ -5626,6 +5631,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "canvas",
       "note": "MOVED in V70-A5: the pan modifier was `Space`, and D2 makes `Space` the leader and ONLY the leader."
     },
     {
@@ -5713,6 +5719,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "storyPlayer",
       "note": "MOVED in V70-A5: autoplay was `Space`, and D2 makes `Space` the leader and ONLY the leader. V70-A6: `p` is also `pane.pin` in the reader scope (a provisional pane's own chip names the key). Ratified on both rows — the tour player and the code buffer are never the same surface, but the gate cannot prove that from two `when` predicates, and a ratification is the right instrument for exactly that.",
       "ratified_conflicts": [
         "pane.pin"
@@ -5744,6 +5751,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "lens",
       "ratified_conflicts": [
         "branches.next",
         "diff.hunk-next",
@@ -5777,6 +5785,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "lens",
       "ratified_conflicts": [
         "branches.prev",
         "diff.hunk-prev",
@@ -5807,7 +5816,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "lens"
     },
     {
       "id": "lens.group-prev",
@@ -5832,7 +5842,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "lens"
     },
     {
       "id": "dismiss.sheet",
@@ -5856,8 +5867,9 @@
       "mutation": "none",
       "side_effect": "none",
       "dismiss_order": 6,
-      "lifecycle": "shipped",
-      "dispatch": "surface"
+      "lifecycle": "retired",
+      "dispatch": "surface",
+      "retired_reason": "V73-K6: the mobile-hosted inspector rail this row dismisses was never built — no `useCommandScope(\"rail\", …)` call and no `sheet.open` publisher exist anywhere in the SPA (grepped), and `InspectorRail.tsx` has no mobile-sheet host of its own. `NavSheet.tsx`/`MobileDrawer.tsx` are unrelated surfaces (the top-bar mobile menu and the reader's file-tree overlay respectively) with their own Escape handling already outside this registry. Retiring rather than inventing a feature this unit was not asked to build."
     },
     {
       "id": "drawer.row-next",
@@ -5884,7 +5896,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "overlayPanels"
     },
     {
       "id": "drawer.row-prev",
@@ -5911,7 +5924,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "overlayPanels"
     },
     {
       "id": "drawer.activate",
@@ -5938,7 +5952,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "overlayPanels"
     },
     {
       "id": "drawer.collapse",
@@ -5962,7 +5977,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "overlayPanels"
     },
     {
       "id": "drawer.expand",
@@ -5986,7 +6002,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "overlayPanels"
     },
     {
       "id": "dismiss.overlay",
@@ -6012,6 +6029,7 @@
       "dismiss_order": 4,
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "overlayPanels",
       "note": "One entry for the whole panel class — peek, hierarchy, impact, ego-graph, layered DAG. Each panel owns execution; the dismiss ORDER is declared once, here."
     },
     {
@@ -6039,6 +6057,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "pickers",
       "note": "`j`/`k` move the cursor only while the filter box is EMPTY (the StructurePopup/RecentLocations carve-out)."
     },
     {
@@ -6065,7 +6084,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "palette.section-next",
@@ -6089,7 +6109,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "palette.section-prev",
@@ -6113,7 +6134,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "palette.activate",
@@ -6137,7 +6159,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "palette.show-unavailable",
@@ -6164,7 +6187,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "dismiss.popover",
@@ -6189,7 +6213,8 @@
       "side_effect": "none",
       "dismiss_order": 1,
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "dismiss.palette",
@@ -6214,7 +6239,8 @@
       "side_effect": "none",
       "dismiss_order": 5,
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "pickers"
     },
     {
       "id": "search.row.next",
@@ -6240,7 +6266,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.row.prev",
@@ -6266,7 +6293,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.group.next",
@@ -6291,7 +6319,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.group.prev",
@@ -6316,7 +6345,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.open",
@@ -6342,7 +6372,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.refine",
@@ -6369,6 +6400,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "consult's two-level filtering: orderless, literal, smartcase, `!needle` excludes. It only REMOVES rows from the returned page — it never re-queries and never re-ranks."
     },
     {
@@ -6397,6 +6429,7 @@
       "dismiss_order": 9,
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "Two rungs in ONE row rather than two Escape rows: the results page's only modal thing is the transcripts-row popover, and it dismisses before the refinement. The refinement rung KEEPS the result set (consult's rule) — Escape never re-queries and never navigates. This is the shallowest dismissal in the ladder, so every modal layer above it (peek, menu, sheet, palette) still dismisses first."
     },
     {
@@ -6424,6 +6457,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "Writes `facets:1` into the query — the rail is never hidden state."
     },
     {
@@ -6451,6 +6485,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "Writes `group:<key>` into the query."
     },
     {
@@ -6477,6 +6512,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "Peek-first (D5): the preview never takes keyboard focus and never navigates."
     },
     {
@@ -6504,6 +6540,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "The CLI-parity affordance: the query bar IS the protocol, so the copied line runs the same search."
     },
     {
@@ -6530,7 +6567,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.history",
@@ -6556,7 +6594,8 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "owner": "search"
     },
     {
       "id": "search.keep",
@@ -6583,6 +6622,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "The same eviction-is-a-view-operation ring the Desk drawer uses (`desk/drawerSets.ts`), hosted by the results page."
     },
     {
@@ -6609,6 +6649,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "vim's `:cnewer` over the quickfix stack, which is what the result-set stack is."
     },
     {
@@ -6635,6 +6676,7 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
+      "owner": "search",
       "note": "vim's `:colder`."
     },
     {

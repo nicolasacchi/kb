@@ -480,20 +480,26 @@ export default function PeekPanel({
     // only the keys handled below — so e.g. Tab still behaves natively.
     if (!peekPanelHandlesKey(e)) return;
     e.stopPropagation();
+    // V73-K6 — one of `overlayPanels`' several independent owners of these
+    // `drawer`-scope ids (`commands/surfaceRows.test.ts`'s `OWNER_FILES`);
+    // see `HierarchyPanel.tsx`'s own doc for the group.
     switch (e.key) {
       case "ArrowDown":
       case "j":
+        // kbc-owns: "drawer.row-next":
         e.preventDefault();
         scent.noteKeyboard();
         onMove(1);
         return;
       case "ArrowUp":
       case "k":
+        // kbc-owns: "drawer.row-prev":
         e.preventDefault();
         scent.noteKeyboard();
         onMove(-1);
         return;
       case "Escape":
+        // kbc-owns: "dismiss.overlay":
         e.preventDefault();
         onClose();
         return;
@@ -501,7 +507,7 @@ export default function PeekPanel({
     // V70-A6 — every other Ramp rung, resolved by the ONE shared table
     // (`nav/ramp.ts`'s `rungForKey`, which mirrors the registry rows). `Enter`
     // resolves to `"here"`, so the pre-A6 behaviour survives a host that has
-    // not passed `onRamp`.
+    // not passed `onRamp`. // kbc-owns: "drawer.activate":
     const rung = rungForKey(e);
     if (!rung) return;
     const row = state.card ? resolveCandidateToRow(state.card.candidate) : currentRow(state);
