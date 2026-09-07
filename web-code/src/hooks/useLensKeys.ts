@@ -1,11 +1,23 @@
 // DCB W2.B — the lens page's row/group keyboard nav. Co-located with the
 // other page-level key hooks (not inside `components/lens/`, since this is
 // Lens.tsx-only wiring, not a rendered component).
+//
+// V73-K6: `j`/`k`/`(`/`)` used to be hard-coded `e.key === …` checks with no
+// registry involvement — a second home for `lens.row-next`/`lens.row-prev`/
+// `lens.group-next`/`lens.group-prev` (`scope: "board"`,
+// `when: "board == lens"`), which shipped in `registry.json` with this exact
+// behaviour already but nothing here ever asked the registry what a
+// keystroke meant. `onKey` now asks `dispatch.ts`'s `resolve()` — the same
+// resolver `CommandRoot` uses — and runs the returned id's handler; see
+// `lensCommands.ts` for the declaration↔handler contract.
 
 import { useEffect } from "react";
 import type { CodeLensGroup, CodeLensRef } from "../api/types";
 import type { GroupSelection } from "../components/lens/GroupRail";
+import { resolve as resolveCommand, tokenOf } from "../commands/dispatch";
+import { useCommandScope } from "../commands/CommandRoot";
 import { refsForGroup, stepGroup } from "../lib/docLensUrl";
+import type { LensHandlers } from "./lensCommands";
 
 /// Duplicated locally (2-line pure functions) rather than imported from
 /// `Reader.tsx` — the codebase's established convention is a local copy per
@@ -60,37 +72,42 @@ export function useLensKeys(opts: UseLensKeysOpts): void {
     setSelectedRefOrdinal,
   } = opts;
 
+  useCommandScope("board", { board: "lens" });
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditableTarget(e.target)) return;
       if (isInsideBuffer(e.target)) return; // vimReader owns the buffer's keys
+      const token = tokenOf(e);
+      const ctx = { board: "lens" as const };
+      // `lens.row-next`/`lens.row-prev` also carry a `plain`-preset
+      // `ArrowDown`/`ArrowUp` this hook never wired (pre-registry it only
+      // ever matched the literal `"j"`/`"k"` characters) — trying `vim` then
+      // `plain` picks that up too, regardless of the SPA's live preset
+      // setting, the same choice `Browser.tsx`'s onKey makes for the
+      // identical reason. `lens.group-next`/`lens.group-prev` have no
+      // `plain` key at all, so the fallback is a no-op for them.
+      const cmd = resolveCommand(token, "board", ctx, "vim") ?? resolveCommand(token, "board", ctx, "plain");
+      if (!cmd) return;
       const rows = refsForGroup(refs, selectedGroup);
       const idx = rows.findIndex((r) => r.ordinal === selectedRefOrdinal);
-      switch (e.key) {
-        case "j": {
-          e.preventDefault();
+      const handlers: LensHandlers = {
+        "lens.row-next": () => {
           const next = idx === -1 ? rows[0] : rows[Math.min(idx + 1, rows.length - 1)];
           setSelectedRefOrdinal(next?.ordinal ?? null);
-          break;
-        }
-        case "k": {
-          e.preventDefault();
+        },
+        "lens.row-prev": () => {
           const next = idx === -1 ? rows[0] : rows[Math.max(idx - 1, 0)];
           setSelectedRefOrdinal(next?.ordinal ?? null);
-          break;
-        }
-        case ")":
-          e.preventDefault();
-          setSelectedGroup(stepGroup(groups, ungroupedCount, selectedGroup, 1));
-          break;
-        case "(":
-          e.preventDefault();
-          setSelectedGroup(stepGroup(groups, ungroupedCount, selectedGroup, -1));
-          break;
-        default:
-          break;
-      }
+        },
+        "lens.group-next": () => setSelectedGroup(stepGroup(groups, ungroupedCount, selectedGroup, 1)),
+        "lens.group-prev": () => setSelectedGroup(stepGroup(groups, ungroupedCount, selectedGroup, -1)),
+      };
+      const handler = (handlers as Record<string, (() => void) | undefined>)[cmd.id];
+      if (!handler) return;
+      e.preventDefault();
+      handler();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

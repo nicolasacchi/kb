@@ -207,6 +207,16 @@ export default function StoryPlayer({ repo, path, atSha, onExit }: StoryPlayerPr
           e.preventDefault();
           goToStep(clamped + 1);
           break;
+        // kbc-owns: "player.autoplay": this listener is the row's real
+        // executor (V73-K6) — StoryPlayer predates the `board`-scope
+        // registry unification and was never migrated onto
+        // `commands/CommandRoot.tsx`'s bus (its `ArrowLeft`/`ArrowRight`/
+        // `Escape` above aren't either, even though `player.prev`/
+        // `player.next` carry `useCommandHandlers` registrations of their
+        // own — in `Tour.tsx`, the OTHER `board == player` surface). Not
+        // `Tour.tsx`'s own gap: `StepperBar.tsx`'s own doc records that tour
+        // mode deliberately ships with no autoplay ("per the milestone
+        // brief"), so this row's one real, working home is here.
         case "p":
           // Deliverable 5 — reduced motion means no default-on/available
           // autoplay at all, not just a quieter transition.

@@ -76,6 +76,21 @@ registered in every reachable ROUTE (`app.tsx`'s shell registers many, but
 `Reader.tsx` owns the desk verbs and unmounts with the route) — which
 needs a route graph this suite does not have.
 
+**Every shipped `dispatch: "surface"` row needs the SAME proof, and until
+`V73-K6` nothing gave it one.** `deadRows.test.ts` gates `central` rows
+only, so each prior unit that shipped a surface family built its own
+bespoke per-surface gate (`diffV2.test.ts`, `reviewDoc.test.ts`,
+`boards.test.ts`) and the rest — the pre-existing `board.row-next`/
+`board.row-prev`/`board.drill`/`board.pan` and the whole `lens.*`/
+`palette.*`/`drawer.*`/`dismiss.*` families — shipped with no proof at all,
+found by generalizing the question: `commands/surfaceRows.test.ts` requires
+every shipped surface row to be claimed by a `useCommandHandlers`
+registration, a `vimKind`, or an `owner` field naming a registered surface
+whose source contains the row's id (a real handler map, `searchCommands.ts`'s
+pattern, or an inline `kbc-owns` marker for a surface that cannot route
+through the shared resolver at all — `Canvas.tsx`'s bare `Alt` press being
+the case that can't).
+
 **A bare key can be swallowed by the CM6 buffer guard — the predicate is
 precise, and getting it wrong breaks either one key or thirty-five.**
 `CommandRoot`'s guard 2 (`shouldWithholdFromBuffer`, exported from

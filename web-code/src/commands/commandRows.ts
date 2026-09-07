@@ -16,7 +16,7 @@
 import { matchSpeedSearch, type MatchRange } from "../lib/speedSearch";
 import { displayKey, evalWhen, type Ctx } from "./dispatch";
 import {
-  KBC_COMMANDS,
+  KBC_ACTIVE_COMMANDS,
   KBC_SCOPES,
   type KbcCommand,
   type KbcPreset,
@@ -88,7 +88,10 @@ export function commandRows(
 ): CommandRow[] {
   const needle = commandNeedle(query);
   const rows: CommandRow[] = [];
-  for (const command of KBC_COMMANDS) {
+  // V73-K6 — `KBC_ACTIVE_COMMANDS`, not `KBC_COMMANDS`: a retired row is
+  // closed history, not a "planned" one, and does not belong in the palette
+  // even behind the "show unavailable" toggle.
+  for (const command of KBC_ACTIVE_COMMANDS) {
     // Rank on the BEST of title / synonyms / id — an operator who types
     // "seen" should find "Toggle viewed on this file" as readily as one who
     // types "viewed" — with a small per-field penalty so a title hit wins a
@@ -142,7 +145,7 @@ export function splitRows(rows: CommandRow[]): { available: CommandRow[]; unavai
 export function deepLinkDisposition(
   id: string,
 ): { kind: "run"; command: KbcCommand } | { kind: "prefill"; command: KbcCommand; reason: string } | null {
-  const command = KBC_COMMANDS.find((c) => c.id === id);
+  const command = KBC_ACTIVE_COMMANDS.find((c) => c.id === id);
   if (!command) return null;
   if (command.lifecycle !== "shipped") {
     return { kind: "prefill", command, reason: "planned — not yet wired" };

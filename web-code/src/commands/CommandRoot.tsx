@@ -53,11 +53,16 @@ import {
   type Ctx,
 } from "./dispatch";
 import { isTypingTarget } from "../lib/isTypingTarget";
-import { KBC_COMMANDS, type KbcCommand, type KbcPreset, type KbcScope } from "./registry.gen";
+import { KBC_ACTIVE_COMMANDS, KBC_COMMANDS, type KbcCommand, type KbcPreset, type KbcScope } from "./registry.gen";
 import WhichKey from "./WhichKey";
 
 // Built once; the registry is a compile-time constant.
-const COMMANDS_BY_ID = new Map(KBC_COMMANDS.map((c) => [c.id, c]));
+// V73-K6 — `KBC_ACTIVE_COMMANDS`: `bus.run(id)` (the palette's own runner,
+// and any future deep-link caller) must never resolve a retired id to a
+// command object, even if something later mis-registers a handler under
+// its name — `resolveById` returning `undefined` is what keeps that path
+// fail-closed.
+const COMMANDS_BY_ID = new Map(KBC_ACTIVE_COMMANDS.map((c) => [c.id, c]));
 
 /// How long a pending prefix sits before which-key appears. Not a timeout —
 /// the prefix survives it — just the pause that earns a hint (§P2's "~400 ms").

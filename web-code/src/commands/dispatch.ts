@@ -25,7 +25,7 @@
 // overlay is what a 400 ms pause buys you, not a lost keystroke.
 
 import {
-  KBC_COMMANDS,
+  KBC_ACTIVE_COMMANDS,
   KBC_DEFAULT_PRESET,
   KBC_LEADER,
   KBC_SCOPES,
@@ -216,9 +216,12 @@ export function displayKey(c: KbcCommand, preset: KbcPreset): string | null {
 
 /// Every command available in `scope` under `ctx` — the palette's row set and
 /// the sheet's contents. Ordered by the registry's own iteration order, which
-/// is authored reading-order.
+/// is authored reading-order. V73-K6: reads `KBC_ACTIVE_COMMANDS` (retired
+/// rows excluded), like every function below — `resolve`/`continuations`/
+/// `commandsForScope` are the whole "active table" surface; a retired row
+/// stays visible only in the full `KBC_COMMANDS` mirror.
 export function commandsForScope(scope: KbcScope, ctx: Ctx = {}): KbcCommand[] {
-  return KBC_COMMANDS.filter((c) => inPlay(c, scope) && evalWhen(c.when, ctx));
+  return KBC_ACTIVE_COMMANDS.filter((c) => inPlay(c, scope) && evalWhen(c.when, ctx));
 }
 
 /// THE pure resolver. `sequence` is a full key sequence (`"g d"`); the result
@@ -239,7 +242,7 @@ export function resolve(
 ): KbcCommand | null {
   const seq = tokensOf(sequence);
   if (seq.length === 0) return null;
-  const hits = KBC_COMMANDS.filter(
+  const hits = KBC_ACTIVE_COMMANDS.filter(
     (c) =>
       inPlay(c, scope) &&
       evalWhen(c.when, ctx) &&
@@ -269,7 +272,7 @@ export function continuations(
   preset: KbcPreset = KBC_DEFAULT_PRESET,
 ): Array<{ command: KbcCommand; next: string; rest: string[] }> {
   const out: Array<{ command: KbcCommand; next: string; rest: string[] }> = [];
-  for (const c of KBC_COMMANDS) {
+  for (const c of KBC_ACTIVE_COMMANDS) {
     if (!inPlay(c, scope) || !evalWhen(c.when, ctx)) continue;
     for (const k of keysFor(c, preset)) {
       const t = tokensOf(k);
