@@ -46,11 +46,11 @@ import {
 import {
   initialVimKeyState,
   vimKeysReducer,
-  wordAt,
   type VimCommand,
   type VimKeyState,
   type VimMode,
 } from "./vimKeys";
+import { identAtColumn } from "../lib/identResolve";
 
 export interface LineSel {
   line: number;
@@ -195,11 +195,14 @@ function jumpMark(view: EditorView, id: string): void {
 // --- word-under-cursor / line-selection extraction (reads the live view) --
 
 function wordAtCursor(view: EditorView): WordPos | null {
+  // V74-L2 — the word-under-a-column rule is `lib/identResolve.ts`'s, not this
+  // file's, because a board's code card must ask `/api/resolve` the SAME
+  // question the buffer asks (D10's "an identifier in a card resolves exactly
+  // as in the reader" golden). All this function still owns is where the
+  // column comes from: CM6's own cursor.
   const head = view.state.selection.main.head;
   const line = view.state.doc.lineAt(head);
-  const found = wordAt(line.text, head - line.from);
-  if (!found) return null;
-  return { line: line.number, col: found.start, word: found.word };
+  return identAtColumn(line.number, line.text, head - line.from);
 }
 
 function lineSelForCallback(view: EditorView): LineSel {

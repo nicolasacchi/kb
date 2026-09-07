@@ -858,9 +858,52 @@ own unit and nothing here weakens root invariant #4.
 
 CLI: `kb-code canvas {boards,show,apply,accept,archive,rm,export,sweep}`.
 `canvas list` keeps its pre-existing meaning — the v3.4-C1 canvas SETS — so
-no script breaks; `canvas boards` lists kbc-canvas/1 boards. The board SPA
-(rendering, fold/expand, the keyboard model, walkthrough mode, add-to-board
-from every surface) is L2 and is not in this unit.
+no script breaks; `canvas boards` lists kbc-canvas/1 boards.
+
+**The SPA (V74-L2).** `/r/{repo}/~boards` is the list (status filter, per-board
+counts, a "check drift" panel over `GET /api/boards/sweep`) and
+`/r/{repo}/~boards/{slug}` renders one board. `~canvas` — V3.4-C2's
+working-set canvas — stays mounted and FROZEN beside it, linked once from a
+"Legacy" section at the bottom of the list with the difference stated: a
+`canvas_sets` payload is opaque by contract and cannot be re-resolved, which
+is the whole point of a board. Nothing was migrated and neither page reads the
+other's data.
+
+Layout is `web-code/src/lib/boardLayout.ts`, which is an ADAPTER over
+`egoGraph.ts`'s `layoutLayeredDag` — the one engine (D10) — plus two things
+the engine has no notion of: card-sized pitch, and pins. A pinned card keeps
+its authored position exactly and is not flowed, mirroring the server's
+export-only `boards::layout::place`. A `code` node renders through the SAME
+`LiveRefCard` the review document uses (server spans, state badge, fold), so
+there is one live code card in the SPA rather than two that could disagree
+about what `carried` looks like; every other kind gets an address card that
+shows the daemon's own `address`, `state` and `reason`. `?ctx=1` fetches the
+± context expansion (never synthesised), `?live=1` re-runs the query cards
+under a caption, and `?step=` is the walkthrough's position — Location
+Contract params, appended last, each omitted at its default and each with a
+total parser (`lib/boardsUrl.ts`).
+
+Keys: nineteen `scope: "board"` rows gated `when: board == boards` (the
+`board` context key gains a fifth value), split into a reading half
+(`!walkthrough`: `j`/`k`/`Enter`, `z c`/`z o`/`z a`/`z M`/`z R`, `+`/`-`,
+`Space b {t,p,u,A,s}`) and a walking half (`walkthrough`: `n`/`k`/`p`) that
+`commands doctor` can prove disjoint; plus `Space g w` (`nav.boards`) and
+`Space b a` (`boards.add`). `Escape` leaves the walkthrough through the
+existing `dismiss.mode` rung — no new Escape row.
+
+Add-to-board is an actions/1 row, `collect.board`, on all five target kinds.
+It is a `mut_spec`, so a caller the server has not cleared for mutations never
+sees it (rule 2: ABSENT, not disabled) — board mutations are loopback-only.
+The SPA composes the WHOLE next document from the board already on the wire
+plus one node (`web-code/src/lib/boardDoc.ts`; there is no partial-patch
+route), checks itself against the lint's own `coordinates` rule before
+sending, and renders a refusal's findings with their rule ids verbatim.
+Node threads reuse the annotations store: the first comment creates an
+ordinary annotation at the node's anchor and the board records its id through
+`apply` — if that second write is refused the comment survives and the panel
+says only the LINK could not be recorded. A node with no path and no line
+(a `note`, a `turn`) is told it cannot carry a thread rather than being given
+an invented anchor.
 
 **kbc-tree/1 (V71-F1) — `GET /api/tree/2?repo=[&view=][&root=][&depth=]
 [&expand=][&scope=][&filter=][&mode=][&decorate=][&base=][&review=]

@@ -884,6 +884,101 @@ none. The `live` bag stayed in the shell deliberately — it closes over two
 dozen shell values, and threading them into a hook and back would add surface
 without removing coupling.
 
+## Boards (`kbc-canvas/1`, `V74-L2`, design §D10)
+
+`routes/Boards.tsx` (`~boards`) and `routes/BoardDetail.tsx`
+(`~boards/{slug}`) render a board of REFERENCES the daemon re-resolves on
+every read. Five rules, each with a home.
+
+**Geometry comes from the engine, and only from the engine.**
+`lib/boardLayout.ts` is an ADAPTER over `lib/egoGraph.ts`'s
+`layoutLayeredDag` — D10's "layout stays in TypeScript, ONE engine" — and it
+computes no topology of its own: no layering, no cycle break, no
+within-layer ordering. It adds exactly two things the engine has no notion
+of: card-sized pitch (`CANVAS_CARD_W/H` + the engine's own gaps, so a JSON
+Canvas export and this surface land on one grid), and PINS. Row order inside
+a layer is expressed AS the engine's sort key (`rankKey`) rather than
+re-sorted afterwards, so there is no second ordering that could disagree
+with it. If you find yourself adding a traversal to `boardLayout.ts`, widen
+the engine and its golden instead. `BoardCanvas.tsx` renders positions and
+computes none.
+
+**A coordinate reaches the daemon through the PIN ACTION, and nowhere else.**
+A board is stored coordinate-free plus a `pins` map, so dragging the surface
+pans the CAMERA and never writes a position (there is no freehand drawing
+either — D21's refusal list). `lib/boardDoc.ts`'s `coordinateKeysOutsidePins`
+is a local mirror of `boards::lint`'s `coordinates` rule and every
+composition is checked against it BEFORE the request, so a bug here is a
+refusal in the browser naming the offending path rather than a 400 the user
+reads as "the server is broken". The daemon's lint is still the gate.
+
+**A `code` node is rendered by the review document's card.** `LiveRefCard`
+(split out of `components/reviews/RefCard.tsx` for this unit, with two
+optional props that both default to the review's own behaviour) paints the
+snippet with the SERVER's spans, shows the state badge and owns the fold —
+so this SPA has ONE live code card, not two that could disagree about what
+`carried` looks like. Board code nodes carry NO trust class, deliberately:
+the daemon mints none, and `trustTierFrom` classifies a missing class DOWN
+to `candidate`, which would be a claim nobody made. Every other kind gets an
+address card; a node with no honest destination (an orphan, or an
+`annotation`/`turn`/`bookmark` this SPA has no route for) shows its address
+UNLINKED rather than being given a guessed one — `cardHref`'s own ruling.
+
+**An identifier in a card resolves exactly as in the reader, and that is a
+GOLDEN.** `lib/identResolve.ts` owns the two steps between "the human
+pointed at a character" and "the daemon is asked a question"
+(`identAtColumn` + `resolveQueryFor`), and `editor/vimReader.ts`'s
+`wordAtCursor` calls the same function — so the buffer and a card cannot
+drift into asking subtly different questions. `identResolve.test.ts` drives
+both paths through their own arithmetic (CM6's real `EditorState` on one
+side, a card's `snippet_start + lineIndex` on the other) and compares the
+requests; the case it exists for is the same name appearing on two lines of
+one window, which a dropped snippet offset would collapse onto the first.
+One rung is structurally unavailable and is named rather than faked: `gd`'s
+single-candidate INLINE peek is a CM6 block widget, and a card is not an
+editor, so `hooks/useIdentPeek.ts` opens the peek PANEL for one candidate
+too.
+
+**Keys: the board scope is shared, so every row is `when`-gated.** `board`
+scope (depth 20) already covered `~canvas`, `~browser`, `~lens` and the tour
+player; this unit adds the fifth `board` context value, `boards`, and gates
+all nineteen surface rows on `board == boards`. They then split into a
+READING half (`!walkthrough`) and a WALKING half (`walkthrough`, a new
+context key), which is what lets `k` mean "previous card" and "previous
+step" without either shadowing the other — `whenDisjoint` proves it, so
+neither pair needs a ratification. What DOES need one is every same-depth
+coactive collision (`j`/`k`/`Enter`/`p`/`n`/`+`/`-`/`z c`/`z o`/`z a` against
+`reader`/`diff`/`review`/`branches` rows), and all twenty-two pairs are
+mutually ratified in `registry.json` — the `board.row-next` precedent,
+followed exactly. `z` stays a PURE-vim prefix inside a `CodeView` because
+`shouldWithholdFromBuffer` resolves in `"reader"` scope and never sees a
+board row, exactly as diff v2's own `z` folds left it. `Escape` leaves the
+walkthrough through the EXISTING `dismiss.mode` rung (order 7,
+`when: mode.active`) — a second Escape row would be a second home for one
+keystroke, and `commands doctor`'s check 7 would refuse the duplicate
+`dismiss_order` anyway. `commands/boards.test.ts` is the per-surface gate
+`deadRows.test.ts` structurally cannot be, in the shape `diffV2.test.ts`
+established.
+
+**Add-to-board is one server-rendered ROW, not a per-surface button.**
+`collect.board` (actions/1, all five target kinds) arrives on the `.` panel,
+the right-click menu and the drag-select pill from the SAME list, and
+`Reader.tsx`'s `runAction` routes its `collect` sink to the picker;
+`Space b a` asks the same `/api/actions` and takes the DEFAULT target, so the
+leader and the menu can never disagree about what "this" is. The picker
+composes the WHOLE next document (there is no partial-patch route) and says
+BEFORE the click when the apply will reset an accepted board to `pending`
+(D21 — a human accepted a specific board, not a slug).
+
+**What to offer for a loopback-only mutation is the DAEMON's verdict.**
+`GET /api/repos` answers `{ repos, loopback }`, computed by the same
+`is_loopback_origin` the gate itself applies; `lib/loopback.ts` reads it and
+`hooks/useLoopback.ts` rides the `["repos"]` query every route already
+holds. Do not re-derive this from `window.location.hostname` — that is a
+second, quietly different answer to a question the server answers exactly.
+Absent (an older daemon), failed or in-flight all read `false`, the safe
+direction, and a refusal is still surfaced with the daemon's own message.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)
