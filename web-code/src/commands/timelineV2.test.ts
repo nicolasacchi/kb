@@ -14,8 +14,13 @@ import { continuations, resolve } from "./dispatch";
 import { KBC_COMMANDS } from "./registry.gen";
 
 const REVIEW_DETAIL_ROWS: ReadonlyArray<[string, string]> = [
-  ["review.claims-toggle", "Space z"],
-  ["review.timeline.lane-cycle", "Space l"],
+  // `Space z`/`Space l` were the original picks — both already claimed
+  // GLOBALLY by V72-I2's `rails.schema-fold`/`rails.atom.open`, caught only
+  // by a manual full-registry scan during a rebase (`commands doctor`'s own
+  // conflict pass skips any pair where either scope is `global` — see
+  // `web-code/CLAUDE.md`'s own note on this).
+  ["review.claims-toggle", "Space q"],
+  ["review.timeline.lane-cycle", "Space j"],
   ["review.timeline.github-toggle", "Space G"],
 ];
 
