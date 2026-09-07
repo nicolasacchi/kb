@@ -66,6 +66,7 @@ import StoryTimeline from "../components/provenance/StoryTimeline";
 import WhyPanel from "../components/provenance/WhyPanel";
 import HistoryPanel from "../components/history/HistoryPanel";
 import CitedBy from "../components/lens/CitedBy";
+import ClaimsCard from "../components/lens/ClaimsCard";
 import MobileDrawer from "../components/MobileDrawer";
 import RefPicker from "../components/RefPicker";
 import StoryPlayer from "../components/story/StoryPlayer";
@@ -992,6 +993,13 @@ export default function ReaderLegacy() {
         paneRepoPath(focusedPane).viewRef.current?.focus();
       }}
     />
+  ) : null;
+
+  // V73-K2c (kbc-claim/1, design D18) — same always-visible slot as
+  // `Reader.tsx`'s own; the legacy shell renders the identical
+  // `InspectorRail`, so it should not lose the Claims card either.
+  const claimsCard = focusedPath ? (
+    <ClaimsCard key={`claims:${focusedPath}`} repo={repo} path={focusedPath} />
   ) : null;
 
   // --- W4.5 — live-mirror auto-refresh heuristic, one instance per pane ----
@@ -2592,6 +2600,7 @@ export default function ReaderLegacy() {
               citedBy={citedBy}
               frameworkCard={frameworkCard}
               diagnosticsCard={diagnosticsCard}
+              claimsCard={claimsCard}
               repo={repo}
               path={focusedPath ?? ""}
               annotationActiveLine={annotationActiveLine}

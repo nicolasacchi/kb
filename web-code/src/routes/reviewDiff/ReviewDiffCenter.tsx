@@ -7,11 +7,13 @@
 // order, the map row states, the per-file `DiffV2Api`. Re-deriving any of
 // them here is what the kbc-tree/1 "renders rows it did NOT compute" rule
 // forbids, in this route's shape.
-import type { GithubThread, ReviewFileRow } from "../../api/types";
+import type { GithubThread, PseudoFile, ReviewFileRow } from "../../api/types";
 import ReviewMapColumn from "../../components/reviews/ReviewMapColumn";
+import PseudoFileView from "../../components/reviews/PseudoFileView";
 import { reduceDiffKeys, type DiffKeysState } from "../../lib/diffKeys";
 import type { MapChapter, MapRowState } from "../../lib/reviewMapColumn";
 import type { OverlayMode } from "../../lib/diffFindings";
+import { pseudoNameFromPath } from "../../lib/pseudoFiles";
 import type { DiffSide } from "../../lib/reviewComments";
 import type { DiffMode } from "../../lib/prefs";
 import { FileDiffBody, LazyDiffSection, type DiffV2Api } from "./DiffSections";
@@ -53,6 +55,9 @@ export interface ReviewDiffCenterProps {
   v2For: (path: string) => DiffV2Api;
   withQuery: (href: string) => string;
   reviewDiffHref: (repo: string, id: number, file?: string) => string;
+  /// V73-K2c (kbc-pseudo/1) — the map column's chapter zero rows.
+  pseudoFiles: PseudoFile[];
+  onPickPseudo: (name: string) => void;
 }
 
 export default function ReviewDiffCenter({
@@ -91,7 +96,10 @@ export default function ReviewDiffCenter({
   v2For,
   withQuery,
   reviewDiffHref,
+  pseudoFiles,
+  onPickPseudo,
 }: ReviewDiffCenterProps) {
+  const pseudoName = pseudoNameFromPath(focusPath);
   return (
       <div className={"kbc-rdiff__body" + (mapOpen ? " kbc-rdiff__body--mapped" : "")}>
         {mapOpen && (
@@ -102,6 +110,8 @@ export default function ReviewDiffCenter({
             fileCount={filesCount}
             viewedCount={viewedCount}
             derived={stops !== null && stops.length > 0}
+            pseudoFiles={pseudoFiles}
+            onPickPseudo={onPickPseudo}
             onPick={(path) => {
               const idx = paths.indexOf(path);
               if (idx >= 0) goFile(idx);
@@ -114,7 +124,15 @@ export default function ReviewDiffCenter({
           />
         )}
         <div className="kbc-rdiff__stream">
-        {ordered.length === 0 ? (
+        {/* V73-K2c (kbc-pseudo/1) — a pseudo path is never one of `ordered`
+            (it is not a diffed file at all), so it is checked BEFORE the
+            normal single/all branches below, in EITHER mode: navigating to
+            one always puts the page in single-file focus
+            (`openPseudo`/`focusPath.length > 0`), but this guard keeps the
+            branch honest even if that invariant ever loosens. */}
+        {pseudoName ? (
+          <PseudoFileView repo={repo} reviewId={id} name={pseudoName} ps={psQuery} />
+        ) : ordered.length === 0 ? (
           <div className="kbc-reader__hint">No files in this patchset.</div>
         ) : single ? (
           <>

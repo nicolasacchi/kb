@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GithubThread } from "../../api/types";
 import type { DiffLine, ParsedDiff } from "../../lib/diff";
 import type { DiagnosticGutterMark } from "../../lib/diagnostics";
@@ -95,6 +95,10 @@ export interface SplitHunksProps {
   onHunkViewed?: (hunkIdx: number) => void;
   onHunkExpand?: (hunkIdx: number, dir: "up" | "down") => void;
   currentHunk?: number | null;
+  /// V73-K2c — see `UnifiedHunks`'s twin doc; identical contract.
+  onHunkTurns?: (hunkIdx: number) => void;
+  turnsOpenId?: string | null;
+  turnsPanel?: ReactNode;
 }
 
 /// Context lines: paint the NEW side on both cells (text is identical;
@@ -166,6 +170,9 @@ export default function SplitHunks({
   onHunkViewed,
   onHunkExpand,
   currentHunk,
+  onHunkTurns,
+  turnsOpenId,
+  turnsPanel,
 }: SplitHunksProps) {
   // V73-K2a — with hunk views in hand the row stream is rebuilt PER HUNK
   // (each hunk owns a strip, a fold and its own context-expanded lines),
@@ -231,6 +238,9 @@ export default function SplitHunks({
                   onToggleFold={() => onHunkFold?.(hi)}
                   onToggleViewed={() => onHunkViewed?.(hi)}
                   onExpand={(dir) => onHunkExpand?.(hi, dir)}
+                  onToggleTurns={onHunkTurns ? () => onHunkTurns(hi) : undefined}
+                  turnsOpen={turnsOpenId === view.id}
+                  turnsPanel={turnsOpenId === view.id ? turnsPanel : undefined}
                 />
               ) : (
                 row.header
