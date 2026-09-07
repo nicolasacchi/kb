@@ -48,21 +48,14 @@ startSseInvalidationBridge();
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing");
 
-// DEP-RR7 step (a) — opt into the v7 route-resolution/transition semantics
-// on the current 6.30.x while still on the v6 API, so the behavior change is
-// isolated from the package-major bump that follows in the next commit.
-// `v7_relativeSplatPath` is a no-op for this app (no relative `to="."`/`".."`
-// links or `navigate(".")` calls exist anywhere in web/src — grep-verified —
-// and the one splat route, `/a/:kb/*`, never resolves a relative link against
-// it). `v7_startTransition` wraps every router-driven state update in
-// `React.startTransition`; see useScrollRestoration.ts and app.tsx for the
-// invariant #31/#20 interactions this surfaced.
-const future = { v7_startTransition: true, v7_relativeSplatPath: true };
-
+// DEP-RR7 — react-router-dom 7 (a thin wrapper over react-router 7). The
+// v6→v7 future flags this app opted into on 6.30.x (v7_startTransition,
+// v7_relativeSplatPath — see the prior commit) are now the only behavior;
+// `<BrowserRouter>` no longer takes a `future` prop.
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <LiveTailPortalProvider>
-      <BrowserRouter future={future}>
+      <BrowserRouter>
         <QueryClientProvider client={queryClient}>
           <App />
         </QueryClientProvider>
