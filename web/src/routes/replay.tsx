@@ -101,6 +101,24 @@ export default function ReplayRoute() {
     [params, setParams],
   );
 
+  // DEP-RR7 — `index` is derived from the URL (`?b=`), and under
+  // `v7_startTransition` (main.tsx) the `setParams` call below now commits
+  // through a LOW-priority React transition rather than synchronously. Two
+  // ArrowRight/j presses fired back to back (as a real "hold the key" burst
+  // does, and as Playwright's two `keyboard.press` calls do) can both reach
+  // this handler before the first transition has committed and re-rendered
+  // `index` — both would then compute `next` from the SAME stale `index`,
+  // so the second press overwrote the first's target instead of advancing
+  // past it. `pendingRef` mirrors the effective in-flight index: it's kept
+  // in sync with the real (committed) `index` whenever they agree, but a
+  // step ALSO advances it immediately, so the very next keydown in the same
+  // burst steps from where the previous one left off rather than from
+  // whatever has (or hasn't yet) landed in the URL.
+  const pendingRef = useRef(index);
+  useEffect(() => {
+    pendingRef.current = index;
+  }, [index]);
+
   // ── keyboard (scope "replay" in lib/keymap.ts) ──────────────────────────
   // One route-local window listener, the W2.6a two-layer rule: the registry
   // documents the grammar for the `?` sheet, this owns execution. Not
@@ -119,27 +137,28 @@ export default function ReplayRoute() {
       // still serve the vim/segment keys while it holds focus.
       if (isEditableTarget(t) && !onScrubber) return;
       const last = beats.length - 1;
+      const cur = pendingRef.current;
       let next: number | null = null;
       switch (e.key) {
         case "ArrowRight":
           if (onScrubber) return; // native range step
-          next = Math.min(index + 1, last);
+          next = Math.min(cur + 1, last);
           break;
         case "ArrowLeft":
           if (onScrubber) return; // native range step
-          next = Math.max(index - 1, 0);
+          next = Math.max(cur - 1, 0);
           break;
         case "j":
-          next = Math.min(index + 1, last);
+          next = Math.min(cur + 1, last);
           break;
         case "k":
-          next = Math.max(index - 1, 0);
+          next = Math.max(cur - 1, 0);
           break;
         case "]":
-          next = stepSegment(segments, index, 1);
+          next = stepSegment(segments, cur, 1);
           break;
         case "[":
-          next = stepSegment(segments, index, -1);
+          next = stepSegment(segments, cur, -1);
           break;
         case "Home":
           if (onScrubber) return;
@@ -154,11 +173,18 @@ export default function ReplayRoute() {
       }
       if (next === null) return;
       e.preventDefault();
-      if (next !== index) setIndex(next);
+      if (next !== cur) {
+        pendingRef.current = next;
+        setIndex(next);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [beats.length, index, segments, setIndex]);
+    // `index` deliberately NOT a dependency: the handler reads the playhead
+    // via `pendingRef` (see above) precisely so it doesn't need to
+    // re-subscribe — and wouldn't help if it did, since re-subscribing still
+    // races the same deferred transition.
+  }, [beats.length, segments, setIndex]);
 
   const target = useMemo(() => playheadTarget(beats, index), [beats, index]);
   const current = beats[index];
