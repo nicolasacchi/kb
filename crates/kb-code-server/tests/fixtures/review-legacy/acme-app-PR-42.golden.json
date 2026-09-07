@@ -9,7 +9,7 @@
       "category": "correctness",
       "cites": [],
       "location": {
-        "kind": "lines",
+        "kind": "single",
         "lines": [
           14
         ],
@@ -28,7 +28,7 @@
       "category": "security",
       "cites": [],
       "location": {
-        "kind": "lines",
+        "kind": "multi",
         "lines": [
           7,
           8,
@@ -48,7 +48,7 @@
       "category": "style",
       "cites": [],
       "location": {
-        "kind": "lines",
+        "kind": "single",
         "lines": [
           3
         ],

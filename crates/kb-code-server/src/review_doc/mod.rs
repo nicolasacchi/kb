@@ -989,6 +989,7 @@ mod tests {
                 "flows",
                 "questions",
                 "author",
+                "ci",
                 "blocks.context",
                 "blocks.approach",
                 "blocks.alternatives_considered",

@@ -425,10 +425,16 @@ fn location_fields(raw: &Value) -> Option<(String, Option<Vec<i64>>, Option<Stri
 
 /// `single | range | multi | whole_file` from a line count — the SAME rule
 /// `kbc-findings/1`'s own writers use (`review_findings::validate_location_
-/// shape`'s vocabulary). Only used for the NESTED shape's default when that
-/// object names no `kind` of its own, or names one outside the closed set;
-/// the flat-shape derivation elsewhere in this file is unchanged (a
-/// pre-existing, separately-tracked defect — see this unit's report).
+/// shape`'s vocabulary). Used both for the flat shape's `kind` (which
+/// carries no vocabulary of its own — only `line`/`lines` — so it never had
+/// a way to say anything else) and as the nested shape's default when that
+/// object names no `kind`, or names one outside the closed set. A pre-K5
+/// defect this unit noticed while touching this code: the flat path used
+/// to hardcode a bare `"lines"`, which is not in `store::LOCATION_KINDS`
+/// and would fail `compose`'s own `finding_no_location`/`invalid_location_
+/// kind` lint on every multi-line flat-shape import — fixed here as a
+/// consequence of unifying both shapes through one resolver, not a
+/// separate deliberate change (see this unit's report).
 fn kind_from_lines(lines: Option<&[i64]>) -> &'static str {
     match lines.map(|l| l.len()).unwrap_or(0) {
         0 => store::LOCATION_KIND_WHOLE_FILE,

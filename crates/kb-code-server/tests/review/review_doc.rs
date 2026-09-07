@@ -141,6 +141,25 @@ fn minimal_doc(title: &str) -> String {
     )
 }
 
+/// Split a `render` response's `html` at the V73-K5 machine block
+/// (`review_legacy::export_block_html`'s `<script type="application/json"
+/// id="kbc-review">…</script>`), returning `(everything_before_it,
+/// the_json_text_inside_it)`. Every render carries exactly one.
+fn split_off_machine_block(html: &str) -> (&str, String) {
+    const OPEN: &str = "<script type=\"application/json\" id=\"kbc-review\">";
+    let open_at = html
+        .find(OPEN)
+        .expect("every render embeds the kbc-review machine block");
+    let body_start = open_at + OPEN.len();
+    let close_at = html[body_start..]
+        .find("</script>")
+        .expect("the machine block is closed");
+    (
+        &html[..open_at],
+        html[body_start..body_start + close_at].to_string(),
+    )
+}
+
 // --- the read ---------------------------------------------------------------
 
 #[tokio::test]
@@ -815,15 +834,36 @@ async fn render_escapes_everything_and_reports_unknown_placeholders() {
         .unwrap();
     assert_eq!(out["schema"], "review-render/1");
     let html = out["html"].as_str().unwrap();
+    // V73-K5 (gap 4) — every render also embeds a re-importable machine
+    // block, and that block's `title` field carries `hostile` VERBATIM (as
+    // inert JSON text, `</` escaped so it can never terminate the block
+    // early — see `review_legacy::export_block_html`). A raw-text
+    // `<script type="application/json">` element's content is never
+    // tokenized as nested HTML by a browser, so this is not a second XSS
+    // surface, but it DOES mean the substring check below must scope to
+    // the rendered TEMPLATE, not the whole page.
+    let (template_html, machine_block) = split_off_machine_block(html);
     assert!(
-        !html.contains("<script>alert"),
-        "a finding title escaped its cell"
+        !template_html.contains("<script>alert"),
+        "a finding title escaped its cell: {template_html}"
     );
     assert!(
-        html.contains("&lt;script&gt;"),
+        template_html.contains("&lt;script&gt;"),
         "and it is still VISIBLE, escaped"
     );
     assert!(out["unknown_placeholders"].as_array().unwrap().is_empty());
+    // The machine block itself must still be well-formed JSON — proof its
+    // OWN `</` escaping did not corrupt the payload it was meant to protect.
+    let block_json: serde_json::Value =
+        serde_json::from_str(&machine_block).expect("the embedded machine block is valid JSON");
+    assert_eq!(block_json["schema"], "kbc-review/1");
+    assert!(
+        block_json["findings"][0]["title"]
+            .as_str()
+            .unwrap()
+            .contains("<script>alert"),
+        "the machine block carries the finding's title VERBATIM (it is data, never executed): {block_json}"
+    );
 
     // Operator template, loopback POST — one renderer, two entry points.
     let out: serde_json::Value = client
