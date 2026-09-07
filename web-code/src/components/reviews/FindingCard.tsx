@@ -5,6 +5,8 @@
 // over `ReviewFinding`, not a second comment component.
 import type { FindingLocation, FindingSeverity, ReviewFinding } from "../../api/types";
 import { Icon } from "../icons";
+import RefCard from "./RefCard";
+import { actChipClass, findingCites, findingTombstoneText } from "../../lib/reviewDoc";
 import { relativeTime } from "../../lib/format";
 import { reviewDiffHref } from "./ReviewHeader";
 import DispositionMenu from "./DispositionMenu";
@@ -23,6 +25,42 @@ export function severityRank(severity: FindingSeverity): number {
   if (severity === "concern") return 1;
   return 2; // "ok"
 }
+
+/**
+ * findings v2 — a finding's SPEECH ACT. `"issue"` when the daemon did not
+ * send one, which is exactly what every pre-V0034 row meant (and what an
+ * older daemon that omits the field is describing).
+ */
+export function findingAct(finding: Pick<ReviewFinding, "act">): string {
+  return finding.act ?? "issue";
+}
+
+/** The act chip's class — one home for the label's styling. */
+export function findingActClass(finding: Pick<ReviewFinding, "act">): string {
+  return actChipClass(finding.act);
+}
+
+/** A finding's secondary refs. Absent ≠ empty — see the wire type's own doc. */
+export function findingCitesOf(finding: Pick<ReviewFinding, "cites">): string[] {
+  return findingCites(finding);
+}
+
+/** `superseded_by` as a tombstone line, or `null` when the row is live. */
+export function findingTombstone(
+  finding: Pick<ReviewFinding, "superseded" | "superseded_by">,
+): string | null {
+  return findingTombstoneText(finding);
+}
+
+/**
+ * Why a cited ref renders as an address rather than as a live card HERE.
+ * `GET /api/reviews/{id}/findings` carries the ref STRINGS; only
+ * `GET …/doc?resolve=true` mints cards, and this card is reachable without
+ * a document at all. Saying so is the point — the Document tab's own
+ * finding list shows the same refs against real cards.
+ */
+export const CITE_UNRESOLVED_REASON =
+  "cited ref — cards are minted by the document read (`kb-code review doc --resolve`), not by the findings wire";
 
 export function severityStripeClass(severity: FindingSeverity): string {
   return `kbc-finding--${severity}`;
@@ -93,15 +131,44 @@ function SeverityMeta({ finding, showAgentMark = true }: { finding: ReviewFindin
   const author = findingAuthorDisplay(finding);
   return (
     <div className="kbc-finding__meta">
+      {/* findings v2 (V73-K2b, design D9) — `act` is the SPEECH-ACT axis
+          BESIDE severity, not a second severity: an issue and a question
+          about the same line at the same severity are different things to a
+          reader, and v1 could not say which was which. It orders nothing. */}
+      <span className={findingActClass(finding)} data-kbc-finding-act={findingAct(finding)}>
+        {findingAct(finding)}
+      </span>
+      <span aria-hidden="true">·</span>
       <span className="kbc-finding__sev" data-kbc-finding-severity={finding.severity}>
         {finding.severity}
       </span>
+      {/* `blocking` is the reviewer's OWN call and deliberately not derived
+          from `severity` ("a blocker that is not blocking this PR" is a real
+          thing to say). It reads as WEIGHT — never as a score. */}
+      {finding.blocking && (
+        <span
+          className="kbc-finding__blocking"
+          data-kbc-finding-blocking
+          title="the reviewer's own call — not derived from severity"
+        >
+          blocking
+        </span>
+      )}
       <span aria-hidden="true">·</span>
       <span>{finding.category}</span>
       <span aria-hidden="true">·</span>
       <span className="kbc-finding__loc" data-kbc-finding-loc>
         {findingLocationLabel(finding.location)}
       </span>
+      {findingTombstone(finding) && (
+        <span
+          className="kbc-finding__tomb"
+          data-kbc-finding-tombstone={finding.superseded_by ?? "superseded"}
+          title="still here, still readable, naming its successor — a re-compose never destroys what a human formed a disposition against"
+        >
+          {findingTombstone(finding)}
+        </span>
+      )}
       {finding.resolution.orphaned && (
         <span className="kbc-finding__orphan" data-kbc-finding-orphaned title="anchor no longer resolves">
           <Icon.Unlink /> orphaned
@@ -172,6 +239,24 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
       {finding.recommendation && (
         <div className="kbc-finding__rc" data-kbc-finding-recommendation>
           {finding.recommendation}
+        </div>
+      )}
+      {/* SECONDARY refs (findings v2). They never compete with the PRIMARY
+          location above — that one carries the annotation anchor, and
+          therefore the carry-forward ladder, the thread and the GitHub
+          export. These are folded by default: a citation is context, and an
+          expanded stack of them would bury the finding itself. */}
+      {findingCitesOf(finding).length > 0 && (
+        <div className="kbc-finding__cites" data-kbc-finding-cites={findingCitesOf(finding).length}>
+          {findingCitesOf(finding).map((c) => (
+            <RefCard
+              key={c}
+              span={{ kind: "unresolved", body: c, reason: CITE_UNRESOLVED_REASON }}
+              repo={repo}
+              reviewId={reviewId}
+              folded
+            />
+          ))}
         </div>
       )}
       <div className="kbc-finding__foot">

@@ -1,18 +1,17 @@
-// The kbc-refs/1 LOCK-STEP golden — the SPA half, seeded ahead of the parser.
+// The kbc-refs/1 LOCK-STEP golden — the SPA half (V73-K2b).
 //
-// `crates/kb-code-server/grammar/kbcrefs.golden.json` is ONE fixture meant to
-// be read by TWO parsers: `review_doc/refs.rs`'s
-// `golden_corpus_matches_the_rust_parser` and — once K2 lands
-// `web-code/src/lib/kbcRefs.ts` — this file's own walk over the same bytes.
-// Neither parser generates the other, so the fixture is the only thing that
-// keeps them from drifting: touch the grammar on one side and the other
-// side's golden test fails, naming the case.
+// `crates/kb-code-server/grammar/kbcrefs.golden.json` is ONE fixture read by
+// TWO parsers: `review_doc/refs.rs`'s `golden_corpus_matches_the_rust_parser`
+// and this file's walk over the same bytes through `lib/kbcRefs.ts`. Neither
+// parser generates the other, so the fixture is the only thing that keeps
+// them from drifting: touch the grammar on one side and the other side's
+// test fails, naming the case.
 //
-// K1 ships the SERVER parser only, so this file deliberately does NOT import
-// a TS parser yet. What it does today is assert the fixture is present,
-// well-formed, and covers every declared scheme — so the file cannot rot
-// between now and K2, and so K2's first job is a one-line import plus the
-// commented-out block at the bottom rather than "invent a fixture".
+// K1 shipped the SERVER parser and left this file asserting only that the
+// fixture was present and well-formed. K2b lands the SPA parser, so the walk
+// K1 left commented out at the bottom is now the point of the file — the
+// fixture-integrity assertions stay, because a fixture that stops covering a
+// scheme would make the walk pass for the wrong reason.
 //
 // Reading across the crate boundary is fine HERE (vitest runs from the repo)
 // and is the same thing `kbcq.golden.test.ts` and `src/commands/
@@ -24,6 +23,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { classify, SCHEMES as TS_SCHEMES } from "./kbcRefs";
 
 const GOLDEN_PATH = fileURLToPath(
   new URL(
@@ -95,16 +95,29 @@ describe("kbc-refs/1 golden corpus", () => {
     }
   });
 
-  // K2 (the SPA parser) replaces this file's body with the real walk:
-  //
-  //   import { classify } from "./kbcRefs";
-  //   for (const c of golden.cases) {
-  //     it(`classifies ${JSON.stringify(c.body)} exactly as the daemon does`, () => {
-  //       const got = classify(c.body);
-  //       expect(got.kind).toBe(c.class);
-  //       if (c.class === "ref") expect(got.ref).toEqual(c.parsed);
-  //     });
-  //   }
-  //
-  // Until then the assertions above keep the fixture honest and present.
+  it("declares the same seven schemes the daemon does", () => {
+    expect([...TS_SCHEMES]).toEqual([...SCHEMES]);
+  });
+});
+
+// The walk itself: every case, both sides, one assertion each so a failure
+// names the body that diverged rather than "the corpus".
+describe("kbc-refs/1 — the TS parser classifies exactly as the daemon does", () => {
+  for (const c of golden.cases) {
+    it(`classifies ${JSON.stringify(c.body)} as ${c.class}`, () => {
+      const got = classify(c.body);
+      expect(got.kind).toBe(c.class);
+      if (got.kind === "ref") {
+        // `parsed` IS the serde serialization of the Rust `Ref` — an extra
+        // or missing key here is a real divergence, not a shape preference.
+        expect(got.ref).toEqual(c.parsed);
+        expect(Object.keys(got.ref).sort()).toEqual(Object.keys(c.parsed ?? {}).sort());
+      }
+      if (got.kind === "malformed") {
+        // A malformed ref must always say WHY — an unexplained refusal is
+        // the invisible failure invariant 22(b) exists to prevent.
+        expect(got.reason.length).toBeGreaterThan(0);
+      }
+    });
+  }
 });

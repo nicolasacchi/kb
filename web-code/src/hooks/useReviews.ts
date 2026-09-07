@@ -14,6 +14,8 @@ import {
   fetchReviewFiles,
   fetchReviewFindings,
   fetchReviewInterdiff,
+  fetchReviewDoc,
+  fetchReviewDocLint,
   fetchReviewMap,
   fetchReviewReadingOrder,
   fetchReviewReport,
@@ -127,6 +129,82 @@ export function reviewMapKey(repo: string | undefined, id: number | undefined) {
 
 export function reviewReadingOrderKey(repo: string | undefined, id: number | undefined) {
   return ["reviews", repo, "reading-order", id] as const;
+}
+
+export function reviewDocKey(
+  repo: string | undefined,
+  id: number | undefined,
+  ps: string | undefined,
+) {
+  return ["reviews", repo, "doc", id, ps ?? "latest"] as const;
+}
+
+export function reviewDocLintKey(
+  repo: string | undefined,
+  id: number | undefined,
+  ps: string | undefined,
+) {
+  return ["reviews", repo, "doc-lint", id, ps ?? "latest"] as const;
+}
+
+/**
+ * `GET /api/reviews/{id}/doc?resolve=true` (V73-K1/K2b, `kbc-review/1`). On
+ * 404 — the review has no composed document, or the daemon predates the
+ * surface — returns `null` so the cockpit hides the Document tab rather than
+ * showing empty chrome, exactly as `useReviewMap` does.
+ *
+ * Always asks for `resolve=true`: a Document tab without live cards is the
+ * prose the CLI already prints, and D9-a's whole claim is that the refs
+ * become cards. Fetched only when the tab is opened (`enabled`) so the cost
+ * of resolving every ref is paid by the reader who asked for it.
+ */
+export function useReviewDoc(
+  repo: string | undefined,
+  id: number | undefined,
+  ps?: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: reviewDocKey(repo, id, ps),
+    queryFn: async () => {
+      try {
+        return await fetchReviewDoc(id as number, { ps, resolve: true });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && repo !== undefined && id !== undefined,
+    staleTime: BEHAVIORAL_STALE_MS,
+    retry: false,
+  });
+}
+
+/**
+ * `GET /api/reviews/{id}/doc/lint` (V73-K1/K2b). Same 404→`null` degrade:
+ * a review with no document has nothing to lint, and the panel simply does
+ * not render. A lint FAILURE is not an error state — rows are the point.
+ */
+export function useReviewDocLint(
+  repo: string | undefined,
+  id: number | undefined,
+  ps?: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: reviewDocLintKey(repo, id, ps),
+    queryFn: async () => {
+      try {
+        return await fetchReviewDocLint(id as number, { ps });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && repo !== undefined && id !== undefined,
+    staleTime: BEHAVIORAL_STALE_MS,
+    retry: false,
+  });
 }
 
 /**

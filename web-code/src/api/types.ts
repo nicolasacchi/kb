@@ -2308,6 +2308,167 @@ export interface ReviewReadingOrderOut {
   note?: string | null;
 }
 
+// --- V73-K1/K2b — the kbc-review/1 document --------------------------------
+//
+// Mirrors `crates/kb-code-server/src/review_doc/` (`routes::DocOut`,
+// `cards::Card`, `lint::LintOut`). The STORED artefact is Markdown; the typed
+// front-matter blocks arrive beside it already parsed, so this side never
+// re-parses YAML — it renders `doc_md`'s BODY (`lib/kbcRefs.ts`'s `docBody`)
+// and reads every structured field off the wire.
+
+/// One `[[…]]` ref resolved into a live card. Computed PER REQUEST by the
+/// daemon and persisted nowhere: a card is a claim about the repository as
+/// it is right now.
+export interface ReviewDocCard {
+  /** The ref body exactly as the author wrote it — the join key. */
+  ref: string;
+  /** `code` | `sym` | `ent` | `finding` | `gh` | `kb` | `hunk`. */
+  scheme: string;
+  /** `pinned` | `carried` | `orphan` | `inert`. */
+  state: string;
+  /**
+   * `exact` | `likely` | `candidate`. Absent for an ORPHAN (nothing to
+   * grade) and for an INERT link (no claim is made) — never zeroed.
+   */
+  trust?: string | null;
+  path?: string | null;
+  line?: number | null;
+  line_end?: number | null;
+  /** The blob the REF pinned (`@sha`), verbatim as written. */
+  blob_sha?: string | null;
+  /** The blob that path has at the target patchset right now. */
+  current_blob?: string | null;
+  snippet?: string | null;
+  /** The first line number `snippet` shows. */
+  snippet_start?: number | null;
+  /**
+   * Server-computed highlight spans, byte offsets REBASED onto `snippet`.
+   * `null` when the target blob is not one this daemon has indexed — a pure
+   * store lookup, never derived in a request handler.
+   */
+  highlights?: Span[] | null;
+  /** Always present: why it is pinned, how it was carried, or why orphan. */
+  caption: string;
+}
+
+export interface ReviewDocStop {
+  ref: string;
+  why?: string | null;
+}
+
+export interface ReviewDocChapter {
+  chapter: string;
+  stops: ReviewDocStop[];
+}
+
+/// A reading order that is either the author's or the daemon's, and always
+/// says which (`source: "authored" | "derived"`).
+export interface ReviewDocReadingOrder {
+  source: string;
+  caption: string;
+  chapters: ReviewDocChapter[];
+}
+
+export interface ReviewDocFlow {
+  name: string;
+  steps: string[];
+}
+
+export interface ReviewDocQuestion {
+  /** `to_author` | `to_reviewer` | `to_agent`. */
+  to: string;
+  ask: string;
+  ref?: string | null;
+}
+
+export interface ReviewDocAuthor {
+  /** `agent` | `human`. */
+  kind: string;
+  model?: string | null;
+  session_id?: string | null;
+  considered: string[];
+  not_considered: string[];
+}
+
+export interface ReviewDocRisk {
+  /** `low` | `medium` | `high`. */
+  level: string;
+  why: string;
+}
+
+/// A finding as the DOCUMENT read surfaces it — the identity and the two v2
+/// axes, no carry-forward resolution and no thread counts.
+/// `GET /api/reviews/{id}/findings` is still the full view.
+export interface ReviewDocFindingBrief {
+  slug: string;
+  act: string;
+  severity: string;
+  blocking: boolean;
+  category: string;
+  title: string;
+  location_path: string;
+  fingerprint?: string | null;
+  origin: string;
+  superseded: boolean;
+  superseded_by?: string | null;
+  disposition?: string | null;
+  cites?: string[] | null;
+}
+
+/// `GET /api/reviews/{id}/doc[?ps=&resolve=true]` body (`kbc-review/1`).
+export interface ReviewDocOut {
+  schema: string;
+  review_id: number;
+  repo: string;
+  ps_number: number;
+  revision: number;
+  /** How many revisions exist across every patchset — the chain's length. */
+  revisions: number;
+  /** `minimal` | `standard` | `full`. */
+  tier: string;
+  created_at: number;
+  /** The lossless record: front matter + body, byte-for-byte as composed. */
+  doc_md: string;
+  summary_md: string;
+  risk?: ReviewDocRisk | null;
+  reading_order: ReviewDocReadingOrder;
+  blocks: Record<string, string>;
+  flows: ReviewDocFlow[];
+  questions: ReviewDocQuestion[];
+  author?: ReviewDocAuthor | null;
+  findings: ReviewDocFindingBrief[];
+  /**
+   * Every optional block this document does NOT carry. Always present, even
+   * when empty — an absence is stated, never discovered.
+   */
+  omitted: string[];
+  /** `null` unless `?resolve=true`. */
+  cards?: ReviewDocCard[] | null;
+  cards_resolved: boolean;
+}
+
+export interface ReviewDocLintRow {
+  rule: string;
+  /** `error` | `warning` | `info`. */
+  severity: string;
+  message: string;
+  /** 1-based document line, when the row has one. */
+  line?: number | null;
+  /** The ref body this row is about, when it is about one. */
+  ref?: string | null;
+  /** The nearest things the author might have meant — never an applied fix. */
+  candidates?: string[];
+}
+
+/// `GET /api/reviews/{id}/doc/lint` body (`kbc-review/1`).
+export interface ReviewDocLintOut {
+  schema: string;
+  errors: number;
+  warnings: number;
+  infos: number;
+  rows: ReviewDocLintRow[];
+}
+
 // --- V3.3-S2 — dependent-branch stacks -------------------------------------
 //
 // Mirror `crates/kb-code-server/src/history/stacks.rs` + `routes.rs`
@@ -2824,6 +2985,30 @@ export interface FindingResolution {
 /// (manual create), and both disposition routes' single-finding response.
 export interface ReviewFinding {
   slug: string;
+  /**
+   * findings v2 (D9) — the SPEECH-ACT axis beside `severity`. An `issue` and
+   * a `question` about the same line at the same severity are different
+   * things to a reader. `"issue"` on every pre-V0034 row, which is what
+   * those rows always meant; optional here because an older daemon does not
+   * send the field at all.
+   */
+  act?: string;
+  /**
+   * The reviewer's OWN call, deliberately not derived from `severity`: "a
+   * blocker that is not blocking this PR" is a real thing to say. Rendered
+   * as visual WEIGHT, never as a score.
+   */
+  blocking?: boolean;
+  /**
+   * SECONDARY `[[…]]` refs. `null`/absent means "cites nothing OR the stored
+   * blob was unreadable" — the daemon degrades an unparseable blob to ABSENT
+   * rather than to `[]`, so a card never states an absence it did not verify.
+   */
+  cites?: string[] | null;
+  /** The change detector (`review_doc::fingerprint`); `null` pre-V0034. */
+  fingerprint?: string | null;
+  /** The slug that REPLACED this one. Never inferred — only ever declared. */
+  superseded_by?: string | null;
   severity: FindingSeverity;
   category: string;
   location: FindingLocation;
