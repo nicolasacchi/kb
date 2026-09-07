@@ -195,7 +195,17 @@ pub struct NodeOut {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<CodeCard>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The QUERY CARD.
+    ///
+    /// Serialized as `query_card`, NOT `query`, because [`RefFields`] is
+    /// flattened onto this struct and already owns the key `query` (the
+    /// kbcq/1 string the author wrote). V74-L1 shipped both under one name:
+    /// serde emitted the object and then the string, and every JSON parser
+    /// keeps the LAST duplicate — so the card, and with it the whole
+    /// `?live=1` delta this kind exists for, was unreachable on the wire.
+    /// `code` has no such clash (`RefFields` has no `code` field), which is
+    /// why only this one is renamed.
+    #[serde(rename = "query_card", skip_serializing_if = "Option::is_none")]
     pub query: Option<QueryCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadOut>,
@@ -782,5 +792,65 @@ mod tests {
         );
         assert!(!h.live_queries);
         assert_eq!(h.budget.max_nodes, MAX_NODES);
+    }
+
+    /// V74-L2 — the query CARD and the query STRING are two different keys on
+    /// the wire, and both are present.
+    ///
+    /// `NodeOut` flattens `RefFields`, which owns `query` (the kbcq/1 string).
+    /// Before the `query_card` rename, serde emitted `"query"` TWICE for a
+    /// query node — the object first, the string second — and every JSON
+    /// parser keeps the LAST duplicate, so `current_count`/`delta`/`basis`
+    /// were unreachable by any caller. This asserts the two keys are distinct
+    /// and that neither is emitted twice.
+    #[test]
+    fn a_query_node_serializes_its_card_and_its_string_under_different_keys() {
+        let mut out = NodeOut {
+            id: "q1".into(),
+            kind: KIND_QUERY.into(),
+            title: None,
+            body_md: None,
+            group: None,
+            state: STATE_PRESENT,
+            reason: REASON_TARGET_PRESENT,
+            address: "repo:r /x".into(),
+            note: None,
+            code: None,
+            query: Some(QueryCard {
+                query: "repo:r /x".into(),
+                authored_count: Some(3),
+                current_count: Some(5),
+                delta: Some(2),
+                basis: Some("page"),
+                truncated: Some(false),
+            }),
+            thread: None,
+            pin: None,
+            reference: RefFields {
+                query: Some("repo:r /x".into()),
+                authored_count: Some(3),
+                ..Default::default()
+            },
+        };
+        let text = serde_json::to_string(&out).expect("serializes");
+        assert_eq!(
+            text.matches("\"query\":").count(),
+            2,
+            "the kbcq string plus the card's own `query` field — and NOT a \
+             duplicate top-level key: {text}"
+        );
+        assert_eq!(text.matches("\"query_card\":").count(), 1, "{text}");
+
+        // The round trip a caller actually makes: parse, then read both.
+        let v: serde_json::Value = serde_json::from_str(&text).expect("parses");
+        assert_eq!(v["query"], serde_json::json!("repo:r /x"));
+        assert_eq!(v["query_card"]["current_count"], serde_json::json!(5));
+        assert_eq!(v["query_card"]["delta"], serde_json::json!(2));
+        assert_eq!(v["query_card"]["basis"], serde_json::json!("page"));
+
+        // A node with NO card omits the key entirely rather than sending null.
+        out.query = None;
+        let text = serde_json::to_string(&out).expect("serializes");
+        assert!(!text.contains("query_card"), "{text}");
     }
 }

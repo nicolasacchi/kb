@@ -513,6 +513,19 @@ export function browserPageUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~browser`;
 }
 
+/// `boardsPageUrl(repo)` → `/r/{repo}/~boards` — V74-L2, the kbc-canvas/1
+/// board list. A SEPARATE surface from `~canvas` (V3.4-C2's working-set
+/// fragments), which stays mounted and frozen beside it.
+/// Query state (`status`/`step`/`live`/`ctx`) is owned by `lib/boardsUrl.ts`.
+export function boardsPageUrl(repo: string): string {
+  return `${codeBasePath(repo, "")}/~boards`;
+}
+
+/// `boardUrl(repo, slug)` → `/r/{repo}/~boards/{slug}` — one board.
+export function boardUrl(repo: string, slug: string): string {
+  return `${boardsPageUrl(repo)}/${encodeURIComponent(slug)}`;
+}
+
 // --- Phase C7 ("story mode") -----------------------------------------------
 //
 // `~story` is a FILE-scoped sentinel — unlike `~commit`/`~compare`/

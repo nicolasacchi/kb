@@ -109,6 +109,12 @@ import type {
   PrReviewsOut,
   // ── PRR-U9 ──
   DiagnosticsOut,
+  // ── V74-L2 (kbc-canvas/1) ──
+  BoardApplyOut,
+  BoardOut,
+  BoardStatusOut,
+  BoardSweepOut,
+  BoardsListOut,
 } from "./types";
 
 // V70-A2 (SEC-02) — every mutating request carries `X-Kbc-Request: 1`.
@@ -2050,4 +2056,74 @@ export function fetchDossier(q: DossierQuery): Promise<DossierOut> {
     budget: q.budget !== undefined ? String(q.budget) : undefined,
     usages_per_kind: q.usagesPerKind !== undefined ? String(q.usagesPerKind) : undefined,
   });
+}
+
+
+// ── kbc-canvas/1 — boards (V74-L2) ─────────────────────────────────────────
+//
+// Four READS on the ordinary bearer surface and two loopback-only MUTATIONS.
+// The SPA never composes an action for them beyond the document itself
+// (`lib/boardDoc.ts`); the lint, the honesty census and every count come back
+// from the daemon.
+
+/// `GET /api/boards?repo=[&status=]`.
+export function fetchBoards(repo: string, status?: string): Promise<BoardsListOut> {
+  return getJson<BoardsListOut>("/api/boards", { repo, status });
+}
+
+/// `GET /api/boards/{slug}?repo=[&ctx=1][&live=1]`. Both flags are OFF by
+/// default and each is a deliberate opt-in: `ctx` asks the daemon to read the
+/// context range's text, `live` asks it to EXECUTE every query card (a full
+/// unified search per card — never on an ordinary page load).
+export function fetchBoard(
+  repo: string,
+  slug: string,
+  opts: { ctx?: boolean; live?: boolean } = {},
+): Promise<BoardOut> {
+  return getJson<BoardOut>(`/api/boards/${encodeURIComponent(slug)}`, {
+    repo,
+    ctx: opts.ctx ? "1" : undefined,
+    live: opts.live ? "1" : undefined,
+  });
+}
+
+/// `GET /api/boards/sweep?repo=[&slug=]` — the drift report. A READ: it
+/// re-resolves and reports, and never repairs what it finds.
+export function fetchBoardSweep(repo: string, slug?: string): Promise<BoardSweepOut> {
+  return getJson<BoardSweepOut>("/api/boards/sweep", { repo, slug });
+}
+
+/// `POST /api/boards/apply` — LOOPBACK-ONLY. The WHOLE document, upserted by
+/// slug; there is no partial-patch route, which is why `lib/boardDoc.ts`
+/// composes the next document from the one on screen.
+export function applyBoard(
+  doc: unknown,
+  opts: { dryRun?: boolean; allowDisconnected?: boolean } = {},
+): Promise<BoardApplyOut> {
+  const qs = new URLSearchParams();
+  if (opts.dryRun) qs.set("dry_run", "1");
+  if (opts.allowDisconnected) qs.set("allow_disconnected", "1");
+  const suffix = qs.toString();
+  return sendJson<BoardApplyOut>(
+    "POST",
+    suffix ? `/api/boards/apply?${suffix}` : "/api/boards/apply",
+    doc,
+  );
+}
+
+/// `POST /api/boards/{slug}/accept?repo=` — LOOPBACK-ONLY (D21: an
+/// agent-proposed board is PENDING until a human accepts it).
+export function acceptBoard(repo: string, slug: string): Promise<BoardStatusOut> {
+  return sendJson<BoardStatusOut>(
+    "POST",
+    `/api/boards/${encodeURIComponent(slug)}/accept?repo=${encodeURIComponent(repo)}`,
+  );
+}
+
+/// `POST /api/boards/{slug}/archive?repo=` — LOOPBACK-ONLY.
+export function archiveBoard(repo: string, slug: string): Promise<BoardStatusOut> {
+  return sendJson<BoardStatusOut>(
+    "POST",
+    `/api/boards/${encodeURIComponent(slug)}/archive?repo=${encodeURIComponent(repo)}`,
+  );
 }

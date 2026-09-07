@@ -40,6 +40,7 @@ import DossierView from "../components/entity/DossierView";
 import PeekPanel, { type PeekAnchor } from "../components/peek/PeekPanel";
 import UsagesDock from "../components/usages/UsagesDock";
 import ActionMenu, { ActionPill } from "../components/actions/ActionMenu";
+import AddToBoardDialog from "../components/boards/AddToBoardDialog";
 import RepoStateBanner from "../components/RepoStateBanner";
 import AddToSetMenu from "../components/sets/AddToSetMenu";
 import BlameChip from "../components/provenance/BlameChip";
@@ -82,7 +83,7 @@ import {
   type UsageChips,
 } from "../lib/usages2";
 import { pillRows, resolveOp } from "../lib/actionOps";
-import type { ActionRow, ActionsOut, Usages2Out, UsageRow2 } from "../api/types";
+import type { ActionRow, ActionsOut, ActionTarget, Usages2Out, UsageRow2 } from "../api/types";
 import type { LinkifyCallbacks } from "../editor/linkify";
 import type { LineMarkerSpec } from "../editor/lineGutter";
 import { copyToClipboard, type LineSel, type VimReaderCallbacks, type WordPos } from "../editor/vimReader";
@@ -1735,6 +1736,10 @@ export default function Reader() {
     pill: boolean;
   }
   const [actionMenu, setActionMenu] = useState<ActionMenuState | null>(null);
+  /// V74-L2 — the add-to-board picker's target, when one is open. Held here
+  /// (not in `ActionMenuState`) because the leader key opens it WITHOUT the
+  /// menu, and the dialog outlives the menu it may have come from.
+  const [addToBoard, setAddToBoard] = useState<ActionTarget | null>(null);
   const actionReqRef = useRef(0);
 
   function capturePeekAnchor(pane: 1 | 2): PeekAnchor | null {
@@ -1999,6 +2004,37 @@ export default function Reader() {
     void loadActions(next);
   }
 
+  /// `Space b a` — the leader's own door to add-to-board. Asks the same
+  /// `/api/actions` the panel asks (so the two agree about what "this" is),
+  /// takes the DEFAULT target and opens the picker. A failure is an honest
+  /// toast; nothing is guessed when the daemon cannot answer.
+  async function addCaretToBoard() {
+    const pane = focusedPane;
+    const { path: panePath } = paneRepoPath(pane);
+    if (!panePath) return;
+    const sel = (pane === 1 ? lastSelRef1 : lastSelRef2).current;
+    const cursorLine = (pane === 1 ? cursorLineRef1 : cursorLineRef2).current;
+    const line = sel?.start ?? cursorLine ?? 1;
+    try {
+      const out = await fetchActions({
+        repo,
+        path: panePath,
+        line,
+        col: 0,
+        ref: gitRef,
+        endLine: sel && sel.end > sel.start ? sel.end : undefined,
+      });
+      const target = out.targets[out.active];
+      if (!target) {
+        toast.warn("no target here — put the caret on a line first");
+        return;
+      }
+      setAddToBoard(target);
+    } catch (e) {
+      toast.err(`couldn't read actions here: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function loadActions(st: ActionMenuState) {
     const reqId = ++actionReqRef.current;
     try {
@@ -2118,6 +2154,14 @@ export default function Reader() {
         inspectorRef.current?.openTab("annotations");
         return;
       case "collect":
+        // V74-L2 — `collect.board` is the ONE door for "add to board" on every
+        // surface the action panel serves (D10). It arrives on the `.` panel,
+        // the right-click menu and the drag-select pill from the SAME
+        // server-rendered list, so there is no per-surface hand-picked row.
+        if (resolved.sink === "board") {
+          setAddToBoard(target);
+          return;
+        }
         inspectorRef.current?.openTab("notes");
         toast.ok("bookmarks live in the rail's notes tab");
         return;
@@ -3339,6 +3383,12 @@ export default function Reader() {
     // V71-E2 — walk the active usages set from anywhere the reader is up.
     "usages.next": () => stepUsages(1),
     "usages.prev": () => stepUsages(-1),
+    // V74-L2 — `Space b a`: add what is under the caret to a board, without
+    // going through the menu first. It asks the SAME `/api/actions` the panel
+    // asks and takes the default target (index 0, "the one the gesture
+    // implies" — `actions.rs`), so the leader and the menu can never disagree
+    // about what "this" means.
+    "boards.add": () => void addCaretToBoard(),
   });
 
   // F5 — Esc closes the mobile reader-tools sheet (mirrors `MobileDrawer`'s
@@ -4456,6 +4506,13 @@ export default function Reader() {
             asSheet={isMobile}
           />
         ))}
+      {addToBoard && (
+        <AddToBoardDialog
+          repo={repo}
+          target={addToBoard}
+          onClose={() => setAddToBoard(null)}
+        />
+      )}
       {saveWorkspaceOpen &&
         (() => {
           const lines = capturedWorkspaceLines();

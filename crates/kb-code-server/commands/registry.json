@@ -85,9 +85,10 @@
         "browser",
         "canvas",
         "player",
-        "lens"
+        "lens",
+        "boards"
       ],
-      "note": "which board surface is mounted"
+      "note": "which board surface is mounted. V74-L2 added `boards` — the kbc-canvas/1 board (`~boards/{slug}`), which is a DIFFERENT surface from `canvas` (V3.4-C2's frozen working-set canvas) and gates its own rows so the two sets are provably disjoint."
     },
     {
       "key": "help.open",
@@ -210,6 +211,14 @@
         "dossier"
       ],
       "note": "which CENTER mode the shell has mounted (`web-code/src/desk/centerModes.ts`'s SHIPPED_CENTER_MODES). V72-G1.2 added `dossier` (`?ent=`); the dossier's own keys gate on it so they are inert everywhere else."
+    },
+    {
+      "key": "walkthrough",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "V74-L2 — a kbc-canvas/1 board is running its walkthrough (`?step=`). It splits the board's own key set in two PROVABLY DISJOINT halves (`!walkthrough` vs `walkthrough`), which is what lets `k` mean \"previous card\" while reading and \"previous step\" while walking without either row shadowing the other."
     }
   ],
   "scopes": [
@@ -320,7 +329,7 @@
       "id": "board",
       "title": "Board + players",
       "depth": 20,
-      "covers": "the non-text centre modes: `~canvas`, `~browser`, and the tour/story players",
+      "covers": "the non-text centre modes: `~canvas`, `~browser`, `~boards` (kbc-canvas/1) and the tour/story players",
       "coactive_with": [
         "global",
         "tree",
@@ -2098,6 +2107,7 @@
       "vim_kind": "move",
       "ratified_conflicts": [
         "board.row-next",
+        "boards.card-next",
         "branches.next",
         "diff.hunk-next",
         "lens.row-next",
@@ -2129,10 +2139,12 @@
       "vim_kind": "move",
       "ratified_conflicts": [
         "board.row-prev",
+        "boards.card-prev",
         "branches.prev",
         "diff.hunk-prev",
         "lens.row-prev",
-        "review.prev"
+        "review.prev",
+        "walkthrough.prev"
       ]
     },
     {
@@ -2831,7 +2843,10 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
-      "vim_kind": "search-step"
+      "vim_kind": "search-step",
+      "ratified_conflicts": [
+        "walkthrough.next"
+      ]
     },
     {
       "id": "find.prev",
@@ -3046,7 +3061,10 @@
       "affordance_anchor": "peek.context-more",
       "lifecycle": "shipped",
       "dispatch": "surface",
-      "note": "The context dial on the inline peek (§P7's inline expansion): 12 to 30 lines in steps. Executed by the widget itself, which holds real DOM focus while open (the `PeekPanel` precedent) — `when: peek.inline` keeps the key unbound everywhere else."
+      "note": "The context dial on the inline peek (§P7's inline expansion): 12 to 30 lines in steps. Executed by the widget itself, which holds real DOM focus while open (the `PeekPanel` precedent) — `when: peek.inline` keeps the key unbound everywhere else.",
+      "ratified_conflicts": [
+        "boards.context-more"
+      ]
     },
     {
       "id": "peek.context-less",
@@ -3073,7 +3091,10 @@
       "affordance_anchor": "peek.context-less",
       "lifecycle": "shipped",
       "dispatch": "surface",
-      "note": "See `peek.context-more`."
+      "note": "See `peek.context-more`.",
+      "ratified_conflicts": [
+        "boards.context-less"
+      ]
     },
     {
       "id": "hierarchy.callers",
@@ -3870,7 +3891,9 @@
       "vim_kind": "cb-pin-pane",
       "note": "§P7's commitment ladder: only a peek→pane promotion creates a provisional pane, and it auto-pins on the SECOND interaction anyway. `p` is free in a reader (vim's `p` is paste, and nothing here can mutate a document). The chip on the pane says the key literally — VS Code's italic preview tab is the counter-example the research names: the signal must be loud and the promotion gesture discoverable.",
       "ratified_conflicts": [
-        "player.autoplay"
+        "boards.walkthrough",
+        "player.autoplay",
+        "walkthrough.play"
       ]
     },
     {
@@ -3902,6 +3925,7 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-next",
+        "boards.card-next",
         "branches.next",
         "lens.row-next",
         "move.down",
@@ -3937,10 +3961,12 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-prev",
+        "boards.card-prev",
         "branches.prev",
         "lens.row-prev",
         "move.up",
-        "review.prev"
+        "review.prev",
+        "walkthrough.prev"
       ]
     },
     {
@@ -4584,7 +4610,10 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface",
-      "note": "V73-K2a. `z` is a PURE-vim prefix in reader scope (`z b`/`z t`/`z z`, all vim_kind), so `shouldWithholdFromBuffer` still withholds it inside a CodeView and these diff-scope rows never reach the buffer — the review diff page has no CodeView at all."
+      "note": "V73-K2a. `z` is a PURE-vim prefix in reader scope (`z b`/`z t`/`z z`, all vim_kind), so `shouldWithholdFromBuffer` still withholds it inside a CodeView and these diff-scope rows never reach the buffer — the review diff page has no CodeView at all.",
+      "ratified_conflicts": [
+        "boards.fold"
+      ]
     },
     {
       "id": "diff.unfold",
@@ -4610,7 +4639,10 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "boards.unfold"
+      ]
     },
     {
       "id": "diff.fold-toggle",
@@ -4636,7 +4668,10 @@
       "mutation": "none",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "boards.fold-toggle"
+      ]
     },
     {
       "id": "diff.context-cycle",
@@ -5061,6 +5096,7 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.drill",
+        "boards.card-open",
         "branches.compare"
       ]
     },
@@ -5091,6 +5127,7 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-next",
+        "boards.card-next",
         "branches.next",
         "diff.hunk-next",
         "lens.row-next",
@@ -5124,10 +5161,12 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-prev",
+        "boards.card-prev",
         "branches.prev",
         "diff.hunk-prev",
         "lens.row-prev",
-        "move.up"
+        "move.up",
+        "walkthrough.prev"
       ]
     },
     {
@@ -5322,6 +5361,7 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-next",
+        "boards.card-next",
         "diff.hunk-next",
         "lens.row-next",
         "move.down",
@@ -5355,10 +5395,12 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-prev",
+        "boards.card-prev",
         "diff.hunk-prev",
         "lens.row-prev",
         "move.up",
-        "review.prev"
+        "review.prev",
+        "walkthrough.prev"
       ]
     },
     {
@@ -5388,6 +5430,7 @@
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.drill",
+        "boards.card-open",
         "review.open-diff"
       ]
     },
@@ -7080,6 +7123,582 @@
       "lifecycle": "shipped",
       "dispatch": "central",
       "note": "The mirror of `] s`; see that row for why neither carries a `vim_kind`."
+    },
+    {
+      "id": "boards.card-next",
+      "title": "Focus the next card",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "j"
+        ],
+        "plain": [
+          "ArrowDown"
+        ],
+        "helix": [
+          "j"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && !walkthrough",
+      "cli": "none:browser-local card focus",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "Reading order: the board's own `steps` first, then authored order (`lib/boards.ts`'s `readingOrder`) — never a sort the SPA invented.",
+      "ratified_conflicts": [
+        "branches.next",
+        "diff.hunk-next",
+        "move.down",
+        "review.next"
+      ]
+    },
+    {
+      "id": "boards.card-prev",
+      "title": "Focus the previous card",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "ArrowUp"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && !walkthrough",
+      "cli": "none:browser-local card focus",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.prev",
+        "diff.hunk-prev",
+        "move.up",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "boards.card-open",
+      "title": "Open the focused card's target",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Enter"
+        ],
+        "plain": [
+          "Enter"
+        ],
+        "helix": [
+          "Enter"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && !walkthrough",
+      "cli": "kb-code canvas show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "A card with no honest destination (an orphan, or an `annotation`/`turn`/`bookmark` this SPA has no route for) says so instead of jumping.",
+      "ratified_conflicts": [
+        "branches.compare",
+        "review.open-diff"
+      ]
+    },
+    {
+      "id": "boards.fold",
+      "title": "Fold the focused card",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "z c"
+        ],
+        "plain": [
+          "z c"
+        ],
+        "helix": [
+          "z c"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "none:browser-local fold state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "diff.fold"
+      ]
+    },
+    {
+      "id": "boards.unfold",
+      "title": "Expand the focused card",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "z o"
+        ],
+        "plain": [
+          "z o"
+        ],
+        "helix": [
+          "z o"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "none:browser-local fold state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "diff.unfold"
+      ]
+    },
+    {
+      "id": "boards.fold-toggle",
+      "title": "Toggle the focused card's fold",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "z a"
+        ],
+        "plain": [
+          "z a"
+        ],
+        "helix": [
+          "z a"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "none:browser-local fold state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "diff.fold-toggle"
+      ]
+    },
+    {
+      "id": "boards.fold-all",
+      "title": "Fold every card",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "z M"
+        ],
+        "plain": [
+          "z M"
+        ],
+        "helix": [
+          "z M"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "none:browser-local fold state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "boards.unfold-all",
+      "title": "Expand every card",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "z R"
+        ],
+        "plain": [
+          "z R"
+        ],
+        "helix": [
+          "z R"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "none:browser-local fold state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "boards.context-more",
+      "title": "Show this card's ± context range",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "+"
+        ],
+        "plain": [
+          "+"
+        ],
+        "helix": [
+          "+"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code canvas show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "The expansion is FETCHED (`?ctx=1`), never synthesised: the daemon sends `context_snippet` only when the read asked for it.",
+      "ratified_conflicts": [
+        "peek.context-more"
+      ]
+    },
+    {
+      "id": "boards.context-less",
+      "title": "Back to this card's primary range",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "-"
+        ],
+        "plain": [
+          "-"
+        ],
+        "helix": [
+          "-"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code canvas show",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "peek.context-less"
+      ]
+    },
+    {
+      "id": "boards.thread",
+      "title": "Open this node's thread",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Space b t"
+        ],
+        "plain": [
+          "Space b t"
+        ],
+        "helix": [
+          "Space b t"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code annotate",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "A node thread REUSES the annotations store — the node's `thread_id` is an `annotations.id`, and there is no second comments table."
+    },
+    {
+      "id": "boards.pin",
+      "title": "Pin the focused card here",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Space b p"
+        ],
+        "plain": [
+          "Space b p"
+        ],
+        "helix": [
+          "Space b p"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code canvas apply",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "The ONLY door through which a coordinate reaches the daemon. Writes through the loopback-only `apply`."
+    },
+    {
+      "id": "boards.unpin",
+      "title": "Release the focused card's pin",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Space b u"
+        ],
+        "plain": [
+          "Space b u"
+        ],
+        "helix": [
+          "Space b u"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code canvas apply",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface"
+    },
+    {
+      "id": "boards.accept",
+      "title": "Accept this board",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Space b A"
+        ],
+        "plain": [
+          "Space b A"
+        ],
+        "helix": [
+          "Space b A"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code canvas accept",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "D21: an agent-proposed board is PENDING until a human accepts it. LOOPBACK-ONLY, and the button is absent for a caller served from a non-loopback origin."
+    },
+    {
+      "id": "boards.sweep",
+      "title": "Check this board for drift",
+      "aka": [],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Space b s"
+        ],
+        "plain": [
+          "Space b s"
+        ],
+        "helix": [
+          "Space b s"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards",
+      "cli": "kb-code canvas sweep",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "A READ. The sweep re-resolves and reports; it never repairs what it finds, because a gate that repaired could not fail."
+    },
+    {
+      "id": "boards.walkthrough",
+      "title": "Walk this board",
+      "aka": [
+        "present",
+        "walkthrough"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "p"
+        ],
+        "plain": [
+          "p"
+        ],
+        "helix": [
+          "p"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && !walkthrough",
+      "cli": "none:browser-local presentation mode",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "Needs the board's own `steps`; a board with no reading order says so rather than inventing one.",
+      "ratified_conflicts": [
+        "pane.pin"
+      ]
+    },
+    {
+      "id": "walkthrough.next",
+      "title": "Next step",
+      "aka": [
+        "next step"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "n"
+        ],
+        "plain": [
+          "n"
+        ],
+        "helix": [
+          "n"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && walkthrough",
+      "cli": "none:browser-local presentation mode",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "find.next"
+      ]
+    },
+    {
+      "id": "walkthrough.prev",
+      "title": "Previous step",
+      "aka": [
+        "previous step"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "k"
+        ],
+        "plain": [
+          "k"
+        ],
+        "helix": [
+          "k"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && walkthrough",
+      "cli": "none:browser-local presentation mode",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "branches.prev",
+        "diff.hunk-prev",
+        "move.up",
+        "review.prev"
+      ]
+    },
+    {
+      "id": "walkthrough.play",
+      "title": "Play / pause the walkthrough",
+      "aka": [
+        "play",
+        "pause"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "p"
+        ],
+        "plain": [
+          "p"
+        ],
+        "helix": [
+          "p"
+        ]
+      },
+      "scope": "board",
+      "when": "board == boards && walkthrough",
+      "cli": "none:browser-local presentation mode",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "One step every six seconds, with a visible indicator; ANY key stops the run.",
+      "ratified_conflicts": [
+        "pane.pin"
+      ]
+    },
+    {
+      "id": "nav.boards",
+      "title": "Go to boards",
+      "aka": [
+        "boards",
+        "map",
+        "canvas boards"
+      ],
+      "group": "Go to",
+      "keys": {
+        "vim": [
+          "Space g w"
+        ],
+        "plain": [
+          "Space g w"
+        ],
+        "helix": [
+          "Space g w"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code canvas boards",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "`w` for the WALK a board is: D10's own framing is that a board is something an agent authors and a human walks. `Space g m` went to `nav.comments` (V72-J2) and `Space g c` stays the FROZEN working-set canvas (`~canvas`), which is a different surface."
+    },
+    {
+      "id": "boards.add",
+      "title": "Add this to a board…",
+      "aka": [
+        "add to board",
+        "collect"
+      ],
+      "group": "Board",
+      "keys": {
+        "vim": [
+          "Space b a"
+        ],
+        "plain": [
+          "Space b a"
+        ],
+        "helix": [
+          "Space b a"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code canvas apply",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "Asks the same `/api/actions` the `.` panel asks and takes the DEFAULT target, so the leader and the menu can never disagree about what \"this\" is. Registered in `Reader.tsx` (the only surface with a caret); elsewhere CommandRoot's \"nothing owns it here\" branch leaves the key alone."
     }
   ]
 }
