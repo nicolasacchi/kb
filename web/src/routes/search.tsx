@@ -522,7 +522,9 @@ export default function SearchRoute() {
                         return (
                           <div
                             key={`${g.kb}:${h.id}`}
-                            ref={(el) => registerCardEl(flatIndex, el)}
+                            ref={el => {
+                              registerCardEl(flatIndex, el);
+                            }}
                             className={isFocused ? "kb-search-card--focused" : undefined}
                             role="option"
                             aria-selected={isFocused}
@@ -552,7 +554,9 @@ export default function SearchRoute() {
                   return (
                     <div
                       key={h.id}
-                      ref={(el) => registerCardEl(i, el)}
+                      ref={el => {
+                        registerCardEl(i, el);
+                      }}
                       className={isFocused ? "kb-search-card--focused" : undefined}
                       role="option"
                       aria-selected={isFocused}
