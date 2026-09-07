@@ -85,6 +85,11 @@ const OWNER_FILES: Readonly<Record<string, readonly string[]>> = {
   ],
   search: ["routes/Search.tsx", "routes/searchCommands.ts"],
   recipe: ["routes/Recipes.tsx", "routes/recipeCommands.ts"],
+  // V75-M3 — the `~branches` views surface. `BranchViews.tsx` holds the
+  // handler map (`branchesCommands.ts`'s `BranchesHandlers` `Record` is
+  // what makes a missing one a COMPILE error, not a test failure); the
+  // contract file is listed beside it for the same reason `recipe`'s is.
+  branches: ["components/branches/BranchViews.tsx", "routes/branchesCommands.ts"],
 };
 
 /// A row that binds no key in any preset documents a passive behaviour, not

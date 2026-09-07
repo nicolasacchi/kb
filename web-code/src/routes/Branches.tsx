@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useParams } from "react-router-dom";
 import BranchesHero from "../components/branches/BranchesHero";
+import BranchViews from "../components/branches/BranchViews";
 import BrowseAllBranches from "../components/branches/BrowseAllBranches";
 import RankedBranchList from "../components/branches/RankedBranchList";
 import EmptyState from "../components/EmptyState";
@@ -8,15 +9,27 @@ import { Icon } from "../components/icons";
 import { useBranches } from "../hooks/useBranches";
 import { useWorkspaceGroups } from "../hooks/useSets";
 import { readerUrl } from "../lib/breadcrumbs";
+import "../styles/branches.css";
 import "../styles/history.css";
 import "../styles/landing.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 
-/// `/r/:repo/~branches` — V4.L2 three-zone landing: default-branch hero,
-/// suggested ranking, then today's table demoted into a browse-all
-/// `<details>`. Ahead/behind compare-link derivation still lives in
-/// `BranchAhead`/`BranchBehind` (unchanged; `time.spec.ts` selects the
-/// moved table cells).
+/// `/r/:repo/~branches`.
+///
+/// V75-M3 (D15) makes `branch-facts/1`'s VIEWS the primary surface: eight
+/// URL-addressable views with the membership rules on the wire, reason
+/// chips, a classed base per row, favourites, prefix folding, the conflict
+/// radar and "compare with common base".
+///
+/// V4.L2's three zones are KEPT beneath it, inside one `<details>`: the
+/// hero (still first — it answers a different question, "what is the
+/// default branch"), then the suggested ranking and today's full table.
+/// They are superseded, not deleted — `branches/1` is a separate, unchanged
+/// endpoint, `time.spec.ts` and `branches-landing.spec.ts` select their
+/// cells, and removing a working surface in the same unit that adds its
+/// replacement would leave nothing to compare against. The `<details>`
+/// defaults open on a small repo, matching `BrowseAllBranches`'s own
+/// existing rule so the e2e fixture's visibility is unchanged.
 export default function Branches() {
   // V70-A6 — root CLAUDE.md #31, ported: this list scrolls the WINDOW, so
   // one offset keyed on the full URL is the whole story. Back onto it lands
@@ -63,13 +76,19 @@ export default function Branches() {
         />
       ) : (
         <>
-          <RankedBranchList repo={repo} defaultBranch={defaultBranch} workspaceCountsByRef={workspaceCountsByRef} />
-          <BrowseAllBranches
-            repo={repo}
-            defaultBranch={defaultBranch}
-            rows={rows}
-            workspaceCountsByRef={workspaceCountsByRef}
-          />
+          <BranchViews repo={repo} />
+          <details className="kbc-branches__legacy" data-kbc-branches-legacy open={rows.length <= 5}>
+            <summary className="kbc-branches__legacy-summary">
+              Suggested ranking and the full table (the v4 landing)
+            </summary>
+            <RankedBranchList repo={repo} defaultBranch={defaultBranch} workspaceCountsByRef={workspaceCountsByRef} />
+            <BrowseAllBranches
+              repo={repo}
+              defaultBranch={defaultBranch}
+              rows={rows}
+              workspaceCountsByRef={workspaceCountsByRef}
+            />
+          </details>
         </>
       )}
     </div>

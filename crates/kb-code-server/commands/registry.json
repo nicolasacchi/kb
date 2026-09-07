@@ -5398,7 +5398,7 @@
       "cli": "kb-code branches",
       "mutation": "none",
       "side_effect": "none",
-      "lifecycle": "planned",
+      "lifecycle": "shipped",
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-next",
@@ -5407,7 +5407,8 @@
         "lens.row-next",
         "move.down",
         "review.next"
-      ]
+      ],
+      "owner": "branches"
     },
     {
       "id": "branches.prev",
@@ -5432,7 +5433,7 @@
       "cli": "kb-code branches",
       "mutation": "none",
       "side_effect": "none",
-      "lifecycle": "planned",
+      "lifecycle": "shipped",
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.row-prev",
@@ -5442,7 +5443,8 @@
         "move.up",
         "review.prev",
         "walkthrough.prev"
-      ]
+      ],
+      "owner": "branches"
     },
     {
       "id": "branches.compare",
@@ -5467,13 +5469,14 @@
       "cli": "kb-code compare",
       "mutation": "none",
       "side_effect": "none",
-      "lifecycle": "planned",
+      "lifecycle": "shipped",
       "dispatch": "surface",
       "ratified_conflicts": [
         "board.drill",
         "boards.card-open",
         "review.open-diff"
-      ]
+      ],
+      "owner": "branches"
     },
     {
       "id": "branches.start-review",
@@ -5495,11 +5498,199 @@
       "targets": [
         "branch"
       ],
-      "cli": "kb-code review start",
+      "cli": "kb-code branch review",
       "mutation": "metadata",
       "side_effect": "none",
-      "lifecycle": "planned",
-      "dispatch": "surface"
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches"
+    },
+    {
+      "id": "branches.view-next",
+      "title": "Next view (current/mine/agent/…)",
+      "aka": [
+        "cycle view",
+        "next view"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "L"
+        ],
+        "plain": [
+          "L"
+        ],
+        "helix": [
+          "L"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code branch facts --view <view>",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches",
+      "note": "The eight views are a CLOSED vocabulary (`facts::View`) and `?view=` is the whole selection, so cycling is a URL write — a reload, a Back and a shared link all show the same rows."
+    },
+    {
+      "id": "branches.view-prev",
+      "title": "Previous view",
+      "aka": [
+        "cycle view back"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "H"
+        ],
+        "plain": [
+          "H"
+        ],
+        "helix": [
+          "H"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code branch facts --view <view>",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches",
+      "note": "Wraps, like its twin."
+    },
+    {
+      "id": "branches.favourite",
+      "title": "Star / unstar the focused branch",
+      "aka": [
+        "star",
+        "favourite",
+        "pin branch"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "P"
+        ],
+        "plain": [
+          "P"
+        ],
+        "helix": [
+          "P"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code branch fav --repo <repo> --ref <ref>",
+      "mutation": "metadata",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches",
+      "note": "Idempotent in both directions server-side, so a double press is an honest no-op (`changed: false`), never a 409. Daemon-side rather than browser-local because the CLI must see the same star (D16 keeps PREFERENCES browser-local; a branch star is a repo fact the agent half of the loop reads)."
+    },
+    {
+      "id": "branches.radar",
+      "title": "Open the conflict radar against this branch",
+      "aka": [
+        "conflicts",
+        "radar",
+        "merge check all"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "R"
+        ],
+        "plain": [
+          "R"
+        ],
+        "helix": [
+          "R"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "kb-code branch conflicts --repo <repo> --against <ref>",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches",
+      "note": "Up to 40 `merge-tree` runs against a per-pair scratch ODB — so it fires only when asked, never on page load, and the panel renders the server's own `N of M computed` caption rather than a count it derived."
+    },
+    {
+      "id": "branches.fold-prefix",
+      "title": "Fold / unfold the focused row's name prefix",
+      "aka": [
+        "fold prefix",
+        "group by prefix"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "Z"
+        ],
+        "plain": [
+          "Z"
+        ],
+        "helix": [
+          "Z"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "none:prefix folding selects among the counts `branch-facts/1` already returned in `prefixes` — there is no second call to make",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches",
+      "note": "`?prefix=` is a server filter; the counts come off the wire, so the fold never derives a number of its own."
+    },
+    {
+      "id": "branches.density",
+      "title": "Toggle reading density (comfortable / compact)",
+      "aka": [
+        "density",
+        "compact"
+      ],
+      "group": "Branches",
+      "keys": {
+        "vim": [
+          "D"
+        ],
+        "plain": [
+          "D"
+        ],
+        "helix": [
+          "D"
+        ]
+      },
+      "scope": "branches",
+      "targets": [
+        "branch"
+      ],
+      "cli": "none:a reading-density preference is browser-local by D16's own ruling — v7.0 preferences never become a daemon-side profile",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "owner": "branches",
+      "note": "D16's reading contract. Persisted in localStorage and mirrored into `?density=` so a shared link carries it."
     },
     {
       "id": "board.pane-prev",
