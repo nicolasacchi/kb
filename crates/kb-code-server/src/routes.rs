@@ -238,6 +238,14 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, message)
     }
 
+    /// V73-K3 — the human message, for a caller that FOLDS an error into a
+    /// degraded lane instead of returning it (`review_timeline`'s `turns`
+    /// lane: a join that could not run must caption itself, not 500 the
+    /// whole stream). Read-only; the wire shape is unchanged.
+    pub(crate) fn message_text(&self) -> &str {
+        &self.message
+    }
+
     /// DCB W1.C — attach a machine-readable `reason` (D11). Builder-style, so
     /// every existing constructor and call site stays untouched.
     pub(crate) fn with_reason(mut self, reason: &'static str) -> Self {

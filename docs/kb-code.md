@@ -117,6 +117,10 @@ decomposed into named terms, never a daemon-authored quality verdict.
 pure composition of existing rows (`review_created`/`pr_bound`/`patchset`/
 `findings_import`/`finding_added`/`disposition`/`verdict`/
 `finding_published`/`verdict_published`/`comment`) — nothing new is stored.
+**v7.3 widens it to `review-timeline/2`** (the PR body, working-tree
+comments, compose revisions, the agent report, claims, GitHub comments and
+the hunk↔turn join, plus filters and paging) — additively, every v1 payload
+key unchanged; see [The stream](#the-stream--timeline-v2-pseudo-files-claims-hunkturn-v73-track-k).
 `kb-code review analytics [--repo R] [--from UNIX] [--to UNIX]` (`GET
 /api/reviews/analytics`, bearer) is the disposition calibration instrument —
 a severity×disposition matrix, acceptance rates, weekly buckets, latency,
@@ -1832,3 +1836,270 @@ landed them as columns and the document read surfaced them, but the wire
 every finding CARD reads did not, so the two axes D9 added were storable and
 unreadable. They are additive — `"issue"` / `false` / `null` on every
 pre-V0034 row, which is what those rows always meant.
+
+## The stream — timeline v2, pseudo-files, claims, hunk↔turn (v7.3, Track K)
+
+Design of record: D9 + D9-a + D18 + D25 of
+`docs/research/kb-code-v7-continuum-2026-09.html`. Four surfaces that all
+answer one question — *what happened to this review, and who did it* — and
+one CLI verb that migrates the old artifacts into it.
+
+### `review-timeline/2` — one ordered stream
+
+`GET /api/reviews/{id}/timeline` (bearer) was a lifecycle changelog; it is
+now the whole conversation. The widening is **additive**: every
+`review-timeline/1` event keeps its `at` field and its own payload keys
+byte-for-byte (pinned by a test), the `events` array is still there, and
+what is new is a typed envelope, five more lanes, and narrowing.
+
+Every event carries:
+
+```json
+{ "at": 1757000000, "ts": 1757000000, "kind": "comment", "lane": "comments",
+  "author": { "kind": "human", "name": "you" },
+  "ref": "code:app/models/order.rb", "body_md": "why cents?",
+  "drift": null, "…kind-specific keys": "…" }
+```
+
+`ts` is `at` under the name the rest of v7 uses; both are emitted so a v1
+reader keeps working. `author.kind` is `human | agent | system`, derived
+from the author NAME through kb's own closed harness vocabulary
+(`kb_core::sessions::HARNESSES` + `agent`) — **a name convention, not
+authentication**; kb-code authenticates nobody and root CLAUDE.md's
+"identity is attribution, not authorization" ruling is unchanged. `ref` is a
+`kbc-review/1` ref (K1's grammar) when the event has a location, and is
+absent — never fabricated — when it does not. `drift` appears only when the
+daemon can name BOTH sides of what moved.
+
+| lane | kinds | source |
+|---|---|---|
+| `lifecycle` | `review_created` `pr_bound` `patchset` | the review, its PR binding, its patchsets |
+| `pr_body` | `pr_body` | the `pr_meta_json` snapshot |
+| `findings` | `findings_import` `finding_added` `disposition` `finding_published` | `review_findings` |
+| `verdict` | `verdict` `verdict_published` | `reviews` |
+| `comments` | `comment` | review-scoped `annotations` |
+| `wt_comments` | `wt_comment` | working-tree `annotations` on this review's own files |
+| `document` | `doc_revision` | `review_docs` — K1's append-only compose chain |
+| `report` | `report` | `reviews.report_json` |
+| `claims` | `claim` | `claims` (V0035, below) |
+| `github` | `github_comment` | LIVE, via the same `list_pull_comments` call `/github-threads` makes |
+| `turns` | `turn` | the hunk↔turn join — `?hunk=` only, LOOPBACK only |
+
+**Every lane reports its own state** in `sources[]` (`ok` · `skipped` · 
+`refused` · `degraded`), with a reason on anything that is not `ok`. A lane
+that failed is never silently empty — the v6.0 One-Inbox per-lane
+precedent, so a GitHub outage cannot make a timeline quietly lie about what
+was said.
+
+Two lanes are conditional, each for a stated reason. **`github`** is a LIVE
+network call the other ten are not: it is on for a PR-bound review, off
+otherwise, `?github=0` turns it off, and a failure degrades the lane rather
+than the request. Thread NESTING stays on `/github-threads` — a timeline is
+chronological by definition, so re-parenting replies here would be a second,
+disagreeing answer. **`turns`** needs `?hunk=<kbc-hunkid/1>` **and**
+loopback, because the join reads raw transcript content (D19's
+`raw-transcript` sensitivity class); off loopback the lane is `refused` with
+that reason, never absent.
+
+Narrowing: `?kind=` (CSV over the closed vocabulary — an unknown name is a
+400 NAMING it, never an empty page) · `?author=` (`human|agent|system` or a
+literal name) · `?since=`/`?until=` (an inverted window is a 400) ·
+`?limit=`/`?offset=`. `total` is the count AFTER filtering and BEFORE
+paging, so a page can say what it is a page of. There is deliberately no
+`include_superseded`: a timeline is a HISTORY, and a superseded finding's
+own import and disposition still happened.
+
+```
+kb-code review timeline ID [--kind K,K] [--author A] [--since T] [--until T] \
+    [--limit N] [--offset N] [--github true|false] [--hunk ID] [--ps N] [--json]
+```
+
+### Pseudo-files — `kbc-pseudo/1`
+
+Four things a reviewer must read are not files in the tree, so until now
+they could be displayed but never *addressed*: you could not cite line 12 of
+a PR body. `GET /api/reviews/{id}/pseudo[/{name}]` (bearer) gives each one a
+name under the reserved `~review/` prefix and a **real git blob hash** —
+literally `ingest::git_blob_hash` over the rendered bytes, the same function
+the mirror index uses.
+
+| name | rendered from |
+|---|---|
+| `~review/pr-body.md` | the `pr_meta_json` snapshot's `body`, VERBATIM (no header, so a line number means the line the author wrote) |
+| `~review/review.md` | the current `kbc-review/1` document revision, front matter and body |
+| `~review/findings.json` | findings v2 in exactly the shape `compose --findings` accepts (superseded excluded, counted) |
+| `~review/commits.md` | `git log <base>..<tip>` with each commit's trailers, via git's own `%(trailers:only,unfold)` |
+
+Because the hash is a real blob hash, `[[code:~review/pr-body.md:12@<sha>]]`
+resolves through the SAME card ladder a tracked path takes: `pinned`/`exact`
+on byte equality, `pinned`/`likely` when the ref pinned no blob, `orphan`
+otherwise. There is deliberately **no carry-forward rung** for a
+pseudo-file: it is regenerated whole on every read, so "the same line,
+moved" is not a thing that happened, and re-anchoring prose into a
+regenerated document would be a guess with nothing behind it. A comment
+anchored to a pseudo path resolves through
+`review_pseudo::resolve_on_pseudo`, which is `review_comments::
+resolve_for_ps_with_content` given the pseudo bytes — not a second matcher.
+
+Nothing is stored. A consequence worth stating rather than discovering: the
+PR body snapshot is wholesale-replaced by `review sweep`, so this daemon has
+**no revision chain** for it. A change is DETECTABLE (the `blob_sha` moves,
+and refs pinned to the old one stop reading `pinned`) but the previous text
+is not recoverable, and no surface pretends otherwise. All four names always
+exist; two of them may be empty, `present: false`, with a `reason`.
+
+The derived reading order gains **chapter zero**, "The review itself",
+listing all four before the diff — a reviewer who reads the code before the
+description is reading it without the question it was meant to answer.
+
+```
+kb-code review pseudo ID [NAME] [--ps N] [--json]
+```
+
+### `kbc-claim/1` — the agent prose register
+
+An agent reading code produces two kinds of output. One is a FACT this
+daemon can re-derive, and the crate's discipline is that such a fact carries
+a class minted per request and is never cached. The other is PROSE — "this
+is the retry path", "we chose the queue over a cron because…", "the
+alternative I rejected was…" — which cannot be re-derived, so it must be
+stored, and *because* it cannot be re-derived it must never be trusted the
+way a derivation is.
+
+ONE table (`claims`, migration V0035), and that is the point. D18 names six
+renderings — commit-time explain cards, the rejected-alternatives ledger,
+decision threads, branch stories, trail notes, entity answers — and rules
+that each is a KIND plus a rendering, never a table.
+
+```
+{ id, repo, subject_kind, subject, subject_path?, review_id?,
+  kind, body_md, confidence?, evidence[], session_id?, model?, blob_sha?,
+  state, caption, current_blob?, created_at }
+```
+
+- `subject_kind` — `path | sym | ent | commit | hunk | review | branch`
+- `kind` — `explain | alternative | decision | story | note | answer`
+- `evidence[]` — `kbc-review/1` refs, validated on write and stored as
+  written (a resolved position is a per-request derivation; persisting one
+  would make a stale answer indistinguishable from a fresh one)
+- `confidence` — the AGENT'S OWN declaration, 0..=1, surfaced verbatim.
+  Nothing multiplies it into anything.
+
+**Three rules.** *(a) Surfaced, never scored.* A claim is rendered beside
+the fact it is about and is never a ranking term, a boost, a filter default
+or a trust class. The pin is structural: a source scan over this crate's
+ranking modules fails by file if any of them so much as names `claims`.
+*(b) The class is computed per request and is not a column.* There is no
+`trust` column, exactly as `lane_facts` and `entity_defs` have none. What is
+stored is the WITNESS — `blob_sha`, the bytes the author was looking at —
+and the read turns it into `pinned` / `drifted` / `unanchored` by comparing
+with the file's live blob. A drifted claim is shown with a caption naming
+BOTH blobs, never hidden and never re-anchored. `unanchored` is the honest
+answer, not a failure: a decision about a branch has no blob. *(c) Writes
+are loopback-only and audited* (D22; root invariant #4 unamended).
+
+`claims` is deliberately **not** in `Store::delete_file`'s cascade, and that
+is a ruling. `rails_edges`/`entity_defs`/`lane_facts` are DERIVED rows whose
+path key would make a deleted file answer forever; a claim is AUTHORED
+content, like an `annotations` row. Deleting an agent's reasoning because
+the file it was about was deleted would destroy the record that explains
+why. A claim about a vanished path reads back `unanchored`, with the reason.
+
+| route | posture |
+|---|---|
+| `GET /api/claims?repo=&subject=&subject_kind=&path=&review=&kind=&limit=&offset=` | bearer |
+| `GET /api/claims/{id}` | bearer |
+| `POST /api/claims` | loopback-only |
+
+```
+kb-code claim add --repo R --subject ADDR --subject-kind K --kind K --body - \
+    [--confidence F] [--evidence REF]... [--session-id S] [--model M] \
+    [--blob SHA] [--review N] [--json]
+kb-code claim list --repo R [--subject|--path|--review|--kind|--limit|--offset] [--json]
+kb-code claim show ID [--json]
+```
+
+### hunk↔turn — two tiers, and a third answer
+
+`GET /api/reviews/{id}/hunks/{hunk}/turns` — **LOOPBACK-ONLY**. "Which agent
+turn wrote this hunk?" is a question the session↔commit join cannot answer:
+that join is per COMMIT, and a commit is many hunks by many turns.
+
+The hunk is addressed by its `kbc-hunkid/1` content address — the same one
+the SPA's per-hunk viewed state uses, now with a Rust implementation
+(`review_hunks`) pinned to the TypeScript one by a shared golden
+(`crates/kb-code-server/grammar/kbchunkid.golden.json`, read by both
+`review_hunks.rs` and `web-code/src/lib/hunkId.golden.test.ts`). The hash is
+FNV-1a 64 over **UTF-16 code units**, which is load-bearing rather than
+incidental: the TS side hashes `charCodeAt`, so a byte-based "simplification"
+would disagree only for diffs containing a non-ASCII character. The golden
+carries one.
+
+| tier | requires |
+|---|---|
+| `exact` | a captured `Edit`/`MultiEdit`/`Write`/`NotebookEdit` whose `file_path` resolves to the hunk's path, whose `old_string`/`new_string` appear byte-for-byte in the hunk's removed/added text, **and** whose session's commit join reaches a commit whose OWN diff reproduces this hunk id. Three independent witnesses: the bytes, the path, the commit. |
+| `likely` | the bytes match, but the path moved, or no commit join reaches the session, or the carrying commit could not be named exactly. Evidence, not proof. |
+| *(not claimed)* | anything else — an EMPTY list with a `reason`. There is no fuzzy third tier: a wrong `exact` is this crate's release blocker, and a "possible" tier is where both a wrong `exact` and an uncertain match would hide. |
+
+`commit_basis` says how well the carrying commit could be named:
+`hunk_exact` (a commit's own diff reproduces this content address — proof,
+not proximity), `path_in_range` (no single commit did, so the set is every
+commit in range touching this path — too wide for `exact`, so every match is
+capped at `likely`), or `none`. The byte match is CONTAINMENT, because
+git's `-U3` window routinely groups several edits into one hunk, and it is
+floored at `MIN_MATCH_BYTES` (24) — a one-line `old_string` of `end` is
+contained in half the hunks in a Ruby repository, so a match under the floor
+is not claimed at any tier.
+
+Nothing is persisted: the diff is re-derived, the ids re-minted, the tool
+inputs re-read from the JSONL, the tiers re-computed. `old_string`/
+`new_string` are file content out of a raw transcript, which is why the
+route is loopback-only; the bearer-visible half (session id, the
+`t-<uuid12>` turn id minted through kb-core's own derivation, tool, path,
+tier) is what the timeline's `turn` events carry, and the surrounding
+assistant text never leaves loopback. If the kb sibling is unreachable the
+commit join degrades honestly (`kb_lane: "degraded"`) and every tier caps at
+`likely`; it never fails the request.
+
+```
+kb-code review turns ID --hunk HUNKID [--ps N] [--json]
+```
+
+### `import-legacy` — migrating the old artifacts
+
+`kb-code review import-legacy <artifact.html>` (`kbc-legacy-import/1`) reads
+**only** the artifact's embedded `<script type="application/json">` machine
+block and maps it onto a `kbc-review/1` document plus a findings v2 sidecar.
+D9-a is a hard rule and the implementation makes it structural: the importer
+never parses the DOM. A finding recovered from a `<section class="finding">`
+is a GUESS, and a guessed finding goes on to inherit a slug, a human's
+disposition and a place in a GitHub thread.
+
+It is a LOCAL verb — no daemon, no route. The artifact is a file on the
+operator's box and the mapping is pure; uploading it to have it transformed
+and handed back would add a mutation-shaped route that mutates nothing.
+
+Accepted block ids, in probe order: `kb-review-data`, `review-data`,
+`pr-review-data`, `kbc-review`, `review-json`. Any other id is ignored, so
+an analytics blob on the same page can never be mistaken for the record. An
+artifact with no block **exits 3** naming the ids it looked for.
+
+The mapping is tolerant in ONE direction: key ALIASES are accepted; VALUES
+outside a closed kbc vocabulary are never silently coerced — each is mapped
+through a substitution that appears in `mapping[]`, or refused under
+`--strict`. A finding with no usable path is SKIPPED with a reason rather
+than given one. A legacy id is **never** adopted as a slug (slugs are minted
+from the review's own monotonic ledger and never reused); it survives in the
+rationale so the row stays traceable. The full field-by-field table lives in
+the skill's own doc.
+
+```
+kb-code review import-legacy ARTIFACT.html [--strict] [--tier T] \
+    [--out-doc F] [--out-findings F] [--review N] [--json]
+```
+
+The agent-layer wrapper is the **`/kb-review-migrate`** skill
+(`plugins/kb-code/skills/kb-review-migrate/`): it runs `import-legacy`,
+reports every substitution and every skipped finding by title, runs
+`review lint`, and hands the operator the exact `review compose` line. It
+never composes — the last look at a machine translation belongs to a human.

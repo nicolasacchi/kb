@@ -940,6 +940,96 @@ invariant #2 records).
     `lanes`' ingest route is absent from its own — a `RouteContract`
     describes a query-param surface, and a POST whose payload IS the
     contract has nothing for `params_accept_without` to say.
+23. **`kbc-claim/1` is SURFACED-NEVER-SCORED, a transcript-derived join is
+    LOOPBACK-ONLY, and a pseudo-file is a per-request VIEW with a real blob
+    hash** (V73-K3, `src/claims.rs` + `src/review_pseudo.rs` +
+    `src/review_turns.rs` + `src/review_hunks.rs`, migration V0035, design
+    D9/D18/D25). Four rules, separate to state and easy to break one at a
+    time.
+    (a) **Claims are surfaced, never scored, and the pin is a source scan.**
+    A claim is agent PROSE about code: it cannot be re-derived, so it is
+    stored, and *because* it cannot be re-derived it must never be trusted
+    the way a derivation is. It is rendered beside the fact it is about and
+    is never a ranking term, a boost, a filter default or a trust class.
+    `claims::tests::no_ranking_module_imports_the_claim_register` walks this
+    crate's ranking sources (`search/matcher.rs`, `search/unified.rs`,
+    `search/results.rs`, `review_inbox.rs`, `review_analytics.rs`,
+    `unified_inbox.rs`, `resolve.rs`, `usages2.rs`) and fails BY FILE if one
+    of them so much as names the module — a source scan with a scan's limits,
+    the same trade `git_argv_lint` (invariant 3) and
+    `every_declared_filter_key_has_a_consumer` (16(a)) make. `confidence` is
+    the AUTHOR'S declaration, printed verbatim and multiplied into nothing.
+    ONE table for all six of D18's renderings (explain cards, the
+    alternatives ledger, decision threads, branch stories, trail notes,
+    entity answers) — invariant 9's "a `reading_sets` row with `kind =
+    'workspace'` IS a workspace" one layer up; six tables would be six
+    cascade registrations and six chances to disagree with the Ladder.
+    `claims` has no `trust` column (invariant 13's posture): what is STORED
+    is the WITNESS, `blob_sha`, and `claims::ladder_state` turns it into
+    `pinned`/`drifted`/`unanchored` per request. A drifted claim is shown
+    with a caption naming BOTH blobs and is NEVER re-anchored — this module
+    runs no ladder of its own, because a claim is about a whole subject
+    rather than a line and guessing which lines it "really" meant is the
+    wrong-`exact` class. **`claims` is deliberately NOT in
+    `Store::delete_file`'s cascade**, unlike `rails_edges`/`entity_defs`/
+    `lane_facts`: those are DERIVED rows whose path key would answer forever;
+    a claim is AUTHORED content, like an `annotations` row, and deleting an
+    agent's reasoning because the file it was about was deleted would destroy
+    the record that explains why it was deleted.
+    (b) **A join that reads transcript TEXT is loopback-only, and its
+    non-exact tier says which witness is missing.** `review_turns` needs an
+    `Edit`'s `old_string`/`new_string` — file content out of a raw
+    transcript, D19's `raw-transcript` sensitivity class — so
+    `GET /api/reviews/{id}/hunks/{hunk}/turns` rides the `transcripts_api`
+    sub-router's gate, and the timeline's own `turns` lane re-checks
+    loopback per request and reports `refused` with that reason rather than
+    omitting itself. Those strings are read back from the JSONL on demand
+    (`transcripts::search::read_turn_tool_input`) and NEVER persisted: the
+    indexer's `TOOL_USE_TEXT_KEYS` allowlist keeps them out of the FTS
+    column on purpose and that stays true. `exact` requires THREE
+    independent witnesses — the bytes, the path, and a commit whose own diff
+    reproduces the hunk's content address — and anything short of all three
+    is `likely` NAMING the missing one; anything short of a byte match over
+    `MIN_MATCH_BYTES` is not claimed at all (an empty list with a reason,
+    never a fuzzy third tier). `CommitBasis` is the ceiling: a
+    `path_in_range` basis caps every match at `likely` because you cannot be
+    exact about which session made a change if you cannot say which commit
+    made it.
+    (c) **`kbc-hunkid/1` now has two implementations and therefore a
+    golden.** The address was minted client-side by V73-K2a because the
+    daemon stored it opaquely (`review_hunk_viewed`, V0031); the hunk↔turn
+    join makes the daemon FIND the hunk an id names, so `review_hunks` is a
+    second implementation of one grammar and
+    `grammar/kbchunkid.golden.json` is the ONE fixture both read
+    (`review_hunks.rs` and `web-code/src/lib/hunkId.golden.test.ts`) —
+    invariant 16(a)'s kbcq/1 discipline and 22(b)'s kbc-refs/1 discipline,
+    third instance. The fixture lives on the CRATE side because the Rust
+    builder stage's Docker context is `COPY crates ./crates`. The hash is
+    FNV-1a 64 over **UTF-16 code units**, not bytes, because the TS side
+    hashes `charCodeAt`; the golden carries a non-BMP case so a
+    "simplification" to bytes fails loudly rather than only for the diffs
+    that contain one.
+    (d) **A pseudo-file is a per-request VIEW with a REAL git blob hash, and
+    it has no carry rung.** `review_pseudo` renders four names under the
+    reserved `~review/` prefix from rows that already exist plus one
+    `git log`; it stores nothing (`rails/1`'s invariant 20(a), applied to a
+    review's prose). Its hash is literally `ingest::git_blob_hash` over the
+    rendered bytes — the SAME function the mirror index uses — which is what
+    lets `[[code:~review/pr-body.md:12@<sha>]]` be `pinned` by byte equality
+    on K1's own ladder with no second notion of identity, and what lets a
+    comment on a pseudo path resolve through
+    `review_comments::resolve_for_ps_with_content` rather than a second
+    matcher. There is deliberately NO `carried` state for a pseudo-file: it
+    is regenerated whole on every read, so "the same line, moved" never
+    happened, and re-anchoring prose into a regenerated document would be a
+    guess with nothing behind it. All four names ALWAYS exist; two may be
+    empty with a stated `reason`, which is a smaller surface than a set whose
+    membership varies. The PR body is kept as ONE `pr_meta_json` snapshot,
+    wholesale-replaced by `review sweep`, so there is **no revision chain**
+    for it — a change is detectable (the hash moves) but the previous text is
+    not recoverable, and no surface pretends otherwise.
+    `review_timeline::V73_K3_ROUTES` joins invariant 15's `RouteContract`
+    walk from both sides.
 
 ## When to update this file
 

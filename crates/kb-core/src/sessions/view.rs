@@ -1545,9 +1545,17 @@ fn find_and_remove(pending: &mut PendingCalls, id: &str) -> Option<usize> {
 }
 
 /// R2 — `"t-"` + first 12 hex chars (dashes stripped) of the record uuid.
-/// `pub(crate)`: `sessions::replay` reuses this verbatim to stamp each beat's
-/// best-effort `turn` ref (R7/S6) — see that module's `ReplayBeat::turn` doc.
-pub(crate) fn turn_id_from_uuid(uuid: &str) -> String {
+///
+/// `sessions::replay` reuses this verbatim to stamp each beat's best-effort
+/// `turn` ref (R7/S6) — see that module's `ReplayBeat::turn` doc.
+///
+/// **`pub` since V73-K3** (widened from `pub(crate)`, no behaviour change):
+/// kb-code's hunk↔turn join mints the SAME `t-<uuid12>` id so a match it
+/// reports addresses the turn `kb sessions read` addresses. Two copies of a
+/// three-line derivation would be two things to keep in step, and root
+/// invariant #11 makes this id part of a cross-daemon contract rather than
+/// an internal detail — so the derivation is exported rather than mirrored.
+pub fn turn_id_from_uuid(uuid: &str) -> String {
     let hex: String = uuid.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     format!("t-{}", &hex[..hex.len().min(12)])
 }
