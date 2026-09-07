@@ -6,6 +6,7 @@ import { Icon } from "../components/icons";
 import { useScopes } from "../hooks/useScopes";
 import { useTodos } from "../hooks/useTodos";
 import { readerUrl } from "../lib/breadcrumbs";
+import { commentsUrl } from "../lib/codeUrl";
 import { speedFilterItems } from "../lib/speedSearch";
 import "../styles/todos.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
@@ -89,6 +90,18 @@ export default function Todos() {
       <header className="kbc-todos__head">
         <h1 className="kbc-todos__title">TODOs — {repo}</h1>
         <p className="kbc-todos__hint">Comment markers from the live index (TODO / FIXME / …).</p>
+        {/* V72-J2 (D8) — this page is UNCHANGED (its own URL, wire and specs
+            keep working byte-for-byte), but comments/1's `~comments`
+            dashboard is now the richer, kind-aware surface: it covers the
+            same TODO-family rows PLUS docs/directives/sections/… with a
+            per-row drift/aged/unreasoned state and the claim → annotation
+            bridge. A link, not a redirect — an existing bookmark to this
+            page never breaks. */}
+        <p className="kbc-todos__hint" data-kbc-todos-comments-link>
+          See also <Link to={commentsUrl(repo)}>Comments</Link> — the full comments/1 index
+          (docs, directives, sections, …) with drift/aged/unreasoned state and the claim → annotation
+          bridge.
+        </p>
       </header>
 
       {todos.data?.truncated && (

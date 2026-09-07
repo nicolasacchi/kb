@@ -38,6 +38,7 @@ import {
   branchesUrl,
   canvasPageUrl,
   codeUrl,
+  commentsUrl,
   commitUrl,
   compareUrl,
   formatLineParam,
@@ -93,6 +94,7 @@ export interface Anchor {
 export type PageId =
   | "branches"
   | "todos"
+  | "comments"
   | "hotspots"
   | "sets"
   | "prs"
@@ -172,6 +174,8 @@ function pageUrl(loc: Location): string {
       return branchesUrl(loc.repo);
     case "todos":
       return todosUrl(loc.repo);
+    case "comments":
+      return commentsUrl(loc.repo);
     case "hotspots":
       return hotspotsUrl(loc.repo);
     case "sets":
@@ -266,6 +270,7 @@ export function encode(loc: Location): string {
 const PAGE_BY_SEGMENT: Readonly<Record<string, PageId>> = {
   "~branches": "branches",
   "~todos": "todos",
+  "~comments": "comments",
   "~hotspots": "hotspots",
   "~sets": "sets",
   "~prs": "prs",

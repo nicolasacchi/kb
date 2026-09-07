@@ -133,6 +133,16 @@ export const RUBY_NESTED_CHILD = "Line";
 /// `save` comes from `ApplicationRecord`, not from `Shop::Order`'s own body.
 export const RUBY_INHERITED_MEMBER = "save";
 
+// V72-J2 (comments/1, `comments.spec.ts`) — a `doc` block, an `annotation`
+// (TODO family), and an UNREASONED `directive` (rubocop:disable with no
+// `--` reason), all riding `RUBY_ORDER_FILE`'s existing commit (see that
+// constant's own doc for why: additive only, no new commit/directory).
+export const COMMENTS_DOC_METHOD = "refund";
+export const COMMENTS_DOC_TEXT = "Refunds a paid order.";
+export const COMMENTS_UNREASONED_METHOD = "apply_discount";
+export const COMMENTS_TODO_MARKER = "TODO";
+export const COMMENTS_TODO_TEXT = "support partial refunds";
+
 // V3.3-U1 / stacks — a SECOND layer stacked ON feature-x (never moves
 // feature-x's tip, never touches main or the pinned initial commit).
 // Creates a 2-layer stack: main ← feature-x ← feature-x-2 for stacks.spec.
@@ -360,6 +370,28 @@ export function createFixtureRepo(dir: string): void {
       "        1",
       "      end",
       "    end",
+      "",
+      // V72-J2 (comments/1) — a `doc` block (immediately above a
+      // definition, no TODO/directive mixed in) and, separately, an
+      // `annotation` + an UNREASONED `directive` pair (no `--` reason),
+      // mirroring `crates/kb-code-server/tests/fixtures/comments/
+      // taxonomy.rb`'s own TODO-next-to-rubocop:disable shape. Additive
+      // only, inside the EXISTING impact commit (see this file's own doc
+      // above `RUBY_ORDER_FILE` for why: neither a new commit nor a new
+      // directory), placed AFTER the nested `Line` class so no existing
+      // pinned line/member assertion moves.
+      `    # ${COMMENTS_DOC_TEXT}`,
+      "    # Idempotent: calling it twice is a no-op.",
+      `    def ${COMMENTS_DOC_METHOD}`,
+      "      total",
+      "    end",
+      "",
+      `    # ${COMMENTS_TODO_MARKER}: ${COMMENTS_TODO_TEXT}`,
+      "    # rubocop:disable Metrics/MethodLength",
+      `    def ${COMMENTS_UNREASONED_METHOD}`,
+      "      total",
+      "    end",
+      "    # rubocop:enable Metrics/MethodLength",
       "  end",
       "end",
       "",

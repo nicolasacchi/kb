@@ -8,6 +8,7 @@ import {
   branchesUrl,
   browserPageUrl,
   canvasPageUrl,
+  commentsUrl,
   hotspotsUrl,
   prsUrl,
   recipesPageUrl,
@@ -43,6 +44,7 @@ export type NavKey =
   | "workspaces"
   | "hotspots"
   | "todos"
+  | "comments"
   | "recipes"
   | "stacks"
   | "canvas"
@@ -69,6 +71,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { key: "workspaces", label: "Workspaces", icon: Icon.Layers, group: "explore", url: workspacesUrl },
   { key: "hotspots", label: "Hotspots", icon: Icon.Flame, group: "explore", url: hotspotsUrl },
   { key: "todos", label: "TODOs", icon: Icon.Tasks, group: "explore", url: todosUrl },
+  // V72-J2 (D8) — comments/1's dashboard: the richer, kind-aware surface
+  // TODOs above now links forward to.
+  { key: "comments", label: "Comments", icon: Icon.Comment, group: "explore", url: commentsUrl },
   { key: "recipes", label: "Recipes", icon: Icon.Terminal, group: "explore", url: recipesPageUrl },
   { key: "stacks", label: "Stacks", icon: Icon.Layers, group: "explore", url: stacksPageUrl },
   { key: "canvas", label: "Canvas", icon: Icon.Graph, group: "explore", url: canvasPageUrl },

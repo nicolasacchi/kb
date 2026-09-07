@@ -65,6 +65,10 @@ import type {
   SetVerdictOut,
   ScopesOut,
   SnapshotReviewOut,
+  CommentsListOut,
+  CommentsFileOut,
+  CommentsSummaryOut,
+  CommentKeywordsOut,
   TodosListOut,
   TreeResponse,
   TreeV2Response,
@@ -1084,6 +1088,53 @@ export function fetchTodos(params: FetchTodosParams): Promise<TodosListOut> {
 /// `GET /api/scopes` — configured `[scopes]` map (name → globs).
 export function fetchScopes(): Promise<ScopesOut> {
   return getJson<ScopesOut>("/api/scopes", {});
+}
+
+// --- comments/1 (V72-J1 server, V72-J2 SPA client) --------------------------
+
+export interface FetchCommentsParams {
+  repo: string;
+  path?: string;
+  kind?: string;
+  keyword?: string;
+  state?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/// `GET /api/comments?repo=[&path=][&kind=][&keyword=][&state=][&limit=]
+/// [&offset=]` — the paged index; the `~comments` dashboard's feed. Server
+/// paging always — this call never fetches "everything" and slices client-
+/// side (kb-code's own `?limit=`/`?offset=` convention, same as `fetchTodos`
+/// above).
+export function fetchComments(params: FetchCommentsParams): Promise<CommentsListOut> {
+  return getJson<CommentsListOut>("/api/comments", {
+    repo: params.repo,
+    path: params.path,
+    kind: params.kind,
+    keyword: params.keyword,
+    state: params.state,
+    limit: params.limit !== undefined ? String(params.limit) : undefined,
+    offset: params.offset !== undefined ? String(params.offset) : undefined,
+  });
+}
+
+/// `GET /api/comments/file?repo=&path=` — every comment block in one file,
+/// in line order. The per-file comment gutter's feed.
+export function fetchCommentsFile(repo: string, path: string): Promise<CommentsFileOut> {
+  return getJson<CommentsFileOut>("/api/comments/file", { repo, path });
+}
+
+/// `GET /api/comments/summary?repo=` — exact per-kind/per-keyword counts
+/// plus the two blame-free state lanes; the dashboard's bounds captions.
+export function fetchCommentsSummary(repo: string): Promise<CommentsSummaryOut> {
+  return getJson<CommentsSummaryOut>("/api/comments/summary", { repo });
+}
+
+/// `GET /api/comments/keywords` — the effective annotation vocabulary
+/// (daemon-wide, `[comments] keywords` is not per-repo, so no `repo` param).
+export function fetchCommentKeywords(): Promise<CommentKeywordsOut> {
+  return getJson<CommentKeywordsOut>("/api/comments/keywords", {});
 }
 
 // --- V3.R1 / V3.R2 — local review sessions --------------------------------

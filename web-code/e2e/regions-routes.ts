@@ -121,6 +121,7 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
     { name: "prs", url: `${BASE}/r/${REPO_NAME}/~prs` },
     { name: "sets", url: `${BASE}/r/${REPO_NAME}/~sets` },
     { name: "todos", url: `${BASE}/r/${REPO_NAME}/~todos` },
+    { name: "comments", url: `${BASE}/r/${REPO_NAME}/~comments` },
     { name: "hotspots", url: `${BASE}/r/${REPO_NAME}/~hotspots` },
     { name: "reviews", url: `${BASE}/r/${REPO_NAME}/~reviews` },
     { name: "recipes", url: `${BASE}/r/${REPO_NAME}/~recipes` },
