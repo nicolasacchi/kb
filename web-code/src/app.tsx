@@ -11,6 +11,7 @@ import { useRepos } from "./hooks/useRepos";
 import { coldSeedRepo, cycleTheme, loadLastRepo, saveLastRepo } from "./lib/prefs";
 import { readerUrl } from "./lib/breadcrumbs";
 import {
+  boardsPageUrl,
   branchesUrl,
   canvasPageUrl,
   commentsUrl,
@@ -102,6 +103,10 @@ const Recipes = lazy(() => import("./routes/Recipes"));
 const Stacks = lazy(() => import("./routes/Stacks"));
 // V3.4-C2 — working-set canvas (Code Bubbles-style pan-zoom fragments).
 const Canvas = lazy(() => import("./routes/Canvas"));
+// V74-L2 — kbc-canvas/1 boards. A SEPARATE surface from `~canvas` above,
+// which stays mounted and frozen (`routes/Boards.tsx`'s header says why).
+const Boards = lazy(() => import("./routes/Boards"));
+const BoardDetail = lazy(() => import("./routes/BoardDetail"));
 // V3.4-C3 — symbol-first browser (Smalltalk lens).
 const Browser = lazy(() => import("./routes/Browser"));
 // DCB W2.B — the doc↔code lens: repo-scoped page (`Lens`) plus two
@@ -303,6 +308,7 @@ function AppShell() {
     "nav.sets": () => navigate(repoRoute(setsUrl)),
     "nav.prs": () => navigate(repoRoute(prsUrl)),
     "nav.canvas": () => navigate(repoRoute(canvasPageUrl)),
+    "nav.boards": () => navigate(repoRoute(boardsPageUrl)),
     "nav.browser": () => navigate(repoRoute(browserPageUrl)),
     "nav.hotspots": () => navigate(repoRoute(hotspotsUrl)),
     "nav.recipes": () => navigate(repoRoute(recipesPageUrl)),
@@ -378,6 +384,8 @@ function AppShell() {
                 <Route path="/r/:repo/~recipes" element={<Recipes />} />
                 <Route path="/r/:repo/~stacks" element={<Stacks />} />
                 <Route path="/r/:repo/~canvas" element={<Canvas />} />
+                <Route path="/r/:repo/~boards" element={<Boards />} />
+                <Route path="/r/:repo/~boards/:slug" element={<BoardDetail />} />
                 <Route path="/r/:repo/~browser" element={<Browser />} />
                 {/* DCB W2.B (R2/D14) — the repo-scoped lens, no splat: the
                     artifact id is the doc key on every DCB wire/route. */}
