@@ -419,16 +419,19 @@ async fn a_comment_on_a_pseudo_file_carries_forward_through_the_same_ladder() {
          could never be `pinned`"
     );
 
-    // …and a `code:~review/review.md:<line>@<sha>` ref resolves through
-    // the SAME card ladder a tracked path takes: `pinned`, `exact`,
-    // because the sha IS the pseudo-file's bytes.
+    // A `code:` ref to a pseudo-file resolves through the SAME card ladder
+    // a tracked path takes. `~review/review.md` HAS bytes (the compose
+    // above), so the ref is `pinned` at the line the author cited.
     let line = doc_md
         .lines()
         .position(|l| l.contains("ANCHORING"))
-        .unwrap()
+        .expect("the fixture line")
         + 1;
-    let doc_with_ref = "---\nschema: kbc-review/1\nsummary_md: |\n  Cents, everywhere.\n---\n\n# Review\n\nA LINE WORTH ANCHORING TO.\n\nSee [[code:~review/pr-body.md:1]].\n"
-        .to_string();
+    let doc_with_ref = format!(
+        "---\nschema: kbc-review/1\nsummary_md: |\n  Cents, everywhere.\n---\n\n\
+         # Review\n\nA LINE WORTH ANCHORING TO.\n\n\
+         See [[code:~review/review.md:{line}]].\n"
+    );
     let resp = client
         .post(format!("{}/api/reviews/{id}/compose", b.base))
         .json(&serde_json::json!({
@@ -445,6 +448,7 @@ async fn a_comment_on_a_pseudo_file_carries_forward_through_the_same_ladder() {
         "{}",
         resp.text().await.unwrap()
     );
+
     let resolved: serde_json::Value = client
         .get(format!("{}/api/reviews/{id}/doc?resolve=true", b.base))
         .send()
@@ -460,17 +464,45 @@ async fn a_comment_on_a_pseudo_file_carries_forward_through_the_same_ladder() {
             c["ref"]
                 .as_str()
                 .unwrap_or("")
-                .contains("~review/pr-body.md")
+                .contains("~review/review.md")
         })
         .unwrap_or_else(|| panic!("no pseudo card in {cards:#?}"));
-    // This review has no PR binding, so `pr-body.md` is EMPTY — and the
-    // card says exactly that rather than pretending the path is missing.
-    assert_eq!(card["state"], "orphan");
-    assert!(card["caption"]
-        .as_str()
-        .unwrap()
-        .contains("review pseudo-file with no content"));
-    let _ = line;
+    assert_eq!(card["state"], "pinned");
+    assert_eq!(card["line"].as_u64(), Some(line as u64));
+    assert!(
+        card["snippet"].as_str().unwrap().contains("ANCHORING"),
+        "{card:#?}"
+    );
+    // The hash the card reports IS the git blob hash of the served bytes —
+    // one notion of identity, shared with every tracked file.
+    assert_eq!(card["current_blob"].as_str().unwrap().len(), 40);
+
+    // …and an EMPTY pseudo-file is an honest ORPHAN that FAILS the lint,
+    // with nothing written. An absent PR description must not silently
+    // resolve to an empty card.
+    let doc_bad_ref = "---\nschema: kbc-review/1\nsummary_md: |\n  Cents.\n---\n\n\
+                       See [[code:~review/pr-body.md:1]].\n";
+    let resp = client
+        .post(format!("{}/api/reviews/{id}/compose", b.base))
+        .json(&serde_json::json!({
+            "doc_md": doc_bad_ref,
+            "tier": "minimal",
+            "findings_v2": [],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let rows = body["lint"]["rows"].as_array().unwrap();
+    assert!(
+        rows.iter().any(|r| r["rule"] == "ref_orphan"
+            && r["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("not bound to a pull request")),
+        "{body:#?}"
+    );
 }
 
 // --- review-timeline/2 -----------------------------------------------------
