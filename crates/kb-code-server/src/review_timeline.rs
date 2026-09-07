@@ -452,9 +452,16 @@ pub(crate) fn core_events(
     events
 }
 
-/// The `review-timeline/1` entry point, unchanged in signature and in what
-/// a v1 reader sees. Kept so the pre-K3 unit tests and any v1 consumer
-/// keep working verbatim.
+/// The `review-timeline/1` composition, unchanged in signature and in what
+/// a v1 reader sees: [`core_events`] sorted and serialised.
+///
+/// `#[cfg(test)]` and honestly so — the ROUTE is what a v1 consumer talks
+/// to, and it composes `core_events` itself. This function's only job now
+/// is to be the thing the v1 goldens and
+/// [`v2_tests::v1_payload_keys_are_byte_identical_under_v2`] measure
+/// against, which is exactly why it must not quietly drift into a second
+/// production path.
+#[cfg(test)]
 pub(crate) fn compose_review_timeline(
     review: &store::ReviewRow,
     binding: &store::ReviewPrBinding,
@@ -1503,7 +1510,7 @@ mod v2_tests {
     fn the_agent_author_set_tracks_kbs_harness_vocabulary() {
         for h in kb_core::sessions::HARNESSES {
             assert!(
-                AGENT_AUTHOR_NAMES.contains(h),
+                AGENT_AUTHOR_NAMES.contains(&h),
                 "kb added the harness {h:?}; kb-code's timeline would read it as a HUMAN author"
             );
         }

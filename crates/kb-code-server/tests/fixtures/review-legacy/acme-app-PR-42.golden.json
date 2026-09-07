@@ -1,1 +1,119 @@
-{}
+{
+  "block_bytes": 1883,
+  "block_id": "kb-review-data",
+  "doc_md": "---\nschema: kbc-review/1\nsummary_md: |\n  Money moves from floats to integer cents across the order model and its two callers.\n  The conversion itself is right; the migration backfill and one serializer are not.\nrisk:\n  level: high\n  why: derived from the legacy artifact's verdict \"request-changes\"\nblocks:\n  context: |\n    Migrated from a legacy review artifact by `kb-code review import-legacy`\n    (kbc-legacy-import/1). Only the embedded <script id=\"kb-review-data\"> machine block was\n    read; the artifact's prose was NOT scraped (design D9-a). 4 finding(s) were\n    migrated and 1 skipped for want of a location.\n---\n\n# Migrated review\n\nMoney moves from floats to integer cents across the order model and its two callers.\nThe conversion itself is right; the migration backfill and one serializer are not.\n\n## Provenance\n\nThis document is a mechanical translation of a legacy review artifact's machine\nblock. Nothing in it was re-derived from the current code: every finding below is\nthe legacy reviewer's claim, carried across so it can be dispositioned, not\nre-verified. Run `kb-code review lint` before composing.\n",
+  "findings": [
+    {
+      "act": "issue",
+      "blocking": true,
+      "category": "correctness",
+      "cites": [],
+      "location": {
+        "kind": "lines",
+        "lines": [
+          14
+        ],
+        "path": "db/migrate/20260101_add_price_cents.rb",
+        "removed": false
+      },
+      "rationale": "db/migrate/20260101_add_price_cents.rb multiplies a rounded float, so every price ending in .x5 is off by one cent.\n\n(migrated from legacy finding `PR42-1`)",
+      "recommendation": "Multiply first, then round: (price * 100).round.",
+      "severity": "blocker",
+      "supersedes": [],
+      "title": "The backfill rounds before it multiplies"
+    },
+    {
+      "act": "issue",
+      "blocking": true,
+      "category": "security",
+      "cites": [],
+      "location": {
+        "kind": "lines",
+        "lines": [
+          7,
+          8,
+          9
+        ],
+        "path": "app/serializers/admin/order_serializer.rb",
+        "removed": false
+      },
+      "rationale": "app/serializers/admin/order_serializer.rb keeps `price`, which is now stale after the backfill.\n\n(migrated from legacy finding `PR42-2`)",
+      "severity": "blocker",
+      "supersedes": [],
+      "title": "The admin serializer still exposes the float column"
+    },
+    {
+      "act": "note",
+      "blocking": false,
+      "category": "style",
+      "cites": [],
+      "location": {
+        "kind": "lines",
+        "lines": [
+          3
+        ],
+        "path": "app/models/order.rb",
+        "removed": false
+      },
+      "rationale": "CENTS_PER_UNIT is a bare integer; freezing is idiomatic here.\n\n(migrated from legacy finding `PR42-3`)",
+      "severity": "ok",
+      "supersedes": [],
+      "title": "Constant could be frozen"
+    },
+    {
+      "act": "issue",
+      "blocking": false,
+      "category": "other",
+      "cites": [],
+      "location": {
+        "kind": "whole_file",
+        "lines": null,
+        "path": "app/models/order.rb",
+        "removed": false
+      },
+      "rationale": "Present so the fixture exercises the stated-substitution path.\n\n(migrated from legacy finding `PR42-4`)",
+      "severity": "concern",
+      "supersedes": [],
+      "title": "A severity and a category this vocabulary does not have"
+    }
+  ],
+  "mapping": [
+    {
+      "field": "severity",
+      "from": "critical",
+      "rows": 1,
+      "to": "blocker"
+    },
+    {
+      "field": "severity",
+      "from": "nit",
+      "rows": 1,
+      "to": "ok"
+    },
+    {
+      "field": "severity",
+      "from": "spicy",
+      "rows": 1,
+      "to": "concern"
+    },
+    {
+      "field": "category",
+      "from": "vibes",
+      "rows": 1,
+      "to": "other"
+    }
+  ],
+  "notes": [
+    "1 finding(s) were NOT migrated — every one is listed in `skipped` with its reason. None was given a fabricated location.",
+    "only the <script id=\"kb-review-data\"> machine block was read; the artifact's prose was not scraped (design D9-a)"
+  ],
+  "schema": "kbc-legacy-import/1",
+  "skipped": [
+    {
+      "index": 4,
+      "reason": "no location path (looked for [\"path\", \"file\", \"filename\", \"location\"]) — a finding with no location fails kbc-review/1's own `finding_no_location` lint, and inventing one would be worse than omitting it",
+      "title": "A finding with no location at all"
+    }
+  ],
+  "tier": "standard"
+}
