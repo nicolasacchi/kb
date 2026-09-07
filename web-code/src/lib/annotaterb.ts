@@ -4,20 +4,33 @@
 // WHERE THIS SHOULD LIVE, AND WHY IT DOES NOT YET
 // ------------------------------------------------
 // `comments/1` (V72-J1) classifies a source comment's KIND, and a schema
-// banner is exactly its `generated` bucket — so the right long-term source
-// for "does this file carry an annotaterb block, and where" is
-// `GET /api/comments/file`, server-side, with the daemon's own taxonomy.
-// That route does not exist on this branch's base (checked: no `/comments`
-// route in `crates/kb-code-server/src/router.rs` at `b982002`), and this
-// unit was told not to block on it. So the block is parsed CLIENT-SIDE from
-// the text `GET /api/file` already returned — no extra request, nothing
-// persisted, recomputed per render.
+// banner is exactly its `generated` bucket — `classify.rs`'s own
+// `GENERATED_NEEDLES` leads with `"== schema information"`. So the right
+// long-term source for "does this file carry an annotaterb block, and
+// where" is `GET /api/comments/file`, server-side, with the daemon's own
+// taxonomy and its own honesty basis.
 //
-// TODO(V72-J1): when `GET /api/comments/file` is on the base, take the block
-// RANGE from the `generated` comment it reports and keep only the column
-// table parsing here. The card must then say which source it used — a
-// client guess and a daemon classification are different facts and the
-// caption should not pretend otherwise.
+// That route did NOT exist on this unit's base (`b982002`: no `/comments`
+// route in `router.rs`), and the unit was told not to block on it — so the
+// block is parsed CLIENT-SIDE out of the text `GET /api/file` already
+// returned: no extra request, nothing persisted, recomputed per render, and
+// captioned as a browser read rather than a daemon fact
+// (`SCHEMA_SOURCE_CAPTION`).
+//
+// V72-J1 LANDED ON MAIN WHILE THIS UNIT WAS IN FLIGHT, so the switch is now
+// a follow-up someone can actually do rather than a hypothetical:
+//
+// TODO(follow-up): take the block RANGE from the `generated` `CommentOut`
+// that `GET /api/comments/file?repo=&path=` reports, and keep ONLY the
+// column-table parse below (the daemon classifies runs, it does not read
+// annotaterb's column grammar). Three things must move with it: the card's
+// caption (a daemon classification and a client guess are different facts
+// and the caption must not blur them), the honest degrade when that request
+// fails or the file is past its blame/scan budget, and this file's tests,
+// which currently pin the block-FINDING rules the daemon would take over.
+// Switching mid-unit was declined deliberately: it is a new request, a new
+// hook, a new caption and a new failure mode on a surface that was already
+// green, which is a re-scope, not a fix.
 //
 // The parse is deliberately narrow. It recognises the banner annotaterb
 // (and the older `annotate` gem) actually writes, and refuses everything
