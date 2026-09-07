@@ -127,6 +127,7 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
     { name: "recipes", url: `${BASE}/r/${REPO_NAME}/~recipes` },
     { name: "stacks", url: `${BASE}/r/${REPO_NAME}/~stacks` },
     { name: "canvas", url: `${BASE}/r/${REPO_NAME}/~canvas` },
+    { name: "boards", url: `${BASE}/r/${REPO_NAME}/~boards` },
     { name: "browser", url: `${BASE}/r/${REPO_NAME}/~browser` },
     { name: "lens-repo-scoped", url: `${BASE}/r/${REPO_NAME}/~lens/${DOCLENS_KB}/${DOCLENS_DOC_ID}` },
   );
@@ -203,6 +204,41 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
       { name: "review-diff", url: `${BASE}/r/${REPO_NAME}/~reviews`, skip: reason },
       { name: "review-diff-file", url: `${BASE}/r/${REPO_NAME}/~reviews`, skip: reason },
     );
+  }
+
+
+  // V74-L2 — one kbc-canvas/1 board, so `~boards/{slug}` is a route this
+  // module can actually reach. Applied through the loopback-only route the
+  // harness can use (it hits 127.0.0.1), and DELETED by `cleanup` for the
+  // reason this file's header records for the reading set: a row left behind
+  // changes what another spec's list assertions see.
+  const boardSlug = `regions-e2e-board`;
+  const boardRes = await request.post(`${BASE}/api/boards/apply`, {
+    headers: { "X-Kbc-Request": "1", "Content-Type": "application/json" },
+    data: {
+      schema: "kbc-canvas/1",
+      repo: REPO_NAME,
+      slug: boardSlug,
+      title: "regions e2e board",
+      nodes: [{ id: "n1", kind: "note", title: "n1", body_md: "a landmark fixture" }],
+    },
+  });
+  if (boardRes.ok()) {
+    cleanupFns.push(async () => {
+      await request.delete(`${BASE}/api/boards/${boardSlug}?repo=${REPO_NAME}`, {
+        headers: { "X-Kbc-Request": "1" },
+      });
+    });
+    routes.push({
+      name: "board-detail",
+      url: `${BASE}/r/${REPO_NAME}/~boards/${boardSlug}`,
+    });
+  } else {
+    routes.push({
+      name: "board-detail",
+      url: `${BASE}/r/${REPO_NAME}/~boards`,
+      skip: `POST /api/boards/apply -> ${boardRes.status()} (loopback-only)`,
+    });
   }
 
   return { routes, cleanup };

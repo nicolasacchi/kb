@@ -272,7 +272,16 @@ export default function BoardDetail() {
 
   // --- keyboard ------------------------------------------------------------
 
-  useCommandScope("board", { board: "boards", walkthrough });
+  // `mode.active` is published alongside `walkthrough` deliberately: it is the
+  // context key the EXISTING `dismiss.mode` rung reads ("a tour / resize
+  // submode / canvas selection is active", dismiss_order 7), and a walkthrough
+  // is exactly that. Without it, Escape would need a second Escape row — a
+  // second home for one keystroke, which the registry exists to prevent.
+  useCommandScope("board", {
+    board: "boards",
+    walkthrough,
+    "mode.active": walkthrough,
+  });
   useCommandHandlers({
     "boards.card-next": () => focusStep(1),
     "boards.card-prev": () => focusStep(-1),

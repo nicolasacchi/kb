@@ -169,7 +169,8 @@ describe("the board rows", () => {
     // The `deadRows.test.ts` question, asked for the surface family it cannot
     // reach — narrowed to the ONE route that renders this surface.
     expect(BOARD_DETAIL_SRC).toContain("useCommandHandlers");
-    expect(BOARD_DETAIL_SRC).toContain('useCommandScope("board", { board: "boards", walkthrough })');
+    expect(BOARD_DETAIL_SRC).toContain('useCommandScope("board", {');
+    expect(BOARD_DETAIL_SRC).toContain('board: "boards",');
     for (const [id] of BOARD_ROWS) {
       expect(BOARD_DETAIL_SRC.includes(`"${id}":`), `${id} has no handler`).toBe(true);
     }
@@ -181,6 +182,10 @@ describe("the board rows", () => {
     // would be a second home for one keystroke, and `commands doctor`'s check 7
     // would refuse the duplicate `dismiss_order` anyway.
     expect(BOARD_DETAIL_SRC).toContain('"dismiss.mode":');
+    // …and the rung's own context key is PUBLISHED, or the row would resolve
+    // nowhere and Escape would silently do nothing (the dead-row failure, one
+    // layer down from the registry).
+    expect(BOARD_DETAIL_SRC).toContain('"mode.active": walkthrough,');
     expect(KBC_COMMANDS.filter((c) => c.id.startsWith("boards.") && c.keys.vim.includes("Escape")))
       .toHaveLength(0);
   });
