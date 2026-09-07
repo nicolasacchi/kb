@@ -9,14 +9,14 @@
       "category": "correctness",
       "cites": [],
       "location": {
-        "kind": "lines",
+        "kind": "single",
         "lines": [
           14
         ],
         "path": "db/migrate/20260101_add_price_cents.rb",
         "removed": false
       },
-      "rationale": "db/migrate/20260101_add_price_cents.rb multiplies a rounded float, so every price ending in .x5 is off by one cent.\n\n(migrated from legacy finding `PR42-1`)",
+      "rationale": "db/migrate/20260101_add_price_cents.rb multiplies a rounded float, so every price ending in .x5 is off by one cent.\n\n(migrated from a legacy finding \u2014 legacy_id: PR42-1)",
       "recommendation": "Multiply first, then round: (price * 100).round.",
       "severity": "blocker",
       "supersedes": [],
@@ -28,7 +28,7 @@
       "category": "security",
       "cites": [],
       "location": {
-        "kind": "lines",
+        "kind": "multi",
         "lines": [
           7,
           8,
@@ -37,7 +37,7 @@
         "path": "app/serializers/admin/order_serializer.rb",
         "removed": false
       },
-      "rationale": "app/serializers/admin/order_serializer.rb keeps `price`, which is now stale after the backfill.\n\n(migrated from legacy finding `PR42-2`)",
+      "rationale": "app/serializers/admin/order_serializer.rb keeps `price`, which is now stale after the backfill.\n\n(migrated from a legacy finding \u2014 legacy_id: PR42-2)",
       "severity": "blocker",
       "supersedes": [],
       "title": "The admin serializer still exposes the float column"
@@ -48,14 +48,14 @@
       "category": "style",
       "cites": [],
       "location": {
-        "kind": "lines",
+        "kind": "single",
         "lines": [
           3
         ],
         "path": "app/models/order.rb",
         "removed": false
       },
-      "rationale": "CENTS_PER_UNIT is a bare integer; freezing is idiomatic here.\n\n(migrated from legacy finding `PR42-3`)",
+      "rationale": "CENTS_PER_UNIT is a bare integer; freezing is idiomatic here.\n\n(migrated from a legacy finding \u2014 legacy_id: PR42-3)",
       "severity": "ok",
       "supersedes": [],
       "title": "Constant could be frozen"
@@ -71,7 +71,7 @@
         "path": "app/models/order.rb",
         "removed": false
       },
-      "rationale": "Present so the fixture exercises the stated-substitution path.\n\n(migrated from legacy finding `PR42-4`)",
+      "rationale": "Present so the fixture exercises the stated-substitution path.\n\n(migrated from a legacy finding \u2014 legacy_id: PR42-4)",
       "severity": "concern",
       "supersedes": [],
       "title": "A severity and a category this vocabulary does not have"
@@ -104,14 +104,14 @@
     }
   ],
   "notes": [
-    "1 finding(s) were NOT migrated — every one is listed in `skipped` with its reason. None was given a fabricated location.",
+    "1 finding(s) were NOT migrated \u2014 every one is listed in `skipped` with its reason. None was given a fabricated location.",
     "only the <script id=\"kb-review-data\"> machine block was read; the artifact's prose was not scraped (design D9-a)"
   ],
   "schema": "kbc-legacy-import/1",
   "skipped": [
     {
       "index": 4,
-      "reason": "no location path (looked for [\"path\", \"file\", \"filename\", \"location\"]) — a finding with no location fails kbc-review/1's own `finding_no_location` lint, and inventing one would be worse than omitting it",
+      "reason": "no location path (looked for [\"path\", \"file\", \"filename\", \"location\"], including the nested {path, kind, lines} shape) \u2014 a finding with no location fails kbc-review/1's own `finding_no_location` lint, and inventing one would be worse than omitting it",
       "title": "A finding with no location at all"
     }
   ],

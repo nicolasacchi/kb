@@ -24,8 +24,22 @@
 // never silently degraded into a wikilink, which would make the failure
 // invisible on both sides (kb-code-server/CLAUDE.md invariant 22(b)).
 
-/** The seven scheme prefixes, in the order `refs::SCHEMES` declares them. */
-export const SCHEMES = ["code", "sym", "ent", "finding", "gh", "kb", "hunk"] as const;
+/**
+ * The nine scheme prefixes, in the order `refs::SCHEMES` declares them.
+ * V73-K5 added `ci` (a check-run snapshot citation) and `question` (a
+ * document-local back-reference into this document's own `questions[]`).
+ */
+export const SCHEMES = [
+  "code",
+  "sym",
+  "ent",
+  "finding",
+  "gh",
+  "kb",
+  "hunk",
+  "ci",
+  "question",
+] as const;
 export type Scheme = (typeof SCHEMES)[number];
 
 /** `gh:` object kinds — closed, so a typo is a malformed ref. */
@@ -45,7 +59,9 @@ export type KbcRef =
   | { scheme: "finding"; raw: string; slug: string }
   | { scheme: "gh"; raw: string; kind: string; id: string }
   | { scheme: "kb"; raw: string; kb: string; id: string }
-  | { scheme: "hunk"; raw: string; path: string; ps: number; index: number };
+  | { scheme: "hunk"; raw: string; path: string; ps: number; index: number }
+  | { scheme: "ci"; raw: string; name: string }
+  | { scheme: "question"; raw: string; index: number };
 
 /** What a `[[…]]` body turned out to be — exhaustive and disjoint. */
 export type RefClass =
@@ -258,6 +274,33 @@ function parseHunk(raw: string, rest: string): KbcRef {
   return { scheme: "hunk", raw, path, ps, index };
 }
 
+/**
+ * `ci:<check-name>`. The name is whatever GitHub's Checks API calls the
+ * run — free text, routinely containing spaces/slashes/parens — so the
+ * only refusal is an empty name.
+ */
+function parseCi(raw: string, rest: string): KbcRef {
+  const name = rest.trim();
+  if (name === "") throw new RefError("ci ref has an empty check name");
+  return { scheme: "ci", raw, name };
+}
+
+/**
+ * `question:<n>`, `n >= 1` — a 1-based ordinal into the CURRENT document's
+ * own `questions[]`.
+ */
+function parseQuestion(raw: string, restIn: string): KbcRef {
+  const rest = restIn.trim();
+  const index = parseU32(rest);
+  if (index === null) {
+    throw new RefError(`question ref ${dbg(rest)} is not a positive whole number`);
+  }
+  if (index === 0) {
+    throw new RefError("question ref index must be >= 1 (questions are numbered from 1)");
+  }
+  return { scheme: "question", raw, index };
+}
+
 /** The `Err(reason)` arm of the Rust `Result`, as a throw. */
 class RefError extends Error {}
 
@@ -289,6 +332,10 @@ function parseRefInner(body: string): KbcRef | typeof NOT_OURS {
       return parseKb(raw, rest);
     case "hunk":
       return parseHunk(raw, rest);
+    case "ci":
+      return parseCi(raw, rest);
+    case "question":
+      return parseQuestion(raw, rest);
   }
 }
 
@@ -316,9 +363,14 @@ export function classify(body: string): RefClass {
   }
 }
 
-/** `true` for the two schemes this daemon deliberately does not resolve. */
+/**
+ * `true` for the schemes this daemon deliberately does not resolve LIVE:
+ * `gh`/`kb` address something on the far side of a call kb-code never
+ * makes or a corpus it does not own; `ci` reads a snapshot rather than
+ * calling GitHub's Checks API again.
+ */
 export function isInert(r: KbcRef): boolean {
-  return r.scheme === "gh" || r.scheme === "kb";
+  return r.scheme === "gh" || r.scheme === "kb" || r.scheme === "ci";
 }
 
 // --- the document scanner --------------------------------------------------

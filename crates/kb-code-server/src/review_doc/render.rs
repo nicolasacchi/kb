@@ -109,7 +109,15 @@ impl FindingLine {
 }
 
 /// The closed placeholder set. Order is documentation order.
-pub const PLACEHOLDERS: [&str; 13] = [
+///
+/// V73-K5 (gap 6) adds `pr_number` and `risk_score` — the two identifiers a
+/// legacy artifact's header always carried that a rendered `kbc-review/1`
+/// export could not yet name. Neither is a NEW document field: `pr_number`
+/// is the review's own PR binding (`reviews.pr_number`, already stored by
+/// the PR Room) and `risk_score` is the pre-K1 `report_json.risk_score`
+/// lane the coverage table already names as that concept's real home —
+/// `risk` stays deliberately level-plus-why, never a score, by design.
+pub const PLACEHOLDERS: [&str; 15] = [
     "title",
     "meta",
     "summary",
@@ -123,6 +131,8 @@ pub const PLACEHOLDERS: [&str; 13] = [
     "author",
     "omitted",
     "body",
+    "pr_number",
+    "risk_score",
 ];
 
 /// The built-in template — what `render` uses when the operator names none.
@@ -141,6 +151,12 @@ pub struct RenderCtx<'a> {
     pub tier: &'a str,
     pub rendered_at: i64,
     pub omitted: &'a [String],
+    /// V73-K5 — the review's own PR binding number, when it has one.
+    pub pr_number: Option<i64>,
+    /// V73-K5 — the pre-K1 `report_json.risk_score` lane's numeric value,
+    /// when the review has an authored report carrying one. Independent of
+    /// `doc.risk` (which has no numeric axis by design).
+    pub risk_score: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +189,11 @@ pub fn render(
     values.insert("author", author_html(doc.author.as_ref()));
     values.insert("omitted", omitted_html(ctx.omitted));
     values.insert("body", md(&doc.body_md));
+    values.insert("pr_number", pr_number_html(ctx.pr_number));
+    values.insert(
+        "risk_score",
+        risk_score_html(doc.risk.as_ref(), ctx.risk_score),
+    );
     substitute(template, &values)
 }
 
@@ -453,6 +474,40 @@ fn empty(msg: &str) -> String {
     format!("<p class=\"kbc-empty\">{}</p>", esc(msg))
 }
 
+/// The review's bound PR number, or an honest "n/a" — never a guess and
+/// never `0`.
+fn pr_number_html(pr_number: Option<i64>) -> String {
+    match pr_number {
+        Some(n) => esc(&n.to_string()),
+        None => "n/a".to_string(),
+    }
+}
+
+/// The document's own risk LEVEL, with the pre-K1 report lane's numeric
+/// score appended when the review's report carries one — see
+/// [`RenderCtx::risk_score`]'s doc for why that is a SEPARATE lane rather
+/// than a new document field. "n/a" only when there is no risk at all to
+/// report (the document names none and no score exists either).
+fn risk_score_html(risk: Option<&Risk>, risk_score: Option<f64>) -> String {
+    match (risk, risk_score) {
+        (None, None) => "n/a".to_string(),
+        (None, Some(score)) => esc(&format_score(score)),
+        (Some(r), None) => esc(&r.level),
+        (Some(r), Some(score)) => esc(&format!("{} ({})", r.level, format_score(score))),
+    }
+}
+
+/// A numeric score, trimmed of a trailing `.0` when it is a whole number —
+/// `report_json.risk_score` is author-supplied JSON and may be an integer
+/// or a fraction.
+fn format_score(score: f64) -> String {
+    if score.fract() == 0.0 {
+        format!("{score:.0}")
+    } else {
+        format!("{score}")
+    }
+}
+
 /// Render an UNTRUSTED Markdown body. `kb_core::markdown::
 /// render_comment_fragment` sets `render.unsafe = false`, so raw HTML in a
 /// review document is ESCAPED rather than passed through — reusing the
@@ -511,6 +566,8 @@ mod tests {
             tier: "standard",
             rendered_at: 0,
             omitted,
+            pr_number: Some(42),
+            risk_score: Some(0.5),
         }
     }
 
@@ -540,6 +597,7 @@ mod tests {
                     to: "to_author".into(),
                     ask: payload.to_string(),
                     r#ref: Some(payload.to_string()),
+                    answers: Some(payload.to_string()),
                 }],
                 author: Some(Author {
                     kind: "agent".into(),
@@ -548,6 +606,12 @@ mod tests {
                     considered: vec![payload.to_string()],
                     not_considered: vec![payload.to_string()],
                 }),
+                ci: vec![crate::review_doc::CiCheck {
+                    name: payload.to_string(),
+                    status: "success".into(),
+                    url: Some(payload.to_string()),
+                    observed_at: Some(0),
+                }],
                 body_md: format!("body {payload}"),
                 body_line: 1,
             };
@@ -715,5 +779,49 @@ mod tests {
         assert!(html.contains("does not exist"), "{html}");
         assert!(!html.contains("kbc-snippet"), "{html}");
         assert_eq!(card.state, STATE_ORPHAN);
+    }
+
+    // --- V73-K5 gap 6: {{pr_number}} / {{risk_score}} ----------------------
+
+    #[test]
+    fn pr_number_is_the_bound_number_or_an_honest_n_a() {
+        assert_eq!(pr_number_html(Some(15476)), "15476");
+        assert_eq!(pr_number_html(None), "n/a");
+    }
+
+    #[test]
+    fn risk_score_combines_the_document_level_with_the_report_score_or_says_n_a() {
+        let high = Risk {
+            level: "high".to_string(),
+            why: "touches billing".to_string(),
+        };
+        assert_eq!(risk_score_html(None, None), "n/a");
+        assert_eq!(risk_score_html(Some(&high), None), "high");
+        assert_eq!(risk_score_html(None, Some(0.5)), "0.5");
+        assert_eq!(risk_score_html(Some(&high), Some(7.0)), "high (7)");
+    }
+
+    #[test]
+    fn every_render_names_the_pr_number_and_risk_score_placeholders() {
+        let doc = ReviewDoc {
+            summary_md: "s".into(),
+            risk: None,
+            reading_order: vec![],
+            blocks: BTreeMap::new(),
+            findings: None,
+            flows: vec![],
+            questions: vec![],
+            author: None,
+            ci: vec![],
+            body_md: "b".into(),
+            body_line: 1,
+        };
+        let omitted = Vec::new();
+        let mut ctx = ctx("t", &omitted);
+        ctx.pr_number = Some(15476);
+        ctx.risk_score = None;
+        let out = render(DEFAULT_TEMPLATE, &doc, &[], &[], &ctx);
+        assert!(out.html.contains("15476"), "{}", out.html);
+        assert!(out.unknown_placeholders.is_empty());
     }
 }

@@ -100,6 +100,78 @@ pub struct ReadingOrderOut {
     pub chapters: Vec<review_doc::Chapter>,
 }
 
+/// V73-K5 — a `ci:` block that is either the author's or DERIVED from the
+/// review's own `pr_meta_json.checks` snapshot, and always says which
+/// (`ReadingOrderOut`'s exact pattern, applied to a second block).
+#[derive(Debug, Clone, Serialize)]
+pub struct CiOut {
+    /// `authored` | `derived`.
+    pub source: &'static str,
+    pub checks: Vec<review_doc::CiCheck>,
+}
+
+/// `doc_ci` (this document's OWN authored `ci:` block) wins when non-empty;
+/// otherwise every entry is DERIVED from `pr_meta_json.checks` (PRR-R2's
+/// `CheckRunOut` snapshot, embedded verbatim at the review's last PR-meta
+/// fetch — never a fresh GitHub call). An empty result either way is an
+/// honest "no known checks", not an error.
+pub fn derive_ci(
+    doc_ci: &[review_doc::CiCheck],
+    pr_meta_json: Option<&str>,
+    pr_meta_fetched_at: Option<i64>,
+) -> CiOut {
+    if !doc_ci.is_empty() {
+        return CiOut {
+            source: "authored",
+            checks: doc_ci.to_vec(),
+        };
+    }
+    let raw_checks: Vec<crate::github::CheckRunOut> = pr_meta_json
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| v.get("checks").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let checks = raw_checks
+        .into_iter()
+        .map(|c| review_doc::CiCheck {
+            name: c.name,
+            status: ci_status_from_check(&c.status, c.note.as_deref()).to_string(),
+            // `CheckRunOut` carries no URL (the daemon has never fetched
+            // one) — absent is the honest value, not a guess.
+            url: None,
+            observed_at: pr_meta_fetched_at,
+        })
+        .collect();
+    CiOut {
+        source: "derived",
+        checks,
+    }
+}
+
+/// `CheckRunOut`'s own `pass|fail|warn|pending` (the generic GitHub-Checks
+/// normalization) is a COARSER vocabulary than `review_doc::CI_STATUSES`;
+/// this refines it using the raw `note` field when GitHub's own
+/// `conclusion`/`status` string is still available, falling back to the
+/// coarse mapping only when `note` is absent. `neutral`/`stale` fold to
+/// `skipped` — the closest honest bucket in a 4-value set that has no
+/// "neutral" of its own.
+fn ci_status_from_check(status: &str, note: Option<&str>) -> &'static str {
+    match note {
+        Some("success") => "success",
+        Some("failure") | Some("timed_out") | Some("action_required") | Some("cancelled") => {
+            "failure"
+        }
+        Some("skipped") | Some("neutral") | Some("stale") => "skipped",
+        Some("queued") | Some("in_progress") => "pending",
+        _ => match status {
+            "pass" => "success",
+            "fail" => "failure",
+            "pending" => "pending",
+            _ => "skipped",
+        },
+    }
+}
+
 /// A finding as the DOCUMENT read surfaces it: the identity and the two v2
 /// axes, no resolution and no threads. `GET /api/reviews/{id}/findings` is
 /// still the full view (carry-forward resolution, thread counts, publish
@@ -168,6 +240,9 @@ pub struct DocOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<review_doc::Risk>,
     pub reading_order: ReadingOrderOut,
+    /// V73-K5 — the `ci:` block, authored-or-derived (same dual-source
+    /// pattern as `reading_order`).
+    pub ci: CiOut,
     pub blocks: std::collections::BTreeMap<String, String>,
     pub flows: Vec<review_doc::Flow>,
     pub questions: Vec<review_doc::Question>,
@@ -294,7 +369,10 @@ async fn build_doc_out(
     };
     let authored_order = doc.reading_order.clone();
 
-    let (findings, reading_order, cards) = state
+    let doc_ci = doc.ci.clone();
+    let question_count = doc.questions.len();
+
+    let (findings, reading_order, ci, cards) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let findings: Vec<FindingBrief> = store
@@ -311,6 +389,15 @@ async fn build_doc_out(
                     chapters: authored_order,
                 }
             };
+            // Fetched unconditionally (one cheap row, not gated on
+            // `resolve`): `ci` is a document-read field like
+            // `reading_order`, not a card-resolution artifact.
+            let pr_binding = store.get_review_pr_binding(id)?.unwrap_or_default();
+            let ci = derive_ci(
+                &doc_ci,
+                pr_binding.pr_meta_json.as_deref(),
+                pr_binding.pr_meta_fetched_at,
+            );
             let cards = if resolve {
                 let known_ps: HashSet<i64> = store
                     .list_patchsets(id)?
@@ -323,7 +410,6 @@ async fn build_doc_out(
                 // because they are rendered from rows this closure already
                 // has plus ONE `git log`, and because every ref in one pass
                 // must see the SAME bytes.
-                let pseudo_binding = store.get_review_pr_binding(id)?.unwrap_or_default();
                 let pseudo_doc = store.latest_review_doc(id, ps_c.ps_number)?;
                 let pseudo_findings = store.list_review_findings(id, None, true)?;
                 let (pseudo_commits, pseudo_truncated) =
@@ -331,7 +417,7 @@ async fn build_doc_out(
                 let pseudo = crate::review_pseudo::build_set(
                     id,
                     ps_c.ps_number,
-                    &pseudo_binding,
+                    &pr_binding,
                     pseudo_doc.as_ref(),
                     &pseudo_findings,
                     &pseudo_commits,
@@ -345,12 +431,14 @@ async fn build_doc_out(
                     known_ps: &known_ps,
                     changed_paths: &changed_paths,
                     pseudo: Some(&pseudo),
+                    ci_checks: &ci.checks,
+                    question_count,
                 };
                 Some(cards::resolve_cards(store, &ctx, &refs))
             } else {
                 None
             };
-            Ok((findings, reading_order, cards))
+            Ok((findings, reading_order, ci, cards))
         })
         .await?;
 
@@ -367,6 +455,7 @@ async fn build_doc_out(
         summary_md: doc_c.summary_md,
         risk: doc_c.risk,
         reading_order,
+        ci,
         blocks: doc_c.blocks,
         flows: doc_c.flows,
         questions: doc_c.questions,
@@ -511,6 +600,7 @@ pub async fn lint_review_doc(
         &row.doc_md,
         tier,
         None,
+        Some(row.created_at),
     )
     .await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
@@ -531,6 +621,7 @@ pub async fn lint_document(
     doc_md: &str,
     tier: Tier,
     findings_override: Option<&[DocFinding]>,
+    composed_at: Option<i64>,
 ) -> Result<LintOut, ApiError> {
     lint_and_resolve(
         state,
@@ -542,6 +633,7 @@ pub async fn lint_document(
         doc_md,
         tier,
         findings_override,
+        composed_at,
     )
     .await
     .map(|(lint, _)| lint)
@@ -564,6 +656,7 @@ pub async fn lint_and_resolve(
     doc_md: &str,
     tier: Tier,
     findings_override: Option<&[DocFinding]>,
+    composed_at: Option<i64>,
 ) -> Result<(LintOut, Vec<Card>), ApiError> {
     let doc = match review_doc::parse(doc_md) {
         Ok(d) => d,
@@ -585,11 +678,14 @@ pub async fn lint_and_resolve(
         doc_md,
         tier,
         findings.as_deref(),
+        composed_at,
     ));
 
     let ps_c = ps.clone();
     let root_c = repo_root.to_path_buf();
     let changed_paths = inputs.changed_paths.clone();
+    let doc_ci = doc.ci.clone();
+    let question_count = doc.questions.len();
     let (card_rows, resolved) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -618,6 +714,11 @@ pub async fn lint_and_resolve(
                 &pseudo_commits,
                 pseudo_truncated,
             );
+            let ci = derive_ci(
+                &doc_ci,
+                pseudo_binding.pr_meta_json.as_deref(),
+                pseudo_binding.pr_meta_fetched_at,
+            );
             let ctx = CardCtx {
                 repo_root: &root_c,
                 repo_id,
@@ -626,6 +727,8 @@ pub async fn lint_and_resolve(
                 known_ps: &known_ps,
                 changed_paths: &changed_paths,
                 pseudo: Some(&pseudo),
+                ci_checks: &ci.checks,
+                question_count,
             };
             let cards = cards::resolve_cards(store, &ctx, &refs);
             let rows = lint::card_rows(store, repo_id, &cards);
@@ -763,6 +866,24 @@ async fn render_with(
         })
         .collect();
     let title = doc_title(&out);
+    // V73-K5 (gap 6) — `pr_number` (the review's own PR binding) and
+    // `risk_score` (the pre-K1 `report_json.risk_score` lane) both live
+    // outside the document; one extra cheap read, alongside the export
+    // machine block's OWN finding rows (gap 4) so this is the only place
+    // that pays for either.
+    let summary_md = doc.summary_md.clone();
+    let risk = doc.risk.clone();
+    let (pr_number, report_risk_score, export_findings) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let pr_number = store.get_review_pr_binding(id)?.and_then(|b| b.pr_number);
+            let risk_score = store
+                .get_review_report(id)?
+                .and_then(|r| crate::reviews::report_risk_score_numeric(r.report_json.as_deref()));
+            let findings = store.list_review_findings(id, None, false)?;
+            Ok((pr_number, risk_score, findings))
+        })
+        .await?;
     let ctx = RenderCtx {
         repo: &out.repo,
         review_id: id,
@@ -772,15 +893,27 @@ async fn render_with(
         tier: &out.tier,
         rendered_at: now_unix(),
         omitted: &out.omitted,
+        pr_number,
+        risk_score: report_risk_score,
     };
     let rendered = render::render(template, &doc, &findings, &cards, &ctx);
+    // V73-K5 (gap 4) — every render, including the built-in default
+    // template, embeds a re-importable machine block: `kb-code review
+    // import-legacy` on this SAME export reproduces the document (modulo
+    // freshly-minted finding slugs). Appended OUTSIDE the operator's own
+    // template substitution — a custom template that names no placeholder
+    // for it must still round-trip.
+    let machine_block = crate::review_legacy::export_block_html(
+        &crate::review_legacy::export_block_json(&summary_md, risk.as_ref(), &export_findings),
+    );
+    let html = format!("{}\n{machine_block}\n", rendered.html);
     Ok(RenderOut {
         schema: RENDER_SCHEMA,
         review_id: id,
         ps_number: out.ps_number,
         revision: out.revision,
         template: template_name.to_string(),
-        html: rendered.html,
+        html,
         unknown_placeholders: rendered.unknown_placeholders,
         cards: cards.len(),
         orphans: cards
@@ -885,6 +1018,9 @@ pub async fn prepare_doc(
     findings_override: Option<&[DocFinding]>,
 ) -> Result<Result<PreparedDoc, (LintOut, Vec<Card>)>, ApiError> {
     let inputs = repo_inputs(repo_root, ps).await?;
+    // `None` — this is a CANDIDATE document, not yet composed, so it has
+    // no `created_at` to be stale relative to (the same reasoning
+    // `lint::structural_rows`'s `composed_at` doc states).
     let (lint, cards) = lint_and_resolve(
         state,
         id,
@@ -895,6 +1031,7 @@ pub async fn prepare_doc(
         doc_md,
         tier,
         findings_override,
+        None,
     )
     .await?;
     let Ok(doc) = review_doc::parse(doc_md) else {
@@ -930,4 +1067,69 @@ pub async fn prepare_doc(
         cards,
         new_row,
     }))
+}
+
+#[cfg(test)]
+mod ci_derive_tests {
+    use super::*;
+
+    #[test]
+    fn an_authored_ci_block_wins_over_any_pr_meta_snapshot() {
+        let authored = vec![review_doc::CiCheck {
+            name: "custom".to_string(),
+            status: "skipped".to_string(),
+            url: None,
+            observed_at: None,
+        }];
+        let pr_meta = serde_json::json!({ "checks": [
+            { "name": "build", "status": "pass" }
+        ] })
+        .to_string();
+        let out = derive_ci(&authored, Some(&pr_meta), Some(1));
+        assert_eq!(out.source, "authored");
+        assert_eq!(out.checks, authored);
+    }
+
+    #[test]
+    fn an_empty_authored_block_derives_from_the_pr_meta_snapshot() {
+        let pr_meta = serde_json::json!({ "checks": [
+            { "name": "build", "status": "pass" },
+            { "name": "lint", "status": "fail", "note": "failure" },
+            { "name": "docs", "status": "warn", "note": "skipped" },
+            { "name": "deploy", "status": "pending" }
+        ] })
+        .to_string();
+        let out = derive_ci(&[], Some(&pr_meta), Some(1_700_000_000));
+        assert_eq!(out.source, "derived");
+        assert_eq!(out.checks.len(), 4);
+        let by_name = |n: &str| out.checks.iter().find(|c| c.name == n).unwrap();
+        assert_eq!(by_name("build").status, "success");
+        assert_eq!(by_name("lint").status, "failure");
+        assert_eq!(by_name("docs").status, "skipped");
+        assert_eq!(by_name("deploy").status, "pending");
+        assert_eq!(by_name("build").observed_at, Some(1_700_000_000));
+        assert_eq!(by_name("build").url, None);
+    }
+
+    #[test]
+    fn no_pr_meta_and_no_authored_block_is_an_honest_empty_derived_list() {
+        let out = derive_ci(&[], None, None);
+        assert_eq!(out.source, "derived");
+        assert!(out.checks.is_empty());
+    }
+
+    #[test]
+    fn ci_status_from_check_prefers_the_raw_note_over_the_coarse_status() {
+        assert_eq!(ci_status_from_check("warn", Some("neutral")), "skipped");
+        assert_eq!(ci_status_from_check("warn", Some("stale")), "skipped");
+        assert_eq!(ci_status_from_check("pending", Some("queued")), "pending");
+        assert_eq!(
+            ci_status_from_check("pending", Some("in_progress")),
+            "pending"
+        );
+        assert_eq!(ci_status_from_check("fail", Some("cancelled")), "failure");
+        // No note at all: falls back to the coarse status.
+        assert_eq!(ci_status_from_check("pass", None), "success");
+        assert_eq!(ci_status_from_check("warn", None), "skipped");
+    }
 }

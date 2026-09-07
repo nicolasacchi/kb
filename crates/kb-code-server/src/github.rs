@@ -305,7 +305,12 @@ pub struct PrDetailOut {
 /// — see [`normalize_check_status`] — because GitHub's own two-axis
 /// `status`/`conclusion` pair is not itself the vocabulary any consumer of
 /// this crate's wire format wants to branch on.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+// V73-K5 — `Deserialize` is ADDITIVE (this struct already documents the
+// exact `pr_meta_json.checks` snapshot shape): `review_doc::routes::
+// derive_ci` reads that shape BACK out of the stored snapshot to build the
+// `ci:` block's derived entries, rather than re-parsing it into a THIRD,
+// hand-rolled shape that could drift from this one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckRunOut {
     pub name: String,
     /// `"pass"` | `"fail"` | `"warn"` | `"pending"` — see
@@ -316,12 +321,12 @@ pub struct CheckRunOut {
     /// normalized field above so a caller that wants GitHub's own precision
     /// (e.g. distinguishing `skipped` from `neutral`, both normalized to
     /// `warn`) still can.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     /// Seconds between `started_at` and `completed_at`, when GitHub
     /// reported both as parseable RFC3339 timestamps; `None` on a
     /// still-running check or an unparseable timestamp — never a guessed 0.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<i64>,
 }
 

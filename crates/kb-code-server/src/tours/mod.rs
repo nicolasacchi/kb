@@ -194,6 +194,8 @@ impl TourStepIn {
 /// | `hunk:` | K1's `hunk:<path>@<ps>#<n>` carries no review id and no `kbc-hunkid/1` address; the structured form (`kind: "hunk"` + `review` + `patchset` + `hunk`) carries both |
 /// | `finding:` | K1's `finding:<slug>` carries no review id; the structured form does |
 /// | `gh:` / `kb:` | inert links this daemon never resolves — put them in the step's `body_md`, or use a `link` node with a real URL |
+/// | `ci:` | V73-K5's check-run citation is `is_inert` (a snapshot read) and carries no path or range — a step is a PLACE, and a check has none |
+/// | `question:` | V73-K5's document-local back-reference addresses another question in a REVIEW, not a place in the repository |
 ///
 /// Every one of those refusals NAMES the structured field that does the
 /// job, so a narrower sugar is never a dead end.
@@ -246,6 +248,16 @@ pub fn node_from_ref_string(raw: &str) -> Result<(String, RefFields), String> {
             "{raw:?} is an INERT link — this daemon never calls GitHub and does not own \
              the kb corpus, so it makes no claim about it. Put it in the step's `body_md`, \
              or use a `link` node with a real URL"
+        )),
+        Ref::Ci { .. } => Err(format!(
+            "{raw:?} is an INERT check-run citation (V73-K5, a snapshot read, never a \
+             live GitHub call) and carries no path or range. A tour step is a PLACE; put \
+             this in the step's `body_md` instead"
+        )),
+        Ref::Question { .. } => Err(format!(
+            "{raw:?} addresses another question in a REVIEW DOCUMENT (V73-K5), not a \
+             place in the repository — a tour step has no use for it. Put it in the \
+             step's `body_md` instead"
         )),
     }
 }

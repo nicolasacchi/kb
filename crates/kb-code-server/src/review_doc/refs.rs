@@ -19,6 +19,8 @@
 //! | `gh` | `gh:<comment\|review\|issue\|pr>/<id>` | inert — kb-code never calls GitHub |
 //! | `kb` | `kb:<kb>/<id>` | inert — a link into the kb corpus |
 //! | `hunk` | `hunk:<path>@<ps>#<n>` | `ps` may be written `3` or `ps3` |
+//! | `ci` | `ci:<check-name>` | inert — a snapshot read, never a live GitHub call (V73-K5) |
+//! | `question` | `question:<n>` | this document's own `questions[]`, 1-based (V73-K5) |
 //!
 //! # Two parsing surfaces, one grammar
 //!
@@ -61,10 +63,17 @@
 
 use serde::Serialize;
 
-/// The seven scheme prefixes, in the order they are documented. A `[[…]]`
+/// The NINE scheme prefixes, in the order they are documented. A `[[…]]`
 /// body whose text before the first `:` is NOT in this set is a kb
 /// wikilink and this module never touches it.
-pub const SCHEMES: [&str; 7] = ["code", "sym", "ent", "finding", "gh", "kb", "hunk"];
+///
+/// V73-K5 added `ci` (a check-run snapshot citation) and `question` (a
+/// document-local back-reference into this document's own `questions[]`)
+/// — both closing the legacy-coverage gate's remaining schema gaps rather
+/// than growing the grammar for its own sake.
+pub const SCHEMES: [&str; 9] = [
+    "code", "sym", "ent", "finding", "gh", "kb", "hunk", "ci", "question",
+];
 
 /// `gh:` object kinds — closed, so a typo is a malformed ref rather than a
 /// link this daemon would have to guess the shape of.
@@ -117,6 +126,22 @@ pub enum Ref {
         ps: i64,
         index: u32,
     },
+    /// V73-K5 — `ci:<check-name>`. Resolved against a snapshot (the
+    /// document's own authored `ci:` block, or one DERIVED from the
+    /// review's stored `pr_meta_json.checks`) — never a live GitHub call,
+    /// which is exactly why it is [`Ref::is_inert`].
+    Ci {
+        raw: String,
+        name: String,
+    },
+    /// V73-K5 — `question:<n>`, a 1-based ordinal into THIS document's own
+    /// `questions[]`. There is no persisted question id (unlike a finding's
+    /// slug), so the ordinal into the SAME revision is the only stable
+    /// address there is.
+    Question {
+        raw: String,
+        index: u32,
+    },
 }
 
 impl Ref {
@@ -129,7 +154,9 @@ impl Ref {
             | Ref::Finding { raw, .. }
             | Ref::Gh { raw, .. }
             | Ref::Kb { raw, .. }
-            | Ref::Hunk { raw, .. } => raw,
+            | Ref::Hunk { raw, .. }
+            | Ref::Ci { raw, .. }
+            | Ref::Question { raw, .. } => raw,
         }
     }
 
@@ -143,14 +170,19 @@ impl Ref {
             Ref::Gh { .. } => "gh",
             Ref::Kb { .. } => "kb",
             Ref::Hunk { .. } => "hunk",
+            Ref::Ci { .. } => "ci",
+            Ref::Question { .. } => "question",
         }
     }
 
-    /// `true` for the two schemes this daemon deliberately does not
-    /// resolve: they address something on the far side of a network call
-    /// kb-code never makes (`gh:`) or a corpus it does not own (`kb:`).
+    /// `true` for the schemes this daemon deliberately does not resolve
+    /// LIVE: `gh:`/`kb:` address something on the far side of a network
+    /// call kb-code never makes or a corpus it does not own; `ci:` reads a
+    /// SNAPSHOT (authored, or derived from `pr_meta_json.checks` at the
+    /// last PR-metadata fetch) rather than calling GitHub's Checks API
+    /// again — same "no live call" posture, so the same word applies.
     pub fn is_inert(&self) -> bool {
-        matches!(self, Ref::Gh { .. } | Ref::Kb { .. })
+        matches!(self, Ref::Gh { .. } | Ref::Kb { .. } | Ref::Ci { .. })
     }
 }
 
@@ -202,6 +234,8 @@ pub fn parse_ref(body: &str) -> Result<Option<Ref>, String> {
         "gh" => parse_gh(owned, rest).map(Some),
         "kb" => parse_kb(owned, rest).map(Some),
         "hunk" => parse_hunk(owned, rest).map(Some),
+        "ci" => parse_ci(owned, rest).map(Some),
+        "question" => parse_question(owned, rest).map(Some),
         // `SCHEMES` is the single declaration home; this arm is
         // unreachable while the `match` above covers it, and the test
         // `every_declared_scheme_has_a_parser_arm` fails by name if a
@@ -382,6 +416,37 @@ fn parse_hunk(raw: String, rest: &str) -> Result<Ref, String> {
         ps,
         index,
     })
+}
+
+/// `ci:<check-name>`. The name is whatever GitHub's Checks API calls the
+/// run — free text, routinely containing spaces, slashes and parens (e.g.
+/// `"test (3.11, ubuntu-latest)"`) — so the only refusal is an empty name;
+/// nothing else about a check NAME is this grammar's business (whether it
+/// is a check this review's snapshot actually KNOWS ABOUT is a resolution
+/// question, answered honestly by the card's caption, never a parse error).
+fn parse_ci(raw: String, rest: &str) -> Result<Ref, String> {
+    let name = rest.trim();
+    if name.is_empty() {
+        return Err("ci ref has an empty check name".to_string());
+    }
+    Ok(Ref::Ci {
+        raw,
+        name: name.to_string(),
+    })
+}
+
+/// `question:<n>`, `n >= 1` — a 1-based ordinal into the CURRENT document's
+/// own `questions[]`. There is no cross-document form: a question has no
+/// slug, so "which document" is always "the one this ref is read from".
+fn parse_question(raw: String, rest: &str) -> Result<Ref, String> {
+    let rest = rest.trim();
+    let index: u32 = rest
+        .parse()
+        .map_err(|_| format!("question ref {rest:?} is not a positive whole number"))?;
+    if index == 0 {
+        return Err("question ref index must be >= 1 (questions are numbered from 1)".to_string());
+    }
+    Ok(Ref::Question { raw, index })
 }
 
 /// `…:<line>` or `…:<lo>-<hi>` at the very END of `s`; `None` when the tail

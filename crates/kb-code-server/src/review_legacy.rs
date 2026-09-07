@@ -43,8 +43,9 @@
 //! `finding_no_location` lint would reject it anyway and a fabricated path
 //! is worse than an honest omission.
 
-use crate::review_doc::DocFinding;
-use crate::review_findings::FindingLocationBody;
+use crate::review_doc::{self, DocFinding};
+use crate::review_findings::{FindingEvidenceBody, FindingLocationBody};
+use crate::store;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -60,6 +61,11 @@ pub const BLOCK_IDS: &[&str] = &[
     "pr-review-data",
     "kbc-review",
     "review-json",
+    // V73-K5 — kb-code's OWN pre-v7.3 findings-ledger schema
+    // (`kbc-findings/1`, the PR Room's `findings import` route). An
+    // artifact carrying kb-code's own former schema under its own former
+    // id was, before this, invisible to the importer.
+    "kbc-findings",
 ];
 
 /// Front-matter `summary_md` sources, in precedence order.
@@ -74,6 +80,12 @@ pub const RATIONALE_KEYS: &[&str] = &["rationale", "detail", "details", "descrip
 pub const RECOMMENDATION_KEYS: &[&str] = &["recommendation", "fix", "suggestion", "remedy"];
 /// Per-finding path sources.
 pub const PATH_KEYS: &[&str] = &["path", "file", "filename", "location"];
+/// Per-finding FLAT cited-code-excerpt sources — a legacy schema's own
+/// scraped snippet text, as opposed to the TYPED `{lang, source}` shape
+/// `evidence` (below) already names. Never trusted as a still-true fact
+/// about the file (it may be stale text quoted at review time): carried
+/// forward as a live `cites` ref instead — see [`map_finding`]'s doc.
+pub const EXCERPT_KEYS: &[&str] = &["excerpt", "code_excerpt", "snippet", "code"];
 
 /// The kbc severity vocabulary (unchanged from `kbc-findings/1`).
 pub const SEVERITIES: &[&str] = &["blocker", "concern", "ok"];
@@ -376,6 +388,107 @@ fn normalise_risk(s: &str) -> Option<&'static str> {
     }
 }
 
+/// One finding's location, from EITHER shape this importer accepts: the
+/// generic flat `PATH_KEYS` string (with `line`/`lines` top-level
+/// siblings), or the SAME nested `{path, kind, lines}` object
+/// [`DocFinding`] and `kbc-findings/1` already use elsewhere in this crate.
+/// Returns `(path, lines, declared_kind)` — `declared_kind` is `Some` only
+/// for the nested shape, and only when THAT object actually names one.
+fn location_fields(raw: &Value) -> Option<(String, Option<Vec<i64>>, Option<String>)> {
+    if let Some(path) = first_str(raw, PATH_KEYS) {
+        let lines = raw
+            .get("line")
+            .and_then(Value::as_i64)
+            .map(|l| vec![l])
+            .or_else(|| {
+                raw.get("lines")
+                    .and_then(|l| l.as_array())
+                    .map(|a| a.iter().filter_map(Value::as_i64).collect::<Vec<i64>>())
+            })
+            .filter(|v| !v.is_empty());
+        return Some((path.to_string(), lines, None));
+    }
+    let obj = raw.get("location")?.as_object()?;
+    let path = obj
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let lines = obj
+        .get("lines")
+        .and_then(|l| l.as_array())
+        .map(|a| a.iter().filter_map(Value::as_i64).collect::<Vec<i64>>())
+        .filter(|v| !v.is_empty());
+    let kind = obj.get("kind").and_then(Value::as_str).map(str::to_string);
+    Some((path.to_string(), lines, kind))
+}
+
+/// `single | range | multi | whole_file` from a line count — the SAME rule
+/// `kbc-findings/1`'s own writers use (`review_findings::validate_location_
+/// shape`'s vocabulary). Used both for the flat shape's `kind` (which
+/// carries no vocabulary of its own — only `line`/`lines` — so it never had
+/// a way to say anything else) and as the nested shape's default when that
+/// object names no `kind`, or names one outside the closed set. A pre-K5
+/// defect this unit noticed while touching this code: the flat path used
+/// to hardcode a bare `"lines"`, which is not in `store::LOCATION_KINDS`
+/// and would fail `compose`'s own `finding_no_location`/`invalid_location_
+/// kind` lint on every multi-line flat-shape import — fixed here as a
+/// consequence of unifying both shapes through one resolver, not a
+/// separate deliberate change (see this unit's report).
+fn kind_from_lines(lines: Option<&[i64]>) -> &'static str {
+    match lines.map(|l| l.len()).unwrap_or(0) {
+        0 => store::LOCATION_KIND_WHOLE_FILE,
+        1 => store::LOCATION_KIND_SINGLE,
+        2 => store::LOCATION_KIND_RANGE,
+        _ => store::LOCATION_KIND_MULTI,
+    }
+}
+
+/// The finding's cited code excerpt, when the raw JSON carries one — EITHER
+/// the typed `{lang, source}` shape `kbc-findings/1`'s own `evidence` field
+/// already uses, or a flat scraped snippet string under one of
+/// [`EXCERPT_KEYS`].
+enum RawExcerpt {
+    /// Carried through verbatim as findings-v2 `evidence` — a typed,
+    /// author-attributed excerpt, not a guess.
+    Typed(FindingEvidenceBody),
+    /// A bare scraped string. NEVER copied verbatim into a field that
+    /// looks authoritative (it may be stale the moment the legacy artifact
+    /// was rendered) — [`map_finding`] turns this into a live `cites` ref
+    /// instead, so a reader always sees CURRENT bytes, never frozen ones.
+    Flat(String),
+}
+
+fn raw_excerpt(raw: &Value) -> Option<RawExcerpt> {
+    if let Some(obj) = raw.get("evidence").and_then(Value::as_object) {
+        let lang = obj.get("lang").and_then(Value::as_str).map(str::to_string);
+        let source = obj
+            .get("source")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if lang.is_some() || source.is_some() {
+            return Some(RawExcerpt::Typed(FindingEvidenceBody { lang, source }));
+        }
+    }
+    first_str(raw, EXCERPT_KEYS).map(|s| RawExcerpt::Flat(s.to_string()))
+}
+
+/// A `code:` ref citing `path`/`lines` — no `@sha`: this importer has no
+/// repository to read a blob hash from (D9-a's "local, no daemon, no
+/// network" verb), so the honest ref is unpinned, resolving live against
+/// whatever the target patchset reads today.
+fn code_cite(path: &str, lines: Option<&[i64]>) -> String {
+    match lines {
+        None | Some([]) => format!("code:{path}"),
+        Some([one]) => format!("code:{path}:{one}"),
+        Some(many) => {
+            let lo = many.iter().min().copied().unwrap_or(0);
+            let hi = many.iter().max().copied().unwrap_or(0);
+            format!("code:{path}:{lo}-{hi}")
+        }
+    }
+}
+
 /// `Ok(Ok(finding))` mapped · `Ok(Err(reason))` skipped · `Err(_)` strict
 /// refusal.
 #[allow(clippy::type_complexity)]
@@ -387,11 +500,19 @@ fn map_finding(
     let Some(title) = first_str(raw, TITLE_KEYS) else {
         return Ok(Err(format!("no title (looked for {TITLE_KEYS:?})")));
     };
-    let Some(path) = first_str(raw, PATH_KEYS) else {
+    let excerpt = raw_excerpt(raw);
+    let Some((path, lines, declared_kind)) = location_fields(raw) else {
+        let excerpt_note = if excerpt.is_some() {
+            " (this finding also cited a code excerpt, which could not be carried forward \
+             without a location either)"
+        } else {
+            ""
+        };
         return Ok(Err(format!(
-            "no location path (looked for {PATH_KEYS:?}) — a finding with no location fails \
-             kbc-review/1's own `finding_no_location` lint, and inventing one would be worse \
-             than omitting it"
+            "no location path (looked for {PATH_KEYS:?}, including the nested {{path, kind, \
+             lines}} shape) — a finding with no location fails kbc-review/1's own \
+             `finding_no_location` lint, and inventing one would be worse than omitting \
+             it{excerpt_note}"
         )));
     };
 
@@ -400,50 +521,113 @@ fn map_finding(
     let raw_cat = first_str(raw, &["category", "kind", "type"]);
     let category = map_category(raw_cat, opts, mapping)?;
 
-    let lines = raw
-        .get("line")
-        .and_then(|l| l.as_i64())
-        .map(|l| vec![l])
-        .or_else(|| {
-            raw.get("lines").and_then(|l| l.as_array()).map(|a| {
-                a.iter()
-                    .filter_map(serde_json::Value::as_i64)
-                    .collect::<Vec<i64>>()
-            })
-        })
-        .filter(|v| !v.is_empty());
+    // `act` is a v2 axis the legacy shape has no column for — UNLESS the
+    // raw finding already IS a v2 shape (this daemon's own export, or a
+    // hand-authored kbc-findings/1 block), in which case its own `act` is
+    // honoured rather than re-derived. Absent or out-of-vocabulary, the
+    // existing stated rule applies: an `ok` row is a note, everything else
+    // an issue.
+    let act = first_str(raw, &["act"])
+        .filter(|a| review_doc::is_valid_act(a))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if severity == "ok" {
+                "note".to_string()
+            } else {
+                "issue".to_string()
+            }
+        });
+    // `blocking` likewise: an explicit bool is honoured (round-trip
+    // fidelity for this daemon's own export); otherwise derived from
+    // severity, as before.
+    let blocking = raw
+        .get("blocking")
+        .and_then(Value::as_bool)
+        .unwrap_or(severity == "blocker");
 
-    // `act` is a v2 axis the legacy shape has no column for. It is DERIVED
-    // from severity through one stated rule rather than defaulted silently:
-    // an `ok` row is a note, everything else is an issue.
-    let act = if severity == "ok" { "note" } else { "issue" };
+    let derived_kind = kind_from_lines(lines.as_deref()).to_string();
+    let kind = match declared_kind {
+        Some(k) if store::is_valid_location_kind(&k) => k,
+        Some(bad) => {
+            // The nested object named a `kind` outside the closed
+            // single|range|multi|whole_file vocabulary — substituted with
+            // a stated note, the same tolerant-in-one-direction posture
+            // `map_severity`/`map_category` already apply.
+            note_mapping(mapping, "location.kind", &bad, &derived_kind);
+            derived_kind
+        }
+        None => derived_kind,
+    };
+
+    let (cites, evidence, flat_excerpt_bytes) = match excerpt {
+        Some(RawExcerpt::Typed(body)) => (raw_cites(raw), Some(body), None),
+        Some(RawExcerpt::Flat(text)) => {
+            let mut cites = raw_cites(raw);
+            let cite = code_cite(&path, lines.as_deref());
+            if !cites.contains(&cite) {
+                cites.push(cite);
+            }
+            (cites, None, Some(text.len()))
+        }
+        None => (raw_cites(raw), None, None),
+    };
+    if let Some(bytes) = flat_excerpt_bytes {
+        // The excerpt's TEXT is never quoted here — only its size, so the
+        // mapping row stays an honest audit trail ("something was scraped
+        // and rerouted") without itself becoming a second, un-refreshed
+        // copy of possibly-stale content.
+        note_mapping(
+            mapping,
+            "cites",
+            &format!("a scraped {bytes}-byte code excerpt"),
+            "a live code: ref (never the frozen excerpt text)",
+        );
+    }
 
     Ok(Ok(DocFinding {
         // No slug: the ledger mints one. Carrying a legacy id across would
         // claim an identity in a namespace that never minted it (D9's slug
         // rule) — the legacy id is preserved in the rationale instead.
         slug: None,
-        act: act.to_string(),
+        act,
         severity: severity.to_string(),
         category: category.to_string(),
-        blocking: severity == "blocker",
+        blocking,
         title: title.to_string(),
         rationale: rationale_with_provenance(raw),
         recommendation: first_str(raw, RECOMMENDATION_KEYS).map(str::to_string),
         location: FindingLocationBody {
-            path: path.to_string(),
-            kind: if lines.is_some() {
-                "lines".into()
-            } else {
-                "whole_file".into()
-            },
+            path,
+            kind,
             lines,
             removed: false,
         },
-        cites: Vec::new(),
-        supersedes: Vec::new(),
-        evidence: None,
+        cites,
+        supersedes: raw_string_list(raw, "supersedes"),
+        evidence,
     }))
+}
+
+/// `cites`/`supersedes` — a JSON array of strings, carried through
+/// verbatim when the raw finding already has one (this daemon's own
+/// export, or a hand-authored kbc-findings/1 block). Absent or malformed
+/// degrades to empty rather than a refusal: a legacy artifact's OWN schema
+/// never had these fields, so their absence is the overwhelmingly common
+/// and entirely expected case.
+fn raw_string_list(raw: &Value, key: &str) -> Vec<String> {
+    raw.get(key)
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn raw_cites(raw: &Value) -> Vec<String> {
+    raw_string_list(raw, "cites")
 }
 
 /// The rationale, plus the legacy id when the block carried one — so a
@@ -454,9 +638,9 @@ fn rationale_with_provenance(raw: &Value) -> String {
     match first_str(raw, &["id", "slug", "ref"]) {
         Some(id) => {
             if base.is_empty() {
-                format!("(migrated from legacy finding `{id}`)")
+                format!("(migrated from a legacy finding — legacy_id: {id})")
             } else {
-                format!("{base}\n\n(migrated from legacy finding `{id}`)")
+                format!("{base}\n\n(migrated from a legacy finding — legacy_id: {id})")
             }
         }
         None => base,
@@ -583,6 +767,97 @@ fn yaml_scalar(s: &str) -> String {
     }
 }
 
+// --- V73-K5: the export half — closing the round trip ----------------------
+//
+// `render` embeds exactly this shape under the `kbc-review` block id (one
+// of [`BLOCK_IDS`]), so `import` can read a kb-code export back — the
+// round trip design D9-a always intended but K1 never wired up. Nothing
+// here is a second schema: it emits the SAME generic finding shape
+// [`map_finding`] already reads (flat top-level scalars, the nested
+// `{path, kind, lines, removed}` location, and a typed `evidence` object),
+// so a fix to the importer's tolerance is automatically a fix to the
+// round trip too.
+
+/// One composed, non-superseded finding, in the shape [`map_finding`]
+/// accepts. Slugs are exported (so the rationale can trace back to them
+/// via `legacy_id`) but are NEVER re-adopted on import — D9's "a legacy id
+/// is never a slug" rule applies to this daemon's own former output
+/// exactly as it does to a stranger's.
+pub fn export_finding_json(f: &store::ReviewFindingRow) -> Value {
+    let lines: Option<Vec<i64>> = f
+        .location_lines
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+    let evidence = if f.evidence_lang.is_some() || f.evidence_source.is_some() {
+        serde_json::json!({ "lang": f.evidence_lang, "source": f.evidence_source })
+    } else {
+        Value::Null
+    };
+    let cites: Vec<String> = f
+        .cites_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    serde_json::json!({
+        "slug": f.slug,
+        "act": f.act,
+        "severity": f.severity,
+        "category": f.category,
+        "blocking": f.blocking,
+        "title": f.title,
+        "rationale": f.rationale,
+        "recommendation": f.recommendation,
+        "location": {
+            "path": f.location_path,
+            "kind": f.location_kind,
+            "lines": lines,
+            "removed": f.location_removed,
+        },
+        "cites": cites,
+        "evidence": evidence,
+    })
+}
+
+/// The whole machine block payload — front matter's own `summary_md`/
+/// `risk` plus every LIVE (non-superseded) finding. Tombstoned findings
+/// are deliberately excluded: re-importing an export should not resurrect
+/// a finding a human already dispositioned away.
+pub fn export_block_json(
+    summary_md: &str,
+    risk: Option<&review_doc::Risk>,
+    findings: &[store::ReviewFindingRow],
+) -> Value {
+    let live: Vec<Value> = findings
+        .iter()
+        .filter(|f| !f.superseded)
+        .map(export_finding_json)
+        .collect();
+    serde_json::json!({
+        "schema": SCHEMA_KBC_REVIEW,
+        "summary_md": summary_md,
+        "risk": risk.map(|r| serde_json::json!({ "level": r.level, "why": r.why })),
+        "findings": live,
+    })
+}
+
+/// `kbc-review/1`'s OWN schema tag, as `import`'s `risk_from`/`first_str`
+/// probes expect to see it — named here rather than importing
+/// `review_doc::SCHEMA` under a second name, so a reader sees at a glance
+/// this is the review document schema, not `kbc-legacy-import/1`'s own.
+const SCHEMA_KBC_REVIEW: &str = review_doc::SCHEMA;
+
+/// Wrap `payload` in the `<script type="application/json" id="kbc-review">`
+/// block [`BLOCK_IDS`] already accepts, escaping every `</` so a rationale
+/// or title that happens to contain `</script>` can never truncate the
+/// block early when [`scan_script`] re-extracts it — the standard
+/// embedded-JSON escape (`\/` is a legal JSON escape for `/`, so this is
+/// invisible to any JSON parser, including [`import`]'s own).
+pub fn export_block_html(payload: &Value) -> String {
+    let json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+    let escaped = json.replace("</", "<\\/");
+    format!("<script type=\"application/json\" id=\"kbc-review\">{escaped}</script>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,7 +968,7 @@ mod tests {
 {"summary":"s","findings":[{"id":"f-7","title":"t","severity":"ok","path":"a.rb"}]}</script>"#;
         let out = import(html, &ImportOptions::default()).unwrap();
         assert_eq!(out.findings[0].slug, None);
-        assert!(out.findings[0].rationale.contains("legacy finding `f-7`"));
+        assert!(out.findings[0].rationale.contains("legacy_id: f-7"));
     }
 
     #[test]
@@ -772,5 +1047,243 @@ mod tests {
         let back: serde_json::Value = serde_json::from_str(&json).unwrap();
         let parsed: Vec<DocFinding> = serde_json::from_value(back["findings"].clone()).unwrap();
         assert_eq!(parsed, out.findings);
+    }
+
+    // --- V73-K5 gap 1: a cited code excerpt is never silently dropped ------
+
+    #[test]
+    fn a_flat_scraped_excerpt_is_carried_as_a_live_code_ref_never_as_frozen_text() {
+        let html = r#"<script type="application/json" id="kb-review-data">
+{"summary":"s","findings":[{"title":"t","severity":"concern","path":"a.rb","line":12,
+                             "excerpt":"def totally_stale\n  1 + 1\nend"}]}</script>"#;
+        let out = import(html, &ImportOptions::default()).unwrap();
+        assert_eq!(out.findings.len(), 1);
+        // The excerpt TEXT is never reproduced verbatim anywhere in the
+        // output — only a live pointer is.
+        assert!(!out.doc_md.contains("totally_stale"));
+        assert!(
+            !out.findings[0].rationale.contains("totally_stale"),
+            "{:?}",
+            out.findings[0].rationale
+        );
+        assert_eq!(out.findings[0].cites, vec!["code:a.rb:12".to_string()]);
+        assert_eq!(out.findings[0].evidence, None);
+        assert!(out.mapping.iter().any(|m| m.field == "cites"));
+    }
+
+    #[test]
+    fn an_excerpt_with_no_location_is_skipped_and_the_reason_says_so() {
+        let html = r#"<script type="application/json" id="kb-review-data">
+{"summary":"s","findings":[{"title":"nowhere","severity":"concern",
+                             "excerpt":"orphaned snippet"}]}</script>"#;
+        let out = import(html, &ImportOptions::default()).unwrap();
+        assert!(out.findings.is_empty());
+        assert_eq!(out.skipped.len(), 1);
+        assert!(
+            out.skipped[0].reason.contains("also cited a code excerpt"),
+            "{}",
+            out.skipped[0].reason
+        );
+    }
+
+    // --- V73-K5 gap 2: the nested {path, kind, lines} location shape -------
+
+    #[test]
+    fn a_nested_location_object_is_read_the_same_as_a_flat_path() {
+        let html = r#"<script type="application/json" id="kb-review-data">
+{"summary":"s","findings":[{"title":"t","severity":"concern","category":"correctness",
+    "rationale":"r","location":{"path":"app/models/order.rb","kind":"range","lines":[10,12]}}]}
+</script>"#;
+        let out = import(html, &ImportOptions::default()).unwrap();
+        assert_eq!(out.findings.len(), 1, "{:?}", out.skipped);
+        let f = &out.findings[0];
+        assert_eq!(f.location.path, "app/models/order.rb");
+        assert_eq!(f.location.kind, "range");
+        assert_eq!(f.location.lines, Some(vec![10, 12]));
+    }
+
+    #[test]
+    fn a_nested_location_missing_kind_derives_one_from_the_line_count() {
+        let html = r#"<script type="application/json" id="kb-review-data">
+{"summary":"s","findings":[
+  {"title":"a","severity":"ok","location":{"path":"a.rb","lines":[3]}},
+  {"title":"b","severity":"ok","location":{"path":"b.rb","lines":[3,9,11]}},
+  {"title":"c","severity":"ok","location":{"path":"c.rb"}}
+]}</script>"#;
+        let out = import(html, &ImportOptions::default()).unwrap();
+        assert_eq!(out.findings.len(), 3, "{:?}", out.skipped);
+        assert_eq!(out.findings[0].location.kind, "single");
+        assert_eq!(out.findings[1].location.kind, "multi");
+        assert_eq!(out.findings[2].location.kind, "whole_file");
+    }
+
+    #[test]
+    fn a_nested_location_with_an_out_of_vocabulary_kind_is_substituted_with_a_note() {
+        let html = r#"<script type="application/json" id="kb-review-data">
+{"summary":"s","findings":[{"title":"t","severity":"ok",
+    "location":{"path":"a.rb","kind":"lines","lines":[3]}}]}</script>"#;
+        let out = import(html, &ImportOptions::default()).unwrap();
+        assert_eq!(out.findings[0].location.kind, "single");
+        assert!(
+            out.mapping
+                .iter()
+                .any(|m| m.field == "location.kind" && m.from == "lines"),
+            "{:?}",
+            out.mapping
+        );
+    }
+
+    // --- V73-K5 gap 3: kb-code's own pre-v7.3 kbc-findings/1 block --------
+
+    #[test]
+    fn a_kbc_findings_block_is_accepted_severity_preserved_slug_kept_as_legacy_id() {
+        let html = r#"<script type="application/json" id="kbc-findings">
+{"schema":"kbc-findings/1","findings":[{"slug":"f-3","severity":"blocker",
+    "category":"correctness","title":"Dedup race","rationale":"a race on retry",
+    "location":{"path":"app/x.rb","kind":"single","lines":[10]},
+    "evidence":{"lang":"ruby","source":"@count += 1"}}]}</script>"#;
+        let out = import(html, &ImportOptions::default()).unwrap();
+        assert_eq!(out.block_id, "kbc-findings");
+        assert_eq!(out.findings.len(), 1, "{:?}", out.skipped);
+        let f = &out.findings[0];
+        // Severity is ALREADY the kbc vocabulary — preserved, zero
+        // substitution note.
+        assert_eq!(f.severity, "blocker");
+        assert!(out.mapping.is_empty(), "{:?}", out.mapping);
+        // The slug is NEVER adopted as identity...
+        assert_eq!(f.slug, None);
+        // ...but is kept, traceable, as `legacy_id`.
+        assert!(f.rationale.contains("legacy_id: f-3"), "{}", f.rationale);
+        assert_eq!(f.location.path, "app/x.rb");
+        assert_eq!(f.location.lines, Some(vec![10]));
+        // The typed evidence carries through verbatim — it is NOT dropped
+        // and NOT rerouted through `cites` (that rerouting is only for a
+        // FLAT scraped excerpt string, never a typed evidence object).
+        assert_eq!(
+            f.evidence,
+            Some(crate::review_findings::FindingEvidenceBody {
+                lang: Some("ruby".to_string()),
+                source: Some("@count += 1".to_string()),
+            })
+        );
+    }
+
+    // --- V73-K5 gap 4: render's machine block round-trips through import --
+
+    #[test]
+    fn export_then_import_reproduces_the_document_modulo_minted_slugs() {
+        let finding = sample_finding_row();
+        let payload = export_block_json(
+            "Money moves from floats to integer cents.",
+            Some(&review_doc::Risk {
+                level: "high".to_string(),
+                why: "touches billing".to_string(),
+            }),
+            std::slice::from_ref(&finding),
+        );
+        let html = format!(
+            "<html><body><h1>Review</h1>{}</body></html>",
+            export_block_html(&payload)
+        );
+
+        let out = import(&html, &ImportOptions::default()).expect("re-imports");
+        assert_eq!(out.block_id, "kbc-review");
+
+        let doc = crate::review_doc::parse(&out.doc_md).expect("re-imported doc parses");
+        assert_eq!(
+            doc.summary_md.trim_end(),
+            "Money moves from floats to integer cents."
+        );
+        assert_eq!(doc.risk.as_ref().map(|r| r.level.as_str()), Some("high"));
+        assert_eq!(
+            doc.risk.as_ref().map(|r| r.why.as_str()),
+            Some("touches billing")
+        );
+
+        assert_eq!(out.findings.len(), 1);
+        let f = &out.findings[0];
+        // Slugs are NEVER re-adopted — the one place this round trip is
+        // deliberately lossy, and the report says so by name.
+        assert_eq!(f.slug, None);
+        assert!(f.rationale.contains("legacy_id: f-9"), "{}", f.rationale);
+        assert!(f.rationale.starts_with(&finding.rationale));
+        assert_eq!(f.act, finding.act);
+        assert_eq!(f.severity, finding.severity);
+        assert_eq!(f.category, finding.category);
+        assert_eq!(f.blocking, finding.blocking);
+        assert_eq!(f.title, finding.title);
+        assert_eq!(f.recommendation, finding.recommendation);
+        assert_eq!(f.location.path, finding.location_path);
+        assert_eq!(f.location.kind, finding.location_kind);
+        assert_eq!(
+            f.evidence,
+            Some(crate::review_findings::FindingEvidenceBody {
+                lang: finding.evidence_lang.clone(),
+                source: finding.evidence_source.clone(),
+            })
+        );
+        // Zero substitutions: every value the export wrote was already
+        // valid kbc vocabulary.
+        assert!(out.mapping.is_empty(), "{:?}", out.mapping);
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    }
+
+    #[test]
+    fn the_export_escapes_a_closing_script_tag_inside_a_rationale() {
+        let mut finding = sample_finding_row();
+        finding.rationale = "see </script><script>alert(1)</script> above".to_string();
+        let payload = export_block_json("s", None, std::slice::from_ref(&finding));
+        let html = format!("<html><body>{}</body></html>", export_block_html(&payload));
+        // The embedded block must not have been truncated by the payload's
+        // own content — re-extracting and re-parsing it must still work.
+        let out = import(&html, &ImportOptions::default()).expect("re-imports despite the payload");
+        assert_eq!(out.findings.len(), 1);
+        assert!(out.findings[0].rationale.contains("alert(1)"));
+        assert!(!html.contains("<script>alert(1)</script>"));
+    }
+
+    /// A hand-built [`crate::store::ReviewFindingRow`] — this crate has no
+    /// lighter builder for one outside a live store, so the literal is
+    /// spelled out in full rather than half-constructed through `Default`
+    /// (this row type derives none).
+    fn sample_finding_row() -> store::ReviewFindingRow {
+        store::ReviewFindingRow {
+            id: 1,
+            review_id: 7,
+            annotation_id: "ann_1".to_string(),
+            slug: "f-9".to_string(),
+            severity: "blocker".to_string(),
+            category: "correctness".to_string(),
+            location_kind: "single".to_string(),
+            location_path: "app/models/order.rb".to_string(),
+            location_lines: Some("[14]".to_string()),
+            location_removed: false,
+            title: "The backfill rounds before it multiplies".to_string(),
+            rationale: "multiplies a rounded float, off by a cent".to_string(),
+            recommendation: Some("Multiply first, then round".to_string()),
+            evidence_lang: Some("ruby".to_string()),
+            evidence_source: Some("(price * 100).round".to_string()),
+            origin: "import".to_string(),
+            author: None,
+            disposition: None,
+            disposition_note: None,
+            disposition_by: None,
+            disposition_at: None,
+            content_updated_at: None,
+            published_state: "unpublished".to_string(),
+            published_at: None,
+            published_url: None,
+            superseded: false,
+            superseded_at: None,
+            superseded_reason: None,
+            import_batch_id: "batch_1".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            act: "issue".to_string(),
+            blocking: true,
+            cites_json: None,
+            fingerprint: None,
+            superseded_by: None,
+        }
     }
 }
