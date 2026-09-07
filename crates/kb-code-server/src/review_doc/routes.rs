@@ -317,6 +317,26 @@ async fn build_doc_out(
                     .into_iter()
                     .map(|p| p.ps_number)
                     .collect();
+                // V73-K3 — the review's pseudo-files, so a `code:
+                // ~review/<name>` ref resolves through the same ladder as a
+                // tracked path. Built here (not lazily inside the resolver)
+                // because they are rendered from rows this closure already
+                // has plus ONE `git log`, and because every ref in one pass
+                // must see the SAME bytes.
+                let pseudo_binding = store.get_review_pr_binding(id)?.unwrap_or_default();
+                let pseudo_doc = store.latest_review_doc(id, ps_c.ps_number)?;
+                let pseudo_findings = store.list_review_findings(id, None, true)?;
+                let (pseudo_commits, pseudo_truncated) =
+                    crate::review_pseudo::commit_list(&root_c, &ps_c.base_sha, &ps_c.tip_sha);
+                let pseudo = crate::review_pseudo::build_set(
+                    id,
+                    ps_c.ps_number,
+                    &pseudo_binding,
+                    pseudo_doc.as_ref(),
+                    &pseudo_findings,
+                    &pseudo_commits,
+                    pseudo_truncated,
+                );
                 let ctx = CardCtx {
                     repo_root: &root_c,
                     repo_id,
@@ -324,6 +344,7 @@ async fn build_doc_out(
                     target_ps: &ps_c,
                     known_ps: &known_ps,
                     changed_paths: &changed_paths,
+                    pseudo: Some(&pseudo),
                 };
                 Some(cards::resolve_cards(store, &ctx, &refs))
             } else {
@@ -380,20 +401,56 @@ fn derive_reading_order(
         caption: "this document declares no reading order — the tour below is DERIVED from the \
                   review map (dependencies first, tests last), not authored"
             .to_string(),
-        chapters: vec![review_doc::Chapter {
-            chapter: "Derived from the review map".to_string(),
-            stops: stops
-                .into_iter()
-                .map(|s| review_doc::Stop {
-                    r#ref: format!("code:{}", s.path),
-                    why: Some(if s.cycle {
-                        format!("{} (in an import cycle)", s.reason)
-                    } else {
-                        s.reason
-                    }),
-                })
-                .collect(),
-        }],
+        chapters: vec![
+            // V73-K3 — CHAPTER ZERO (design D9: "PR description and all
+            // GitHub comments absorbed into one timeline and chapter
+            // zero"). The review's own pseudo-files come before the diff,
+            // because a reviewer who reads the code before the description
+            // is reading it without the question it was meant to answer.
+            // Listed unconditionally, in `review_pseudo::NAMES` order — a
+            // pseudo-file always EXISTS, and one with no content says so
+            // when its card resolves, which is a better degrade than a
+            // chapter whose membership silently varies per review.
+            review_pseudo_chapter(),
+            review_doc::Chapter {
+                chapter: "Derived from the review map".to_string(),
+                stops: stops
+                    .into_iter()
+                    .map(|s| review_doc::Stop {
+                        r#ref: format!("code:{}", s.path),
+                        why: Some(if s.cycle {
+                            format!("{} (in an import cycle)", s.reason)
+                        } else {
+                            s.reason
+                        }),
+                    })
+                    .collect(),
+            },
+        ],
+    }
+}
+
+/// Chapter zero: the four `kbc-pseudo/1` files, as ordinary `code:` stops.
+/// They address like paths because they ARE addressable like paths — see
+/// `crate::review_pseudo`'s module doc.
+fn review_pseudo_chapter() -> review_doc::Chapter {
+    review_doc::Chapter {
+        chapter: "The review itself".to_string(),
+        stops: crate::review_pseudo::NAMES
+            .iter()
+            .map(|name| review_doc::Stop {
+                r#ref: format!("code:{}", crate::review_pseudo::path_for(name)),
+                why: Some(
+                    match *name {
+                        crate::review_pseudo::PR_BODY => "what the author says this change is for",
+                        crate::review_pseudo::REVIEW_MD => "the review document itself",
+                        crate::review_pseudo::FINDINGS_JSON => "every finding, as the sidecar",
+                        _ => "the commits, with their trailers",
+                    }
+                    .to_string(),
+                ),
+            })
+            .collect(),
     }
 }
 
@@ -541,6 +598,26 @@ pub async fn lint_and_resolve(
                 .into_iter()
                 .map(|p| p.ps_number)
                 .collect();
+            // V73-K3 — the review's pseudo-files, so a `code:
+            // ~review/<name>` ref resolves through the same ladder as a
+            // tracked path. Built here (not lazily inside the resolver)
+            // because they are rendered from rows this closure already
+            // has plus ONE `git log`, and because every ref in one pass
+            // must see the SAME bytes.
+            let pseudo_binding = store.get_review_pr_binding(id)?.unwrap_or_default();
+            let pseudo_doc = store.latest_review_doc(id, ps_c.ps_number)?;
+            let pseudo_findings = store.list_review_findings(id, None, true)?;
+            let (pseudo_commits, pseudo_truncated) =
+                crate::review_pseudo::commit_list(&root_c, &ps_c.base_sha, &ps_c.tip_sha);
+            let pseudo = crate::review_pseudo::build_set(
+                id,
+                ps_c.ps_number,
+                &pseudo_binding,
+                pseudo_doc.as_ref(),
+                &pseudo_findings,
+                &pseudo_commits,
+                pseudo_truncated,
+            );
             let ctx = CardCtx {
                 repo_root: &root_c,
                 repo_id,
@@ -548,6 +625,7 @@ pub async fn lint_and_resolve(
                 target_ps: &ps_c,
                 known_ps: &known_ps,
                 changed_paths: &changed_paths,
+                pseudo: Some(&pseudo),
             };
             let cards = cards::resolve_cards(store, &ctx, &refs);
             let rows = lint::card_rows(store, repo_id, &cards);

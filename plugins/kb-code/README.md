@@ -257,3 +257,14 @@ meaningfully; there's no watch mode.
   `review export-github`'s payload — recording every post via
   `review publish` so nothing double-posts. The daemon stores; the agent
   authors; `gh` runs only at the agent layer, only when asked.
+
+- **`/kb-review-migrate`** (`skills/kb-review-migrate/`) — the one-shot
+  migration from a LEGACY review HTML artifact to a `kbc-review/1` document
+  plus a findings v2 sidecar (kb-code v7.3, design D9/D9-a). It runs
+  `kb-code review import-legacy`, which reads ONLY the artifact's embedded
+  `<script type="application/json">` machine block and never its prose, then
+  lints the result via `review lint` and hands the operator the exact
+  `review compose` line. It never composes, never invents a location or a
+  slug, and reports every skipped finding by title — the artifact's prose is
+  decoy by design, and a scraped finding would inherit a slug, a
+  disposition and a GitHub thread it never earned.

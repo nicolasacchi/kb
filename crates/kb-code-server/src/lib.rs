@@ -321,6 +321,7 @@ pub mod boards;
 pub mod bookmarks;
 pub mod canvas;
 pub mod checkout;
+pub mod claims;
 // S2-C (design-s2.md § S2-C) — LSP code actions as suggestions. Alone
 // rather than folded into `lip.rs`: its own request/response wire types,
 // distinct from `lip::DiagnosticsOut`. See `code_actions`'s own module doc.
@@ -401,11 +402,15 @@ pub mod review_findings;
 pub mod review_gate;
 pub mod review_github_export;
 pub mod review_github_threads;
+pub mod review_hunks;
 pub mod review_impact;
 pub mod review_inbox;
+pub mod review_legacy;
 pub mod review_map;
+pub mod review_pseudo;
 pub mod review_sweep;
 pub mod review_timeline;
+pub mod review_turns;
 pub mod reviews;
 pub mod router;
 pub mod routes;
