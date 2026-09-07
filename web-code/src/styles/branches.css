@@ -1,0 +1,308 @@
+/* V75-M3 (D15) — `branch-facts/1`'s views surface.
+ *
+ * The one design rule worth stating in CSS: the AGENT-provenance rail is
+ * D16's Lane Budget channel for provenance — a 2 px session-hue rail in
+ * gutter A, and nothing else. `--prov-hue-0…7` have existed since V70-A7
+ * with no consumer (`tokens.css`'s own note); this is that consumer. Trust
+ * is line STYLE in one hue and lives on a different channel — never mix the
+ * two, or a decorative axis starts reading as a verdict. */
+
+.kbc-bviews {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0 24px;
+  outline: none;
+}
+
+.kbc-bviews__selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.kbc-bviews__view {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.kbc-bviews__view--on {
+  border-color: var(--accent);
+  background: var(--bg-raised, var(--bg-card));
+  font-weight: 600;
+}
+
+.kbc-bviews__count {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+}
+
+.kbc-bviews__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.kbc-bviews__filter {
+  flex: 1 1 22ch;
+  min-width: 18ch;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg-card));
+  color: var(--fg);
+  font: inherit;
+}
+
+.kbc-bviews__toggle {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.kbc-bviews__toggle--on {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.kbc-bviews__prefixes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.kbc-bviews__diag {
+  margin: 0;
+  color: var(--warn, var(--fg-dim));
+  font-size: 0.9em;
+}
+
+.kbc-bviews__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* D16's reading contract: a comfortable/compact density preference. Compact
+ * drops the reason list and tightens the row box; it never removes a BADGE,
+ * because a badge is a fact and density is a reading preference. */
+.kbc-bviews--compact .kbc-bviews__rows {
+  gap: 2px;
+}
+
+.kbc-bviews__rules {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  color: var(--fg-dim);
+  font-size: 0.85em;
+}
+
+.kbc-bviews__rules p {
+  margin: 2px 0;
+}
+
+/* --- one row ---------------------------------------------------------- */
+
+.kbc-bfact {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 8px 10px;
+  /* Gutter A is reserved for the provenance rail even when there is none,
+   * so a list of mixed rows does not jitter horizontally. */
+  border-left: 2px solid transparent;
+}
+
+.kbc-bfact--compact {
+  padding: 3px 10px;
+}
+
+.kbc-bfact--focused {
+  border-color: var(--accent);
+}
+
+/* THE provenance rail. `--kbc-prov-hue` is set inline per row by
+ * `lib/provHue.ts` (`var(--prov-hue-N)`); the fallback keeps a row with no
+ * agent evidence visually neutral rather than assigning it a colour. */
+.kbc-bfact--agent {
+  border-left-color: var(--kbc-prov-hue, var(--line));
+}
+
+/* A stack layer is indented by its depth — the structure a flat list hides.
+ * Two levels is enough for the shapes `history::stacks` detects; deeper
+ * chains keep the level-2 indent rather than marching off the page. */
+.kbc-bfact[data-kbc-bfact-depth="1"] { margin-left: 12px; }
+.kbc-bfact[data-kbc-bfact-depth="2"] { margin-left: 24px; }
+.kbc-bfact[data-kbc-bfact-depth="3"] { margin-left: 24px; }
+
+.kbc-bfact__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.kbc-bfact__star {
+  border: 0;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 1em;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.kbc-bfact__star[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.kbc-bfact__name {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.kbc-bfact__remote,
+.kbc-bfact__base,
+.kbc-bfact__baseclass {
+  color: var(--fg-dim);
+  font-size: 0.9em;
+}
+
+.kbc-bfact__ab {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+
+.kbc-bfact__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.kbc-bfact--compact .kbc-bfact__badges {
+  margin-top: 0;
+}
+
+.kbc-bfact__reasons {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  color: var(--fg-dim);
+  font-size: 0.88em;
+}
+
+.kbc-bfact__cta {
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* --- the radar -------------------------------------------------------- */
+
+.kbc-radar {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 10px 12px;
+}
+
+.kbc-radar__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.kbc-radar__title {
+  margin: 0;
+  font-size: 1em;
+}
+
+.kbc-radar__against,
+.kbc-radar__caption,
+.kbc-radar__hint,
+.kbc-radar__hunks,
+.kbc-radar__kind {
+  color: var(--fg-dim);
+  font-size: 0.9em;
+  font-weight: 400;
+}
+
+.kbc-radar__close {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.kbc-radar__refusal {
+  color: var(--red, var(--fg));
+}
+
+.kbc-radar__refusal-why {
+  color: var(--fg-dim);
+}
+
+.kbc-radar__rows,
+.kbc-radar__paths {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.kbc-radar__paths {
+  margin-left: 14px;
+}
+
+.kbc-radar__row--clean .kbc-radar__verdict {
+  color: var(--green, var(--fg-dim));
+}
+
+.kbc-radar__row--conflict .kbc-radar__verdict {
+  color: var(--warn, var(--fg));
+}
+
+.kbc-radar__branch {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+/* --- the v4 zones, demoted --------------------------------------------- */
+
+.kbc-branches__legacy {
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.kbc-branches__legacy-summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+}
