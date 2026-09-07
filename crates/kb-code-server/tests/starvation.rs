@@ -187,6 +187,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         symbol_index: Arc::new(kb_code_server::search::SymbolIndex::new()),
         search_factors: config.search.factors(),
         lanes: config.lanes.clone(),
+        trails: config.trails.clone(),
         status_index: Arc::new(kb_code_server::git_status::StatusIndex::new()),
         semantic: config.semantic,
         semantic_chunk_store: None,

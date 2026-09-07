@@ -914,6 +914,26 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CanvasCmd,
     },
+    /// `kb-code tour …` — `kbc-tour/1` (V74-L3b, design D12 + D10): a
+    /// walk through references this daemon already serves, each step with
+    /// prose, a blob and a camera, every one re-resolved through the
+    /// Ladder on read. A tour IS a board whose nodes are its steps (one
+    /// step model, D10), so it shares the board lint, resolver and
+    /// storage. `apply` and `rm` are LOOPBACK-ONLY.
+    Tour {
+        #[command(subcommand)]
+        cmd: TourCmd,
+    },
+    /// `kb-code trail …` — `kbc-trail/1` (V74-L3b, design D12 + D17): the
+    /// navigation record. **OFF by default** and opt-in per volume; the
+    /// agent-facing read is `aggregate` ONLY (counts per file/symbol, no
+    /// per-line spans, no ordering below the day). Every verb but
+    /// `aggregate` is LOOPBACK-ONLY — a trail is a record of where a
+    /// person went, and it never leaves the operator's box.
+    Trail {
+        #[command(subcommand)]
+        cmd: TrailCmd,
+    },
     /// `kb-code claim …` — `kbc-claim/1` (V73-K3, design D18): the agent
     /// PROSE register. A claim is an explanation, a rejected alternative, a
     /// decision, a story, a trail note or an answer, ABOUT a subject
@@ -2927,6 +2947,239 @@ enum CanvasCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum TourCmd {
+    /// List `kbc-tour/1` tours (`GET /api/tours?repo=`).
+    List {
+        #[arg(long)]
+        repo: String,
+        /// `pending` | `draft` | `accepted` | `archived`; absent = all.
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one tour, every step re-resolved through the Ladder NOW
+    /// (`GET /api/tours/{slug}?repo=`).
+    Show {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        /// Include each code step's CONTEXT range beside its primary one.
+        #[arg(long)]
+        ctx: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a `kbc-tour/1` document — an idempotent upsert BY SLUG
+    /// (`POST /api/tours/apply`, LOOPBACK-ONLY).
+    ///
+    /// The document is linted first: the tour schema, the step cap, the
+    /// camera bounds and every rule the BOARD lint already owns (slug,
+    /// title, caps, node kinds, reference fields, duplicate ids and, above
+    /// all, COORDINATES — a tour is coordinate-free for the same reason a
+    /// board is).
+    Apply {
+        /// The document. Exactly one of this or `--stdin`.
+        #[arg(short = 'f', long = "from-file")]
+        from_file: Option<PathBuf>,
+        #[arg(long)]
+        stdin: bool,
+        /// Lint the document without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pack a tour's steps under a BYTE budget
+    /// (`GET /api/tours/{slug}/pack?repo=&budget=`).
+    ///
+    /// Steps are emitted in walk order until the next one would cross the
+    /// budget; every step that did not fit is counted and named. A pack is
+    /// a PREFIX of the tour, never a summary of it.
+    Pack {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        /// Byte budget.
+        #[arg(long)]
+        budget: Option<usize>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export a tour (`GET /api/tours/{slug}/export?format=`).
+    ///
+    /// An exported tour is a SNAPSHOT and every format says so. `codetour`
+    /// is additionally LOSSY (no blob, no resolution state, no camera, no
+    /// non-code step) and lists every loss in its own `kbc_lossy` array.
+    Export {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        /// `md` | `codetour`.
+        #[arg(long, default_value = "md")]
+        format: String,
+        /// Write here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+    },
+    /// Delete a tour (`DELETE /api/tours/{slug}`, LOOPBACK-ONLY).
+    Rm {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TrailCmd {
+    /// Show — or CHANGE — the opt-in state (`GET`/`POST
+    /// /api/trails/state`). The write is LOOPBACK-ONLY and audited.
+    ///
+    /// `off` (the first-boot default) records nothing, `recording` records,
+    /// `paused` stops without forgetting. The daemon's own `[trails]
+    /// enabled` is a separate, stronger switch: with it false nothing is
+    /// recorded and the mode cannot be changed at all.
+    State {
+        /// `off` | `recording` | `paused`; absent = just report.
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List trails (`GET /api/trails?repo=`). LOOPBACK-ONLY.
+    List {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one trail's steps on the Ladder (`GET /api/trails/{id}?repo=`).
+    /// LOOPBACK-ONLY.
+    Show {
+        id: String,
+        #[arg(long)]
+        repo: String,
+        /// Start at this ordinal (a fork chip's own read).
+        #[arg(long)]
+        from: Option<i64>,
+        /// Include the trail's dissent notes.
+        #[arg(long)]
+        notes: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// The ONE agent-facing read (`GET /api/trails/aggregate?repo=`):
+    /// counts per file/symbol over whole DAYS.
+    ///
+    /// There is deliberately no per-line span, no step timestamp and no
+    /// ordering below the day here, and no number this prints is a score,
+    /// a gate or a ranking term (design D17).
+    Aggregate {
+        #[arg(long)]
+        repo: String,
+        /// Inclusive day bound, `YYYY-MM-DD`.
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete trail data WHOLESALE (`POST /api/trails/purge`,
+    /// LOOPBACK-ONLY and audited).
+    ///
+    /// Removes trails and their steps — the movement record. Dissent notes
+    /// on an authored trail are ordinary annotations and SURVIVE: they are
+    /// the human's own words, not derived data.
+    Purge {
+        #[arg(long)]
+        repo: String,
+        /// Purge only trails created before this unix second.
+        #[arg(long)]
+        before: Option<i64>,
+        /// One trail instead of the repo's whole ledger.
+        #[arg(long)]
+        id: Option<String>,
+        /// Required — a wholesale delete is not a thing to fat-finger.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drain a trail's DISSENT notes (`GET /api/trails/{id}?notes=1`).
+    ///
+    /// An agent lays an AUTHORED trail down; the human walks it and
+    /// disagrees inline. Those objections are ordinary annotations
+    /// carrying the trail's id — there is no second comments table — and
+    /// this is the verb that reads them back. LOOPBACK-ONLY.
+    Notes {
+        id: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fork a trail at a step (`POST /api/trails/{id}/fork`,
+    /// LOOPBACK-ONLY) — "I went down another path from here".
+    Fork {
+        id: String,
+        #[arg(long)]
+        repo: String,
+        /// The step to branch AT; every step from here on is carried into
+        /// the new trail.
+        #[arg(long, default_value_t = 0)]
+        from: i64,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Lay down an AUTHORED trail from a document (`POST /api/trails`,
+    /// LOOPBACK-ONLY) — the agent half of D12's authored/dissent loop.
+    Author {
+        /// The document. Exactly one of this or `--stdin`.
+        #[arg(short = 'f', long = "from-file")]
+        from_file: Option<PathBuf>,
+        #[arg(long)]
+        stdin: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum HookCmd {
     /// Print the settings.json snippet (+ the plugin-install alternative)
     /// to wire up `kb-code-why.sh`. Never writes anything.
@@ -4774,6 +5027,108 @@ async fn run(cli: Cli) -> Result<()> {
                 daemon,
                 json,
             } => board_sweep_cmd(&daemon, &repo, slug.as_deref(), check, json).await,
+        },
+        Cmd::Tour { cmd } => match cmd {
+            TourCmd::List {
+                repo,
+                status,
+                daemon,
+                json,
+            } => tour_list_cmd(&daemon, &repo, status.as_deref(), json).await,
+            TourCmd::Show {
+                slug,
+                repo,
+                ctx,
+                daemon,
+                json,
+            } => tour_show_cmd(&daemon, &slug, &repo, ctx, json).await,
+            TourCmd::Apply {
+                from_file,
+                stdin,
+                dry_run,
+                daemon,
+                json,
+            } => tour_apply_cmd(&daemon, from_file.as_deref(), stdin, dry_run, json).await,
+            TourCmd::Pack {
+                slug,
+                repo,
+                budget,
+                daemon,
+                json,
+            } => tour_pack_cmd(&daemon, &slug, &repo, budget, json).await,
+            TourCmd::Export {
+                slug,
+                repo,
+                format,
+                out,
+                daemon,
+            } => tour_export_cmd(&daemon, &slug, &repo, &format, out.as_deref()).await,
+            TourCmd::Rm { slug, repo, daemon } => tour_rm_cmd(&daemon, &slug, &repo).await,
+        },
+        Cmd::Trail { cmd } => match cmd {
+            TrailCmd::State { mode, daemon, json } => {
+                trail_state_cmd(&daemon, mode.as_deref(), json).await
+            }
+            TrailCmd::List {
+                repo,
+                limit,
+                daemon,
+                json,
+            } => trail_list_cmd(&daemon, &repo, limit, json).await,
+            TrailCmd::Show {
+                id,
+                repo,
+                from,
+                notes,
+                daemon,
+                json,
+            } => trail_show_cmd(&daemon, &id, &repo, from, notes, json).await,
+            TrailCmd::Aggregate {
+                repo,
+                since,
+                until,
+                limit,
+                daemon,
+                json,
+            } => {
+                trail_aggregate_cmd(
+                    &daemon,
+                    &repo,
+                    since.as_deref(),
+                    until.as_deref(),
+                    limit,
+                    json,
+                )
+                .await
+            }
+            TrailCmd::Purge {
+                repo,
+                before,
+                id,
+                yes,
+                daemon,
+                json,
+            } => trail_purge_cmd(&daemon, &repo, before, id.as_deref(), yes, json).await,
+            TrailCmd::Notes {
+                id,
+                repo,
+                daemon,
+                json,
+            } => trail_notes_cmd(&daemon, &id, &repo, json).await,
+            TrailCmd::Fork {
+                id,
+                repo,
+                from,
+                title,
+                daemon,
+                json,
+            } => trail_fork_cmd(&daemon, &id, &repo, from, title.as_deref(), json).await,
+            TrailCmd::Author {
+                from_file,
+                stdin,
+                daemon,
+                json,
+            } => trail_author_cmd(&daemon, from_file.as_deref(), stdin, json).await,
         },
         Cmd::Doclens { cmd } => match cmd {
             DoclensCmd::Show {
@@ -11219,6 +11574,718 @@ async fn board_export_cmd(
             eprintln!("wrote {} ({} bytes)", p.display(), body.len());
         }
         None => print!("{body}"),
+    }
+    Ok(())
+}
+
+// ── V74-L3b — `kbc-tour/1` (`kb-code tour {list,show,apply,pack,export,rm}`)
+// and `kbc-trail/1` (`kb-code trail {state,list,show,aggregate,purge,notes,
+// fork,author}`) ───────────────────────────────────────────────────────────
+//
+// Every READ route takes its path from the server crate's own declared
+// contracts (`kb_code_server::tours::V74_L3B_TOUR_ROUTES` /
+// `trails::V74_L3B_TRAIL_ROUTES`) rather than a string literal, so
+// `cli_requests_send_every_param_their_route_requires` walks the CLI and
+// the server against each other — the `boards`/`entity`/`seq` discipline.
+//
+// The MUTATIONS are loopback-only and use the status-preserving `*_raw`
+// helpers, so a refusal keeps its body and `loopback_or_api_error` can name
+// the gate rather than printing a bare 404. Two trail READS are
+// loopback-only too (a trail is a record of where a person went), so they
+// take the same treatment.
+
+/// `GET /api/tours` — `(declared path, query)`.
+fn tours_list_request(
+    repo: &str,
+    status: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(s) = status {
+        q.push(("status", s.to_string()));
+    }
+    (kb_code_server::tours::TOURS_LIST_ROUTE.path, q)
+}
+
+/// `GET /api/tours/{slug}` — the declared path carries the `{slug}`
+/// placeholder; the command substitutes the real one.
+fn tour_get_request(repo: &str, ctx: bool) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if ctx {
+        q.push(("ctx", "1".to_string()));
+    }
+    (kb_code_server::tours::TOUR_GET_ROUTE.path, q)
+}
+
+/// `GET /api/tours/{slug}/pack`.
+fn tour_pack_request(
+    repo: &str,
+    budget: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(b) = budget {
+        q.push(("budget", b.to_string()));
+    }
+    (kb_code_server::tours::TOUR_PACK_ROUTE.path, q)
+}
+
+/// `GET /api/tours/{slug}/export`.
+fn tour_export_request(repo: &str, format: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::tours::TOUR_EXPORT_ROUTE.path,
+        vec![("repo", repo.to_string()), ("format", format.to_string())],
+    )
+}
+
+/// `GET /api/trails/state` — daemon-wide, no repo.
+fn trails_state_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::trails::TRAILS_STATE_ROUTE.path, Vec::new())
+}
+
+/// `GET /api/trails`.
+fn trails_list_request(
+    repo: &str,
+    limit: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(l) = limit {
+        q.push(("limit", l.to_string()));
+    }
+    (kb_code_server::trails::TRAILS_LIST_ROUTE.path, q)
+}
+
+/// `GET /api/trails/{id}`.
+fn trail_get_request(
+    repo: &str,
+    from: Option<i64>,
+    notes: bool,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(f) = from {
+        q.push(("from", f.to_string()));
+    }
+    if notes {
+        q.push(("notes", "1".to_string()));
+    }
+    (kb_code_server::trails::TRAIL_GET_ROUTE.path, q)
+}
+
+/// `GET /api/trails/aggregate` — a literal path, no substitution.
+fn trails_aggregate_request(
+    repo: &str,
+    since: Option<&str>,
+    until: Option<&str>,
+    limit: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(v) = since {
+        q.push(("since", v.to_string()));
+    }
+    if let Some(v) = until {
+        q.push(("until", v.to_string()));
+    }
+    if let Some(l) = limit {
+        q.push(("limit", l.to_string()));
+    }
+    (kb_code_server::trails::TRAILS_AGGREGATE_ROUTE.path, q)
+}
+
+/// Substitute a real slug/id into a declared path's placeholder. The value
+/// is percent-encoded even though the server's own validators refuse
+/// anything that would need it — `board_path`'s rule, and its reason: a URL
+/// builder that trusts a validator on the other side of a wire is one
+/// relaxation away from a path traversal.
+fn tour_path(declared: &str, slug: &str) -> String {
+    declared.replace("{slug}", &percent_encode_segment(slug))
+}
+
+fn trail_path(declared: &str, id: &str) -> String {
+    declared.replace("{id}", &percent_encode_segment(id))
+}
+
+fn percent_encode_segment(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+async fn tour_list_cmd(daemon: &str, repo: &str, status: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = tours_list_request(repo, status);
+    let body = get_json(&client, daemon, path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let tours = body["tours"].as_array().cloned().unwrap_or_default();
+    if tours.is_empty() {
+        println!("(no kbc-tour/1 tours in {repo})");
+        return Ok(());
+    }
+    println!(
+        "{:<28} {:<10} {:<5} {:>6}  title",
+        "slug", "status", "rev", "steps"
+    );
+    for t in tours {
+        println!(
+            "{:<28} {:<10} {:<5} {:>6}  {}",
+            t["slug"].as_str().unwrap_or("?"),
+            t["status"].as_str().unwrap_or("?"),
+            t["revision"].as_i64().unwrap_or(0),
+            t["steps"].as_i64().unwrap_or(0),
+            t["title"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+async fn tour_show_cmd(daemon: &str, slug: &str, repo: &str, ctx: bool, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (declared, q) = tour_get_request(repo, ctx);
+    let path = tour_path(declared, slug);
+    let body = get_json(&client, daemon, &path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "{}  [{}]  rev {}",
+        body["title"].as_str().unwrap_or("?"),
+        body["status"].as_str().unwrap_or("?"),
+        body["revision"].as_i64().unwrap_or(0),
+    );
+    let h = &body["honesty"];
+    println!(
+        "{} steps — {} pinned · {} carried · {} present · {} inert · {} ORPHAN",
+        h["steps"].as_i64().unwrap_or(0),
+        h["pinned"].as_i64().unwrap_or(0),
+        h["carried"].as_i64().unwrap_or(0),
+        h["present"].as_i64().unwrap_or(0),
+        h["inert"].as_i64().unwrap_or(0),
+        h["orphans"].as_i64().unwrap_or(0),
+    );
+    for note in h["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", note.as_str().unwrap_or(""));
+    }
+    println!();
+    for s in body["steps"].as_array().cloned().unwrap_or_default() {
+        let n = &s["node"];
+        println!(
+            "{:>3}. {:<18} {:<9} {:<18} {}",
+            s["ordinal"].as_i64().unwrap_or(0) + 1,
+            n["id"].as_str().unwrap_or("?"),
+            n["state"].as_str().unwrap_or("?"),
+            n["reason"].as_str().unwrap_or("?"),
+            n["address"].as_str().unwrap_or(""),
+        );
+        if let Some(t) = n["title"].as_str() {
+            println!("     {t}");
+        }
+    }
+    Ok(())
+}
+
+async fn tour_apply_cmd(
+    daemon: &str,
+    from_file: Option<&std::path::Path>,
+    stdin: bool,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    if from_file.is_some() == stdin {
+        anyhow::bail!("tour apply: pass exactly one of --from-file FILE or --stdin");
+    }
+    let text = read_document(from_file, stdin, "tour document")?;
+    let payload: serde_json::Value =
+        serde_json::from_str(&text).context("parse the tour document as JSON")?;
+    let client = http_client()?;
+    let mut q: Vec<(&str, &str)> = Vec::new();
+    if dry_run {
+        q.push(("dry_run", "1"));
+    }
+    let (status, body) =
+        post_json_query_raw(&client, daemon, "/api/tours/apply", &q, &payload).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("tour apply", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let verb = if body["unchanged"].as_bool().unwrap_or(false) {
+        "unchanged"
+    } else if body["created"].as_bool().unwrap_or(false) {
+        "created"
+    } else {
+        "updated"
+    };
+    println!(
+        "{} {} [{}] rev {} — {} steps{}",
+        verb,
+        body["slug"].as_str().unwrap_or("?"),
+        body["status"].as_str().unwrap_or("?"),
+        body["revision"].as_i64().unwrap_or(0),
+        body["steps"].as_i64().unwrap_or(0),
+        if body["dry_run"].as_bool().unwrap_or(false) {
+            "  (dry run — nothing written)"
+        } else {
+            ""
+        }
+    );
+    if body["status_reset"].as_bool().unwrap_or(false) {
+        println!("  status reset: the tour's content changed, so it is no longer accepted");
+    }
+    for f in body["lint"]["findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        println!(
+            "  {} [{}] {}{}",
+            f["severity"].as_str().unwrap_or("?"),
+            f["rule"].as_str().unwrap_or("?"),
+            f["at"]
+                .as_str()
+                .map(|a| format!("{a}: "))
+                .unwrap_or_default(),
+            f["message"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+fn read_document(from_file: Option<&std::path::Path>, stdin: bool, what: &str) -> Result<String> {
+    if stdin {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .with_context(|| format!("read {what} from stdin"))?;
+        return Ok(buf);
+    }
+    let p = from_file.expect("checked by the caller");
+    std::fs::read_to_string(p).with_context(|| format!("read --from-file {}", p.display()))
+}
+
+async fn tour_pack_cmd(
+    daemon: &str,
+    slug: &str,
+    repo: &str,
+    budget: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (declared, q) = tour_pack_request(repo, budget);
+    let path = tour_path(declared, slug);
+    let body = get_json(&client, daemon, &path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    print!("{}", body["text"].as_str().unwrap_or_default());
+    let dropped = body["dropped"].as_array().cloned().unwrap_or_default();
+    eprintln!(
+        "{} of {} steps packed in {} of {} bytes{}",
+        body["steps_packed"].as_i64().unwrap_or(0),
+        body["steps_total"].as_i64().unwrap_or(0),
+        body["bytes"].as_i64().unwrap_or(0),
+        body["budget"].as_i64().unwrap_or(0),
+        if dropped.is_empty() {
+            String::new()
+        } else {
+            format!(" — {} dropped", dropped.len())
+        }
+    );
+    for d in dropped {
+        eprintln!(
+            "  dropped step {}: {}",
+            d["id"].as_str().unwrap_or("?"),
+            d["reason"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+async fn tour_export_cmd(
+    daemon: &str,
+    slug: &str,
+    repo: &str,
+    format: &str,
+    out: Option<&std::path::Path>,
+) -> Result<()> {
+    // The SAME vocabulary check the daemon runs, reused rather than
+    // duplicated (`board_export_cmd`'s precedent).
+    if !kb_code_server::tours::export::is_valid_format(format) {
+        anyhow::bail!(
+            "invalid format {format:?} — expected one of: {}",
+            kb_code_server::tours::export::FORMATS.join(", ")
+        );
+    }
+    let client = http_client()?;
+    let (declared, q) = tour_export_request(repo, format);
+    debug_assert!(declared.ends_with("/export"));
+    let path = tour_path(declared, slug);
+    let url = format!("{}{path}", daemon.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .query(&query_pairs(&q))
+        .send()
+        .await
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
+        .error_for_status()
+        .with_context(|| format!("GET {url}"))?;
+    let body = resp.text().await.context("read the export body")?;
+    match out {
+        Some(p) => {
+            std::fs::write(p, body.as_bytes()).with_context(|| format!("write {}", p.display()))?;
+            eprintln!("wrote {} ({} bytes)", p.display(), body.len());
+        }
+        None => print!("{body}"),
+    }
+    Ok(())
+}
+
+async fn tour_rm_cmd(daemon: &str, slug: &str, repo: &str) -> Result<()> {
+    let client = http_client()?;
+    let path = tour_path(kb_code_server::tours::TOUR_GET_ROUTE.path, slug);
+    let (status, body) = delete_json_raw(&client, daemon, &path, &[("repo", repo)]).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("tour rm", daemon, status, &body));
+    }
+    println!("deleted tour {slug}");
+    Ok(())
+}
+
+// --- trails -----------------------------------------------------------------
+
+fn print_trail_state(body: &serde_json::Value) {
+    println!(
+        "trails: {} (daemon `[trails] enabled` = {})",
+        body["mode"].as_str().unwrap_or("?"),
+        body["enabled"].as_bool().unwrap_or(false),
+    );
+    println!(
+        "  retention {} days · dwell floored to {}s · mode changeable here: {}",
+        body["retention_days"].as_i64().unwrap_or(0),
+        body["step_granularity_secs"].as_i64().unwrap_or(1),
+        body["mutable"].as_bool().unwrap_or(false),
+    );
+    for n in body["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", n.as_str().unwrap_or(""));
+    }
+}
+
+async fn trail_state_cmd(daemon: &str, mode: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let body = match mode {
+        None => {
+            let (path, q) = trails_state_request();
+            get_json(&client, daemon, path, &query_pairs(&q)).await?
+        }
+        Some(m) => {
+            let payload = serde_json::json!({ "mode": m });
+            let (status, body) =
+                post_json_raw(&client, daemon, "/api/trails/state", &payload).await?;
+            if !status.is_success() {
+                return Err(loopback_or_api_error("trail state", daemon, status, &body));
+            }
+            body
+        }
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    print_trail_state(&body);
+    Ok(())
+}
+
+async fn trail_list_cmd(daemon: &str, repo: &str, limit: Option<usize>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = trails_list_request(repo, limit);
+    let (status, body) = get_json_raw(&client, daemon, path, &query_pairs(&q)).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("trail list", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let trails = body["trails"].as_array().cloned().unwrap_or_default();
+    println!(
+        "trails in {repo}: mode {} (enabled = {})",
+        body["mode"].as_str().unwrap_or("?"),
+        body["enabled"].as_bool().unwrap_or(false),
+    );
+    for n in body["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", n.as_str().unwrap_or(""));
+    }
+    if trails.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "{:<20} {:<10} {:<12} {:>6} {:>8}  parent",
+        "id", "origin", "day", "steps", "dwell(s)"
+    );
+    for t in trails {
+        println!(
+            "{:<20} {:<10} {:<12} {:>6} {:>8}  {}",
+            t["id"].as_str().unwrap_or("?"),
+            t["origin"].as_str().unwrap_or("?"),
+            t["day"].as_str().unwrap_or("-"),
+            t["step_count"].as_i64().unwrap_or(0),
+            t["dwell_secs"].as_i64().unwrap_or(0),
+            t["parent_id"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+async fn trail_show_cmd(
+    daemon: &str,
+    id: &str,
+    repo: &str,
+    from: Option<i64>,
+    notes: bool,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (declared, q) = trail_get_request(repo, from, notes);
+    let path = trail_path(declared, id);
+    let (status, body) = get_json_raw(&client, daemon, &path, &query_pairs(&q)).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("trail show", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "{} [{}] — {} steps, {}s dwell",
+        body["id"].as_str().unwrap_or("?"),
+        body["origin"].as_str().unwrap_or("?"),
+        body["step_count"].as_i64().unwrap_or(0),
+        body["dwell_secs"].as_i64().unwrap_or(0),
+    );
+    for n in body["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", n.as_str().unwrap_or(""));
+    }
+    println!();
+    for s in body["steps"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "{:>4}. {:<16} {:<9} {:>5}s  {}  {}",
+            s["ordinal"].as_i64().unwrap_or(0),
+            s["via"].as_str().unwrap_or("?"),
+            s["state"].as_str().unwrap_or("?"),
+            s["dwell_secs"].as_i64().unwrap_or(0),
+            s["day"].as_str().unwrap_or(""),
+            s["path"].as_str().unwrap_or(""),
+        );
+    }
+    print_trail_notes(&body);
+    Ok(())
+}
+
+fn print_trail_notes(body: &serde_json::Value) {
+    let Some(list) = body["notes_list"].as_array() else {
+        return;
+    };
+    if list.is_empty() {
+        println!("\n(no dissent notes on this trail)");
+        return;
+    }
+    println!("\ndissent notes:");
+    for n in list {
+        println!(
+            "  {} [{}] {}{}",
+            n["id"].as_str().unwrap_or("?"),
+            n["author"].as_str().unwrap_or("?"),
+            if n["resolved"].as_bool().unwrap_or(false) {
+                "(resolved) "
+            } else {
+                ""
+            },
+            n["body"].as_str().unwrap_or(""),
+        );
+    }
+}
+
+async fn trail_notes_cmd(daemon: &str, id: &str, repo: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (declared, q) = trail_get_request(repo, None, true);
+    let path = trail_path(declared, id);
+    let (status, body) = get_json_raw(&client, daemon, &path, &query_pairs(&q)).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("trail notes", daemon, status, &body));
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": body["schema"],
+                "trail": body["id"],
+                "origin": body["origin"],
+                "notes": body["notes_list"],
+            }))?
+        );
+        return Ok(());
+    }
+    print_trail_notes(&body);
+    Ok(())
+}
+
+async fn trail_aggregate_cmd(
+    daemon: &str,
+    repo: &str,
+    since: Option<&str>,
+    until: Option<&str>,
+    limit: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = trails_aggregate_request(repo, since, until, limit);
+    let body = get_json(&client, daemon, path, &query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let rows = body["rows"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("(no trail attention recorded in {repo} for this window)");
+    } else {
+        println!(
+            "{:>6} {:>9} {:>5}  {:<12} {:<12}  path",
+            "steps", "dwell(s)", "days", "first", "last"
+        );
+        for r in rows {
+            println!(
+                "{:>6} {:>9} {:>5}  {:<12} {:<12}  {}{}",
+                r["steps"].as_i64().unwrap_or(0),
+                r["dwell_secs"].as_i64().unwrap_or(0),
+                r["days"].as_i64().unwrap_or(0),
+                r["first_day"].as_str().unwrap_or(""),
+                r["last_day"].as_str().unwrap_or(""),
+                r["path"].as_str().unwrap_or("(no path)"),
+                r["symbol"]
+                    .as_str()
+                    .map(|s| format!("  {s}"))
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    if body["truncated"].as_bool().unwrap_or(false) {
+        println!("(capped — pass --limit for more)");
+    }
+    for n in body["notes"].as_array().cloned().unwrap_or_default() {
+        println!("note: {}", n.as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
+async fn trail_purge_cmd(
+    daemon: &str,
+    repo: &str,
+    before: Option<i64>,
+    id: Option<&str>,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    if !yes {
+        anyhow::bail!(
+            "trail purge deletes trail data WHOLESALE and cannot be undone — pass --yes \
+             once you mean it (use --id to purge one trail, or --before <unix> for a \
+             window)"
+        );
+    }
+    let client = http_client()?;
+    let mut payload = serde_json::json!({ "repo": repo });
+    if let Some(b) = before {
+        payload["before"] = serde_json::json!(b);
+    }
+    if let Some(i) = id {
+        payload["id"] = serde_json::json!(i);
+    }
+    let (status, body) = post_json_raw(&client, daemon, "/api/trails/purge", &payload).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("trail purge", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "purged {} trail(s) and {} step(s) from {repo}",
+        body["trails"].as_i64().unwrap_or(0),
+        body["steps"].as_i64().unwrap_or(0),
+    );
+    for n in body["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", n.as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
+async fn trail_fork_cmd(
+    daemon: &str,
+    id: &str,
+    repo: &str,
+    from: i64,
+    title: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let path = format!("{}/fork", trail_path("/api/trails/{id}", id));
+    let mut payload = serde_json::json!({ "repo": repo, "from_ordinal": from });
+    if let Some(t) = title {
+        payload["title"] = serde_json::json!(t);
+    }
+    let (status, body) = post_json_raw(&client, daemon, &path, &payload).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("trail fork", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "forked {} at step {} → {} ({} steps carried)",
+        id,
+        from,
+        body["id"].as_str().unwrap_or("?"),
+        body["steps"].as_i64().unwrap_or(0),
+    );
+    Ok(())
+}
+
+async fn trail_author_cmd(
+    daemon: &str,
+    from_file: Option<&std::path::Path>,
+    stdin: bool,
+    json: bool,
+) -> Result<()> {
+    if from_file.is_some() == stdin {
+        anyhow::bail!("trail author: pass exactly one of --from-file FILE or --stdin");
+    }
+    let text = read_document(from_file, stdin, "trail document")?;
+    let payload: serde_json::Value =
+        serde_json::from_str(&text).context("parse the trail document as JSON")?;
+    let client = http_client()?;
+    let (status, body) = post_json_raw(&client, daemon, "/api/trails", &payload).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("trail author", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "authored trail {} — {} steps",
+        body["id"].as_str().unwrap_or("?"),
+        body["steps"].as_i64().unwrap_or(0),
+    );
+    for n in body["notes"].as_array().cloned().unwrap_or_default() {
+        println!("  note: {}", n.as_str().unwrap_or(""));
     }
     Ok(())
 }
@@ -23982,6 +25049,17 @@ mod tests {
             board_get_request("repo", false, false),
             board_export_request("repo", "md", None),
             board_sweep_request("repo", None),
+            // V74-L3b — `kbc-tour/1`'s four reads and `kbc-trail/1`'s four,
+            // the same rule. A read declared in either unit's route list
+            // with no verb building a request for it fails HERE, by path.
+            tours_list_request("repo", None),
+            tour_get_request("repo", false),
+            tour_pack_request("repo", Some(4096)),
+            tour_export_request("repo", "md"),
+            trails_state_request(),
+            trails_list_request("repo", Some(10)),
+            trail_get_request("repo", Some(0), true),
+            trails_aggregate_request("repo", Some("2026-09-01"), None, Some(10)),
             // V73-K3 — the timeline's narrowing params, the claim register,
             // the two pseudo-file reads and the hunk↔turn join.
             review_timeline_request(&TimelineOpts {

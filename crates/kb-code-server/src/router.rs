@@ -983,6 +983,38 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/boards/{slug}/export",
             get(crate::boards::routes::export_board),
         )
+        // V74-L3b (D12 + D10, Track L) — `kbc-tour/1`'s four READS. A tour
+        // is a `canvas_boards` row with `kind = 'tour'` (migration V0037),
+        // so these are the SAME storage, the SAME lint and the SAME Ladder
+        // resolver the board routes above use — see `crate::tours`' module
+        // doc. `crate::tours::V74_L3B_TOUR_ROUTES` declares them and a
+        // unit test walks that declaration against THIS file.
+        .route("/tours", get(crate::tours::routes::list_tours))
+        .route("/tours/{slug}", get(crate::tours::routes::get_tour))
+        .route("/tours/{slug}/pack", get(crate::tours::routes::pack_tour))
+        .route(
+            "/tours/{slug}/export",
+            get(crate::tours::routes::export_tour),
+        )
+        // V74-L3b — `kbc-trail/1`'s TWO bearer-readable surfaces. The
+        // STATE read feeds the SPA's mandatory opt-in indicator (D17), and
+        // the AGGREGATE is the one agent-facing read: counts per
+        // file/symbol, never per-line spans, never an ordering below the
+        // day. The two HUMAN reads (`GET /api/trails`, `GET
+        // /api/trails/{id}`) return the operator's own movement record and
+        // are LOOPBACK-ONLY, registered on the sub-router below — a
+        // stricter gate than any other read in this crate, for invariant
+        // 23(b)'s reason applied to attention data.
+        //
+        // Literal `/trails/state` and `/trails/aggregate` sit ahead of the
+        // `{id}` param route; axum resolves literals over params
+        // regardless of registration order, and a trail id is `trl_` + 12
+        // hex, so neither can ever be shadowed by a real id.
+        .route("/trails/state", get(crate::trails::routes::get_state))
+        .route(
+            "/trails/aggregate",
+            get(crate::trails::routes::aggregate_trails),
+        )
         .route("/events", get(routes::events))
         // 2026-08-16 drift repair — the SSE schema surface (see the module
         // doc above and `crate::schema`'s own doc).
@@ -1262,6 +1294,34 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/boards/{slug}",
             delete(crate::boards::routes::delete_board),
         )
+        // V74-L3b — `kbc-tour/1`'s two mutations, the same loopback-only
+        // family as the board mutations directly above (a tour IS a board
+        // row). `accepted`/`archived` stay reachable only through the
+        // BOARD transition routes, and `apply`'s lint refuses to author
+        // either, so D21's pending-until-a-human-accepts rule holds for a
+        // loopback caller too.
+        .route("/tours/apply", post(crate::tours::routes::apply_tour))
+        .route("/tours/{slug}", delete(crate::tours::routes::delete_tour))
+        // V74-L3b — `kbc-trail/1`. EVERY trail write is here, and so are
+        // the two HUMAN reads: a trail is a record of where a person went,
+        // and the design's Security §Privacy line ("read-tracking never
+        // leaves the operator's box") makes that a stricter class than an
+        // ordinary bearer read. The aggregate and the state read are on
+        // the bearer router above.
+        //
+        // `audit_mutations` (invariant 1) runs inside this gate, so every
+        // opt-in transition, every purge and every fork lands in the
+        // ledger with its actual outcome for free — which is what makes
+        // D17's "purge is audited" true without a line of its own.
+        .route(
+            "/trails",
+            get(crate::trails::routes::list_trails).post(crate::trails::routes::create_authored),
+        )
+        .route("/trails/steps", post(crate::trails::routes::ingest_steps))
+        .route("/trails/purge", post(crate::trails::routes::purge_trails))
+        .route("/trails/state", post(crate::trails::routes::set_state))
+        .route("/trails/{id}", get(crate::trails::routes::get_trail))
+        .route("/trails/{id}/fork", post(crate::trails::routes::fork_trail))
         .layer(from_fn_with_state(
             auth.clone(),
             transcripts::search::loopback_only,

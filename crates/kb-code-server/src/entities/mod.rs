@@ -847,6 +847,11 @@ mod tests {
             .chain(crate::review_timeline::V73_K3_ROUTES.iter())
             // V74-L3a joins the SAME walk: `kbc-recipe/1`'s four reads.
             .chain(crate::recipe::routes::V74_L3A_ROUTES.iter())
+            // V74-L3b — kbc-tour/1's four reads and kbc-trail/1's four,
+            // the same way. A tour read declared with no registration in
+            // router.rs fails HERE, by path.
+            .chain(crate::tours::V74_L3B_TOUR_ROUTES.iter())
+            .chain(crate::trails::V74_L3B_TRAIL_ROUTES.iter())
         {
             let nested = c
                 .path

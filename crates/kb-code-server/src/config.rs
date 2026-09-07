@@ -150,6 +150,14 @@ pub struct KbCodeConfig {
     #[serde(default)]
     pub comments: CommentsSection,
 
+    /// `[trails]` — V74-L3b's `kbc-trail/1` navigation record
+    /// (`crate::trails`). **OFF by default**, and that default is a
+    /// design ruling rather than a conservative choice: D17 permits a
+    /// server-side attention ledger only as "an explicit opt-in that is
+    /// off on first boot". See [`TrailsSection`].
+    #[serde(default)]
+    pub trails: TrailsSection,
+
     /// `[security]` — V70-A2's local-daemon hardening knobs (SEC-13's
     /// server-enforced secret denylist + SEC-02's strict-request-header
     /// opt-in). Every field has a safe default, so an existing
@@ -157,6 +165,69 @@ pub struct KbCodeConfig {
     /// posture. See [`SecuritySection`].
     #[serde(default)]
     pub security: SecuritySection,
+}
+
+/// `[trails]` — `kbc-trail/1`'s three knobs (V74-L3b, design D17).
+///
+/// `enabled` is the OPERATOR's master switch and it defaults to `false`.
+/// That is not a cautious default that could be flipped for convenience:
+/// D17 permits a server-side attention ledger only in a milestone that
+/// ships pause, purge and retention together, behind "an explicit opt-in
+/// that is off on first boot with a visible indicator". With this `false`
+/// (or the section absent entirely — the common case) every trail WRITE
+/// route refuses, `GET /api/trails/state` reports `enabled: false`, and
+/// the retention sweep starts no task.
+///
+/// The runtime mode (`off` / `recording` / `paused`) is a SEPARATE,
+/// persisted decision in the `trails_state` table, changed only by the
+/// loopback-only, audited `POST /api/trails/state`. Two switches, and they
+/// mean different things: this key is "the operator permits the feature to
+/// exist", the row is "the operator has turned it on right now". A fresh
+/// volume reads `off` even with this `true`, because the absence of a
+/// decision is not a decision to record.
+///
+/// ```toml
+/// [trails]
+/// enabled = true
+/// retention_days = 30
+/// step_granularity_secs = 1
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrailsSection {
+    /// The master switch. `false` (the default) ⇒ nothing is ever
+    /// recorded and no mode transition is possible.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How long a trail survives before the background sweep
+    /// (`trails::gc`) removes it, in days. `0` disables the sweep
+    /// entirely, which is an operator's explicit "keep everything"
+    /// (surfaced in `GET /api/trails/state`), never a silent default.
+    #[serde(default = "default_trails_retention_days")]
+    pub retention_days: u32,
+    /// The dwell floor, in seconds. A step's dwell is `left_at -
+    /// entered_at` FLOORED to a multiple of this — the "never finer than
+    /// dwell-per-step" rule made arithmetic. Values below 1 are treated
+    /// as 1 by `trails::quantise_dwell`.
+    #[serde(default = "default_trails_step_granularity_secs")]
+    pub step_granularity_secs: i64,
+}
+
+fn default_trails_retention_days() -> u32 {
+    30
+}
+
+fn default_trails_step_granularity_secs() -> i64 {
+    1
+}
+
+impl Default for TrailsSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: default_trails_retention_days(),
+            step_granularity_secs: default_trails_step_granularity_secs(),
+        }
+    }
 }
 
 /// `[comments]` — the `comments/1` annotation keyword grammar (V72-J1).
