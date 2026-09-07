@@ -1103,6 +1103,75 @@ invariant #2 records).
     `review_timeline::V73_K3_ROUTES` joins invariant 15's `RouteContract`
     walk from both sides.
 
+25. **`kbc-recipe/1`: the op set is CLOSED and is the guard, a repo file is
+    a read-only input under trust-on-first-use, and an empty step names
+    its reason from a closed vocabulary** (V74-L3a, D11 + D21,
+    `src/recipe/`, migration V0038). Four rules, separate to state and
+    easy to break one at a time.
+    (a) **A recipe can never reference an exec lane, and the TYPE is why.**
+    `recipe::ops::Op` is a Rust enum with fifteen variants and no `Exec`;
+    an author cannot spell one, a `.kbc/recipes/*.toml` cannot deserialize
+    into one, and `ops::tests::the_op_set_cannot_reach_an_exec_lane` walks
+    the variant list AND every declared arg name so the property survives
+    the set growing. This is invariant 10 ("the daemon never spawns a
+    non-git process") and 21(b)'s two-lane-kind ruling, restated one layer
+    up: the `facts` op reads `lane_facts` rows the operator's own CLI
+    already ingested and cannot cause a tool to run, and it still refuses
+    unless `[lanes]` enabled that lane — a recipe can never enable one.
+    D21's other half holds here too: `?p.`/`?ctx.` values land in declared,
+    typed params a closed op set consumes, so no query parameter names a
+    route, a command or a tool. Every op declares the address kinds it
+    ACCEPTS and the kind it PRODUCES, so the DAG is type-checked at LOAD
+    and a mis-wired step fails by NAME rather than at run time with an
+    empty table nobody can explain. Do not add an op whose output kind is
+    not decidable from its args and its inputs — that is the seam a query
+    language grows through.
+    (b) **A repo-versioned recipe is read ONLY from the default ref,
+    through the ODB, under TOFU.** Never the working tree (a recipe is
+    something the team agreed to; an uncommitted edit has agreed to
+    nothing) and never whatever branch is checked out. Trust keys on the
+    git blob oid — a CONTENT address — so the same bytes at a different
+    commit stay trusted and one changed byte does not; `changed` ships a
+    unified DIFF, because "accept this again?" without showing what moved
+    is a prompt nobody can answer. `recipe new --from-json -` writes a
+    `recipes_server` row and NEVER into the tree, a repo file WINS a slug
+    collision, and what it shadowed is REPORTED (`shadowed_by`) rather
+    than dropped. `.kbc/` is inert data here in exactly the sense
+    invariant 21(a) demands: it can propose a question, never enable a
+    lane, name a tool, or change this daemon's configuration.
+    (c) **Every step carries a census, and exactly ONE reason is clean.**
+    `census::EmptyReason` is closed (eleven values) and only
+    `filtered-out` means "nothing to worry about"; `lane-disabled`,
+    `no-index`, `scope-excluded` and the rest are facts about the QUESTION.
+    A free-text reason would be a reason nobody can test for and a UI
+    cannot offer a remedy beside. `every_empty_reason_has_a_producer` is
+    the source scan that stops a value being declared with nothing able to
+    reach it (the dead-surface defect in this module's shape), and
+    `exactly_one_empty_reason_is_clean` pins the posture itself. This is
+    the fix for the `recipes/1` defect class D11's repair list names:
+    three of the six shipped an honest-looking empty set over a missing
+    input.
+    (d) **Nothing is minted here, nothing is cached, and a run is
+    deterministic.** An op COPIES the class its engine already computed
+    (`usages2`'s own `trust`, `entities::class_for`, `rails::noun_trust`,
+    `lanes::classing`) and this module has no code that raises one; an
+    address whose engine reported nothing says `unknown`, which is also
+    what a missing blob says — never a blank and never a zero (invariants
+    13/20/21/22, root invariant #2). Results are recomputed per request
+    and persisted ONLY when the operator asks for a materialised run over
+    loopback, which records the mirror `generation` it was computed at so
+    a replay captions itself stale instead of reading as live. Determinism
+    is a property of the whole path (every op sorts on the address itself,
+    identical step calls are memoised, only the budget consults a clock)
+    and `two_runs_are_byte_identical` pins it. `recipes/1` stays FROZEN
+    beside this — the `/api/usages` → `/api/usages/2` treatment — with its
+    six bodies adopted as native adapters rather than re-expressed in the
+    op set, because `new-public-api`'s language rules and
+    `god-functions`' fan fold would each cost a recipe-shaped op variant.
+    `recipe::routes::V74_L3A_ROUTES` joins invariant 15's `RouteContract`
+    walk from both sides; the four mutations are absent from it for the
+    reason `boards`' own four are.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside `kb-code-server` (or its
