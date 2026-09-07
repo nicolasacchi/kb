@@ -2787,3 +2787,223 @@ tours/trails are L3b. The SHOULDs D11 marks — fixtures, the inbox drift
 lane, save-as board/tour, trend and property-diff — are not built, and
 `review` in `timeline` mode reports the finding-shaped events only,
 saying so in its census rather than inventing an address for a verdict.
+
+## Workspaces, worktrees and the `@ref` frame table (v7.5, V75-M1)
+
+### Two nouns, and one older word that collides with them
+
+D13 splits what the daemon used to call "a repo" in two:
+
+* a **Workspace** is one shared git **object store**. Its id derives from
+  the canonical `--git-common-dir` plus the root commit
+  (`ws_` + 12 hex). Every blob, every commit and every git-history
+  derivation belongs to it, whichever checkout you read them through.
+* a **Worktree** is one **checkout**. Its id is the admin-directory name
+  (`<common>/worktrees/<id>`, or the reserved `(main)` for the main
+  worktree, which has none), and **its path is a mutable attribute** —
+  `git worktree move` changes the path and not the identity.
+
+There is a third, older use of the word in this daemon, and conflating the
+two is the mistake this section exists to prevent: **D26's kbc-seq/1
+already owns `reading_sets.workspace_id`** (V0029), where "workspace" means
+a *reading set of kind `workspace`* — the Desk. `kb-code workspace`
+(singular) is that one; `kb-code workspaces` (plural) is D13's. The re-key
+never adds a column named `workspace_id` to a table that could be read as a
+Desk, which is one of the two reasons the authored path-anchored tables
+below take `worktree_id`.
+
+### The classification table
+
+Every table carrying a repo key declares which identity owns its rows
+(`kb_code_server::rekey::REPO_KEYED_TABLES`; migration `V0040__workspace_
+rekey.sql` adds the columns):
+
+| class | column | tables |
+| --- | --- | --- |
+| `object` — a function of the OBJECT STORE (a blob, a commit, git history); two checkouts would derive the identical row | `workspace_id` | `author_stats` · `behavioral_meta` · `claims` · `cochange_pairs` · `comments` · `commit_sessions` · `doc_refs` · `entity_defs` · `lane_facts` · `lane_runs` · `path_stats` · `rails_edges` · `recipe_trust` · `scip_runs` · `session_signals` |
+| `worktree` — a property of a PATH ON DISK in one checkout; sharing it would be a wrong answer, not a saving | `worktree_id` | `annotations` · `bookmarks` · `canvas_boards` · `canvas_sets` · `file_opens` · `files` · `reading_sets` · `recipe_runs` · `reviews` · `trails` |
+| `meta` — about the daemon rather than about code | none | `repos` (the canonical HOLDER of both) · `worktrees` (the identity registry itself) · `mutations` (the audit ledger: re-keying it would rewrite history) · `doc_lens_pins` (a cross-daemon pin whose `repo` is a hint re-resolved per read) · `recipes_server` (its `repo` is an optional SCOPE — NULL means every repo — and a row that may belong to no repo cannot be owned by a workspace) |
+
+The blob-keyed derived tables (`symbols`, `highlights`, `occurrences`,
+`import_specs`, `call_sites`, `type_relations`, `chunk_status`,
+`derived_status`) carry **no repo key at all** and never did — ADR-2 keyed
+them by `(blob_hash, salt)` from V0001, so a second checkout of one
+repository has always cost zero re-extraction for them. They are outside
+the classification because they need no key, not because they were
+forgotten.
+
+`store::tests::v75_m1` walks `sqlite_master` against that table from both
+ends: **a table added later with a `repo_id`/`repo` column fails the build
+until it declares a class.** That walk is the re-key's teeth.
+
+**Where the value comes from.** Not from Rust. Each keyed table carries an
+`AFTER INSERT … WHEN NEW.<key> IS NULL` trigger, created next to the column
+in V0040, that reads the identity off the `repos` row the row already
+points at. One home, unforgettable by a future `INSERT`, and every `Store`
+write signature unchanged. `Store::set_repo_identity` is the only writer of
+`repos.workspace_id`/`worktree_id`.
+
+**What the re-key does NOT do, and why.** It adds the key. It does not
+collapse two checkouts' duplicate rows into one, and no read widens from
+`repo_id = ?` to `workspace_id = ?`. Three reasons, and they compose: a
+shared read over two repo ids would return each row twice; sharing needs
+the PRIMARY KEY to become `(workspace_id, …)`, which in SQLite is a table
+REBUILD; and a rebuild is O(every row) inside a migration, i.e. between
+`Store::open` and the listener bind, which invariant 11's V72-B0(a)
+forbids outright. There is also no surface today that registers two
+worktrees of one workspace as two repos, so a widened read would be code
+no configuration can reach. `rekey::READS_NOT_WIDENED` is the ledger of
+what still needs the collapse, and the collapse belongs with the worktree
+lifecycle verbs and their own one-way-door treatment.
+
+The read that DOES go through the new key is the per-workspace derived-row
+census on `GET /api/workspaces` (`derived`), and in
+`kb-code workspaces --json`.
+
+### Reads
+
+`GET /api/workspaces` → `kbc-workspace/1`: every workspace with its
+`common_dir`, `root_commit` (or `null` plus a `note` when HEAD is unborn),
+the `[[repos]]` entries resolved to it, its worktrees, and the `derived`
+census. `GET /api/workspaces/{id}/worktrees` is the same payload narrowed
+to one (404 on an unknown id). Both are ordinary `auth_bearer` reads.
+
+Each worktree row carries `path` (mutable), `branch`, `head_sha`,
+`is_main`/`bare`/`detached`, `locked` + the lock reason **verbatim**,
+`prunable` + git's own reason, and D13's honesty pair:
+
+* `path_resolution` — `exact` (the worktree path IS a configured
+  `[[repos]]` root) · `ancestor` (it is inside one) · `absent`;
+* `mounted` — `path_resolution != absent`.
+
+A worktree outside every configured root is listed as **"known, not
+mounted"**, never hidden and never browsed. A prunable worktree is listed
+too, with git's reason: reads skip it, but an operator needs to see it and
+the lifecycle verbs need something to name. The lock reason is stored and
+printed and **parsed by nothing** — D13's agent-owner oracle is a later
+unit and can only ever mint `likely`.
+
+Not to be confused with D14/M4's per-FILE `path_resolution`, which answers
+"does this path exist at the target ref" for the reader. Same three words,
+different subject.
+
+`GET /api/repos` gains `workspace_id` and `worktree_id` **additively**,
+read off `repos` rather than recomputed, so the two surfaces cannot
+disagree. Both are `null` until resolution has run.
+
+### `@ref` frames (D14)
+
+`GET /api/frames` → `kbc-frames/1`, and `kb-code frames [--json]`. A Rust
+`const` table (`kb_code_server::frames::FRAMES`), golden-pinned at
+`tests/fixtures/frames.golden.json`, saying per lane where its answer comes
+from and what it may claim about a ref that is not checked out:
+
+| lane | source | off-HEAD ceiling |
+| --- | --- | --- |
+| `text`, `symbols`, `files` | working tree (via the mirror) | `refused` |
+| `tree`, `file_at_ref` | ODB | `exact` |
+| `blame` | git | `exact` |
+| `usages` | working tree | `likely` |
+| `framework_edges` | working tree | `candidate` |
+| `lsp_live` | refused | `refused` |
+
+`off_head` is a **ceiling, never a promise**; `ref_aware: false` means the
+lane ignores a ref and answers for the checkout, which a reader must SAY
+rather than silently substitute. This unit lays the table and consumes
+none of it — the reader's ref chip, compare mode and per-lane banners
+derive from these bytes rather than restating them.
+
+### The migration treatment: backup, epoch, rehearsal
+
+A schema epoch is a **one-way door** for a volume: `kb_core::sibling::
+refuse_if_volume_ahead` makes an older binary refuse a forward-migrated
+volume rather than silently regress it, and the only remedy it offers is
+"restore the state backup matching epoch V\<n\>". V0040 therefore ships
+with all three of:
+
+**Backup.** `backup::ensure_for_epoch_crossing` runs inside `Store::open`,
+ordered deliberately: AFTER `refuse_if_volume_ahead` (a volume this binary
+must refuse is never snapshotted) and BEFORE the V72-B1 checksum repair,
+which is itself a write — a snapshot taken after it would not be the
+pre-migration state an operator would roll back to. The first boot that
+would carry a volume across V0040 takes a
+`VACUUM INTO` snapshot beside the database, named for the epoch it restores
+to (e.g. `index.db.pre-V0038.bak` for a volume that had reached
+V0038), and writes a `kbc-backup/1` receipt
+(`<state>/kb-code/backup.marker`). If the snapshot cannot be written the
+boot is **refused** with the reason, rather than migrating a volume nobody
+can roll back. `VACUUM INTO` (not `cp`) because a live WAL that has not
+checkpointed would otherwise restore torn. A second crossing boot reuses
+the existing snapshot; a receipt whose file was deleted is not fresh.
+`KB_CODE_I_HAVE_A_BACKUP=1` proceeds anyway for an operator holding a
+filesystem-level snapshot, and logs a warning naming itself every time.
+
+`kb-code backup [--db PATH] [--json]` takes the same snapshot on demand and
+writes the same receipt, so the gate can be front-run before a deploy
+window. It is a LOCAL FILE operation: no daemon, no route, no new mutation
+surface — a backup you can only take through a running daemon is exactly
+the one you cannot take when the daemon refuses to boot.
+
+**Epoch.** Nothing is bumped by hand. `store::schema_epoch()` reads the
+highest EMBEDDED migration version, so landing `V0040__workspace_rekey.sql`
+*is* the bump; it rides `GET /api/identity`'s `schema_epoch`, and
+`kb-code doctor`'s `sibling_handshake` check already fails on CLI/daemon
+skew.
+
+**Rehearsal.** `kb-code rehearse-migration --from PATH [--keep] [--json]`
+→ `rehearsal/1`. It `VACUUM INTO`-copies the volume to a throwaway
+directory beside it, runs the real `Store::open` (so the backup gate and
+every repair run exactly as they would live), stamps a clearly-fake
+identity on the COPY's `repos` rows so the backfill genuinely writes every
+row, runs the paged backfill to completion, and reports: the epoch before
+and after, the snapshot the gate took, a per-table row census (**a re-key
+adds columns, never rows**), per-table keyed/unkeyed counts, and the
+backfill's wall clock on a volume that size. The source is never written;
+the copy is deleted unless `--keep`; a non-empty `problems` list exits
+non-zero.
+
+Two exemptions the census states rather than hides:
+`refinery_schema_history` gains exactly one row per applied migration —
+that IS the migration happening — and a table the migration CREATED is
+noted as such rather than read as a row count that moved. Both were found
+by the first real run of this verb against a 2.9 GB volume, which is what a
+rehearsal is for; the same run found that the backup gate had been written
+and never WIRED into `Store::open`.
+
+### The backfill
+
+Rows that predate the triggers are stamped by a **paged background pass**
+(`rekey::spawn_rekey`), spawned by `bind_and_spawn` and never awaited —
+V72-B0(a)'s rule, and sharper here because resolution runs `git rev-list
+--max-parents=0 HEAD`, which walks the whole reachable history. That walk
+is paid ONCE per volume: the recorded root commit is reused on every later
+boot.
+
+The pass resolves each `[[repos]]` entry to its workspace + worktree, then
+walks each keyed table by `rowid` in pages of 512, one short transaction
+each, sleeping between pages so the store's single connection mutex is
+genuinely released. The cursor lives in the `rekey_progress` table, written
+in the SAME transaction as the page it describes (V72-B0's marker was a
+sidecar FILE only to avoid bumping the refinery epoch — this unit bumps it
+anyway, and a row cannot disagree with its own page). The UPDATE's
+`<key> IS NULL` predicate makes a replayed page a no-op, so a crash costs
+one page. A per-boot wall-clock budget stops the pass and the next boot
+resumes; a repo added, removed or re-pointed changes the recorded
+fingerprint and the tables are walked again (a rowid scan, not a rewrite).
+
+`GET /api/identity` reports `rekey: pending | running | done` and
+`kb-code doctor` prints it as an INFORMATIONAL check (it never fails
+doctor: `pending` is a normal state on a daemon that has just booted).
+Every route answers correctly in all three states — `Store::
+workspace_repo_ids` falls back to the caller's own repo id while the
+identity is unresolved. What `pending` tells you is that
+`GET /api/workspaces` may be EMPTY because resolution has not finished,
+which is a different statement from "there are no workspaces".
+
+### Not in this unit
+
+The worktree LIFECYCLE verbs (`create`/`lock`/`unlock`/`repair`/`prune`),
+the branch views, the reader's `@ref` chip and compare mode, and the
+transcript scrubber are each their own unit. Nothing here mutates a
+worktree; `checkout.rs`'s loopback-only working-tree lane is untouched and
+remains the only place this daemon changes a checkout.

@@ -40,6 +40,18 @@ pub struct AppState {
     pub repos: Vec<RepoEntry>,
     pub store: Arc<Store>,
     pub repo_ids: HashMap<String, i64>,
+    /// V75-M1 — the Workspace re-key's own honesty flag
+    /// (`rekey::STATE_PENDING` | `STATE_RUNNING` | `STATE_DONE`), reported
+    /// verbatim on `GET /api/identity` and `GET /api/workspaces`.
+    ///
+    /// In-memory and per-boot, seeded from `Store::rekey_is_done` and
+    /// flipped by the background pass (`rekey::spawn_rekey`). The DURABLE
+    /// state is the `rekey_progress` table — this is the cheap read a
+    /// route can make without touching the store. `pending` says "the key
+    /// columns may be NULL and the workspace list may be empty because
+    /// resolution has not run yet", which is a different statement from
+    /// "there are no workspaces".
+    pub rekey: Arc<std::sync::atomic::AtomicU8>,
     /// The daemon-wide SSE event bus (`GET /api/events`) — mirrors
     /// `kb_server::state::KbHandles::bus`'s "one bus, one monotonic id
     /// space" shape, scaled down to kb-code's single-daemon-many-repos
