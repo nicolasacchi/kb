@@ -13891,14 +13891,15 @@ async fn review_pseudo_cmd(
     json: bool,
 ) -> Result<()> {
     let client = http_client()?;
-    let mut query: Vec<(&str, &str)> = Vec::new();
-    if let Some(p) = ps {
-        query.push(("ps", p));
-    }
-    let path = match name {
-        Some(n) => format!("/api/reviews/{id}/pseudo/{n}"),
-        None => format!("/api/reviews/{id}/pseudo"),
+    // Through the contract's own builders, so the verb and
+    // `cli_requests_send_every_param_their_route_requires` share ONE
+    // spelling of each path and its params.
+    let (template, query) = match name {
+        Some(_) => review_pseudo_file_request(ps),
+        None => review_pseudo_list_request(ps),
     };
+    let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let path = fill_review_id(template, id).replace("{name}", name.unwrap_or_default());
     let body = get_json(&client, daemon, &path, &query).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -13954,14 +13955,10 @@ async fn review_turns_cmd(
     json: bool,
 ) -> Result<()> {
     let client = http_client()?;
-    let mut query: Vec<(&str, &str)> = Vec::new();
-    if let Some(p) = ps {
-        query.push(("ps", p));
-    }
-    let url = format!(
-        "{}/api/reviews/{id}/hunks/{hunk}/turns",
-        daemon.trim_end_matches('/')
-    );
+    let (template, query) = review_turns_request(ps);
+    let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let path = fill_review_id(template, id).replace("{hunk}", hunk);
+    let url = format!("{}{path}", daemon.trim_end_matches('/'));
     let resp = client
         .get(&url)
         .query(&query)

@@ -427,9 +427,8 @@ async fn a_comment_on_a_pseudo_file_carries_forward_through_the_same_ladder() {
         .position(|l| l.contains("ANCHORING"))
         .unwrap()
         + 1;
-    let doc_with_ref = format!(
-        "---\nschema: kbc-review/1\nsummary_md: |\n  Cents, everywhere.\n---\n\n         # Review\n\nA LINE WORTH ANCHORING TO.\n\nSee [[code:~review/pr-body.md:1]].\n"
-    );
+    let doc_with_ref = "---\nschema: kbc-review/1\nsummary_md: |\n  Cents, everywhere.\n---\n\n# Review\n\nA LINE WORTH ANCHORING TO.\n\nSee [[code:~review/pr-body.md:1]].\n"
+        .to_string();
     let resp = client
         .post(format!("{}/api/reviews/{id}/compose", b.base))
         .json(&serde_json::json!({
@@ -645,7 +644,7 @@ fn seed_edit_session(root: &Path, session_id: &str, repo_dir: &Path) {
     let abs = serde_json::to_string(&repo_dir.join("order.rb").display().to_string()).unwrap();
     let old = serde_json::to_string(OLD_LINE).unwrap();
     let new = serde_json::to_string(NEW_LINE).unwrap();
-    let lines = vec![
+    let lines = [
         format!(
             r#"{{"type":"user","uuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","parentUuid":null,"sessionId":"{session_id}","timestamp":"2026-07-17T10:00:00.000Z","isSidechain":false,"message":{{"role":"user","content":"move to cents"}}}}"#
         ),
