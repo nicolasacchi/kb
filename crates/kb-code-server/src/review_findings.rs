@@ -516,6 +516,14 @@ fn orphaned_resolution(target_ps: &ReviewPatchsetRow) -> ResolvedForPs {
 /// ONE JSON builder every findings route returns through, so a manual
 /// create's response and a disposition set/clear's response are
 /// byte-shape-identical to `GET /findings`'s own rows.
+///
+/// V73-K2b added the five findings-v2 fields (`act`, `blocking`, `cites`,
+/// `fingerprint`, `superseded_by`). V73-K1 landed them as COLUMNS and put
+/// them on the document read's own `FindingBrief`, but this — the wire every
+/// finding CARD in the SPA reads — never carried them, so the two axes D9
+/// added were storable and unreadable. Purely additive: no field changed
+/// name, type or position, and every pre-V0034 row answers `"issue"` /
+/// `false` / `null`, which is what those rows always meant.
 fn finding_json(
     f: &ReviewFindingRow,
     resolution: &ResolvedForPs,
@@ -550,8 +558,23 @@ fn finding_json(
     } else {
         serde_json::Value::Null
     };
+    // findings v2 (V73-K1's own columns, V73-K2b's wire). `cites` is the
+    // stored JSON re-parsed — a malformed blob degrades to ABSENT rather
+    // than to an empty list, because "this finding cites nothing" and "we
+    // could not read what it cites" are different facts and a card must be
+    // able to say which. Every one of the five is `null`/`false`/absent on a
+    // pre-V0034 row, which is exactly what those rows meant.
+    let cites: Option<serde_json::Value> = f
+        .cites_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
     serde_json::json!({
         "slug": f.slug,
+        "act": f.act,
+        "blocking": f.blocking,
+        "cites": cites,
+        "fingerprint": f.fingerprint,
+        "superseded_by": f.superseded_by,
         "severity": f.severity,
         "category": f.category,
         "location": {
@@ -2093,6 +2116,70 @@ mod tests {
         let findings = vec![finding_row(1, "f-a", "Security", "a.rb")];
         let pairs = vec![pair("Security", "a.rb", vec![2, 3])];
         assert!(recurring_findings(&findings, 1, &pairs).is_empty());
+    }
+
+    // --- the findings-v2 wire (V73-K2b) -----------------------------------
+
+    fn resolution_for_test() -> ResolvedForPs {
+        ResolvedForPs {
+            line: Some(12),
+            line_end: None,
+            orphaned: false,
+            resolved_against: ResolvedAgainst {
+                ps: 1,
+                sha: "aaaa".into(),
+            },
+            original: None,
+            confidence: Some("exact"),
+        }
+    }
+
+    #[test]
+    fn the_findings_wire_carries_the_five_v2_fields() {
+        // V73-K1 landed `act`/`blocking`/`cites`/`fingerprint`/
+        // `superseded_by` as COLUMNS and put them on the document read's own
+        // `FindingBrief`, but the wire every finding CARD reads did not carry
+        // them — the two axes D9 added were storable and unreadable. This
+        // pins that they are on the shared builder, so a manual create, a
+        // disposition set and `GET /findings` all report them alike.
+        let mut f = finding_row(1, "f-a", "correctness", "a.rb");
+        f.act = "question".into();
+        f.blocking = true;
+        f.cites_json = Some(r#"["code:a.rb:1","sym:Order#total"]"#.to_string());
+        f.fingerprint = Some("deadbeefcafe0001".into());
+        f.superseded_by = Some("f-b".into());
+        let v = finding_json(&f, &resolution_for_test(), 0, 0);
+        assert_eq!(v["act"], "question");
+        assert_eq!(v["blocking"], true);
+        assert_eq!(v["cites"][0], "code:a.rb:1");
+        assert_eq!(v["cites"][1], "sym:Order#total");
+        assert_eq!(v["fingerprint"], "deadbeefcafe0001");
+        assert_eq!(v["superseded_by"], "f-b");
+    }
+
+    #[test]
+    fn a_pre_v0034_row_reads_back_as_what_it_always_meant() {
+        // Every default is the honest reading of a row nothing computed a v2
+        // value for: an `issue`, not blocking, citing nothing, with no
+        // fingerprint and no successor.
+        let f = finding_row(1, "f-a", "correctness", "a.rb");
+        let v = finding_json(&f, &resolution_for_test(), 0, 0);
+        assert_eq!(v["act"], "issue");
+        assert_eq!(v["blocking"], false);
+        assert!(v["cites"].is_null());
+        assert!(v["fingerprint"].is_null());
+        assert!(v["superseded_by"].is_null());
+    }
+
+    #[test]
+    fn an_unreadable_cites_blob_is_absent_not_empty() {
+        // "cites nothing" and "we could not read what it cites" are
+        // different facts; degrading the second into the first would let a
+        // card state an absence it never verified.
+        let mut f = finding_row(1, "f-a", "correctness", "a.rb");
+        f.cites_json = Some("{ not json".to_string());
+        let v = finding_json(&f, &resolution_for_test(), 0, 0);
+        assert!(v["cites"].is_null());
     }
 
     #[test]

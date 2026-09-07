@@ -3,6 +3,8 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { ReviewDetailPr, ReviewPatchset } from "../api/types";
 import { Icon } from "../components/icons";
 import CockpitTabs, { type CockpitView } from "../components/reviews/CockpitTabs";
+// ── V73-K2b (kbc-review/1, design D9/D9-a) — the Document tab ──
+import DocPanel from "../components/reviews/DocPanel";
 import FilesPanel, { type FileSort } from "../components/reviews/FilesPanel";
 import InterdiffPanel from "../components/reviews/InterdiffPanel";
 import PatchsetStrip from "../components/reviews/PatchsetStrip";
@@ -14,11 +16,14 @@ import ReviewHeader from "../components/reviews/ReviewHeader";
 import ReviewMapPanel from "../components/reviews/ReviewMapPanel";
 import ReviewSidePanel from "../components/reviews/ReviewSidePanel";
 import TimelinePanel from "../components/reviews/TimelinePanel";
+import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useReviewComments } from "../hooks/useReviewComments";
 import {
   useGithubThreads,
   useReview,
+  useReviewDoc,
+  useReviewDocLint,
   useReviewFiles,
   useReviewInterdiff,
   useReviewMap,
@@ -27,7 +32,8 @@ import {
   useReviewTimeline,
 } from "../hooks/useReviews";
 import { readerUrl } from "../lib/breadcrumbs";
-import { parseReviewPs, parseReviewTab } from "../lib/codeUrl";
+import { parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
+import { cardList } from "../lib/reviewDoc";
 import { indexThreads } from "../lib/reviewComments";
 import { toast } from "../lib/toast";
 import "../styles/reviews.css";
@@ -35,6 +41,15 @@ import "../styles/review-room.css";
 import "../styles/recipes.css";
 import "../styles/stacks.css";
 import "../styles/history.css";
+import "../styles/review-doc.css";
+
+/// Escape a value for use inside an attribute selector. Same fallback shape
+/// `routes/reviewDiff/helpers.ts`'s `cssAttr` carries, for the same reason:
+/// `CSS.escape` is absent in the node test environment and on old engines.
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 
 /// V3.R2 — `/r/{repo}/~reviews/{id}` review cockpit: patchset timeline,
 /// files table with inline diffs + viewed tracking, annotations side
@@ -154,6 +169,35 @@ export default function ReviewDetail() {
   const timelineQ = useReviewTimeline(repo, idOk ? id : undefined, cockpitView === "timeline");
   const timelineAvailable = timelineQ.data !== null || (!timelineQ.isFetched && !timelineQ.isError);
 
+  // ── V73-K2b (kbc-review/1) — the Document tab. Same fetch-on-open +
+  // 404→null degrade convention as Map/Order/Timeline above: a review with
+  // no composed document hides the tab rather than showing empty chrome.
+  // The read always asks for `?resolve=true` — a document without live cards
+  // is the prose the CLI already prints (`useReviewDoc`'s own note).
+  const docQ = useReviewDoc(repo, idOk ? id : undefined, psQuery, cockpitView === "doc");
+  const docLintQ = useReviewDocLint(repo, idOk ? id : undefined, psQuery, cockpitView === "doc");
+  const docAvailable = docQ.data !== null || (!docQ.isFetched && !docQ.isError);
+  // `?cards=folded` — the tab's one knob, and it lives in the URL for the
+  // same reason every diff-v2 knob does: a reload reproduces the view and
+  // there is no parallel store to drift.
+  const cardsFolded = parseDocCardsMode(searchParams.get("cards")) === "folded";
+  function setCardsFolded(folded: boolean) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (folded) next.set("cards", "folded");
+        else next.delete("cards");
+        return next;
+      },
+      { replace: true },
+    );
+  }
+  // The focused ref card. Browser-local by design: it is a cursor, not a
+  // place — `?cards=` reproduces the LAYOUT, and a card permalink is the
+  // card's own address (`RefCard`'s link), not a highlight in this tab.
+  const [focusedRef, setFocusedRef] = useState<string | null>(null);
+  const docCards = useMemo(() => cardList(docQ.data), [docQ.data]);
+
   // ── PRR-F (design-addendum-2.md §A) — GitHub threads, fetched once the
   // review's `pr_number` is known (the hook itself stays disabled until
   // then). Shared across the Timeline tab (interleave) and the side panel's
@@ -215,6 +259,13 @@ export default function ReviewDetail() {
       toast.err("Timeline is not available on this server version.");
       setCockpitView("files");
     }
+    if (cockpitView === "doc" && docQ.isFetched && docQ.data === null) {
+      // Two causes, one honest sentence: this review has no composed
+      // document, or the daemon predates the surface. The tab never
+      // distinguishes them because the 404 does not either.
+      toast.err("This review has no kbc-review/1 document (compose one with `kb-code review compose`).");
+      setCockpitView("files");
+    }
   }, [
     cockpitView,
     mapQ.isFetched,
@@ -223,7 +274,76 @@ export default function ReviewDetail() {
     orderQ.data,
     timelineQ.isFetched,
     timelineQ.data,
+    docQ.isFetched,
+    docQ.data,
   ]);
+
+  // ── V73-K2b — the cockpit's KEYS, as kbc-cmd/1 handlers.
+  //
+  // This is the first surface to publish `scope: "review"`. The five
+  // `review.tab.*` rows have existed since v7.0 and dispatched NOWHERE —
+  // shipping `6` (Document) beside a dead `1` would be exactly the
+  // silently-dead-row failure web-code/CLAUDE.md's keyboard section exists
+  // to prevent, so all six are registered here together.
+  //
+  // Every row is `dispatch: "surface"` and none carries a `vim_kind`: this
+  // route mounts no `CodeView`, so `shouldWithholdFromBuffer` (which
+  // resolves in `"reader"` scope) never sees any of them — the same reason
+  // the diff-scope rows are safe. `] r`/`[ r` follow the `] p`/`] u`/`] d`
+  // precedent exactly: `[`/`]` is a MIXED prefix and a vim arm would fire
+  // the step twice.
+  useCommandScope("review", {
+    "review.open": true,
+    "help.open": false,
+  });
+  function selectTab(view: CockpitView, available: boolean) {
+    // A tab that is not available is a NO-OP, never a toast and never a
+    // navigation to empty chrome — the key means "show me that tab", and
+    // there is no tab to show.
+    if (!available) return;
+    setCockpitView(view);
+    if (view === "order") setTourIdx(0);
+  }
+  function stepCard(delta: 1 | -1) {
+    if (docCards.length === 0) return;
+    const at = focusedRef === null ? -1 : docCards.findIndex((c) => c.ref === focusedRef);
+    const next = at === -1 ? (delta === 1 ? 0 : docCards.length - 1) : at + delta;
+    const card = docCards[(next + docCards.length) % docCards.length];
+    if (card) setFocusedRef(card.ref);
+  }
+  useCommandHandlers({
+    "review.tab.report": () => selectTab("report", reportAvailable),
+    "review.tab.files": () => selectTab("files", true),
+    "review.tab.map": () => selectTab("map", mapAvailable),
+    "review.tab.order": () => selectTab("order", orderAvailable),
+    "review.tab.timeline": () => selectTab("timeline", timelineAvailable),
+    "review.tab.doc": () => selectTab("doc", docAvailable),
+    "doc.cards-fold": () => {
+      if (cockpitView !== "doc") return;
+      setCardsFolded(!cardsFolded);
+    },
+    "doc.card-next": () => {
+      if (cockpitView !== "doc") return;
+      stepCard(1);
+    },
+    "doc.card-prev": () => {
+      if (cockpitView !== "doc") return;
+      stepCard(-1);
+    },
+    "doc.card-open": () => {
+      if (cockpitView !== "doc" || focusedRef === null) return;
+      const el = document.querySelector(`[data-kbc-refcard-link="${cssEscape(focusedRef)}"]`);
+      // An orphan and an inert card have NO link — by construction, not by
+      // omission. Nothing to open is the honest outcome, not a fallback
+      // navigation to somewhere adjacent.
+      if (el instanceof HTMLElement) el.click();
+    },
+    "doc.compose-copy": () => {
+      if (cockpitView !== "doc") return;
+      const el = document.querySelector("[data-kbc-doc-compose-copy]");
+      if (el instanceof HTMLElement) el.click();
+    },
+  });
 
   const files = filesQ.data?.files ?? [];
   const activePs: ReviewPatchset | undefined =
@@ -335,6 +455,7 @@ export default function ReviewDetail() {
         mapAvailable={mapAvailable}
         orderAvailable={orderAvailable}
         timelineAvailable={timelineAvailable}
+        docAvailable={docAvailable}
         cockpitView={cockpitView}
         onSelect={(view) => {
           setCockpitView(view);
@@ -378,6 +499,30 @@ export default function ReviewDetail() {
               data={timelineQ.data}
               githubThreads={githubThreadsQ.data}
             />
+          ) : !compareMode && cockpitView === "doc" ? (
+            docQ.isLoading ? (
+              <div className="kbc-reader__hint">Loading the review document…</div>
+            ) : docQ.error ? (
+              <div className="kbc-reader__hint kbc-reader__hint--error">
+                {(docQ.error as Error).message}
+              </div>
+            ) : docQ.data ? (
+              <DocPanel
+                repo={repo}
+                id={id}
+                doc={docQ.data}
+                lint={docLintQ.data}
+                lintLoading={docLintQ.isLoading}
+                cardsFolded={cardsFolded}
+                onSetCardsFolded={setCardsFolded}
+                focusedRef={focusedRef}
+                onFocusRef={setFocusedRef}
+              />
+            ) : (
+              <div className="kbc-reader__hint">
+                This review has no kbc-review/1 document yet.
+              </div>
+            )
           ) : compareMode && interdiffReady ? (
             <InterdiffPanel
               repo={repo}
@@ -418,6 +563,9 @@ export default function ReviewDetail() {
           onMobileClose={isMobile ? () => setSheetOpen(false) : undefined}
           onOpenPublishPreview={openPublishPreview}
           prNumber={prNumberForThreads}
+          docCards={cockpitView === "doc" ? docCards : undefined}
+          focusedRef={focusedRef}
+          onFocusRef={setFocusedRef}
         />
       </div>
       {isMobile && sheetOpen && (

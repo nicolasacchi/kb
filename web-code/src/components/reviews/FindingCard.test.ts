@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewFinding } from "../../api/types";
 import {
+  findingAct,
+  findingActClass,
   findingAuthorDisplay,
+  findingCitesOf,
   findingDiffHref,
   findingLastTouched,
   findingLocationLabel,
+  findingTombstone,
   severityRank,
   severityStripeClass,
 } from "./FindingCard";
@@ -137,5 +141,45 @@ describe("findingLastTouched", () => {
   it("falls back to updated_at when content_updated_at is null", () => {
     const f = finding({ created_at: 1000, updated_at: 2000, content_updated_at: null });
     expect(findingLastTouched(f, 2010_000)).toContain("second");
+  });
+});
+
+// --- findings v2 (V73-K2b, design D9) -------------------------------------
+//
+// V73-K1 landed `act`/`blocking`/`cites`/`fingerprint`/`superseded_by` as
+// storage columns; K2b put them on the wire and on this card. Every field is
+// OPTIONAL on the TS type on purpose — an older daemon omits them entirely,
+// and each default below is what a pre-V0034 row always meant.
+describe("findings v2 on the card", () => {
+  it("reads a finding with no act as an ISSUE", () => {
+    expect(findingAct(finding())).toBe("issue");
+    expect(findingAct(finding({ act: "question" }))).toBe("question");
+  });
+
+  it("puts the act in a class of its own, never in the severity's", () => {
+    expect(findingActClass(finding({ act: "nitpick" }))).toBe(
+      "kbc-finding__act kbc-finding__act--nitpick",
+    );
+    // The act is a LABEL beside severity; it must not reuse the severity
+    // stripe, whose whole job is the other axis.
+    expect(findingActClass(finding({ act: "issue" }))).not.toBe(
+      severityStripeClass(finding().severity),
+    );
+  });
+
+  it("renders superseded_by as a tombstone naming its successor", () => {
+    expect(findingTombstone(finding({ superseded: true, superseded_by: "f-newer" }))).toBe(
+      "superseded by f-newer",
+    );
+    // `superseded` without a declared successor still says so — the daemon
+    // never INFERS which new finding replaced an old one.
+    expect(findingTombstone(finding({ superseded: true }))).toBe("superseded");
+    expect(findingTombstone(finding())).toBeNull();
+  });
+
+  it("treats an unreadable cites blob the same as none, for RENDERING only", () => {
+    expect(findingCitesOf(finding({ cites: ["code:a.rb:1"] }))).toEqual(["code:a.rb:1"]);
+    expect(findingCitesOf(finding({ cites: null }))).toEqual([]);
+    expect(findingCitesOf(finding())).toEqual([]);
   });
 });

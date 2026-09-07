@@ -76,6 +76,8 @@ import type {
   ReviewRiskOut,
   RecipesCatalogOut,
   RecipeRunOut,
+  ReviewDocLintOut,
+  ReviewDocOut,
   ReviewMapOut,
   ReviewReadingOrderOut,
   StacksOut,
@@ -1318,6 +1320,37 @@ export function fetchRecipeRun(params: FetchRecipeRunParams): Promise<RecipeRunO
 /// `GET /api/reviews/{id}/map` — 404 when the surface is absent (older server).
 export function fetchReviewMap(id: number): Promise<ReviewMapOut> {
   return getJson<ReviewMapOut>(`/api/reviews/${id}/map`, {});
+}
+
+// --- V73-K1/K2b — the kbc-review/1 document -------------------------------
+
+/// `GET /api/reviews/{id}/doc[?ps=&resolve=true]` (`kbc-review/1`) — 404 when
+/// the review has no composed document (or on an older server), which is what
+/// lets the cockpit hide the Document tab rather than show empty chrome.
+///
+/// `resolve` is OFF by default on the wire: card resolution reads git blobs
+/// and the symbol index, and a caller that only wants the prose should not
+/// pay for it. The SPA always asks for `true` — the whole point of the tab is
+/// the live cards — but the param is spelled here rather than hardcoded so
+/// the cost is visible at the call site.
+export function fetchReviewDoc(
+  id: number,
+  params: { ps?: string; resolve?: boolean } = {},
+): Promise<ReviewDocOut> {
+  return getJson<ReviewDocOut>(`/api/reviews/${id}/doc`, {
+    ps: params.ps,
+    resolve: params.resolve ? "true" : undefined,
+  });
+}
+
+/// `GET /api/reviews/{id}/doc/lint[?ps=]` — lints the STORED document.
+/// Read-only: composing stays loopback-only (D22), so the SPA shows the
+/// `kb-code review compose` line rather than offering to run it.
+export function fetchReviewDocLint(
+  id: number,
+  params: { ps?: string } = {},
+): Promise<ReviewDocLintOut> {
+  return getJson<ReviewDocLintOut>(`/api/reviews/${id}/doc/lint`, { ps: params.ps });
 }
 
 /// `GET /api/reviews/{id}/reading-order`.

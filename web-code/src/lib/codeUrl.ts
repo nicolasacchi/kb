@@ -241,7 +241,7 @@ export function reviewsUrl(repo: string): string {
 /// `components/`, same posture `ReviewDiffHrefOpts.overlay` already takes
 /// on this file's own `OverlayMode` twin) so `reviewUrl`'s `tab` option and
 /// `parseReviewTab`'s return type stay structurally assignable to it.
-export type ReviewCockpitTab = "report" | "files" | "map" | "order" | "timeline";
+export type ReviewCockpitTab = "report" | "files" | "map" | "order" | "timeline" | "doc";
 
 const REVIEW_COCKPIT_TABS: ReadonlySet<string> = new Set<ReviewCockpitTab>([
   "report",
@@ -249,7 +249,21 @@ const REVIEW_COCKPIT_TABS: ReadonlySet<string> = new Set<ReviewCockpitTab>([
   "map",
   "order",
   "timeline",
+  // V73-K2b — the `kbc-review/1` document. Appended LAST so nothing about
+  // the five existing values moves.
+  "doc",
 ]);
+
+/// `?cards=folded` — the Document tab's card fold state. The URL is the only
+/// place it lives (the diff v2 rule, applied to the one knob this tab has),
+/// and `"expanded"` is the default and therefore never written.
+export type DocCardsMode = "expanded" | "folded";
+
+/// TOTAL: anything absent or unrecognised is the documented default, never a
+/// throw and never a guess.
+export function parseDocCardsMode(v: string | null): DocCardsMode {
+  return v === "folded" ? "folded" : "expanded";
+}
 
 /// `"files"` is the cockpit's own fallback default (`CockpitTabs.tsx` /
 /// `ReviewDetail.tsx`'s pre-V70-A3S `useState<CockpitView>("files")`) — kept

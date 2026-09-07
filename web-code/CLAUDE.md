@@ -663,6 +663,103 @@ invisible to `shouldWithholdFromBuffer`, which resolves in `"reader"`, so
 carry no `vim_kind`, following the `] u`/`] d`/`] s` precedent: `[`/`]` is
 a MIXED prefix and a vim arm would fire the step twice.
 
+## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
+
+`?tab=doc` is the Review Room's sixth cockpit tab. Four rules, each with a
+home, and each about the same thing: this tab renders a document it did not
+write, about a repository it does not resolve.
+
+**A ref becomes a card only if the daemon minted one.** `GET …/doc?resolve=
+true` sends `cards[]` keyed by the ref body EXACTLY as the author wrote it,
+and that key is the join — `lib/reviewDoc.ts`'s `refSpanFor` looks it up and
+nothing else. The four outcomes are disjoint and all four RENDER: a card, a
+`malformed` chip carrying the daemon's own reason, an `unresolved` chip
+naming which of the two causes applies (the read asked for no cards, or the
+daemon's scanner did not treat that span as prose), and a bare `[[X]]` left
+as literal text because root invariant #29 owns that syntax. There is no
+fifth branch in which a span quietly disappears. **Never widen this into
+"parse it here and show a card anyway"**: kb-code is the only thing that can
+say whether a citation still points at the bytes it claims, and a card this
+browser invented would be exactly the wrong-`exact` failure the crate's
+oracle bar calls a release blocker.
+
+**An orphan is a VISIBLE card that says "no honest match", and it carries no
+link.** `review_doc::cards` deliberately reports no position for one, so
+there is nothing to link to and nothing to guess. The same is true of an
+`inert` `gh:`/`kb:` card, for a different reason: kb-code never calls GitHub
+and does not own the kb corpus, and a bare `gh:comment/12` names no host it
+could resolve — `cardHref` returns `null` for both, and that null is
+asserted. Worth knowing when reading the e2e spec: an orphan is
+**unreachable through `compose`** (`ref_orphan` is a lint ERROR and a
+document read is pinned to the patchset it was composed against), so
+`review-doc.spec.ts` asserts the two honest failures that ARE reachable —
+`malformed` (a `warn`) and `inert` — and the orphan's own rendering is pinned
+in `lib/reviewDoc.test.ts`.
+
+**Highlighting, trust, captions and counts are all the server's.** A card's
+snippet is painted with `lib/diffHighlight.ts`'s `buildLineSpans`/`paintLine`
+over the spans the daemon already rebased onto that snippet — a client-side
+highlighter would be a second, disagreeing source of truth, so an unindexed
+blob renders unpainted. Trust rides the shared `TrustBadge` (LINE STYLE, the
+Lane Budget) and is omitted entirely when the daemon minted no tier, because
+`trustTierFrom` classifies a missing class DOWN to `candidate` — which would
+be a claim. `revisions`, `omitted[]` and the reading order's `source`/
+`caption` are rendered verbatim. The ONE thing this side derives is the
+act/blocking FACETING of the findings the wire already sent
+(`findingFacets`), and it is a second VIEW of one list, never a second count.
+
+**The Markdown path is `lib/markdownLite.ts` — extended, not replaced.**
+V73-K2b added two block kinds, `heading` and `code` (fences), both behind
+`MarkdownLiteOptions` and both OFF by default, so `ReportPanel`'s summary
+stream is byte-identical to before. A review document opts into both, and the
+fence support is load-bearing rather than cosmetic: `review_doc::refs`'s
+scanner skips fenced blocks, so without a fence block kind this side would
+find a ref the daemon never saw and render a card for it. `lib/kbcRefs.ts` is
+the TS MIRROR of that scanner + the ref grammar, golden-pinned against the
+SAME `crates/kb-code-server/grammar/kbcrefs.golden.json` the Rust parser
+walks — the kbcq/1 discipline (§ Search grammar), applied to a second
+grammar. Touch the grammar on one side and the other side's test fails,
+naming the case.
+
+**Keys.** Six new rows, all `scope: "review"` / `dispatch: "surface"` /
+no `vim_kind`: `6` (`review.tab.doc`), `Space r` (`doc.cards-fold`),
+`] r`/`[ r` (`doc.card-next`/`prev`), `Space o` (`doc.card-open`), `Space y`
+(`doc.compose-copy`). `ReviewDetail.tsx` is the FIRST surface to publish
+`scope: "review"` at all — which is why the same unit also registered the
+five `review.tab.*` rows that had shipped in v7.0 and dispatched nowhere:
+a live `6` beside a dead `1` is the silently-dead-row failure § Keyboard is
+written to prevent. `] r`/`[ r` carry no vim arm, following the `] p`/`] u`/
+`] d`/`] s` precedent exactly (`[`/`]` is a MIXED prefix; an arm would fire
+the step twice), and none of the others needs one because this route mounts
+no `CodeView` — `shouldWithholdFromBuffer` resolves in `"reader"` scope and
+never sees a review-scope row. `commands/reviewDoc.test.ts` is the
+per-surface gate `deadRows.test.ts` structurally cannot be (that suite gates
+`central` rows only), in the shape `diffV2.test.ts` established. The rail's
+ref list installs NO keydown handler: bare `j`/`k` in `review` scope already
+belong to the inbox's own declared rows, and two homes for one keystroke is
+what the registry exists to prevent.
+
+**Authoring is not here.** Composing is loopback-only (D22, unchanged), so
+the header offers the exact `kb-code review compose` line to COPY and the
+lint panel is read-only. That is the same recorded CLI-parity posture
+`lib/searchHistory.ts` carries for a saved search.
+
+## `ReviewDiff`'s shape (`V73-K2b`)
+
+`routes/ReviewDiff.tsx` is the SHELL: the queries, the page-wide derivations
+(the moved-block index, the noise census, the map row states, the drafts),
+the command handlers and the `live` ref bag the window keydown listener
+reads. Everything else moved into `routes/reviewDiff/` — `helpers.ts` (the
+`?param=` readers and `splatPath`/`orderedRows`), `useReviewDiffState.ts`
+(every URL read and every URL writer, so "the URL is the only state" is
+checkable by reading ONE file), `DiffSections.tsx` (`FileDiffBody`,
+`LazyDiffSection`), and three props-only region components
+(`ReviewDiffToolbar`, `ReviewDiffCenter`, `ReviewDiffRail`). That is the
+shape `Reader.tsx` got in V70: a shell that owns state, with regions that own
+none. The `live` bag stayed in the shell deliberately — it closes over two
+dozen shell values, and threading them into a hook and back would add surface
+without removing coupling.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)

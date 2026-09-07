@@ -8,7 +8,13 @@
 // degrade, same convention as Map/Order) rather than being unconditional —
 // an older server without `GET .../timeline` hides the tab with no stub
 // chrome, consistent with every other optional cockpit surface here.
-export type CockpitView = "report" | "files" | "map" | "order" | "timeline";
+//
+// ── V73-K2b (kbc-review/1, design D9) — the Document tab ──
+// Same `*Available` gate again (`useReviewDoc`'s 404→null degrade): a review
+// with no composed document, or a daemon that predates the surface, hides the
+// tab rather than showing empty chrome. It sits LAST so no existing tab's
+// position or `data-kbc-review-view` hook moves.
+export type CockpitView = "report" | "files" | "map" | "order" | "timeline" | "doc";
 
 export interface CockpitTabsProps {
   compareMode: boolean;
@@ -16,6 +22,7 @@ export interface CockpitTabsProps {
   mapAvailable: boolean;
   orderAvailable: boolean;
   timelineAvailable: boolean;
+  docAvailable: boolean;
   cockpitView: CockpitView;
   onSelect: (view: CockpitView) => void;
 }
@@ -26,10 +33,16 @@ export default function CockpitTabs({
   mapAvailable,
   orderAvailable,
   timelineAvailable,
+  docAvailable,
   cockpitView,
   onSelect,
 }: CockpitTabsProps) {
-  if (compareMode || !(reportAvailable || mapAvailable || orderAvailable || timelineAvailable)) return null;
+  if (
+    compareMode ||
+    !(reportAvailable || mapAvailable || orderAvailable || timelineAvailable || docAvailable)
+  ) {
+    return null;
+  }
   return (
     <div className="kbc-review__view-tabs" role="tablist" data-kbc-review-view-tabs>
       {reportAvailable && (
@@ -100,6 +113,20 @@ export default function CockpitTabs({
           data-kbc-review-view="timeline"
         >
           Timeline
+        </button>
+      )}
+      {docAvailable && (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={cockpitView === "doc"}
+          className={
+            "kbc-review__view-tab" + (cockpitView === "doc" ? " kbc-review__view-tab--active" : "")
+          }
+          onClick={() => onSelect("doc")}
+          data-kbc-review-view="doc"
+        >
+          Document
         </button>
       )}
     </div>

@@ -1645,3 +1645,43 @@ The three reads are declared as `RouteContract`s in
 dead-surface test V71-G0 added.
 
 CLI: `kb-code review {doc,lint,render,compose}`.
+
+### The Document tab — the SPA half
+
+The Review Room's cockpit gains a sixth tab, `?tab=doc`, rendering
+`GET …/doc?resolve=true`: the front matter as a header (tier badge, risk
+chip, revision *n* of *m*, the author block with `considered` /
+`not_considered`, `omitted[]` as a captioned degrade list), the reading order
+(the author's chapters and stops, or the daemon's own captioned **derived**),
+the named `blocks` in their DECLARED order (never the wire's alphabetical
+one), `flows` and `questions` as ref lists, the findings with their v2 axes,
+and the Markdown body — with **every `[[…]]` replaced inline by a live
+card**. A card shows the server's snippet with the server's own highlight
+spans (never a client-side highlighter), its state as a WORD (`pinned` /
+`carried` / `no honest match` / `inert`), its trust through the shared
+line-style badge, the daemon's caption verbatim, and an address that links
+into the reader (or the review diff, or the finding permalink). An orphan is
+a full, visible card that says it has no honest match and carries no link;
+an inert `gh:`/`kb:` link carries none either, because kb-code names no host
+it could resolve. `?cards=folded` folds every card to its address line — a
+folded card still says what it points at. The side panel lists every ref as a
+jump list. `GET …/doc/lint` renders as a small read-only panel on the tab's
+header, with each row's "did you mean" candidates; composing stays
+loopback-only, so the tab shows the exact `kb-code review compose` line an
+agent would run, to copy.
+
+The refs grammar has a TS mirror, `web-code/src/lib/kbcRefs.ts`, which walks
+the SAME `crates/kb-code-server/grammar/kbcrefs.golden.json` fixture the Rust
+parser does — one fixture, two parsers, neither generated from the other
+(kbc-review/1 joining the discipline kbcq/1 already carries). Keys:
+`6` opens the tab, `Space r` folds/unfolds every card, `] r`/`[ r` step the
+focused card, `Space o` opens its target, `Space y` copies the compose line.
+V73-K2b also registered the five pre-existing `review.tab.*` rows (`1`…`5`),
+which had shipped in v7.0 and dispatched nowhere.
+
+The findings wire (`GET /api/reviews/{id}/findings` and its single-finding
+siblings) carries the five v2 fields from v7.3's SPA unit onward: V0034
+landed them as columns and the document read surfaced them, but the wire
+every finding CARD reads did not, so the two axes D9 added were storable and
+unreadable. They are additive — `"issue"` / `false` / `null` on every
+pre-V0034 row, which is what those rows always meant.
