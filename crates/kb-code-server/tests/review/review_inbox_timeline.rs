@@ -363,7 +363,11 @@ async fn timeline_route_returns_ascending_events_end_to_end() {
         .json()
         .await
         .unwrap();
-    assert_eq!(body["schema"], "review-timeline/1");
+    // V73-K3 — the schema is `/2` since the timeline absorbed the PR body,
+    // the working-tree comments, the compose chain, the report, claims,
+    // GitHub and the hunk↔turn join. The widening is ADDITIVE: every
+    // assertion BELOW this line is unchanged, which is the point.
+    assert_eq!(body["schema"], "review-timeline/2");
     assert_eq!(body["review_id"], id);
     let events = body["events"].as_array().unwrap();
     assert!(!events.is_empty());
