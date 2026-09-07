@@ -32,8 +32,8 @@ const GOLDEN_PATH = fileURLToPath(
   ),
 );
 
-/** The seven scheme prefixes `review_doc::refs::SCHEMES` declares. */
-const SCHEMES = ["code", "sym", "ent", "finding", "gh", "kb", "hunk"] as const;
+/** The nine scheme prefixes `review_doc::refs::SCHEMES` declares. */
+const SCHEMES = ["code", "sym", "ent", "finding", "gh", "kb", "hunk", "ci", "question"] as const;
 
 type RefClass = "ref" | "wikilink" | "malformed";
 

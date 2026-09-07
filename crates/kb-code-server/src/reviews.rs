@@ -494,6 +494,21 @@ fn pr_binding_and_report_fields(
     })
 }
 
+/// The stored report's OWN `risk_score` key, as a NUMBER — `pub(crate)` so
+/// `review_doc::routes`'s `{{risk_score}}` render placeholder (V73-K5, gap
+/// 6) sources it the same way [`pr_binding_and_report_fields`] does,
+/// rather than a second hand-rolled parse of `report_json` that could
+/// drift from it. Deliberately narrower than that function's own
+/// `report_risk_score` field: this one is for a render PLACEHOLDER, which
+/// needs an arithmetic value to print, not an arbitrary JSON value to pass
+/// through — a non-numeric `risk_score` (e.g. a string) degrades to `None`
+/// here rather than a display artifact.
+pub(crate) fn report_risk_score_numeric(report_json: Option<&str>) -> Option<f64> {
+    report_json
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("risk_score").and_then(serde_json::Value::as_f64))
+}
+
 /// Splice [`pr_binding_and_report_fields`]'s keys into an existing review
 /// JSON object in place — `list_reviews`/`get_review` build their base
 /// shape via the `json!` macro (a `serde_json::Value::Object`), so this

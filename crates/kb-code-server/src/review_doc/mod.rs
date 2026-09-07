@@ -109,7 +109,21 @@ impl Tier {
 /// The OPTIONAL blocks whose absence is reported rather than assumed. The
 /// order is the order `omitted[]` reports them in, so two reads of the same
 /// document produce byte-identical output.
-pub const OPTIONAL_BLOCKS: [&str; 5] = ["risk", "reading_order", "flows", "questions", "author"];
+///
+/// V73-K5 adds `ci`: like `reading_order`, it always has a DERIVED value
+/// available at read time (from the review's own `pr_meta_json.checks`
+/// snapshot) — `omitted` still names it here when the AUTHORED document
+/// carries none, exactly as `reading_order` does, so "this document's own
+/// front matter said nothing about CI" stays a stated fact rather than
+/// something a reader has to notice from an empty-looking section.
+pub const OPTIONAL_BLOCKS: [&str; 6] = [
+    "risk",
+    "reading_order",
+    "flows",
+    "questions",
+    "author",
+    "ci",
+];
 
 /// The closed set of NAMED sections `blocks:` may carry. An unknown name is
 /// refused by name (`normalize_report_shape`'s precedent) rather than
@@ -124,7 +138,7 @@ pub const BLOCK_NAMES: [&str; 6] = [
 ];
 
 /// The closed set of top-level front-matter keys.
-pub const FRONT_MATTER_KEYS: [&str; 9] = [
+pub const FRONT_MATTER_KEYS: [&str; 10] = [
     "schema",
     "summary_md",
     "risk",
@@ -134,11 +148,27 @@ pub const FRONT_MATTER_KEYS: [&str; 9] = [
     "flows",
     "questions",
     "author",
+    "ci",
 ];
 
 pub const RISK_LEVELS: [&str; 3] = ["low", "medium", "high"];
 
 pub const QUESTION_TARGETS: [&str; 3] = ["to_author", "to_reviewer", "to_agent"];
+
+/// V73-K5 — the `ci:` block's closed status vocabulary. Deliberately its
+/// OWN four values rather than a reuse of `github::CheckRunOut`'s
+/// `pass|fail|warn|pending` (that vocabulary is the GENERIC GitHub-Checks
+/// normalization every consumer of the raw API shares): a document's `ci:`
+/// block may be AUTHORED by a human with no GitHub check behind it at all,
+/// so its vocabulary names the concept a reader expects — GitHub's own
+/// `conclusion` values — rather than this daemon's internal reduction of
+/// them. `review_doc::routes::derive_ci` is what bridges the two when a
+/// block is DERIVED from a `pr_meta_json.checks` snapshot.
+pub const CI_STATUSES: [&str; 4] = ["success", "failure", "pending", "skipped"];
+
+pub fn is_valid_ci_status(s: &str) -> bool {
+    CI_STATUSES.contains(&s)
+}
 
 pub const AUTHOR_KINDS: [&str; 2] = ["agent", "human"];
 
@@ -265,6 +295,34 @@ pub struct Question {
     pub ask: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
+    /// V73-K5 (gap 7, "nothing formally links a question to its answer") —
+    /// a ref naming what answered this question: typically `finding:<slug>`
+    /// (the finding that resolves it) or `question:<n>` (another question
+    /// in this SAME document that already covers it). Unvalidated against
+    /// live state at parse time — like every other typed ref field, it is
+    /// resolved into a card on demand, and an unresolvable one is an honest
+    /// orphan, never a parse error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answers: Option<String>,
+}
+
+/// V73-K5 — one `ci:` block entry: a check-run STATUS SNAPSHOT, either
+/// AUTHORED directly or DERIVED from the review's own `pr_meta_json.checks`
+/// (`review_doc::routes::derive_ci`). Never re-fetched live — see
+/// [`refs::Ref::Ci`]'s doc for why that is `is_inert`, not a defect.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CiCheck {
+    pub name: String,
+    /// One of [`CI_STATUSES`] — validated at parse time for an AUTHORED
+    /// block (a document is refused by name for an out-of-vocabulary
+    /// value, the same posture `risk.level`/`questions[].to` already take);
+    /// a DERIVED block can never produce one outside the set because
+    /// `routes::derive_ci` maps into it.
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -335,6 +393,11 @@ pub struct ReviewDoc {
     pub flows: Vec<Flow>,
     pub questions: Vec<Question>,
     pub author: Option<Author>,
+    /// V73-K5 — the AUTHORED `ci:` block. Empty when the document names
+    /// none, which is the overwhelmingly common case (`routes::derive_ci`
+    /// is what fills the gap at read time from the review's own PR
+    /// metadata; this field is never itself the derived value).
+    pub ci: Vec<CiCheck>,
     pub body_md: String,
     pub body_line: u32,
 }
@@ -556,10 +619,16 @@ pub fn parse(doc: &str) -> Result<ReviewDoc, DocError> {
                     Some(Value::String(s)) => Some(s.clone()),
                     Some(_) => return Err(DocError::msg("`questions[].ref` must be a string")),
                 };
+                let answers = match m.get("answers") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.clone()),
+                    Some(_) => return Err(DocError::msg("`questions[].answers` must be a string")),
+                };
                 out.push(Question {
                     to: to.to_string(),
                     ask: ask.to_string(),
                     r#ref: r,
+                    answers,
                 });
             }
             out
@@ -594,6 +663,55 @@ pub fn parse(doc: &str) -> Result<ReviewDoc, DocError> {
         Some(_) => return Err(DocError::msg("`author` must be a mapping")),
     };
 
+    let ci = match obj.get("ci") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for it in items {
+                let m = it.as_object().ok_or_else(|| {
+                    DocError::msg("each ci entry is {name, status, url?, observed_at?}")
+                })?;
+                let name = m
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| DocError::msg("`ci[].name` must be a non-empty string"))?;
+                let status = m
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| DocError::msg("`ci[].status` must be a string"))?;
+                if !is_valid_ci_status(status) {
+                    return Err(DocError::msg(format!(
+                        "`ci[].status` must be one of {}, got {status:?}",
+                        CI_STATUSES.join("|")
+                    )));
+                }
+                let url = match m.get("url") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.clone()),
+                    Some(_) => return Err(DocError::msg("`ci[].url` must be a string")),
+                };
+                let observed_at = match m.get("observed_at") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Number(n)) => Some(n.as_i64().ok_or_else(|| {
+                        DocError::msg("`ci[].observed_at` must be a whole number")
+                    })?),
+                    Some(_) => {
+                        return Err(DocError::msg("`ci[].observed_at` must be a unix timestamp"))
+                    }
+                };
+                out.push(CiCheck {
+                    name: name.to_string(),
+                    status: status.to_string(),
+                    url,
+                    observed_at,
+                });
+            }
+            out
+        }
+        Some(_) => return Err(DocError::msg("`ci` must be a sequence")),
+    };
+
     Ok(ReviewDoc {
         summary_md,
         risk,
@@ -603,6 +721,7 @@ pub fn parse(doc: &str) -> Result<ReviewDoc, DocError> {
         flows,
         questions,
         author,
+        ci,
         body_md: split.body.to_string(),
         body_line: split.body_line,
     })
@@ -732,6 +851,7 @@ pub fn omitted_blocks(doc: &ReviewDoc) -> Vec<String> {
             "flows" => !doc.flows.is_empty(),
             "questions" => !doc.questions.is_empty(),
             "author" => doc.author.is_some(),
+            "ci" => !doc.ci.is_empty(),
             _ => true,
         };
         if !present {
@@ -794,6 +914,9 @@ pub fn all_refs(doc: &ReviewDoc) -> Vec<refs::Ref> {
     }
     for q in &doc.questions {
         if let Some(r) = &q.r#ref {
+            push_typed(r, &mut out, &mut seen);
+        }
+        if let Some(r) = &q.answers {
             push_typed(r, &mut out, &mut seen);
         }
     }
@@ -920,6 +1043,63 @@ mod tests {
         assert!(got.iter().any(|r| r.starts_with("finding:")), "{got:?}");
     }
 
+    // --- V73-K5 gap 5: the `ci:` block ---------------------------------
+
+    #[test]
+    fn a_ci_block_parses_with_url_and_observed_at() {
+        let raw =
+            "---\nsummary_md: x\nfindings: []\nci:\n  - name: build\n    status: success\n    \
+                   url: https://ci.example/1\n    observed_at: 1700000000\n---\n";
+        let doc = parse(raw).expect("parses");
+        assert_eq!(doc.ci.len(), 1);
+        assert_eq!(doc.ci[0].name, "build");
+        assert_eq!(doc.ci[0].status, "success");
+        assert_eq!(doc.ci[0].url.as_deref(), Some("https://ci.example/1"));
+        assert_eq!(doc.ci[0].observed_at, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn a_ci_entry_with_an_unknown_status_is_refused_by_name() {
+        let raw =
+            "---\nsummary_md: x\nfindings: []\nci:\n  - name: build\n    status: green\n---\n";
+        let e = parse(raw).expect_err("refused");
+        assert!(e.message.contains("success|failure|pending|skipped"), "{e}");
+    }
+
+    #[test]
+    fn a_ci_entry_with_an_empty_name_is_refused() {
+        let raw =
+            "---\nsummary_md: x\nfindings: []\nci:\n  - name: \" \"\n    status: pending\n---\n";
+        assert!(parse(raw).is_err());
+    }
+
+    #[test]
+    fn ci_is_empty_by_default_and_absent_from_no_document() {
+        let doc = parse("---\nsummary_md: x\nfindings: []\n---\n").expect("parses");
+        assert!(doc.ci.is_empty());
+        assert!(omitted_blocks(&doc).contains(&"ci".to_string()));
+    }
+
+    // --- V73-K5 gap 7: a question's `answers` link ----------------------
+
+    #[test]
+    fn a_question_answers_field_parses_and_joins_all_refs() {
+        let raw =
+            "---\nsummary_md: x\nfindings: []\nquestions:\n  - to: to_agent\n    ask: safe?\n    \
+                   answers: finding:f-1\n---\n";
+        let doc = parse(raw).expect("parses");
+        assert_eq!(doc.questions[0].answers.as_deref(), Some("finding:f-1"));
+        let refs: Vec<String> = all_refs(&doc).iter().map(|r| r.raw().to_string()).collect();
+        assert!(refs.contains(&"finding:f-1".to_string()), "{refs:?}");
+    }
+
+    #[test]
+    fn a_question_with_no_answers_is_none() {
+        let raw = "---\nsummary_md: x\nfindings: []\nquestions:\n  - to: to_reviewer\n    ask: ok?\n---\n";
+        let doc = parse(raw).expect("parses");
+        assert_eq!(doc.questions[0].answers, None);
+    }
+
     #[test]
     fn every_declared_vocabulary_is_non_empty_and_unique() {
         for (name, v) in [
@@ -932,6 +1112,7 @@ mod tests {
             ("QUESTION_TARGETS", QUESTION_TARGETS.to_vec()),
             ("AUTHOR_KINDS", AUTHOR_KINDS.to_vec()),
             ("OPTIONAL_BLOCKS", OPTIONAL_BLOCKS.to_vec()),
+            ("CI_STATUSES", CI_STATUSES.to_vec()),
         ] {
             let mut s = v.clone();
             s.sort_unstable();
