@@ -1060,10 +1060,14 @@ than from the lazy route:
   block documents is real). It parses the annotaterb `# == Schema
   Information` banner out of the text `GET /api/file` already returned:
   no second request, nothing persisted, recomputed per render, and
-  CAPTIONED as a client read rather than a daemon fact. `lib/annotaterb.ts`
-  carries the `comments/1` TODO — when `GET /api/comments/file` is on the
-  base, the block RANGE should come from its `generated` comment and the
-  caption must change with it.
+  CAPTIONED as a client read rather than a daemon fact. `GET
+  /api/comments/file` (`comments/1`, V72-J1) did not exist on this unit's
+  base and landed on main while it was in flight; `lib/annotaterb.ts`
+  carries the precise follow-up — the block RANGE should come from that
+  route's `generated` comment, the column-table parse stays client-side
+  (the daemon classifies comment RUNS, it does not read annotaterb's column
+  grammar), and the caption must change with it, because a daemon
+  classification and a client guess are different facts.
 - **The Rails atom table** (`components/rails/RailsAtomCard.tsx`), rendered
   through `PeekPanel`'s `cardExtra` slot under the hover card. It reuses
   the ONE per-file `useFrameworkEdges` query `FrameworkCard` already makes
