@@ -162,6 +162,15 @@ const INTENT_LABELS: Record<string, string> = {
   todo: "To-do",
   "flag-for-agent": "Flag for agent",
   "tour-stop": "Tour stop",
+  // V72-J2 — an annotation minted by the claim → annotation bridge
+  // (`annotations::INTENT_CLAIM`). Deliberately NOT added to
+  // `INTENT_OPTIONS` below: a human composes "note"/"question"/"todo"/
+  // "flag-for-agent"/"tour-stop" by hand, but "claim" is minted only by
+  // `comments.track-as-annotation`/the comment card's "track as
+  // annotation" button (D8: "the TODO is the ticket, no tracker
+  // semantics") — offering it in the manual composer's dropdown would
+  // invite a human to create one with no source comment to bridge from.
+  claim: "Claim",
 };
 
 /// Display label for an intent value — an unrecognized string (an older/

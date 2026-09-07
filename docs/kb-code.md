@@ -967,6 +967,26 @@ audit|keywords --repo R [--path P] [--kind K] [--keyword K] [--state S]
 (drifted docs · aged annotations · unreasoned suppressions) in a compact
 form an agent can act on.
 
+**comments/1 in the SPA (V72-J2, D8).** A per-file comment gutter (kbc-
+theme/1 Lane Budget's fourth `editor/lineGutter.ts` slot, alongside blame/
+annotations/diagnostics) with three modes (`all`/`quiet`/`doc-only`,
+`Space C c`); a `~comments` dashboard (`Space g m`) defaulting to the
+actionable slice as three server-paged lanes (mirroring `comments audit`'s
+own three requests) with kind/keyword/path facets and a "show everything"
+toggle; the existing identifier hover tooltip gains an additive freshness
+caption + YARD-vs-signature disagreement chip when a `doc` row documents
+the hovered symbol; and the claim → annotation bridge
+(`comments.track-as-annotation`, `Space C t`) mints an ordinary annotation
+via the existing `POST /api/annotations` path with the ONE new
+`intent: "claim"` value (`annotations::INTENT_CLAIM` — a route-boundary
+string, no migration), joined back to its source comment by live line
+(four derived states: open/tracked/resolved/gone). `GET /api/todos`'s
+`~todos` page is UNCHANGED (own URL, own specs) and links forward to
+`~comments` as the richer surface rather than being redirected — see
+`web-code/CLAUDE.md`'s "Comments/1 in the SPA" section for the full
+surface-by-surface rationale (gutter-slot decision, mode semantics, the
+bridge's no-tracker-semantics rule, registry rows).
+
 **Track R — review unblock (D22 local-canonical): IN FLIGHT, not yet
 landed as of this writing (V70-A9D).** This section is a placeholder,
 deliberately left unfilled rather than guessed: Track R registers a real

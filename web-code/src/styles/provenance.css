@@ -15,7 +15,8 @@
 
 .cm-gutter.kbc-blame-gutter,
 .cm-gutter.kbc-annot-gutter,
-.cm-gutter.kbc-diag-gutter {
+.cm-gutter.kbc-diag-gutter,
+.cm-gutter.kbc-comment-gutter {
   width: 14px;
   cursor: pointer;
 }
@@ -97,6 +98,44 @@
 .kbc-diag-dot--unknown {
   background: transparent;
   border: 1.5px solid var(--ink-dim);
+}
+
+/* V72-J2 (D8) — the comments/1 gutter (kbc-theme/1 Lane Budget's "gutter
+ * slot four"). KIND picks the base fill (a quiet, low-saturation set — this
+ * lane is reading texture, not an alert); comments/1's own STATE
+ * (drifted/aged/unreasoned/unknown) is rendered as a BORDER STYLE on top of
+ * whatever kind fill is underneath, never hue-only, per the Lane Budget's
+ * "trust is a line style" rule applied here to comments/1's own state
+ * vocabulary — a CVD simulation or a hue-collapsed theme still shows which
+ * rows carry a state. */
+.kbc-comment-dot--doc {
+  background: var(--blue);
+}
+.kbc-comment-dot--annotation {
+  background: var(--warn);
+}
+.kbc-comment-dot--directive {
+  background: var(--accent);
+}
+.kbc-comment-dot--section,
+.kbc-comment-dot--licence,
+.kbc-comment-dot--generated,
+.kbc-comment-dot--commented_code,
+.kbc-comment-dot--prose {
+  background: transparent;
+  border: 1.5px solid var(--ink-dim);
+}
+.kbc-comment-dot--state-drifted {
+  border: 2px solid var(--red);
+}
+.kbc-comment-dot--state-aged {
+  border: 2px dashed var(--warn);
+}
+.kbc-comment-dot--state-unreasoned {
+  border: 2px dotted var(--red);
+}
+.kbc-comment-dot--state-unknown {
+  border: 2px dotted var(--ink-dim);
 }
 
 /* --- R12 originating-change (why-panel) --------------------------------- */

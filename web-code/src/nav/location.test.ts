@@ -31,6 +31,7 @@ const ROUND_TRIP_URLS = [
   "/r/kb/src/main.rs/~story?at=deadbeef",
   "/r/kb/~branches",
   "/r/kb/~todos",
+  "/r/kb/~comments",
   "/r/kb/~hotspots",
   "/r/kb/~sets",
   "/r/kb/~prs",

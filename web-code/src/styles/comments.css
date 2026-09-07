@@ -1,0 +1,438 @@
+/* V72-J2 (D8) — comments/1 in the SPA: the gutter's hover card, the rail's
+ * Comments tab, and the `~comments` dashboard. Every color reaches for a
+ * `tokens.css` variable, same discipline `provenance.css`/`todos.css`
+ * document. The gutter DOT chrome itself (`.kbc-comment-dot*`) lives in
+ * `styles/provenance.css`, beside the blame/annotation/diagnostics dots it
+ * shares `editor/lineGutter.ts`'s factory with. */
+
+/* --- the gutter's hover card --------------------------------------------- */
+
+.kbc-comment-card {
+  z-index: var(--z-popover-hi);
+  width: 280px;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 12px;
+  pointer-events: auto;
+}
+.kbc-comment-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.kbc-comment-card__kind {
+  font-weight: 600;
+}
+.kbc-comment-card__keyword {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warn-bg, var(--bg-elev));
+  color: var(--warn);
+  font-size: 11px;
+}
+.kbc-comment-card__directive {
+  color: var(--ink-mute);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.kbc-comment-card__fields {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-comment-card__field {
+  display: flex;
+  gap: 4px;
+}
+.kbc-comment-card__field dt {
+  font-weight: 600;
+}
+.kbc-comment-card__field dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-comment-card__text {
+  margin: 0 0 6px;
+  max-height: 6.5em;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kbc-comment-card__state {
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.kbc-comment-card__state--drifted,
+.kbc-comment-card__state--unreasoned {
+  border: 1px dashed var(--red);
+  color: var(--red);
+}
+.kbc-comment-card__state--aged {
+  border: 1px dashed var(--warn);
+  color: var(--warn);
+}
+.kbc-comment-card__state--unknown {
+  border: 1px dotted var(--ink-dim);
+  color: var(--ink-mute);
+}
+.kbc-comment-card__state--fresh {
+  border: 1px solid var(--rule);
+  color: var(--ink-mute);
+}
+.kbc-comment-card__jump {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* --- the mode chip (Reader toolbar) --------------------------------------- */
+
+[data-kbc-comment-gutter-mode] {
+  text-transform: capitalize;
+}
+
+/* --- the rail's Comments tab (`components/comments/CommentsPanel.tsx`) --- */
+
+.kbc-comments-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-comments-panel__row {
+  padding: 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+.kbc-comments-panel__row.is-active {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+.kbc-comments-panel__jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-comments-panel__kind {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-comments-panel__keyword {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elev);
+  color: var(--warn);
+  font-size: 11px;
+}
+.kbc-comments-panel__line {
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.kbc-comments-panel__text {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kbc-comments-panel__symbol {
+  display: inline-block;
+  margin-bottom: 4px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--accent-soft);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-comment-state {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.kbc-comment-state--drifted,
+.kbc-comment-state--unreasoned {
+  border: 1px dashed var(--red);
+  color: var(--red);
+}
+.kbc-comment-state--aged {
+  border: 1px dashed var(--warn);
+  color: var(--warn);
+}
+.kbc-comment-state--unknown {
+  border: 1px dotted var(--ink-dim);
+  color: var(--ink-mute);
+}
+.kbc-comment-bridge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-comment-bridge--open {
+  background: var(--bg-elev);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+}
+.kbc-comment-bridge--tracked {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bor);
+  color: var(--accent-soft);
+}
+.kbc-comment-bridge--resolved {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--ink-mute);
+  cursor: default;
+}
+.kbc-comment-bridge--gone {
+  background: transparent;
+  border: 1px dashed var(--red);
+  color: var(--red);
+}
+.kbc-comments-panel__resolve {
+  display: inline-block;
+  margin-top: 6px;
+  margin-left: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--bg-elev);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-comments-panel__note {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+
+/* --- `~comments` dashboard (`routes/Comments.tsx`) ----------------------- */
+
+.kbc-comments-dash {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.kbc-comments-dash__head {
+  margin-bottom: 16px;
+}
+.kbc-comments-dash__title {
+  font-size: 24px;
+  margin: 0 0 4px;
+}
+.kbc-comments-dash__hint,
+.kbc-comments-dash__bounds,
+.kbc-comments-dash__muted,
+.kbc-comments-dash__note {
+  color: var(--ink-mute);
+  margin: 0;
+  font-size: 13px;
+}
+.kbc-comments-dash__error {
+  color: var(--red);
+  font-size: 13px;
+}
+.kbc-comments-dash__filters {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.kbc-comments-dash__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kbc-comments-dash__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.kbc-comments-dash__chip.is-on {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+}
+.kbc-comments-dash__chip-n {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.kbc-comments-dash__row2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kbc-comments-dash__search {
+  flex: 1;
+  min-width: 180px;
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+}
+.kbc-comments-dash__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.kbc-comments-dash__state-select {
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.kbc-comments-dash__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.kbc-comments-dash__section h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kbc-comments-dash__count {
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-weight: normal;
+}
+.kbc-comments-dash__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kbc-comments-dash__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+.kbc-comments-dash__link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.kbc-comments-dash__kind {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+.kbc-comments-dash__keyword {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elev);
+  color: var(--warn);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.kbc-comments-dash__path {
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.kbc-comments-dash__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.kbc-comments-dash__state {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.kbc-comments-dash__state--drifted,
+.kbc-comments-dash__state--unreasoned {
+  border: 1px dashed var(--red);
+  color: var(--red);
+}
+.kbc-comments-dash__state--aged {
+  border: 1px dashed var(--warn);
+  color: var(--warn);
+}
+.kbc-comments-dash__state--unknown {
+  border: 1px dotted var(--ink-dim);
+  color: var(--ink-mute);
+}
+.kbc-comments-dash__more {
+  align-self: flex-start;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}

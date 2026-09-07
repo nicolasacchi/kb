@@ -2601,7 +2601,7 @@ pub struct CreateAnnotationBody {
     #[serde(default)]
     pub sha: Option<String>,
     /// "note" (default) | "question" | "todo" | "flag-for-agent" |
-    /// "tour-stop" — validated against `annotations::is_valid_intent`.
+    /// "tour-stop" | "claim" (V72-J2) — validated against `annotations::is_valid_intent`.
     #[serde(default)]
     pub intent: Option<String>,
     /// `Some` makes this a REPLY to an existing (non-reply) annotation —

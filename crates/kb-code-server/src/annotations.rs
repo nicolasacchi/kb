@@ -290,15 +290,29 @@ pub const INTENT_TOUR_STOP: &str = "tour-stop";
 /// live on the sibling `review_findings` row, never here (V0024's own
 /// "field pollution" rationale).
 pub const INTENT_FINDING: &str = "finding";
+/// V72-J2 (D8's "claim → annotation bridge") — an annotation minted FROM a
+/// comments/1 `annotation`-kind comment (a TODO-family keyword hit) via
+/// `POST /api/annotations`, never server-synthesized. "Add a value, not a
+/// table": the bridge needs a durable, queryable way to tell "this
+/// annotation tracks a source comment" apart from an ordinary note/question,
+/// and this crate's own `is_valid_intent` is route-boundary string
+/// validation with no `CHECK` constraint behind it (see that fn's doc), so
+/// widening the vocabulary by one value is the whole change — no migration,
+/// no new table. The bridge's four read states (open/tracked/resolved/gone)
+/// are DERIVED client-side per render from a comment+annotation join keyed
+/// on the annotation's own live-resolved `line` (this module's `resolve`,
+/// above) against the comments/1 scan's current line — never stored here.
+pub const INTENT_CLAIM: &str = "claim";
 
 /// The full `intent` vocabulary — see the migration's doc.
-pub const INTENTS: [&str; 6] = [
+pub const INTENTS: [&str; 7] = [
     INTENT_NOTE,
     INTENT_QUESTION,
     INTENT_TODO,
     INTENT_FLAG_FOR_AGENT,
     INTENT_TOUR_STOP,
     INTENT_FINDING,
+    INTENT_CLAIM,
 ];
 
 /// Route-boundary validation for `anchor_kind` — stringly-typed per this
@@ -656,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn intent_vocab_accepts_exactly_the_six_intents() {
+    fn intent_vocab_accepts_exactly_the_seven_intents() {
         for i in [
             "note",
             "question",
@@ -664,10 +678,11 @@ mod tests {
             "flag-for-agent",
             "tour-stop",
             "finding",
+            "claim",
         ] {
             assert!(is_valid_intent(i), "{i} should be valid");
         }
-        for i in ["Note", "flag_for_agent", "", "resolved", "Finding"] {
+        for i in ["Note", "flag_for_agent", "", "resolved", "Finding", "Claim"] {
             assert!(!is_valid_intent(i), "{i} should be invalid");
         }
     }

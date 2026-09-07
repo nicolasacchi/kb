@@ -7090,8 +7090,8 @@ pub struct AnnotationRow {
     /// nesting only, enforced in code (`routes::create_annotation`), not a
     /// SQL FK — see the migration's doc.
     pub parent_id: Option<String>,
-    /// "note" | "question" | "todo" | "flag-for-agent" | "tour-stop" —
-    /// vocab validated at the route boundary
+    /// "note" | "question" | "todo" | "flag-for-agent" | "tour-stop" |
+    /// "claim" (V72-J2) — vocab validated at the route boundary
     /// (`crate::annotations::is_valid_intent`).
     pub intent: String,
     pub body: String,

@@ -754,7 +754,15 @@ export type AnchorKind = "line" | "range" | "symbol" | "diff" | "review" | "set"
 
 /// `crate::annotations::INTENTS` — same "open string on the wire, closed
 /// alias for callers" posture as `AnchorKind` above.
-export type AnnotationIntent = "note" | "question" | "todo" | "flag-for-agent" | "tour-stop";
+// ── V72-J2 — `"claim"` added: `annotations::INTENT_CLAIM`, an annotation
+// minted from a comments/1 `annotation`-kind comment via the claim →
+// annotation bridge (D8). Purely additive, same "widening the union
+// changes nothing for an existing exhaustive switch" note `AnchorKind`'s
+// own `"review"`/`"set"` additions carry above — no existing caller
+// switches exhaustively on `AnnotationIntent` today (`lib/annotations.ts`'s
+// `INTENT_LABELS`/`intentLabel` already degrade an unrecognized value to
+// itself verbatim). ──
+export type AnnotationIntent = "note" | "question" | "todo" | "flag-for-agent" | "tour-stop" | "claim";
 
 export interface AnnotationView {
   id: string;
@@ -4301,4 +4309,195 @@ export interface DossierOut {
   namespace_tree: NamespaceChild[];
   zeitwerk: ZeitwerkOut;
   honesty: DossierHonesty;
+}
+
+// --- comments/1 (V72-J1 server, V72-J2 SPA client) --------------------------
+//
+// Mirrors `crates/kb-code-server/src/comments/{routes,drift,keywords}.rs`
+// field-for-field. `state` is computed PER REQUEST and persisted nowhere
+// (that crate's own doc) — this file never re-derives it, only renders it.
+
+/// `comments::classify::CommentKind`'s closed eight-value vocabulary — a
+/// documentation/caller alias, same "open string on the wire, closed alias
+/// for callers" posture `AnchorKind`/`AnnotationIntent` use above.
+/// `CommentOut.kind` itself stays plain `string` so a kind this build
+/// doesn't know about (a newer daemon) still round-trips rather than being
+/// coerced.
+export type CommentKind =
+  | "doc"
+  | "annotation"
+  | "directive"
+  | "section"
+  | "licence"
+  | "generated"
+  | "commented_code"
+  | "prose";
+
+/// `comments::drift::STATE_NAMES` — same alias posture as `CommentKind`.
+export type CommentStateName = "none" | "fresh" | "drifted" | "unknown" | "aged" | "unreasoned";
+
+/// `comments::drift::CommentState` — one block's computed state. A struct on
+/// the wire (never a discriminated union): every consumer reads `state`
+/// first and the decomposition second, and a field that doesn't apply is
+/// ABSENT rather than null-and-meaningless.
+export interface CommentState {
+  state: string;
+  /// Only for `state: "unknown"` — why the oracle refused (`uncommitted` |
+  /// `blame-budget` | `blame-unavailable` | `no-documented-symbol` |
+  /// `no-blame-for-doc-lines` | `no-blame-for-symbol-body` |
+  /// `unparseable-on-date`) — an OPEN string; an unrecognized reason (a
+  /// newer daemon) renders VERBATIM, never swallowed.
+  reason?: string;
+  /// `drifted`: whole days the code's newest commit is newer than the
+  /// doc's. `aged`: whole days the `on:` date is past.
+  age_days?: number;
+  /// `drifted` only — the newest commit touching the documented body.
+  code_commit?: string;
+  /// `drifted` only — the newest commit touching the doc block itself.
+  doc_commit?: string;
+  /// `aged` only — the smart_todo date that has passed.
+  on_date?: string;
+  /// `unreasoned` only — the tool whose suppression carries no justification.
+  tool?: string;
+}
+
+/// `comments::keywords::SmartTodoFields` — the parsed
+/// `TODO(on: date('…'), to: '…')` bag. `raw` is the OPEN key→value bag
+/// (every parenthetical pair, one layer of matching quotes stripped);
+/// `on_kind`/`on_date`/`to` are the interpreted subset (`on_date` is the
+/// only one the drift oracle evaluates, per that module's doc).
+export interface SmartTodoFields {
+  raw: Record<string, string>;
+  on_kind?: string;
+  on_date?: string;
+  to?: string;
+}
+
+/// `comments::routes::DocSymbolOut` — the definition a `doc` block documents.
+export interface CommentDocSymbolOut {
+  name: string;
+  kind: string;
+  line_start: number;
+  line_end: number;
+}
+
+/// `comments::routes::DirectiveOut` — a tool pragma's own shape. `has_reason`
+/// is `undefined` for a magic comment / build tag (nothing to justify) —
+/// present (`true`/`false`) only for a SUPPRESSION directive.
+export interface CommentDirectiveOut {
+  tool: string;
+  has_reason?: boolean;
+}
+
+/// `comments::routes::CommentOut` — one classified comment block, the unit
+/// every SPA surface (gutter, dashboard, hover, the claim bridge) renders.
+export interface CommentOut {
+  path: string;
+  kind: string;
+  line_start: number;
+  line_end: number;
+  text: string;
+  text_truncated: boolean;
+  keyword?: string;
+  keyword_text?: string;
+  fields?: SmartTodoFields;
+  symbol?: CommentDocSymbolOut;
+  directive?: CommentDirectiveOut;
+  /// The blob these rows were derived from — the caller's own drift check
+  /// against a file it just read.
+  blob_sha: string;
+  state: CommentState;
+}
+
+/// `comments::routes::ScanBasis` — what a `?state=`-filtered `GET
+/// /api/comments` scan actually looked at, before the state filter or the
+/// page cut it down.
+export interface CommentScanBasis {
+  rows_scanned: number;
+  /// The true count of rows matching the SQL-side filters, from the
+  /// database — not the length of anything else in the response.
+  rows_matching_filters: number;
+  bound: number;
+  truncated: boolean;
+}
+
+/// `comments::routes::BlameBasis` — what the drift oracle actually blamed
+/// for this request.
+export interface CommentBlameBasis {
+  files_blamed: number;
+  files_wanted: number;
+  budget: number;
+  exhausted: boolean;
+}
+
+/// `GET /api/comments`'s body (`comments::routes::CommentsListOut`).
+export interface CommentsListOut {
+  repo: string;
+  comments: CommentOut[];
+  /// The number of rows a caller could page through with these filters.
+  total: number;
+  /// More rows exist past this page.
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  scan: CommentScanBasis;
+  blame: CommentBlameBasis;
+  /// `#[serde(skip_serializing_if = "Vec::is_empty")]` server-side — ABSENT
+  /// (not `[]`) on the wire whenever there is nothing to say. Read this via
+  /// `?? []`, never `.notes.map(...)` directly.
+  notes?: string[];
+}
+
+/// `GET /api/comments/file`'s body (`comments::routes::CommentsFileOut`) —
+/// every block in one file, in line order; the per-file comment gutter's feed.
+export interface CommentsFileOut {
+  repo: string;
+  path: string;
+  blob_sha?: string;
+  comments: CommentOut[];
+  total: number;
+  truncated: boolean;
+  blame: CommentBlameBasis;
+  /// `#[serde(skip_serializing_if = "Vec::is_empty")]` server-side — ABSENT
+  /// (not `[]`) whenever there is nothing to say (the common case: most
+  /// files have no honesty caption to add). Read via `?? []`.
+  notes?: string[];
+}
+
+/// `comments::routes::KeywordsOut` — the effective annotation vocabulary.
+export interface CommentKeywordsOut {
+  keywords: string[];
+  /// `"default"` or `"config"`.
+  source: string;
+  rubocop_defaults: string[];
+  /// The two markers carried beyond RuboCop's six so `GET /api/todos` keeps
+  /// its row set.
+  legacy_extra: string[];
+  /// The keywords `GET /api/todos` — and the claim bridge's "track as
+  /// annotation" affordance — report/offer.
+  todo_family: string[];
+}
+
+/// `comments::routes::StateBasisOut` — the summary's own honesty about
+/// which state lanes it counted, and why the rest are absent.
+export interface CommentStateBasisOut {
+  lanes: string[];
+  excluded: string[];
+  excluded_reason: string;
+  candidates_scanned: number;
+  bound: number;
+  truncated: boolean;
+}
+
+/// `GET /api/comments/summary`'s body (`comments::routes::CommentsSummaryOut`)
+/// — exact per-kind/per-keyword counts, plus the two state lanes that need
+/// no `git blame`.
+export interface CommentsSummaryOut {
+  repo: string;
+  total: number;
+  by_kind: Record<string, number>;
+  by_keyword: Record<string, number>;
+  by_state: Record<string, number>;
+  state_basis: CommentStateBasisOut;
+  keywords: CommentKeywordsOut;
 }
