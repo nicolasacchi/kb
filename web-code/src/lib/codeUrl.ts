@@ -226,6 +226,13 @@ export function todosUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~todos`;
 }
 
+/// `commentsUrl(repo)` → `/r/{repo}/~comments` — V72-J2 (D8) comments/1
+/// dashboard, the richer kind-aware surface `~todos` above now links
+/// forward to.
+export function commentsUrl(repo: string): string {
+  return `${codeBasePath(repo, "")}/~comments`;
+}
+
 /// `hotspotsUrl(repo)` → `/r/{repo}/~hotspots` — V3.2-B3 attention hotspots.
 export function hotspotsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~hotspots`;

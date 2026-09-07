@@ -50,6 +50,8 @@ describe("NAV_ITEMS catalog", () => {
       "workspaces",
       "hotspots",
       "todos",
+      // V72-J2 — comments/1's dashboard (the richer surface `todos` links to).
+      "comments",
       "recipes",
       "stacks",
       "canvas",

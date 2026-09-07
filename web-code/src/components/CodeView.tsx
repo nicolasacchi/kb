@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
-import type { Span, Symbol } from "../api/types";
+import type { CommentOut, Span, Symbol } from "../api/types";
 import { makeByteToUtf16Mapper, spansToDecorationRanges } from "../lib/decorations";
 import { ageOverlayExtension, setAgeOverlayLines } from "../editor/ageOverlay";
 import { conflictOverlayExtension, setConflictOverlayActive } from "../editor/conflictOverlay";
@@ -29,6 +29,7 @@ import { useCommands } from "../commands/CommandRoot";
 import { vimReader, vimStatus, type VimReaderCallbacks } from "../editor/vimReader";
 import type { AgeLineInfo } from "../lib/ageHeatmap";
 import type { BlameDotInfo } from "../lib/blameGutter";
+import type { CommentGutterMark } from "../lib/comments";
 import type { DiagnosticGutterMark } from "../lib/diagnostics";
 import { scanLinkTokens } from "../lib/linkifyScan";
 import StickyContext from "./StickyContext";
@@ -38,9 +39,11 @@ import "../styles/history.css";
 
 // CodeMirror 6, READ-ONLY. Renders a file's content with server-derived
 // syntax-highlight decorations (`highlightField.ts`) and line numbers, plus
-// (W4.4/W4.6) two optional gutters built on the shared `editor/
-// lineGutter.ts` factory: a blame-provenance dot gutter and an
-// annotations gutter. Both gutters are ALWAYS present in the extension set
+// (W4.4/W4.6/PRR-U9/V72-J2) FOUR optional gutters built on the shared
+// `editor/lineGutter.ts` factory: a blame-provenance dot gutter, an
+// annotations gutter, a diagnostics gutter, and (V72-J2, kbc-theme/1's Lane
+// Budget "gutter slot four") a comments/1 gutter. All four gutters are
+// ALWAYS present in the extension set
 // (so their `StateField`s exist on every `EditorState`), but render nothing
 // when their marker map is empty — `blameDots`/`annotationMarkers` being
 // `null`/`undefined` (provenance mode off / annotations still loading)
@@ -160,6 +163,18 @@ export interface CodeViewProps {
   /// identity (see that module's doc for why each call needs its own).
   diagnosticMarkers?: Map<number, DiagnosticGutterMark> | null;
 
+  // --- V72-J2 (D8) — the comments/1 gutter (kbc-theme/1 Lane Budget's
+  // "gutter slot four") -------------------------------------------------
+  /// `null`/`undefined` = gutter renders no marks (comments/1 hasn't loaded
+  /// yet). Already filtered to the active `CommentGutterMode` by the host
+  /// (`Reader.tsx`) — this component renders whatever it's handed, same
+  /// "the projection is computed once outside, this renders it honestly"
+  /// split the annotations/diagnostics gutters above already use.
+  commentMarkers?: Map<number, CommentGutterMark> | null;
+  onCommentHover?: (line: number, rect: DOMRect) => void;
+  onCommentUnhover?: (line: number) => void;
+  onCommentClick?: (line: number) => void;
+
   // --- W4.5 — live-mirror auto-refresh heuristic inputs ----------------
   /// Fires whenever the viewer's "dirty" state changes (scrolled away from
   /// the top, or carries a non-collapsed selection) — `useLiveMirror`'s
@@ -228,6 +243,13 @@ export interface CodeViewProps {
   hoverRepo?: string | null;
   hoverPath?: string | null;
   hoverRef?: string;
+  /// V72-J2 (D8) — the CURRENT file's already-fetched comments/1 rows, for
+  /// the hover tooltip's freshness-caption/YARD-mismatch enrichment
+  /// (`editor/hoverTooltip.ts`'s `findDocCommentForSymbol`). `null`/
+  /// `undefined` renders the pre-V72-J2 tooltip byte-identical — same "an
+  /// absent enrichment input changes nothing" contract every other optional
+  /// prop here already keeps.
+  docComments?: CommentOut[] | null;
 }
 
 const BLAME_DOT_SOLID: LineMarkerSpec["className"] = "kbc-blame-dot kbc-blame-dot--solid";
@@ -255,6 +277,29 @@ function diagMarkersFrom(
   if (!marks) return out;
   for (const [line, mark] of marks) {
     out.set(line, { className: `kbc-diag-dot kbc-diag-dot--${mark.severity}`, title: mark.title });
+  }
+  return out;
+}
+
+/// V72-J2 — `lib/comments.ts`'s pure `CommentGutterMark` (kind/state/title)
+/// into the gutter factory's `LineMarkerSpec` shape (`styles/comments.css`
+/// defines one `.kbc-comment-dot--<kind>` rule per `CommentKind` PLUS one
+/// `.kbc-comment-dot--state-<state>` modifier per non-`"none"` state — the
+/// state renders as a border/underline STYLE, never hue-only, kbc-theme/1's
+/// Lane Budget "trust is a line style" rule applied to comments/1's own
+/// state vocabulary). Same split `blameMarkersFrom`/`diagMarkersFrom` draw
+/// between pure derivation (`lib/comments.ts`) and CM6 marker shape (here).
+function commentMarkersFrom(
+  marks: Map<number, CommentGutterMark> | null | undefined,
+): Map<number, LineMarkerSpec> {
+  const out = new Map<number, LineMarkerSpec>();
+  if (!marks) return out;
+  for (const [line, mark] of marks) {
+    const stateClass = mark.state !== "none" ? ` kbc-comment-dot--state-${mark.state}` : "";
+    out.set(line, {
+      className: `kbc-comment-dot kbc-comment-dot--${mark.kind}${stateClass}`,
+      title: mark.title,
+    });
   }
   return out;
 }
@@ -304,6 +349,10 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     annotationMarkers,
     onAnnotationClick,
     diagnosticMarkers,
+    commentMarkers,
+    onCommentHover,
+    onCommentUnhover,
+    onCommentClick,
     onViewerDirtyChange,
     onCursorLineChange,
     linkify,
@@ -326,6 +375,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     hoverRepo = null,
     hoverPath = null,
     hoverRef,
+    docComments = null,
   }: CodeViewProps,
   ref,
 ) {
@@ -393,6 +443,14 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   // `createLineGutter`'s call contract stays identical across all three
   // gutters.
   const diagHandlersRef = useRef<LineGutterHandlers>({});
+  // V72-J2 — the comments/1 gutter's own hover/click affordances (the small
+  // card on hover, the rail's Comments tab on click).
+  const commentHandlersRef = useRef<LineGutterHandlers>({});
+  commentHandlersRef.current = {
+    onHover: onCommentHover,
+    onUnhover: onCommentUnhover,
+    onClick: onCommentClick ? (line) => onCommentClick(line) : undefined,
+  };
 
   const listenerCbRef = useRef<ListenerCallbacks>({});
   listenerCbRef.current = {
@@ -500,13 +558,16 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
 
   // V70-A6 — the identifier hover tooltip. Options are read through a ref for
   // the same reason; the extension itself is built ONCE.
-  const hoverOptsRef = useRef({ repo: hoverRepo, path: hoverPath, ref: hoverRef });
-  hoverOptsRef.current = { repo: hoverRepo, path: hoverPath, ref: hoverRef };
+  const hoverOptsRef = useRef({ repo: hoverRepo, path: hoverPath, ref: hoverRef, docComments });
+  hoverOptsRef.current = { repo: hoverRepo, path: hoverPath, ref: hoverRef, docComments };
   const stableHover = useRef(
     hoverTooltipExtension({
       getRepo: () => hoverOptsRef.current.repo,
       getPath: () => hoverOptsRef.current.path,
       getRef: () => hoverOptsRef.current.ref,
+      // V72-J2 (D8) — comments/1's doc-hover enrichment; `undefined`/`null`
+      // (comments/1 not wired for this caller) renders byte-identical.
+      getDocComments: () => hoverOptsRef.current.docComments,
       // Ctrl/Cmd-click IS `gd` — the pointer affordance for the registry's
       // existing `reader.goto-definition` row, not a second definition of it.
       onGotoDefinition: (pos) => vimRef.current?.onGotoDef?.(pos),
@@ -550,6 +611,12 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   // plumbing needed (`editor/lineGutter.ts`'s doc: each call gets its own
   // `StateField`/`StateEffect` pair by construction).
   const diagGutterHandle = useRef(createLineGutter("kbc-diag-gutter", diagHandlersRef)).current;
+  // V72-J2 — a FOURTH `createLineGutter` call (kbc-theme/1 Lane Budget's
+  // "gutter slot four"): the comments/1 gutter. Same generalization PRR-U9's
+  // own comment above already notes for the third.
+  const commentGutterHandle = useRef(
+    createLineGutter("kbc-comment-gutter", commentHandlersRef),
+  ).current;
 
   // SH.C3 — one Compartment each for line-wrap and font-size, created ONCE
   // for the component's lifetime (same rationale as the gutter handles
@@ -574,6 +641,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
           annotGutterHandle.extension,
           blameGutterHandle.extension,
           diagGutterHandle.extension,
+          commentGutterHandle.extension,
           ageOverlayExtension,
           storyOverlayExtension,
           conflictOverlayExtension,
@@ -656,6 +724,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     blameGutterHandle.setMarkers(view, blameMarkersFrom(blameDots));
     annotGutterHandle.setMarkers(view, annotationMarkers ?? new Map());
     diagGutterHandle.setMarkers(view, diagMarkersFrom(diagnosticMarkers));
+    commentGutterHandle.setMarkers(view, commentMarkersFrom(commentMarkers));
     setAgeOverlayLines(view, ageLines ?? new Map());
     setStoryOverlayLines(view, storyLines ?? []);
     setConflictOverlayActive(view, conflictActive ?? false);
@@ -712,6 +781,18 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     if (!view) return;
     diagGutterHandle.setMarkers(view, diagMarkersFrom(diagnosticMarkers));
   }, [diagnosticMarkers, diagGutterHandle]);
+
+  // V72-J2 — independent of `blobHash` for the same reason the marker syncs
+  // above are: `GET /api/comments/file` resolves on its own schedule, and a
+  // gutter-mode toggle re-filters the SAME already-fetched rows without a
+  // new fetch (`Reader.tsx` recomputes `commentMarkers` from its own
+  // `CommentGutterMode` state, which is what actually changes this prop's
+  // identity on a mode cycle).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    commentGutterHandle.setMarkers(view, commentMarkersFrom(commentMarkers));
+  }, [commentMarkers, commentGutterHandle]);
 
   useEffect(() => {
     const view = viewRef.current;

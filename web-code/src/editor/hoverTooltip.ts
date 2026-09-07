@@ -33,7 +33,12 @@
 import { EditorView, hoverTooltip, type Tooltip } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { fetchHover } from "../api/client";
-import type { HoverOut } from "../api/types";
+import type { CommentOut, HoverOut } from "../api/types";
+import {
+  findDocCommentForSymbol,
+  freshnessCaption,
+  yardSignatureDisagreement,
+} from "../lib/comments";
 import { wordAt } from "./vimKeys";
 
 /// How long the pointer must rest on an identifier. 500 ms is the design's
@@ -51,6 +56,12 @@ export interface HoverTooltipOptions {
   getRef: () => string | undefined;
   /// Ctrl/Cmd-click — go to the definition at this position.
   onGotoDefinition?: (pos: { line: number; col: number; word: string }) => void;
+  /// V72-J2 (D8) — the CURRENT file's already-fetched comments/1 rows
+  /// (`Reader.tsx`'s own `useCommentsFile`, the SAME data the comment
+  /// gutter reads — no second fetch). `undefined`/`null`/`[]` all degrade to
+  /// "no doc-hover enrichment", never a crash — comments/1 coverage is per-
+  /// repo/per-language and this tooltip must render identically without it.
+  getDocComments?: () => CommentOut[] | null | undefined;
 }
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
@@ -62,7 +73,15 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
 
 /// Render `hover/1` into the tooltip's DOM. Exported for the unit test, which
 /// asserts the honest-empty and trust-absent branches without a browser.
-export function renderHoverDom(out: HoverOut | null, word: string): HTMLElement {
+/// `docComment` is V72-J2's (D8) OPTIONAL enrichment — the comments/1 `doc`
+/// row for this same symbol, when one was found (`lib/comments.ts`'s
+/// `findDocCommentForSymbol`); `undefined`/`null` renders byte-identical to
+/// before this unit.
+export function renderHoverDom(
+  out: HoverOut | null,
+  word: string,
+  docComment?: CommentOut | null,
+): HTMLElement {
   const root = el("div", "kbc-hovertip");
   root.setAttribute("data-kbc-hovertip", "");
   if (!out || (!out.symbol && !out.defsite && !out.framework)) {
@@ -88,6 +107,42 @@ export function renderHoverDom(out: HoverOut | null, word: string): HTMLElement 
   if (sym?.doc) {
     const doc = sym.doc.split(/\r?\n/).slice(0, 6).join("\n");
     root.appendChild(el("p", "kbc-hovertip__doc", doc));
+  }
+  // V72-J2 (D8) — comments/1's freshness caption + YARD-vs-signature
+  // disagreement, appended right after the doc text it's ABOUT. Both are
+  // additive-only (absent when `docComment` is `undefined`/`null`, i.e. no
+  // comments/1 coverage for this symbol) so the tooltip is byte-identical
+  // to before this unit whenever comments/1 has nothing to add.
+  if (docComment) {
+    const fresh = freshnessCaption(docComment.state);
+    if (fresh) {
+      const freshEl = el(
+        "div",
+        `kbc-hovertip__freshness kbc-hovertip__freshness--${docComment.state.state}`,
+        fresh,
+      );
+      freshEl.setAttribute("data-kbc-hovertip-freshness", docComment.state.state);
+      root.appendChild(freshEl);
+    }
+    // Pure, client-side, never a verdict about which side is right (see
+    // `yardSignatureDisagreement`'s own doc) — a chip naming the mismatch,
+    // not a claim that either the doc or the signature is wrong.
+    const disagreement = yardSignatureDisagreement(docComment.text, sym?.signature);
+    if (disagreement) {
+      const chip = el("div", "kbc-hovertip__yard-mismatch", "YARD ≠ signature");
+      chip.setAttribute("data-kbc-hovertip-yard-mismatch", "");
+      chip.title = [
+        disagreement.missingInSig.length > 0
+          ? `documented but not in the signature: ${disagreement.missingInSig.join(", ")}`
+          : null,
+        disagreement.missingInYard.length > 0
+          ? `in the signature but not documented: ${disagreement.missingInYard.join(", ")}`
+          : null,
+      ]
+        .filter((s): s is string => s !== null)
+        .join(" · ");
+      root.appendChild(chip);
+    }
   }
   // ONE provenance line — where it is defined, or which framework edge
   // named it. Never both stacked: the tooltip is a glance, not a card.
@@ -140,11 +195,16 @@ export function hoverTooltipExtension(opts: HoverTooltipOptions): Extension {
       // must produce nothing, not an empty box.
       if (!w) return null;
       const out = await lookup(repo, path, lineObj.number, w.start, opts.getRef());
+      // V72-J2 — read fresh at TOOLTIP-CREATE time (not captured at
+      // extension-creation time), same ref-read idiom every other per-render
+      // option here uses; `getDocComments` is optional so a caller that
+      // hasn't wired comments/1 gets the pre-V72-J2 tooltip byte-identical.
+      const docComment = findDocCommentForSymbol(opts.getDocComments?.() ?? [], out?.symbol?.name);
       return {
         pos: lineObj.from + w.start,
         end: lineObj.from + w.end,
         above: true,
-        create: () => ({ dom: renderHoverDom(out, w.word) }),
+        create: () => ({ dom: renderHoverDom(out, w.word, docComment) }),
       };
     },
     { hoverTime: HOVER_DELAY_MS },

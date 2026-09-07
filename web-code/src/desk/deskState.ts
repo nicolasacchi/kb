@@ -58,13 +58,19 @@ export type ResizeTarget = DeskRegionId | "panes";
 /// becomes a different tab). It is a real member of the union rather than a
 /// mode-local widget because the Desk persists the rail's tab and a tab the
 /// reducer could not name would be a tab the desk could not restore.
-export type RailTab = "all" | "understand" | "history" | "notes" | "review" | "dossier";
+///
+/// V72-J2 added `comments` (D8's comments/1) — UNCONDITIONAL, unlike
+/// `review`/`dossier`: every file the scanner covers has an honest
+/// (possibly empty) comments/1 list, so there is no "no context for this
+/// tab" gate to write.
+export type RailTab = "all" | "understand" | "history" | "notes" | "comments" | "review" | "dossier";
 
 export const RAIL_TABS: readonly RailTab[] = [
   "all",
   "understand",
   "history",
   "notes",
+  "comments",
   "review",
   "dossier",
 ];

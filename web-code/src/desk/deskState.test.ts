@@ -71,10 +71,10 @@ function everyState(): DeskState[] {
 describe("deskState — the golden round trip", () => {
   it("survives JSON serialise → parse → migrate byte-for-byte, for every reachable state", () => {
     const states = everyState();
-    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `6` is
-    // `RAIL_TABS.length` — V72-G1.2 added `dossier` as a sixth tab, so this
-    // product moves with it (it was 5 through V71).
-    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 6 * 2);
+    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `7` is
+    // `RAIL_TABS.length` — V72-J2 added `comments` as a seventh tab (it was
+    // 6 through V72-G1.2, 5 through V71), so this product moves with it.
+    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 7 * 2);
     for (const s of states) {
       const back = migrateDeskState(JSON.parse(JSON.stringify(s)));
       expect(back, `round trip lost ${JSON.stringify(s)}`).toEqual(s);

@@ -27,6 +27,7 @@
 import { KBC_DEFAULT_PRESET, KBC_PRESETS, type KbcPreset } from "../commands/registry.gen";
 import { KBC_THEMES } from "../themes/registry.gen";
 import { fromOklch, parseHex, toHex, toOklch } from "../themes/derive";
+import { COMMENT_GUTTER_MODES, type CommentGutterMode } from "./comments";
 
 export type Theme = "dark" | "light" | "system";
 
@@ -104,6 +105,11 @@ export interface Prefs {
   /// design D24's "local-first, never feeds ranking".
   coachGd?: number;
   learnToasts?: Record<string, number>;
+  /// V72-J2 (D8) — the comments/1 gutter's display filter (default `"all"`).
+  /// Browser-local by the same D16 ruling every other reading-mode toggle
+  /// here follows: comments/1 itself has no display-mode concept, this is
+  /// purely how the margin reads for THIS operator.
+  commentGutterMode?: CommentGutterMode;
 }
 
 const PREFS_KEY = "kbc:prefs";
@@ -133,6 +139,7 @@ const DEFAULT_PREFS: Prefs = {
   keyPreset: KBC_DEFAULT_PRESET,
   coachGd: 0,
   learnToasts: {},
+  commentGutterMode: "all",
 };
 
 export function loadPrefs(): Prefs {
@@ -434,6 +441,21 @@ export function saveWrap(on: boolean): void {
   const cur = loadPrefs();
   if (cur.wrap === on) return;
   savePrefs({ ...cur, wrap: on });
+}
+
+/// V72-J2 — the comments/1 gutter's display mode (default `"all"` when
+/// unset, or when a corrupt/unrecognized value is stored — same "degrade to
+/// the honest default rather than throw" posture `normalizeInspectorTab`
+/// uses).
+export function loadCommentGutterMode(): CommentGutterMode {
+  const v = loadPrefs().commentGutterMode;
+  return v && (COMMENT_GUTTER_MODES as readonly string[]).includes(v) ? v : "all";
+}
+
+export function saveCommentGutterMode(mode: CommentGutterMode): void {
+  const cur = loadPrefs();
+  if (cur.commentGutterMode === mode) return;
+  savePrefs({ ...cur, commentGutterMode: mode });
 }
 
 /// SH.C3 — clamp to the reader font-size stepper's bounds; a non-finite

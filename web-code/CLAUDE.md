@@ -576,6 +576,130 @@ obeys the focused-panel rule instead — it stops only the keys it handles
 (`railListHandlesKey`), leaving every chord and global command to reach
 `CommandRoot`.
 
+## Comments/1 in the SPA (`V72-J2`, D8, Track J)
+
+comments/1 (server: `crates/kb-code-server/src/comments/`) is a repo-wide
+scanner over eight comment kinds (doc/annotation/directive/section/licence/
+generated/commented_code/prose), each carrying a per-request, never-
+persisted `state` (fresh/drifted/unknown/aged/unreasoned/none). This unit
+gives it four SPA surfaces, each with a home already named by an existing
+convention — nothing here invents a new one.
+
+**The gutter is slot FOUR, not a rail row.** kbc-theme/1's Lane Budget
+(`themes/LANE-BUDGET.md`) says the intent/comment column is "gutter slot
+four or a rail row, never a fifth slot." `CodeView.tsx` had exactly THREE
+`editor/lineGutter.ts` gutters before this unit (blame, the existing
+annotations/review gutter, diagnostics — PRR-U9's own comment already
+numbers itself "a THIRD `createLineGutter` call"), so comments/1 is the
+fourth: `commentGutterHandle`, its own `StateField`/`StateEffect` pair
+(the factory's own "each call needs its own identity" contract), the
+`.kbc-comment-dot--<kind>` fill + `.kbc-comment-dot--state-<state>` BORDER
+STYLE (never hue-only — the Lane Budget's "trust is a line style" rule,
+applied here to comments/1's own state vocabulary). `lib/comments.ts`'s
+`commentGutterMarkers` marks every line in a block's `[line_start,
+line_end]` range, mirroring `lib/diagnostics.ts`'s own region-spanning
+convention.
+
+**Three modes, one client-side filter, zero server calls.** `all` (every
+kind) → `quiet` (only `annotation`/`directive` rows that carry a non-`none`
+STATE — a `doc` row is hidden in quiet even when fresh, since quiet's whole
+point is "just the actionable directives/annotations") → `doc-only` (doc
+rows only, any state) → back to `all`. `Space C c` cycles it
+(`comments.gutter-mode-cycle`); persisted in `kbc:prefs` under
+`commentGutterMode` (`lib/prefs.ts`'s `load`/`saveCommentGutterMode`), same
+browser-local posture every other reading toggle here takes. A mode NEVER
+hides a comment class silently — the toolbar's mode chip
+(`[data-kbc-comment-gutter-mode]`) always names which of the three is
+active.
+
+**The rail's Comments tab is UNCONDITIONAL.** Unlike Review/Dossier (gated
+on "does this file have one"), every file the scanner covers has an
+honest, possibly-empty, comments/1 list — so `comments` joins `RailTab`
+(`desk/deskState.ts`'s `RAIL_TABS`, now seven) as an always-offered tab,
+`Space R c`. `components/comments/CommentsPanel.tsx` renders the WHOLE
+file's comments/1 rows regardless of the gutter's own display mode (the
+gutter mode is a reading filter over the margin, never a second index).
+
+**Doc hover is additive-only, keyed off the SAME already-fetched data.**
+`editor/hoverTooltip.ts`'s existing `renderHoverDom` (the CM6 identifier
+tooltip) gained one optional parameter, `docComment` — the comments/1
+`doc` row for the hovered symbol (`lib/comments.ts`'s
+`findDocCommentForSymbol`, matched by `symbol.name` within the CURRENT
+file's own `useCommentsFile` result; no second fetch). Absent/`null`
+renders byte-identical to before this unit. When present it appends, right
+after the existing `sym.doc` paragraph: the freshness caption
+(`freshnessCaption` — "fresh" / "drifted N days (code moved at `<sha>`,
+doc last touched at `<sha>`)" / "unknown: `<reason>`" / …, NEVER a verdict
+about whether the comment is wrong, per `comments::drift`'s own rule), and
+— only when the doc is YARD-shaped (`@param`/`@return`) AND the hovered
+symbol's `signature` string has parameters to compare against — a "YARD ≠
+signature" chip (`yardSignatureDisagreement`, pure/client-side/golden-
+pinned) naming which names are undocumented or over-documented, never
+which side is right. This surface is a deliberately narrow append: V72-I2
+(landing around the same time) also touches this tooltip/peek pipeline —
+expect an append-only rebase here, keep both additions.
+
+**The claim → annotation bridge adds ONE value, not a table.**
+`annotations::INTENT_CLAIM = "claim"` (`crates/kb-code-server/src/
+annotations.rs`) is the one genuine server change this unit makes: `intent`
+validation there is route-boundary string matching with no SQL `CHECK`
+behind it (that fn's own doc), so widening the seven-value vocabulary by
+one is the whole change — no migration, no new table, no new column. The
+bridge (`lib/comments.ts`'s `deriveBridgeRows`) NEVER mints its own id or
+back-reference: a bridgeable comment (an `annotation`-kind row whose
+keyword is in `GET /api/comments/keywords`'s `todo_family`, never
+hardcoded) and an `intent: "claim"` annotation are joined by CURRENT LINE
+— both sides are independently re-resolved against the same live blob per
+request (comments/1's scan; `annotations::resolve`'s own content-hash
+carry-forward), so "same live line" is the honest, already-existing
+matching mechanism; there is no fifth identity to invent. Four states,
+derived per render, never stored: `open` (comment, no claim) / `tracked`
+(open claim, comment present) / `resolved` (claim resolved, regardless of
+whether the comment remains — "resolved but the TODO text remains" is
+still `resolved`) / `gone` (open claim, comment no longer at that line —
+an orphan, surfaced via the SAME carry-forward ladder the annotation's own
+`stale`/`line` fields already ride, never hidden). `Space C t`
+(`comments.track-as-annotation`) creates the annotation through the
+EXISTING `POST /api/annotations` path (`lib/annotations.ts`'s
+`buildCreatePayload` shape, called directly with `intent: "claim"`); it
+never edits source — a "fix via suggestion" door stays the existing
+suggestion composer's job, not this bridge's.
+
+**`~comments` is a NEW dashboard; `~todos` is untouched, not redirected.**
+`routes/Comments.tsx` (`Space g m`, `nav.comments`) defaults to the
+ACTIONABLE slice — three parallel `GET /api/comments?state=<lane>` calls,
+one per `lib/comments.ts`'s `ACTIONABLE_STATES` (a small mirror of the
+server's `comments::drift::ACTIONABLE_STATES`, since no wire response
+carries that list), the exact shape `kb-code comments audit` prints —
+each its own server-paged section with a TRUE total, never a client
+slice. Facet chips (kind, keyword, path prefix, off `GET
+/api/comments/summary`'s exact counts) narrow every lane's query at once;
+"show everything" swaps to one unfiltered, still server-paged list.
+`routes/Todos.tsx` (`~todos`, `Space g t`) is DELIBERATELY unchanged byte-
+for-byte (its own wire, its own specs, its own `PageId` all keep working)
+— it gained one discoverability LINK to `~comments`, not a redirect,
+because folding it in cleanly would mean re-deriving its exact TODO-family
+row set as a `~comments` preset and this unit chose not to grow the query
+grammar for that; a future unit may still retire the standalone page once
+that preset exists.
+
+**Registry rows (`crates/kb-code-server/commands/registry.json`, group
+`Comments` + one `Go`/`Rail` row each):** `nav.comments` (`Space g m`,
+`m` because `c` is `nav.canvas`), `rail.tab.comments` (`Space R c`),
+`comments.gutter-mode-cycle` (`Space C c` — a NEW `Space C` leader prefix;
+`Space c`/`Space m` are already `diff.context-cycle`/`diff.map-toggle`,
+which the shadowing lint (`kb-code commands doctor` check 6) forbids a new
+`scope: global` row from reusing), `comments.next`/`comments.prev` (`]
+m`/`[ m` — `]c`/`[c` are `commit.next`/`commit.prev`; deliberately NO
+`vim_kind`, following the `]u`/`[u`/`]d`/`[d`/`]s`/`[s`/`]p`/`[p`
+precedent: `[`/`]` is a MIXED prefix, so `CommandRoot`'s guard 2 lets it
+through and the vim reducer no-ops on a continuation ('m') it does not
+recognise), `comments.track-as-annotation` (`Space C t`),
+`comments.open-card` (`Space C o`). None of the six carry a `vim_kind` —
+every one is a `Space`-leader chord or a `[`/`]`-prefixed mixed chord, and
+D2's "Space is only the leader" plus the mixed-prefix precedent both mean
+none of them needs a vim-layer forwarding arm.
+
 ## Review diff v2 (`V73-K2a`, design §D9, Track K)
 
 `routes/ReviewDiff.tsx` is the full-page review reader. Diff v2 added a

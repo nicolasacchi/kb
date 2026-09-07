@@ -5,6 +5,7 @@ import {
   buildSym,
   canvasPageUrl,
   codeUrl,
+  commentsUrl,
   commitUrl,
   compareUrl,
   findingUrl,
@@ -354,6 +355,16 @@ describe("todosUrl", () => {
 
   it("encodes a repo name needing it", () => {
     expect(todosUrl("my repo")).toBe("/r/my%20repo/~todos");
+  });
+});
+
+describe("commentsUrl", () => {
+  it("builds the repo-scoped comments/1 dashboard URL", () => {
+    expect(commentsUrl("kb")).toBe("/r/kb/~comments");
+  });
+
+  it("encodes a repo name needing it", () => {
+    expect(commentsUrl("my repo")).toBe("/r/my%20repo/~comments");
   });
 });
 

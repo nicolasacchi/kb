@@ -20,8 +20,13 @@ test.describe("todos page", () => {
     await todoChip.click();
     await expect(todoChip).toHaveClass(/is-on/);
 
-    // Only TODO rows remain under the group.
-    const rows = page.locator("[data-kbc-todos-row]");
+    // Only TODO rows remain under the group. Scoped to THIS group (not the
+    // page's first row overall) since V72-J2 added a second TODO-family
+    // annotation elsewhere in the fixture (`shop_order.rb`, comments/1's own
+    // e2e fixture) — `GET /api/todos` is comments/1's own filtered view
+    // (docs/kb-code.md's comments/1 section), so it legitimately has more
+    // than one file's worth of TODO rows now.
+    const rows = group.locator("[data-kbc-todos-row]");
     await expect(rows.first()).toBeVisible();
     await expect(rows.first().locator("[data-kbc-todos-marker]")).toHaveAttribute(
       "data-kbc-todos-marker",

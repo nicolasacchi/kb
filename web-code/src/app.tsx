@@ -13,6 +13,7 @@ import { readerUrl } from "./lib/breadcrumbs";
 import {
   branchesUrl,
   canvasPageUrl,
+  commentsUrl,
   hotspotsUrl,
   prsUrl,
   recipesPageUrl,
@@ -82,6 +83,10 @@ const Tour = lazy(() => import("./routes/Tour"));
 const Workspaces = lazy(() => import("./routes/Workspaces"));
 // Phase N — TODO index (repo-scoped sentinel, same footing as ~sets).
 const Todos = lazy(() => import("./routes/Todos"));
+// V72-J2 (D8) — comments/1 dashboard (repo-scoped sentinel, same footing as
+// ~todos above, which it supersedes as the richer, kind-aware surface —
+// `~todos` keeps working, unchanged, and links forward to this one).
+const Comments = lazy(() => import("./routes/Comments"));
 // V3.2-B3 — behavioral attention hotspots (repo-scoped sentinel).
 const Hotspots = lazy(() => import("./routes/Hotspots"));
 // V3.R2 — local review sessions (list + cockpit detail).
@@ -294,6 +299,7 @@ function AppShell() {
     "nav.reviews": () => navigate(repoRoute(reviewsUrl)),
     "nav.branches": () => navigate(repoRoute(branchesUrl)),
     "nav.todos": () => navigate(repoRoute(todosUrl)),
+    "nav.comments": () => navigate(repoRoute(commentsUrl)),
     "nav.sets": () => navigate(repoRoute(setsUrl)),
     "nav.prs": () => navigate(repoRoute(prsUrl)),
     "nav.canvas": () => navigate(repoRoute(canvasPageUrl)),
@@ -358,6 +364,7 @@ function AppShell() {
                 <Route path="/r/:repo/~sets/:id/~tour" element={<Tour />} />
                 <Route path="/r/:repo/~workspaces" element={<Workspaces />} />
                 <Route path="/r/:repo/~todos" element={<Todos />} />
+                <Route path="/r/:repo/~comments" element={<Comments />} />
                 <Route path="/r/:repo/~hotspots" element={<Hotspots />} />
                 <Route path="/r/:repo/~reviews" element={<Reviews />} />
                 <Route path="/r/:repo/~reviews/:id/diff" element={<ReviewDiff />} />

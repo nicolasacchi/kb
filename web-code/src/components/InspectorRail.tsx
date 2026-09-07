@@ -44,6 +44,7 @@ const TAB_META: Record<InspectorTab, { label: string; icon: ReactNode; hint: str
   understand: { label: "Understand", icon: <Icon.Entity />, hint: "what is this?" },
   history: { label: "History", icon: <Icon.History />, hint: "how did it get here?" },
   notes: { label: "Notes", icon: <Icon.Note />, hint: "what did I mark?" },
+  comments: { label: "Comments", icon: <Icon.Comment />, hint: "what does the source say about itself?" },
   review: { label: "Review", icon: <Icon.ClipboardCheck />, hint: "what's contested?" },
   dossier: { label: "Dossier", icon: <Icon.List />, hint: "what does this entity have?" },
 };
@@ -149,6 +150,17 @@ export interface InspectorRailProps {
   /// unit, byte-identical. When present, it renders ABOVE Annotations/
   /// Bookmarks (D26: "a Workspace notes section at the top").
   workspaceNotesPanel?: ReactNode | null;
+
+  // --- V72-J2 (D8) addition ------------------------------------------------
+  /// The Comments tab's body (`components/comments/CommentsPanel.tsx`),
+  /// built by `Reader.tsx` (same ownership pattern as `annotationsBody`
+  /// below — it owns the `useCommentsFile`/bridge fetches). UNCONDITIONAL,
+  /// unlike Review/Dossier: every file the scanner covers has an honest
+  /// list, possibly empty, so there is no "no context" gate to render.
+  commentsPanel?: ReactNode | null;
+  /// Badge count — the number of ACTIONABLE (drifted/aged/unreasoned)
+  /// comments/1 rows in the open file, off the wire (never re-derived here).
+  commentsBadgeCount?: number;
 }
 
 function SubjectChip({
@@ -262,6 +274,8 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     tab: tabProp,
     onTabChange,
     workspaceNotesPanel = null,
+    commentsPanel = null,
+    commentsBadgeCount = 0,
   },
   handleRef,
 ) {
@@ -276,6 +290,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
 
   const badgeFor = (t: InspectorTab): number => {
     if (t === "notes") return unresolvedAnnotations + bookmarkCount;
+    if (t === "comments") return commentsBadgeCount;
     // Understand/History/All/Review have no unread concept — never invent one.
     return 0;
   };
@@ -317,6 +332,9 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     <BookmarksPanel repo={repo} onJump={onJumpBookmark} />
   ) : (
     <div className="kbc-inspector__hint">Bookmarks unavailable.</div>
+  );
+  const commentsBody = commentsPanel ?? (
+    <div className="kbc-inspector__hint">No file open.</div>
   );
   const dossierBody = hasDossierContext ? (
     (dossierPanel ?? <div className="kbc-inspector__hint">No members in this dossier.</div>)
@@ -409,6 +427,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
             <Section title="History">{historyBody}</Section>
             <Section title="Annotations">{annotationsBody}</Section>
             <Section title="Bookmarks">{bookmarksBody}</Section>
+            <Section title="Comments">{commentsBody}</Section>
             {hasReviewContext && <Section title="Review">{reviewBody}</Section>}
           </>
         )}
@@ -431,6 +450,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
             <Section title="Bookmarks">{bookmarksBody}</Section>
           </>
         )}
+        {tab === "comments" && <Section title="Comments">{commentsBody}</Section>}
         {tab === "review" && <Section title="Review">{reviewBody}</Section>}
         {tab === "dossier" && <Section title="Members">{dossierBody}</Section>}
       </div>

@@ -43,6 +43,8 @@ import ActionMenu, { ActionPill } from "../components/actions/ActionMenu";
 import RepoStateBanner from "../components/RepoStateBanner";
 import AddToSetMenu from "../components/sets/AddToSetMenu";
 import BlameChip from "../components/provenance/BlameChip";
+import CommentGutterCard from "../components/comments/CommentGutterCard";
+import CommentsPanel from "../components/comments/CommentsPanel";
 import DiagnosticsCard from "../components/provenance/DiagnosticsCard";
 import FrameworkCard from "../components/provenance/FrameworkCard";
 import StoryTimeline from "../components/provenance/StoryTimeline";
@@ -85,8 +87,9 @@ import type { LinkifyCallbacks } from "../editor/linkify";
 import type { LineMarkerSpec } from "../editor/lineGutter";
 import { copyToClipboard, type LineSel, type VimReaderCallbacks, type WordPos } from "../editor/vimReader";
 import { useActiveWorkspace } from "../hooks/useActiveWorkspace";
-import { useAnnotations } from "../hooks/useAnnotations";
+import { useAnnotations, useCreateAnnotation } from "../hooks/useAnnotations";
 import { useBlame } from "../hooks/useBlame";
+import { useCommentKeywords, useCommentsFile } from "../hooks/useComments";
 import { useBlameAttributions } from "../hooks/useBlameAttributions";
 import {
   useBookmarks,
@@ -106,6 +109,17 @@ import { useWorkingSet } from "../hooks/useWorkingSet";
 import { buildAgeLineBuckets, type AgeLineInfo } from "../lib/ageHeatmap";
 import { annotationGutterTitle, annotationsByLine, unresolvedCount } from "../lib/annotations";
 import { buildLineDots, regionCoveringLine, type BlameDotInfo } from "../lib/blameGutter";
+import {
+  ACTIONABLE_STATES,
+  claimAnnotationBody,
+  commentAtLine,
+  commentGutterMarkers,
+  filterCommentsForMode,
+  isBridgeable,
+  nextCommentLine,
+  nextGutterMode,
+  type CommentGutterMode,
+} from "../lib/comments";
 import { diagnosticGutterMarks, type DiagnosticGutterMark } from "../lib/diagnostics";
 import {
   codeUrl,
@@ -190,6 +204,7 @@ import {
 import { loadProvisionalPanes } from "../lib/prefs";
 import {
   loadCodeLenses,
+  loadCommentGutterMode,
   loadParamHints,
   loadReaderFontSize,
   loadStickyContext,
@@ -197,6 +212,7 @@ import {
   READER_FONT_SIZE_MAX,
   READER_FONT_SIZE_MIN,
   saveCodeLenses,
+  saveCommentGutterMode,
   saveParamHints,
   saveReaderFontSize,
   saveStickyContext,
@@ -1211,6 +1227,10 @@ export default function Reader() {
   useEffect(() => {
     dispatchLadder({ type: "closePanel" });
     setHoverChip(null);
+    // V72-J2 — same reasoning: a stale comments/1 hover/active line from the
+    // PREVIOUSLY focused pane's file has nothing to show for the new one.
+    setCommentHoverChip(null);
+    setCommentActiveLine(null);
   }, [repo, focusedPath, focusedRef]);
 
   // --- W4.6 — annotations gutter + panel -----------------------------------
@@ -1251,6 +1271,103 @@ export default function Reader() {
   >(undefined);
   const cursorLineRef1 = useRef(1);
   const cursorLineRef2 = useRef(1);
+
+  // --- V72-J2 (D8) — comments/1: the per-file gutter, doc hover freshness's
+  // data source, and the claim → annotation bridge ------------------------
+  // Wave E convention (same as annotations/blame above): keyed on the
+  // FOCUSED pane's path, always fetched (the gutter's "always-fetch
+  // discipline" — a mode cycle is a pure client filter over this ONE
+  // response, never a re-fetch).
+  const commentsFile = useCommentsFile(repo, focusedPath);
+  const allFileComments = commentsFile.data?.comments ?? [];
+  const commentKeywords = useCommentKeywords();
+  const todoFamily = commentKeywords.data?.todo_family ?? [];
+  const [commentGutterMode, setCommentGutterMode] = useState<CommentGutterMode>(() =>
+    loadCommentGutterMode(),
+  );
+  function cycleCommentGutterMode() {
+    setCommentGutterMode((m) => {
+      const next = nextGutterMode(m);
+      saveCommentGutterMode(next);
+      return next;
+    });
+  }
+  const visibleFileComments = useMemo(
+    () => filterCommentsForMode(allFileComments, commentGutterMode),
+    [allFileComments, commentGutterMode],
+  );
+  const commentMarkers = useMemo(
+    () => commentGutterMarkers(visibleFileComments),
+    [visibleFileComments],
+  );
+  // The rail's Comments-tab badge — ACTIONABLE (drifted/aged/unreasoned)
+  // rows in THIS file, off the wire (`CommentOut.state.state`), never
+  // re-derived from the gutter's own display filter.
+  const commentsBadgeCount = useMemo(
+    () => allFileComments.filter((c) => ACTIONABLE_STATES.includes(c.state.state)).length,
+    [allFileComments],
+  );
+  const [commentHoverChip, setCommentHoverChip] = useState<
+    { line: number; rect: DOMRect } | null
+  >(null);
+  const [commentActiveLine, setCommentActiveLine] = useState<number | null>(null);
+  const createClaimAnnotation = useCreateAnnotation(repo, focusedPath ?? "");
+
+  function handleCommentHover(line: number, rect: DOMRect) {
+    setCommentHoverChip({ line, rect });
+  }
+  function handleCommentUnhover(line: number) {
+    setCommentHoverChip((c) => (c && c.line === line ? null : c));
+  }
+  function handleCommentClick(line: number) {
+    setCommentHoverChip(null);
+    setCommentActiveLine(line);
+    inspectorRef.current?.openTab("comments");
+  }
+  const commentHoverComment = commentHoverChip
+    ? commentAtLine(allFileComments, commentHoverChip.line)
+    : null;
+
+  /// `comments.next`/`comments.prev` (`]m`/`[m`) — walk the FOCUSED pane's
+  /// currently-VISIBLE (mode-filtered) markers from wherever its cursor is.
+  function handleCommentNav(dir: 1 | -1) {
+    const cursorLine = focusedPane === 1 ? cursorLineRef1.current : cursorLineRef2.current;
+    const next = nextCommentLine(visibleFileComments, cursorLine, dir);
+    if (next === null) return;
+    jumpToLine(focusedPane, next);
+  }
+  /// `comments.open-card` (`Space C o`) — the keyboard door to the same
+  /// small card a gutter hover/click opens, for the block at the cursor.
+  function handleCommentOpenCard() {
+    const cursorLine = focusedPane === 1 ? cursorLineRef1.current : cursorLineRef2.current;
+    const c = commentAtLine(allFileComments, cursorLine);
+    if (!c) {
+      toast.warn("No comment near the cursor.");
+      return;
+    }
+    setCommentActiveLine(c.line_start);
+    inspectorRef.current?.openTab("comments");
+  }
+  /// `comments.track-as-annotation` (`Space C t`) — the claim → annotation
+  /// bridge's keyboard door. Creates an ordinary annotation through the
+  /// EXISTING `POST /api/annotations` path, `intent: "claim"`
+  /// (`annotations::INTENT_CLAIM`); never edits source.
+  function handleCommentTrackAsAnnotation() {
+    const path = focusedPath;
+    if (!path) return;
+    const cursorLine = focusedPane === 1 ? cursorLineRef1.current : cursorLineRef2.current;
+    const c = commentAtLine(allFileComments, cursorLine);
+    if (!c || !isBridgeable(c, todoFamily)) {
+      toast.warn("No trackable TODO-family comment at the cursor.");
+      return;
+    }
+    createClaimAnnotation.mutate(
+      { repo, path, line: c.line_start, body: claimAnnotationBody(c), intent: "claim" },
+      {
+        onError: (e) => toast.err(e instanceof Error ? e.message : "failed to create the tracking annotation"),
+      },
+    );
+  }
 
   // --- V70-A10 ("Workspaces v0", D26) — save/open the open files + desk
   // snapshot + ref as a named set, with notes -----------------------------
@@ -3168,7 +3285,19 @@ export default function Reader() {
     "rail.tab.understand": () => selectRailTab("understand"),
     "rail.tab.history": () => selectRailTab("history"),
     "rail.tab.notes": () => selectRailTab("notes"),
+    "rail.tab.comments": () => selectRailTab("comments"),
     "rail.tab.review": () => selectRailTab("review"),
+    // V72-J2 (D8) — comments/1: the gutter mode cycle, buffer navigation
+    // (`]m`/`[m`, deliberately no `vim_kind` — see the registry row's own
+    // note), and the claim → annotation bridge's keyboard doors. None of
+    // these need a vim-layer arm: `Space`-leader chords are never vim-owned
+    // (D2: "Space is only the leader"), and `]m`/`[m` follow the `]u`/`[u`/
+    // `]d`/`[d`/`]s`/`[s`/`]p`/`[p` mixed-prefix precedent exactly.
+    "comments.gutter-mode-cycle": () => cycleCommentGutterMode(),
+    "comments.next": () => handleCommentNav(1),
+    "comments.prev": () => handleCommentNav(-1),
+    "comments.track-as-annotation": () => handleCommentTrackAsAnnotation(),
+    "comments.open-card": () => handleCommentOpenCard(),
     // V70-H1 — the registry declares all five `Ctrl-w` pane commands in
     // scope `reader` (`pane.focus-prev/-next/-cycle`, `pane.split`,
     // `pane.close`), but NONE had a registered central handler here.
@@ -3622,6 +3751,22 @@ export default function Reader() {
             </button>
           </div>
         )}
+        {/* V72-J2 (D8) — the comments/1 gutter's mode chip (`Space C c`
+            cycles it). A mode NEVER hides a comment class silently — this
+            chip is the on-screen indicator naming which of the three
+            filters is currently active, always visible whenever a file is
+            open (same gate as the toggles above it). */}
+        {isFile && !diffMode && !storyMode && (
+          <button
+            type="button"
+            className="kbc-sticky-toggle"
+            title="Comment gutter mode (all / quiet / doc-only) — Space C c cycles it"
+            data-kbc-comment-gutter-mode={commentGutterMode}
+            onClick={cycleCommentGutterMode}
+          >
+            Comments: {commentGutterMode}
+          </button>
+        )}
         <RefPicker repo={repo} path={path} activeRef={gitRef} pane2={pane2Loc ?? undefined} />
         {/* Phase E4 — capture the FOCUSED pane's open file (or its current
             selection, when one exists) into a reading set. */}
@@ -3794,6 +3939,10 @@ export default function Reader() {
                       annotationMarkers={focusedPane === 1 ? annotationMarkers : null}
                       onAnnotationClick={focusedPane === 1 ? handleAnnotationClick : undefined}
                       diagnosticMarkers={focusedPane === 1 ? diagMarks : null}
+                      commentMarkers={focusedPane === 1 ? commentMarkers : null}
+                      onCommentHover={focusedPane === 1 ? handleCommentHover : undefined}
+                      onCommentUnhover={focusedPane === 1 ? handleCommentUnhover : undefined}
+                      onCommentClick={focusedPane === 1 ? handleCommentClick : undefined}
                       onViewerDirtyChange={(dirty) => {
                         viewerDirtyRef1.current = dirty;
                       }}
@@ -3821,6 +3970,7 @@ export default function Reader() {
                       hoverRepo={repo}
                       hoverPath={activeFile ?? null}
                       hoverRef={gitRef}
+                      docComments={focusedPane === 1 ? allFileComments : null}
                     />
                   )
                 ) : (
@@ -3902,6 +4052,10 @@ export default function Reader() {
                           annotationMarkers={focusedPane === 2 ? annotationMarkers : null}
                           onAnnotationClick={focusedPane === 2 ? handleAnnotationClick : undefined}
                           diagnosticMarkers={focusedPane === 2 ? diagMarks : null}
+                          commentMarkers={focusedPane === 2 ? commentMarkers : null}
+                          onCommentHover={focusedPane === 2 ? handleCommentHover : undefined}
+                          onCommentUnhover={focusedPane === 2 ? handleCommentUnhover : undefined}
+                          onCommentClick={focusedPane === 2 ? handleCommentClick : undefined}
                           onViewerDirtyChange={(dirty) => {
                             viewerDirtyRef2.current = dirty;
                           }}
@@ -3929,6 +4083,7 @@ export default function Reader() {
                           hoverRepo={repo}
                           hoverPath={pane2Loc?.path ?? null}
                           hoverRef={pane2Loc?.ref}
+                          docComments={focusedPane === 2 ? allFileComments : null}
                         />
                       )
                     ) : null}
@@ -4044,6 +4199,17 @@ export default function Reader() {
           {hoverChip && (
             <BlameChip rect={hoverChip.rect} label={hoverChip.label} solid={hoverChip.solid} />
           )}
+          {commentHoverChip && commentHoverComment && (
+            <CommentGutterCard
+              rect={commentHoverChip.rect}
+              comment={commentHoverComment}
+              onJumpSymbol={
+                commentHoverComment.symbol
+                  ? () => jumpToLine(focusedPane, commentHoverComment.symbol!.line_start)
+                  : undefined
+              }
+            />
+          )}
           {copiedTick > 0 && (
             <div className="kbc-copied-chip" role="status" data-kbc-copied>
               Permalink copied
@@ -4098,6 +4264,18 @@ export default function Reader() {
                 paneRepoPath(focusedPane).viewRef.current?.focus();
               }}
               unresolvedAnnotations={unresolvedAnnotationsCount}
+              commentsBadgeCount={commentsBadgeCount}
+              commentsPanel={
+                <CommentsPanel
+                  repo={repo}
+                  path={focusedPath ?? ""}
+                  activeLine={commentActiveLine}
+                  onGotoLine={(line, lineEnd) => {
+                    jumpToLine(focusedPane, line, lineEnd);
+                    paneRepoPath(focusedPane).viewRef.current?.focus();
+                  }}
+                />
+              }
               // F5 — `false`/`undefined` on desktop (isMobile is always
               // false there), so this `<aside>`'s markup is byte-identical
               // to pre-F5: no `asSheet` gate exercised, no sheet-head, no
