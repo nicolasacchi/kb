@@ -2313,3 +2313,264 @@ each is a single-file change:
 - No ref scheme, front-matter block, or `kbc-claim/1` kind names a CI check
   run, so CI status cannot be cited inside a review document at all today,
   hand-authored or migrated.
+## Recipes — `kbc-recipe/1` (v7.4, Track L)
+
+A **recipe** is a named, parameterised, deterministic question asked of
+kb-code's own indexes. Two families share one surface:
+
+- **`recipes/1`** (v3.3-Q1, `GET /api/recipes`, `GET /api/recipes/{name}`)
+  — six compiled-in ranked queries. **FROZEN** and byte-compatible for the
+  SPA's existing Recipes page, with two deliberate behaviour changes from
+  the repair round below.
+- **`kbc-recipe/1`** (v7.4, `GET /api/recipe*`) — the typed runner: a DAG
+  over a closed op set, typed params, kbc-scope/1 scoping, four result
+  views, a per-step census, and trust-on-first-use for recipes a repo
+  carries. The six `recipes/1` bodies are **adopted** here as native
+  adapters, so all fourteen run, show and lint the same way.
+
+The two prefixes are separate for the reason `canvas` and `boards` are:
+`/api/recipes/{name}` already owns the depth-2 param slot, so the new
+family gets its own singular prefix rather than shadowing a recipe that
+happens to be named after a literal segment.
+
+### What a recipe is
+
+```toml
+slug = "orient:hot-and-cold"        # the FILE NAME is the slug for a repo file
+title = "Hot and cold"
+intent = "orienting"                # orienting|reviewing|checking-tests|rails|hygiene
+description_md = "…"
+scope = "$context.scope"            # a kbc-scope/1 expression; default = the reader's own
+
+params = [
+  { name = "top", type = "int", default = 25, min = 1, max = 500 },
+]
+
+steps = [
+  { id = "churn",  op = "churn",   args = { min_revisions = "$p.min_revisions" } },
+  { id = "ranked", op = "set_ops", args = { mode = "sort", from = "$steps.churn", by = "churn" } },
+]
+
+views = [
+  { id = "hot", kind = "table", step = "ranked", columns = [
+    { header = "Path", field = "path" },
+    { header = "Churn", field = { scalar = "churn" } },
+  ]},
+]
+```
+
+Param types: `string` · `int` · `float` · `bool` · `enum` (with `values`)
+· `path` (rejected by the same lexical guard every content route uses) ·
+`symbol` · `ref` (constructed through `git::revspec::Revspec`, so
+invariant 3 holds for a recipe-supplied ref too). `min`/`max` are
+inclusive and a violation is a 400 naming the field, the value and the
+bound.
+
+An arg is a literal, `$p.<name>`, `$context.<field>`
+(`repo|path|symbol|ref|scope`) or `$steps.<id>`. There is **no
+interpolation** — `"$p.a and $p.b"` is a literal string, because a
+template would be the beginning of a query language (D21). A field
+projection goes through the `map` op, whose transforms are type-checked;
+`$steps.<id>.<field>` is refused at load.
+
+Every result cell is an **address** — `path`, `line`, `symbol`, `entity`,
+`commit`, `id`, `blob`, `trust`, `kind`, `address`, or `{ scalar = "…" }`
+for one of the emitting op's own derived numbers. `blob` and `trust` are
+always present: an engine that reported neither says `unknown`, never a
+blank and never a zero.
+
+### The op set (closed)
+
+| op | args | consumes | produces |
+|---|---|---|---|
+| `search` | `q` (kbcq/1), `lane`, `limit` | — | `file` \| `symbol` \| `line` (per `lane`) |
+| `usages` | `from`, `trust`, `limit` | `symbol` | `line` |
+| `entity` | `from`, `name`, `kind`, `limit` | `file` | `entity` |
+| `outline` | `from`, `kinds`, `limit` | `file` | `symbol` |
+| `comments` | `from`, `kind`, `keyword`, `state`, `limit` | `file` | `comment` |
+| `facts` | `lane`, `from`, `kind`, `min_severity`, `limit` | `file` | `fact` |
+| `rails` | `noun` \| `orphans`, `limit` | — | `entity` \| `file` |
+| `tree` | `scope`, `ext`, `limit` | — | `file` |
+| `git_log` | `since`, `range`, `emit`, `limit` | — | `commit` \| `file` (per `emit`) |
+| `blame` | `from`, `limit` | `file`/`symbol`/`line` | `line` |
+| `churn` | `min_revisions`, `limit` | — | `file` |
+| `boards` | `status`, `limit` | — | `node` |
+| `review` | `kind`, `state`, `severity`, `disposition`, `limit` | — | `finding` |
+| `set_ops` | `mode`, `from`, `with`, `by`, `desc`, `n`, `trust`, `path_prefix`, `min`, `max` | any (one kind) | its input's kind |
+| `map` | `from`, `to` | varies | varies |
+
+`set_ops` modes: `union` · `intersect` · `diff` · `filter` · `sort` ·
+`limit`. `map` transforms: `file-of` · `symbol-of` · `entity-of` ·
+`definitions-of`.
+
+**A recipe can never reference an exec lane.** Not because a check
+rejects one — because no variant of the op enum names one (D21;
+kb-code-server invariant 10, "the daemon never spawns a non-git
+process"). The `facts` op reads `lane_facts` rows the operator's own CLI
+already ingested and cannot cause a tool to run; its lane must still be
+enabled in `[lanes]`, which no recipe can do.
+
+The DAG is **type-checked at load**: a step fed the wrong address kind
+fails by NAME (`steps.uses: arg "from" carries file addresses, but op
+`usages` accepts symbol`), as does a forward reference, an unknown arg,
+an undeclared param, a `set_ops` whose inputs disagree on kind, and a
+view over a step that does not exist.
+
+### Where a recipe lives, and trust
+
+| home | source | trust |
+|---|---|---|
+| `builtin` | the eight DAG recipes + six native adapters this binary ships | always trusted |
+| `server` | `kb-code recipe new --from-json -` (loopback) | always trusted |
+| `repo` | `.kbc/recipes/<slug>.toml` at the repo's **default ref** | trust-on-first-use |
+
+A repo file is read **only from the default ref, only through the ODB** —
+never the working tree, never whatever branch is checked out. First sight
+is `untrusted` and refuses to run with a 403 naming the state and the
+command that accepts it (`urn:kb:errors:recipe-untrusted`). A changed
+content hash is `changed` **with a unified diff**, and does not inherit
+the old decision. Caps: 64 KiB per file, 64 files per repo.
+
+A repo file **wins** on a slug collision and the catalog reports what it
+shadowed (`shadowed_by`). A file whose declared `slug` disagrees with its
+file name is a reported problem, not a silent rename.
+
+### Running one
+
+`GET /api/recipe/{slug}/run?repo=&p.<name>=&ctx.<field>=&scope=&limit=&view=`
+— a bearer **read**; it mutates nothing, which is also what makes a run
+URL shareable. The response is `kbc-recipe-run/1`:
+
+```jsonc
+{
+  "schema": "kbc-recipe-run/1",
+  "recipe": "…", "home": "repo", "source": "repo:.kbc/recipes/x.toml@<blob>",
+  "trust": "trusted",
+  "scope": { "expression": "…", "applied": true, "matched": 42, "notes": [] },
+  "steps": [ { "id": "…", "op": "churn", "rows": [ /* addresses */ ],
+               "total": 120, "truncated": true, "ms": 8,
+               "census": { "empty_reason": "lane-disabled",
+                           "inputs": { "path_stats": 120 },
+                           "filters_applied": [ "…" ], "notes": [] } } ],
+  "views": [ { "id": "hot", "kind": "table", "columns": [ … ], "rows": [ [ "…" ] ] } ],
+  "honesty": { "generation": 41, "as_of": "…", "budget_ms": 20000,
+               "elapsed_ms": 91, "budget_exhausted": false, "notes": [] }
+}
+```
+
+- **`limit` over 500 is a 400 naming both numbers.** Never a silent clamp.
+- **A scope with any diagnostic is not applied**: the run proceeds
+  UNSCOPED with the reason captioned (`scope.applied: false`), because a
+  silent narrowing is worse than an honest widening.
+- **A run is deterministic for a given mirror state.** Every op sorts on
+  the address itself, identical step calls are memoised, and two runs
+  against one `generation` are byte-identical.
+
+### The census — why is this empty
+
+Every step carries one. `empty_reason` is a closed vocabulary and exactly
+**one** value means "nothing to worry about":
+
+| reason | means |
+|---|---|
+| `filtered-out` | rows existed and every one failed this step's filters — **the only clean one** |
+| `no-inputs` | the step reads per-address and got none |
+| `upstream-empty` | the previous step returned nothing |
+| `scope-excluded` | the scope removed every row |
+| `lane-disabled` | an `aug-lane/1` lane is off in `[lanes]` |
+| `lane-unknown` | no lane by that name |
+| `lane-unavailable` | a known lane could not answer |
+| `no-index` | the index this step reads has no rows (the reason names the command that builds it) |
+| `not-a-rails-app` | rails/1 found no Rails structure |
+| `param-empty` | a param resolved to an empty value |
+| `budget-exhausted` | the 20 s run budget was spent before this step started |
+
+`inputs` names what the step actually READ, so a reader can see where the
+funnel narrowed; `filters_applied` names what it applied.
+
+### The shipped catalog
+
+| slug | intent | params | views | CLI |
+|---|---|---|---|---|
+| `orient:entry-points` | orienting | `top` | doors · routes · classes | `kb-code recipe run orient:entry-points --repo R` |
+| `orient:hot-and-cold` | orienting | `min_revisions`, `top` | hot · inside | `kb-code recipe run orient:hot-and-cold --repo R` |
+| `review:blast-radius` | reviewing | `since`*, `test_prefix`, `top` | callers · tests · changed · prior | `kb-code recipe run review:blast-radius --repo R --p since=30d` |
+| `review:untested-changes` | reviewing | `since`*, `test_scope`, `lane` | untested · covered · tests | `kb-code recipe run review:untested-changes --repo R --p since=30d` |
+| `tests:flaky-candidates` | checking-tests | `test_scope`, `min_revisions`, `top` | top | `kb-code recipe run tests:flaky-candidates --repo R` |
+| `rails:orphans` | rails | `lane` (enum), `top` | orphans | `kb-code recipe run rails:orphans --repo R --p lane=action_without_route` |
+| `hygiene:aged-todos` | hygiene | `top` | both · aged | `kb-code recipe run hygiene:aged-todos --repo R` |
+| `hygiene:drifted-docs` | hygiene | `top` | drifted · files | `kb-code recipe run hygiene:drifted-docs --repo R` |
+
+Plus the six natives, adapted: `new-public-api` (`since`*),
+`god-functions`, `agent-only-symbols`, `complexity-climbers` (`since`*),
+`unreviewed-hotspots`, `failure-tainted`. Their bodies stay in
+`recipes.rs` — `new-public-api`'s language-specific visibility rules and
+`god-functions`' fan-in/fan-out fold are not expressible in the op set,
+and growing the set one recipe-shaped variant at a time is exactly what
+D21 forbids. What they gain is everything around the body: typed params,
+the cap refusal, scoping, a census, and views that render the columns
+both old presenters dropped.
+
+### The `recipes/1` repair round
+
+D11's list, each with a test named after it:
+
+| defect | fix |
+|---|---|
+| `complexity-climbers` mapped every `read_blob` failure to `Complexity{0,0}`, so a file added after `since` topped the list with a delta equal to its whole size | a baseline that could not be read is `terms.then_state` (`absent`/`too-large`/`unreadable`) with `score: null`, listed last and never ranked as a climb |
+| `agent-only-symbols`' gate read `author_stats OR commit_sessions` while its row test read only `commit_sessions` | the gate reads the SAME table, and an empty result over a missing input says which one (`commit_sessions` vs `agent_attribution`); the per-sha lookup is memoised |
+| `failure-tainted`'s `terms.fail_count` was a permanent zero (its only writer hardcodes `0`) | the term is **retired** rather than reported as measured-and-zero; the note says so |
+| `limit > 500` was silently clamped | a 400 naming both numbers, on `recipes/1` **and** `kbc-recipe/1` |
+| the CLI's 10 s client timeout made the two blame-heavy recipes unusable | `kb-code recipe` uses a 600 s client |
+| the CLI's `error_for_status()` discarded the server's message | error bodies are rendered (`recipe: p.since: required (string) (HTTP 400)`) |
+| `new-public-api` returned a confident empty set on the four-fifths of languages it has no rule for | the note names the rule set and the per-language count it did **not** examine; a run with nothing examinable reports `inputs_missing` |
+| the note said "working tree HEAD", which is not a thing | it names the working tree |
+
+Two of these change behaviour on the frozen wire on purpose: `limit >
+500` now 400s (the SPA's own control tops out at 500, so it is
+unaffected), and `complexity-climbers` rows can carry `score: null` (the
+SPA already renders a null score as `—`).
+
+### Routes
+
+| route | gate | note |
+|---|---|---|
+| `GET /api/recipe?repo=` | bearer | catalog: home, trust, CLI line, load problems |
+| `GET /api/recipe/{slug}?repo=` | bearer | params, steps, views, trust diff |
+| `GET /api/recipe/{slug}/lint?repo=` | bearer | a LIST of problems, never a first error |
+| `GET /api/recipe/{slug}/run?repo=&p.…` | bearer | the run — mutates nothing |
+| `GET /api/recipe/runs/{id}` | bearer | replay a materialised run; says whether it is stale |
+| `POST /api/recipe/{slug}/materialise?…` | loopback | run + store a replayable snapshot |
+| `POST /api/recipe/{slug}/trust` | loopback | accept the bytes at the default ref NOW |
+| `POST /api/recipe/new` | loopback | store an agent-authored recipe on the daemon |
+| `DELETE /api/recipe/{slug}` | loopback | remove a server-stored recipe only |
+
+### CLI
+
+```
+kb-code recipe list  --repo R [--intent orienting]
+kb-code recipe show  <slug> --repo R
+kb-code recipe lint  <slug> --repo R            # exit 3 on a refuse
+kb-code recipe run   <slug> --repo R [--p name=value …] [--ctx path=… ]
+                                     [--scope 'path:app//*'] [--limit N] [--view id]
+                                     [--materialise] [--save-as-set NAME]
+kb-code recipe new   --from-json -  [--repo R]
+kb-code recipe trust <slug> --repo R
+kb-code recipe runs  <run_id>
+kb-code recipe delete <slug>
+kb-code recipes                                  # the FROZEN recipes/1 catalog
+```
+
+**CLI break (v7.4):** the pre-v7.4 `kb-code recipe <NAME> --repo R` is now
+`kb-code recipe run <NAME> --repo R`. `--save-as-set` posts the chosen
+view's addresses to the existing `POST /api/sets` — this CLI never grows a
+second set-creation path, and addresses with no path are reported as
+skipped rather than lost.
+
+### Not built here (L3a)
+
+The recipe **home** SPA, the auto-form and the result-view UI are L3c;
+tours/trails are L3b. The SHOULDs D11 marks — fixtures, the inbox drift
+lane, save-as board/tour, trend and property-diff — are not built, and
+`review` in `timeline` mode reports the finding-shaped events only,
+saying so in its census rather than inventing an address for a verdict.

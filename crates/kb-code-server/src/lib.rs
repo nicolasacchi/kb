@@ -389,6 +389,12 @@ pub mod outline;
 pub mod provenance;
 pub mod rails;
 pub mod reading_sets;
+/// V74-L3a (D11 + D21, Track L) — `kbc-recipe/1`: the typed recipe
+/// runner over a CLOSED op set. Sibling of `recipes` below, which stays
+/// FROZEN as `recipes/1` (the `/api/usages` → `/api/usages/2`
+/// treatment); the six `recipes/1` bodies are adopted here as native
+/// adapters so all fourteen share one run/show/lint surface.
+pub mod recipe;
 pub mod recipes;
 /// V72-H2b (D7) — `reextract-bill/1`: what a salt bump would cost,
 /// measured rather than estimated.

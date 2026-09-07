@@ -622,6 +622,34 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // free query language). Ordinary auth_bearer — not loopback-only.
         .route("/recipes", get(crate::recipes::recipes_catalog_route))
         .route("/recipes/{name}", get(crate::recipes::recipe_run_route))
+        // V74-L3a (D11 + D21, Track L) — `kbc-recipe/1`, the typed
+        // runner. Its own SINGULAR prefix, because `recipes/1` above
+        // already owns `/api/recipes/{name}` (the depth-2 param slot):
+        // a new depth-2 literal would shadow any recipe named after it,
+        // and a depth-3 family under `{name}` would read as a
+        // sub-resource of one recipe. Same decision, same reason, as the
+        // `canvas` → `boards` split further down. All four READS are
+        // ordinary `auth_bearer` — a run mutates nothing, which is also
+        // what makes a run URL shareable; the four WRITERS
+        // (`materialise`/`trust`/`new`/`delete`) are POST/DELETE on the
+        // loopback-only sub-router below. Literal `/recipe/runs/{id}`
+        // sits beside `/recipe/{slug}`; axum resolves literals over
+        // params regardless of registration order, and
+        // `recipe::routes::RESERVED_SLUGS` refuses a stored recipe named
+        // `runs` or `new` so nothing is silently shadowed.
+        // `crate::recipe::routes::V74_L3A_ROUTES` declares the four
+        // reads and a unit test walks that declaration against THIS file.
+        .route("/recipe", get(crate::recipe::routes::catalog_route))
+        .route(
+            "/recipe/runs/{id}",
+            get(crate::recipe::routes::replay_route),
+        )
+        .route("/recipe/{slug}", get(crate::recipe::routes::show_route))
+        .route("/recipe/{slug}/run", get(crate::recipe::routes::run_route))
+        .route(
+            "/recipe/{slug}/lint",
+            get(crate::recipe::routes::lint_route),
+        )
         // B2 — token-level position resolve (see the module doc above).
         .route("/resolve", get(resolve::resolve_route))
         .route("/usages", get(crate::usages::usages_route))
@@ -1203,6 +1231,24 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // accepts it) — `apply`'s own lint refuses to author that status at
         // all, so the rule holds for a loopback caller too, not just by
         // virtue of this gate.
+        // V74-L3a — kbc-recipe/1's four WRITERS. `materialise` stores a
+        // run snapshot, `trust` records a trust-on-first-use decision,
+        // `new` writes a server-stored recipe and `delete` removes one:
+        // each records a decision this daemon honours later, so all four
+        // are loopback-only (D22's local-canonical ruling, unchanged).
+        .route(
+            "/recipe/{slug}/materialise",
+            post(crate::recipe::routes::materialise_route),
+        )
+        .route(
+            "/recipe/{slug}/trust",
+            post(crate::recipe::routes::trust_route),
+        )
+        .route("/recipe/new", post(crate::recipe::routes::new_route))
+        .route(
+            "/recipe/{slug}",
+            delete(crate::recipe::routes::delete_route),
+        )
         .route("/boards/apply", post(crate::boards::routes::apply_board))
         .route(
             "/boards/{slug}/accept",

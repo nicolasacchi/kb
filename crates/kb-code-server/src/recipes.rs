@@ -9,6 +9,45 @@
 //! Wire:
 //! - `GET /api/recipes` — pure catalog (no repo touch)
 //! - `GET /api/recipes/{name}?repo=&since=&limit=&scope=` — run one
+//!
+//! **V74-L3a repair round (D11's own list).** Six defects, each of them
+//! a place where this module violated a clause of its OWN design law
+//! above, are fixed here and each has a test named after it:
+//!
+//! 1. *missing blob ≠ zero* — `complexity-climbers` mapped EVERY
+//!    `read_blob` failure (`PathNotFound`, `TooLarge`, any ODB error) to
+//!    `Complexity{0,0}`, so a file added or renamed after `since` topped
+//!    the list with a fabricated delta equal to its whole current size.
+//!    A baseline that could not be read is now `then_state` +
+//!    `score: null`, ranked LAST and never as a climb.
+//! 2. *gate/row parity* — `agent-only-symbols`' presence gate read
+//!    `author_stats` OR `commit_sessions` while its per-symbol test read
+//!    only `commit_sessions`, so a repo with the first and not the second
+//!    returned `items: []` with `inputs_missing: []` — an honest-looking
+//!    empty set over a missing input. The gate now reads the SAME table
+//!    the row test does, and says which one is missing.
+//! 3. *`fail_count` retired* — the only writer of `session_signals`
+//!    hardcodes `fail_count = 0` ("no distinct test-failure field on
+//!    wire"), so `failure-tainted`'s advertised `terms.fail_count` was a
+//!    permanent zero and its `score` a permanently half-empty sum. The
+//!    term is GONE rather than reported as measured-and-zero.
+//! 4. *`limit > 500` → 400* — silently clamping to 500 and returning
+//!    `truncated: true` invites a caller to misread the cap as the
+//!    corpus. Over the cap now refuses with BOTH numbers (kb root
+//!    invariant #35's `?ids=` rule).
+//! 5. *unsupported languages are named* — `is_public_export` understands
+//!    five languages and answered `false` for every other one, so a Go or
+//!    Ruby repo got a confident empty set. The note now names the
+//!    languages and the count it did not examine, and a run with NOTHING
+//!    examinable reports `inputs_missing`.
+//! 6. *note wording* — "working tree HEAD" is not a thing; the
+//!    comparison is against the working tree, which is the caveat a
+//!    reader actually needs.
+//!
+//! The CLI half of the list (`client timeout 600 s`, `error bodies
+//! surfaced`) lives in `kb-code-cli`. `crate::recipe` (kbc-recipe/1)
+//! adopts all six bodies as native adapters; this module stays the home
+//! of the bodies themselves and of the FROZEN `recipes/1` wire.
 
 use crate::behavioral::{
     complexity_for_path, complexity_proxy, dense_ranks_desc, hotspot_score, stored_fail_term,
@@ -263,7 +302,7 @@ pub async fn recipe_run_route(
     // `from_str`'s error already lists the known recipe names.
     let recipe = Recipe::from_str(&name).map_err(ApiError::not_found)?;
     let (repo, repo_id) = find_repo(&state, &params.repo)?;
-    let limit = clamp_limit(params.limit);
+    let limit = parse_limit(params.limit)?;
 
     // Required params
     let since = match recipe {
@@ -308,8 +347,20 @@ pub async fn recipe_run_route(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
 }
 
-fn clamp_limit(limit: Option<usize>) -> usize {
-    limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
+/// V74-L3a repair 4 — over the cap REFUSES with both numbers. The old
+/// `.clamp(1, MAX_LIMIT)` returned 500 rows and `truncated: true` for a
+/// caller who asked for 2000, which reads as "your repo has 500 of
+/// these" rather than "I capped you". kb root invariant #35 (`?ids=`)
+/// states the rule: over-cap is a 400, never a silent truncation.
+pub(crate) fn parse_limit(limit: Option<usize>) -> Result<usize, ApiError> {
+    match limit {
+        None => Ok(DEFAULT_LIMIT),
+        Some(0) => Err(ApiError::bad_request("limit must be at least 1")),
+        Some(n) if n > MAX_LIMIT => Err(ApiError::bad_request(format!(
+            "limit {n} exceeds the per-recipe cap of {MAX_LIMIT}"
+        ))),
+        Some(n) => Ok(n),
+    }
 }
 
 fn parse_scope(
@@ -357,8 +408,11 @@ fn in_scope(path: &str, scope: &Option<(bool, Vec<String>)>) -> bool {
 // Run
 // ---------------------------------------------------------------------------
 
+/// `pub(crate)` for `crate::recipe::builtins::run_native` — kbc-recipe/1
+/// adapts all six bodies rather than reimplementing them in its op set
+/// (see that module's doc for why the bodies stay here).
 #[allow(clippy::too_many_arguments)]
-fn run_recipe(
+pub(crate) fn run_recipe(
     recipe: Recipe,
     store: &Store,
     blame_cache: &BlameCache,
@@ -453,10 +507,21 @@ fn run_new_public_api(
     let mut blame_by_path: HashMap<String, Vec<blame::BlameRegion>> = HashMap::new();
 
     let mut items = Vec::new();
+    // V74-L3a repair 5 — `is_public_export` understands five languages
+    // and answers `false` for every other one, which turned a Go / Ruby /
+    // Java repo into a confident `items: []` with `inputs_missing: []`.
+    // Count what was never EXAMINABLE and say so.
+    let mut examined = 0usize;
+    let mut unexaminable: BTreeMap<String, usize> = BTreeMap::new();
     for (path, lang, sym) in rows {
         if !in_scope(&path, scope) {
             continue;
         }
+        if !EXPORT_RULE_LANGS.contains(&lang.as_str()) {
+            *unexaminable.entry(lang.clone()).or_insert(0) += 1;
+            continue;
+        }
+        examined += 1;
         if !is_public_export(&lang, &path, &sym, repo_root, &mut file_text) {
             continue;
         }
@@ -512,18 +577,44 @@ fn run_new_public_api(
                     .cmp(b["symbol"].as_str().unwrap_or(""))
             })
     });
+    let mut note = format!(
+        "Public/exported definitions first blamed after since_unix={since_unix}. This recipe \
+         understands visibility in {} only. Attention only — not a stability verdict.",
+        EXPORT_RULE_LANGS.join(", ")
+    );
+    let mut inputs_missing = Vec::new();
+    if !unexaminable.is_empty() {
+        let skipped: usize = unexaminable.values().sum();
+        let langs = unexaminable
+            .iter()
+            .map(|(l, n)| format!("{l}={n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        note.push_str(&format!(
+            " {skipped} symbol(s) were in languages it has no visibility rule for ({langs}) and \
+             were NOT examined."
+        ));
+        if examined == 0 {
+            // Nothing here could be answered at all: that is a missing
+            // input, not an empty result set.
+            inputs_missing.push("public-export-rules".to_string());
+        }
+    }
     Ok(finish(
         Recipe::NewPublicApi,
         repo_name,
         items,
-        Vec::new(),
-        Some(format!(
-            "Public/exported definitions first blamed after since_unix={since_unix}. \
-             Attention only — not a stability verdict."
-        )),
+        inputs_missing,
+        Some(note),
         limit,
     ))
 }
+
+/// The languages `is_public_export` has a visibility rule for. Declared
+/// beside the rule so the two cannot drift, and named in every
+/// `new-public-api` note (V74-L3a repair 5).
+pub(crate) const EXPORT_RULE_LANGS: &[&str] =
+    &["rust", "typescript", "tsx", "javascript", "python"];
 
 fn is_public_export(
     lang: &str,
@@ -737,18 +828,38 @@ fn run_agent_only(
     limit: usize,
     scope: &Option<(bool, Vec<String>)>,
 ) -> Result<RecipeRunOut, ApiError> {
-    let has_attr = store.has_session_authors(repo_id)? || store.has_commit_session_ids(repo_id)?;
-    if !has_attr {
+    // V74-L3a repair 2 — the GATE must read the same table the per-symbol
+    // ROW TEST reads. It used to pass on `author_stats` alone while every
+    // row was decided by `get_commit_session`, so a repo with dual-author
+    // rows and no `Kb-Session:` trailers returned `items: []` with
+    // `inputs_missing: []`: an honest-looking empty set over a missing
+    // input, from inside a module whose own design law forbids exactly
+    // that.
+    let has_join = store.has_commit_session_ids(repo_id)?;
+    if !has_join {
+        let has_authors = store.has_session_authors(repo_id)?;
+        let (missing, why): (&str, String) = if has_authors {
+            (
+                "commit_sessions",
+                "Dual-author `session:` rows exist, but there are no commit→session joins — \
+                 and the per-symbol test reads commit_sessions. Missing input, not an empty \
+                 agent-only set: land `Kb-Session:` trailers (or run the join backfill) first."
+                    .into(),
+            )
+        } else {
+            (
+                "agent_attribution",
+                "No dual-author session rows and no commit→session joins for this repo. \
+                 Missing input — not an empty agent-only set."
+                    .into(),
+            )
+        };
         return Ok(finish(
             Recipe::AgentOnlySymbols,
             repo_name,
             Vec::new(),
-            vec!["agent_attribution".into()],
-            Some(
-                "No dual-author session rows or commit→session joins for this repo. \
-                 Missing input — not an empty agent-only set."
-                    .into(),
-            ),
+            vec![missing.into()],
+            Some(why),
             limit,
         ));
     }
@@ -756,6 +867,11 @@ fn run_agent_only(
     let git = GitRepo::open(repo_root).map_err(ApiError::from)?;
     let symbols = store.symbols_for_repo(repo_id)?;
     let mut blame_by_path: HashMap<String, Vec<blame::BlameRegion>> = HashMap::new();
+    // One sqlite round trip per DISTINCT sha, not per covering region per
+    // symbol. The same handful of shas recurs across thousands of symbols
+    // and each lookup takes the store's single connection mutex — the
+    // 2026-08-31 starvation incident's pressure shape, in a loop.
+    let mut session_by_sha: HashMap<String, bool> = HashMap::new();
     let mut items = Vec::new();
 
     for (path, sym) in symbols {
@@ -796,13 +912,20 @@ fn run_agent_only(
                 break;
             }
             shas.insert(r.sha.as_str());
-            let agent = store
-                .get_commit_session(repo_id, &r.sha)
-                .ok()
-                .flatten()
-                .and_then(|row| row.session_id)
-                .filter(|s| !s.is_empty())
-                .is_some();
+            let agent = match session_by_sha.get(&r.sha) {
+                Some(v) => *v,
+                None => {
+                    let v = store
+                        .get_commit_session(repo_id, &r.sha)
+                        .ok()
+                        .flatten()
+                        .and_then(|row| row.session_id)
+                        .filter(|s| !s.is_empty())
+                        .is_some();
+                    session_by_sha.insert(r.sha.clone(), v);
+                    v
+                }
+            };
             if !agent {
                 all_agent = false;
                 break;
@@ -862,6 +985,12 @@ fn run_complexity_climbers(
 
     let files = store.list_files(repo_id)?;
     let mut items = Vec::new();
+    // V74-L3a repair 1 — a baseline this recipe could not READ is not a
+    // baseline of zero. These rows are kept (never dropped: the file DID
+    // change, and hiding it would be its own dishonesty) but they carry
+    // `score: null` and a `then_state`, and they sort after every real
+    // climb rather than above it.
+    let mut unknown_baseline: Vec<(String, serde_json::Value)> = Vec::new();
     for f in files {
         if !in_scope(&f.path, scope) {
             continue;
@@ -873,13 +1002,29 @@ fn run_complexity_climbers(
         let then_c = match git.read_blob(&since_rev, &f.path, DEFAULT_BLOB_SIZE_CAP) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                complexity_proxy(&text)
+                Some(complexity_proxy(&text))
             }
-            Err(_) => Complexity {
-                loc: 0,
-                indent_sum: 0,
-            },
+            Err(err) => {
+                let now_c = complexity_for_path(repo_root, &f.path);
+                unknown_baseline.push((
+                    f.path.clone(),
+                    serde_json::json!({
+                        "path": f.path,
+                        "score": serde_json::Value::Null,
+                        "terms": {
+                            "then_state": baseline_state(&err),
+                            "loc_then": serde_json::Value::Null,
+                            "indent_then": serde_json::Value::Null,
+                            "loc_now": now_c.loc,
+                            "indent_now": now_c.indent_sum,
+                            "delta": serde_json::Value::Null,
+                        },
+                    }),
+                ));
+                None
+            }
         };
+        let Some(then_c) = then_c else { continue };
         let now_c = complexity_for_path(repo_root, &f.path);
         let delta = now_c.total().saturating_sub(then_c.total()) as i64;
         if delta <= 0 {
@@ -892,6 +1037,7 @@ fn run_complexity_climbers(
                 "path": f.path,
                 "score": delta,
                 "terms": {
+                    "then_state": BASELINE_READ,
                     "loc_then": then_c.loc,
                     "loc_now": now_c.loc,
                     "indent_then": then_c.indent_sum,
@@ -902,18 +1048,47 @@ fn run_complexity_climbers(
         ));
     }
     items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    let items: Vec<_> = items.into_iter().map(|(_, _, v)| v).collect();
+    unknown_baseline.sort_by(|a, b| a.0.cmp(&b.0));
+    let unknown_count = unknown_baseline.len();
+    let items: Vec<_> = items
+        .into_iter()
+        .map(|(_, _, v)| v)
+        .chain(unknown_baseline.into_iter().map(|(_, v)| v))
+        .collect();
+    let mut note = format!(
+        "Complexity proxy = loc + indent_sum (behavioral formula). Compared the blob at \
+         {since_rev} against the WORKING TREE (not another commit). Positive delta only."
+    );
+    if unknown_count > 0 {
+        note.push_str(&format!(
+            " {unknown_count} file(s) had no readable baseline at {since_rev} (added, renamed, \
+             or over the blob cap); they carry `score: null` and a `terms.then_state` and are \
+             listed last — an unreadable baseline is NOT a baseline of zero."
+        ));
+    }
     Ok(finish(
         Recipe::ComplexityClimbers,
         repo_name,
         items,
         Vec::new(),
-        Some(format!(
-            "Complexity proxy = loc + indent_sum (behavioral formula). \
-             Compared blob at {since_rev} vs working tree HEAD. Positive delta only."
-        )),
+        Some(note),
         limit,
     ))
+}
+
+/// The `terms.then_state` vocabulary. Closed, and each value names a
+/// DIFFERENT thing a reader would otherwise have to infer from a zero.
+pub(crate) const BASELINE_READ: &str = "read";
+pub(crate) const BASELINE_ABSENT: &str = "absent";
+pub(crate) const BASELINE_TOO_LARGE: &str = "too-large";
+pub(crate) const BASELINE_UNREADABLE: &str = "unreadable";
+
+pub(crate) fn baseline_state(err: &crate::git::GitError) -> &'static str {
+    match err {
+        crate::git::GitError::PathNotFound { .. } => BASELINE_ABSENT,
+        crate::git::GitError::TooLarge { .. } => BASELINE_TOO_LARGE,
+        _ => BASELINE_UNREADABLE,
+    }
 }
 
 // --- unreviewed-hotspots --------------------------------------------------
@@ -1052,12 +1227,23 @@ fn run_failure_tainted(
     }
 
     // Aggregate evidence per path via dual-author session rows.
-    let mut by_path: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
-    // (error_count_sum, fail_count_sum, sessions_with_evidence)
+    //
+    // V74-L3a repair 3 — `terms.fail_count` is RETIRED. The only writer
+    // of `session_signals` passes a literal `0` for it ("no distinct
+    // test-failure field on wire"), so `stored_fail_term` was
+    // permanently `None`, the advertised term was permanently `0`, and
+    // the score was a sum with one addend that could never fire. A term
+    // that is structurally unmeasurable must not be reported as measured
+    // and zero; when the write site starts carrying real failure counts,
+    // it comes back with a test.
+    let mut by_path: BTreeMap<String, (i64, i64)> = BTreeMap::new();
+    // (error_count_sum, sessions_with_evidence)
+    let mut suppressed_fail_terms = 0usize;
     for s in &sigs {
-        let fail_term = stored_fail_term(s.fail_count);
-        let has_evidence = s.error_count > 0 || fail_term.is_some();
-        if !has_evidence {
+        if stored_fail_term(s.fail_count).is_some() {
+            suppressed_fail_terms += 1;
+        }
+        if s.error_count <= 0 {
             continue;
         }
         let paths = store.paths_for_session_author(repo_id, &s.session_id)?;
@@ -1065,26 +1251,23 @@ fn run_failure_tainted(
             if !in_scope(&p, scope) {
                 continue;
             }
-            let e = by_path.entry(p).or_insert((0, 0, 0));
+            let e = by_path.entry(p).or_insert((0, 0));
             e.0 = e.0.saturating_add(s.error_count.max(0));
-            e.1 = e.1.saturating_add(fail_term.unwrap_or(0).max(0));
-            e.2 = e.2.saturating_add(1);
+            e.1 = e.1.saturating_add(1);
         }
     }
 
     let mut items: Vec<(i64, String, serde_json::Value)> = by_path
         .into_iter()
-        .map(|(path, (err, fail, sessions))| {
-            let score = err.saturating_add(fail);
+        .map(|(path, (err, sessions))| {
             (
-                score,
+                err,
                 path.clone(),
                 serde_json::json!({
                     "path": path,
-                    "score": score,
+                    "score": err,
                     "terms": {
                         "error_count": err,
-                        "fail_count": fail,
                         "sessions": sessions,
                     },
                 }),
@@ -1093,16 +1276,23 @@ fn run_failure_tainted(
         .collect();
     items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     let items: Vec<_> = items.into_iter().map(|(_, _, v)| v).collect();
+    let mut note = String::from(
+        "Paths co-touched by sessions carrying TOOL-ERROR evidence (session_signals + \
+         author_stats `session:` rows). Test-failure counts are not captured by any writer, \
+         so no fail term is reported — absence of the term, not a zero. Attention only.",
+    );
+    if suppressed_fail_terms > 0 {
+        note.push_str(&format!(
+            " ({suppressed_fail_terms} session row(s) DO carry a non-zero fail_count; the term \
+             returns with a test once a writer sets it meaningfully.)"
+        ));
+    }
     Ok(finish(
         Recipe::FailureTainted,
         repo_name,
         items,
         Vec::new(),
-        Some(
-            "Paths co-touched by sessions with tool-error / fail evidence \
-             (session_signals + author_stats session: rows). Attention only."
-                .into(),
-        ),
+        Some(note),
         limit,
     ))
 }
