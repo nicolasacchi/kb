@@ -1629,8 +1629,9 @@ discovered.
 
 ### Refs — the grammar
 
-A ref is a `[[…]]` span whose body starts with one of seven closed scheme
-prefixes. **A bare `[[X]]` is a kb wikilink and is never a kbc ref** (kb root
+A ref is a `[[…]]` span whose body starts with one of nine closed scheme
+prefixes (V73-K5 added `ci` and `question` to K1's original seven).
+**A bare `[[X]]` is a kb wikilink and is never a kbc ref** (kb root
 invariant #29 owns that syntax); a `[[…]]` that names a known scheme but does
 not parse is reported as `ref_malformed`, never silently degraded into a
 wikilink.
@@ -1644,6 +1645,8 @@ wikilink.
 | `gh` | `gh:<comment\|review\|issue\|pr>/<id>` | `[[gh:comment/12345]]` |
 | `kb` | `kb:<kb>/<id>` | `[[kb:research/9f8b7182d433]]` |
 | `hunk` | `hunk:<path>@<ps>#<n>` (`ps` may be `3` or `ps3`) | `[[hunk:app/models/order.rb@2#3]]` |
+| `ci` | `ci:<check-name>` | `[[ci:build (ubuntu-latest)]]` |
+| `question` | `question:<n>` (1-based, this document's own `questions[]`) | `[[question:2]]` |
 
 Refs are read from BOTH surfaces through one parser: the prose scan (which
 skips fenced code blocks, inline code spans and the front-matter region) and
@@ -1662,7 +1665,12 @@ computed per request and persisted nowhere:
 | `pinned` | the bytes the author cited are the bytes shown | `exact` when the `@sha` IS the patchset's blob; `likely` when the ref pinned no blob |
 | `carried` | the bytes moved and the ladder re-anchored them, with a caption saying how | `likely` — never `exact` |
 | `orphan` | no honest match; **no position is reported** | none |
-| `inert` | `gh:`/`kb:` — kb-code makes no claim (it never calls GitHub and does not own the kb corpus) | none |
+| `inert` | `gh:`/`kb:`/`ci:` — kb-code makes no LIVE claim (it never calls GitHub, does not own the kb corpus, and reads `ci:` from a snapshot rather than re-fetching Checks) | none |
+
+A `[[question:<n>]]` ref is `pinned`/`exact` when this document has an `n`th
+question and an ordinary `orphan` (naming the count) otherwise — the one
+scheme that resolves against the document's OWN structure rather than the
+repository or the store.
 
 A `code:` ref is carried by the **same** ladder review comments use
 (`annotations::resolve` plus the snippet guard) — not a second matcher. A
@@ -2130,50 +2138,59 @@ A vocabulary-coverage pass (V73-K4) checked every element a typical
 pre-K1 review artifact carries — an operator- or agent-rendered HTML page
 with an embedded machine-readable findings block — against what
 `kbc-review/1` can express today. The grading is at the protocol level:
-does the vocabulary (front-matter keys, the seven ref schemes, findings v2,
-the timeline lanes, the `kbc-claim/1` kinds) have a place for this element
-at all, independent of any one importer's current bugs.
+does the vocabulary (front-matter keys, the ref schemes — nine as of
+V73-K5's `ci`/`question` addition, findings v2, the timeline lanes, the
+`kbc-claim/1` kinds) have a place for this element at all, independent of
+any one importer's current bugs.
 
 | element category | kbc-review/1 carrier | coverage |
 |---|---|---|
-| header identity (repo, PR/change number, title) | `pr_meta` binding + `{{meta}}` | covered-with-degrade — `{{meta}}` surfaces kb-code's own review id, not the external change number |
+| header identity (repo, PR/change number, title) | `pr_meta` binding + `{{meta}}` + `{{pr_number}}` (V73-K5) | covered-with-degrade — `{{meta}}` still surfaces kb-code's own review id; the EXTERNAL PR number now has its own placeholder rather than sharing `{{meta}}`'s |
 | author / timestamp / branch attribution | `pr_meta` snapshot | covered-with-degrade — not folded into the document's own render |
 | top-level verdict + prose | review-level `verdict` + `report_json` | covered-with-degrade — two separate mechanisms, not unified in front matter |
-| numeric risk score | `report_json.risk_score` (pre-K1 lane) | covered-with-degrade — `risk` is deliberately level + why, never a score, by design |
+| numeric risk score | `report_json.risk_score` (pre-K1 lane) + `{{risk_score}}` (V73-K5) | covered-with-degrade — `risk` stays deliberately level + why, by design; the render placeholder now bridges the two lanes rather than the score having no place in a render at all |
 | aggregate finding counts | derivable from findings v2 by `severity` | covered-with-degrade — arithmetic over the list, not a stored or rendered field |
-| CI-check counts / status | — | **gap** — no ref scheme, block, or claim kind names a CI check run |
+| CI-check counts / status | `ci:` block (V73-K5), authored or DERIVED from `pr_meta_json.checks` | covered-with-degrade — arithmetic over `GET .../doc`'s `ci.checks`, not a separately stored count (the aggregate-finding-counts row's same shape) |
 | prose summary | `summary_md` | covered |
 | per-finding severity | `severity` (`blocker`\|`concern`\|`ok`) | covered |
 | per-finding free-text category | `category` (8-value closed set) | covered-with-degrade — a value outside the set folds to `other` with a stated mapping row |
-| per-finding location (path / line(s) / whole-file) | `location{path,kind,lines,removed}` | covered — the same shape `kbc-findings/1` already uses |
-| per-finding id + external deep link | rationale-embedded provenance line only | covered-with-degrade — a fresh slug is always minted (never reused), so a link published elsewhere against the old id will not resolve |
+| per-finding location (path / line(s) / whole-file) | `location{path,kind,lines,removed}`, flat OR nested (V73-K5) | covered — the same shape `kbc-findings/1` already uses, and `import-legacy` now reads both shapes it appears in |
+| per-finding id + external deep link | rationale-embedded provenance line only (`legacy_id: …`, V73-K5) | covered-with-degrade — a fresh slug is always minted (never reused), so a link published elsewhere against the old id will not resolve |
 | per-finding title / rationale / recommendation | `title` / `rationale` / `recommendation` | covered |
-| per-finding cited code excerpt | `[[code:path:lines@sha]]` ref + a live, server-highlighted card | covered as a mechanism — see open work below for why today's importer can still miss it |
+| per-finding cited code excerpt | typed `evidence{lang,source}`, or a live `[[code:path:lines]]` `cites` ref (V73-K5) | covered — a typed excerpt is carried as `evidence`; a flat scraped snippet is never reproduced verbatim, only pointed at live, per D9-a |
 | files-changed / diffstat list | diff v2's own file map (`GET /reviews/{id}/files`) | covered-with-degrade — a separate surface, not joined into the document or its render |
-| CI checks list | — | **gap** — same absence as the aggregate row, at per-check granularity |
-| embedded machine JSON block | `kbc-legacy-import/1`'s intended input | covered-with-degrade — depends on the block carrying a recognized id and shape |
+| CI checks list | `ci:` block (V73-K5) + `[[ci:<check-name>]]` ref | covered — an inert snapshot card, per-check, authored or derived |
+| embedded machine JSON block | `kbc-legacy-import/1`'s intended input, now ALSO `render`'s own output (V73-K5) | covered-with-degrade — depends on a THIRD-PARTY block carrying a recognized id/shape; kb-code's own export always does |
+| question ↔ its answer | `questions[].answers` + `[[question:<n>]]` ref (V73-K5, bonus) | covered — not part of the original legacy-artifact vocabulary (no pre-K1 artifact had this concept), added as the rubric's one GitHub-parity win |
 
-**Open work**, ranked by how much each undermines a faithful migration —
-each is a single-file change:
+**Closed in V73-K5** (this table's degrades above name the residue of each):
 
-- `import-legacy` never reads a finding's embedded code-excerpt field: a
-  migrated finding keeps its title, rationale and recommendation but
-  silently drops any cited snippet, with no note recorded. This is the one
-  place the importer does not hold itself to the crate's own "an absence is
-  stated, never discovered" rule.
-- Its finding-location lookup only reads flat top-level keys; it does not
-  fall back to the same nested `{path, kind, lines}` object shape
-  `DocFinding` and `kbc-findings/1` already use elsewhere in this crate, so
-  a block using that shape has every finding skipped for "no location".
-- Its accepted block-id allowlist does not include `kbc-findings` — the id
-  kb-code's own pre-v7.3 findings-ledger schema (`kbc-findings/1`, the PR
-  Room's `findings import` route) would naturally produce — so an artifact
-  carrying kb-code's own former schema under its own former id is invisible
-  to the importer.
-- No `render --template` output, including the built-in default, embeds a
-  re-importable machine block, so an export cannot currently be fed back
-  through `import-legacy`; the round trip the design intends does not yet
-  close.
-- No ref scheme, front-matter block, or `kbc-claim/1` kind names a CI check
-  run, so CI status cannot be cited inside a review document at all today,
-  hand-authored or migrated.
+- `import-legacy` now reads a finding's cited code excerpt: a typed
+  `evidence{lang,source}` object carries straight through; a flat scraped
+  snippet string is turned into a live `cites` ref (`code:<path>[:<lines>]`,
+  no `@sha` — this verb has no repository to read a blob hash from) rather
+  than reproduced as frozen, possibly-stale text. A finding that carries an
+  excerpt but no usable location still says so in its `skipped[]` reason.
+- Its finding-location lookup now falls back to the nested `{path, kind,
+  lines}` object shape `DocFinding` and `kbc-findings/1` already use
+  elsewhere in this crate; an out-of-vocabulary nested `kind` is substituted
+  with a stated mapping row exactly as an out-of-vocabulary `severity` is.
+- Its accepted block-id allowlist now includes `kbc-findings` — kb-code's
+  own pre-v7.3 findings-ledger schema — mapped through the same tolerant
+  generic path: `severity` is already the kbc vocabulary (zero
+  substitution), and a `slug` is kept traceable as `legacy_id` in the
+  rationale, never adopted.
+- `render` (every template, including the built-in default) now embeds a
+  `<script type="application/json" id="kbc-review">` machine block in
+  exactly the shape `import-legacy` accepts (front matter's `summary_md`/
+  `risk` plus every live, non-superseded finding) — `</` is escaped so a
+  finding's own prose can never truncate the block early. `kb-code review
+  import-legacy` on that export reproduces the document, modulo freshly
+  minted finding slugs (the ONE place the round trip is deliberately
+  lossy, by the same "a legacy id is never adopted" rule).
+- The `ci:` front-matter block (`{name, status: success|failure|pending|
+  skipped, url?, observed_at?}`) and the `[[ci:<check-name>]]` ref scheme
+  now name a CI check run — authored, or DERIVED from the review's own
+  `pr_meta_json.checks` snapshot when the document names none. A `ci:` ref
+  is `is_inert` (a snapshot read, never a fresh GitHub call), the same
+  posture `gh:`/`kb:` already take.

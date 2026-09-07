@@ -29,6 +29,13 @@ use std::collections::{HashMap, HashSet};
 
 pub const SCHEMA: &str = "review-lint/1";
 
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub const SEVERITY_ERROR: &str = "error";
 pub const SEVERITY_WARN: &str = "warn";
 pub const SEVERITY_INFO: &str = "info";
@@ -51,7 +58,15 @@ pub const RULES: &[(&str, &str)] = &[
     ("stale_sha", SEVERITY_INFO),
     ("bare_symbol_mention", SEVERITY_INFO),
     ("question_without_ref", SEVERITY_INFO),
+    ("question_stale", SEVERITY_INFO),
 ];
+
+/// V73-K5 (gap 7) — a `to_agent` question with no `answers` ref is worth a
+/// nudge only once it has had time to be noticed; a question raised an hour
+/// ago is not "stale", it is "new". `structural_rows` degrades this rule to
+/// silence (never a guess) when it is not TOLD how old the document is —
+/// see that function's `composed_at` doc.
+pub const QUESTION_STALE_DAYS: i64 = 14;
 
 pub fn severity_of(rule: &str) -> &'static str {
     RULES
@@ -195,11 +210,20 @@ pub fn size_rows(doc_md: &str, ref_count: usize, finding_count: usize) -> Vec<Li
 
 /// Everything that can be checked WITHOUT the repository: tiers, findings
 /// vocabulary and identity, the prose scan's own observations.
+///
+/// `composed_at` is the STORED revision's own `created_at` (unix seconds)
+/// when this is a lint of a document that already exists, and `None` for a
+/// candidate that has not been composed yet (a `compose --dry-run`
+/// pre-flight, or `kb-code review lint --doc <file>` on a local file). The
+/// `question_stale` rule needs a real age to compare against and degrades
+/// to SILENCE rather than a guess when it has none — a document with no
+/// birthday cannot be "14 days old".
 pub fn structural_rows(
     doc: &ReviewDoc,
     raw: &str,
     tier: Tier,
     findings: Option<&[DocFinding]>,
+    composed_at: Option<i64>,
 ) -> Vec<LintRow> {
     let mut rows = Vec::new();
 
@@ -256,6 +280,7 @@ pub fn structural_rows(
         );
     }
 
+    let stale_after = composed_at.map(|c| c + QUESTION_STALE_DAYS * 86_400);
     for q in &doc.questions {
         if q.r#ref.is_none() {
             rows.push(LintRow::new(
@@ -267,6 +292,21 @@ pub fn structural_rows(
                     truncate(&q.ask)
                 ),
             ));
+        }
+        if q.to == "to_agent" && q.answers.is_none() {
+            if let Some(threshold) = stale_after {
+                if now_unix() >= threshold {
+                    rows.push(LintRow::new(
+                        "question_stale",
+                        format!(
+                            "the to_agent question {:?} has had no `answers` ref for over {} \
+                             days",
+                            truncate(&q.ask),
+                            QUESTION_STALE_DAYS
+                        ),
+                    ));
+                }
+            }
         }
     }
 
@@ -540,7 +580,7 @@ mod tests {
     fn the_fixture_lints_clean_of_errors_at_its_declared_tier() {
         let doc = parse(FIXTURE).expect("parses");
         let findings = doc.findings.clone();
-        let rows = structural_rows(&doc, FIXTURE, Tier::Standard, findings.as_deref());
+        let rows = structural_rows(&doc, FIXTURE, Tier::Standard, findings.as_deref(), None);
         let errors: Vec<&LintRow> = rows
             .iter()
             .filter(|r| r.severity == SEVERITY_ERROR)
@@ -551,7 +591,7 @@ mod tests {
     #[test]
     fn a_bare_wikilink_is_reported_as_information_never_as_an_error() {
         let doc = parse(FIXTURE).expect("parses");
-        let rows = structural_rows(&doc, FIXTURE, Tier::Standard, doc.findings.as_deref());
+        let rows = structural_rows(&doc, FIXTURE, Tier::Standard, doc.findings.as_deref(), None);
         let hit = rows
             .iter()
             .find(|r| r.rule == "bare_wikilink")
@@ -564,7 +604,7 @@ mod tests {
     fn a_malformed_ref_is_a_warning_and_names_its_reason() {
         let raw = "---\nsummary_md: x\nfindings: []\n---\nSee [[code:]] please.\n";
         let doc = parse(raw).expect("parses");
-        let rows = structural_rows(&doc, raw, Tier::Minimal, doc.findings.as_deref());
+        let rows = structural_rows(&doc, raw, Tier::Minimal, doc.findings.as_deref(), None);
         let hit = rows
             .iter()
             .find(|r| r.rule == "ref_malformed")
@@ -599,7 +639,7 @@ mod tests {
                    \x20     lines: [9]\n\
                    ---\n";
         let doc = parse(raw).expect("parses");
-        let rows = structural_rows(&doc, raw, Tier::Minimal, doc.findings.as_deref());
+        let rows = structural_rows(&doc, raw, Tier::Minimal, doc.findings.as_deref(), None);
         assert!(rules(&rows).contains(&"duplicate_fingerprint"), "{rows:#?}");
     }
 
@@ -618,7 +658,7 @@ mod tests {
                    \x20     kind: single\n\
                    ---\n";
         let doc = parse(raw).expect("parses");
-        let rows = structural_rows(&doc, raw, Tier::Minimal, doc.findings.as_deref());
+        let rows = structural_rows(&doc, raw, Tier::Minimal, doc.findings.as_deref(), None);
         assert!(rules(&rows).contains(&"finding_no_location"), "{rows:#?}");
     }
 
@@ -626,7 +666,7 @@ mod tests {
     fn tier_problems_surface_as_errors_naming_the_tier_and_the_field() {
         let raw = "---\nsummary_md: x\nfindings: []\n---\n";
         let doc = parse(raw).expect("parses");
-        let rows = structural_rows(&doc, raw, Tier::Full, doc.findings.as_deref());
+        let rows = structural_rows(&doc, raw, Tier::Full, doc.findings.as_deref(), None);
         let msgs: Vec<&str> = rows
             .iter()
             .filter(|r| r.rule == "tier_unmet")
@@ -640,6 +680,75 @@ mod tests {
         assert!(msgs.iter().any(|m| m.contains("`risk`")), "{msgs:#?}");
         assert!(msgs.iter().any(|m| m.contains("`author`")), "{msgs:#?}");
         assert!(msgs.iter().any(|m| m.contains("`blocks`")), "{msgs:#?}");
+    }
+
+    // --- V73-K5 gap 7: an unanswered to_agent question, over time ----------
+
+    fn doc_with_one_to_agent_question(answers: Option<&str>) -> ReviewDoc {
+        let answers_line = answers
+            .map(|a| format!("\n    answers: {a}"))
+            .unwrap_or_default();
+        let raw = format!(
+            "---\nsummary_md: x\nfindings: []\nquestions:\n  - to: to_agent\n    ask: \
+             is this safe?{answers_line}\n---\n"
+        );
+        parse(&raw).expect("parses")
+    }
+
+    #[test]
+    fn an_unanswered_to_agent_question_is_silent_with_no_known_age() {
+        let doc = doc_with_one_to_agent_question(None);
+        let rows = structural_rows(&doc, "x", Tier::Minimal, doc.findings.as_deref(), None);
+        assert!(
+            !rules(&rows).contains(&"question_stale"),
+            "a candidate document with no `composed_at` has no age to be stale about: {rows:#?}"
+        );
+    }
+
+    #[test]
+    fn an_unanswered_to_agent_question_is_silent_while_fresh() {
+        let doc = doc_with_one_to_agent_question(None);
+        let now = now_unix();
+        let rows = structural_rows(
+            &doc,
+            "x",
+            Tier::Minimal,
+            doc.findings.as_deref(),
+            Some(now - 3600), // an hour old
+        );
+        assert!(!rules(&rows).contains(&"question_stale"), "{rows:#?}");
+    }
+
+    #[test]
+    fn an_unanswered_to_agent_question_warns_info_once_stale() {
+        let doc = doc_with_one_to_agent_question(None);
+        let now = now_unix();
+        let rows = structural_rows(
+            &doc,
+            "x",
+            Tier::Minimal,
+            doc.findings.as_deref(),
+            Some(now - (QUESTION_STALE_DAYS + 1) * 86_400),
+        );
+        let hit = rows
+            .iter()
+            .find(|r| r.rule == "question_stale")
+            .expect("stale after the threshold");
+        assert_eq!(hit.severity, SEVERITY_INFO);
+    }
+
+    #[test]
+    fn an_answered_to_agent_question_never_goes_stale() {
+        let doc = doc_with_one_to_agent_question(Some("finding:f-1"));
+        let now = now_unix();
+        let rows = structural_rows(
+            &doc,
+            "x",
+            Tier::Minimal,
+            doc.findings.as_deref(),
+            Some(now - (QUESTION_STALE_DAYS + 30) * 86_400),
+        );
+        assert!(!rules(&rows).contains(&"question_stale"), "{rows:#?}");
     }
 
     #[test]

@@ -48,6 +48,7 @@ use crate::git::{GitRepo, DEFAULT_BLOB_SIZE_CAP};
 use crate::highlight::Span;
 use crate::ingest::git_blob_hash;
 use crate::review_comments;
+use crate::review_doc;
 use crate::review_doc::refs::Ref;
 use crate::store::{ReviewPatchsetRow, Store};
 use serde::Serialize;
@@ -197,6 +198,16 @@ pub struct CardCtx<'a> {
     /// a tracked file. `None` (the pre-K3 shape) simply means no `~review/`
     /// path can resolve, and such a ref is an ordinary orphan.
     pub pseudo: Option<&'a crate::review_pseudo::PseudoSet>,
+    /// V73-K5 -- the CI snapshot a `[[ci:<name>]]` ref resolves against:
+    /// the document's own AUTHORED `ci:` block when non-empty, else the
+    /// DERIVED one (`routes::derive_ci`). Empty is a legitimate value (no
+    /// known checks), not an unset one.
+    pub ci_checks: &'a [review_doc::CiCheck],
+    /// V73-K5 -- how many `questions[]` entries THIS document's own front
+    /// matter declares, so a `[[question:<n>]]` ref can say whether `n` is
+    /// in range without this module reaching back into the whole
+    /// `ReviewDoc`.
+    pub question_count: usize,
 }
 
 /// Resolve every ref into a card, in the order given. One blob read per
@@ -232,6 +243,8 @@ fn resolve_one(
         ),
         Ref::Finding { slug, .. } => resolve_finding(store, ctx, r, slug),
         Ref::Hunk { path, ps, index, .. } => resolve_hunk(ctx, r, path, *ps, *index),
+        Ref::Ci { name, .. } => resolve_ci(ctx, r, name),
+        Ref::Question { index, .. } => resolve_question(ctx, r, *index),
         Ref::Ent { fqn, .. } => resolve_ent(store, ctx, r, fqn, cache, oid_cache),
         Ref::Sym {
             container, name, ..
@@ -855,6 +868,73 @@ fn resolve_hunk(ctx: &CardCtx<'_>, r: &Ref, path: &str, ps: i64, index: u32) -> 
     card
 }
 
+// --- ci / question (V73-K5) -------------------------------------------------
+
+/// A `[[ci:<name>]]` card is always `inert` — the daemon never re-calls
+/// GitHub's Checks API to resolve one, it reads the SNAPSHOT the caller
+/// already resolved (`CardCtx::ci_checks`, authored-or-derived). An
+/// unknown name is not an error at parse time (the grammar cannot know
+/// what checks exist) and is not an orphan either (an inert ref makes no
+/// claim to verify) — it is an honest "not in this snapshot" caption, the
+/// same "surfaced, never a guess" posture `gh:`/`kb:` already take.
+fn resolve_ci(ctx: &CardCtx<'_>, r: &Ref, name: &str) -> Card {
+    match ctx.ci_checks.iter().find(|c| c.name == name) {
+        Some(c) => Card::base(
+            r,
+            STATE_INERT,
+            None,
+            format!(
+                "CI check {name:?} — status: {}{}",
+                c.status,
+                c.observed_at
+                    .map(|t| format!(" (observed at {t})"))
+                    .unwrap_or_default()
+            ),
+        ),
+        None => Card::base(
+            r,
+            STATE_INERT,
+            None,
+            format!(
+                "no CI check named {name:?} in this review's snapshot ({} known: {})",
+                ctx.ci_checks.len(),
+                ctx.ci_checks
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ),
+    }
+}
+
+/// A `[[question:<n>]]` card. Unlike `ci:`, this addresses a STRUCTURAL
+/// fact about the document being read (does it have an `n`th question at
+/// all), so an out-of-range `n` IS an honest orphan rather than an inert
+/// "not found" — the same distinction `hunk:` draws between "no such
+/// patchset" (this review) and "not verified against the diff" (this
+/// milestone's known limit).
+fn resolve_question(ctx: &CardCtx<'_>, r: &Ref, index: u32) -> Card {
+    if index == 0 || index as usize > ctx.question_count {
+        return Card::orphan(
+            r,
+            format!(
+                "this document has {} question(s); there is no question {index}",
+                ctx.question_count
+            ),
+        );
+    }
+    Card::base(
+        r,
+        STATE_PINNED,
+        Some("exact"),
+        format!(
+            "question {index} of {} in this document",
+            ctx.question_count
+        ),
+    )
+}
+
 fn sorted_list(set: &HashSet<i64>) -> String {
     let mut v: Vec<i64> = set.iter().copied().collect();
     v.sort_unstable();
@@ -1042,5 +1122,98 @@ mod tests {
                 class: HighlightClass::String
             }]
         );
+    }
+
+    // --- V73-K5: ci / question -------------------------------------------
+
+    fn test_ps() -> ReviewPatchsetRow {
+        ReviewPatchsetRow {
+            id: 1,
+            review_id: 1,
+            ps_number: 1,
+            tip_sha: "abc123".to_string(),
+            base_sha: "def456".to_string(),
+            captured_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_ci_ref_is_always_inert_and_names_the_check_or_says_unknown() {
+        let ps = test_ps();
+        let known_ps = HashSet::new();
+        let changed_paths = HashSet::new();
+        let checks = vec![review_doc::CiCheck {
+            name: "build".to_string(),
+            status: "success".to_string(),
+            url: None,
+            observed_at: Some(1_700_000_000),
+        }];
+        let ctx = CardCtx {
+            repo_root: Path::new("."),
+            repo_id: 1,
+            review_id: 1,
+            target_ps: &ps,
+            known_ps: &known_ps,
+            changed_paths: &changed_paths,
+            pseudo: None,
+            ci_checks: &checks,
+            question_count: 0,
+        };
+
+        let known = Ref::Ci {
+            raw: "ci:build".to_string(),
+            name: "build".to_string(),
+        };
+        let card = resolve_ci(&ctx, &known, "build");
+        assert_eq!(card.state, STATE_INERT);
+        assert_eq!(card.trust, None);
+        assert!(card.caption.contains("success"), "{}", card.caption);
+
+        let unknown = Ref::Ci {
+            raw: "ci:lint".to_string(),
+            name: "lint".to_string(),
+        };
+        let card = resolve_ci(&ctx, &unknown, "lint");
+        assert_eq!(card.state, STATE_INERT);
+        assert!(
+            card.caption.contains("no CI check named"),
+            "{}",
+            card.caption
+        );
+    }
+
+    #[test]
+    fn a_question_ref_is_pinned_in_range_and_an_orphan_out_of_it() {
+        let ps = test_ps();
+        let known_ps = HashSet::new();
+        let changed_paths = HashSet::new();
+        let checks: Vec<review_doc::CiCheck> = Vec::new();
+        let ctx = CardCtx {
+            repo_root: Path::new("."),
+            repo_id: 1,
+            review_id: 1,
+            target_ps: &ps,
+            known_ps: &known_ps,
+            changed_paths: &changed_paths,
+            pseudo: None,
+            ci_checks: &checks,
+            question_count: 2,
+        };
+
+        let in_range = Ref::Question {
+            raw: "question:2".to_string(),
+            index: 2,
+        };
+        let card = resolve_question(&ctx, &in_range, 2);
+        assert_eq!(card.state, STATE_PINNED);
+        assert_eq!(card.trust, Some("exact"));
+
+        let too_big = Ref::Question {
+            raw: "question:5".to_string(),
+            index: 5,
+        };
+        let card = resolve_question(&ctx, &too_big, 5);
+        assert_eq!(card.state, STATE_ORPHAN);
+        assert!(card.caption.contains("has 2 question"), "{}", card.caption);
     }
 }

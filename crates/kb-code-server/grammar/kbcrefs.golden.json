@@ -160,6 +160,33 @@
         "index": 0
       }
     },
+    {
+      "body": "ci:build",
+      "class": "ref",
+      "parsed": {
+        "scheme": "ci",
+        "raw": "ci:build",
+        "name": "build"
+      }
+    },
+    {
+      "body": "ci:test (3.11, ubuntu-latest)",
+      "class": "ref",
+      "parsed": {
+        "scheme": "ci",
+        "raw": "ci:test (3.11, ubuntu-latest)",
+        "name": "test (3.11, ubuntu-latest)"
+      }
+    },
+    {
+      "body": "question:2",
+      "class": "ref",
+      "parsed": {
+        "scheme": "question",
+        "raw": "question:2",
+        "index": 2
+      }
+    },
     { "body": "Order", "class": "wikilink" },
     { "body": "Order|the order model", "class": "wikilink" },
     { "body": "docs/design", "class": "wikilink" },
@@ -177,6 +204,9 @@
     { "body": "kb:solo", "class": "malformed" },
     { "body": "hunk:app/x.rb@2", "class": "malformed" },
     { "body": "hunk:app/x.rb@two#1", "class": "malformed" },
-    { "body": "hunk:app/x.rb@0#1", "class": "malformed" }
+    { "body": "hunk:app/x.rb@0#1", "class": "malformed" },
+    { "body": "ci:", "class": "malformed" },
+    { "body": "question:0", "class": "malformed" },
+    { "body": "question:two", "class": "malformed" }
   ]
 }
