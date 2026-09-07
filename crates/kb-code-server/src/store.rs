@@ -171,6 +171,14 @@ pub enum StoreError {
     SchemaEpoch(String),
     #[error("kb-code store io error: {0}")]
     Io(#[from] std::io::Error),
+    /// V75-M1 — the pre-migration snapshot the Workspace-re-key epoch
+    /// crossing requires could not be written, and no override was set.
+    /// Boot-only, like [`StoreError::SchemaEpoch`], and for the same
+    /// reason: an epoch is a one-way door and its only remedy is a
+    /// restore, so migrating without a snapshot is the outage, not the
+    /// refusal.
+    #[error("{0}")]
+    BackupRequired(String),
     #[error("kb-code store encoding error: {0}")]
     Encoding(#[from] serde_json::Error),
     /// Phase E3 — a `reading_sets` `(repo_id, name)` UNIQUE-constraint
@@ -309,6 +317,17 @@ impl Store {
         kb_core::sibling::refuse_if_volume_ahead(&conn, path, schema_epoch())
             .map_err(|e| StoreError::SchemaEpoch(e.to_string()))?;
 
+        // V75-M1 — the pre-migration backup gate. Ordered deliberately:
+        // AFTER the epoch guard (a volume this binary must refuse is never
+        // snapshotted) and BEFORE the checksum repair below, which is
+        // itself a WRITE — a snapshot taken after it would not be the
+        // pre-migration state an operator would roll back to. Returns
+        // `None` (and touches nothing) on every boot that is not a
+        // crossing, which is all of them once a volume is past
+        // `backup::REKEY_EPOCH`.
+        crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
+            .map_err(|e| StoreError::BackupRequired(e.to_string()))?;
+
         // V72-B1 — one-time, narrowly-targeted repair for the ONE migration
         // checksum a 2026-09 public-repo scrub diverged. MUST run after the
         // schema-epoch guard above (a stale checksum is never a
@@ -347,6 +366,31 @@ impl Store {
     pub fn hold_lock_for_test(&self, dur: std::time::Duration) {
         let _guard = self.lock();
         std::thread::sleep(dur);
+    }
+
+    /// TEST-ONLY (compiled unconditionally so INTEGRATION tests can reach
+    /// it, like [`Store::hold_lock_for_test`]): migrate the volume at
+    /// `path` only as far as `version`, leaving it deliberately BEHIND
+    /// this binary's own epoch.
+    ///
+    /// The only way to build a volume that predates a migration this
+    /// binary embeds, which is what the V75-M1 backup gate and the
+    /// rehearsal verb both need a fixture for. Uses refinery's own
+    /// `Target::Version`, so the result is a genuinely migrated volume
+    /// with a genuine history — never a fabricated `refinery_schema_history`
+    /// row.
+    #[doc(hidden)]
+    pub fn migrate_to_for_test(path: &Path, version: u32) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut conn = Connection::open(path)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(version))
+            .run(&mut conn)
+            .map_err(|e| StoreError::Migration(e.to_string()))?;
+        Ok(())
     }
 
     /// TEST-ONLY: drops the `symbols` table out from under this `Store`, so
@@ -11345,6 +11389,351 @@ pub struct RecipeRunRow {
     pub generation: u64,
     pub result_json: String,
     pub created_unix: i64,
+}
+// ── V75-M1: the Workspace re-key ─────────────────────────────────────
+//
+// D13's two identities (`crate::workspace`), the paged backfill that
+// stamps them onto rows that predate the V0040 triggers
+// (`crate::rekey`), and the ONE read that goes through the new key: the
+// per-workspace derived-row census.
+//
+// A separate `impl Store` block, in the same module so it still reaches
+// the private connection `lock()`, kept apart so a 16k-line file gains a
+// section rather than an interleaving.
+
+/// One `workspaces` row.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorkspaceRow {
+    pub id: String,
+    pub common_dir: String,
+    pub root_commit: Option<String>,
+    pub created_at: i64,
+}
+
+impl Store {
+    /// Idempotent: the id is a pure function of (common dir, root commit),
+    /// so a second boot rewrites the same row and only moves `seen_at`.
+    pub fn upsert_workspace(
+        &self,
+        id: &str,
+        common_dir: &str,
+        root_commit: Option<&str>,
+        now: i64,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO workspaces (id, common_dir, root_commit, created_at, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                 common_dir = excluded.common_dir,
+                 root_commit = COALESCE(excluded.root_commit, workspaces.root_commit),
+                 seen_at = excluded.seen_at",
+            params![id, common_dir, root_commit, now],
+        )?;
+        Ok(())
+    }
+
+    /// Look a workspace up by its canonical common dir — the lookup that
+    /// lets `resolve_and_upsert` SKIP the root-commit history walk on
+    /// every boot after the first.
+    pub fn workspace_by_common_dir(&self, common_dir: &str) -> Result<Option<WorkspaceRow>> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT id, common_dir, root_commit, created_at FROM workspaces
+                 WHERE common_dir = ?1",
+                params![common_dir],
+                |r| {
+                    Ok(WorkspaceRow {
+                        id: r.get(0)?,
+                        common_dir: r.get(1)?,
+                        root_commit: r.get(2)?,
+                        created_at: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn list_workspaces(&self) -> Result<Vec<WorkspaceRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, common_dir, root_commit, created_at FROM workspaces ORDER BY common_dir",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(WorkspaceRow {
+                    id: r.get(0)?,
+                    common_dir: r.get(1)?,
+                    root_commit: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Replace one workspace's worktree rows wholesale, in ONE transaction.
+    ///
+    /// Wholesale because `git worktree list` IS the answer: a worktree the
+    /// enumeration no longer reports has been removed, and keeping a stale
+    /// row would make `mounted`/`prunable` lie. The `(workspace_id, id)`
+    /// key is what makes a MOVED worktree keep its identity across this —
+    /// the path changes, the row does not become a second one.
+    pub fn replace_worktrees(
+        &self,
+        workspace_id: &str,
+        rows: &[crate::workspace::WorktreeRow],
+        now: i64,
+    ) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM worktrees WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO worktrees (
+                     workspace_id, id, path, branch, head_sha, is_main, bare, detached,
+                     locked, lock_reason, prunable, prunable_reason, mounted,
+                     path_resolution, repo_id, seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                         (SELECT id FROM repos WHERE name = ?15), ?16)",
+            )?;
+            for w in rows {
+                stmt.execute(params![
+                    workspace_id,
+                    w.id,
+                    w.path,
+                    w.branch,
+                    w.head_sha,
+                    w.is_main as i64,
+                    w.bare as i64,
+                    w.detached as i64,
+                    w.locked as i64,
+                    w.lock_reason,
+                    w.prunable as i64,
+                    w.prunable_reason,
+                    w.mounted as i64,
+                    w.path_resolution,
+                    w.repo,
+                    now,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn worktrees_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::workspace::WorktreeRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT w.workspace_id, w.id, w.path, w.branch, w.head_sha, w.is_main, w.bare,
+                    w.detached, w.locked, w.lock_reason, w.prunable, w.prunable_reason,
+                    w.mounted, w.path_resolution, r.name
+             FROM worktrees w LEFT JOIN repos r ON r.id = w.repo_id
+             WHERE w.workspace_id = ?1
+             ORDER BY w.is_main DESC, w.id",
+        )?;
+        let rows = stmt
+            .query_map(params![workspace_id], |r| {
+                Ok(crate::workspace::WorktreeRow {
+                    workspace_id: r.get(0)?,
+                    id: r.get(1)?,
+                    path: r.get(2)?,
+                    branch: r.get(3)?,
+                    head_sha: r.get(4)?,
+                    is_main: r.get::<_, i64>(5)? != 0,
+                    bare: r.get::<_, i64>(6)? != 0,
+                    detached: r.get::<_, i64>(7)? != 0,
+                    locked: r.get::<_, i64>(8)? != 0,
+                    lock_reason: r.get(9)?,
+                    prunable: r.get::<_, i64>(10)? != 0,
+                    prunable_reason: r.get(11)?,
+                    mounted: r.get::<_, i64>(12)? != 0,
+                    path_resolution: r.get(13)?,
+                    repo: r.get(14)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Stamp `repos.workspace_id`/`worktree_id`. THE canonical write of
+    /// both identities — every V0040 trigger reads them from here.
+    pub fn set_repo_identity(
+        &self,
+        name: &str,
+        workspace_id: &str,
+        worktree_id: &str,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE repos SET workspace_id = ?2, worktree_id = ?3 WHERE name = ?1",
+            params![name, workspace_id, worktree_id],
+        )?;
+        Ok(())
+    }
+
+    /// `(workspace_id, worktree_id)` for a repo NAME, or `None` when
+    /// resolution has not run yet (`rekey: "pending"`).
+    pub fn repo_identity(&self, name: &str) -> Result<Option<(String, String)>> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT workspace_id, worktree_id FROM repos WHERE name = ?1",
+                params![name],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row.and_then(|(w, t)| match (w, t) {
+            (Some(w), Some(t)) => Some((w, t)),
+            _ => None,
+        }))
+    }
+
+    /// The re-key's RESOLUTION FUNCTION: every registered repo sharing
+    /// `repo_id`'s workspace, in id order.
+    ///
+    /// Falls back to `[repo_id]` when the identity is not resolved yet —
+    /// which is what makes every caller byte-identical while
+    /// `rekey: "pending"`, and byte-identical forever on the one-repo-
+    /// per-workspace deployment that is the only one today. See
+    /// `crate::rekey`'s module doc for why no READ widens onto this yet.
+    pub fn workspace_repo_ids(&self, repo_id: i64) -> Result<Vec<i64>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM repos
+             WHERE workspace_id IS NOT NULL
+               AND workspace_id = (SELECT workspace_id FROM repos WHERE id = ?1)
+             ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map(params![repo_id], |r| r.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(if ids.is_empty() { vec![repo_id] } else { ids })
+    }
+
+    /// Per object-class table, how many rows this workspace owns — the
+    /// read that goes through the key the re-key added. Tables with zero
+    /// rows are omitted (an absent entry is "none", never a failure).
+    pub fn workspace_derived_census(
+        &self,
+        workspace_id: &str,
+    ) -> Result<std::collections::BTreeMap<String, i64>> {
+        let conn = self.lock();
+        let mut out = std::collections::BTreeMap::new();
+        for t in crate::rekey::REPO_KEYED_TABLES
+            .iter()
+            .filter(|t| t.class == crate::rekey::RepoKeyClass::Object)
+        {
+            // Table name comes from a `const` in this binary, never from a
+            // request (`rekey::tests::every_declared_table_name_is_a_plain_
+            // identifier` pins that).
+            let n: i64 = conn.query_row(
+                &format!("SELECT count(*) FROM {} WHERE workspace_id = ?1", t.table),
+                params![workspace_id],
+                |r| r.get(0),
+            )?;
+            if n > 0 {
+                out.insert(t.table.to_string(), n);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One page of the re-key backfill. Returns `(rows keyed, table done)`.
+    ///
+    /// Keyset-paged by `rowid` (V72-B0's `sweep_stale_salt_page` shape),
+    /// one SHORT transaction per page, cursor persisted in the SAME
+    /// transaction as the page it describes. Idempotent: the UPDATE's
+    /// `<key> IS NULL` predicate makes a repeated page a no-op, so a crash
+    /// mid-page costs one replayed page and nothing else.
+    pub fn rekey_backfill_page(
+        &self,
+        t: &crate::rekey::KeyedTable,
+        fingerprint: &str,
+        page: usize,
+    ) -> Result<(u64, bool)> {
+        // `backfill_sql` is `None` for exactly the `meta` class, i.e. a
+        // table with no key column — one guard, not two.
+        let Some(sql) = crate::rekey::backfill_sql(t) else {
+            return Ok((0, true));
+        };
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let progress: Option<(i64, i64, Option<String>)> = tx
+            .query_row(
+                "SELECT cursor, done, fingerprint FROM rekey_progress WHERE table_name = ?1",
+                params![t.table],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let (cursor, already_done) = match progress {
+            // A different fingerprint means the repo set moved: the
+            // recorded cursor is about a different question, so start over.
+            Some((c, d, fp)) if fp.as_deref() == Some(fingerprint) => (c, d != 0),
+            _ => (0, false),
+        };
+        if already_done {
+            return Ok((0, true));
+        }
+        let (in_page, last): (i64, Option<i64>) = tx.query_row(
+            &format!(
+                "SELECT count(*), max(rowid) FROM
+                 (SELECT rowid FROM {} WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)",
+                t.table
+            ),
+            params![cursor, page as i64],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let done = (in_page as usize) < page;
+        let keyed = match last {
+            Some(last) => tx.execute(&sql, params![cursor, last])? as u64,
+            None => 0,
+        };
+        let next_cursor = last.unwrap_or(cursor);
+        let now = chrono::Utc::now().timestamp();
+        tx.execute(
+            "INSERT INTO rekey_progress (table_name, cursor, done, rows_keyed, fingerprint, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(table_name) DO UPDATE SET
+                 cursor = excluded.cursor,
+                 done = excluded.done,
+                 rows_keyed = CASE
+                     WHEN rekey_progress.fingerprint IS excluded.fingerprint
+                     THEN rekey_progress.rows_keyed + excluded.rows_keyed
+                     ELSE excluded.rows_keyed END,
+                 fingerprint = excluded.fingerprint,
+                 updated_at = excluded.updated_at",
+            params![t.table, next_cursor, done as i64, keyed as i64, fingerprint, now],
+        )?;
+        tx.commit()?;
+        Ok((keyed, done))
+    }
+
+    /// `true` when every keyed table has been walked to completion — the
+    /// boot-time seed for the `rekey` honesty flag.
+    pub fn rekey_is_done(&self) -> Result<bool> {
+        let conn = self.lock();
+        let want = crate::rekey::keyed_tables().count() as i64;
+        let got: i64 = conn.query_row(
+            "SELECT count(*) FROM rekey_progress WHERE done = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(got >= want)
+    }
 }
 
 #[cfg(test)]

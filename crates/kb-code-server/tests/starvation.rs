@@ -180,6 +180,13 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         repos: config.repos,
         store,
         repo_ids,
+        // V75-M1 — this fixture never runs the re-key (it is a
+        // starvation probe, not a workspace one), so the flag says
+        // `pending`, which is the honest answer for a state that has
+        // resolved nothing.
+        rekey: Arc::new(std::sync::atomic::AtomicU8::new(
+            kb_code_server::rekey::STATE_PENDING,
+        )),
         bus,
         watch_mode: watch_mode_label,
         watcher: Arc::new(watcher),

@@ -852,6 +852,9 @@ mod tests {
             // router.rs fails HERE, by path.
             .chain(crate::tours::V74_L3B_TOUR_ROUTES.iter())
             .chain(crate::trails::V74_L3B_TRAIL_ROUTES.iter())
+            // V75-M1 — the Workspace list and the D14 frame table join the
+            // SAME walk, one milestone later.
+            .chain(crate::workspace::V75_M1_ROUTES.iter())
         {
             let nested = c
                 .path
