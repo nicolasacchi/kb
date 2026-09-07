@@ -1,4 +1,4 @@
-import { memo, type CSSProperties, type ReactNode } from "react";
+import { memo, type CSSProperties, type ReactNode, type JSX } from "react";
 import { Link } from "react-router-dom";
 import type { SearchHit, SearchMode } from "../../api/client";
 import { artifactHref } from "../../lib/artifactHref";
