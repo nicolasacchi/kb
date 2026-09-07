@@ -143,6 +143,13 @@ pub struct KbCodeConfig {
     #[serde(default)]
     pub lanes: LanesSection,
 
+    /// `[branches]` — V75-M3's `branch-facts/1` knobs (today: the D18
+    /// agent-provenance email set). Every field has a default, so an
+    /// existing `kb-code.toml` with no `[branches]` table keeps the
+    /// shipped behaviour. See [`BranchesSection`].
+    #[serde(default)]
+    pub branches: BranchesSection,
+
     /// `[comments]` — V72-J1's `comments/1` annotation keyword grammar
     /// (`crate::comments::keywords`). Empty by default, which resolves to
     /// the shipped eight-keyword set; a non-empty list REPLACES it
@@ -419,6 +426,48 @@ impl SearchSection {
             frecency: self.frecency,
             demote_generated: self.demote_generated,
             lexical_rarity: self.lexical_rarity,
+        }
+    }
+}
+
+/// `[branches]` — V75-M3's `branch-facts/1` knobs. One field today, and
+/// it exists because the D18 agent-provenance ladder's `likely` rung is an
+/// EMAIL match: the addresses an operator's own agent harness commits
+/// under are a deployment fact this binary cannot know.
+///
+/// Empty (the default) resolves to
+/// [`crate::history::facts::DEFAULT_AGENT_EMAILS`] rather than to "no
+/// `likely` rung at all" — a `likely` rung that is dead unless configured
+/// would be a surface that silently does nothing. A non-empty list
+/// REPLACES the default wholesale (the `[comments] keywords` precedent),
+/// so an operator can also narrow it to nothing meaningful on purpose.
+///
+/// Note what is deliberately NOT configurable: the `exact` rung. A trailer
+/// naming the run is evidence regardless of deployment, and letting config
+/// widen `exact` would be the one way to get "a human's commit labelled
+/// agent" back.
+///
+/// ```toml
+/// [branches]
+/// agent_emails = ["noreply@anthropic.com", "bot@example.invalid"]
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BranchesSection {
+    #[serde(default)]
+    pub agent_emails: Vec<String>,
+}
+
+impl BranchesSection {
+    /// The effective agent-email set — the configured list, or the shipped
+    /// default when it is empty.
+    pub fn resolved_agent_emails(&self) -> Vec<String> {
+        if self.agent_emails.is_empty() {
+            crate::history::facts::DEFAULT_AGENT_EMAILS
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            self.agent_emails.clone()
         }
     }
 }

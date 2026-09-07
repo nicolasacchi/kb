@@ -135,6 +135,15 @@ impl From<HistoryError> for ReviewGitError {
             }
             HistoryError::BadRevspec(s) => ReviewGitError::BadRef(s),
             HistoryError::NotFound(s) => ReviewGitError::Unresolved(s),
+            // V75-M3 — this module never opens a scratch ODB (nothing here
+            // runs `merge-tree`), so this arm is unreachable in practice.
+            // It folds into `GitFailed` rather than growing a
+            // `ReviewGitError` variant nothing can produce: the review
+            // error enum's job is to name the failures a REVIEW can have.
+            e @ HistoryError::ScratchUnwritable { .. } => ReviewGitError::GitFailed {
+                status: -1,
+                stderr: e.to_string(),
+            },
         }
     }
 }
@@ -922,6 +931,27 @@ pub async fn create_review(
     State(state): State<SharedState>,
     Json(body): Json<CreateReviewBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let value = create_review_value(&state, body).await?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(value),
+    ))
+}
+
+/// The body of [`create_review`], returning the JSON VALUE rather than a
+/// response.
+///
+/// V75-M3 split this out so `branches::start_branch_review` can compose
+/// review creation (with a CLASSED base) without re-implementing any of
+/// it — the alternative was a second creation path, which is how two
+/// creation paths drift. The handler above is now a three-line wrapper and
+/// the wire shape is byte-identical.
+pub(crate) async fn create_review_value(
+    state: &SharedState,
+    body: CreateReviewBody,
+) -> Result<serde_json::Value, ApiError> {
+    let state = state.clone();
     let (repo, _repo_id) = find_repo(&state, &body.repo)?;
     reject_user_ref(&body.head_ref)?;
     if let Some(b) = body.base_ref.as_deref() {
@@ -979,25 +1009,21 @@ pub async fn create_review(
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
 
-    Ok((
-        StatusCode::CREATED,
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
-            "schema": SCHEMA,
-            "id": review.id,
-            "repo": review.repo,
-            "title": review.title,
-            "base_ref": review.base_ref,
-            "head_ref": review.head_ref,
-            "session_id": review.session_id,
-            "state": review.state,
-            "created_at": review.created_at,
-            "updated_at": review.updated_at,
-            "latest_ps": ps.ps_number,
-            "tip_sha": ps.tip_sha,
-            "base_sha": ps.base_sha,
-        })),
-    ))
+    Ok(serde_json::json!({
+        "schema": SCHEMA,
+        "id": review.id,
+        "repo": review.repo,
+        "title": review.title,
+        "base_ref": review.base_ref,
+        "head_ref": review.head_ref,
+        "session_id": review.session_id,
+        "state": review.state,
+        "created_at": review.created_at,
+        "updated_at": review.updated_at,
+        "latest_ps": ps.ps_number,
+        "tip_sha": ps.tip_sha,
+        "base_sha": ps.base_sha,
+    }))
 }
 
 /// `POST /api/reviews/{id}/snapshot` — explicit capture. Loopback-only.

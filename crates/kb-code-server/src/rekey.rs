@@ -144,6 +144,15 @@ pub const REPO_KEYED_TABLES: &[KeyedTable] = &[
               own history",
     },
     KeyedTable {
+        table: "branch_favourites",
+        class: RepoKeyClass::Object,
+        repo_column: "repo",
+        why: "a starred BRANCH is a ref, and refs live in the common dir every worktree of one \
+              object store shares — two checkouts see the same refs/heads/x, so a star that \
+              followed the checkout would be a wrong answer (contrast `bookmarks`, which \
+              anchors a path on disk)",
+    },
+    KeyedTable {
         table: "claims",
         class: RepoKeyClass::Object,
         repo_column: "repo_id",
@@ -355,6 +364,12 @@ pub const REPO_KEYED_TABLES: &[KeyedTable] = &[
 pub const READS_NOT_WIDENED: &[&str] = &[
     "author_stats",
     "behavioral_meta",
+    // V75-M3 — a starred branch is object-class (a ref is a property of
+    // the shared object store), and its read is not widened for the same
+    // two reasons as every other entry here: `branch_favourites`' PK is
+    // `(repo, ref_name)`, so sharing needs the same table rebuild, and
+    // nothing registers two worktrees of one workspace yet.
+    "branch_favourites",
     "claims",
     "cochange_pairs",
     "comments",

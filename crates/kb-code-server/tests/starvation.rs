@@ -195,6 +195,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         search_factors: config.search.factors(),
         lanes: config.lanes.clone(),
         trails: config.trails.clone(),
+        branches: config.branches.clone(),
         status_index: Arc::new(kb_code_server::git_status::StatusIndex::new()),
         semantic: config.semantic,
         semantic_chunk_store: None,
@@ -223,6 +224,9 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         secret_policy: kb_code_server::security::secrets::SecretPolicy::default(),
         git_fanout: Arc::new(tokio::sync::Semaphore::new(4)),
         scratch_root: std::env::temp_dir().join("kb-code-starvation-scratch"),
+        branch_base_cache: std::sync::Arc::new(parking_lot::Mutex::new(
+            kb_code_server::history::facts::BaseCache::default(),
+        )),
     }))
 }
 
