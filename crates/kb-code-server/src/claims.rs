@@ -614,4 +614,48 @@ mod tests {
         assert!(claims_accept_without(""));
         assert!(!claims_accept_without("repo"));
     }
+
+    /// V73-K5 (gap 7, bonus) — "nothing formally links a question to its
+    /// answer" is closed WITHOUT a new claims column: an `answer`-kind
+    /// claim names the review question it answers via the SAME `evidence[]`
+    /// mechanism every other claim already uses, now that `question:<n>`
+    /// is a real kbc scheme (`review_doc::refs::SCHEMES`). No change to
+    /// `validate` was needed — this test pins that it already Just Works.
+    #[test]
+    fn an_answer_kind_claim_can_cite_the_question_it_answers() {
+        let body = ClaimBody {
+            schema: SCHEMA.to_string(),
+            repo: "acme-app".to_string(),
+            subject_kind: "review".to_string(),
+            subject: "7".to_string(),
+            kind: "answer".to_string(),
+            body_md: "yes, see the migration guard added in f-3".to_string(),
+            confidence: Some(0.9),
+            evidence: vec!["question:2".to_string(), "finding:f-3".to_string()],
+            session_id: None,
+            model: None,
+            blob_sha: None,
+            review_id: Some(7),
+        };
+        assert!(validate(&body).is_ok());
+    }
+
+    #[test]
+    fn a_ci_ref_is_also_valid_claim_evidence() {
+        let body = ClaimBody {
+            schema: SCHEMA.to_string(),
+            repo: "acme-app".to_string(),
+            subject_kind: "review".to_string(),
+            subject: "7".to_string(),
+            kind: "explain".to_string(),
+            body_md: "the flaky check is unrelated to this change".to_string(),
+            confidence: None,
+            evidence: vec!["ci:build (ubuntu-latest)".to_string()],
+            session_id: None,
+            model: None,
+            blob_sha: None,
+            review_id: None,
+        };
+        assert!(validate(&body).is_ok());
+    }
 }

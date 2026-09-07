@@ -15271,6 +15271,27 @@ async fn review_doc_cmd(
         order["source"].as_str().unwrap_or("?"),
         order["caption"].as_str().unwrap_or(""),
     );
+    // V73-K5 — the ci: block, authored or derived; silent when empty (no
+    // known checks is not worth a line every time).
+    if let Some(checks) = body["ci"]["checks"].as_array() {
+        if !checks.is_empty() {
+            let names: Vec<String> = checks
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}={}",
+                        c["name"].as_str().unwrap_or("?"),
+                        c["status"].as_str().unwrap_or("?")
+                    )
+                })
+                .collect();
+            println!(
+                "\nci ({}): {}",
+                body["ci"]["source"].as_str().unwrap_or("?"),
+                names.join(", ")
+            );
+        }
+    }
     if let Some(omitted) = body["omitted"].as_array() {
         if !omitted.is_empty() {
             let names: Vec<String> = omitted
