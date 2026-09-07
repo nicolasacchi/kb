@@ -449,6 +449,7 @@
 use crate::agentview;
 use crate::bookmarks;
 use crate::canvas;
+use crate::claims;
 use crate::doclens;
 use crate::provenance;
 use crate::reading_sets;
@@ -460,6 +461,7 @@ use crate::review_github_threads;
 use crate::review_impact;
 use crate::review_inbox;
 use crate::review_map;
+use crate::review_pseudo;
 use crate::review_sweep;
 use crate::review_timeline;
 use crate::reviews;
@@ -912,6 +914,22 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/reviews/{id}/github-threads",
             get(review_github_threads::github_threads_route),
         )
+        // V73-K3 — review-scoped PSEUDO-FILES (`kbc-pseudo/1`): the PR
+        // body, the kbc-review/1 document, the findings sidecar and the
+        // commit list, each with a real git blob hash so a `code:` ref can
+        // pin to one. Rendered per request from rows that already exist;
+        // nothing is stored (`crate::review_pseudo`'s own doc).
+        .route("/reviews/{id}/pseudo", get(review_pseudo::list_pseudo))
+        .route(
+            "/reviews/{id}/pseudo/{name}",
+            get(review_pseudo::get_pseudo),
+        )
+        // V73-K3 — `kbc-claim/1`, the agent-prose claim register. The READS
+        // are ordinary bearer reads; the WRITE is loopback-only, below.
+        // Every row rides a per-request Ladder and is SURFACED, NEVER
+        // SCORED (`crate::claims`'s own doc, migration V0035's header).
+        .route("/claims", get(claims::list_claims))
+        .route("/claims/{id}", get(claims::get_claim))
         // V3.4-C1 — canvas sets (reads; mutations on loopback-only).
         .route("/canvas", get(canvas::list_canvas))
         .route("/canvas/{id}", get(canvas::get_canvas))
@@ -1118,6 +1136,21 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // doc lists `viewed` among the mutations `remote_mutations` never
         // reaches, and a per-hunk twin of that state must not quietly ride
         // a wider gate than the state it refines.
+        // V73-K3 — the hunk↔turn join. LOOPBACK-ONLY because it reads raw
+        // captured transcript content (`old_string`/`new_string` are file
+        // bytes) — D19's `raw-transcript` sensitivity class, the same gate
+        // `/search/transcripts` and `/session-diff` already ride. It is a
+        // READ on a loopback-only router, which is exactly what those two
+        // are as well.
+        .route(
+            "/reviews/{id}/hunks/{hunk}/turns",
+            get(crate::review_turns::hunk_turns_route),
+        )
+        // V73-K3 — appending a `kbc-claim/1` row. Loopback-only (D22's
+        // local-canonical ruling; root invariant #4 unamended) and audited
+        // by the crate-wide `audit_mutations` layer with no per-route
+        // wiring (invariant 1).
+        .route("/claims", post(claims::create_claim))
         .route("/reviews/{id}/hunk-viewed", put(reviews::put_hunk_viewed))
         .route(
             "/reviews/{id}/hunk-viewed/{hunk_id}",

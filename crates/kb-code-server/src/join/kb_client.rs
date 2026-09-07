@@ -585,6 +585,15 @@ impl KbClient {
     /// disambiguated it to a full hex sha before this is ever called; this
     /// client applies no validation of its own beyond what reqwest's own
     /// URL-encoding does).
+    /// V73-K3 — is the kb sibling configured at all? A read that DEGRADES
+    /// without it (the hunk↔turn join's commit witness) needs to tell
+    /// "kb said nothing" apart from "kb was never asked", and every method
+    /// below already returns `Disabled` for the second case without saying
+    /// so on the wire.
+    pub fn is_enabled(&self) -> bool {
+        self.cfg.enabled
+    }
+
     pub async fn by_commit(&self, sha: &str) -> Result<Vec<CommitMatch>> {
         if !self.cfg.enabled {
             return Err(KbClientError::Disabled);

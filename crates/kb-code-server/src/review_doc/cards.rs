@@ -189,6 +189,14 @@ pub struct CardCtx<'a> {
     /// The paths the target patchset changes — a `hunk:` ref's own
     /// existence check.
     pub changed_paths: &'a HashSet<String>,
+    /// V73-K3 — the review's PSEUDO-FILES (`kbc-pseudo/1`), when the
+    /// caller built them. A `code:` ref whose path is `~review/<name>`
+    /// resolves against these bytes instead of the tree, through the SAME
+    /// ladder and with the same states: a pseudo-file carries a real git
+    /// blob hash, so `@sha` byte-equality means exactly what it means for
+    /// a tracked file. `None` (the pre-K3 shape) simply means no `~review/`
+    /// path can resolve, and such a ref is an ordinary orphan.
+    pub pseudo: Option<&'a crate::review_pseudo::PseudoSet>,
 }
 
 /// Resolve every ref into a card, in the order given. One blob read per
@@ -262,6 +270,32 @@ fn resolve_code(
     cache: &mut HashMap<String, Option<String>>,
     oid_cache: &mut HashMap<String, Option<String>>,
 ) -> Card {
+    // V73-K3 — a `~review/…` path addresses a review PSEUDO-FILE. Same
+    // ladder, different source of bytes: the content is rendered rather
+    // than read out of the tree, and its `blob_sha` is a real git blob
+    // hash of those bytes, so `pinned`/`carried`/`orphan` and
+    // `trust_for`'s byte-equality rule all apply unchanged.
+    if let Some(name) = crate::review_pseudo::name_for_path(path) {
+        return match ctx.pseudo.and_then(|set| set.get(name)) {
+            Some(file) if file.present => {
+                pseudo_code_card(store, r, path, file, line, line_end, sha)
+            }
+            Some(file) => Card::orphan(
+                r,
+                format!(
+                    "{path} is a review pseudo-file with no content: {}",
+                    file.reason.as_deref().unwrap_or("nothing to render")
+                ),
+            ),
+            None => Card::orphan(
+                r,
+                format!(
+                    "{path} names a review pseudo-file, but this read did not build them                      (pseudo-files are per-review; a ref to one only resolves inside its own                      review's document)"
+                ),
+            ),
+        };
+    }
+
     let tip = ctx.target_ps.tip_sha.as_str();
     let Some(content) = read_at_ps(ctx.repo_root, path, tip, cache) else {
         return Card::orphan(
@@ -430,6 +464,68 @@ fn resolve_code(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// A `code:` card over a PSEUDO-FILE's rendered bytes. There is no
+/// carry-forward rung here on purpose: a pseudo-file is regenerated whole
+/// on every read, so "the same line, moved" is not a thing that happened —
+/// either the author pinned the bytes that are still current (`pinned`,
+/// `exact`) or they pinned bytes that no longer exist, and re-anchoring
+/// prose into a regenerated document would be a guess with nothing behind
+/// it (`orphan`). A ref with no `@sha` is `pinned` at `likely`, exactly as
+/// it is for a tracked file: the author claimed nothing about which bytes.
+fn pseudo_code_card(
+    store: &Store,
+    r: &Ref,
+    path: &str,
+    file: &crate::review_pseudo::PseudoFile,
+    line: Option<u32>,
+    line_end: Option<u32>,
+    sha: Option<&str>,
+) -> Card {
+    let content = file.content();
+    let total = content.lines().count().max(1) as u32;
+    let start = line.unwrap_or(1).clamp(1, total);
+    let end = line_end.unwrap_or(start).clamp(start, total);
+    match sha {
+        None => finish_code(
+            store,
+            r,
+            path,
+            content,
+            &file.blob_sha,
+            None,
+            start,
+            end,
+            STATE_PINNED,
+            format!(
+                "{path} is a review pseudo-file rendered from {}; this ref pinned no blob, so                  the lines shown are the CURRENT ones",
+                file.source
+            ),
+        ),
+        Some(sha) if file.blob_sha.starts_with(sha) => finish_code(
+            store,
+            r,
+            path,
+            content,
+            &file.blob_sha,
+            Some(sha.to_string()),
+            start,
+            end,
+            STATE_PINNED,
+            format!(
+                "the bytes this ref cites are still {path}'s own ({})",
+                file.blob_sha
+            ),
+        ),
+        Some(sha) => Card::orphan(
+            r,
+            format!(
+                "this ref cites {sha} of {path}, which now renders as {} — a pseudo-file is                  regenerated whole on every read, so there is no moved line to carry the ref                  forward to",
+                file.blob_sha
+            ),
+        ),
+    }
+}
+
 fn finish_code(
     store: &Store,
     r: &Ref,

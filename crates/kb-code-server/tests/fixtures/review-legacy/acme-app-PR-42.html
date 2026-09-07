@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PR-42 — Order totals in cents</title>
+<meta name="kb-category" content="pr-review">
+<meta name="kb-tags" content="review, acme-app, status:open">
+</head>
+<body>
+<h1>PR-42 — Order totals in cents</h1>
+
+<p>This is the artifact's PROSE. A migration must never read it — the whole
+point of the fixture is that everything below the first heading is decoy.</p>
+
+<section class="finding severity-blocker" id="prose-f-1">
+  <h2>Decoy: unbounded query in <code>OrdersController#index</code></h2>
+  <p>path: app/controllers/orders_controller.rb, line 88.</p>
+  <p>This finding exists ONLY in the prose and must not be migrated.</p>
+</section>
+
+<section class="finding severity-concern" id="prose-f-2">
+  <h2>Decoy: missing spec for the cents conversion</h2>
+  <p>path: spec/models/order_spec.rb</p>
+</section>
+
+<h2>Verdict</h2>
+<p>Decoy verdict prose: approve with nits.</p>
+
+<script type="application/json" id="kb-review-data">
+{
+  "schema": "pr-review/1",
+  "pr": { "number": 42, "repo": "acme/acme-app", "title": "Order totals in cents" },
+  "summary": "Money moves from floats to integer cents across the order model and its two callers.\nThe conversion itself is right; the migration backfill and one serializer are not.",
+  "verdict": "request-changes",
+  "findings": [
+    {
+      "id": "PR42-1",
+      "severity": "blocker",
+      "category": "correctness",
+      "title": "The backfill rounds before it multiplies",
+      "detail": "db/migrate/20260101_add_price_cents.rb multiplies a rounded float, so every price ending in .x5 is off by one cent.",
+      "recommendation": "Multiply first, then round: (price * 100).round.",
+      "path": "db/migrate/20260101_add_price_cents.rb",
+      "line": 14
+    },
+    {
+      "id": "PR42-2",
+      "severity": "critical",
+      "category": "security",
+      "title": "The admin serializer still exposes the float column",
+      "detail": "app/serializers/admin/order_serializer.rb keeps `price`, which is now stale after the backfill.",
+      "file": "app/serializers/admin/order_serializer.rb",
+      "lines": [7, 8, 9]
+    },
+    {
+      "id": "PR42-3",
+      "severity": "nit",
+      "category": "style",
+      "title": "Constant could be frozen",
+      "description": "CENTS_PER_UNIT is a bare integer; freezing is idiomatic here.",
+      "path": "app/models/order.rb",
+      "line": 3
+    },
+    {
+      "id": "PR42-4",
+      "severity": "spicy",
+      "kind": "vibes",
+      "title": "A severity and a category this vocabulary does not have",
+      "detail": "Present so the fixture exercises the stated-substitution path.",
+      "path": "app/models/order.rb"
+    },
+    {
+      "id": "PR42-5",
+      "severity": "concern",
+      "title": "A finding with no location at all",
+      "detail": "Present so the fixture exercises the skip path."
+    }
+  ]
+}
+</script>
+
+<script type="application/json" id="analytics">
+{"summary":"a decoy machine block with an id this importer does not accept"}
+</script>
+</body>
+</html>

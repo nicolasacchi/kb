@@ -887,6 +887,17 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CanvasCmd,
     },
+    /// `kb-code claim …` — `kbc-claim/1` (V73-K3, design D18): the agent
+    /// PROSE register. A claim is an explanation, a rejected alternative, a
+    /// decision, a story, a trail note or an answer, ABOUT a subject
+    /// (`path`/`sym`/`ent`/`commit`/`hunk`/`review`/`branch`). It rides a
+    /// per-request Ladder (`pinned`/`drifted`/`unanchored`) and is
+    /// SURFACED, NEVER SCORED — nothing this daemon ranks can read one.
+    /// `add` is LOOPBACK-ONLY.
+    Claim {
+        #[command(subcommand)]
+        cmd: ClaimCmd,
+    },
     /// `kb-code recipes` — V3.3-Q1 catalog of named deterministic recipes
     /// (`GET /api/recipes`). Daemon-only. Pure enum listing — no repo touch.
     Recipes {
@@ -2555,6 +2566,87 @@ enum BehavioralCmd {
 /// `/api/boards`) and different tables. `canvas boards` lists the second
 /// one; `canvas list` keeps its pre-existing meaning so no script breaks.
 #[derive(Subcommand, Debug)]
+enum ClaimCmd {
+    /// `kb-code claim add --repo R --subject ADDR --subject-kind K --kind K
+    /// --body - [--confidence F] [--evidence REF]... [--session-id S]
+    /// [--model M] [--blob SHA] [--review N] [--json]` — `POST /api/claims`,
+    /// LOOPBACK-ONLY.
+    ///
+    /// `--body -` reads the prose from stdin (the `workspace save
+    /// --desk-json -` convention). `--confidence` is the AUTHOR'S OWN
+    /// declaration, surfaced verbatim and never multiplied into anything.
+    /// `--blob` is the witness: the blob the author was looking at, which
+    /// is what makes the claim `pinned` rather than `unanchored`.
+    Add {
+        #[arg(long)]
+        repo: String,
+        /// The address, in the subject kind's own grammar.
+        #[arg(long)]
+        subject: String,
+        /// path | sym | ent | commit | hunk | review | branch
+        #[arg(long = "subject-kind")]
+        subject_kind: String,
+        /// explain | alternative | decision | story | note | answer
+        #[arg(long)]
+        kind: String,
+        /// The prose, or `-` to read it from stdin.
+        #[arg(long)]
+        body: String,
+        #[arg(long)]
+        confidence: Option<f64>,
+        /// A kbc-review/1 ref backing the claim (repeatable).
+        #[arg(long)]
+        evidence: Vec<String>,
+        #[arg(long = "session-id")]
+        session_id: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long = "blob")]
+        blob_sha: Option<String>,
+        #[arg(long = "review")]
+        review: Option<i64>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code claim list --repo R [--subject ADDR] [--subject-kind K]
+    /// [--path P] [--review N] [--kind K] [--limit N] [--offset N] [--json]`
+    /// — `GET /api/claims`. Every row carries its Ladder state and, when
+    /// drifted, the caption naming both blobs.
+    List {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long = "subject-kind")]
+        subject_kind: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long = "review")]
+        review: Option<i64>,
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        offset: Option<usize>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code claim show ID [--json]` — `GET /api/claims/{id}`.
+    Show {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum CanvasCmd {
     /// List v3.4-C1 canvas SETS (`GET /api/canvas?repo=`). Requires `--repo`.
     List {
@@ -3166,13 +3258,104 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
-    /// `kb-code review timeline ID [--json]` — PRR-R4: `GET
-    /// /api/reviews/{id}/timeline` (milestone plan arbitration #7). Pure
-    /// composition of existing rows, ascending by `at`.
+    /// `kb-code review timeline ID [--kind K,K] [--author A] [--since T]
+    /// [--until T] [--limit N] [--offset N] [--github] [--hunk ID] [--json]`
+    /// — `GET /api/reviews/{id}/timeline` (`review-timeline/2`, V73-K3;
+    /// PRR-R4 originally). ONE ordered stream of typed events: the PR body,
+    /// every comment class, compose revisions, the agent report, claims,
+    /// GitHub comments, and — with `--hunk`, over loopback — the hunk↔turn
+    /// join. Pure composition; nothing is stored.
     Timeline {
         id: i64,
+        /// Comma-separated event kinds. An unknown name is refused NAMING
+        /// the vocabulary, never silently empty.
+        #[arg(long)]
+        kind: Option<String>,
+        /// `human` | `agent` | `system`, or a literal author name.
+        #[arg(long)]
+        author: Option<String>,
+        #[arg(long)]
+        since: Option<i64>,
+        #[arg(long)]
+        until: Option<i64>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        offset: Option<usize>,
+        /// Force the LIVE GitHub lane on (default) or off. It is a network
+        /// call the other lanes are not.
+        #[arg(long)]
+        github: Option<bool>,
+        /// A `kbc-hunkid/1` address — adds the loopback-only `turn` lane.
+        #[arg(long)]
+        hunk: Option<String>,
+        #[arg(long)]
+        ps: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code review pseudo ID [NAME] [--ps N] [--json]` — `GET
+    /// /api/reviews/{id}/pseudo[/{name}]` (`kbc-pseudo/1`, V73-K3). The
+    /// review's four addressable pseudo-files: `pr-body.md`, `review.md`,
+    /// `findings.json`, `commits.md`. With no NAME, lists all four with
+    /// their content hashes; with a NAME, prints its bytes.
+    Pseudo {
+        id: i64,
+        name: Option<String>,
+        #[arg(long)]
+        ps: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code review turns ID --hunk HUNKID [--ps N] [--json]` — `GET
+    /// /api/reviews/{id}/hunks/{hunk}/turns` (V73-K3, LOOPBACK-ONLY). Which
+    /// captured session turns produced a diff hunk, in two tiers: `exact`
+    /// (byte-equal old→new on the same path in a session joined to the
+    /// commit that carries the hunk) and `likely` (content only). Anything
+    /// else is not claimed — an empty list with the reason.
+    Turns {
+        id: i64,
+        #[arg(long)]
+        hunk: String,
+        #[arg(long)]
+        ps: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code review import-legacy ARTIFACT.html [--strict] [--tier T]
+    /// [--out-doc F] [--out-findings F] [--json]` — `kbc-legacy-import/1`
+    /// (V73-K3, design D9-a). Reads ONLY the embedded machine JSON block of
+    /// a legacy review HTML artifact and maps it onto a kbc-review/1
+    /// document plus a findings v2 sidecar. The artifact's PROSE is never
+    /// scraped, and this verb never composes: it prints the exact
+    /// `kb-code review compose` line for the operator to run.
+    ///
+    /// LOCAL — no daemon, no network. Exits 3 when the artifact carries no
+    /// machine block (the `EXIT_CONFLICT` slot: the request is well-formed
+    /// and the state refuses it, same as `review lint`).
+    ImportLegacy {
+        artifact: PathBuf,
+        /// Refuse rather than substitute when a value is outside a closed
+        /// kbc vocabulary.
+        #[arg(long)]
+        strict: bool,
+        #[arg(long)]
+        tier: Option<String>,
+        /// Write the produced document here instead of printing it.
+        #[arg(long = "out-doc")]
+        out_doc: Option<PathBuf>,
+        /// Write the produced findings sidecar here.
+        #[arg(long = "out-findings")]
+        out_findings: Option<PathBuf>,
+        /// The review id to name in the printed `compose` line.
+        #[arg(long = "review")]
+        review: Option<i64>,
         #[arg(long)]
         json: bool,
     },
@@ -4826,8 +5009,71 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
-            ReviewCmd::Timeline { id, daemon, json } => {
-                review_timeline_cmd(&daemon, id, json).await
+            ReviewCmd::Timeline {
+                id,
+                kind,
+                author,
+                since,
+                until,
+                limit,
+                offset,
+                github,
+                hunk,
+                ps,
+                daemon,
+                json,
+            } => {
+                review_timeline_cmd(
+                    &daemon,
+                    id,
+                    &TimelineOpts {
+                        kind,
+                        author,
+                        since,
+                        until,
+                        limit,
+                        offset,
+                        github,
+                        hunk,
+                        ps,
+                    },
+                    json,
+                )
+                .await
+            }
+            ReviewCmd::Pseudo {
+                id,
+                name,
+                ps,
+                daemon,
+                json,
+            } => review_pseudo_cmd(&daemon, id, name.as_deref(), ps.as_deref(), json).await,
+            ReviewCmd::Turns {
+                id,
+                hunk,
+                ps,
+                daemon,
+                json,
+            } => review_turns_cmd(&daemon, id, &hunk, ps.as_deref(), json).await,
+            ReviewCmd::ImportLegacy {
+                artifact,
+                strict,
+                tier,
+                out_doc,
+                out_findings,
+                review,
+                json,
+            } => {
+                review_import_legacy_cmd(
+                    &artifact,
+                    strict,
+                    tier.as_deref(),
+                    out_doc.as_deref(),
+                    out_findings.as_deref(),
+                    review,
+                    json,
+                )
+                .await
             }
             ReviewCmd::Sweep {
                 repo,
@@ -5225,6 +5471,71 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .await
         }
+        Cmd::Claim { cmd } => match cmd {
+            ClaimCmd::Add {
+                repo,
+                subject,
+                subject_kind,
+                kind,
+                body,
+                confidence,
+                evidence,
+                session_id,
+                model,
+                blob_sha,
+                review,
+                daemon,
+                json,
+            } => {
+                claim_add_cmd(
+                    &daemon,
+                    ClaimAddArgs {
+                        repo,
+                        subject,
+                        subject_kind,
+                        kind,
+                        body,
+                        confidence,
+                        evidence,
+                        session_id,
+                        model,
+                        blob_sha,
+                        review,
+                    },
+                    json,
+                )
+                .await
+            }
+            ClaimCmd::List {
+                repo,
+                subject,
+                subject_kind,
+                path,
+                review,
+                kind,
+                limit,
+                offset,
+                daemon,
+                json,
+            } => {
+                claim_list_cmd(
+                    &daemon,
+                    &ClaimListArgs {
+                        repo,
+                        subject,
+                        subject_kind,
+                        path,
+                        review,
+                        kind,
+                        limit,
+                        offset,
+                    },
+                    json,
+                )
+                .await
+            }
+            ClaimCmd::Show { id, daemon, json } => claim_show_cmd(&daemon, &id, json).await,
+        },
         Cmd::Lanes { cmd } => match cmd {
             LanesCmd::List { repo, daemon, json } => {
                 lanes_list_cmd(&daemon, repo.as_deref(), json).await
@@ -13468,29 +13779,499 @@ async fn review_inbox_cmd(
     Ok(())
 }
 
-/// `kb-code review timeline ID [--json]` — `GET /api/reviews/{id}/timeline`
-/// (milestone plan arbitration #7).
-async fn review_timeline_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
+/// The `review timeline` narrowing options, gathered so the verb, the
+/// request builder and the route-contract walk all express them once.
+#[derive(Debug, Clone, Default)]
+struct TimelineOpts {
+    kind: Option<String>,
+    author: Option<String>,
+    since: Option<i64>,
+    until: Option<i64>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    github: Option<bool>,
+    hunk: Option<String>,
+    ps: Option<String>,
+}
+
+/// The query `review timeline` sends — built here (not inline in the verb)
+/// so `cli_requests_send_every_param_their_route_requires` can walk it
+/// against `review_timeline::TIMELINE_ROUTE` without a second spelling.
+fn review_timeline_request(opts: &TimelineOpts) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q: Vec<(&'static str, String)> = Vec::new();
+    if let Some(v) = &opts.kind {
+        q.push(("kind", v.clone()));
+    }
+    if let Some(v) = &opts.author {
+        q.push(("author", v.clone()));
+    }
+    if let Some(v) = opts.since {
+        q.push(("since", v.to_string()));
+    }
+    if let Some(v) = opts.until {
+        q.push(("until", v.to_string()));
+    }
+    if let Some(v) = opts.limit {
+        q.push(("limit", v.to_string()));
+    }
+    if let Some(v) = opts.offset {
+        q.push(("offset", v.to_string()));
+    }
+    if let Some(v) = opts.github {
+        q.push(("github", v.to_string()));
+    }
+    if let Some(v) = &opts.hunk {
+        q.push(("hunk", v.clone()));
+    }
+    if let Some(v) = &opts.ps {
+        q.push(("ps", v.clone()));
+    }
+    (kb_code_server::review_timeline::TIMELINE_ROUTE.path, q)
+}
+
+/// `kb-code review timeline ID […]` — `GET /api/reviews/{id}/timeline`
+/// (`review-timeline/2`, V73-K3).
+async fn review_timeline_cmd(daemon: &str, id: i64, opts: &TimelineOpts, json: bool) -> Result<()> {
     let client = http_client()?;
-    let body = get_json(&client, daemon, &format!("/api/reviews/{id}/timeline"), &[]).await?;
+    let (path, query) = review_timeline_request(opts);
+    let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let body = get_json(&client, daemon, &fill_review_id(path, id), &query).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
         return Ok(());
     }
     let events = body["events"].as_array().cloned().unwrap_or_default();
+    let total = body["total"].as_i64().unwrap_or(events.len() as i64);
+    // Every lane that is NOT ok says so, ABOVE the stream — a lane that
+    // could not run must never read as a lane with nothing to say.
+    for lane in body["sources"].as_array().into_iter().flatten() {
+        let state = lane["state"].as_str().unwrap_or("?");
+        if state == "ok" && lane["reason"].is_null() {
+            continue;
+        }
+        println!(
+            "! {:<12} {:<9} {}",
+            lane["lane"].as_str().unwrap_or("?"),
+            state,
+            lane["reason"].as_str().unwrap_or(""),
+        );
+    }
     if events.is_empty() {
         println!("(no timeline events)");
         return Ok(());
     }
     for e in &events {
         println!(
-            "{:<12} {:<18} {}",
+            "{:<12} {:<16} {:<7} {}",
             e["at"],
             e["kind"].as_str().unwrap_or("?"),
+            e["author"]["kind"].as_str().unwrap_or("?"),
             format_timeline_detail(e),
+        );
+        if let Some(d) = e["drift"]["note"].as_str() {
+            println!("             drift: {d}");
+        }
+    }
+    if (events.len() as i64) < total {
+        println!(
+            "\n({} of {} events — narrow with --kind/--author/--since, or page with --offset)",
+            events.len(),
+            total
         );
     }
     Ok(())
+}
+
+/// `kb-code review pseudo ID [NAME]` — `kbc-pseudo/1` (V73-K3).
+async fn review_pseudo_cmd(
+    daemon: &str,
+    id: i64,
+    name: Option<&str>,
+    ps: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if let Some(p) = ps {
+        query.push(("ps", p));
+    }
+    let path = match name {
+        Some(n) => format!("/api/reviews/{id}/pseudo/{n}"),
+        None => format!("/api/reviews/{id}/pseudo"),
+    };
+    let body = get_json(&client, daemon, &path, &query).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    match name {
+        Some(_) => {
+            let f = &body["file"];
+            println!(
+                "{}  {}  {} bytes, {} lines",
+                f["path"].as_str().unwrap_or("?"),
+                f["blob_sha"].as_str().unwrap_or("?"),
+                f["byte_len"],
+                f["lines"],
+            );
+            if let Some(r) = f["reason"].as_str() {
+                println!("({r})");
+            }
+            if let Some(c) = f["content"].as_str() {
+                println!("---");
+                print!("{c}");
+                if !c.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        None => {
+            for f in body["files"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<26} {:<44} {:>7} {}",
+                    f["path"].as_str().unwrap_or("?"),
+                    f["blob_sha"].as_str().unwrap_or("?"),
+                    f["byte_len"],
+                    if f["present"].as_bool().unwrap_or(false) {
+                        String::new()
+                    } else {
+                        format!("(empty: {})", f["reason"].as_str().unwrap_or("?"))
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `kb-code review turns ID --hunk HUNKID` — the hunk↔turn join (V73-K3),
+/// LOOPBACK-ONLY on the daemon side.
+async fn review_turns_cmd(
+    daemon: &str,
+    id: i64,
+    hunk: &str,
+    ps: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if let Some(p) = ps {
+        query.push(("ps", p));
+    }
+    let url = format!(
+        "{}/api/reviews/{id}/hunks/{hunk}/turns",
+        daemon.trim_end_matches('/')
+    );
+    let resp = client
+        .get(&url)
+        .query(&query)
+        .send()
+        .await
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if !status.is_success() {
+        return Err(loopback_or_api_error("review turns", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "hunk {}  path {}  basis {}",
+        body["hunk_id"].as_str().unwrap_or("?"),
+        body["path"].as_str().unwrap_or("(not found)"),
+        body["commit_basis"].as_str().unwrap_or("?"),
+    );
+    println!("  {}", body["commit_basis_caption"].as_str().unwrap_or(""));
+    if body["kb_lane"].as_str() == Some("degraded") {
+        println!(
+            "! kb lane degraded: {}",
+            body["kb_lane_reason"].as_str().unwrap_or("")
+        );
+    }
+    for n in body["notes"].as_array().into_iter().flatten() {
+        println!("! {}", n.as_str().unwrap_or(""));
+    }
+    let turns = body["turns"].as_array().cloned().unwrap_or_default();
+    if turns.is_empty() {
+        println!("(no turns claimed)");
+        if let Some(r) = body["reason"].as_str() {
+            println!("{r}");
+        }
+        return Ok(());
+    }
+    for t in &turns {
+        println!(
+            "{:<8} {:<16} {:<10} {:>6}B  {}",
+            t["tier"].as_str().unwrap_or("?"),
+            t["turn_id"].as_str().unwrap_or("?"),
+            t["tool"].as_str().unwrap_or("?"),
+            t["matched_bytes"],
+            t["path"].as_str().unwrap_or(""),
+        );
+        println!("         {}", t["why"].as_str().unwrap_or(""));
+        println!("         {}", t["kb_read"].as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
+/// `kb-code review import-legacy ARTIFACT.html` — `kbc-legacy-import/1`
+/// (V73-K3, design D9-a). LOCAL: no daemon, no network. Reads only the
+/// artifact's embedded machine block and never composes.
+async fn review_import_legacy_cmd(
+    artifact: &Path,
+    strict: bool,
+    tier: Option<&str>,
+    out_doc: Option<&Path>,
+    out_findings: Option<&Path>,
+    review: Option<i64>,
+    json: bool,
+) -> Result<()> {
+    let html = std::fs::read_to_string(artifact)
+        .with_context(|| format!("read {}", artifact.display()))?;
+    let opts = kb_code_server::review_legacy::ImportOptions {
+        strict,
+        tier: tier.map(str::to_string),
+    };
+    let out = match kb_code_server::review_legacy::import(&html, &opts) {
+        Ok(out) => out,
+        Err(e) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schema": kb_code_server::review_legacy::SCHEMA,
+                        "ok": false,
+                        "source": artifact.display().to_string(),
+                        "error": e,
+                        "message": e.to_string(),
+                    }))?
+                );
+            } else {
+                eprintln!("review import-legacy: {e}");
+            }
+            // The artifact is well-formed HTML and the state (no machine
+            // block) refuses the request — the same slot `review lint` uses
+            // for a lint error.
+            std::process::exit(envelope::EXIT_CONFLICT);
+        }
+    };
+
+    let findings_json = serde_json::to_string_pretty(&serde_json::json!({
+        "schema": "kbc-findings/2",
+        "findings": out.findings,
+    }))?;
+    if let Some(p) = out_doc {
+        std::fs::write(p, &out.doc_md).with_context(|| format!("write {}", p.display()))?;
+    }
+    if let Some(p) = out_findings {
+        std::fs::write(p, &findings_json).with_context(|| format!("write {}", p.display()))?;
+    }
+
+    let compose_line = format!(
+        "kb-code review compose {} --doc {} --findings {} --tier {} --dry-run",
+        review
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "<REVIEW-ID>".into()),
+        out_doc
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<doc.md>".into()),
+        out_findings
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<findings.json>".into()),
+        out.tier,
+    );
+
+    if json {
+        let mut v = serde_json::to_value(&out)?;
+        v["ok"] = serde_json::json!(true);
+        v["source"] = serde_json::json!(artifact.display().to_string());
+        v["findings_json"] = serde_json::json!(findings_json);
+        v["next"] = serde_json::json!(compose_line);
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+
+    println!(
+        "block <script id=\"{}\">  {} bytes  ->  tier {}  {} finding(s)",
+        out.block_id,
+        out.block_bytes,
+        out.tier,
+        out.findings.len()
+    );
+    for m in &out.mapping {
+        println!(
+            "  mapped {} {:?} -> {:?}  ({} row(s))",
+            m.field, m.from, m.to, m.rows
+        );
+    }
+    for sk in &out.skipped {
+        println!(
+            "  SKIPPED #{} {:?}: {}",
+            sk.index,
+            sk.title.as_deref().unwrap_or(""),
+            sk.reason
+        );
+    }
+    for n in &out.notes {
+        println!("  note: {n}");
+    }
+    if out_doc.is_none() {
+        println!("---\n{}", out.doc_md);
+    }
+    println!("\nNext (this verb never composes):\n  {compose_line}");
+    Ok(())
+}
+
+// --- V73-K3: kbc-claim/1 -----------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct ClaimAddArgs {
+    repo: String,
+    subject: String,
+    subject_kind: String,
+    kind: String,
+    body: String,
+    confidence: Option<f64>,
+    evidence: Vec<String>,
+    session_id: Option<String>,
+    model: Option<String>,
+    blob_sha: Option<String>,
+    review: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct ClaimListArgs {
+    repo: String,
+    subject: Option<String>,
+    subject_kind: Option<String>,
+    path: Option<String>,
+    review: Option<i64>,
+    kind: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+fn claims_request(args: &ClaimListArgs) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q: Vec<(&'static str, String)> = vec![("repo", args.repo.clone())];
+    if let Some(v) = &args.subject {
+        q.push(("subject", v.clone()));
+    }
+    if let Some(v) = &args.subject_kind {
+        q.push(("subject_kind", v.clone()));
+    }
+    if let Some(v) = &args.path {
+        q.push(("path", v.clone()));
+    }
+    if let Some(v) = args.review {
+        q.push(("review", v.to_string()));
+    }
+    if let Some(v) = &args.kind {
+        q.push(("kind", v.clone()));
+    }
+    if let Some(v) = args.limit {
+        q.push(("limit", v.to_string()));
+    }
+    if let Some(v) = args.offset {
+        q.push(("offset", v.to_string()));
+    }
+    (kb_code_server::claims::CLAIMS_ROUTE.path, q)
+}
+
+async fn claim_add_cmd(daemon: &str, args: ClaimAddArgs, json: bool) -> Result<()> {
+    // `-` reads the prose from stdin (the `workspace save --desk-json -`
+    // convention) — a claim body is prose and routinely multi-line.
+    let body_md = if args.body == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .context("read claim body from stdin")?;
+        buf
+    } else {
+        args.body.clone()
+    };
+    let payload = serde_json::json!({
+        "schema": kb_code_server::claims::SCHEMA,
+        "repo": args.repo,
+        "subject_kind": args.subject_kind,
+        "subject": args.subject,
+        "kind": args.kind,
+        "body_md": body_md,
+        "confidence": args.confidence,
+        "evidence": args.evidence,
+        "session_id": args.session_id,
+        "model": args.model,
+        "blob_sha": args.blob_sha,
+        "review_id": args.review,
+    });
+    let client = http_client()?;
+    let (status, body) = post_json_raw(&client, daemon, "/api/claims", &payload).await?;
+    if !status.is_success() {
+        return Err(loopback_or_api_error("claim add", daemon, status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    print_claim(&body);
+    Ok(())
+}
+
+async fn claim_list_cmd(daemon: &str, args: &ClaimListArgs, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = claims_request(args);
+    let query: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let body = get_json(&client, daemon, path, &query).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let claims = body["claims"].as_array().cloned().unwrap_or_default();
+    if claims.is_empty() {
+        println!("(no claims)");
+        return Ok(());
+    }
+    for c in &claims {
+        print_claim(c);
+    }
+    println!(
+        "\n{} of {} claim(s)",
+        body["returned"].as_i64().unwrap_or(0),
+        body["total"].as_i64().unwrap_or(0)
+    );
+    Ok(())
+}
+
+async fn claim_show_cmd(daemon: &str, id: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let body = get_json(&client, daemon, &format!("/api/claims/{id}"), &[]).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    print_claim(&body);
+    println!("{}", body["body_md"].as_str().unwrap_or(""));
+    Ok(())
+}
+
+/// One claim's header line plus, when it drifted, the caption. A drifted
+/// claim is never hidden — it is shown with the reason, which is what
+/// "greyed with a drift caption" means outside a browser.
+fn print_claim(c: &serde_json::Value) {
+    println!(
+        "{:<18} {:<11} {:<11} {:<10} {}",
+        c["id"].as_str().unwrap_or("?"),
+        c["kind"].as_str().unwrap_or("?"),
+        c["state"].as_str().unwrap_or("?"),
+        c["confidence"]
+            .as_f64()
+            .map(|f| format!("conf {f:.2}"))
+            .unwrap_or_default(),
+        c["subject"].as_str().unwrap_or(""),
+    );
+    if c["state"].as_str() != Some("pinned") {
+        println!("    {}", c["caption"].as_str().unwrap_or(""));
+    }
 }
 
 fn format_timeline_detail(e: &serde_json::Value) -> String {
@@ -18063,6 +18844,34 @@ fn fill_review_id(template: &str, id: i64) -> String {
     template.replace("{id}", &id.to_string())
 }
 
+/// The `GET /api/reviews/{id}/pseudo[/{name}]` requests: `(path, query)`.
+/// Both are `?ps=`-only, so one builder each, using the contract's own path
+/// constant rather than a string literal.
+fn review_pseudo_list_request(ps: Option<&str>) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q: Vec<(&'static str, String)> = Vec::new();
+    if let Some(p) = ps {
+        q.push(("ps", p.to_string()));
+    }
+    (kb_code_server::review_pseudo::PSEUDO_LIST_ROUTE.path, q)
+}
+
+fn review_pseudo_file_request(ps: Option<&str>) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q: Vec<(&'static str, String)> = Vec::new();
+    if let Some(p) = ps {
+        q.push(("ps", p.to_string()));
+    }
+    (kb_code_server::review_pseudo::PSEUDO_FILE_ROUTE.path, q)
+}
+
+/// The `GET /api/reviews/{id}/hunks/{hunk}/turns` request: `(path, query)`.
+fn review_turns_request(ps: Option<&str>) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q: Vec<(&'static str, String)> = Vec::new();
+    if let Some(p) = ps {
+        q.push(("ps", p.to_string()));
+    }
+    (kb_code_server::review_turns::HUNK_TURNS_ROUTE.path, q)
+}
+
 /// The `GET /api/entity` request: `(path, query)`.
 fn entity_request(
     repo: &str,
@@ -22306,6 +23115,26 @@ mod tests {
             board_get_request("repo", false, false),
             board_export_request("repo", "md", None),
             board_sweep_request("repo", None),
+            // V73-K3 — the timeline's narrowing params, the claim register,
+            // the two pseudo-file reads and the hunk↔turn join.
+            review_timeline_request(&TimelineOpts {
+                kind: Some("comment".into()),
+                limit: Some(10),
+                ..Default::default()
+            }),
+            claims_request(&ClaimListArgs {
+                repo: "repo".into(),
+                subject: None,
+                subject_kind: None,
+                path: None,
+                review: None,
+                kind: None,
+                limit: None,
+                offset: None,
+            }),
+            review_pseudo_list_request(Some("latest")),
+            review_pseudo_file_request(Some("latest")),
+            review_turns_request(Some("latest")),
         ];
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
@@ -22336,7 +23165,10 @@ mod tests {
             // V74-L1 — same walk, one milestone later. A board read
             // declared in `boards::V74_L1_ROUTES` with no verb building a
             // request for it fails HERE, by path.
-            .chain(kb_code_server::boards::V74_L1_ROUTES.iter());
+            .chain(kb_code_server::boards::V74_L1_ROUTES.iter())
+            // V73-K3 — the timeline, the claim register, the two
+            // pseudo-file reads and the hunk↔turn join, the same way.
+            .chain(kb_code_server::review_timeline::V73_K3_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

@@ -232,6 +232,60 @@ pub(crate) fn read_turn_text(
     )
 }
 
+/// V73-K3 — the same seek-and-reparse [`read_turn_text`] does, but handing
+/// back a tool_use turn's RAW `input` object instead of its indexed display
+/// text.
+///
+/// This exists because the indexer deliberately does NOT keep an `Edit`'s
+/// `old_string`/`new_string` (`parse::TOOL_USE_TEXT_KEYS` is a curated
+/// allowlist and a pinned test asserts `old_string` never reaches the FTS
+/// column). That is the right default — those strings are file content, and
+/// putting file content into a search index is a different product — but
+/// the hunk↔turn join needs exactly those two strings to prove an edit
+/// produced a hunk. So they are read back from the JSONL on demand,
+/// per request, and NEVER persisted: kb-code stores that a turn happened,
+/// never what it typed.
+///
+/// LOOPBACK ONLY by construction of where it is called from
+/// (`review_turns`, on the `transcripts_api` sub-router) — this is raw
+/// transcript content, D19's `raw-transcript` sensitivity class.
+///
+/// Best-effort, exactly like [`read_turn_text`]: any failure yields `None`.
+pub(crate) fn read_turn_tool_input(
+    root: &Path,
+    src_file: &str,
+    uuid: &str,
+    tool_name: Option<&str>,
+    byte_offset: i64,
+    byte_len: i64,
+) -> Option<serde_json::Value> {
+    if byte_offset < 0 || byte_len < 0 {
+        return None;
+    }
+    let abs = root.join(src_file);
+    let mut file = std::fs::File::open(&abs).ok()?;
+    file.seek(SeekFrom::Start(byte_offset as u64)).ok()?;
+    let mut buf = vec![0u8; byte_len as usize];
+    file.read_exact(&mut buf).ok()?;
+    let line = String::from_utf8_lossy(&buf).into_owned();
+    let value: serde_json::Value = serde_json::from_str(&line).ok()?;
+    let content = value.pointer("/message/content")?.as_array()?;
+    for block in content {
+        if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+            continue;
+        }
+        // One JSONL line can carry several tool_use blocks; match the one
+        // this turn row names, by id/name the same way `read_turn_text`
+        // matches by uuid+kind+tool_name.
+        if block.get("name").and_then(|n| n.as_str()) != tool_name {
+            continue;
+        }
+        let _ = uuid;
+        return block.get("input").cloned();
+    }
+    None
+}
+
 /// Re-read `row`'s source JSONL, re-derive the specific turn's display text
 /// ([`read_turn_text`]), and clip ~240 chars around the first occurrence of
 /// `query`'s first alphanumeric token. Falls back to an empty string (not

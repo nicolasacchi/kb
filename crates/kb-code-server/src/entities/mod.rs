@@ -842,6 +842,9 @@ mod tests {
             // `kbc-canvas/1` read declared in `boards::V74_L1_ROUTES` with
             // no registration in router.rs fails HERE, by path.
             .chain(crate::boards::V74_L1_ROUTES.iter())
+            // V73-K3 — the timeline, the claim register, the two
+            // pseudo-file reads and the hunk↔turn join, the same way.
+            .chain(crate::review_timeline::V73_K3_ROUTES.iter())
         {
             let nested = c
                 .path

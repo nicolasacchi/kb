@@ -1,0 +1,90 @@
+{
+  "schema": "kbc-hunkid/1",
+  "note": "kbc-hunkid/1 — ONE corpus, two implementations. Read by crates/kb-code-server/src/review_hunks.rs (Rust) and web-code/src/lib/hunkId.golden.test.ts (TypeScript). The hash is FNV-1a 64 over UTF-16 CODE UNITS; the fingerprint input is the path plus every +/- line with its sigil, joined by newlines, with context lines and line numbers deliberately excluded so the address survives a rebase.",
+  "cases": [
+    {
+      "name": "one-line replacement",
+      "path": "app/models/order.rb",
+      "diff": "@@ -10,3 +10,3 @@ class Order\n   def total\n-    items.sum(&:price)\n+    items.sum(&:price_cents)\n   end\n",
+      "hunks": [
+        {
+          "fingerprint_input": "app/models/order.rb\n-    items.sum(&:price)\n+    items.sum(&:price_cents)",
+          "id": "29ee47674123769c",
+          "removed_text": "    items.sum(&:price)",
+          "added_text": "    items.sum(&:price_cents)"
+        }
+      ]
+    },
+    {
+      "name": "two hunks in one file",
+      "path": "app/models/order.rb",
+      "diff": "diff --git a/app/models/order.rb b/app/models/order.rb\nindex 1111111..2222222 100644\n--- a/app/models/order.rb\n+++ b/app/models/order.rb\n@@ -1,3 +1,4 @@\n class Order\n+  include Payable\n   def total\n   end\n@@ -20,2 +21,2 @@\n-  ORDERS = []\n+  ORDERS = [].freeze\n",
+      "hunks": [
+        {
+          "fingerprint_input": "app/models/order.rb\n+  include Payable",
+          "id": "83048c9a219eb9c1",
+          "removed_text": "",
+          "added_text": "  include Payable"
+        },
+        {
+          "fingerprint_input": "app/models/order.rb\n-  ORDERS = []\n+  ORDERS = [].freeze",
+          "id": "e91e99cffccb6307",
+          "removed_text": "  ORDERS = []",
+          "added_text": "  ORDERS = [].freeze"
+        }
+      ]
+    },
+    {
+      "name": "non-BMP and accented content",
+      "path": "docs/notes.md",
+      "diff": "@@ -1,2 +1,2 @@\n-café 𝄞\n+café 𝄞!\n",
+      "hunks": [
+        {
+          "fingerprint_input": "docs/notes.md\n-café 𝄞\n+café 𝄞!",
+          "id": "a4dc821ab9cc48a4",
+          "removed_text": "café 𝄞",
+          "added_text": "café 𝄞!"
+        }
+      ]
+    },
+    {
+      "name": "added file, no removals",
+      "path": "lib/acme/retry.rb",
+      "diff": "@@ -0,0 +1,3 @@\n+module Acme\n+  class Retry\n+  end\n",
+      "hunks": [
+        {
+          "fingerprint_input": "lib/acme/retry.rb\n+module Acme\n+  class Retry\n+  end",
+          "id": "12e89050c50516ba",
+          "removed_text": "",
+          "added_text": "module Acme\n  class Retry\n  end"
+        }
+      ]
+    },
+    {
+      "name": "implicit single-line ranges",
+      "path": "config/routes.rb",
+      "diff": "@@ -5 +5 @@\n-  root to: 'home#index'\n+  root to: 'dashboard#index'\n",
+      "hunks": [
+        {
+          "fingerprint_input": "config/routes.rb\n-  root to: 'home#index'\n+  root to: 'dashboard#index'",
+          "id": "3c495c054bbef515",
+          "removed_text": "  root to: 'home#index'",
+          "added_text": "  root to: 'dashboard#index'"
+        }
+      ]
+    },
+    {
+      "name": "deletion only",
+      "path": "app/legacy.rb",
+      "diff": "@@ -1,3 +1,1 @@\n class Legacy\n-  def gone\n-  end\n",
+      "hunks": [
+        {
+          "fingerprint_input": "app/legacy.rb\n-  def gone\n-  end",
+          "id": "b34b4f6797087883",
+          "removed_text": "  def gone\n  end",
+          "added_text": ""
+        }
+      ]
+    }
+  ]
+}
