@@ -376,181 +376,6 @@ pub fn resolve_on_pseudo(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn binding_with_body(body: Option<&str>) -> store::ReviewPrBinding {
-        store::ReviewPrBinding {
-            pr_number: Some(7),
-            pr_repo_slug: Some("acme/acme-app".into()),
-            pr_head_sha: Some("aaa".into()),
-            pr_meta_json: Some(serde_json::json!({ "title": "t", "body": body }).to_string()),
-            pr_meta_fetched_at: Some(1000),
-            artifact_hint_kb: None,
-            artifact_hint_id: None,
-        }
-    }
-
-    #[test]
-    fn names_are_closed_and_round_trip_through_the_prefix() {
-        assert_eq!(NAMES.len(), 4);
-        for n in NAMES {
-            assert_eq!(name_for_path(&path_for(n)), Some(*n));
-        }
-        assert_eq!(name_for_path("app/models/order.rb"), None);
-        assert_eq!(name_for_path("~review/nope.md"), None);
-        assert!(is_pseudo_path("~review/pr-body.md"));
-        assert!(!is_pseudo_path("app/models/order.rb"));
-    }
-
-    #[test]
-    fn the_pr_body_is_verbatim_and_its_hash_is_a_real_git_blob_hash() {
-        let f = render_pr_body(&binding_with_body(Some("line one\nline two\n")));
-        assert!(f.present);
-        assert_eq!(f.content(), "line one\nline two\n");
-        assert_eq!(f.blob_sha, git_blob_hash(b"line one\nline two\n"));
-        assert_eq!(f.lines, 2);
-    }
-
-    #[test]
-    fn an_absent_pr_binding_still_has_the_file_empty_with_a_reason() {
-        let f = render_pr_body(&store::ReviewPrBinding::default());
-        assert!(!f.present);
-        assert_eq!(f.content(), "");
-        assert!(f.reason.as_deref().unwrap().contains("not bound"));
-        // The empty file still has an honest, stable hash — the git hash of
-        // zero bytes, which is a real object id.
-        assert_eq!(f.blob_sha, git_blob_hash(b""));
-    }
-
-    #[test]
-    fn an_empty_pr_description_is_distinguished_from_an_absent_binding() {
-        let f = render_pr_body(&binding_with_body(None));
-        assert!(!f.present);
-        assert!(f.reason.as_deref().unwrap().contains("empty description"));
-    }
-
-    #[test]
-    fn commits_md_states_the_true_total_when_it_stops() {
-        let commits: Vec<PseudoCommit> = (0..3)
-            .map(|i| PseudoCommit {
-                sha: format!("{i}bcdef0123456789"),
-                subject: format!("commit {i}"),
-                author: "A <a@example.test>".into(),
-                author_time: 100 + i,
-                trailers: if i == 0 {
-                    vec!["Kb-Session: abc-123".into()]
-                } else {
-                    vec![]
-                },
-            })
-            .collect();
-        let f = render_commits_md(&commits, Some(900));
-        assert!(f.present);
-        assert!(f.content().contains("Kb-Session: abc-123"));
-        assert!(f.content().contains("900 commits"));
-        assert!(f.content().contains("(none)"));
-    }
-
-    #[test]
-    fn the_set_is_always_four_files_in_reading_order() {
-        let set = build_set(
-            1,
-            2,
-            &store::ReviewPrBinding::default(),
-            None,
-            &[],
-            &[],
-            None,
-        );
-        let names: Vec<&str> = set.files.iter().map(|f| f.name).collect();
-        assert_eq!(names, NAMES.to_vec());
-        assert_eq!(
-            set.get("~review/review.md").map(|f| f.name),
-            Some(REVIEW_MD)
-        );
-        assert_eq!(
-            set.get("findings.json").map(|f| f.name),
-            Some(FINDINGS_JSON)
-        );
-    }
-
-    fn pseudo_ps() -> store::ReviewPatchsetRow {
-        store::ReviewPatchsetRow {
-            id: 1,
-            review_id: 1,
-            ps_number: 1,
-            tip_sha: "tip".into(),
-            base_sha: "base".into(),
-            captured_at: 0,
-        }
-    }
-
-    /// A line-anchored comment, built through the SAME helper
-    /// `routes::create_annotation` uses — never a hand-rolled `Anchor`, or
-    /// this test would prove something about a shape nothing writes.
-    fn anchored(line: u32, snippet: &str) -> store::AnnotationRow {
-        let anchor = crate::annotations::anchor_for_line(line, snippet);
-        store::AnnotationRow {
-            id: "ann-1".into(),
-            repo_id: 1,
-            path: path_for(PR_BODY),
-            anchor: Some(serde_json::to_string(&anchor).unwrap()),
-            anchor_kind: "line".into(),
-            anchor2: None,
-            parent_id: None,
-            intent: "note".into(),
-            body: "why is this here?".into(),
-            author: "you".into(),
-            created_at: 1,
-            updated_at: 1,
-            resolved: false,
-            review_id: Some(1),
-            ps_number: Some(1),
-            side: Some("new".into()),
-            set_id: None,
-        }
-    }
-
-    /// The pseudo-file half of the SAME ladder: a comment whose snippet is
-    /// still on its line resolves; one whose snippet moved is an honest
-    /// ORPHAN, never a guessed line.
-    #[test]
-    fn a_comment_on_a_pseudo_file_resolves_or_orphans_through_the_shared_ladder() {
-        let file = render_pr_body(&binding_with_body(Some(
-            "why this change
-second line
-third line\n",
-        )));
-        let ps = pseudo_ps();
-
-        let hit = resolve_on_pseudo(&anchored(2, "second line"), &ps, &file);
-        assert!(!hit.orphaned, "{hit:?}");
-        assert_eq!(hit.line, Some(2));
-
-        let moved = resolve_on_pseudo(&anchored(2, "a line this file does not have"), &ps, &file);
-        assert!(
-            moved.orphaned,
-            "an unprovable match must be an orphan, never a guessed line: {moved:?}"
-        );
-        assert!(moved.line.is_none());
-    }
-
-    #[test]
-    fn the_findings_sidecar_is_the_shape_compose_accepts() {
-        let f = render_findings_json(1, 1, &[]);
-        let v: serde_json::Value = serde_json::from_str(f.content()).unwrap();
-        assert_eq!(v["schema"], "kbc-findings/2");
-        assert!(v["findings"].is_array());
-        // The array is exactly `Vec<DocFinding>` — the sidecar `compose
-        // --findings` reads.
-        let parsed: Vec<DocFinding> =
-            serde_json::from_value(v["findings"].clone()).expect("round-trips as DocFinding");
-        assert!(parsed.is_empty());
-    }
-}
-
 // --- routes ----------------------------------------------------------------
 
 use crate::routes::ApiError;
@@ -735,3 +560,178 @@ pub const PSEUDO_FILE_ROUTE: RouteContract = RouteContract {
     required_params: &[],
     params_accept_without: pseudo_accept_without,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding_with_body(body: Option<&str>) -> store::ReviewPrBinding {
+        store::ReviewPrBinding {
+            pr_number: Some(7),
+            pr_repo_slug: Some("acme/acme-app".into()),
+            pr_head_sha: Some("aaa".into()),
+            pr_meta_json: Some(serde_json::json!({ "title": "t", "body": body }).to_string()),
+            pr_meta_fetched_at: Some(1000),
+            artifact_hint_kb: None,
+            artifact_hint_id: None,
+        }
+    }
+
+    #[test]
+    fn names_are_closed_and_round_trip_through_the_prefix() {
+        assert_eq!(NAMES.len(), 4);
+        for n in NAMES {
+            assert_eq!(name_for_path(&path_for(n)), Some(*n));
+        }
+        assert_eq!(name_for_path("app/models/order.rb"), None);
+        assert_eq!(name_for_path("~review/nope.md"), None);
+        assert!(is_pseudo_path("~review/pr-body.md"));
+        assert!(!is_pseudo_path("app/models/order.rb"));
+    }
+
+    #[test]
+    fn the_pr_body_is_verbatim_and_its_hash_is_a_real_git_blob_hash() {
+        let f = render_pr_body(&binding_with_body(Some("line one\nline two\n")));
+        assert!(f.present);
+        assert_eq!(f.content(), "line one\nline two\n");
+        assert_eq!(f.blob_sha, git_blob_hash(b"line one\nline two\n"));
+        assert_eq!(f.lines, 2);
+    }
+
+    #[test]
+    fn an_absent_pr_binding_still_has_the_file_empty_with_a_reason() {
+        let f = render_pr_body(&store::ReviewPrBinding::default());
+        assert!(!f.present);
+        assert_eq!(f.content(), "");
+        assert!(f.reason.as_deref().unwrap().contains("not bound"));
+        // The empty file still has an honest, stable hash — the git hash of
+        // zero bytes, which is a real object id.
+        assert_eq!(f.blob_sha, git_blob_hash(b""));
+    }
+
+    #[test]
+    fn an_empty_pr_description_is_distinguished_from_an_absent_binding() {
+        let f = render_pr_body(&binding_with_body(None));
+        assert!(!f.present);
+        assert!(f.reason.as_deref().unwrap().contains("empty description"));
+    }
+
+    #[test]
+    fn commits_md_states_the_true_total_when_it_stops() {
+        let commits: Vec<PseudoCommit> = (0..3)
+            .map(|i| PseudoCommit {
+                sha: format!("{i}bcdef0123456789"),
+                subject: format!("commit {i}"),
+                author: "A <a@example.test>".into(),
+                author_time: 100 + i,
+                trailers: if i == 0 {
+                    vec!["Kb-Session: abc-123".into()]
+                } else {
+                    vec![]
+                },
+            })
+            .collect();
+        let f = render_commits_md(&commits, Some(900));
+        assert!(f.present);
+        assert!(f.content().contains("Kb-Session: abc-123"));
+        assert!(f.content().contains("900 commits"));
+        assert!(f.content().contains("(none)"));
+    }
+
+    #[test]
+    fn the_set_is_always_four_files_in_reading_order() {
+        let set = build_set(
+            1,
+            2,
+            &store::ReviewPrBinding::default(),
+            None,
+            &[],
+            &[],
+            None,
+        );
+        let names: Vec<&str> = set.files.iter().map(|f| f.name).collect();
+        assert_eq!(names, NAMES.to_vec());
+        assert_eq!(
+            set.get("~review/review.md").map(|f| f.name),
+            Some(REVIEW_MD)
+        );
+        assert_eq!(
+            set.get("findings.json").map(|f| f.name),
+            Some(FINDINGS_JSON)
+        );
+    }
+
+    fn pseudo_ps() -> store::ReviewPatchsetRow {
+        store::ReviewPatchsetRow {
+            id: 1,
+            review_id: 1,
+            ps_number: 1,
+            tip_sha: "tip".into(),
+            base_sha: "base".into(),
+            captured_at: 0,
+        }
+    }
+
+    /// A line-anchored comment, built through the SAME helper
+    /// `routes::create_annotation` uses — never a hand-rolled `Anchor`, or
+    /// this test would prove something about a shape nothing writes.
+    fn anchored(line: u32, snippet: &str) -> store::AnnotationRow {
+        let anchor = crate::annotations::anchor_for_line(line, snippet);
+        store::AnnotationRow {
+            id: "ann-1".into(),
+            repo_id: 1,
+            path: path_for(PR_BODY),
+            anchor: Some(serde_json::to_string(&anchor).unwrap()),
+            anchor_kind: "line".into(),
+            anchor2: None,
+            parent_id: None,
+            intent: "note".into(),
+            body: "why is this here?".into(),
+            author: "you".into(),
+            created_at: 1,
+            updated_at: 1,
+            resolved: false,
+            review_id: Some(1),
+            ps_number: Some(1),
+            side: Some("new".into()),
+            set_id: None,
+        }
+    }
+
+    /// The pseudo-file half of the SAME ladder: a comment whose snippet is
+    /// still on its line resolves; one whose snippet moved is an honest
+    /// ORPHAN, never a guessed line.
+    #[test]
+    fn a_comment_on_a_pseudo_file_resolves_or_orphans_through_the_shared_ladder() {
+        let file = render_pr_body(&binding_with_body(Some(
+            "why this change
+second line
+third line\n",
+        )));
+        let ps = pseudo_ps();
+
+        let hit = resolve_on_pseudo(&anchored(2, "second line"), &ps, &file);
+        assert!(!hit.orphaned, "{hit:?}");
+        assert_eq!(hit.line, Some(2));
+
+        let moved = resolve_on_pseudo(&anchored(2, "a line this file does not have"), &ps, &file);
+        assert!(
+            moved.orphaned,
+            "an unprovable match must be an orphan, never a guessed line: {moved:?}"
+        );
+        assert!(moved.line.is_none());
+    }
+
+    #[test]
+    fn the_findings_sidecar_is_the_shape_compose_accepts() {
+        let f = render_findings_json(1, 1, &[]);
+        let v: serde_json::Value = serde_json::from_str(f.content()).unwrap();
+        assert_eq!(v["schema"], "kbc-findings/2");
+        assert!(v["findings"].is_array());
+        // The array is exactly `Vec<DocFinding>` — the sidecar `compose
+        // --findings` reads.
+        let parsed: Vec<DocFinding> =
+            serde_json::from_value(v["findings"].clone()).expect("round-trips as DocFinding");
+        assert!(parsed.is_empty());
+    }
+}

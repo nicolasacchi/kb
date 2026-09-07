@@ -463,7 +463,6 @@ fn resolve_code(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 /// A `code:` card over a PSEUDO-FILE's rendered bytes. There is no
 /// carry-forward rung here on purpose: a pseudo-file is regenerated whole
 /// on every read, so "the same line, moved" is not a thing that happened —
@@ -526,6 +525,7 @@ fn pseudo_code_card(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_code(
     store: &Store,
     r: &Ref,
