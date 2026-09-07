@@ -186,6 +186,17 @@ pub async fn seq_route(
         .map(|p| !is_reading_set_projection(p))
         .unwrap_or(true)
         && workspace.is_none();
+    // V74-L3b — a kbc-tour/1 tour is ALSO a `canvas_boards` row (V0039's
+    // `kind` column), so the `tour` projection now resolves out of two
+    // tables: `reading_sets` (kind='tour', V71-G0's own widening) and
+    // `canvas_boards` (kind='tour'). Exactly the shape the `board`
+    // projection already has after V74-L1, and the layer is unchanged:
+    // nothing is created, moved or merged, and `source` still names the
+    // table each row physically lives in. A canvas tour carries no
+    // workspace binding either, so `?workspace=` excludes it for the same
+    // reason it excludes a board.
+    let want_canvas_tours =
+        projection.map(|p| p == PROJECTION_TOUR).unwrap_or(true) && workspace.is_none();
 
     let kind_filter = projection.filter(|p| is_reading_set_projection(p));
     let workspace_q = workspace.clone();
@@ -210,7 +221,18 @@ pub async fn seq_route(
                 // still honestly reports `null` (its payload is opaque to
                 // this daemon and always was).
                 rows.extend(store.seq_canvas_sets(repo_id)?);
-                rows.extend(store.seq_canvas_boards(repo_id)?);
+                rows.extend(store.seq_canvas_boards(
+                    repo_id,
+                    crate::tours::BOARD_KIND_BOARD,
+                    PROJECTION_BOARD,
+                )?);
+            }
+            if want_canvas_tours {
+                rows.extend(store.seq_canvas_boards(
+                    repo_id,
+                    crate::tours::BOARD_KIND_TOUR,
+                    PROJECTION_TOUR,
+                )?);
             }
             Ok::<_, ApiError>(rows)
         })
@@ -226,7 +248,9 @@ pub async fn seq_route(
     let mut notes: Vec<String> = Vec::new();
     if workspace.is_some() {
         notes.push(
-            "boards carry no workspace binding yet — ?workspace= excludes every board".to_string(),
+            "boards and kbc-tour/1 tours carry no workspace binding yet — ?workspace= \
+             excludes every one of them"
+                .to_string(),
         );
     }
     if rows.is_empty() {

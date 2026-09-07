@@ -905,6 +905,157 @@ says only the LINK could not be recorded. A node with no path and no line
 (a `note`, a `turn`) is told it cannot carry a thread rather than being given
 an invented anchor.
 
+**kbc-tour/1 (V74-L3b) — a tour IS a board whose nodes are its steps.**
+Design of record: D12 (tours and trails) + D10 ("a board's `steps` and a
+tour share the step model — do not build two"), Track L. A **tour** is an
+ordered walk through references this daemon already serves, each step
+carrying prose, a blob and a camera, every reference re-resolved through the
+Ladder on every read — which is, word for word, a board.
+
+So kbc-tour/1 creates no table. A tour is a `canvas_boards` row with
+`kind = 'tour'` (migration V0039): its steps are `canvas_nodes`, their order
+and cameras are `canvas_steps`, and consecutive steps are joined by
+generated `then` edges. That is invariant 9's ruling ("a `reading_sets` row
+with `kind = 'workspace'` IS a workspace — not a new entity") applied one
+table over, and it is what "do not build two" asks for at the strongest
+reading: ONE lint (`boards::lint::check`, which the tour lint extends rather
+than duplicates), ONE resolver (`boards::resolve::resolve_node`), one
+walkthrough contract, one `?step=` grammar, one snippet-capture rule. A tour
+and a board share `canvas_boards`' `UNIQUE (repo_id, slug)`, so they share
+one slug space in a repo — an apply that would collide across the two
+families gets a `409` NAMING the family that holds the slug, never a raw
+constraint error. Neither ever appears in the other's list, and each 404s on
+the other's route.
+
+A tour adds exactly three things on top of a board, and each is additive.
+**`camera`** — per-step `{fold, context}` hints on `canvas_steps.camera_json`,
+with NO coordinates: `boards::lint`'s `coordinates` rule runs over a tour
+document unchanged, so geometry cannot be smuggled in through a camera any
+more than through a node. **The `ref` sugar** — a step may name its target
+with a kbc-review/1 ref string instead of the structured reference fields,
+parsed by `review_doc::refs::parse_ref` (the ONE ref parser) and lowered to
+the same `RefFields` a board node carries. It covers `code:` refs *that cite
+a line or a range*, and every other scheme is refused with the structured
+field that does the job named in the refusal: a whole-file `code:` gives the
+Ladder nothing to carry; `sym:`/`ent:` would require resolving a symbol to a
+path and PERSISTING that derivation, which is the cached-class this crate
+refuses; `hunk:`/`finding:` carry no review id; `gh:`/`kb:` are inert links
+that belong in the step's prose. **The linear structure** — steps ARE the
+nodes, and the `then` chain is generated, so a tour lints as one connected
+component on its merits rather than by passing `--allow-disconnected` (which
+would also suppress a real problem on a board).
+
+`kb-code tour pack <slug> --budget N` (`GET /api/tours/{slug}/pack`) is the
+budgeted context pack. Steps are emitted in walk order until the next one
+would cross the budget; every step that did not fit is COUNTED and NAMED, and
+the drop is a SUFFIX — a pack with a hole in the middle would read as a
+shorter tour rather than a truncated one. A step is emitted whole or not at
+all (half a snippet reads as complete), and an ORPHAN step is emitted with
+its prose and its last-known address and no snippet, because there is
+nothing honest to show. The rendering is the same function the `md` export
+uses, so a pack is literally a prefix of the export.
+
+Exports are `md` and `codetour`, both SNAPSHOTS that say so with the
+revision and the resolution counts they were taken at. **CodeTour** (the VS
+Code `.tour` format) is additionally LOSSY and lists every loss in its own
+`kbc_lossy` array inside the file rather than in a doc nobody re-reads: the
+blob per step (CodeTour anchors on a line or a text pattern and has no
+notion of the bytes an author read), the resolution state, every camera, and
+every step that does not address a file and a line — those are omitted with
+a count rather than approximated.
+
+Reads (`/api/tours`, `/api/tours/{slug}`, `…/pack`, `…/export`) are ordinary
+`auth_bearer` and are declared as `RouteContract`s in
+`kb_code_server::tours::V74_L3B_TOUR_ROUTES`. `POST /api/tours/apply` and
+`DELETE /api/tours/{slug}` ride the same loopback-only sub-router the board
+mutations do; `accepted`/`archived` stay reachable only through the BOARD
+transition routes, so D21's pending-until-a-human-accepts rule holds
+unchanged. CLI: `kb-code tour {list,show,apply,pack,export,rm}`.
+
+**kbc-trail/1 (V74-L3b) — the navigation record, OFF by default.**
+Design of record: D12 + **D17** ("Attention, not comprehension") + the
+Security posture's §Privacy line. A **trail** is an ordered list of PLACES
+the operator went, one dwell number each, recorded only after an explicit
+opt-in, shown to the operator in full, shown to an agent only in AGGREGATE,
+purgeable wholesale, and aged out by a retention window.
+
+D17 does not say "server-side trails, with purge to follow": it says
+server-side "only in the milestone that ships pause, purge and retention
+together". A ledger of where a person looked with no way to stop it and no
+way to delete it is a different product from the one this design describes,
+so the three controls are not features layered on a store — they are the
+precondition for the store existing at all, and they ship in the same file
+set as the ingest route.
+
+**Two switches, and they mean different things.** `[trails] enabled` in
+`kb-code.toml` (**default `false`**) is the operator's master switch: with
+it off nothing is recorded, no mode transition is possible, and the
+retention sweep starts no task. The runtime mode — `off` | `recording` |
+`paused` — is a separate, persisted decision in `trails_state`, changed only
+by the loopback-only, audited `POST /api/trails/state`. A fresh volume reads
+`off` even with the config `true`, because the absence of a decision is not a
+decision to record. A write refusal always names WHICH gate it hit
+(`trails-disabled`, `trails-off`, `trails-paused`): "nothing is being
+recorded" has three different fixes and a generic 403 names none of them.
+
+Four properties are structural, not promises:
+
+| property | how it is enforced |
+|---|---|
+| nothing finer than a STEP can be stored | `trail_steps` is the finest row in the schema and holds ONE dwell number. `trails::reject_sub_step_keys` refuses a payload naming a viewport, a caret, a scroll offset or a per-line dwell — BY NAME, on the raw JSON, before the typed parse, so the refusal teaches the rule (the `coordinates` precedent). A sub-step span is REFUSED, never rounded |
+| dwell is DERIVED and QUANTISED | the client sends `entered_at`/`left_at`; the server computes the difference, floors it to `[trails] step_granularity_secs` and clamps it. There is no client-supplied dwell field, so "never finer than dwell-per-step" is a property of the wire |
+| the agent-facing read is aggregate, and its only time key is the DAY | `GET /api/trails/aggregate` groups by `(path, symbol)` and reads `trail_steps.day`, never `entered_at`; its row struct has no timestamp field to leak one into, and its `?since=`/`?until=` window is a `YYYY-MM-DD` grammar for the same reason |
+| no trail number is a score, a gate or a ranking term | a source scan (`trails::tests::no_ranking_module_imports_the_trail_ledger`) fails BY FILE if any ranking module in this crate so much as names `crate::trails` — `kbc-claim/1`'s own pin, which is root invariant #10's surfaced-never-scored law |
+
+Typed hops are CLOSED at eleven (design §P7 verbatim): `search`,
+`definition_of`, `usage_of`, `caller_of`, `blame`, `why`, `story`, `review`,
+`framework`, `manual`, `agent_suggested`. A RECORDED trail is minted per repo
+per UTC day (or by an explicit fork); an AUTHORED one is laid down whole by
+an agent for the human to walk. `POST /api/trails/{id}/fork` carries a COPY
+of the steps from its branch point, so a fork reads as "I was here, and then
+I went another way" rather than as an empty trail with a pointer; parent and
+fork may each be purged without the other.
+
+A step's state is computed on every read and stored nowhere, and it is
+deliberately the SHALLOW end of the Ladder: `pinned` (the blob is still the
+blob), `carried` (the file is there under different bytes), `orphan` (the
+path is gone), `inert` (there was no path). A trail step is a place someone
+went, not an anchored claim about specific bytes, so re-anchoring its line
+into a changed blob would invent precision the record never had.
+
+**The two HUMAN reads are loopback-only** — `GET /api/trails` and
+`GET /api/trails/{id}` return the operator's own movement record, and the
+design's "read-tracking never leaves the operator's box" makes that a
+stricter class than an ordinary bearer read (invariant 23(b)'s reasoning,
+applied to attention data). `GET /api/trails/state` is `auth_bearer` because
+D17's indicator is mandatory and an indicator that cannot render is not an
+indicator; it reports `mutable: false` for a caller that could not change the
+mode anyway, so the SPA hides the control rather than offering a button that
+403s. `GET /api/trails/aggregate` is `auth_bearer` because it IS the
+agent-facing surface.
+
+`POST /api/trails/purge` (loopback-only, audited) is WHOLESALE by default —
+the point of a purge is that it leaves nothing behind — with `?before=` for a
+window and `id` for one trail. It is deliberately NOT gated on `[trails]
+enabled`: an operator who has just turned the feature off must still be able
+to delete what it recorded while it was on. It removes trails and their
+steps; an `annotations` row carrying a `trail_id` SURVIVES, because a dissent
+note on an authored trail is the human's own words and invariant 23(a) rules
+that authored content is not derived data. Retention is
+`[trails] retention_days` (default 30, `0` = the operator's explicit keep
+everything, surfaced in `/state`) swept by a paged background task on V72-B0's
+shape: spawned and never awaited, `TRAIL_GC_PAGE` trails per short
+transaction, a yield between pages, and no task at all when nothing can
+expire.
+
+Dissent notes REUSE the annotations store rather than growing a second
+comments table (D10's node-thread ruling, one layer over): `annotations`
+gains a nullable `trail_id`, a reply inherits it through the SAME
+`inherit_scope_field` ladder `review_id`/`set_id` already use, and
+`kb-code trail notes <id>` drains them. CLI: `kb-code trail
+{state,list,show,aggregate,purge,notes,fork,author}`; `purge` requires
+`--yes`.
+
 **kbc-tree/1 (V71-F1) — `GET /api/tree/2?repo=[&view=][&root=][&depth=]
 [&expand=][&scope=][&filter=][&mode=][&decorate=][&base=][&review=]
 [&limit=]`.** The PROJECTED, decorated tree, computed ONCE server-side so
