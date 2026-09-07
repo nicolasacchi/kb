@@ -89,20 +89,27 @@ export default function LayeredDag({
     setCursor(0);
   }, [layout]);
 
+  // V73-K6 — one of `overlayPanels`' several independent owners of these
+  // `drawer`-scope ids (no Escape here — this panel renders in flow, not as
+  // a dialog, so it has nothing of its own to dismiss); see
+  // `HierarchyPanel.tsx`'s own doc for the group.
   function onKeyDown(e: React.KeyboardEvent) {
     e.stopPropagation();
     switch (e.key) {
       case "ArrowDown":
       case "j":
+        // kbc-owns: "drawer.row-next":
         e.preventDefault();
         setCursor((c) => Math.min(nodes.length - 1, c + 1));
         return;
       case "ArrowUp":
       case "k":
+        // kbc-owns: "drawer.row-prev":
         e.preventDefault();
         setCursor((c) => Math.max(0, c - 1));
         return;
       case "Enter": {
+        // kbc-owns: "drawer.activate":
         e.preventDefault();
         const n = nodes[cursor];
         if (n) onActivate(n);

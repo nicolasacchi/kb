@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { groupCommands, normaliseContext, scopeSections } from "./KeyboardHelp";
-import { KBC_COMMANDS } from "../commands/registry.gen";
+import { KBC_ACTIVE_COMMANDS } from "../commands/registry.gen";
 
 // V70-A5 — the sheet's content is no longer a literal in this file, so this
 // test no longer mirrors a private array. It covers the two pure functions
@@ -18,7 +18,7 @@ describe("normaliseContext", () => {
 
 describe("groupCommands", () => {
   it("buckets by group, preserving registry order", () => {
-    const reader = KBC_COMMANDS.filter((c) => c.scope === "reader");
+    const reader = KBC_ACTIVE_COMMANDS.filter((c) => c.scope === "reader");
     const groups = groupCommands(reader);
     expect(groups.length).toBeGreaterThan(3);
     expect(groups.map((g) => g.title)).toContain("Move");
@@ -34,7 +34,9 @@ describe("scopeSections", () => {
   it("'all' returns every command as primary, nothing demoted", () => {
     const { primary, global } = scopeSections("all");
     expect(global).toEqual([]);
-    expect(primary.reduce((n, g) => n + g.rows.length, 0)).toBe(KBC_COMMANDS.length);
+    // V73-K6 — `KBC_ACTIVE_COMMANDS`, not `KBC_COMMANDS`: a retired row
+    // (`dismiss.sheet`) is excluded from the sheet on purpose.
+    expect(primary.reduce((n, g) => n + g.rows.length, 0)).toBe(KBC_ACTIVE_COMMANDS.length);
   });
 
   it("a real scope shows its own rows first and collapses the global ones", () => {
@@ -59,7 +61,7 @@ describe("scopeSections", () => {
     // `graph.ego` is bound in vim (`g G`) and unbound in plain; it must be
     // present either way, because the palette can still run it.
     expect(reader.map((c) => c.id)).toContain("graph.ego");
-    expect(KBC_COMMANDS.find((c) => c.id === "graph.ego")!.keys.plain).toEqual([]);
+    expect(KBC_ACTIVE_COMMANDS.find((c) => c.id === "graph.ego")!.keys.plain).toEqual([]);
   });
 
   it("shows the ratified departures on the global sheet, marked planned", () => {

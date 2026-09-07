@@ -21,6 +21,7 @@ import type { SymbolHit } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { useConfirm } from "../components/ConfirmProvider";
 import { Icon } from "../components/icons";
+import { useCommandScope } from "../commands/CommandRoot";
 import {
   useCanvas,
   useCanvasList,
@@ -89,6 +90,11 @@ export default function CanvasPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const confirm = useConfirm();
+  // V73-K6 — publish the scope so the palette/`?` sheet/which-key overlay
+  // list `board.pan` while this route is mounted (discoverability only:
+  // `CanvasSurface`'s own listener below still executes it directly — see
+  // that listener's `kbc-owns` doc for why it cannot go through the bus).
+  useCommandScope("board", { board: "canvas" });
 
   const { id: openId, review: reviewParam } = parseCanvasSearch(searchParams);
 
@@ -566,6 +572,15 @@ function CanvasSurface({
   // not exist. Alt is free here (the reader's vim layer never touches Alt,
   // `vimReader.ts`'s guard bails on it) and is the pan modifier Figma and
   // Excalidraw already train.
+  //
+  // kbc-owns: "board.pan": this listener, not `commands/CommandRoot.tsx`, is
+  // the row's sole executor (V73-K6). `tokenOf` folds a bare Alt keydown into
+  // `"Alt-Alt"` (`e.altKey` is already true for the modifier's OWN keydown,
+  // and the key name is appended again) — there is no live-registry path
+  // that can ever resolve the literal token `"Alt"` the row declares, so
+  // routing this through `resolve()`/`useCommandHandlers` is not a
+  // refactor, it is a rewrite of `tokenOf`'s modifier-fold rule for one row.
+  // A raw, direct listener is the honest, working owner.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Alt" && !e.repeat) {

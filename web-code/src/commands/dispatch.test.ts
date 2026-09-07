@@ -643,6 +643,8 @@ describe("scope goldens", () => {
       "Space R n → rail.tab.notes",
       "Space R u → rail.tab.understand",
       "Space R v → rail.tab.review",
+      // V73-K2c — kbc-hunk-turns/1's on-demand join.
+      "Space T → diff.hunk-turns",
       "Space V → diff.viewed-advance",
       // V73-K2a — diff v2. `Space` family, `z` folds and `[ p`/`] p`.
       "Space W → diff.publish",
@@ -651,6 +653,11 @@ describe("scope goldens", () => {
       "Space c → diff.context-cycle",
       "Space d → desk.toggle.drawer",
       "Space e d → entity.dossier.open",
+      // V73-K2c — kbc-pseudo/1's four fixed chapter-zero rows.
+      "Space f 1 → diff.pseudo.pr-body",
+      "Space f 2 → diff.pseudo.review-md",
+      "Space f 3 → diff.pseudo.findings",
+      "Space f 4 → diff.pseudo.commits",
       "Space g / → nav.search-page",
       "Space g R → nav.rails",
       "Space g b → nav.branches",
@@ -744,6 +751,8 @@ describe("scope goldens", () => {
       "Space C o → comments.open-card",
       "Space C t → comments.track-as-annotation",
       "Space D → drawer.pin",
+      // V73-K2c — the Timeline tab's live GitHub lane toggle.
+      "Space G → review.timeline.github-toggle",
       "Space K → drawer.keep",
       "Space P e → desk.preset.explore",
       "Space P p → desk.preset.present",
@@ -776,9 +785,13 @@ describe("scope goldens", () => {
       "Space g t → nav.todos",
       "Space g w → nav.boards",
       "Space g x → nav.browser",
+      // V73-K2c — the Timeline tab's lane-visibility cycle.
+      "Space j → review.timeline.lane-cycle",
       "Space l → rails.atom.open",
       "Space o → doc.card-open",
       "Space p → rail.pin",
+      // V73-K2c — the claim register's toggle (mounted on Document + Report).
+      "Space q → review.claims-toggle",
       "Space r → doc.cards-fold",
       "Space t → view.theme-cycle",
       "Space u → drawer.reopen",

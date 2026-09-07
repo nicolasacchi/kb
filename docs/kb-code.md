@@ -2278,6 +2278,19 @@ commit join degrades honestly (`kb_lane: "degraded"`) and every tier caps at
 kb-code review turns ID --hunk HUNKID [--ps N] [--json]
 ```
 
+### The SPA surface (`V73-K2c`)
+
+The Room's own half of all four surfaces above — timeline v2's lane bar +
+filters + paging, the claim register (Document tab, beside the Report tab's
+findings, and the reader inspector rail's Claims card), the on-demand
+hunk↔turn "turns" chip, and the pseudo-files chapter zero + read-only
+buffer view — lives in `web-code/`, documented in
+[web-code/CLAUDE.md](../web-code/CLAUDE.md)'s own "Timeline v2, the claim
+register, hunk↔turn chips and pseudo-files" section. That section also
+names a genuine server-side wire bug this unit found and fixed: a duplicate
+`"author"` JSON key on `comment`/`wt_comment` timeline events that silently
+clobbered the v2 envelope for those two of seventeen kinds.
+
 ### `import-legacy` — migrating the old artifacts
 
 `kb-code review import-legacy <artifact.html>` (`kbc-legacy-import/1`) reads

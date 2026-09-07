@@ -31,7 +31,15 @@ export type KbcMutation = "none" | "metadata" | "working-tree";
 
 export type KbcSideEffect = "none" | "remote";
 
-export type KbcLifecycle = "shipped" | "planned";
+/// `retired` (V73-K6) — the row existed, describes a real key, but nothing
+/// executes it anymore and nothing should: excluded from `KBC_ACTIVE_COMMANDS`
+/// below (the palette, the `?` sheet, the which-key overlay and the
+/// dispatcher all read that filtered list, never `KBC_COMMANDS` directly) —
+/// `KBC_COMMANDS` itself keeps the row for the drift golden and the audit
+/// trail. Distinct from `planned` (not built YET, still surfaced as
+/// "planned" so the intent stays visible): a retired row is closed history,
+/// invisible on purpose.
+export type KbcLifecycle = "shipped" | "planned" | "retired";
 
 /// Who fires the binding at the WINDOW layer. `central` — `CommandRoot`'s
 /// single listener. `surface` — declared here for the sheet, the palette and
@@ -76,6 +84,16 @@ export interface KbcCommand {
   readonly browserPassthrough?: boolean;
   readonly note?: string;
   readonly ratifiedConflicts?: readonly string[];
+  /// V73-K6 — the surface that claims a `dispatch: "surface"` row's
+  /// execution when no `useCommandHandlers` registration names it and it
+  /// carries no `vimKind` (the CM6 layer's own claim). Verified by
+  /// `commands/surfaceRows.test.ts` against a fixed per-owner file set —
+  /// see that file for the mechanism and `web-code/CLAUDE.md`'s keyboard
+  /// section for the rule.
+  readonly owner?: string;
+  /// V73-K6 — present only when `lifecycle === "retired"`: why the row is
+  /// no longer live.
+  readonly retiredReason?: string;
 }
 
 export interface KbcScopeDef {
@@ -2882,6 +2900,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["move.left"],
+    owner: "browser",
   },
   {
     id: "board.pane-next",
@@ -2897,6 +2916,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["move.right"],
+    owner: "browser",
   },
   {
     id: "board.row-next",
@@ -2912,6 +2932,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["branches.next","diff.hunk-next","move.down","review.next"],
+    owner: "browser",
   },
   {
     id: "board.row-prev",
@@ -2927,6 +2948,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["branches.prev","diff.hunk-prev","move.up","review.prev"],
+    owner: "browser",
   },
   {
     id: "board.drill",
@@ -2942,6 +2964,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["branches.compare","review.open-diff"],
+    owner: "browser",
   },
   {
     id: "board.pan",
@@ -2957,6 +2980,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "MOVED in V70-A5: the pan modifier was `Space`, and D2 makes `Space` the leader and ONLY the leader.",
+    owner: "canvas",
   },
   {
     id: "player.next",
@@ -3003,6 +3027,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     dispatch: "surface",
     note: "MOVED in V70-A5: autoplay was `Space`, and D2 makes `Space` the leader and ONLY the leader. V70-A6: `p` is also `pane.pin` in the reader scope (a provisional pane's own chip names the key). Ratified on both rows — the tour player and the code buffer are never the same surface, but the gate cannot prove that from two `when` predicates, and a ratification is the right instrument for exactly that.",
     ratifiedConflicts: ["pane.pin"],
+    owner: "storyPlayer",
   },
   {
     id: "lens.row-next",
@@ -3019,6 +3044,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["branches.next","diff.hunk-next","move.down","review.next"],
+    owner: "lens",
   },
   {
     id: "lens.row-prev",
@@ -3035,6 +3061,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     ratifiedConflicts: ["branches.prev","diff.hunk-prev","move.up","review.prev"],
+    owner: "lens",
   },
   {
     id: "lens.group-next",
@@ -3050,6 +3077,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "lens",
   },
   {
     id: "lens.group-prev",
@@ -3065,6 +3093,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "lens",
   },
   {
     id: "dismiss.sheet",
@@ -3078,8 +3107,9 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     mutation: "none",
     sideEffect: "none",
     dismissOrder: 6,
-    lifecycle: "shipped",
+    lifecycle: "retired",
     dispatch: "surface",
+    retiredReason: "V73-K6: the mobile-hosted inspector rail this row dismisses was never built — no `useCommandScope(\"rail\", …)` call and no `sheet.open` publisher exist anywhere in the SPA (grepped), and `InspectorRail.tsx` has no mobile-sheet host of its own. `NavSheet.tsx`/`MobileDrawer.tsx` are unrelated surfaces (the top-bar mobile menu and the reader's file-tree overlay respectively) with their own Escape handling already outside this registry. Retiring rather than inventing a feature this unit was not asked to build.",
   },
   {
     id: "drawer.row-next",
@@ -3095,6 +3125,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "overlayPanels",
   },
   {
     id: "drawer.row-prev",
@@ -3110,6 +3141,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "overlayPanels",
   },
   {
     id: "drawer.activate",
@@ -3125,6 +3157,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "overlayPanels",
   },
   {
     id: "drawer.collapse",
@@ -3139,6 +3172,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "overlayPanels",
   },
   {
     id: "drawer.expand",
@@ -3153,6 +3187,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "overlayPanels",
   },
   {
     id: "dismiss.overlay",
@@ -3169,6 +3204,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "One entry for the whole panel class — peek, hierarchy, impact, ego-graph, layered DAG. Each panel owns execution; the dismiss ORDER is declared once, here.",
+    owner: "overlayPanels",
   },
   {
     id: "palette.row-next",
@@ -3184,6 +3220,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "`j`/`k` move the cursor only while the filter box is EMPTY (the StructurePopup/RecentLocations carve-out).",
+    owner: "pickers",
   },
   {
     id: "palette.row-prev",
@@ -3198,6 +3235,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "palette.section-next",
@@ -3212,6 +3250,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "palette.section-prev",
@@ -3226,6 +3265,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "palette.activate",
@@ -3240,6 +3280,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "palette.show-unavailable",
@@ -3254,6 +3295,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "dismiss.popover",
@@ -3269,6 +3311,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     dismissOrder: 1,
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "dismiss.palette",
@@ -3284,6 +3327,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     dismissOrder: 5,
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "pickers",
   },
   {
     id: "search.row.next",
@@ -3297,6 +3341,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.row.prev",
@@ -3310,6 +3355,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.group.next",
@@ -3323,6 +3369,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.group.prev",
@@ -3336,6 +3383,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.open",
@@ -3349,6 +3397,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.refine",
@@ -3363,6 +3412,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "consult's two-level filtering: orderless, literal, smartcase, `!needle` excludes. It only REMOVES rows from the returned page — it never re-queries and never re-ranks.",
+    owner: "search",
   },
   {
     id: "search.refine.clear",
@@ -3378,6 +3428,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "Two rungs in ONE row rather than two Escape rows: the results page's only modal thing is the transcripts-row popover, and it dismisses before the refinement. The refinement rung KEEPS the result set (consult's rule) — Escape never re-queries and never navigates. This is the shallowest dismissal in the ladder, so every modal layer above it (peek, menu, sheet, palette) still dismisses first.",
+    owner: "search",
   },
   {
     id: "search.facets",
@@ -3392,6 +3443,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "Writes `facets:1` into the query — the rail is never hidden state.",
+    owner: "search",
   },
   {
     id: "search.group.cycle",
@@ -3406,6 +3458,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "Writes `group:<key>` into the query.",
+    owner: "search",
   },
   {
     id: "search.preview",
@@ -3420,6 +3473,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "Peek-first (D5): the preview never takes keyboard focus and never navigates.",
+    owner: "search",
   },
   {
     id: "search.copy-cli",
@@ -3434,6 +3488,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "The CLI-parity affordance: the query bar IS the protocol, so the copied line runs the same search.",
+    owner: "search",
   },
   {
     id: "search.save",
@@ -3447,6 +3502,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.history",
@@ -3460,6 +3516,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "surface",
+    owner: "search",
   },
   {
     id: "search.keep",
@@ -3474,6 +3531,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "The same eviction-is-a-view-operation ring the Desk drawer uses (`desk/drawerSets.ts`), hosted by the results page.",
+    owner: "search",
   },
   {
     id: "search.stack.next",
@@ -3488,6 +3546,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "vim's `:cnewer` over the quickfix stack, which is what the result-set stack is.",
+    owner: "search",
   },
   {
     id: "search.stack.prev",
@@ -3502,6 +3561,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     lifecycle: "shipped",
     dispatch: "surface",
     note: "vim's `:colder`.",
+    owner: "search",
   },
   {
     id: "usages.next",
@@ -4155,4 +4215,133 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     dispatch: "central",
     note: "V72-I2. The same call the Schema card's own Fold button makes. `Space z` rather than a bare `z`: `z` is a pure vim FOLD prefix inside the buffer, and adding a global bare `z` would change what the buffer guard does with every `z` chord (web-code/CLAUDE.md's `every, never any` rule, from the other direction).",
   },
+  {
+    id: "review.claims-toggle",
+    title: "Toggle the claim register",
+    aka: ["claims","claim register"],
+    group: "Review cockpit",
+    keys: { vim: ["Space q"], plain: [], helix: ["Space q"] },
+    scope: "review",
+    targets: ["review"],
+    cli: "kb-code claim list",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (kbc-claim/1, design D18). Mounted on BOTH the Document and Report tabs (never both at once, since `cockpitView` renders exactly one) — a plain DOM-click delegation onto whichever one is open, the `doc.compose-copy` precedent.",
+  },
+  {
+    id: "review.timeline.lane-cycle",
+    title: "Timeline: cycle the next lane's visibility",
+    aka: ["cycle lanes","lane toggle"],
+    group: "Review cockpit",
+    keys: { vim: ["Space j"], plain: [], helix: ["Space j"] },
+    scope: "review",
+    targets: ["review"],
+    cli: "none:lane visibility is a client-side filter over the already-fetched page — the wire has no `?lane=` (`lib/timelineLanes.ts`'s own doc)",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (review-timeline/2). Walks `lib/timelineLanes.ts`'s eleven lanes in order, toggling one per press.",
+  },
+  {
+    id: "review.timeline.github-toggle",
+    title: "Timeline: toggle the live GitHub lane",
+    aka: ["github toggle","github=0"],
+    group: "Review cockpit",
+    keys: { vim: ["Space G"], plain: [], helix: ["Space G"] },
+    scope: "review",
+    targets: ["review"],
+    cli: "kb-code review timeline ID --github false",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (review-timeline/2). Maps straight to the server's `?github=` param — a LIVE network call the other ten lanes are not.",
+  },
+  {
+    id: "diff.hunk-turns",
+    title: "Which agent turn wrote this hunk? (loopback only)",
+    aka: ["turns","hunk turns","who wrote this"],
+    group: "Review diff",
+    keys: { vim: ["Space T"], plain: [], helix: ["Space T"] },
+    scope: "diff",
+    targets: ["hunk"],
+    cli: "kb-code review turns ID --hunk HUNKID",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (kbc-hunk-turns/1). Fetches ON DEMAND for the CURSOR hunk only — never auto-fetched for every hunk. LOOPBACK-ONLY; off loopback the panel renders the honest refusal.",
+  },
+  {
+    id: "diff.pseudo.pr-body",
+    title: "Open ~review/pr-body.md",
+    aka: ["pr body","pseudo pr-body"],
+    group: "Review diff",
+    keys: { vim: ["Space f 1"], plain: [], helix: ["Space f 1"] },
+    scope: "diff",
+    targets: ["pseudo"],
+    cli: "kb-code review pseudo ID pr-body.md",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (kbc-pseudo/1). One of four fixed rows (not a `Space {1-9}` wildcard — `drawer.tab`'s own precedent — since these name four SPECIFIC, permanent files).",
+  },
+  {
+    id: "diff.pseudo.review-md",
+    title: "Open ~review/review.md",
+    aka: ["review doc","pseudo review.md"],
+    group: "Review diff",
+    keys: { vim: ["Space f 2"], plain: [], helix: ["Space f 2"] },
+    scope: "diff",
+    targets: ["pseudo"],
+    cli: "kb-code review pseudo ID review.md",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (kbc-pseudo/1). See `diff.pseudo.pr-body`'s own note.",
+  },
+  {
+    id: "diff.pseudo.findings",
+    title: "Open ~review/findings.json",
+    aka: ["findings json","pseudo findings"],
+    group: "Review diff",
+    keys: { vim: ["Space f 3"], plain: [], helix: ["Space f 3"] },
+    scope: "diff",
+    targets: ["pseudo"],
+    cli: "kb-code review pseudo ID findings.json",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (kbc-pseudo/1). See `diff.pseudo.pr-body`'s own note.",
+  },
+  {
+    id: "diff.pseudo.commits",
+    title: "Open ~review/commits.md",
+    aka: ["commits","pseudo commits"],
+    group: "Review diff",
+    keys: { vim: ["Space f 4"], plain: [], helix: ["Space f 4"] },
+    scope: "diff",
+    targets: ["pseudo"],
+    cli: "kb-code review pseudo ID commits.md",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "surface",
+    note: "V73-K2c (kbc-pseudo/1). See `diff.pseudo.pr-body`'s own note.",
+  },
 ];
+
+/// V73-K6 — `KBC_COMMANDS` minus `lifecycle: "retired"` rows: what "exists
+/// right now" means to every LIVE consumer (the resolver, the palette, the
+/// `?` sheet, the which-key overlay). `KBC_COMMANDS` stays the full,
+/// byte-for-byte mirror of the registry — retired rows included — for the
+/// drift golden (`registry.gen.test.ts`) and anything reading it as history.
+export const KBC_ACTIVE_COMMANDS: readonly KbcCommand[] = KBC_COMMANDS.filter(
+  (c) => c.lifecycle !== "retired",
+);

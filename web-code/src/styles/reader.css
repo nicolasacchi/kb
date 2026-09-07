@@ -2700,3 +2700,187 @@
 .kbc-entity__partner-link:hover {
   text-decoration: underline;
 }
+
+/* V73-K2c (kbc-claim/1, design D18) — the claim register. Mounted on the
+ * Document tab, beside the Report tab's findings, and reused by the reader
+ * inspector's Claims card — ONE stylesheet entry for all three, since
+ * `ClaimRegister.tsx` is the one component. Deliberately visually DISTINCT
+ * from `.kbc-trust` (the FACT ladder, `--kbc-trust-style` line-style
+ * channel): a claim is agent PROSE, not a re-derivable class, so its own
+ * register uses a dashed rule + a faint background tint + an italic body,
+ * composed from EXISTING generic roles (no new hue) rather than the trust
+ * channel's own vocabulary — a claim badge must never be mistaken for a
+ * trust tier at a glance. */
+.kbc-claims {
+  border: 1px dashed var(--rule-hi);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 60%, transparent);
+  margin: 12px 0;
+}
+.kbc-claims__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-claims__toggle:hover {
+  background: var(--bg-card-hi);
+}
+.kbc-claims__title {
+  font-weight: 600;
+}
+.kbc-claims__scope {
+  flex: 1;
+  color: var(--ink-faint);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kbc-claims__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-claim {
+  border-top: 1px dashed var(--rule);
+  padding-top: 6px;
+}
+.kbc-claim__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  text-align: left;
+  padding: 2px 0;
+}
+.kbc-claim__kind {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-mute);
+  background: var(--bg-card-hi);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  flex: 0 0 auto;
+}
+.kbc-claim__subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+.kbc-claim__ladder {
+  font-size: var(--fs-xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  cursor: help;
+  flex: 0 0 auto;
+}
+.kbc-claim__ladder--pinned {
+  border: 1px dashed var(--green);
+  color: var(--green);
+}
+.kbc-claim__ladder--drifted {
+  border: 1px dashed var(--warn);
+  color: var(--warn);
+}
+.kbc-claim__ladder--unanchored {
+  border: 1px dashed var(--ink-faint);
+  color: var(--ink-faint);
+}
+.kbc-claim__detail {
+  padding: 4px 0 4px 4px;
+}
+.kbc-claim__body {
+  font-style: italic;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.kbc-claim__drift,
+.kbc-claim__unanchored {
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  margin: 4px 0;
+}
+.kbc-claim__drift {
+  color: var(--warn);
+}
+.kbc-claim__evidence {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kbc-claim__evidence-row {
+  display: inline-flex;
+}
+.kbc-claim__evidence-link,
+.kbc-claim__evidence-plain {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+.kbc-claim__evidence-link:hover {
+  text-decoration: underline;
+  color: var(--accent-soft);
+}
+.kbc-claim__meta {
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  margin-top: 4px;
+}
+
+/* V73-K2c (kbc-hunk-turns/1) — the two-tier turn badge. NOT `.kbc-trust`
+ * (that vocabulary is exact/likely/candidate; this join has no candidate
+ * tier at all) — same LINE-STYLE-is-the-signal convention, a narrower pair. */
+.kbc-turntier {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  cursor: help;
+  white-space: nowrap;
+}
+.kbc-turntier--exact {
+  text-decoration: underline solid currentColor;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+}
+.kbc-turntier--likely {
+  text-decoration: underline dashed currentColor;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.kbc-inspector__claims {
+  padding: 0 10px;
+}
+.kbc-inspector__claims .kbc-claims {
+  margin: 8px 0;
+}

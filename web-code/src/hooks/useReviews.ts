@@ -30,7 +30,11 @@ import {
   type FetchReviewFindingsParams,
   type PatchReviewInput,
 } from "../api/client";
-import type { ReviewVerdictState, SetFindingDispositionInput } from "../api/types";
+import type {
+  ReviewTimelineParams,
+  ReviewVerdictState,
+  SetFindingDispositionInput,
+} from "../api/types";
 import { BEHAVIORAL_STALE_MS } from "./useBehavioral";
 // ── PRR-U1 ── kept as its OWN import statement (same PRR-U3 precedent
 // `api/client.ts` documents) so this unit's diff never touches a line a
@@ -566,20 +570,47 @@ export function usePublishVerdict(repo: string) {
   });
 }
 
-export function reviewTimelineKey(repo: string | undefined, id: number | undefined) {
-  return ["reviews", repo, "timeline", id] as const;
+export function reviewTimelineKey(
+  repo: string | undefined,
+  id: number | undefined,
+  params?: ReviewTimelineParams,
+) {
+  return [
+    "reviews",
+    repo,
+    "timeline",
+    id,
+    params?.kind ?? null,
+    params?.author ?? null,
+    params?.since ?? null,
+    params?.until ?? null,
+    params?.limit ?? null,
+    params?.offset ?? null,
+    params?.github ?? null,
+    params?.hunk ?? null,
+    params?.ps ?? null,
+  ] as const;
 }
 
-/// `GET /api/reviews/{id}/timeline` — same 404→null degrade convention as
-/// `useReviewMap`/`useReviewReadingOrder` above (an older server without
-/// this route, or the surface genuinely absent) so `CockpitTabs`' Timeline
-/// tab can hide itself with no stub chrome rather than an error state.
-export function useReviewTimeline(repo: string | undefined, id: number | undefined, enabled = true) {
+/// `GET /api/reviews/{id}/timeline` (`review-timeline/2`, V73-K2c) — same
+/// 404→null degrade convention as `useReviewMap`/`useReviewReadingOrder`
+/// above (an older server without this route, or the surface genuinely
+/// absent) so `CockpitTabs`' Timeline tab can hide itself with no stub
+/// chrome rather than an error state. `params` round-trips to the server
+/// (`kind`/`author`/`since`/`until`/`limit`/`offset`/`github`/`hunk`/`ps`);
+/// lane VISIBILITY is a client-side filter over the returned `events[]`,
+/// not a query param (the wire has no `?lane=`).
+export function useReviewTimeline(
+  repo: string | undefined,
+  id: number | undefined,
+  enabled = true,
+  params: ReviewTimelineParams = {},
+) {
   return useQuery({
-    queryKey: reviewTimelineKey(repo, id),
+    queryKey: reviewTimelineKey(repo, id, params),
     queryFn: async () => {
       try {
-        return await fetchReviewTimeline(id as number);
+        return await fetchReviewTimeline(id as number, params);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
@@ -720,5 +751,160 @@ export function useReviewAnalytics(repo: string | undefined, enabled = true) {
     queryKey: reviewAnalyticsKey(repo),
     queryFn: () => fetchReviewAnalytics({ repo }),
     enabled: enabled && repo !== undefined,
+  });
+}
+
+// ── V73-K2c — kbc-claim/1 (the claim register), kbc-pseudo/1 (chapter
+// zero + the pseudo-file view) and kbc-hunk-turns/1 (the on-demand
+// hunk↔turn chip). Own import statement, the same append-only precedent
+// PRR-U8 above establishes.
+import {
+  fetchClaims,
+  fetchHunkTurns,
+  fetchReviewPseudoFile,
+  fetchReviewPseudoList,
+} from "../api/client";
+import type { ClaimSubjectKind, FetchClaimsParams } from "../api/types";
+
+export function claimsKey(params: FetchClaimsParams | undefined) {
+  return [
+    "claims",
+    params?.repo,
+    params?.subject ?? null,
+    params?.subject_kind ?? null,
+    params?.path ?? null,
+    params?.review ?? null,
+    params?.kind ?? null,
+    params?.limit ?? null,
+    params?.offset ?? null,
+  ] as const;
+}
+
+/// `GET /api/claims?repo=&…` — surfaced, never scored: the wire order is
+/// rendered verbatim, never re-sorted by confidence (`ClaimRegister.tsx`'s
+/// own doc). `enabled` defaults to `repo` being known; every narrowing
+/// param is optional, same "absent = the daemon's own default" posture
+/// every other fetch in this file follows.
+export function useClaims(params: FetchClaimsParams | undefined, enabled = true) {
+  return useQuery({
+    queryKey: claimsKey(params),
+    queryFn: () => fetchClaims(params as FetchClaimsParams),
+    enabled: enabled && params !== undefined && params.repo !== "",
+    staleTime: BEHAVIORAL_STALE_MS,
+    retry: false,
+  });
+}
+
+/// The reader inspector's Claims card — claims about exactly ONE file
+/// (`subject_kind: "path"`), keyed on the subject address (root CLAUDE.md
+/// invariant #30's "rail row, not a gutter slot" placement).
+export function useFileClaims(repo: string | undefined, path: string | undefined) {
+  return useClaims(
+    repo !== undefined && path !== undefined && path !== ""
+      ? { repo, subject_kind: "path" as ClaimSubjectKind, subject: path }
+      : undefined,
+    repo !== undefined && path !== undefined && path !== "",
+  );
+}
+
+export function reviewPseudoListKey(repo: string | undefined, id: number | undefined, ps?: string) {
+  return ["reviews", repo, "pseudo", id, ps ?? "latest"] as const;
+}
+
+/// `GET /api/reviews/{id}/pseudo?ps=` — the map column's chapter zero.
+/// 404→null degrade (older server) mirrors every other optional review
+/// surface in this file.
+export function useReviewPseudoList(
+  repo: string | undefined,
+  id: number | undefined,
+  ps: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: reviewPseudoListKey(repo, id, ps),
+    queryFn: async () => {
+      try {
+        return await fetchReviewPseudoList(id as number, ps);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && repo !== undefined && id !== undefined,
+    staleTime: BEHAVIORAL_STALE_MS,
+    retry: false,
+  });
+}
+
+export function reviewPseudoFileKey(
+  repo: string | undefined,
+  id: number | undefined,
+  name: string | undefined,
+  ps?: string,
+) {
+  return ["reviews", repo, "pseudo-file", id, name, ps ?? "latest"] as const;
+}
+
+/// `GET /api/reviews/{id}/pseudo/{name}?ps=` — the single-file read (with
+/// `content`), fetched only once a chapter-zero row is actually opened.
+export function useReviewPseudoFile(
+  repo: string | undefined,
+  id: number | undefined,
+  name: string | undefined,
+  ps: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: reviewPseudoFileKey(repo, id, name, ps),
+    queryFn: async () => {
+      try {
+        return await fetchReviewPseudoFile(id as number, name as string, ps);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && repo !== undefined && id !== undefined && name !== undefined,
+    staleTime: BEHAVIORAL_STALE_MS,
+    retry: false,
+  });
+}
+
+/// A refusal this hook DID reach the server for, vs never having asked
+/// (`enabled: false`) — `HunkTurnsPanel.tsx` renders this branch as the
+/// honest "loopback only" / "no match: <reason>" text rather than a blank
+/// panel. The route has no dedicated bearer-visible refusal shape of its
+/// own (LOOPBACK is enforced at the router, ahead of the handler), so any
+/// non-2xx here is rendered as its own `ApiError.message` verbatim.
+export interface HunkTurnsResult {
+  ok: boolean;
+  message?: string;
+}
+
+export function hunkTurnsKey(
+  repo: string | undefined,
+  id: number | undefined,
+  hunk: string | undefined,
+  ps?: string,
+) {
+  return ["reviews", repo, "hunk-turns", id, hunk, ps ?? "latest"] as const;
+}
+
+/// `GET /api/reviews/{id}/hunks/{hunk}/turns?ps=` — LOOPBACK-ONLY, and
+/// deliberately ON DEMAND: `enabled` is `false` until the caller has
+/// clicked the hunk's "turns" affordance (never auto-fetched per hunk).
+export function useHunkTurns(
+  repo: string | undefined,
+  id: number | undefined,
+  hunk: string | undefined,
+  ps: string | undefined,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: hunkTurnsKey(repo, id, hunk, ps),
+    queryFn: () => fetchHunkTurns(id as number, hunk as string, ps),
+    enabled: enabled && repo !== undefined && id !== undefined && hunk !== undefined,
+    staleTime: BEHAVIORAL_STALE_MS,
+    retry: false,
   });
 }
