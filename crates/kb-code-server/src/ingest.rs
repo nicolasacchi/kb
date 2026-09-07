@@ -332,8 +332,39 @@ pub fn index_file(
         crate::comments::comments_version_for(lang_info.symbol_salt, comment_keywords);
     if !store.has_comments(repo_id, path, blob_hash, &comments_version)? {
         let symbols = store.symbols_for_blob(blob_hash, symbol_salt)?;
-        let extraction =
-            crate::comments::extract_comments(lang_info.id, bytes, &symbols, comment_keywords)?;
+        // V72-I2 — this lane DEGRADES; it does not abort the file.
+        //
+        // `extract_comments` opens with `lang::parse(lang_id, …)`, and that
+        // is `LangError::Unsupported` for every `syntax/1` row with no
+        // tree-sitter grammar — `haml` (whose engine is this crate's own
+        // scanner), and the deliberately grammar-less `Dockerfile`/`.sql`
+        // rows. `lang.rs`'s own doc on `HAML` states the contract those
+        // rows rely on: "`lang::parse("haml", …)` is `Unsupported`, which
+        // is the honest answer and which every caller already degrades on."
+        //
+        // Propagating it with `?` made this the one caller that does not,
+        // and because this block runs BEFORE the Rails lens, the entity
+        // index and every other pass below, a language with no grammar
+        // silently lost ALL of them — not just its comments. That is how a
+        // `.haml` view stopped producing rails-lens edges entirely:
+        // `rails_route.rs`'s HAML test caught it as `edges_total` 23 against
+        // 26 with every noun count still correct, i.e. exactly one source
+        // file's worth of edges missing.
+        //
+        // Only `Unsupported` is absorbed, and it is absorbed as an EMPTY
+        // extraction, which is the truth: a build with no grammar for this
+        // language has no tree-sitter comment nodes to find. A real parse
+        // failure on a language this build DOES support still propagates.
+        let extraction = match crate::comments::extract_comments(
+            lang_info.id,
+            bytes,
+            &symbols,
+            comment_keywords,
+        ) {
+            Ok(e) => e,
+            Err(crate::lang::LangError::Unsupported(_)) => Default::default(),
+            Err(e) => return Err(e.into()),
+        };
         let rows: Vec<NewComment> = extraction
             .blocks
             .iter()
@@ -1117,6 +1148,52 @@ mod tests {
                 .is_empty(),
             "a genuine salt bump must purge the stale-salt sibling for the same blob+language"
         );
+    }
+
+    /// V72-I2 — a language with a `syntax/1` row but NO tree-sitter grammar
+    /// must not lose the rest of its ingest pass.
+    ///
+    /// `extract_comments` opens with `lang::parse`, which is
+    /// `LangError::Unsupported` for `haml` (this crate's own scanner is its
+    /// engine) and for the deliberately grammar-less `Dockerfile`/`.sql`
+    /// rows. When the comment lane propagated that with `?`, `index_file`
+    /// returned `Err` — before the Rails lens, the entity index and every
+    /// other pass below it — so a `.haml` view silently produced NO
+    /// rails-lens edges at all.
+    ///
+    /// This asserts exactly what the fix CHANGED: `index_file` completes
+    /// instead of erroring. Before the fix the `expect` below panics. The
+    /// downstream CONSEQUENCE — that the Rails lens therefore runs for a
+    /// `.haml` view — is covered end-to-end against a real daemon by
+    /// `tests/rails_route.rs`'s
+    /// `the_rails_lens_reads_haml_through_the_real_ingest_path`, which is
+    /// where it belongs: it needs a committed fixture tree, since
+    /// `views::extract_haml` resolves a `render` by READING the view
+    /// directory.
+    ///
+    /// (An earlier draft asserted the lens edge here too, over a two-line
+    /// synthetic template with the partial written to a temp repo root, and
+    /// it produced no edge. That is an unexplained OBSERVATION, not a
+    /// diagnosis — the same construct in the committed `acme-app` fixture
+    /// does mint the edge — and chasing it was out of this unit's scope.)
+    #[test]
+    fn a_language_with_no_grammar_still_completes_its_ingest_pass() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let haml = b"%section\n  = render \"haml_row\"\n";
+
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "app/views/orders/summary.html.haml",
+            haml,
+            "hashHaml",
+            true,
+            false,
+            &kw(),
+        )
+        .expect("a grammar-less language must ingest, not error");
+        assert_eq!(outcome.tier, "haml");
     }
 
     #[test]
