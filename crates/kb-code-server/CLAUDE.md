@@ -876,7 +876,7 @@ invariant #2 records).
     invariant #4 is not amended. `review_doc::routes::V73_K1_ROUTES` joins
     invariant 15's `RouteContract` walk from both sides.
 
-22. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
+24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by
     the LINT rather than by the gate** (V74-L1, D10 + D21, `src/boards/`,
     migration V0036). Four rules, separate to state and easy to break one
