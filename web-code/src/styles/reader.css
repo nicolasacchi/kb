@@ -1089,6 +1089,11 @@
 .kbc-hl-string {
   color: var(--syn-string);
 }
+/* V72-H2b (D16) — a Ruby symbol/regex, a JS template/regex, a JSON object
+ * KEY, a CSS/TOML url. Not a plain string. */
+.kbc-hl-string-special {
+  color: var(--syn-string-special);
+}
 .kbc-hl-comment {
   /* SH.C1 — code comments are body text developers actually read;
    * `--ink-dim` (~3.7:1 post-bump) is legible for labels but fails AA here.
@@ -1111,11 +1116,21 @@
 .kbc-hl-constant {
   color: var(--syn-constant);
 }
+/* V72-H2b (D16) — `nil`/`None`/`true`/`self`/`null`: the LANGUAGE's
+ * constants, which read as keywords in most editors and do here too. */
+.kbc-hl-constant-builtin {
+  color: var(--syn-constant-builtin);
+}
 .kbc-hl-operator {
   color: var(--syn-operator);
 }
 .kbc-hl-punctuation {
   color: var(--syn-punctuation);
+}
+/* V72-H2b (D16) — interpolation delimiters and document markers, which
+ * carry meaning ordinary punctuation does not. */
+.kbc-hl-punctuation-special {
+  color: var(--syn-punctuation-special);
 }
 .kbc-hl-property {
   color: var(--syn-property);

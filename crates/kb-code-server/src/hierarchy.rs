@@ -1298,7 +1298,7 @@ fn require_callable_def(
             ),
         ));
     }
-    let symbols = store.symbols_for_blob(&read.blob_hash, lang_info.salt)?;
+    let symbols = store.symbols_for_blob(&read.blob_hash, lang_info.symbol_salt)?;
     // Prefer a callable whose name covers (line, col).
     let on_name = symbols.iter().find(|s| {
         is_callable_kind(&s.kind)
@@ -1346,7 +1346,7 @@ fn require_callable_def(
             })?
     };
     let _ = repo_id;
-    Ok((sym, lang_info.salt, read.blob_hash))
+    Ok((sym, lang_info.symbol_salt, read.blob_hash))
 }
 
 /// Force candidate for dynamic dispatch / trait-object / duck-typed calls.

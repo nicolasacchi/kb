@@ -845,6 +845,8 @@ mod tests {
             // V73-K3 — the timeline, the claim register, the two
             // pseudo-file reads and the hunk↔turn join, the same way.
             .chain(crate::review_timeline::V73_K3_ROUTES.iter())
+            // V74-L3a joins the SAME walk: `kbc-recipe/1`'s four reads.
+            .chain(crate::recipe::routes::V74_L3A_ROUTES.iter())
         {
             let nested = c
                 .path

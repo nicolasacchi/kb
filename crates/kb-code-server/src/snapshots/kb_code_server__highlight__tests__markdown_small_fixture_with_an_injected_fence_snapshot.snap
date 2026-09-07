@@ -6,7 +6,7 @@ expression: spans
     Span {
         byte_start: 0,
         byte_len: 1,
-        class: Punctuation,
+        class: PunctuationSpecial,
     },
     Span {
         byte_start: 2,

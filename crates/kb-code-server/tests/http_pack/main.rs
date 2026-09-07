@@ -17,6 +17,7 @@ mod impact_analysis_route;
 mod join_route;
 mod lenses_route;
 mod lip_route;
+mod recipe_route;
 mod recipes_route;
 mod refs_diff_routes;
 mod resolve_route;

@@ -48,6 +48,10 @@ startSseInvalidationBridge();
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing");
 
+// DEP-RR7 — react-router-dom 7 (a thin wrapper over react-router 7). The
+// v6→v7 future flags this app opted into on 6.30.x (v7_startTransition,
+// v7_relativeSplatPath — see the prior commit) are now the only behavior;
+// `<BrowserRouter>` no longer takes a `future` prop.
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <LiveTailPortalProvider>

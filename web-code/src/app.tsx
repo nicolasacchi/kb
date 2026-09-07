@@ -11,6 +11,7 @@ import { useRepos } from "./hooks/useRepos";
 import { coldSeedRepo, cycleTheme, loadLastRepo, saveLastRepo } from "./lib/prefs";
 import { readerUrl } from "./lib/breadcrumbs";
 import {
+  boardsPageUrl,
   branchesUrl,
   canvasPageUrl,
   commentsUrl,
@@ -19,6 +20,7 @@ import {
   recipesPageUrl,
   reviewsUrl,
   stacksPageUrl,
+  railsUrl,
   todosUrl,
 } from "./lib/codeUrl";
 import { setsUrl } from "./lib/setsUrl";
@@ -87,6 +89,11 @@ const Todos = lazy(() => import("./routes/Todos"));
 // ~todos above, which it supersedes as the richer, kind-aware surface —
 // `~todos` keeps working, unchanged, and links forward to this one).
 const Comments = lazy(() => import("./routes/Comments"));
+// V72-I2 — `~rails`: the `rails/1` entity-index dashboard. Repo-scoped
+// sentinel, mounted EXACTLY like `~todos`/`~workspaces` above — §D1's "any
+// new surface lands in an existing region", not a second app shell and not a
+// new Desk center mode (`desk/centerModes.ts` still ships `reader` alone).
+const Rails = lazy(() => import("./routes/Rails"));
 // V3.2-B3 — behavioral attention hotspots (repo-scoped sentinel).
 const Hotspots = lazy(() => import("./routes/Hotspots"));
 // V3.R2 — local review sessions (list + cockpit detail).
@@ -102,6 +109,10 @@ const Recipes = lazy(() => import("./routes/Recipes"));
 const Stacks = lazy(() => import("./routes/Stacks"));
 // V3.4-C2 — working-set canvas (Code Bubbles-style pan-zoom fragments).
 const Canvas = lazy(() => import("./routes/Canvas"));
+// V74-L2 — kbc-canvas/1 boards. A SEPARATE surface from `~canvas` above,
+// which stays mounted and frozen (`routes/Boards.tsx`'s header says why).
+const Boards = lazy(() => import("./routes/Boards"));
+const BoardDetail = lazy(() => import("./routes/BoardDetail"));
 // V3.4-C3 — symbol-first browser (Smalltalk lens).
 const Browser = lazy(() => import("./routes/Browser"));
 // DCB W2.B — the doc↔code lens: repo-scoped page (`Lens`) plus two
@@ -300,9 +311,11 @@ function AppShell() {
     "nav.branches": () => navigate(repoRoute(branchesUrl)),
     "nav.todos": () => navigate(repoRoute(todosUrl)),
     "nav.comments": () => navigate(repoRoute(commentsUrl)),
+    "nav.rails": () => navigate(repoRoute((r) => railsUrl(r))),
     "nav.sets": () => navigate(repoRoute(setsUrl)),
     "nav.prs": () => navigate(repoRoute(prsUrl)),
     "nav.canvas": () => navigate(repoRoute(canvasPageUrl)),
+    "nav.boards": () => navigate(repoRoute(boardsPageUrl)),
     "nav.browser": () => navigate(repoRoute(browserPageUrl)),
     "nav.hotspots": () => navigate(repoRoute(hotspotsUrl)),
     "nav.recipes": () => navigate(repoRoute(recipesPageUrl)),
@@ -365,6 +378,7 @@ function AppShell() {
                 <Route path="/r/:repo/~workspaces" element={<Workspaces />} />
                 <Route path="/r/:repo/~todos" element={<Todos />} />
                 <Route path="/r/:repo/~comments" element={<Comments />} />
+                <Route path="/r/:repo/~rails" element={<Rails />} />
                 <Route path="/r/:repo/~hotspots" element={<Hotspots />} />
                 <Route path="/r/:repo/~reviews" element={<Reviews />} />
                 <Route path="/r/:repo/~reviews/:id/diff" element={<ReviewDiff />} />
@@ -378,6 +392,8 @@ function AppShell() {
                 <Route path="/r/:repo/~recipes" element={<Recipes />} />
                 <Route path="/r/:repo/~stacks" element={<Stacks />} />
                 <Route path="/r/:repo/~canvas" element={<Canvas />} />
+                <Route path="/r/:repo/~boards" element={<Boards />} />
+                <Route path="/r/:repo/~boards/:slug" element={<BoardDetail />} />
                 <Route path="/r/:repo/~browser" element={<Browser />} />
                 {/* DCB W2.B (R2/D14) — the repo-scoped lens, no splat: the
                     artifact id is the doc key on every DCB wire/route. */}

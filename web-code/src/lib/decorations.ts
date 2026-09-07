@@ -73,8 +73,12 @@ export interface DecorationRange {
 }
 
 /// One CSS class per `HighlightClass` bucket — mirrors
-/// `highlight::HighlightClass`'s fixed 15-member set 1:1 (`styles/reader.css`
-/// defines each `.kbc-hl-*` rule).
+/// `highlight::HighlightClass`'s fixed EIGHTEEN-member set 1:1 (V72-H2b,
+/// D16; `styles/reader.css` defines each `.kbc-hl-*` rule and
+/// `styles/tokens.css` the `--syn-*` role behind it). The wire values are
+/// kebab-case, so a multi-word role is `kbc-hl-string-special` — no
+/// translation happens here, which is why widening the server enum needed
+/// no change to this function.
 export function cssClassFor(cls: HighlightClass): string {
   return `kbc-hl-${cls}`;
 }

@@ -211,7 +211,7 @@ fn scip_ingest(
             })
             .collect();
         occurrences_written += occs.len();
-        store.replace_scip_occurrences(&file.blob_hash, lang_info.salt, &occs)?;
+        store.replace_scip_occurrences(&file.blob_hash, lang_info.symbol_salt, &occs)?;
         docs_accepted += 1;
     }
 

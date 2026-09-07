@@ -71,12 +71,12 @@ test.describe("merge-check card (Compare, G1)", () => {
     await expect(card).toBeVisible();
     await expect(card.locator("[data-kbc-mergecheck-clean]")).toBeVisible();
     await expect(card.locator("[data-kbc-mergecheck-ahead]")).toContainText("1");
-    // 8 = main's fixture commits since the feature-x fork point (see
+    // 9 = main's fixture commits since the feature-x fork point (see
     // time.spec's branches test for the enumeration, incl. DCB W2.B's
     // additive rev_remap demo commits, DCB-W2.B.R fix 9's ambiguity-demo
-    // commit, and DCB-W3.B's seedCitedByDemo commit ("doclens: add cited-by
-    // demo fixture")).
-    await expect(card.locator("[data-kbc-mergecheck-behind]")).toContainText("8");
+    // commit, DCB-W3.B's seedCitedByDemo commit ("doclens: add cited-by
+    // demo fixture"), and V72-I2's Rails fixture app).
+    await expect(card.locator("[data-kbc-mergecheck-behind]")).toContainText("9");
     await expect(card.locator("[data-kbc-mergecheck-mergebase]")).toBeVisible();
   });
 });

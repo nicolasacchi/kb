@@ -119,6 +119,12 @@ export interface InspectorRailProps {
   /// PRR-U9 (design-addendum-2.md §D) — the Diagnostics card, mounted the
   /// SAME always-visible way `frameworkCard`/`citedBy` are.
   diagnosticsCard?: ReactNode | null;
+  /// V72-I2 — the annotaterb Schema card. A FOURTH always-visible passport
+  /// slot beside `citedBy`/`frameworkCard`/`diagnosticsCard`, not a sixth
+  /// tab: it is a per-FILE derived fact, and it renders nothing at all for a
+  /// file with no `# == Schema Information` banner (`DiagnosticsCard`'s own
+  /// "absent" idiom, not `FrameworkCard`'s named-empty one).
+  schemaCard?: ReactNode | null;
 
   // --- V70-A4 additions --------------------------------------------------
   /// The Review tab's body. `null` + `hasReviewContext: false` renders
@@ -265,6 +271,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     citedBy = null,
     frameworkCard = null,
     diagnosticsCard = null,
+    schemaCard = null,
     reviewPanel = null,
     hasReviewContext = false,
     subject,
@@ -417,6 +424,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
       {citedBy}
       {frameworkCard}
       {diagnosticsCard}
+      {schemaCard}
       <div className="kbc-inspector__body" data-kbc-rail-body={tab}>
         {tab === "all" && (
           <>

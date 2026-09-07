@@ -1,6 +1,8 @@
 import type { DocSummary } from "../api/client";
 import { Icon } from "./icons";
 
+import type { JSX } from "react";
+
 type Glyph = { I: (p: { className?: string }) => JSX.Element; n: number | null };
 
 // Derive the (up to 4) capability glyphs to render for an artifact.

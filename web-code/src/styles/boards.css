@@ -1,0 +1,536 @@
+/* `kbc-canvas/1` — the board list and the board surface (V74-L2, D10).
+ *
+ * Three rules this stylesheet must not break.
+ *
+ * TRUST IS NOT STYLED HERE. A DERIVED edge's class renders as LINE STYLE
+ * (kbc-theme/1's Lane Budget — `--kbc-trust-style`, the same channel the
+ * shared `TrustBadge` uses); an AUTHORED edge gets one solid stroke and no
+ * tier at all. Nothing below assigns a hue to exact/likely/candidate, so a
+ * hand-drawn arrow can never be mistaken for a SCIP-verified one.
+ *
+ * AN ORPHAN IS A FULL CARD. State is a WORD on every card (`review-doc.css`'s
+ * own rule, and `.kbc-refcard__state` is the element that carries it, since a
+ * board's code cards ARE ref cards). Nothing here dims a card out of the way,
+ * and there is no `display: none` on any state.
+ *
+ * GEOMETRY COMES FROM THE ENGINE. Card width/height are the constants
+ * `lib/boardLayout.ts` lays out with (`CANVAS_CARD_W`/`CANVAS_CARD_H`); this
+ * file must not invent a different size, or the cards and the edges drawn
+ * between their centres would disagree. */
+
+/* ── the list ─────────────────────────────────────────────────────────── */
+
+.kbc-boards {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem 1.25rem 3rem;
+  color: var(--ink);
+}
+
+.kbc-boards__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kbc-boards__title {
+  font-size: var(--fs-lg);
+  margin: 0;
+}
+
+.kbc-boards__hint,
+.kbc-board__caption {
+  color: var(--ink-dim);
+  font-size: var(--fs-sm);
+  margin: 0;
+}
+
+.kbc-boards__controls,
+.kbc-board__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: var(--fs-sm);
+}
+
+.kbc-boards__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kbc-boards__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.kbc-boards__row-name {
+  font-weight: 600;
+}
+
+.kbc-boards__row-meta,
+.kbc-board__gate {
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+/* Status is a WORD; the border weight is reinforcement only. `pending` is
+ * D21's own state — an agent proposed this board and no human has accepted
+ * it — so it is the one that reads loudest. */
+.kbc-boards__status {
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.45rem;
+  font-size: var(--fs-xs);
+  text-transform: lowercase;
+  color: var(--ink-dim);
+}
+
+.kbc-boards__status--pending {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.kbc-boards__status--accepted {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.kbc-boards__status--archived {
+  opacity: 0.7;
+}
+
+.kbc-boards__sweep,
+.kbc-board__sweep {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-card-hi);
+  font-size: var(--fs-sm);
+}
+
+.kbc-boards__error {
+  color: var(--danger);
+}
+
+.kbc-boards__legacy {
+  border-top: 1px solid var(--rule);
+  padding-top: 0.75rem;
+  color: var(--ink-dim);
+  font-size: var(--fs-sm);
+}
+
+.kbc-boards__legacy h2 {
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 0.25rem;
+}
+
+/* ── one board ────────────────────────────────────────────────────────── */
+
+.kbc-board {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--ink);
+}
+
+.kbc-board__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.kbc-board__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.kbc-board__title {
+  font-size: var(--fs-lg);
+  margin: 0;
+}
+
+.kbc-board__census {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+.kbc-board__walkthrough {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 1rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-card-hi);
+  font-size: var(--fs-sm);
+}
+
+.kbc-board__main {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kbc-board__rail {
+  width: 22rem;
+  max-width: 40vw;
+  border-left: 1px solid var(--rule);
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+/* ── the surface ──────────────────────────────────────────────────────── */
+
+.kbc-board__surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg);
+  touch-action: none;
+}
+
+.kbc-board__world {
+  position: relative;
+  transform-origin: 0 0;
+}
+
+.kbc-board__edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* One stroke for an AUTHORED edge. The dash pattern below is the DERIVED
+ * lane's trust channel and is applied only to a derived edge, so the two can
+ * never be confused. */
+.kbc-board__edge {
+  stroke: var(--rule-hi);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.kbc-board__edge--authored {
+  stroke-dasharray: none;
+}
+
+.kbc-board__edge--derived {
+  stroke-dasharray: var(--kbc-trust-dash, 4 3);
+}
+
+/* `kbc-trust-*` (tokens.css) already sets `--kbc-trust-style`; the dash
+ * pattern here is the SVG expression of the same three tiers, so a derived
+ * edge's class is legible at a glance and in every theme. */
+.kbc-board__edge.kbc-trust-exact {
+  --kbc-trust-dash: none;
+}
+.kbc-board__edge.kbc-trust-likely {
+  --kbc-trust-dash: 6 3;
+}
+.kbc-board__edge.kbc-trust-candidate {
+  --kbc-trust-dash: 2 3;
+}
+
+/* Kind is carried in the stroke's WEIGHT, never in a hue: eight kinds do not
+ * fit in a colour vocabulary that also has to survive CVD. */
+.kbc-board__edge--contradicts,
+.kbc-board__edge--question {
+  stroke-width: 2.5;
+}
+
+.kbc-board__slot {
+  position: absolute;
+}
+
+.kbc-board__truncated {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 0.35rem 0.75rem;
+  background: var(--bg-card-hi);
+  border-top: 1px solid var(--warn);
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+/* ── one card ─────────────────────────────────────────────────────────── */
+
+.kbc-boardcard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: 320px;
+  max-height: 200px;
+  overflow: auto;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.kbc-boardcard.is-focused {
+  outline: 2px solid var(--accent-bor);
+  outline-offset: 1px;
+}
+
+.kbc-boardcard--folded {
+  max-height: 4.5rem;
+}
+
+.kbc-boardcard__head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--fs-xs);
+}
+
+.kbc-boardcard__title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbc-boardcard__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.kbc-boardcard__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 0.1rem;
+}
+
+.kbc-boardcard__actions button:hover {
+  color: var(--ink);
+}
+
+.kbc-boardcard__body {
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.kbc-boardcard__note,
+.kbc-boardcard__reason {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+.kbc-boardcard__kbcq {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.kbc-boardcard__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+.kbc-boardcard__url {
+  overflow-wrap: anywhere;
+}
+
+.kbc-boardcard__ctx,
+.kbc-boardcard__pinned {
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+/* ── the add-to-board dialog ──────────────────────────────────────────── */
+
+.kbc-addboard {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--backdrop);
+  z-index: var(--z-drawer);
+}
+
+.kbc-addboard__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(32rem, 92vw);
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--ink);
+}
+
+.kbc-addboard__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.kbc-addboard__head button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.kbc-addboard__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: var(--fs-sm);
+}
+
+.kbc-addboard__target,
+.kbc-addboard__slug,
+.kbc-addboard__note {
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  margin: 0;
+}
+
+.kbc-addboard__warn {
+  color: var(--warn);
+  font-size: var(--fs-sm);
+  margin: 0;
+}
+
+.kbc-addboard__error {
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  margin: 0;
+}
+
+.kbc-addboard__lint {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+.kbc-addboard__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* ── a node's thread ──────────────────────────────────────────────────── */
+
+.kbc-boardthread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+}
+
+.kbc-boardthread__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.kbc-boardthread__head button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.kbc-boardthread__anchor,
+.kbc-boardthread__why {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+.kbc-boardthread__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kbc-boardthread__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border-left: 2px solid var(--rule-hi);
+  padding-left: 0.4rem;
+}
+
+.kbc-boardthread__author {
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}
+
+.kbc-boardthread__composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.kbc-boardthread__error {
+  color: var(--danger);
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+
+/* Mobile: the board is one column and the thread is the ONE bottom sheet,
+ * never a second one beside the rail (`web-code/CLAUDE.md`'s Desk rule, and
+ * root CLAUDE.md #30's "one mobile entry point"). */
+@media (width <= 860px) {
+  .kbc-board__rail {
+    position: fixed;
+    inset: auto 0 0 0;
+    width: auto;
+    max-width: none;
+    max-height: 60vh;
+    border-left: none;
+    border-top: 1px solid var(--rule-hi);
+    background: var(--bg-card);
+    z-index: var(--z-drawer);
+  }
+}

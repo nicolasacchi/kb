@@ -1020,7 +1020,13 @@ fn highlights_for(
     (byte_start, byte_end): (usize, usize),
 ) -> Option<Vec<Span>> {
     let li = crate::lang::detect(path, Some(content.as_bytes()))?;
-    let all = store.highlights_for_blob(current_blob, li.salt).ok()??;
+    // V72-H2b — the HIGHLIGHT family's salt. Reading the `highlights`
+    // table under `symbol_salt` (the shape before the split) would answer
+    // `None` for every blob, which this fn's own doc would then render as
+    // the honest "not indexed" — a silent dead surface.
+    let all = store
+        .highlights_for_blob(current_blob, li.highlight_salt)
+        .ok()??;
     Some(clip_spans(&all, byte_start, byte_end))
 }
 

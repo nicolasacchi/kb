@@ -181,16 +181,33 @@ describe("deriveTheme", () => {
     for (const role of compat) expect(d.roles, role).toHaveProperty(role);
   });
 
-  it("carries exactly highlight.rs's fifteen classes — no more, no fewer", () => {
+  it("carries exactly highlight.rs's eighteen classes — no more, no fewer", () => {
     // Frozen against `crates/kb-code-server/src/highlight.rs`'s
-    // `HighlightClass`. Widening needs the shared-`salt` split (v7.2), so a
-    // sixteenth role appearing here is a bug, not a feature.
+    // `HighlightClass`, in its WIRE order (the same list that crate
+    // exports as `highlight::ROLES`). V72-H2b widened the fifteen to
+    // eighteen on the back of the symbol_salt/highlight_salt split; a
+    // nineteenth appearing here without the server enum and the
+    // `--syn-*` tokens moving with it is a bug, not a feature.
     expect([...SYNTAX_ROLES]).toEqual([
-      "keyword", "string", "comment", "function", "type", "number", "variable",
-      "constant", "operator", "punctuation", "property", "attribute", "label",
+      "keyword", "string", "string-special", "comment", "function", "type",
+      "number", "variable", "constant", "constant-builtin", "operator",
+      "punctuation", "punctuation-special", "property", "attribute", "label",
       "escape", "other",
     ]);
     for (const r of SYNTAX_ROLES) expect(d.roles).toHaveProperty(`syn-${r}`);
+  });
+
+  it("gives every widened role its own hue, not its parent's", () => {
+    // The point of a role is that a theme CAN separate it. The built-in
+    // palette in `styles/tokens.css` deliberately does not (it carries
+    // seven chrome hues, not eleven) — a registry theme does.
+    for (const [child, parent] of [
+      ["syn-string-special", "syn-string"],
+      ["syn-constant-builtin", "syn-constant"],
+      ["syn-punctuation-special", "syn-punctuation"],
+    ]) {
+      expect(d.roles[child], `${child} vs ${parent}`).not.toEqual(d.roles[parent]);
+    }
   });
 
   it("clears the text floor on every background a role can co-occur with", () => {

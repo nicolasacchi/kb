@@ -335,6 +335,33 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// The re-extract bill (`GET /api/reextract/bill`): what bumping a
+    /// grammar/query salt would cost on this daemon's mirror — files and
+    /// bytes per language, rows per derived table, and a TIMED sample of
+    /// the real extractors scaled to the whole repo. Run it BEFORE
+    /// shipping a salt bump; D7 asks for the number to be recorded per
+    /// milestone.
+    ///
+    /// `--bill` is currently the only mode: kb-code has no "re-extract
+    /// now" verb, because a whole-corpus maintenance pass with a trigger
+    /// is exactly the shape the V72-B0 boot-hang rules keep out of this
+    /// daemon. The mirror re-derives itself through the ordinary ingest
+    /// gates on the next visit to each file.
+    Reextract {
+        /// Price the bump. Required — see the note above.
+        #[arg(long)]
+        bill: bool,
+        #[arg(long)]
+        repo: Option<String>,
+        /// Files per language in the TIMED sample (0 = census only).
+        #[arg(long)]
+        sample: Option<usize>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `reextract-bill/1` JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
     /// `kb-code outline <PATH> --repo R [--ref REF] [--json]` —
     /// `GET /api/outline` (`outline/1`): the structure of ONE file, for
     /// every registered file type. Rust items, YAML/TOML/JSON key paths,
@@ -926,27 +953,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// `kb-code recipe <NAME> --repo NAME [--since] [--limit]` — V3.3-Q1
-    /// run one named deterministic recipe (`GET /api/recipes/{name}`).
-    /// Daemon-only. Operator-critical parity surface (D7).
+    /// `kb-code recipe <list|show|run|lint|new|trust|runs|delete>` —
+    /// V74-L3a `kbc-recipe/1`: the typed runner over a CLOSED op set.
+    ///
+    /// **CLI break (V74-L3a):** the pre-v7.4 form `kb-code recipe <NAME>
+    /// --repo R` is now `kb-code recipe run <NAME> --repo R`. All
+    /// fourteen recipes — the eight DAG built-ins and the six
+    /// `recipes/1` natives, now adapted onto this runner — are reachable
+    /// the same way. `kb-code recipes` (the frozen `recipes/1` catalog)
+    /// and `GET /api/recipes*` are unchanged.
     Recipe {
-        /// Kebab-case recipe name (`new-public-api`, `god-functions`, …).
-        name: String,
-        #[arg(long)]
-        repo: String,
-        /// Required by `new-public-api` and `complexity-climbers`
-        /// (git ref or ISO date `YYYY-MM-DD`).
-        #[arg(long)]
-        since: Option<String>,
-        #[arg(long)]
-        limit: Option<usize>,
-        /// Named scope include (`tests`) or exclude (`!generated`).
-        #[arg(long)]
-        scope: Option<String>,
-        #[arg(long, default_value = "http://127.0.0.1:4747")]
-        daemon: String,
-        #[arg(long)]
-        json: bool,
+        #[command(subcommand)]
+        cmd: RecipeCmd,
     },
     /// `kb-code hook install|uninstall|status` — W5.3: the
     /// `kb-code-why.sh` PreToolUse hook's install surface. NEVER edits
@@ -2550,6 +2568,128 @@ enum BehavioralCmd {
     },
 }
 
+/// `kb-code recipe …` — V74-L3a `kbc-recipe/1`.
+#[derive(Subcommand, Debug)]
+enum RecipeCmd {
+    /// The catalog for one repo: every built-in, server-stored and
+    /// repo-versioned recipe, with its HOME, its trust state and the CLI
+    /// line that runs it (`GET /api/recipe?repo=`).
+    List {
+        #[arg(long)]
+        repo: String,
+        /// One of `orienting|reviewing|checking-tests|rails|hygiene`.
+        #[arg(long)]
+        intent: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// One recipe: params, steps, views, source and (for a repo file
+    /// whose bytes moved) the trust DIFF (`GET /api/recipe/{slug}`).
+    Show {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Would it load, and would it run? A LIST of problems, never a
+    /// first error (`GET /api/recipe/{slug}/lint`). Exits 3 on a
+    /// `refuse`.
+    Lint {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run it (`GET /api/recipe/{slug}/run`). Mutates nothing unless
+    /// `--materialise` (loopback) is given.
+    Run {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        /// A typed param, `name=value`. Repeatable.
+        #[arg(long = "p", value_name = "NAME=VALUE")]
+        p: Vec<String>,
+        /// A `$context` field, `name=value` (`repo|path|symbol|ref|scope`).
+        /// Repeatable.
+        #[arg(long = "ctx", value_name = "NAME=VALUE")]
+        ctx: Vec<String>,
+        /// A kbc-scope/1 expression overriding the recipe's own.
+        #[arg(long)]
+        scope: Option<String>,
+        /// Per-step row cap. Over the server's cap is a 400 with both
+        /// numbers — never a silent clamp.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Render only this view.
+        #[arg(long)]
+        view: Option<String>,
+        /// Store the result as a replayable snapshot (loopback only).
+        #[arg(long)]
+        materialise: bool,
+        /// Create a reading set from a view's addresses, THROUGH the
+        /// existing `POST /api/sets` path — this CLI never grows a
+        /// second set-creation route (loopback only).
+        #[arg(long, value_name = "NAME")]
+        save_as_set: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Store an agent-authored recipe on the DAEMON — never into the
+    /// tree (`POST /api/recipe/new`, loopback only). `-` reads stdin.
+    New {
+        /// Path to a JSON recipe document, or `-` for stdin.
+        #[arg(long = "from-json", value_name = "PATH|-")]
+        from_json: String,
+        /// Scope the stored recipe to one repo (absent = every repo).
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept the bytes a repo-versioned recipe carries RIGHT NOW
+    /// (`POST /api/recipe/{slug}/trust`, loopback only). A later change
+    /// re-arms the prompt with a diff.
+    Trust {
+        slug: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replay a materialised run (`GET /api/recipe/runs/{id}`). A stale
+    /// snapshot says so rather than reading as live.
+    Runs {
+        id: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a SERVER-stored recipe (`DELETE /api/recipe/{slug}`,
+    /// loopback only). A builtin and a repo file are not deletable here.
+    Delete {
+        slug: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// `kb-code canvas …` — TWO families under one verb, deliberately named
 /// apart rather than merged.
 ///
@@ -4104,6 +4244,13 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
         Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
         Cmd::Parity { daemon, json } => parity_cmd(&daemon, json).await,
+        Cmd::Reextract {
+            bill,
+            repo,
+            sample,
+            daemon,
+            json,
+        } => reextract_cmd(&daemon, bill, repo.as_deref(), sample, json).await,
         Cmd::Outline {
             path,
             repo,
@@ -4678,26 +4825,70 @@ async fn run(cli: Cli) -> Result<()> {
             } => doclens_unpin_cmd(&daemon, &kb, &doc, json).await,
         },
         Cmd::Recipes { daemon, json } => recipes_catalog_cmd(&daemon, json).await,
-        Cmd::Recipe {
-            name,
-            repo,
-            since,
-            limit,
-            scope,
-            daemon,
-            json,
-        } => {
-            recipe_run_cmd(
-                &daemon,
-                &name,
-                &repo,
-                since.as_deref(),
-                limit,
-                scope.as_deref(),
+        Cmd::Recipe { cmd } => match cmd {
+            RecipeCmd::List {
+                repo,
+                intent,
+                daemon,
                 json,
-            )
-            .await
-        }
+            } => recipe_list_cmd(&daemon, &repo, intent.as_deref(), json).await,
+            RecipeCmd::Show {
+                slug,
+                repo,
+                daemon,
+                json,
+            } => recipe_show_cmd(&daemon, &slug, &repo, json).await,
+            RecipeCmd::Lint {
+                slug,
+                repo,
+                daemon,
+                json,
+            } => recipe_lint_cmd(&daemon, &slug, &repo, json).await,
+            RecipeCmd::Run {
+                slug,
+                repo,
+                p,
+                ctx,
+                scope,
+                limit,
+                view,
+                materialise,
+                save_as_set,
+                daemon,
+                json,
+            } => {
+                recipe_run_cmd(RecipeRunArgs {
+                    daemon: &daemon,
+                    slug: &slug,
+                    repo: &repo,
+                    p: &p,
+                    ctx: &ctx,
+                    scope: scope.as_deref(),
+                    limit,
+                    view: view.as_deref(),
+                    materialise,
+                    save_as_set: save_as_set.as_deref(),
+                    json,
+                })
+                .await
+            }
+            RecipeCmd::New {
+                from_json,
+                repo,
+                daemon,
+                json,
+            } => recipe_new_cmd(&daemon, &from_json, repo.as_deref(), json).await,
+            RecipeCmd::Trust {
+                slug,
+                repo,
+                daemon,
+                json,
+            } => recipe_trust_cmd(&daemon, &slug, &repo, json).await,
+            RecipeCmd::Runs { id, daemon, json } => recipe_replay_cmd(&daemon, &id, json).await,
+            RecipeCmd::Delete { slug, daemon, json } => {
+                recipe_delete_cmd(&daemon, &slug, json).await
+            }
+        },
         Cmd::Hook { cmd } => match cmd {
             HookCmd::Install => {
                 hook_install();
@@ -6647,6 +6838,141 @@ fn syntax_request() -> (&'static str, Vec<(&'static str, String)>) {
 /// The `GET /api/parity` request: `(path, query)`.
 fn parity_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::PARITY_ROUTE.path, Vec::new())
+}
+
+// ── V72-H2b — `kb-code reextract --bill` ────────────────────────────────
+//
+// Same discipline as the two above: the PATH comes from the server crate's
+// own `reextract::V72_H2B_ROUTES` contract, so
+// `cli_requests_send_every_param_their_route_requires` walks this verb
+// against the route it calls.
+
+/// The `GET /api/reextract/bill` request: `(path, query)`.
+fn reextract_bill_request(
+    repo: &str,
+    sample: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(n) = sample {
+        q.push(("sample", n.to_string()));
+    }
+    (kb_code_server::reextract::BILL_ROUTE.path, q)
+}
+
+/// `--repo`, or the daemon's ONE repo when it mirrors exactly one. Never
+/// a silent "first of several": which repo a bill priced is the whole
+/// point of the number, so an ambiguous daemon is an error naming the
+/// candidates rather than a guess.
+async fn resolve_repo_arg(
+    client: &reqwest::Client,
+    daemon: &str,
+    repo: Option<&str>,
+) -> Result<String> {
+    if let Some(r) = repo {
+        return Ok(r.to_string());
+    }
+    let body = get_json(client, daemon, "/api/repos", &[]).await?;
+    let names: Vec<String> = body["repos"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| r["name"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    match names.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => anyhow::bail!("this daemon mirrors no repos"),
+        many => anyhow::bail!(
+            "this daemon mirrors {} repos ({}) — name one with --repo",
+            many.len(),
+            many.join(", ")
+        ),
+    }
+}
+
+/// `kb-code reextract --bill` — the human table over `reextract-bill/1`.
+/// Every number is printed with the label the wire gives it: EXACT for
+/// the census, MEASURED for the sample, and the projection spelled out
+/// per row rather than presented as a fact.
+async fn reextract_cmd(
+    daemon: &str,
+    bill: bool,
+    repo: Option<&str>,
+    sample: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    if !bill {
+        anyhow::bail!(
+            "kb-code reextract: pass --bill. There is no re-extract verb: a salt bump is an \
+             edit to the daemon's `lang` table plus a deploy, and the mirror re-derives \
+             itself through the ordinary ingest gates."
+        );
+    }
+    let client = http_client()?;
+    let repo = resolve_repo_arg(&client, daemon, repo).await?;
+    let (path, query) = reextract_bill_request(&repo, sample);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let num = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+    println!(
+        "{} — role table v{}, sample {} file(s)/language",
+        body["repo"].as_str().unwrap_or("?"),
+        num(&body["role_table_version"]),
+        num(&body["sample"]),
+    );
+    println!(
+        "\n{:<12} {:>7} {:>12} {:>8} {:>12} {:>12}",
+        "LANG", "FILES", "BYTES", "SAMPLED", "SYM ms(proj)", "HL ms(proj)"
+    );
+    let ms = |v: &serde_json::Value| match v.as_f64() {
+        Some(f) => format!("{f:.0}"),
+        None => "—".to_string(),
+    };
+    for l in body["languages"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "{:<12} {:>7} {:>12} {:>8} {:>12} {:>12}",
+            l["lang"].as_str().unwrap_or("?"),
+            num(&l["files"]),
+            num(&l["bytes"]),
+            num(&l["sampled_files"]),
+            ms(&l["projected_symbol_ms"]),
+            ms(&l["projected_highlight_ms"]),
+        );
+    }
+    println!("\nrows per derived table (exact for this repo's blobs):");
+    for t in body["tables"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "  {:<16} {:>10}",
+            t["table"].as_str().unwrap_or("?"),
+            num(&t["rows"])
+        );
+    }
+    let totals = &body["totals"];
+    println!(
+        "\ntotal: {} file(s), {} byte(s), {} derived row(s)",
+        num(&totals["files"]),
+        num(&totals["bytes"]),
+        num(&totals["rows"]),
+    );
+    println!(
+        "projected re-extract: symbols {} ms, highlights {} ms",
+        ms(&totals["projected_symbol_ms"]),
+        ms(&totals["projected_highlight_ms"]),
+    );
+    if !body["census_complete"].as_bool().unwrap_or(true) {
+        println!("\nNOTE: the row census hit its wall-clock budget — `tables` is a FLOOR.");
+    }
+    if !body["sample_complete"].as_bool().unwrap_or(true) {
+        println!("NOTE: the timed pass hit its budget — some languages were not sampled.");
+    }
+    if let Some(h) = body["honesty"].as_str() {
+        println!("\n{h}");
+    }
+    Ok(())
 }
 
 // --- V72-H4a: `aug-lane/1` (`kb-code lanes`) -----------------------------
@@ -9789,74 +10115,616 @@ async fn recipes_catalog_cmd(daemon: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn recipe_run_cmd(
-    daemon: &str,
-    name: &str,
+// --- V74-L3a: `kbc-recipe/1` (`kb-code recipe`) ---------------------------
+//
+// Four request builders against the four routes
+// `kb_code_server::recipe::routes::V74_L3A_ROUTES` declares; each takes its
+// PATH from the const rather than a string literal, so
+// `cli_requests_send_every_param_their_route_requires` walks the CLI and
+// the server against each other. The four WRITERS (materialise / trust /
+// new / delete) have no builder here for the reason their contracts are
+// absent server-side: a `RouteContract` describes a query-param surface.
+
+/// The `GET /api/recipe` request: `(path, query)`.
+fn recipe_catalog_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::recipe::routes::RECIPE_CATALOG_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+/// The `GET /api/recipe/{slug}` request: `(declared path, query)`.
+fn recipe_show_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::recipe::routes::RECIPE_SHOW_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+/// The `GET /api/recipe/{slug}/lint` request: `(declared path, query)`.
+fn recipe_lint_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::recipe::routes::RECIPE_LINT_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+/// The `GET /api/recipe/{slug}/run` request: `(declared path, query)`.
+/// `p.<name>` / `ctx.<field>` ride the query as dotted keys — the server
+/// recovers them from the raw query because `serde_urlencoded` cannot
+/// flatten a map beside typed fields.
+fn recipe_run_request(
     repo: &str,
-    since: Option<&str>,
-    limit: Option<usize>,
+    p: &[(String, String)],
     scope: Option<&str>,
-    json: bool,
-) -> Result<()> {
-    let client = http_client()?;
-    let mut q: Vec<(&str, String)> = vec![("repo", repo.to_string())];
-    if let Some(s) = since {
-        q.push(("since", s.to_string()));
+    limit: Option<usize>,
+    view: Option<&str>,
+) -> (&'static str, Vec<(String, String)>) {
+    let mut q = vec![("repo".to_string(), repo.to_string())];
+    q.extend(p.iter().cloned());
+    if let Some(s) = scope {
+        q.push(("scope".to_string(), s.to_string()));
     }
     if let Some(n) = limit {
-        q.push(("limit", n.to_string()));
+        q.push(("limit".to_string(), n.to_string()));
     }
-    if let Some(s) = scope {
-        q.push(("scope", s.to_string()));
+    if let Some(v) = view {
+        q.push(("view".to_string(), v.to_string()));
     }
-    let qref: Vec<(&str, &str)> = q.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let path = format!("/api/recipes/{name}");
-    let body = get_json(&client, daemon, &path, &qref).await?;
+    (kb_code_server::recipe::routes::RECIPE_RUN_ROUTE.path, q)
+}
+
+/// Substitute a real slug into a declared path's `{slug}` placeholder,
+/// percent-encoding it. Same posture as `board_path`: a URL builder that
+/// trusts a validator on the other side of a wire is one relaxation away
+/// from a path traversal. Recipe slugs legitimately carry `:` (the intent
+/// prefix), which axum decodes back on the `Path` extractor.
+fn recipe_path(declared: &str, slug: &str) -> String {
+    declared.replace(
+        "{slug}",
+        &slug
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect::<String>(),
+    )
+}
+
+/// V74-L3a repair (D11's "client timeout 600 s"). `http_client`'s 10 s
+/// default made the two blame-heavy `recipes/1` recipes unusable — a
+/// `new-public-api` run over a few thousand files spends longer than
+/// that in `git blame` alone, and the CLI gave up while the server kept
+/// working. `behavioral_backfill_cmd` had already set the precedent for
+/// a long-op client; recipes did not adopt it until now.
+fn recipe_client() -> Result<reqwest::Client> {
+    client_builder()
+        .timeout(Duration::from_secs(600))
+        .build()
+        .context("build recipe http client")
+}
+
+/// V74-L3a repair (D11's "error bodies surfaced"). `get_json`'s blanket
+/// `error_for_status()` threw away the server's own message, so a caller
+/// who forgot a required param got `HTTP status client error (400 Bad
+/// Request)` while the SPA rendered `p.since: required (string)`. Two
+/// surfaces, one server, two qualities of answer. This renders the body.
+fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> anyhow::Error {
+    let msg = body["error"]
+        .as_str()
+        .or_else(|| body["detail"].as_str())
+        .unwrap_or("(no error message)");
+    let kind = body["type"]
+        .as_str()
+        .map(|t| format!(" [{t}]"))
+        .unwrap_or_default();
+    anyhow::anyhow!("recipe: {msg} (HTTP {}){kind}", status.as_u16())
+}
+
+async fn recipe_get(
+    client: &reqwest::Client,
+    daemon: &str,
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<serde_json::Value> {
+    let (status, body) = get_json_raw(client, daemon, path, query).await?;
+    if !status.is_success() {
+        return Err(recipe_api_error(status, &body));
+    }
+    Ok(body)
+}
+
+async fn recipe_list_cmd(daemon: &str, repo: &str, intent: Option<&str>, json: bool) -> Result<()> {
+    let client = recipe_client()?;
+    let (path, q) = recipe_catalog_request(repo);
+    let body = recipe_get(&client, daemon, path, &query_pairs(&q)).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
         return Ok(());
     }
-    let missing = body["inputs_missing"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let missing_s: Vec<&str> = missing.iter().filter_map(|v| v.as_str()).collect();
     println!(
-        "recipe · {} v{} · {}  (total {}{}; inputs_missing=[{}])",
-        body["recipe"].as_str().unwrap_or(name),
-        body["recipe_version"].as_u64().unwrap_or(0),
-        body["repo"].as_str().unwrap_or(repo),
-        body["total"].as_u64().unwrap_or(0),
-        if body["truncated"].as_bool().unwrap_or(false) {
-            ", truncated"
+        "recipes · schema {} · repo {}",
+        body["schema"].as_str().unwrap_or("?"),
+        body["repo"].as_str().unwrap_or(repo)
+    );
+    let rows = body["recipes"].as_array().cloned().unwrap_or_default();
+    let mut by_intent: std::collections::BTreeMap<String, Vec<&serde_json::Value>> =
+        std::collections::BTreeMap::new();
+    for r in &rows {
+        let i = r["intent"].as_str().unwrap_or("?").to_string();
+        if intent.is_some_and(|want| want != i) {
+            continue;
+        }
+        by_intent.entry(i).or_default().push(r);
+    }
+    for (group, rs) in by_intent {
+        println!("\n[{group}]");
+        for r in rs {
+            let slug = r["slug"].as_str().unwrap_or("?");
+            let home = r["home"].as_str().unwrap_or("?");
+            let trust = r["trust"].as_str().unwrap_or("?");
+            let flag = if trust == "trusted" { "" } else { "  !" };
+            println!("  {slug:<28} {home:<8} {trust}{flag}");
+            println!("      {}", r["title"].as_str().unwrap_or(""));
+            println!("      $ {}", r["cli"].as_str().unwrap_or(""));
+            if let Some(h) = r["shadowed_by"].as_str() {
+                println!("      (shadows a {h} recipe of the same slug)");
+            }
+        }
+    }
+    let problems = body["problems"].as_array().cloned().unwrap_or_default();
+    if !problems.is_empty() {
+        println!("\nproblems ({}):", problems.len());
+        for p in problems {
+            println!(
+                "  {}: {}",
+                p["path"].as_str().unwrap_or("?"),
+                p["message"].as_str().unwrap_or("?")
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn recipe_show_cmd(daemon: &str, slug: &str, repo: &str, json: bool) -> Result<()> {
+    let client = recipe_client()?;
+    let (declared, q) = recipe_show_request(repo);
+    let body = recipe_get(
+        &client,
+        daemon,
+        &recipe_path(declared, slug),
+        &query_pairs(&q),
+    )
+    .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let r = &body["recipe"];
+    println!(
+        "{}  ({})\n  home:   {}\n  source: {}\n  trust:  {}\n  scope:  {}",
+        r["title"].as_str().unwrap_or(slug),
+        r["slug"].as_str().unwrap_or(slug),
+        r["home"].as_str().unwrap_or("?"),
+        r["source"].as_str().unwrap_or("?"),
+        r["trust"].as_str().unwrap_or("?"),
+        r["scope"].as_str().unwrap_or("?"),
+    );
+    println!("  $ {}", body["cli"].as_str().unwrap_or(""));
+    if let Some(d) = r["description_md"].as_str() {
+        if !d.trim().is_empty() {
+            println!("\n{}", d.trim());
+        }
+    }
+    let params = r["params"].as_array().cloned().unwrap_or_default();
+    if !params.is_empty() {
+        println!("\nparams:");
+        for p in params {
+            println!(
+                "  {:<16} {:<8} {}{}",
+                p["name"].as_str().unwrap_or("?"),
+                p["type"].as_str().unwrap_or("?"),
+                if p["required"].as_bool().unwrap_or(false) {
+                    "required "
+                } else {
+                    ""
+                },
+                p["description"].as_str().unwrap_or(""),
+            );
+        }
+    }
+    let steps = r["steps"].as_array().cloned().unwrap_or_default();
+    if !steps.is_empty() {
+        println!("\nsteps:");
+        for st in steps {
+            println!(
+                "  {:<14} {:<10} {}",
+                st["id"].as_str().unwrap_or("?"),
+                st["op"].as_str().unwrap_or("?"),
+                st["title"].as_str().unwrap_or(""),
+            );
+        }
+    }
+    if let Some(diff) = r["trust_diff"].as_str() {
+        println!("\nthis recipe CHANGED since it was trusted:\n{diff}");
+    }
+    Ok(())
+}
+
+async fn recipe_lint_cmd(daemon: &str, slug: &str, repo: &str, json: bool) -> Result<()> {
+    let client = recipe_client()?;
+    let (declared, q) = recipe_lint_request(repo);
+    let body = recipe_get(
+        &client,
+        daemon,
+        &recipe_path(declared, slug),
+        &query_pairs(&q),
+    )
+    .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        let report = body["report"].as_array().cloned().unwrap_or_default();
+        if report.is_empty() {
+            println!("{slug}: ok");
+        }
+        for r in &report {
+            println!(
+                "{:<8} {:<12} {}",
+                r["severity"].as_str().unwrap_or("?"),
+                r["at"].as_str().unwrap_or("?"),
+                r["message"].as_str().unwrap_or(""),
+            );
+        }
+    }
+    if !body["ok"].as_bool().unwrap_or(false) {
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    Ok(())
+}
+
+struct RecipeRunArgs<'a> {
+    daemon: &'a str,
+    slug: &'a str,
+    repo: &'a str,
+    p: &'a [String],
+    ctx: &'a [String],
+    scope: Option<&'a str>,
+    limit: Option<usize>,
+    view: Option<&'a str>,
+    materialise: bool,
+    save_as_set: Option<&'a str>,
+    json: bool,
+}
+
+fn kv_pairs(prefix: &str, raw: &[String]) -> Result<Vec<(String, String)>> {
+    raw.iter()
+        .map(|kv| {
+            let (k, v) = kv
+                .split_once('=')
+                .ok_or_else(|| anyhow::anyhow!("--{prefix} takes NAME=VALUE; got {kv:?}"))?;
+            Ok((format!("{prefix}.{k}"), v.to_string()))
+        })
+        .collect()
+}
+
+async fn recipe_run_cmd(args: RecipeRunArgs<'_>) -> Result<()> {
+    let client = recipe_client()?;
+    let mut dotted = kv_pairs("p", args.p)?;
+    dotted.extend(kv_pairs("ctx", args.ctx)?);
+    let (declared, q) = recipe_run_request(args.repo, &dotted, args.scope, args.limit, args.view);
+    let qref: Vec<(&str, &str)> = q.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+    let body = if args.materialise {
+        let path = recipe_path("/api/recipe/{slug}/materialise", args.slug);
+        let (status, receipt) =
+            post_json_query_raw(&client, args.daemon, &path, &qref, &serde_json::json!({})).await?;
+        if !status.is_success() {
+            return Err(recipe_api_error(status, &receipt));
+        }
+        let id = receipt["run_id"].as_str().unwrap_or_default().to_string();
+        eprintln!("materialised as {id}");
+        recipe_get(&client, args.daemon, &format!("/api/recipe/runs/{id}"), &[]).await?
+    } else {
+        recipe_get(
+            &client,
+            args.daemon,
+            &recipe_path(declared, args.slug),
+            &qref,
+        )
+        .await?
+    };
+
+    if let Some(name) = args.save_as_set {
+        recipe_save_as_set(&client, args.daemon, args.repo, name, &body, args.view).await?;
+    }
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    render_recipe_run(&body);
+    Ok(())
+}
+
+/// D11's "save-as set", THROUGH the existing sets path — this CLI posts
+/// to `POST /api/sets`, the one route that creates a reading set, rather
+/// than the daemon growing a second creation surface it would then have
+/// to keep in step.
+async fn recipe_save_as_set(
+    client: &reqwest::Client,
+    daemon: &str,
+    repo: &str,
+    name: &str,
+    run: &serde_json::Value,
+    view: Option<&str>,
+) -> Result<()> {
+    let views = run["views"].as_array().cloned().unwrap_or_default();
+    let chosen = match view {
+        Some(want) => views.iter().find(|v| v["id"].as_str() == Some(want)),
+        None => views.first(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("this run declares no view to save"))?;
+    let step_id = chosen["step"].as_str().unwrap_or_default();
+    let rows = run["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|s| s["id"].as_str() == Some(step_id)))
+        .and_then(|s| s["rows"].as_array().cloned())
+        .unwrap_or_default();
+    let mut spans = Vec::new();
+    let mut skipped = 0usize;
+    for r in &rows {
+        let Some(path) = r["path"].as_str() else {
+            skipped += 1;
+            continue;
+        };
+        let mut span = serde_json::json!({ "path": path });
+        if let Some(l) = r["line"].as_u64() {
+            span["line_start"] = serde_json::json!(l);
+            span["line_end"] = serde_json::json!(l);
+        }
+        spans.push(span);
+    }
+    if spans.is_empty() {
+        return Err(anyhow::anyhow!(
+            "nothing in view {:?} has a path to put in a reading set ({skipped} row(s) skipped)",
+            chosen["id"].as_str().unwrap_or("?")
+        ));
+    }
+    let payload = serde_json::json!({ "repo": repo, "name": name, "spans": spans });
+    let (status, body) = post_json_raw(client, daemon, "/api/sets", &payload).await?;
+    if !status.is_success() {
+        return Err(recipe_api_error(status, &body));
+    }
+    eprintln!(
+        "saved {} span(s) as reading set {:?}{}",
+        spans.len(),
+        name,
+        if skipped > 0 {
+            format!(" ({skipped} address(es) had no path and were skipped)")
+        } else {
+            String::new()
+        }
+    );
+    Ok(())
+}
+
+/// The ONE human rendering of a run. `views` are printed as declared —
+/// this presenter adds no columns of its own, so the CLI and the SPA
+/// cannot disagree about what a recipe shows.
+fn render_recipe_run(body: &serde_json::Value) {
+    println!(
+        "{} · {} ({})  home={} trust={}",
+        body["recipe"].as_str().unwrap_or("?"),
+        body["title"].as_str().unwrap_or(""),
+        body["intent"].as_str().unwrap_or("?"),
+        body["home"].as_str().unwrap_or("?"),
+        body["trust"].as_str().unwrap_or("?"),
+    );
+    let scope = &body["scope"];
+    if !scope["expression"].as_str().unwrap_or("").is_empty() {
+        println!(
+            "scope: {} — {}",
+            scope["expression"].as_str().unwrap_or(""),
+            if scope["applied"].as_bool().unwrap_or(false) {
+                format!("applied ({} paths)", scope["matched"].as_u64().unwrap_or(0))
+            } else {
+                "NOT APPLIED (this run is unscoped)".to_string()
+            }
+        );
+        for n in scope["notes"].as_array().cloned().unwrap_or_default() {
+            println!("  note: {}", n.as_str().unwrap_or(""));
+        }
+    }
+    if let Some(rep) = body.get("replay").filter(|v| !v.is_null()) {
+        println!(
+            "replay of {} — snapshot at generation {}, current {}{}",
+            rep["run_id"].as_str().unwrap_or("?"),
+            rep["generation"].as_u64().unwrap_or(0),
+            rep["current_generation"].as_u64().unwrap_or(0),
+            if rep["stale"].as_bool().unwrap_or(false) {
+                "  (STALE)"
+            } else {
+                ""
+            }
+        );
+    }
+
+    println!("\nsteps:");
+    for st in body["steps"].as_array().cloned().unwrap_or_default() {
+        let rows = st["rows"].as_array().map(|r| r.len()).unwrap_or(0);
+        println!(
+            "  {:<14} {:<10} {:>5} rows / {:<5} total  {}ms{}",
+            st["id"].as_str().unwrap_or("?"),
+            st["op"].as_str().or(st["engine"].as_str()).unwrap_or("?"),
+            rows,
+            st["total"].as_u64().unwrap_or(0),
+            st["ms"].as_u64().unwrap_or(0),
+            if st["truncated"].as_bool().unwrap_or(false) {
+                "  (truncated)"
+            } else {
+                ""
+            },
+        );
+        let census = &st["census"];
+        if let Some(reason) = census["empty_reason"].as_str() {
+            // The whole point of the census: "0 rows" and "that lane is
+            // switched off" must never print the same.
+            println!("      EMPTY: {reason}");
+            for f in census["filters_applied"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
+                println!("        {}", f.as_str().unwrap_or(""));
+            }
+        }
+        for n in census["notes"].as_array().cloned().unwrap_or_default() {
+            println!("      note: {}", n.as_str().unwrap_or(""));
+        }
+    }
+
+    for v in body["views"].as_array().cloned().unwrap_or_default() {
+        let cols = v["columns"].as_array().cloned().unwrap_or_default();
+        println!(
+            "\n[{}] {} ({})",
+            v["id"].as_str().unwrap_or("?"),
+            v["title"].as_str().unwrap_or(""),
+            v["kind"].as_str().unwrap_or("?")
+        );
+        let headers: Vec<String> = cols
+            .iter()
+            .map(|c| c["header"].as_str().unwrap_or("?").to_string())
+            .collect();
+        println!("  {}", headers.join("  |  "));
+        for row in v["rows"].as_array().cloned().unwrap_or_default() {
+            let cells: Vec<String> = row
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|c| c.as_str().unwrap_or("").to_string())
+                .collect();
+            println!("  {}", cells.join("  |  "));
+        }
+    }
+
+    let h = &body["honesty"];
+    println!(
+        "\ngeneration {} · {}ms of a {}ms budget{}",
+        h["generation"].as_u64().unwrap_or(0),
+        h["elapsed_ms"].as_u64().unwrap_or(0),
+        h["budget_ms"].as_u64().unwrap_or(0),
+        if h["budget_exhausted"].as_bool().unwrap_or(false) {
+            "  (BUDGET EXHAUSTED — this run is partial)"
         } else {
             ""
-        },
-        missing_s.join(", "),
+        }
     );
-    if let Some(note) = body["note"].as_str() {
-        println!("note: {note}");
+    for n in h["notes"].as_array().cloned().unwrap_or_default() {
+        println!("note: {}", n.as_str().unwrap_or(""));
     }
-    // Generic table: path first when present, then score/symbol.
-    println!("{:<8} {:<28} {:<20} detail", "score", "path", "symbol");
-    for it in body["items"].as_array().cloned().unwrap_or_default() {
-        let score = it["score"]
-            .as_f64()
-            .or_else(|| it["score"].as_i64().map(|n| n as f64))
-            .map(|s| format!("{s:.4}"))
-            .unwrap_or_else(|| "-".into());
-        let path = it["path"].as_str().unwrap_or("-");
-        let symbol = it["symbol"].as_str().unwrap_or("-");
-        let class = it["class"].as_str().unwrap_or("");
-        let terms = it.get("terms").map(|t| t.to_string()).unwrap_or_default();
-        let detail = if !class.is_empty() && !terms.is_empty() {
-            format!("class={class} {terms}")
-        } else if !class.is_empty() {
-            format!("class={class}")
-        } else {
-            terms
-        };
-        println!("{score:<8} {path:<28} {symbol:<20} {detail}");
+}
+
+async fn recipe_new_cmd(
+    daemon: &str,
+    from_json: &str,
+    repo: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let text = if from_json == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("read recipe JSON from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(from_json)
+            .with_context(|| format!("read recipe JSON from {from_json}"))?
+    };
+    let recipe: serde_json::Value =
+        serde_json::from_str(&text).context("parse recipe document as JSON")?;
+    let mut payload = serde_json::json!({ "recipe": recipe });
+    if let Some(r) = repo {
+        payload["repo"] = serde_json::json!(r);
+    }
+    let client = recipe_client()?;
+    let (status, body) = post_json_raw(&client, daemon, "/api/recipe/new", &payload).await?;
+    if !status.is_success() {
+        return Err(recipe_api_error(status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!(
+            "stored {} on the daemon (home={})",
+            body["recipe"].as_str().unwrap_or("?"),
+            body["home"].as_str().unwrap_or("server")
+        );
+    }
+    Ok(())
+}
+
+async fn recipe_trust_cmd(daemon: &str, slug: &str, repo: &str, json: bool) -> Result<()> {
+    let client = recipe_client()?;
+    let (status, body) = post_json_raw(
+        &client,
+        daemon,
+        &recipe_path("/api/recipe/{slug}/trust", slug),
+        &serde_json::json!({ "repo": repo }),
+    )
+    .await?;
+    if !status.is_success() {
+        return Err(recipe_api_error(status, &body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!(
+            "trusted {} at {}",
+            body["recipe"].as_str().unwrap_or(slug),
+            body["source"].as_str().unwrap_or("?")
+        );
+    }
+    Ok(())
+}
+
+async fn recipe_replay_cmd(daemon: &str, id: &str, json: bool) -> Result<()> {
+    let client = recipe_client()?;
+    let body = recipe_get(&client, daemon, &format!("/api/recipe/runs/{id}"), &[]).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    render_recipe_run(&body);
+    Ok(())
+}
+
+async fn recipe_delete_cmd(daemon: &str, slug: &str, json: bool) -> Result<()> {
+    let client = recipe_client()?;
+    let url = format!(
+        "{}{}",
+        daemon.trim_end_matches('/'),
+        recipe_path("/api/recipe/{slug}", slug)
+    );
+    let resp = client
+        .delete(&url)
+        .send()
+        .await
+        .with_context(|| format!("DELETE {url} — is kb-code-server running at {daemon}?"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(recipe_api_error(status, &json_body_or_null(&text)));
+    }
+    if json {
+        println!("{}", serde_json::json!({ "deleted": slug }));
+    } else {
+        println!("deleted server-stored recipe {slug}");
     }
     Ok(())
 }
@@ -23094,6 +23962,8 @@ mod tests {
             }),
             syntax_request(),
             parity_request(),
+            // V72-H2b — the re-extract bill joins the SAME walk.
+            reextract_bill_request("repo", Some(50)),
             // V72-G1.1 — the entity DOSSIER, on its own sibling path
             // beside the frozen `entities/1` index above. A route added
             // to `entities::dossier::V72_G1_ROUTES` with no verb building
@@ -23154,6 +24024,33 @@ mod tests {
             review_pseudo_file_request(Some("latest")),
             review_turns_request(Some("latest")),
         ];
+        // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
+        // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
+        // so it is normalised into the same shape as the rest rather than
+        // widening every builder above.
+        let recipe_run = recipe_run_request("repo", &[], None, None, None);
+        let built: Vec<(&'static str, Vec<(&'static str, String)>)> = built
+            .into_iter()
+            .chain([
+                recipe_catalog_request("repo"),
+                recipe_show_request("repo"),
+                recipe_lint_request("repo"),
+                (
+                    recipe_run.0,
+                    recipe_run
+                        .1
+                        .iter()
+                        .map(|(k, v)| match k.as_str() {
+                            "repo" => ("repo", v.clone()),
+                            "scope" => ("scope", v.clone()),
+                            "limit" => ("limit", v.clone()),
+                            "view" => ("view", v.clone()),
+                            other => panic!("unexpected recipe run param {other:?}"),
+                        })
+                        .collect(),
+                ),
+            ])
+            .collect();
         // Rebase note (V71-F1 replayed onto V71-E2): ONE walk over BOTH
         // units' declared contracts — E2's `actions::V71_E2_ROUTES` and
         // F1's `tree::V71_F1_ROUTES` — chained onto V71-G0's, written in
@@ -23180,6 +24077,8 @@ mod tests {
             .chain(kb_code_server::review_doc::routes::V73_K1_ROUTES.iter())
             // V72-J1 — the four `comments/1` reads, the same way.
             .chain(kb_code_server::comments::V72_J1_ROUTES.iter())
+            // V74-L3a — `kbc-recipe/1`'s four reads join the SAME walk.
+            .chain(kb_code_server::recipe::routes::V74_L3A_ROUTES.iter())
             // V74-L1 — same walk, one milestone later. A board read
             // declared in `boards::V74_L1_ROUTES` with no verb building a
             // request for it fails HERE, by path.
