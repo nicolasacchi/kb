@@ -544,6 +544,114 @@
         }
       ],
       "normalized": "widget rails:widget"
+    },
+    {
+      "raw": "auth branch:feature/auth",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "auth",
+      "text_mode": "literal",
+      "filters": {
+        "branch": "feature/auth"
+      },
+      "normalized": "auth branch:feature/auth"
+    },
+    {
+      "raw": "orders touches:app/models/order.rb",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "orders",
+      "text_mode": "literal",
+      "filters": {
+        "touches": "app/models/order.rb"
+      },
+      "normalized": "orders touches:app/models/order.rb"
+    },
+    {
+      "raw": "widget by:ada",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "filters": {
+        "by": "ada"
+      },
+      "normalized": "widget by:ada"
+    },
+    {
+      "raw": "widget agent:EXACT",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget",
+      "text_mode": "literal",
+      "filters": {
+        "agent": "exact"
+      },
+      "normalized": "widget agent:exact"
+    },
+    {
+      "raw": "widget agent:maybe",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "widget agent:maybe",
+      "text_mode": "literal",
+      "diagnostics": [
+        {
+          "message": "`agent:` takes exact|likely|any|none — `maybe` searched as an ordinary word",
+          "severity": "warning",
+          "token": "agent:maybe"
+        }
+      ],
+      "normalized": "widget agent:maybe"
+    },
+    {
+      "raw": "branch:release by:ada agent:any",
+      "lanes": [
+        "files",
+        "symbols",
+        "text",
+        "semantic",
+        "sessions",
+        "transcripts"
+      ],
+      "query": "",
+      "text_mode": "literal",
+      "filters": {
+        "branch": "release",
+        "by": "ada",
+        "agent": "any"
+      },
+      "normalized": "branch:release by:ada agent:any"
     }
   ]
 }

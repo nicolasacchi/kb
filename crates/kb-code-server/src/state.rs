@@ -103,6 +103,12 @@ pub struct AppState {
     /// checks it AND the persisted opt-in mode, and
     /// `GET /api/trails/state` reports both.
     pub trails: crate::config::TrailsSection,
+    /// V75-M3 — `[branches]` (`config::BranchesSection`), resolved ONCE at
+    /// boot for the same reason `lanes` and `search_factors` are: there is
+    /// no live reload, and every surface in one request must agree about
+    /// which addresses count as an agent's. Read via
+    /// `resolved_agent_emails()` (empty ⇒ the shipped default).
+    pub branches: crate::config::BranchesSection,
     /// V70-A3X — `GET /api/status`'s per-repo cache, same generation-gated
     /// shape (and same per-boot-singleton convention) as `file_index`/
     /// `symbol_index` above — see `git_status`'s module doc.
@@ -256,6 +262,18 @@ pub struct AppState {
     /// under (`history::scratch`). Never inside a browsed repo; swept for
     /// orphans once at boot.
     pub scratch_root: PathBuf,
+    /// V75-M3 — `branch-facts/1`'s per-ref base cache, keyed by
+    /// `(repo, full_ref, tip_sha, default_sha)`
+    /// (`history::facts::BaseCacheKey`). In-process and per-boot, like
+    /// `file_index`/`symbol_index`: a branch fact is derivable from the
+    /// repo at any moment, so persisting it would be a second copy of git
+    /// that can go stale in ways a key miss cannot.
+    ///
+    /// `parking_lot::Mutex` (the 2026-09-01 starvation incident's ruling
+    /// for every short in-process lock in this crate). Root CLAUDE.md #15
+    /// applies: the guard is taken and released INSIDE one
+    /// `spawn_blocking` closure and never crosses an `.await`.
+    pub branch_base_cache: Arc<parking_lot::Mutex<crate::history::facts::BaseCache>>,
 }
 
 pub type SharedState = Arc<AppState>;

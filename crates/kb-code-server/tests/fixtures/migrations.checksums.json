@@ -193,5 +193,10 @@
     "version": 40,
     "name": "workspace_rekey",
     "checksum": "17343273670871537693"
+  },
+  {
+    "version": 41,
+    "name": "branch_favourites",
+    "checksum": "18428223858306464536"
   }
 ]

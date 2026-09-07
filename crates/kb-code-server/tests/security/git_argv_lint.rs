@@ -103,6 +103,17 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "history/file_history.rs",
     "history/merge_check.rs",
     "history/mod.rs",
+    // V75-M3's conflict radar. It spawns `git` directly for the same
+    // reason `history/merge_check.rs` does and one more: `merge-tree
+    // --write-tree` exits 1 for an ordinary conflict (so `run_git_raw`'s
+    // any-non-zero-is-a-failure contract would misclassify it), AND every
+    // child must carry the SEC-15 scratch-ODB environment, which
+    // `run_git_raw` does not set. Both caller-supplied values are
+    // `Revspec`s (`?against=` and each enumerated candidate ref); the only
+    // other interpolated argv entry is `<tree oid>:<path>`, where the oid
+    // is 40 hex characters git itself printed and the path can therefore
+    // never be read as a flag.
+    "history/radar.rs",
     "history/range_diff.rs",
     "history/scratch.rs",
     "history/stacks.rs",
@@ -243,6 +254,28 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
     assert!(
         sep < path_arg,
         "git_behavior must push `--` BEFORE the pathspec"
+    );
+
+    // V75-M3 — `history/facts.rs` takes a caller-supplied PATH
+    // (`touches:<path>`, off the branch-facts route's kbcq/1 query) into a
+    // `git diff --name-only <range> -- <path>`. It spawns nothing itself
+    // (every call goes through `history::run_git_raw`, which is why it is
+    // absent from GIT_SPAWNING_FILES), but the pathspec rule is about
+    // ARGV, not about who spawns.
+    //
+    // Asserted on the WHITESPACE-STRIPPED source rather than on two
+    // `find` offsets: this argv is one short slice literal that rustfmt is
+    // free to keep on one line or break across five, and an assertion that
+    // fails on FORMATTING is the failure mode `contains_outside_comments`
+    // above already exists to avoid.
+    let facts: String = std::fs::read_to_string(src_root().join("history/facts.rs"))
+        .unwrap()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        facts.contains("\"--\",path]"),
+        "facts::touches_path must place `--` immediately before its caller-supplied pathspec"
     );
 
     // `blame/timeline.rs` is the ONE documented non-case: it embeds the
