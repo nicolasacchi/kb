@@ -2123,3 +2123,57 @@ The agent-layer wrapper is the **`/kb-review-migrate`** skill
 reports every substitution and every skipped finding by title, runs
 `review lint`, and hands the operator the exact `review compose` line. It
 never composes — the last look at a machine translation belongs to a human.
+
+### Legacy review artifacts → kbc-review/1
+
+A vocabulary-coverage pass (V73-K4) checked every element a typical
+pre-K1 review artifact carries — an operator- or agent-rendered HTML page
+with an embedded machine-readable findings block — against what
+`kbc-review/1` can express today. The grading is at the protocol level:
+does the vocabulary (front-matter keys, the seven ref schemes, findings v2,
+the timeline lanes, the `kbc-claim/1` kinds) have a place for this element
+at all, independent of any one importer's current bugs.
+
+| element category | kbc-review/1 carrier | coverage |
+|---|---|---|
+| header identity (repo, PR/change number, title) | `pr_meta` binding + `{{meta}}` | covered-with-degrade — `{{meta}}` surfaces kb-code's own review id, not the external change number |
+| author / timestamp / branch attribution | `pr_meta` snapshot | covered-with-degrade — not folded into the document's own render |
+| top-level verdict + prose | review-level `verdict` + `report_json` | covered-with-degrade — two separate mechanisms, not unified in front matter |
+| numeric risk score | `report_json.risk_score` (pre-K1 lane) | covered-with-degrade — `risk` is deliberately level + why, never a score, by design |
+| aggregate finding counts | derivable from findings v2 by `severity` | covered-with-degrade — arithmetic over the list, not a stored or rendered field |
+| CI-check counts / status | — | **gap** — no ref scheme, block, or claim kind names a CI check run |
+| prose summary | `summary_md` | covered |
+| per-finding severity | `severity` (`blocker`\|`concern`\|`ok`) | covered |
+| per-finding free-text category | `category` (8-value closed set) | covered-with-degrade — a value outside the set folds to `other` with a stated mapping row |
+| per-finding location (path / line(s) / whole-file) | `location{path,kind,lines,removed}` | covered — the same shape `kbc-findings/1` already uses |
+| per-finding id + external deep link | rationale-embedded provenance line only | covered-with-degrade — a fresh slug is always minted (never reused), so a link published elsewhere against the old id will not resolve |
+| per-finding title / rationale / recommendation | `title` / `rationale` / `recommendation` | covered |
+| per-finding cited code excerpt | `[[code:path:lines@sha]]` ref + a live, server-highlighted card | covered as a mechanism — see open work below for why today's importer can still miss it |
+| files-changed / diffstat list | diff v2's own file map (`GET /reviews/{id}/files`) | covered-with-degrade — a separate surface, not joined into the document or its render |
+| CI checks list | — | **gap** — same absence as the aggregate row, at per-check granularity |
+| embedded machine JSON block | `kbc-legacy-import/1`'s intended input | covered-with-degrade — depends on the block carrying a recognized id and shape |
+
+**Open work**, ranked by how much each undermines a faithful migration —
+each is a single-file change:
+
+- `import-legacy` never reads a finding's embedded code-excerpt field: a
+  migrated finding keeps its title, rationale and recommendation but
+  silently drops any cited snippet, with no note recorded. This is the one
+  place the importer does not hold itself to the crate's own "an absence is
+  stated, never discovered" rule.
+- Its finding-location lookup only reads flat top-level keys; it does not
+  fall back to the same nested `{path, kind, lines}` object shape
+  `DocFinding` and `kbc-findings/1` already use elsewhere in this crate, so
+  a block using that shape has every finding skipped for "no location".
+- Its accepted block-id allowlist does not include `kbc-findings` — the id
+  kb-code's own pre-v7.3 findings-ledger schema (`kbc-findings/1`, the PR
+  Room's `findings import` route) would naturally produce — so an artifact
+  carrying kb-code's own former schema under its own former id is invisible
+  to the importer.
+- No `render --template` output, including the built-in default, embeds a
+  re-importable machine block, so an export cannot currently be fed back
+  through `import-legacy`; the round trip the design intends does not yet
+  close.
+- No ref scheme, front-matter block, or `kbc-claim/1` kind names a CI check
+  run, so CI status cannot be cited inside a review document at all today,
+  hand-authored or migrated.
