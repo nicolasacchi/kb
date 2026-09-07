@@ -7,6 +7,7 @@ import { useMemo } from "react";
 import type { ReviewDetailPr, ReviewFinding, ReviewReport, ReviewReportOut } from "../../api/types";
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
 import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
+import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
 import AgentVerdictCard from "./AgentVerdictCard";
 import CiChecksCard from "./CiChecksCard";
 import FindingCard, { severityRank } from "./FindingCard";
@@ -89,21 +90,41 @@ function MarkdownLite({ text }: { text: string }) {
   const blocks: MarkdownBlock[] = useMemo(() => parseMarkdownLite(text), [text]);
   return (
     <div className="kbc-report__summary">
-      {blocks.map((b, i) =>
-        b.kind === "paragraph" ? (
-          <p key={i}>
-            <InlineRuns runs={b.runs} />
-          </p>
-        ) : (
-          <ul key={i}>
-            {b.items.map((item, j) => (
-              <li key={j}>
-                <InlineRuns runs={item} />
-              </li>
-            ))}
-          </ul>
-        ),
-      )}
+      {blocks.map((b, i) => {
+        if (b.kind === "paragraph") {
+          return (
+            <p key={i}>
+              <InlineRuns runs={b.runs} />
+            </p>
+          );
+        }
+        if (b.kind === "list") {
+          return (
+            <ul key={i}>
+              {b.items.map((item, j) => (
+                <li key={j}>
+                  <InlineRuns runs={item} />
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        // V73-K2b added `heading` and `code` to `MarkdownBlock`, both behind
+        // `MarkdownLiteOptions` and both OFF here — this panel calls
+        // `parseMarkdownLite(text)` with no options, so neither arm is
+        // reachable and the rendered summary is byte-identical to before.
+        // They are handled rather than dropped so that this stays an
+        // assertion about the OPTIONS, never about the content: a block this
+        // renderer cannot name must still reach the reader.
+        if (b.kind === "heading") {
+          return (
+            <p key={i}>
+              <InlineRuns runs={b.runs} />
+            </p>
+          );
+        }
+        return <pre key={i}>{b.text}</pre>;
+      })}
     </div>
   );
 }
@@ -189,6 +210,15 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab }: Report
       <div className="kbc-eyebrow">
         Section 02 · {sorted.length} finding{sorted.length === 1 ? "" : "s"}
       </div>
+      {/* findings v2 (V73-K2b) — the act/blocking facets. DERIVED from the
+          rows this section already renders and from nothing else: a second
+          VIEW of one list, never a second count (which is exactly how
+          kb-code once shipped three disagreeing "usages" numbers). */}
+      {sorted.length > 0 && (
+        <p className="kbc-report__facets" data-kbc-report-facets>
+          {findingFacetText(findingFacets(sorted))}
+        </p>
+      )}
       {sorted.length === 0 ? (
         <p className="kbc-review__card-empty" data-kbc-report-findings-empty>
           No findings on this patchset.

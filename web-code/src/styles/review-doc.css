@@ -1,0 +1,491 @@
+/* `kbc-review/1` — the Review Room's Document tab (V73-K2b, design D9/D9-a).
+ *
+ * Two rules this stylesheet must not break.
+ *
+ * TRUST IS NOT STYLED HERE. A ref card's tier renders through the shared
+ * `TrustBadge` and kbc-theme/1's Lane Budget, whose channel is LINE STYLE
+ * (`--kbc-trust-style`) in one hue — that is what survives every theme, the
+ * contrast slider and colour-vision deficiency. Nothing below assigns a hue
+ * to exact/likely/candidate.
+ *
+ * STATE IS A WORD FIRST. `pinned` / `carried` / `no honest match` / `inert`
+ * are rendered as TEXT on every card; the tints below are reinforcement, and
+ * a card whose colour were removed entirely would still say what it is. An
+ * orphan in particular is a full, visible card — never dimmed away. */
+
+.kbc-doc {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.75rem 0.25rem 3rem;
+  color: var(--ink);
+}
+
+/* ── header strip ─────────────────────────────────────────────────────── */
+
+.kbc-doc__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.kbc-doc__tier,
+.kbc-doc__risk,
+.kbc-doc__rev,
+.kbc-doc__ps {
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.kbc-doc__tier {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+
+.kbc-doc__risk--low {
+  color: var(--green);
+}
+.kbc-doc__risk--medium {
+  color: var(--warn);
+}
+.kbc-doc__risk--high {
+  color: var(--red);
+}
+
+.kbc-doc__cards-census,
+.kbc-doc__caption {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-doc__cli {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  margin-left: auto;
+}
+
+/* ── sections ─────────────────────────────────────────────────────────── */
+
+.kbc-doc h3 {
+  font-size: var(--fs-md);
+  margin: 0 0 0.25rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.kbc-doc h4 {
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+  margin: 0.5rem 0 0.25rem;
+}
+
+.kbc-doc__derived {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--ink-mute);
+  border: 1px dashed var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: 0 0.4rem;
+}
+
+.kbc-doc__none {
+  font-size: var(--fs-xs);
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.kbc-doc__omitted ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+}
+
+.kbc-doc__omitted li {
+  border: 1px dashed var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.5rem;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-doc__omitted-kind {
+  margin-left: 0.35rem;
+  color: var(--ink-faint);
+}
+
+.kbc-doc__body p,
+.kbc-doc__body li {
+  line-height: 1.6;
+}
+
+.kbc-doc__heading {
+  margin: 0.75rem 0 0.25rem;
+}
+
+.kbc-doc__fence {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.kbc-doc__why {
+  margin-left: 0.4rem;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+/* ── findings (v2) ────────────────────────────────────────────────────── */
+
+.kbc-doc__finding-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kbc-doc__finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: var(--fs-sm);
+}
+
+/* `blocking` is WEIGHT, never a score: a thicker left rule, not a rank. */
+.kbc-doc__finding--blocking {
+  border-left-width: 3px;
+  border-left-color: var(--red);
+}
+
+/* A superseded finding is a TOMBSTONE — still here, still readable, naming
+ * its successor. The MI-W2.3 soft-forget posture, on screen. */
+.kbc-doc__finding--superseded .kbc-doc__finding-title {
+  text-decoration: line-through;
+}
+
+.kbc-finding__act {
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: 0 0.4rem;
+  font-size: var(--fs-xs);
+  text-transform: lowercase;
+  color: var(--ink-dim);
+}
+
+.kbc-doc__finding-blocking {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--red);
+}
+
+.kbc-doc__finding-sev,
+.kbc-doc__finding-cat,
+.kbc-doc__finding-loc,
+.kbc-doc__finding-disp,
+.kbc-doc__finding-tomb {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-doc__finding-loc {
+  font-family: var(--font-mono);
+}
+
+.kbc-doc__finding-cites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  flex-basis: 100%;
+}
+
+/* ── ref cards ────────────────────────────────────────────────────────── */
+
+.kbc-refcard {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  vertical-align: top;
+  max-width: 100%;
+  margin: 0.15rem 0;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: var(--fs-xs);
+}
+
+.kbc-refcard.is-focused {
+  outline: 2px solid var(--accent-bor);
+  outline-offset: 1px;
+}
+
+.kbc-refcard--pinned {
+  border-left: 3px solid var(--green);
+}
+.kbc-refcard--carried {
+  border-left: 3px solid var(--warn);
+}
+/* An orphan is a FULL card, at full contrast. Dimming it would be the
+ * quietest possible way of hiding a failure. */
+.kbc-refcard--orphan {
+  border-left: 3px solid var(--red);
+}
+.kbc-refcard--inert {
+  border-left: 3px dotted var(--rule-hi);
+}
+.kbc-refcard--malformed {
+  border-left: 3px solid var(--red);
+  flex-direction: row;
+  align-items: center;
+  gap: 0.3rem;
+}
+.kbc-refcard--unresolved {
+  border-left: 3px dashed var(--rule-hi);
+  flex-direction: row;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.kbc-refcard__head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.kbc-refcard__fold {
+  background: none;
+  border: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.kbc-refcard__scheme {
+  font-family: var(--font-mono);
+  color: var(--ink-faint);
+}
+
+.kbc-refcard__addr {
+  font-family: var(--font-mono);
+  color: var(--blue);
+}
+
+.kbc-refcard__addr--inert {
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+
+.kbc-refcard__state {
+  color: var(--ink-dim);
+}
+
+.kbc-refcard__caption,
+.kbc-refcard__why {
+  color: var(--ink-mute);
+}
+
+.kbc-refcard__code {
+  display: block;
+  font-family: var(--font-mono);
+  background: var(--bg-panel-2);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.3rem;
+  overflow-x: auto;
+}
+
+.kbc-refcard__line {
+  display: flex;
+  gap: 0.6rem;
+  white-space: pre;
+}
+
+.kbc-refcard__gutter {
+  color: var(--ink-faint);
+  text-align: right;
+  min-width: 3ch;
+  user-select: none;
+}
+
+.kbc-refcard__orphan {
+  color: var(--ink-mute);
+}
+
+.kbc-refcard--folded .kbc-refcard__caption {
+  display: none;
+}
+
+/* ── the rail's ref list ──────────────────────────────────────────────── */
+
+.kbc-refcards__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.kbc-refcards__row {
+  display: flex;
+  width: 100%;
+  gap: 0.4rem;
+  align-items: baseline;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.3rem;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+
+.kbc-refcards__row:hover {
+  background: var(--bg-card-hi);
+}
+
+.kbc-refcards__row.is-focused {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+
+.kbc-refcards__scheme {
+  font-family: var(--font-mono);
+  color: var(--ink-faint);
+}
+
+.kbc-refcards__addr {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.kbc-refcards__state {
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+/* ── lint ─────────────────────────────────────────────────────────────── */
+
+.kbc-doclint {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  padding: 0.4rem 0.6rem;
+}
+
+.kbc-doclint__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+
+.kbc-doclint__rows {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.kbc-doclint__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+  border-left: 3px solid var(--rule-hi);
+  padding-left: 0.4rem;
+}
+
+.kbc-doclint__row--error {
+  border-left-color: var(--red);
+}
+.kbc-doclint__row--warning {
+  border-left-color: var(--warn);
+}
+.kbc-doclint__row--info {
+  border-left-color: var(--rule-hi);
+}
+
+.kbc-doclint__severity {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+}
+
+.kbc-doclint__line,
+.kbc-doclint__cands {
+  color: var(--ink-mute);
+}
+
+.kbc-doclint__ref {
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 860px) {
+  .kbc-doc__cli {
+    display: none;
+  }
+  .kbc-refcard {
+    display: flex;
+  }
+}
+
+/* The Report tab's act/blocking facet line — derived from the rows the
+ * section already renders, never a second count. */
+.kbc-report__facets {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  margin: 0.15rem 0 0.35rem;
+}
+
+.kbc-finding__blocking {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--red);
+}
+
+.kbc-finding__tomb {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-finding__cites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}

@@ -5,6 +5,9 @@ import { useSessionDiff } from "../../hooks/useSessionDiff";
 import { Icon } from "../icons";
 import AskAgentCard from "./AskAgentCard";
 import ReviewThreadsCard from "./ReviewThreadsCard";
+// ── V73-K2b (kbc-review/1) — the Document tab's ref jump list ──
+import RefCardsCard from "./RefCardsCard";
+import type { ReviewDocCard } from "../../api/types";
 // ── PRR-U56 (§2 S2 side panel — Publish card + addendum-2 §F's Suggestions
 // batch card) ──
 import PublishCard from "./PublishCard";
@@ -27,6 +30,15 @@ export interface ReviewSidePanelProps {
   /// PRR-F (design-addendum-2.md §A) — threaded to `ReviewThreadsCard`'s
   /// "GitHub (N)" filter chip; `undefined` for a non-PR-bound review.
   prNumber?: number;
+  /// V73-K2b — the document's resolved ref cards, in wire order. `undefined`
+  /// on every tab but Document, so the card simply is not there rather than
+  /// being an empty list a reader would have to interpret. This panel does
+  /// NOT fetch them: `ReviewDetail` owns the one `useReviewDoc` query and
+  /// both the center and this rail render what it returned (the "one read,
+  /// two renderers" rule the dossier already follows).
+  docCards?: ReviewDocCard[];
+  focusedRef?: string | null;
+  onFocusRef?: (ref: string) => void;
 }
 
 export default function ReviewSidePanel({
@@ -39,6 +51,9 @@ export default function ReviewSidePanel({
   onMobileClose,
   onOpenPublishPreview,
   prNumber,
+  docCards,
+  focusedRef = null,
+  onFocusRef,
 }: ReviewSidePanelProps) {
   const sessionDiff = useSessionDiff(sessionId ?? undefined, repo, !!sessionId);
 
@@ -77,6 +92,10 @@ export default function ReviewSidePanel({
           </button>
         </header>
       )}
+      {docCards && docCards.length > 0 && onFocusRef && (
+        <RefCardsCard cards={docCards} focusedRef={focusedRef} onFocus={onFocusRef} />
+      )}
+
       <ReviewThreadsCard repo={repo} reviewId={id} ps={ps} onOpenFile={onOpenFile} prNumber={prNumber} />
 
       <AskAgentCard repo={repo} reviewId={id} />
