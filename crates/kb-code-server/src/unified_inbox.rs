@@ -306,6 +306,7 @@ mod tests {
             ps_number: None,
             side: None,
             set_id: None,
+            trail_id: None,
         }
     }
 

@@ -695,6 +695,7 @@ mod tests {
             ps_number: Some(1),
             side: Some("new".into()),
             set_id: None,
+            trail_id: None,
         }
     }
 

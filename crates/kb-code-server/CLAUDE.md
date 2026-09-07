@@ -422,7 +422,13 @@ invariant #2 records).
     kind would filter to nothing silently. `canvas_sets` deliberately has
     no `workspace_id` column: nothing would write it, so `?workspace=`
     excludes boards and SAYS SO in `notes` rather than shipping a column
-    with no writer.
+    with no writer. *V74-L3b amendment:* the `tour` projection now resolves
+    out of TWO tables as well — `reading_sets` (kind `tour`) and
+    `canvas_boards` (kind `tour`, invariant 26) — exactly the shape the
+    `board` projection took in V74-L1. `Store::seq_canvas_boards` takes the
+    kind AND the projection name as parameters for that reason; nothing
+    about the layer changes, and `source` still names the table each row
+    physically lives in.
 
 15. **A route this crate adds ships as a `RouteContract`, and two tests
     walk that declaration against its implementations** (V71-G0,
@@ -1171,6 +1177,85 @@ invariant #2 records).
     `recipe::routes::V74_L3A_ROUTES` joins invariant 15's `RouteContract`
     walk from both sides; the four mutations are absent from it for the
     reason `boards`' own four are.
+
+26. **`kbc-tour/1` is a BOARD (one step model), and `kbc-trail/1` is OFF
+    by default with pause, purge and retention shipped in the same unit**
+    (V74-L3b, `src/tours/` + `src/trails/`, migration V0039, design D12 +
+    D17 + D10). Two families, four rules, and each is a way to break the
+    posture quietly.
+    (a) **A tour creates no table.** D10 rules that "a board's `steps` and
+    a tour share the step model — do not build two", and the strongest
+    reading of that is the one this unit takes: a tour is a
+    `canvas_boards` row with `kind = 'tour'`, its steps ARE `canvas_nodes`,
+    their order and cameras are `canvas_steps`, and consecutive steps are
+    joined by GENERATED `then` edges. So there is one lint
+    (`tours::lint::check` lowers to a `BoardDoc` and calls
+    `boards::lint::check` — it ADDS four rules and re-implements none), one
+    resolver (`boards::resolve::resolve_node`, over `CanvasNodeRow`), one
+    snippet-capture rule (`boards::routes::build_nodes`, invariant 21's
+    exact rule) and one walkthrough contract. `canvas_boards.kind` is
+    Rust-validated (`tours::is_valid_board_kind`), never a SQL CHECK
+    (invariant 9's house convention), and it is a REQUIRED parameter on
+    every board/tour store read — `list_canvas_boards`,
+    `get_canvas_board`, `set_canvas_board_status`, `delete_canvas_board`,
+    `seq_canvas_boards` — because a read that forgot to say which family
+    it wanted would silently return the other one. The `UNIQUE (repo_id,
+    slug)` spans BOTH kinds, so an apply colliding across families raises
+    `StoreError::SlugTakenByOtherKind` (a 409 naming the family) rather
+    than an opaque constraint error. The `ref` string sugar is
+    `review_doc::refs::parse_ref` (the ONE ref parser) lowered into
+    `boards::RefFields`, and it covers `code:` with a line ONLY — every
+    other scheme is refused NAMING the structured field that does the job,
+    and `sym:`/`ent:` are refused specifically because resolving a symbol
+    to a path and persisting it would be the cached-class invariant 24(a)
+    and root invariant #2 forbid. Do not widen the sugar by resolving
+    anything at apply time.
+    (b) **Trails are OFF on first boot, and there are TWO switches.**
+    `[trails] enabled` (default `false`) is the operator's master switch;
+    the runtime mode (`off`/`recording`/`paused`, `trails_state`) is a
+    separate persisted decision written ONLY by the loopback-only, audited
+    `POST /api/trails/state`. A fresh volume reads `off` even with the
+    config `true` — the absence of a decision is not a decision to record —
+    and a stored mode a disabled daemon still holds reads back as `off`,
+    because an indicator saying "recording" while nothing is recorded is
+    the one lie this surface exists to prevent. Every write refusal names
+    WHICH gate it hit (`trails-disabled`/`trails-off`/`trails-paused`);
+    they are three different fixes. D17 permits this ledger only in the
+    milestone that ships pause, purge AND retention together, so
+    `trails::routes::{set_state,purge_trails}` and `trails::gc` are not
+    follow-ups — they are the precondition, and none may be removed while
+    the ingest route stands. `purge` is deliberately NOT gated on
+    `enabled`: an operator who just turned the feature off must still be
+    able to delete what it recorded.
+    (c) **Nothing finer than a step can be STORED, and the finest thing
+    ever RETURNED to an agent is a day.** `trail_steps` is the finest row
+    in the schema and holds one derived, quantised `dwell_secs`; there is
+    no client-supplied dwell field, and `trails::reject_sub_step_keys`
+    refuses a payload naming a viewport/caret/scroll/per-line dwell BY
+    NAME on the raw JSON before the typed parse (`boards::lint`'s
+    `coordinates` precedent — the message teaches the rule). A sub-step
+    span is REFUSED, never rounded. `GET /api/trails/aggregate` is the ONE
+    agent-facing read: it groups on `trail_steps.day`, never selects
+    `entered_at`, and `store::TrailAggregateRow` has no timestamp field to
+    leak one into. The two HUMAN reads (`GET /api/trails`,
+    `GET /api/trails/{id}`) are LOOPBACK-ONLY — stricter than any other
+    read in this crate, for invariant 23(b)'s reasoning applied to
+    attention data. Never add a per-line table, never widen the aggregate
+    below the day, and never move the human reads onto `auth_bearer`.
+    (d) **No trail number is a score, a gate or a trust class.**
+    `trails::tests::no_ranking_module_imports_the_trail_ledger` walks this
+    crate's ranking sources and fails BY FILE if one names
+    `crate::trails` — `claims.rs`'s own pin (invariant 23(a)), which is
+    root invariant #10's surfaced-never-scored law. A source scan has a
+    scan's limits; it is the same trade `git_argv_lint` (invariant 3)
+    makes. Dissent notes on an AUTHORED trail reuse the `annotations`
+    store through a nullable `trail_id` (a reply inherits it via
+    `routes::inherit_scope_field`, third instance) and SURVIVE a purge,
+    because a note is the human's own authored words — invariant 23(a)'s
+    ruling, applied to the one table a purge could plausibly have taken
+    with it. `tours::V74_L3B_TOUR_ROUTES` and
+    `trails::V74_L3B_TRAIL_ROUTES` join invariant 15's `RouteContract`
+    walk from both sides.
 
 ## When to update this file
 
