@@ -1219,6 +1219,18 @@ pub const TIMELINE_ROUTE: RouteContract = RouteContract {
     params_accept_without: timeline_accept_without,
 };
 
+/// V73-K3's route registry (invariant 15). Collected HERE because the
+/// timeline is this unit's headline surface and the other three exist to
+/// feed it; the per-module consts stay next to their handlers so a route
+/// and its contract are edited together.
+pub const V73_K3_ROUTES: &[RouteContract] = &[
+    TIMELINE_ROUTE,
+    crate::claims::CLAIMS_ROUTE,
+    crate::review_pseudo::PSEUDO_LIST_ROUTE,
+    crate::review_pseudo::PSEUDO_FILE_ROUTE,
+    crate::review_turns::HUNK_TURNS_ROUTE,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1489,18 +1501,6 @@ mod tests {
     }
 }
 
-/// V73-K3's route registry (invariant 15). Collected HERE because the
-/// timeline is this unit's headline surface and the other three exist to
-/// feed it; the per-module consts stay next to their handlers so a route
-/// and its contract are edited together.
-pub const V73_K3_ROUTES: &[RouteContract] = &[
-    TIMELINE_ROUTE,
-    crate::claims::CLAIMS_ROUTE,
-    crate::review_pseudo::PSEUDO_LIST_ROUTE,
-    crate::review_pseudo::PSEUDO_FILE_ROUTE,
-    crate::review_turns::HUNK_TURNS_ROUTE,
-];
-
 #[cfg(test)]
 mod v2_tests {
     use super::*;
@@ -1600,7 +1600,7 @@ mod v2_tests {
 
     #[test]
     fn filters_narrow_the_view_and_never_reorder_it() {
-        let events = vec![
+        let events = [
             ev(10, "comment", author_for(Some("you"))),
             ev(20, "comment", author_for(Some("claude"))),
             ev(30, "verdict", EventAuthor::system()),

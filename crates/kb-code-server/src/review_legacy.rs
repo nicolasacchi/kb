@@ -225,9 +225,7 @@ fn scan_script(html: &str, id: &str) -> Option<String> {
     let mut cursor = 0usize;
     while let Some(rel) = html[cursor..].find("<script") {
         let open_start = cursor + rel;
-        let Some(gt_rel) = html[open_start..].find('>') else {
-            return None;
-        };
+        let gt_rel = html[open_start..].find('>')?;
         let open_end = open_start + gt_rel;
         let attrs = &html[open_start..open_end];
         let close_rel = html[open_end + 1..].find("</script")?;

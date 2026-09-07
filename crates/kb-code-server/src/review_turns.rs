@@ -715,6 +715,27 @@ pub struct HunkTurnsParams {
     pub ps: Option<String>,
 }
 
+// --- route contract (invariant 15) ----------------------------------------
+
+use crate::entities::RouteContract;
+
+fn turns_accept_without(omit: &str) -> bool {
+    let mut map = serde_json::Map::new();
+    for (k, v) in [("ps", "latest")] {
+        if k != omit {
+            map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+        }
+    }
+    serde_json::from_value::<HunkTurnsParams>(serde_json::Value::Object(map)).is_ok()
+}
+
+pub const HUNK_TURNS_ROUTE: RouteContract = RouteContract {
+    path: "/api/reviews/{id}/hunks/{hunk}/turns",
+    handler: "review_turns::hunk_turns_route",
+    required_params: &[],
+    params_accept_without: turns_accept_without,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,22 +923,3 @@ mod tests {
         assert!(CommitBasis::None.caption().contains("no commit"));
     }
 }
-
-use crate::entities::RouteContract;
-
-fn turns_accept_without(omit: &str) -> bool {
-    let mut map = serde_json::Map::new();
-    for (k, v) in [("ps", "latest")] {
-        if k != omit {
-            map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
-        }
-    }
-    serde_json::from_value::<HunkTurnsParams>(serde_json::Value::Object(map)).is_ok()
-}
-
-pub const HUNK_TURNS_ROUTE: RouteContract = RouteContract {
-    path: "/api/reviews/{id}/hunks/{hunk}/turns",
-    handler: "review_turns::hunk_turns_route",
-    required_params: &[],
-    params_accept_without: turns_accept_without,
-};
