@@ -4450,18 +4450,64 @@ mod tests {
         );
     }
 
+    /// V72-C7 — `score`/`decay`/`age_days` are recomputed from a fresh
+    /// `std::time::SystemTime::now()` (`recall_compose`'s `now_unix`, whole
+    /// seconds) on EVERY `/api/memory/recall` call, independently of
+    /// `visible_to` — `rerank_with_policy_scored` runs the identical
+    /// formula regardless of the filter, so a real difference in these
+    /// three fields between two sequential HTTP calls can only mean the
+    /// wall clock ticked over a whole second in between, never that
+    /// `visible_to` touched them. That's normally invisible (the ~1s of
+    /// drift is far below f32 precision once `age_days` is any real
+    /// memory's age), but `boot_visible_to_all_unlinked_fixture`'s two
+    /// memories are written via `std::fs::write` moments before this test
+    /// runs, so their `mtime_unix` is ~now and `age_days` is a TINY
+    /// fraction of a day — exactly where a 1-second jump between the two
+    /// calls is a LARGE relative change, easily crossing an f32
+    /// representable-value boundary. This is consistent with the
+    /// intermittent hosted-runner failure (passed on rerun, no code
+    /// change) and explains why its four sibling `visible_to_*` tests,
+    /// which only ever assert on title presence/absence and share this
+    /// same near-zero-age fixture pattern, have never flaked: a score
+    /// nudge can't remove a hit from `hits`, only this test's
+    /// full-payload `assert_eq!` sees it. Every ingest write this fixture
+    /// makes (doc upsert, the memory-link-seed hook's seeded-mark, edge/
+    /// code-ref recording) lands before `boot_visible_to_all_unlinked_
+    /// fixture` returns — `vt_wait_for_titles` and the recall route share
+    /// the SAME single per-kb storage actor mailbox (FIFO), so there is no
+    /// further row-set write in flight once titles are visible; the
+    /// remaining source of two-calls-apart non-determinism is exactly this
+    /// wall-clock term. Strip the three time-derived fields before
+    /// comparing — `rel` and `relevance_factor` stay in (rank- and raw-
+    /// engine-score-derived, not wall-clock-derived, so a real
+    /// `visible_to` bug there would still be caught).
+    fn vt_strip_time_derived_score_fields(hits: &mut serde_json::Value) {
+        if let Some(arr) = hits.as_array_mut() {
+            for hit in arr {
+                if let Some(obj) = hit.as_object_mut() {
+                    obj.remove("score");
+                    obj.remove("decay");
+                    obj.remove("age_days");
+                }
+            }
+        }
+    }
+
     /// (f) Absent `visible_to` is byte-identical to the pre-CT-B2 shape:
     /// on a fixture where NO memory is linked at all, a recall with the
     /// param omitted and one with it explicitly set both return the exact
-    /// same hits (id, order, and every field) — proving the filter is a
-    /// true no-op whenever there's nothing to filter, and that an absent
-    /// param never behaves differently from a present-but-harmless one.
+    /// same hits (id, order, and every field EXCEPT the three time-derived
+    /// score components stripped by `vt_strip_time_derived_score_fields`,
+    /// which `visible_to` cannot influence either way — see its doc
+    /// comment) — proving the filter is a true no-op whenever there's
+    /// nothing to filter, and that an absent param never behaves
+    /// differently from a present-but-harmless one.
     #[tokio::test]
     async fn visible_to_absent_is_byte_identical_when_nothing_is_linked() {
         let (_tmp, addr) = boot_visible_to_all_unlinked_fixture().await;
         let client = reqwest::Client::new();
 
-        let without_param: serde_json::Value = client
+        let mut without_param: serde_json::Value = client
             .get(vt_url(
                 addr,
                 "/api/memory/recall?q=krypton&scope=all&limit=10",
@@ -4472,7 +4518,7 @@ mod tests {
             .json()
             .await
             .unwrap();
-        let with_param: serde_json::Value = client
+        let mut with_param: serde_json::Value = client
             .get(vt_url(
                 addr,
                 "/api/memory/recall?q=krypton&scope=all&limit=10&visible_to=some-unrelated-kb",
@@ -4484,9 +4530,14 @@ mod tests {
             .await
             .unwrap();
 
+        vt_strip_time_derived_score_fields(&mut without_param["hits"]);
+        vt_strip_time_derived_score_fields(&mut with_param["hits"]);
+
         assert_eq!(
             without_param["hits"], with_param["hits"],
-            "an unrelated visible_to must be a byte-identical no-op when nothing is linked"
+            "an unrelated visible_to must be a byte-identical no-op when nothing is linked \
+             (modulo the wall-clock-derived score/decay/age_days fields, which visible_to \
+             cannot influence)"
         );
         // Sanity: both calls actually returned the two seeded memories —
         // an empty-vs-empty comparison would pass vacuously.
