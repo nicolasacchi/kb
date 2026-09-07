@@ -1463,6 +1463,81 @@ runs the WHOLE-registry prefix scan by hand in all three presets. **Run that
 scan by hand whenever you add a leader chord** — it is three lines and it is
 the only thing that catches a chord shadowed by a complete binding.
 
+## `~branches` as views (`branch-facts/1`, `V75-M3`, design §D15/§D18)
+
+The page is now three surfaces stacked: the V4.L2 hero (unchanged), the
+**views** surface, and — inside one `<details>` — the V4.L2 ranked list and
+full table. Those two are SUPERSEDED, not deleted: `branches/1` is a
+separate, unchanged endpoint, `time.spec.ts` and `branches-landing.spec.ts`
+select their cells, and deleting a working surface in the same unit that
+adds its replacement leaves nothing to compare against. The `<details>`
+defaults open at `rows.length <= 5`, matching `BrowseAllBranches`'s own
+pre-existing rule so the e2e fixture's visibility is byte-unchanged. When
+the views surface has soaked, removing those two zones is a one-file
+deletion plus two spec edits — do that, rather than growing a third list.
+
+**Five rules, and each is a way to make the page lie.**
+
+**(a) A view is a URL, and the vocabulary is the SERVER'S.** `?view=` is the
+whole selection (`lib/branchViews.ts`'s `branchesSearch`/
+`parseBranchesSearch`, omit-at-default, root CLAUDE.md #35's discipline for
+this page), and `BRANCH_VIEWS` is a MIRROR of `facts::View::ALL`.
+`branchViews.test.ts` reads `crates/kb-code-server/src/history/facts.rs`
+and compares name-for-name IN ORDER — the `kbcq.golden.test.ts` shape, with
+no intermediate JSON, because `View::ALL` is already pinned Rust-side and a
+third copy is one more place for the three to disagree. `parseBranchView` is
+TOTAL: an unknown `?view=` reads as `all` client-side, while the ROUTE 400s
+it. Those are deliberately different answers — a stale bookmark must not
+blank the page, and an API that silently accepted a typo would be worse.
+
+**(b) The page DERIVES no membership, no count and no reason.** The eight
+counts come off `view_counts`; each row's chips are `reasons[]`'s own
+`{code, text}` pairs rendered VERBATIM (the CLI prints the same strings);
+`merged`'s hover sentence is built from the witness the server sent. The one
+number the page must not invent is `view_counts.merged`, which is
+ancestry-only unless the patch-id probe ran — `rules.view_counts_note` says
+so and the footer prints it, rather than the selector quietly disagreeing
+with the merged view's own total. If you find yourself writing a filter
+predicate over `rows` here, you are rebuilding the daemon's answer.
+
+**(c) The provenance rail is the FIRST consumer of `--prov-hue-*`, and it
+means identity only.** D16's Lane Budget gives provenance one channel — a
+2 px session-hue rail in gutter A — and `themes/derive.ts` has emitted
+eight contrast-repaired, maximally-spread hues since V70-A7 with nothing
+reading them (`tokens.css`'s own note). `lib/provHue.ts` is that reader:
+FNV-1a over the session id (or the ref, when only an email said `likely`),
+modulo `PROV_HUES` **imported, never a literal `8`**. The hue says "these
+rows came from one run" and NOTHING else — trust is line STYLE in one hue on
+a different channel, and mixing them makes a decorative axis read as a
+verdict. `.kbc-bfact` reserves the 2 px gutter even when transparent, so a
+mixed list does not jitter.
+
+**(d) The mutation affordances are ABSENT, not disabled, off loopback.**
+"Compare with common base" POSTs to a loopback-only route, so the CTA is
+rendered only when `useLoopback()` is true — `kbc-actions/1`'s rule that a
+disabled row is a map of the mutation surface. The radar's two refusals (the
+typed `503` for an unwritable scratch dir, the `400` for `touches:`) are
+RENDERED with the daemon's own message, and the 503 adds one sentence
+saying the directory is the daemon's, not the repo's, because that is the
+wrong place people will otherwise look.
+
+**(e) Bare keys, and the guard that makes them safe.** All ten
+`scope: branches` rows are bare (`j`/`k`/`Enter`/`r` were ratified in V4.L1
+and merely SHIP here; `L`/`H`/`P`/`R`/`Z`/`D` are new and are unique across
+the ENTIRE registry in every preset). The page owns a text filter, so
+`BranchViews.onKeyDown` bails on `isTypingTarget(e.target)` FIRST —
+`CommandRoot`'s own guard 1, this surface's copy. Remove that bail and every
+bare row becomes a key you cannot type into the filter.
+`branchesCommands.test.ts` asserts the bail is still there for exactly that
+reason. `commands/branches.test.ts` runs the whole-registry prefix scan
+(`tours.test.ts`'s permanent form) on the six NEW keys — exact uniqueness,
+nothing is a prefix of them, they are a prefix of nothing; that scan is what
+ruled out `z` (a prefix of `z z`/`z t`/…) and `g` (a prefix of `g d`/`g r`/…)
+— and for the four RATIFIED ones it asserts the opposite question, that every
+coactive same-depth collision is ratified from both sides, because sharing
+`j` with every other list surface IS the design. **This unit adds no leader
+chord at all**, which is why the `Space g` letter space is untouched.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)

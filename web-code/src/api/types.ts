@@ -5642,3 +5642,253 @@ export interface TrailPurgeOut {
   steps: number;
   notes: string[];
 }
+
+// --- V75-M3 (D15) — `branch-facts/1`, the conflict radar, favourites -------
+//
+// Mirrors `crates/kb-code-server/src/branches.rs` field-for-field. Every
+// optional field here is `skip_serializing_if` on the server, so `undefined`
+// means "the daemon said nothing", never "zero" — the `ahead`/`behind`
+// distinction `BranchOut` above already records, applied to the whole shape.
+
+/// The four rungs of the base ladder (`facts::BaseClass`). `unknown` is a
+/// real answer, not a missing one: nothing was measurable.
+export type BranchBaseClass = "upstream" | "fork-point" | "merge-base" | "unknown";
+
+/// The eight URL-addressable views (`facts::View`). Closed vocabulary; the
+/// SPA's own copy is `lib/branchViews.ts`, which is golden-pinned against
+/// this list.
+export type BranchView =
+  | "current"
+  | "mine"
+  | "agent"
+  | "review"
+  | "active"
+  | "stale"
+  | "merged"
+  | "all";
+
+/// D18's agent-provenance ladder. `exact` = a machine trailer NAMING the
+/// run; `likely` = the tip author's email is a configured agent address;
+/// `none` = no evidence (never "probably not an agent").
+export type BranchAgentClass = "none" | "likely" | "exact";
+
+export interface BranchBase {
+  class: BranchBaseClass;
+  /// `null` only when `class === "unknown"`.
+  ref: string | null;
+  sha?: string;
+}
+
+export interface BranchAgentProvenance {
+  class: BranchAgentClass;
+  via: string;
+  session_id?: string;
+}
+
+export interface BranchMergedWitness {
+  kind: "ancestry" | "patch-id";
+  into: string;
+  into_sha?: string;
+  /// Patch-id only: how many commits had an equivalent patch upstream.
+  equivalent?: number;
+}
+
+/// One "why is this row here" chip. `code` is stable and machine-readable;
+/// `text` is the sentence — rendered verbatim, never re-derived from `code`
+/// (the CLI prints the same string).
+export interface BranchReason {
+  code: string;
+  text: string;
+}
+
+export interface BranchTip {
+  sha: string;
+  subject: string;
+  author_name: string;
+  author_email: string;
+  time: number;
+}
+
+export interface BranchUpstream {
+  ref: string;
+  gone: boolean;
+  ahead?: number;
+  behind?: number;
+}
+
+export interface BranchWorktree {
+  path: string;
+  /// The path's final component — the chip label.
+  id: string;
+}
+
+export interface BranchStack {
+  base: string;
+  depth: number;
+  stale: boolean;
+}
+
+export interface BranchReviewRef {
+  id: number;
+  head_ref: string;
+  base_ref: string;
+}
+
+export interface BranchPr {
+  number: number;
+  title: string;
+  draft: boolean;
+  base_ref: string;
+}
+
+export interface BranchCi {
+  /// Worst-of over the check runs: `fail` > `pending` > `warn` > `pass`;
+  /// `none` when the PR has no checks at all.
+  status: string;
+  checks: number;
+}
+
+/// One row of `branch-facts/1`.
+export interface BranchFactRow {
+  name: string;
+  full_ref: string;
+  remote?: string;
+  tip: BranchTip;
+  is_head: boolean;
+  worktree?: BranchWorktree;
+  upstream?: BranchUpstream;
+  base: BranchBase;
+  ahead?: number;
+  behind?: number;
+  merged?: BranchMergedWitness;
+  agent: BranchAgentProvenance;
+  stale: boolean;
+  mine: boolean;
+  favourite: boolean;
+  reviews: BranchReviewRef[];
+  pr?: BranchPr;
+  ci?: BranchCi;
+  stack?: BranchStack;
+  reasons: BranchReason[];
+}
+
+export interface BranchPrefixCount {
+  /// Includes the trailing `/` — it IS the `?prefix=` value.
+  prefix: string;
+  count: number;
+}
+
+export interface BranchStaleRule {
+  rule: string;
+  percentile: number;
+  threshold_age_secs?: number;
+  applied: boolean;
+  degraded_reason?: string;
+}
+
+export interface BranchRules {
+  base_ladder: string[];
+  base_note: string;
+  stale: BranchStaleRule;
+  merged: {
+    rule: string;
+    patch_id_probed: number;
+    patch_id_candidates: number;
+    patch_id_cap: number;
+  };
+  agent: { exact: string; likely: string; never: string; agent_emails: string[] };
+  views: string;
+  view_counts_note: string;
+  sort: string;
+  ahead_behind_source: string;
+  touches?: { path: string; scanned: number; candidates: number; cap: number };
+  base_cache_hits: number;
+  base_cache_misses: number;
+}
+
+export interface BranchDegradedLane {
+  lane: string;
+  reason: string;
+}
+
+/// `branches::FactsResponse` — `GET /api/branches/facts`.
+export interface BranchFactsResponse {
+  schema: string;
+  repo: string;
+  default?: string;
+  default_sha?: string;
+  view: BranchView;
+  rows: BranchFactRow[];
+  total: number;
+  enumerated: number;
+  enumeration_truncated: boolean;
+  limit: number;
+  offset: number;
+  prefixes: BranchPrefixCount[];
+  view_counts: Partial<Record<BranchView, number>>;
+  rules: BranchRules;
+  diagnostics: { severity: string; token: string; message: string; suggestion?: string }[];
+  normalized: string;
+  degraded: BranchDegradedLane[];
+}
+
+export interface BranchConflictPath {
+  path: string;
+  kind: "both-modified" | "modify-delete" | "delete-modify" | "add-add" | "other";
+  stages: number[];
+  /// ABSENT (not zero) when the probe budget ran out — see the caption.
+  hunks?: number;
+}
+
+export interface BranchConflictRow {
+  branch: string;
+  full_ref: string;
+  tip_sha: string;
+  clean: boolean;
+  conflicts: BranchConflictPath[];
+  error?: string;
+}
+
+/// `branches::ConflictsResponse` — `GET /api/branches/conflicts`.
+export interface BranchConflictsResponse {
+  schema: string;
+  repo: string;
+  against: string;
+  against_sha: string;
+  rows: BranchConflictRow[];
+  budget: {
+    computed: number;
+    candidates: number;
+    pair_cap: number;
+    hunk_probes_used: number;
+    hunk_probe_cap: number;
+    hunk_budget_exhausted: boolean;
+  };
+  /// Pre-rendered so the CLI and the SPA print the same sentence.
+  caption: string;
+}
+
+export interface BranchFavouritesResponse {
+  schema: string;
+  repo: string;
+  /// FULL refs, newest star first.
+  favourites: string[];
+}
+
+export interface SetBranchFavouriteOut {
+  schema: string;
+  repo: string;
+  ref: string;
+  on: boolean;
+  changed: boolean;
+}
+
+/// `branches::BranchReviewOut` — `POST /api/branches/review`.
+export interface BranchReviewOut {
+  schema: string;
+  base: BranchBase;
+  /// Which decision produced `base` — never inferred from the other fields.
+  base_source: "explicit" | "stack" | "ladder";
+  three_dot: boolean;
+  review: { id: number; repo: string; head_ref: string; base_ref: string };
+}

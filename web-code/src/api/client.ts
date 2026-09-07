@@ -16,6 +16,12 @@ import type {
   BlameResponse,
   BlameTimelineResponse,
   BranchesResponse,
+  BranchConflictsResponse,
+  BranchFactsResponse,
+  BranchFavouritesResponse,
+  BranchReviewOut,
+  BranchView,
+  SetBranchFavouriteOut,
   CheckoutDirtyBody,
   CheckoutResponse,
   CommitPageResponse,
@@ -604,6 +610,90 @@ export function fetchBranches(
   sort?: "name" | "suggested",
 ): Promise<BranchesResponse> {
   return getJson<BranchesResponse>("/api/branches", { repo, sort });
+}
+
+// --- V75-M3 (D15) — `branch-facts/1`, the radar, favourites ---------------
+
+/// Every `GET /api/branches/facts` knob. A struct, not eight positional
+/// arguments — `Branches.tsx` passes most of them from the URL and getting
+/// two `string | undefined`s the wrong way round is silent.
+export interface BranchFactsQuery {
+  view?: BranchView;
+  /// A kbcq/1 query — the `/` filter plus `branch:`/`touches:`/`by:`/
+  /// `agent:`. Sent verbatim; the SERVER owns the grammar.
+  q?: string;
+  prefix?: string;
+  fav?: boolean;
+  limit?: number;
+  offset?: number;
+  pr?: boolean;
+  ci?: boolean;
+  patchId?: boolean;
+}
+
+/// `GET /api/branches/facts` (`branch-facts/1`).
+export function fetchBranchFacts(
+  repo: string,
+  query: BranchFactsQuery = {},
+): Promise<BranchFactsResponse> {
+  return getJson<BranchFactsResponse>("/api/branches/facts", {
+    repo,
+    view: query.view,
+    q: query.q || undefined,
+    prefix: query.prefix || undefined,
+    // The server reads `1`/`true`/`yes`; send the flag only when ON, so an
+    // off toggle leaves the URL and the request byte-identical to never
+    // having touched it.
+    fav: query.fav ? "1" : undefined,
+    limit: query.limit !== undefined ? String(query.limit) : undefined,
+    offset: query.offset ? String(query.offset) : undefined,
+    pr: query.pr ? "1" : undefined,
+    ci: query.ci ? "1" : undefined,
+    patch_id: query.patchId ? "1" : undefined,
+  });
+}
+
+/// `GET /api/branches/conflicts` (`branch-conflicts/1`). `q` accepts only
+/// the atoms computable from the one ref pass — the server REFUSES
+/// `touches:` with a 400 rather than ignoring it.
+export function fetchBranchConflicts(
+  repo: string,
+  against: string,
+  limit?: number,
+  q?: string,
+): Promise<BranchConflictsResponse> {
+  return getJson<BranchConflictsResponse>("/api/branches/conflicts", {
+    repo,
+    against,
+    limit: limit !== undefined ? String(limit) : undefined,
+    q: q || undefined,
+  });
+}
+
+export function fetchBranchFavourites(repo: string): Promise<BranchFavouritesResponse> {
+  return getJson<BranchFavouritesResponse>("/api/branches/favourites", { repo });
+}
+
+/// Star/unstar one FULL ref. Idempotent in both directions server-side, so
+/// a double click is a no-op with `changed: false`, never a 409.
+export function setBranchFavourite(
+  repo: string,
+  ref: string,
+  on: boolean,
+): Promise<SetBranchFavouriteOut> {
+  return sendJson<SetBranchFavouriteOut>("POST", "/api/branches/favourites", { repo, ref, on });
+}
+
+/// `POST /api/branches/review` — "compare with common base". LOOPBACK-only
+/// server-side, so this is offered behind `GET /api/repos`'s own `loopback`
+/// bool exactly like every other mutation affordance in this SPA.
+export function startBranchReview(
+  repo: string,
+  ref: string,
+  base: string,
+  title?: string,
+): Promise<BranchReviewOut> {
+  return sendJson<BranchReviewOut>("POST", "/api/branches/review", { repo, ref, base, title });
 }
 
 /// `GET /api/file-history?repo=&path=&limit=&before=` (Phase C4) — one
