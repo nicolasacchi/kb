@@ -103,6 +103,15 @@
 //! | `route:` | single | no | `rails/1`'s route index — matches the verb+path address or `controller#action` (V72-I1) |
 //! | `job:` | single | no | `rails/1`'s job index (V72-I1) |
 //! | `rails:` | single (`model|controller|action|route|job|mailer|view|concern`) | no | `rails/1`'s whole index for one noun — the generic form (V72-I1) |
+//! | `branch:` | single | no | `branch-facts/1`'s branch-NAME substring — `history::facts::FactFilter` (V75-M3) |
+//! | `touches:` | single | no | `branch-facts/1` — branches whose diff vs their own base touches this path; CAPPED, see `facts::MAX_TOUCHES_SCAN` (V75-M3) |
+//! | `by:` | single | no | `branch-facts/1`'s tip-author name/email substring (V75-M3) |
+//! | `agent:` | single (`exact|likely|any|none`) | no | `branch-facts/1`'s D18 agent-provenance class (V75-M3) |
+//!
+//! The last four are the ONE place this grammar's consumer is not
+//! `search::unified`: a branch is not a search lane, and their reader is
+//! `history::facts`. `FilterKeySpec::consumer_module` says so and
+//! `every_declared_filter_key_has_a_consumer` scans both modules.
 //!
 //! The six Rails atoms are a FACET over a derived index, not a path
 //! predicate: each resolves — once per request, inside `unified` — to the
@@ -345,7 +354,57 @@ pub const FILTER_SPECS: &[FilterKeySpec] = &[
         consumer_module: "unified.rs",
         consumer_expr: "filters.rails",
     },
+    // V75-M3 (D15) — the `~branches` omnibox atoms. APPENDED for the same
+    // reason V72-I1's were: declaration order is `normalize`'s render
+    // order, so every pre-existing query's normalized form stays
+    // byte-identical.
+    //
+    // Their consumer is `history/facts.rs`, NOT `unified.rs`: a branch is
+    // not one of the six search lanes, and wiring these into the unified
+    // box so they had a consumer there would be the dead surface this
+    // walk exists to prevent, dressed as compliance. The consumer scan
+    // (`every_declared_filter_key_has_a_consumer`) grew a module MAP for
+    // exactly this case — its own failure message always invited it.
+    FilterKeySpec {
+        key: "branch",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "history/facts.rs",
+        consumer_expr: "filters.branch",
+    },
+    FilterKeySpec {
+        key: "touches",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "history/facts.rs",
+        consumer_expr: "filters.touches",
+    },
+    FilterKeySpec {
+        key: "by",
+        multi: false,
+        negatable: false,
+        values: None,
+        consumer_module: "history/facts.rs",
+        consumer_expr: "filters.by",
+    },
+    FilterKeySpec {
+        key: "agent",
+        multi: false,
+        negatable: false,
+        // Closed vocabulary — `any` is "any evidence at all" (exact OR
+        // likely), `none` is "no evidence". There is deliberately no value
+        // meaning "definitely not an agent": D18's ladder can prove
+        // evidence, never its absence.
+        values: Some(AGENT_FILTER_VALUES),
+        consumer_module: "history/facts.rs",
+        consumer_expr: "filters.agent",
+    },
 ];
+
+/// The closed vocabulary of `agent:` — see its [`FILTER_SPECS`] entry.
+pub const AGENT_FILTER_VALUES: &[&str] = &["exact", "likely", "any", "none"];
 
 /// Farthest a typo may sit from a known key and still earn a did-you-mean —
 /// `laang:` (1) suggests `lang:`; `gorgonzola:` is left alone rather than
@@ -399,6 +458,18 @@ pub struct Filters {
     /// `rails:<noun>` — the generic form, selecting a whole noun. Its
     /// vocabulary is `crate::rails::NOUNS`.
     pub rails: Option<String>,
+    /// V75-M3 — the `~branches` atoms. Like the Rails atoms above, each
+    /// holds the value as typed; `history::facts` resolves them against a
+    /// repo the parser knows nothing about. Non-negatable in v1 for the
+    /// same reason: `-touches:` would have to mean "every branch whose
+    /// diff does not touch this path", which is only honest for the
+    /// branches actually scanned (`touches:` is capped), so the negation
+    /// would silently mean something narrower than it reads.
+    pub branch: Option<String>,
+    pub touches: Option<String>,
+    pub by: Option<String>,
+    /// `agent:exact|likely|any|none` — vocabulary [`AGENT_FILTER_VALUES`].
+    pub agent: Option<String>,
 }
 
 impl Filters {
@@ -910,6 +981,12 @@ fn apply_filter(m: &mut Modifiers<'_>, spec: &FilterKeySpec, negated: bool, valu
         ("route", _) => filters.route = Some(last()),
         ("job", _) => filters.job = Some(last()),
         ("rails", _) => filters.rails = Some(last()),
+        // V75-M3 — same posture: carried through verbatim, resolved by
+        // `history::facts` against a repo.
+        ("branch", _) => filters.branch = Some(last()),
+        ("touches", _) => filters.touches = Some(last()),
+        ("by", _) => filters.by = Some(last()),
+        ("agent", _) => filters.agent = Some(last()),
         // Unreachable while `FILTER_SPECS` and this match agree — and
         // `every_declared_filter_key_is_applied` is what keeps them
         // agreeing.
@@ -1087,6 +1164,10 @@ pub fn normalize(p: &ParsedQuery) -> String {
             "route" => push_single(&mut parts, "route", &p.filters.route),
             "job" => push_single(&mut parts, "job", &p.filters.job),
             "rails" => push_single(&mut parts, "rails", &p.filters.rails),
+            "branch" => push_single(&mut parts, "branch", &p.filters.branch),
+            "touches" => push_single(&mut parts, "touches", &p.filters.touches),
+            "by" => push_single(&mut parts, "by", &p.filters.by),
+            "agent" => push_single(&mut parts, "agent", &p.filters.agent),
             _ => {}
         }
     }
@@ -1496,19 +1577,35 @@ mod tests {
         // this crate's `git_argv_lint`, this is a scan with the limits of a
         // scan: it proves the expression appears in the consuming module,
         // not that it is reached at runtime.
-        let unified: String = include_str!("unified.rs")
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
+        // V75-M3 — a MAP, not one file. The `~branches` atoms are read by
+        // `history/facts.rs`, and forcing them through `unified.rs` just
+        // to satisfy a one-module scan would have created the very dead
+        // surface this test exists to catch. Adding a module here is the
+        // reviewed decision the previous message already asked for; what
+        // is NOT allowed is a `consumer_module` naming a file absent from
+        // this map, which still fails by name.
+        let strip = |src: &str| -> String { src.chars().filter(|c| !c.is_whitespace()).collect() };
+        let consumers: [(&str, String); 2] = [
+            ("unified.rs", strip(include_str!("unified.rs"))),
+            (
+                "history/facts.rs",
+                strip(include_str!("../history/facts.rs")),
+            ),
+        ];
         for spec in FILTER_SPECS {
-            assert_eq!(
-                spec.consumer_module, "unified.rs",
-                "{}: only unified.rs is scanned today — add the module to this test \
-                 before pointing a spec at it",
-                spec.key
-            );
+            let src = consumers
+                .iter()
+                .find(|(name, _)| *name == spec.consumer_module)
+                .map(|(_, src)| src)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: consumer_module {:?} is not scanned — add it to this \
+                         test's `consumers` map before pointing a spec at it",
+                        spec.key, spec.consumer_module
+                    )
+                });
             assert!(
-                unified.contains(spec.consumer_expr),
+                src.contains(spec.consumer_expr),
                 "kbcq/1 declares `{}:` but {} never reads `{}` — either wire it or \
                  drop the key (a filter that parses and does nothing is the v7.0 \
                  dead-surface defect)",
@@ -1519,7 +1616,7 @@ mod tests {
             if spec.negatable {
                 let not_expr = format!("filters.not_{}", spec.key);
                 assert!(
-                    unified.contains(&not_expr),
+                    src.contains(&not_expr),
                     "kbcq/1 declares `-{}:` as negatable but {} never reads `{}`",
                     spec.key,
                     spec.consumer_module,
@@ -1704,6 +1801,11 @@ mod tests {
                 "route",
                 "job",
                 "rails",
+                // V75-M3 — the ~branches omnibox atoms, appended.
+                "branch",
+                "touches",
+                "by",
+                "agent",
             ]
         );
     }

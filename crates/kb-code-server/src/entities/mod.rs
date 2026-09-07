@@ -855,6 +855,12 @@ mod tests {
             // V75-M1 — the Workspace list and the D14 frame table join the
             // SAME walk, one milestone later.
             .chain(crate::workspace::V75_M1_ROUTES.iter())
+            // V75-M3 — `branch-facts/1`'s three READS. `POST
+            // /api/branches/review` is deliberately absent: a
+            // `RouteContract` describes a QUERY-param contract, and that
+            // route takes a JSON body (its own deserialization is the
+            // contract, enforced by axum's `Json` extractor).
+            .chain(crate::branches::V75_M3_ROUTES.iter())
         {
             let nested = c
                 .path

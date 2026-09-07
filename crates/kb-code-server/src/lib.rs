@@ -320,6 +320,10 @@ pub mod behavioral;
 pub mod blame;
 pub mod boards;
 pub mod bookmarks;
+/// V75-M3 (D15) — `branch-facts/1`, the conflict radar, favourites and
+/// "compare with common base". The engines live in `history::facts` /
+/// `history::radar`; this is their HTTP half.
+pub mod branches;
 pub mod canvas;
 pub mod checkout;
 pub mod claims;
@@ -1120,6 +1124,7 @@ pub async fn bind_and_spawn(
         search_factors: search_factors_config,
         lanes: config.lanes.clone(),
         trails: config.trails.clone(),
+        branches: config.branches.clone(),
         status_index: Arc::new(git_status::StatusIndex::new()),
         semantic: semantic_config,
         semantic_chunk_store,
@@ -1179,6 +1184,8 @@ pub async fn bind_and_spawn(
         secret_policy,
         git_fanout,
         scratch_root,
+        // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
+        branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
     });
 
     // DCB W3.A — the doc_refs reverse-index sync. Spawned UNCONDITIONALLY,
@@ -1415,6 +1422,7 @@ pub(crate) async fn build_state_for_test(
         search_factors: config.search.factors(),
         lanes: config.lanes.clone(),
         trails: config.trails.clone(),
+        branches: config.branches.clone(),
         status_index: Arc::new(git_status::StatusIndex::new()),
         semantic: config.semantic,
         semantic_chunk_store: None,
@@ -1449,6 +1457,8 @@ pub(crate) async fn build_state_for_test(
             config_for_security.server.resolved_git_fanout(),
         )),
         scratch_root: paths.state.join(history::scratch::SCRATCH_DIR_NAME),
+        // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
+        branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
     }))
 }
 

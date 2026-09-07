@@ -148,6 +148,28 @@ invariant #2 records).
    permits, `[server] git_fanout`) — this is a measured IO-bound RAID5
    host, and an unbounded N×M fan-out here is the same class of problem an
    unbounded reindex burst is on the kb side.
+   *V75-M3 amendment (D15, `history::radar`):* the N×M fan-out this
+   invariant anticipated now exists — the conflict radar merges up to
+   `radar::MAX_PAIRS` (40) candidate branches against one target — and the
+   rules it must obey are the same three, made explicit. **ONE scratch ODB
+   per PAIR, created and dropped inside the loop** (a 40-pair fan-out that
+   held 40 directories open would trade the unbounded-growth bug for an
+   unbounded-fd one); **the pair cap is HARD and the response says
+   `computed` of `candidates`** rather than truncating to look complete;
+   and a scratch-dir creation FAILURE is now its own error variant
+   (`HistoryError::ScratchUnwritable` → `urn:kb:errors:scratch-unwritable`,
+   `503`, naming the DIRECTORY), because the browsed repo needs no write
+   access at all — that is exactly what the redirection above bought — so
+   the only directory a merge-tree lane can be blocked on is the daemon's
+   OWN state dir, and reporting that as "git failed" sends the operator
+   looking in the wrong place. `merge_check` inherits the typed refusal by
+   going through the same constructor. The radar also reads its result tree
+   BACK out of the scratch ODB (`git show <tree>:<path>`) to COUNT conflict
+   markers: that read must carry the same two env vars as the write, which
+   is why both go through one `git_in_scratch` helper rather than two call
+   sites that can drift, and it is budgeted separately
+   (`radar::MAX_HUNK_PROBES`) with the field ABSENT past the budget, never
+   a guessed zero.
 
 6. **`kbc-cmd/1`: `crates/kb-code-server/commands/registry.json` is the ONE
    declaration home for kb-code's whole keyboard/command surface — never a
@@ -1348,6 +1370,71 @@ invariant #2 records).
     with it. `tours::V74_L3B_TOUR_ROUTES` and
     `trails::V74_L3B_TRAIL_ROUTES` join invariant 15's `RouteContract`
     walk from both sides.
+27. **`branch-facts/1`: the base is CLASSED and never silently defaulted,
+    `stale` is distribution-derived and never asserted over an open review,
+    and a `Co-authored-by:` trailer is never agent provenance** (V75-M3,
+    D15/D18, `src/history/facts.rs` + `src/branches.rs`). Four rules that
+    are separate to state and easy to break one at a time.
+    (a) **One pass, one cache key.** `facts::enumerate` is ONE `git
+    for-each-ref` whose `--format` carries the ahead/behind
+    (`%(ahead-behind:<sha>)`, `%(upstream:track)`) and the agent trailers
+    (`%(trailers:key=Kb-Session…)`) that would otherwise be a subprocess
+    per ref. `%(ahead-behind:)` is git ≥ 2.41 and `for-each-ref` fails the
+    WHOLE invocation on an unknown atom, so there is exactly one documented
+    retry without it, and `rules.ahead_behind_source` says which ran — a
+    degrade that does not announce itself is indistinguishable from a repo
+    with nothing to report. The derived base is cached in-process by
+    `(repo, full_ref, tip_sha, default_sha)` (`facts::BaseCacheKey`);
+    "invalidated when the ref moves" is obtained by the KEY, never by an
+    invalidation pass, and `default_sha` is in it because the base moving
+    changes the answer too. Nothing is persisted: a branch fact is
+    derivable from the repo at any instant, so a table would be a second
+    copy of git that can go stale in ways a key miss cannot.
+    (b) **The base is a four-rung ladder and the CLASS always rides the
+    wire** (`upstream` → `fork-point` → `merge-base` → `unknown`). Rung 1
+    skips an upstream that is this branch's own remote MIRROR (`feature` ↔
+    `origin/feature`) — that is a push target, not a base, and counting it
+    as one reports "0 ahead" for every pushed branch. Rung 4 is a real
+    answer: `base.ref` is `null` AND `ahead`/`behind` are ABSENT, never a
+    measured-looking zero (`branches/1`'s own V70-A3X ruling, inherited).
+    `POST /api/branches/review` REFUSES an `auto` base that came back
+    `unknown` rather than reviewing against the default branch by
+    substitution, and reports an explicit `--base` as `unknown` because the
+    daemon did not detect it.
+    (c) **`stale` and `active` PARTITION the set, the rule is on the wire,
+    and an open review always wins.** The threshold is the 75th percentile
+    of THIS repo's own last-activity ages — under
+    `facts::MIN_REFS_FOR_DISTRIBUTION` refs there is no distribution and
+    NOTHING is stale, with `rules.stale.degraded_reason` saying so. A
+    branch with an open review is never stale however old it is; that is
+    not a tie-break, it is the rule. `merged` is the same discipline in a
+    different shape: the WITNESS is never omitted — `ancestry` is free (0
+    ahead of the base IS the proof) and `patch-id` (`git cherry`, the only
+    thing that sees a SQUASH merge) is a capped probe whose `probed` of
+    `candidates` is reported, so an unprobed row is honestly unmerged
+    rather than wrongly clean.
+    (d) **D18's never-clause is structural.** `agent.class` is `exact` only
+    for a machine trailer NAMING the run, `likely` only for an author email
+    in `[branches] agent_emails`, and a `Co-authored-by:` trailer is not an
+    input to `facts::agent_provenance` AT ALL — there is no field for it on
+    `RawRef`. In an agent-assisted workflow that trailer is the shape a
+    HUMAN-authored commit takes, so reading it as provenance would label
+    the operator's own commits agent; `exact` is deliberately not
+    configurable, so no deployment can widen its way back into that.
+    Pinned by
+    `facts::tests::a_co_authored_by_trailer_alone_is_never_agent` and by
+    the fixture branch `human/assisted` in
+    `tests/history/branch_facts_route.rs`.
+    (e) **`branch:`/`touches:`/`by:`/`agent:` are kbcq/1 keys whose
+    consumer is NOT `unified.rs`.** Invariant 16(a)'s dead-surface walk
+    took a module MAP for exactly this: forcing four branch atoms through
+    the unified search box so they had a consumer there would have created
+    the dead surface that walk exists to catch, dressed as compliance. A
+    `consumer_module` naming a file absent from the map still fails, by
+    name. `touches:` is the one atom that costs a subprocess per branch, so
+    it is capped (`facts::MAX_TOUCHES_SCAN`) and captions `scanned` of
+    `candidates`; its pathspec goes after an explicit `--` and is asserted
+    by `tests/security/git_argv_lint.rs` like every other one.
 
 ## When to update this file
 

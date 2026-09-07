@@ -31,8 +31,14 @@
 pub mod branches;
 pub mod commit;
 pub mod compare;
+/// V75-M3 (D15) — `branch-facts/1`: the ONE `for-each-ref` pass, the
+/// classed base ladder, and the view/stale/merged/agent rules.
+pub mod facts;
 pub mod file_history;
 pub mod merge_check;
+/// V75-M3 (D15) — the conflict radar: `merge_check`'s mechanism fanned out
+/// over N candidate branches, with a hard pair cap and a hunk-probe budget.
+pub mod radar;
 pub mod range_diff;
 /// V70-A2 (SEC-15) — the per-request scratch object directory `merge-tree
 /// --write-tree` writes into, plus its boot-time orphan sweep.
@@ -65,6 +71,21 @@ pub enum HistoryError {
     /// ("malformed request").
     #[error("commit not found: {0:?}")]
     NotFound(String),
+    /// V75-M3 — the per-request scratch object directory (SEC-15,
+    /// [`scratch::ScratchOdb`]) could not be created. This is the
+    /// READ-ONLY-MOUNT refusal, and it is deliberately its own variant:
+    /// the browsed repo needs no write access (that is exactly what the
+    /// scratch redirection bought), so the only thing a `merge-tree` lane
+    /// can fail on for want of a writable directory is the DAEMON'S OWN
+    /// state dir — and telling a caller "git failed" for that would send
+    /// them looking in the wrong place. `routes.rs` maps it to a typed
+    /// `503` naming the directory (never the io error's raw text).
+    ///
+    /// The io error's text rides `reason`, NOT a field named `source`:
+    /// `thiserror` treats `source` as the `std::error::Error` source and
+    /// requires it to BE an error, which a captured `String` is not.
+    #[error("scratch object directory is not writable: {path} ({reason})")]
+    ScratchUnwritable { path: String, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, HistoryError>;
@@ -242,6 +263,28 @@ pub(crate) fn resolve_sha(repo_root: &Path, spec: &str) -> Result<String> {
         &["rev-parse", "--verify", &format!("{spec}^{{commit}}")],
     )?;
     Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// V75-M3 — `git rev-parse --verify <spec>^{commit}` as an OPTION rather
+/// than a `Result`. Same call as [`resolve_sha`]; the difference is the
+/// contract at the call site: `branch-facts/1` asks "does this ref name a
+/// commit right now?" about refs it enumerated itself, where "no" is an
+/// ordinary answer (an unborn HEAD, a symref with no target) and not a
+/// request error to propagate. `pub` because `crate::branches` is that
+/// caller.
+pub fn resolve_ref_commit(repo_root: &Path, spec: &str) -> Option<String> {
+    let spec = crate::git::Revspec::parse(spec).ok()?;
+    let out = resolve_sha(repo_root, spec.as_str()).ok()?;
+    (!out.is_empty()).then_some(out)
+}
+
+/// V75-M3 — `merge_base` for a caller-supplied REF rather than two
+/// resolved shas. `pub` for `crate::branches`, and it validates the ref
+/// through `Revspec` first: `merge_base` below takes shas this daemon
+/// resolved itself, so its own argv carries no validator.
+pub fn merge_base_of(repo_root: &Path, spec: &str, to_sha: &str) -> Option<String> {
+    let spec = crate::git::Revspec::parse(spec).ok()?;
+    merge_base(repo_root, spec.as_str(), to_sha)
 }
 
 /// `git merge-base <from> <to>` — `None` (not an error) on a non-zero exit

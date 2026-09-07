@@ -3695,6 +3695,54 @@ impl Store {
         Ok(rows)
     }
 
+    // --- V75-M3: branch favourites (`branch_favourites`, V0041) ---------
+
+    /// Every starred FULL ref in `repo`, newest star first. The set is
+    /// small by construction (a star is a deliberate act), so this returns
+    /// it whole rather than paginating — `branch-facts/1` needs the whole
+    /// set to mark rows anyway, not just the starred page.
+    pub fn list_branch_favourites(&self, repo: &str) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT ref_name FROM branch_favourites
+             WHERE repo = ?1
+             ORDER BY created_at DESC, ref_name ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![repo], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Star (`on = true`) or unstar a full ref. IDEMPOTENT in both
+    /// directions — starring twice is one row, unstarring an unstarred ref
+    /// is a no-op — so the route needs no read-modify-write and a retried
+    /// request can never 409. Returns whether the row set actually
+    /// changed, which is what the route reports back.
+    pub fn set_branch_favourite(
+        &self,
+        repo: &str,
+        ref_name: &str,
+        on: bool,
+        now: i64,
+    ) -> Result<bool> {
+        let conn = self.lock();
+        let changed = if on {
+            conn.execute(
+                "INSERT INTO branch_favourites (repo, ref_name, created_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(repo, ref_name) DO NOTHING",
+                params![repo, ref_name, now],
+            )?
+        } else {
+            conn.execute(
+                "DELETE FROM branch_favourites WHERE repo = ?1 AND ref_name = ?2",
+                params![repo, ref_name],
+            )?
+        };
+        Ok(changed > 0)
+    }
+
     /// Single bookmark lookup by id.
     pub fn get_bookmark(&self, id: i64) -> Result<Option<BookmarkRow>> {
         self.lock()

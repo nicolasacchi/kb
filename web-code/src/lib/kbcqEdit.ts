@@ -137,6 +137,16 @@ function clauseValues(p: ParsedQuery, key: string, negated: boolean): string[] {
       return one(p.filters.job);
     case "rails:false":
       return one(p.filters.rails);
+    // V75-M3 — the ~branches atoms. Single-valued and non-negatable, so
+    // one case each and no `:true` twin.
+    case "branch:false":
+      return one(p.filters.branch);
+    case "touches:false":
+      return one(p.filters.touches);
+    case "by:false":
+      return one(p.filters.by);
+    case "agent:false":
+      return one(p.filters.agent);
     default:
       return [];
   }

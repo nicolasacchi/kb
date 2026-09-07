@@ -3042,3 +3042,221 @@ the branch views, the reader's `@ref` chip and compare mode, and the
 transcript scrubber are each their own unit. Nothing here mutates a
 worktree; `checkout.rs`'s loopback-only working-tree lane is untouched and
 remains the only place this daemon changes a checkout.
+## Branches — `branch-facts/1` (v7.5, Track M)
+
+The pre-v7.5 `GET /api/branches` (`branches/1`) is unchanged and still
+answers "list the refs, ahead/behind vs the default, `?sort=suggested`".
+`branch-facts/1` is the v7 surface beside it, and the difference is what a
+branch row is allowed to CLAIM.
+
+### The one pass
+
+ONE `git for-each-ref refs/heads refs/remotes` per request, with fourteen
+`--format` atoms. Three of them are why it is one call and not N:
+
+- `%(upstream:track)` — ahead/behind vs the branch's own upstream, already
+  computed by git.
+- `%(ahead-behind:<default sha>)` — ahead/behind vs the default branch, for
+  every ref, in the same pass (git ≥ 2.41).
+- `%(trailers:key=Kb-Session,…)` / `%(…Kb-Agent…)` — the tip's agent
+  trailers, so provenance costs no `git log`.
+
+`%(ahead-behind:)` is the only atom below the crate's floor, and
+`for-each-ref` fails the WHOLE invocation on an unknown atom rather than
+degrading per row. The route therefore retries once without it and reports
+`rules.ahead_behind_source` (`for-each-ref` | `rev-list` | `none`) rather
+than silently reporting nothing.
+
+Facts are cached in-process by **`(repo, ref, tip, default tip)`** — the
+design's `(repo, ref, tip, base)` spelled out. Any of the four moving is a
+key MISS, which is the "invalidated when the ref moves" rule obtained
+structurally rather than by an invalidation pass someone could forget.
+Nothing is persisted: a branch fact is derivable from the repo at any
+moment, so a table would be a second copy of git that can go stale in ways
+a key miss cannot. `rules.base_cache_hits`/`_misses` are on the wire.
+
+### The base is CLASSED, never silently defaulted
+
+| rung | when | base |
+|---|---|---|
+| `upstream` | a configured upstream that is not `[gone]` **and is not this branch's own remote mirror** | the upstream ref; ahead/behind from `%(upstream:track)` |
+| `fork-point` | `git merge-base --fork-point <default> <branch>` succeeded | the default branch, at the fork point |
+| `merge-base` | plain `git merge-base` | the default branch, at the merge base |
+| `unknown` | no default branch, or disjoint histories | **none** — and `ahead`/`behind` are ABSENT, never a measured-looking zero |
+
+The mirror carve-out on rung 1 is load-bearing: a `feature` tracking
+`origin/feature` is a push target, not a base, and treating it as one would
+report "0 ahead" for every pushed branch.
+
+### Views, not tabs
+
+`?view=` is URL-addressable and closed at eight names. Membership rules
+ride the response in `rules.views`, so a caller never has to reverse them
+out of the numbers:
+
+| view | membership |
+|---|---|
+| `current` | checked out at HEAD, or in a linked worktree |
+| `mine` | the repo's own `user.email` (else `user.name`) authored the tip — kb-code has ONE identity |
+| `agent` | D18 provenance is `exact` or `likely` |
+| `review` | an open review names this branch |
+| `active` / `stale` | see below — they PARTITION the set |
+| `merged` | a witness proved it |
+| `all` | everything |
+
+Every row carries `reasons[]` — `{code, text}` pairs in a fixed order, so
+the CLI prints the same sentence the SPA renders as a chip and neither
+re-derives prose from a code. `view_counts` gives every view's own total in
+one round trip; `prefixes` is a server-computed prefix tree over the
+VIEW's rows (folding a page would make the counts move as you scroll).
+
+### stale, merged, agent — each a NAMED rule
+
+**stale** is distribution-derived, not a wall clock: older than the 75th
+percentile of THIS repo's own branch last-activity ages. Under four
+branches there is no distribution to take a percentile of, so nothing is
+called stale and `rules.stale.degraded_reason` says why. **A branch with an
+open review is never stale**, whatever the distribution says.
+
+**merged** always carries its witness. `ancestry` is free — 0 commits ahead
+of the base IS the proof. `patch-id` (`git cherry`) is what catches a
+SQUASH merge, which ancestry structurally cannot see (the GitHub weakness
+this track's evidence names); it costs one subprocess per candidate, so it
+runs for `view=merged` or `?patch_id=1`, is capped, and the response
+reports `patch_id_probed` of `patch_id_candidates`.
+
+**agent** (D18) has two rungs and one explicit non-rung. `exact` = a
+machine trailer NAMING the run (`Kb-Session:`, `Kb-Agent:`). `likely` = the
+tip author's email is in `[branches] agent_emails`. And a
+`Co-authored-by:` trailer ALONE is deliberately **not evidence**: in an
+agent-assisted workflow that trailer is the shape a HUMAN-authored commit
+takes, so reading it as provenance would label the operator's own commits
+agent. `exact` is not configurable; only the email set is.
+
+### The typed omnibox prefixes
+
+Four new kbcq/1 keys, appended to `FILTER_SPECS` so every pre-existing
+query's normalized form is byte-identical:
+
+| key | value | note |
+|---|---|---|
+| `branch:` | free text | case-insensitive substring of the branch NAME |
+| `touches:` | a repo-relative path | branches whose diff vs their own base touches it — CAPPED, with `rules.touches.scanned` of `candidates` |
+| `by:` | free text | substring of the tip author's name OR email |
+| `agent:` | `exact\|likely\|any\|none` | the D18 class; there is deliberately no value meaning "definitely not an agent" |
+
+These are the ONE place a kbcq/1 key's consumer is not `search::unified`:
+a branch is not a search lane, so their `consumer_module` is
+`history/facts.rs` and the dead-surface walk
+(`every_declared_filter_key_has_a_consumer`) scans both modules. The Rust
+parser, `web-code/src/lib/kbcq.ts` and the shared
+`grammar/kbcq.golden.json` stay in lock-step as always.
+
+### The conflict radar
+
+`GET /api/branches/conflicts?repo=&against=&limit=&q=` runs `git
+merge-tree --write-tree` per candidate against a **per-request scratch
+object directory** (SEC-15) — the browsed repo's ODB is never written,
+which is also why the radar needs no write access to the repo at all.
+
+- a HARD pair cap (40, default 20) with `budget.computed` of
+  `budget.candidates` and a pre-rendered `caption`;
+- one scratch ODB per pair, dropped before the next, plus the boot-time
+  orphan sweep for a `kill -9`;
+- every child under the daemon-wide `git_fanout` semaphore;
+- conflict `kind` derived from the STAGE SET (`both-modified`,
+  `modify-delete`, `delete-modify`, `add-add`, `other`) rather than scraped
+  from git's English prose;
+- `hunks` COUNTED from the conflict markers in the merged blob (read back
+  out of the scratch ODB), under its own probe budget — past it the field
+  is ABSENT, never a guessed number, and the caption says so;
+- a branch already contained in `against` is skipped, not merged with
+  itself;
+- `?q=` applies only the atoms computable from the one `for-each-ref` pass
+  (`branch:`, `by:`, `agent:`, the residual name text). `touches:` is
+  REFUSED with a 400 naming why rather than silently ignored, and there is
+  no `?view=` at all: `stale`, `merged`, `review` and `mine` come from the
+  store, the activity distribution and the repo identity, none of which
+  this route computes, so offering them would return an empty page that
+  looks like an answer.
+
+**The read-only refusal is typed.** `ScratchOdb::create` failing is
+`urn:kb:errors:scratch-unwritable` (`503`), naming the DIRECTORY — and
+`merge-check` inherits it, since both go through the same constructor. It
+is the daemon's own state dir that must be writable; the repo need not be.
+
+### Compare with common base
+
+`POST /api/branches/review` starts a review whose base the daemon chose,
+and the response says WHICH decision chose it (`base_source`):
+
+- `explicit` — the caller named a `--base`. It is used verbatim and its
+  `class` is reported as `unknown`, because this daemon classed nothing.
+- `stack` — the branch is a dependent-stack LAYER, so its own parent is
+  the base. Reviewing `B` (atop `A` atop `main`) against `main` drowns the
+  reviewer in `A`'s diff, which is exactly what `history::stacks` exists to
+  see; that detection is REUSED here rather than re-derived.
+- `ladder` — the four-rung classed ladder above.
+
+`--base auto` (the default) REFUSES when the ladder returns `unknown`
+rather than reviewing against a guess. `three_dot: true` — every review in
+this daemon reads `base...head`.
+
+A branch row's own `base` stays the LADDER's answer (default-branch
+relative, D15's four rungs) with the stack's per-level base beside it in
+`stack`; a stack layer also gets a `stack-base` reason chip saying, in
+words, that a review from there will compare against the parent. The two
+answers are different questions, and the row states both rather than
+letting the review verb look like a different daemon's opinion.
+
+It composes `reviews::create_review_value`, i.e. `POST /api/reviews`'s own
+body, so it cannot drift from it — and it is **loopback-only** for the same
+reason: a route that creates a review must not be a weaker gate than
+`POST /api/reviews` itself. (The ref rides the JSON body because a branch
+name contains `/` and axum's wildcard capture must be terminal.)
+
+### Routes
+
+| route | gate | note |
+|---|---|---|
+| `GET /api/branches/facts?repo=&view=&q=&prefix=&fav=&limit=&offset=&pr=&ci=&patch_id=` | bearer | `branch-facts/1` |
+| `GET /api/branches/conflicts?repo=&against=&limit=&q=` | bearer | `branch-conflicts/1`; writes only into a scratch ODB |
+| `GET /api/branches/favourites?repo=` | bearer | starred FULL refs |
+| `POST /api/branches/favourites` | bearer | star/unstar; idempotent both ways |
+| `POST /api/branches/review` | **loopback** | compare with common base |
+
+Favourites are an operator PREFERENCE (the `bookmarks` V0011 /
+`doc_lens_pins` V0020 precedent, not the checkout/review-ref one), stored
+in `branch_favourites` keyed by `(repo, full ref)` — daemon-global and
+never per-identity, since kb-code has one identity.
+
+`?pr=1` folds in open GitHub PRs with ONE `list_pulls` call; `?ci=1`
+additionally probes check runs for the page's PR-bearing rows, capped, with
+the overflow reported in `degraded[]`. Both are OFF by default: a listing
+route must not do network I/O nobody asked for, and any GitHub failure
+degrades into `degraded[]` rather than failing the listing.
+
+### CLI
+
+```
+kb-code branch facts     --repo R [--view current|mine|agent|review|active|stale|merged|all]
+                                  [--query 'agent:exact touches:app/models/order.rb']
+                                  [--prefix feature/] [--fav] [--limit N] [--offset N]
+                                  [--pr] [--ci] [--patch-id]
+kb-code branch conflicts --repo R [--against main] [--limit N] [--query Q]
+kb-code branch fav       --repo R [--ref refs/heads/x [--off]]      # no --ref = list
+kb-code branch review    <REF> --repo R [--base auto|<ref>] [--title T]
+```
+
+The human rendering prints the RULES under the rows — the stale rule, the
+merged rule and its budget, the agent ladder including the never-clause,
+the touches cap, and where the ahead/behind numbers came from. A view whose
+membership the caller cannot restate is a number they would have to trust
+blindly.
+
+### Not built here (M3)
+
+The reading-debt interdiff ("+2 commits since you looked") is a D15 SHOULD
+and is not built. Stack rows report `history::stacks`'s detected per-level
+base rather than re-deriving a second, subtly different one. CI is a
+worst-of roll-up over the check runs, never a quality verdict.

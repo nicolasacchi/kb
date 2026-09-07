@@ -708,6 +708,22 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/commit", get(routes::commit_route))
         .route("/compare", get(routes::compare_route))
         .route("/branches", get(routes::branches_route))
+        // V75-M3 (D15) — `branch-facts/1` and its siblings. Ordinary
+        // `auth_bearer` reads, the same gate as `/branches` above:
+        // `/facts` shells out only to read, and `/conflicts` writes
+        // exclusively into a PER-REQUEST scratch object directory
+        // (SEC-15), so neither touches the browsed repo. `/favourites` is
+        // an operator PREFERENCE — the `bookmarks` (V0011) / doc-lens-pin
+        // (V0020) precedent, not the checkout/review-ref one — so it is a
+        // bearer mutation here rather than loopback-only. The ONE route in
+        // this family that creates a review lives on the loopback-only
+        // sub-router below, beside `POST /reviews` itself.
+        .route("/branches/facts", get(crate::branches::facts_route))
+        .route("/branches/conflicts", get(crate::branches::conflicts_route))
+        .route(
+            "/branches/favourites",
+            get(crate::branches::list_favourites).post(crate::branches::set_favourite),
+        )
         .route("/file-history", get(routes::file_history_route))
         // V3.3-S2 — stack awareness (dependent-branch detection +
         // per-layer incremental diff). Ordinary auth_bearer reads, same
@@ -1198,6 +1214,16 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             post(crate::review_findings::import_findings_route),
         )
         .route("/reviews", post(reviews::create_review))
+        // V75-M3 (D15) — "Compare with common base": start a review whose
+        // base came off `branch-facts/1`'s CLASSED ladder. It composes
+        // `reviews::create_review_value`, so it must not be a WEAKER gate
+        // than `POST /reviews` directly above — hence loopback-only here
+        // rather than on `review_remote`. The ref rides the body because a
+        // branch name contains `/` and axum's wildcard must be terminal.
+        .route(
+            "/branches/review",
+            post(crate::branches::start_branch_review),
+        )
         .route("/reviews/{id}/snapshot", post(reviews::snapshot_review))
         .route(
             "/reviews/{id}",

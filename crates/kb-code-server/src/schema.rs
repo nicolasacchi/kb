@@ -48,6 +48,12 @@ const V1_TYPES: &[&str] = &[
     // Phase N — bookmarks (`bookmarks.rs`). Per-repo scoped, fired on
     // create/update/delete.
     "bookmark.changed",
+    // V75-M3 — branch FAVOURITES (`branches.rs`). Per-repo scoped, fired
+    // on a star/unstar that actually changed the row set. Deliberately the
+    // bookmarks shape (`repo` only): `branch-facts/1` is derived from git
+    // on every read, so a listener has nothing finer to invalidate than
+    // "this repo's branch rows".
+    "branch.changed",
     // V3.R1 — local review sessions (`reviews.rs`). `reason` distinguishes
     // the mutation kind (`patchset` | `meta` | `deleted` | `verdict` |
     // `pr_bound` | `report` [PRR-R2] | `findings_import` | `disposition`
@@ -100,6 +106,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         }
         "set.changed" => json!({"type": kind, "payload": ["repo"]}),
         "bookmark.changed" => json!({"type": kind, "payload": ["repo"]}),
+        "branch.changed" => json!({"type": kind, "payload": ["repo"]}),
         "review.changed" => {
             json!({"type": kind, "payload": ["review_id", "repo", "reason", "deleted?", "finding_slug?"]})
         }

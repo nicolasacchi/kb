@@ -49,6 +49,13 @@ use std::path::{Path, PathBuf};
 /// The state-dir subdirectory every scratch ODB lives under.
 pub const SCRATCH_DIR_NAME: &str = "scratch";
 
+/// V75-M3 — the RFC 7807 `type` URN for
+/// [`super::HistoryError::ScratchUnwritable`]. Lives beside its producer,
+/// the same convention `security::paths`/`security::secrets` follow for
+/// theirs. A caller seeing this knows the refusal is about the DAEMON'S
+/// state dir, not about the repo it asked about.
+pub const ERR_SCRATCH_UNWRITABLE: &str = "urn:kb:errors:scratch-unwritable";
+
 /// A per-request scratch object directory, removed on drop.
 #[derive(Debug)]
 pub struct ScratchOdb {
@@ -66,8 +73,22 @@ impl ScratchOdb {
         // git creates fan-out dirs itself but expects `info`/`pack` to
         // exist (it creates them lazily too, but making them here keeps
         // the layout obvious to anyone who looks at a leftover).
-        std::fs::create_dir_all(dir.join("info")).map_err(HistoryError::Spawn)?;
-        std::fs::create_dir_all(dir.join("pack")).map_err(HistoryError::Spawn)?;
+        //
+        // V75-M3 — a failure HERE is the read-only-mount refusal, not a
+        // git failure. The browsed repo needs no write access at all
+        // (exactly what the redirection above bought), so the only
+        // directory a `merge-tree` lane can be blocked on for want of
+        // write permission is THIS one, under the daemon's own state dir.
+        // `HistoryError::ScratchUnwritable` names it, so a caller looks in
+        // the right place; `Spawn` would have read as "git could not
+        // start". `merge_check` inherits the same typed refusal by going
+        // through this constructor.
+        let unwritable = |e: std::io::Error| HistoryError::ScratchUnwritable {
+            path: scratch_root.display().to_string(),
+            reason: e.to_string(),
+        };
+        std::fs::create_dir_all(dir.join("info")).map_err(unwritable)?;
+        std::fs::create_dir_all(dir.join("pack")).map_err(unwritable)?;
         Ok(Self { dir, alternates })
     }
 
@@ -208,6 +229,39 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let s = ScratchOdb::create(repo.path(), root.path()).unwrap();
         assert!(!s.dir().starts_with(repo.path()));
+    }
+
+    /// V75-M3 — the read-only-mount refusal is TYPED. Unix-only: the test
+    /// needs a directory whose write bit is genuinely off.
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_scratch_root_is_a_typed_refusal_naming_the_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let got = ScratchOdb::create(repo.path(), &locked);
+        // Restore before asserting so a failure still leaves a removable
+        // temp dir behind.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        match got {
+            Err(HistoryError::ScratchUnwritable { path, .. }) => {
+                assert_eq!(path, locked.display().to_string());
+            }
+            // Running as root (some container CI images) ignores the mode
+            // bits entirely, so there is no refusal to observe on such a
+            // host. Skipping is honest; asserting would fail for a reason
+            // that has nothing to do with this code.
+            Ok(_) => eprintln!(
+                "skipped: this uid can create a directory under mode 0500 (root?) — \
+                 the ScratchUnwritable path is unobservable here"
+            ),
+            Err(other) => panic!("expected ScratchUnwritable, got {other:?}"),
+        }
     }
 
     #[test]

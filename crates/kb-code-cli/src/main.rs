@@ -1282,6 +1282,17 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code branch <facts|conflicts|fav|review>` — V75-M3 (D15):
+    /// `branch-facts/1`, the conflict radar, favourites, and "compare with
+    /// common base". Daemon-only.
+    ///
+    /// Deliberately a SEPARATE family from the flat `branches` verb above:
+    /// `branches` is `branches/1` and stays byte-identical, `branch` is the
+    /// v7 surface with a classed base and views.
+    Branch {
+        #[command(subcommand)]
+        cmd: BranchCmd,
+    },
     /// `kb-code compare <FROM> <TO> --repo R [--three-dot]` — V4.P1:
     /// `GET /api/compare`. Daemon-only.
     Compare {
@@ -3398,6 +3409,107 @@ enum TranscriptsCmd {
 }
 
 /// `kb-code review <subcommand>` — V3.R1 local review sessions.
+/// V75-M3 (D15) — the `branch-facts/1` family. Every verb is daemon-only;
+/// `review` is the one that mutates (loopback-only server-side).
+#[derive(Subcommand, Debug)]
+enum BranchCmd {
+    /// `kb-code branch facts --repo R [--view V] [--query Q] …` —
+    /// `GET /api/branches/facts` (`branch-facts/1`).
+    Facts {
+        #[arg(long)]
+        repo: String,
+        /// One of current|mine|agent|review|active|stale|merged|all.
+        #[arg(long, default_value = "all")]
+        view: String,
+        /// A kbcq/1 query — the `/` filter plus `branch:`, `touches:`,
+        /// `by:` and `agent:`.
+        #[arg(long)]
+        query: Option<String>,
+        /// Prefix-folding selection, e.g. `feature/`.
+        #[arg(long)]
+        prefix: Option<String>,
+        /// Starred branches only.
+        #[arg(long)]
+        fav: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        offset: Option<usize>,
+        /// Fold in open GitHub PRs (one API call).
+        #[arg(long)]
+        pr: bool,
+        /// Also probe CI for the page's PR-bearing rows (capped). Implies
+        /// `--pr`.
+        #[arg(long)]
+        ci: bool,
+        /// Run the patch-id (squash) merge probe outside `--view merged`.
+        #[arg(long = "patch-id")]
+        patch_id: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code branch conflicts --repo R --against main` —
+    /// `GET /api/branches/conflicts` (`branch-conflicts/1`).
+    Conflicts {
+        #[arg(long)]
+        repo: String,
+        /// The ref every candidate is merged against.
+        #[arg(long, default_value = "main")]
+        against: String,
+        /// Pairs to compute; hard-capped server-side.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// A kbcq/1 query narrowing the candidate set. `branch:`, `by:`
+        /// and `agent:` only — the radar refuses `touches:` rather than
+        /// silently ignoring it, and has no `--view` because half the
+        /// views are not computable from a ref listing alone.
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code branch fav --repo R [--ref REF [--off]]` — list, star or
+    /// unstar. With no `--ref`, lists.
+    Fav {
+        #[arg(long)]
+        repo: String,
+        /// The FULL ref to star/unstar, as `branch facts` reports it.
+        #[arg(long = "ref")]
+        ref_name: Option<String>,
+        /// Unstar instead of starring.
+        #[arg(long)]
+        off: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code branch review <REF> --repo R [--base auto|<ref>]` — start a
+    /// review against the CLASSED base ("compare with common base").
+    /// Loopback-only server-side.
+    Review {
+        /// The branch to review (full ref or short name).
+        #[arg(value_name = "REF")]
+        ref_name: String,
+        #[arg(long)]
+        repo: String,
+        /// `auto` (default) detects the base through the classed ladder and
+        /// REFUSES when it cannot; anything else is used verbatim.
+        #[arg(long, default_value = "auto")]
+        base: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum ReviewCmd {
     /// Start a review on HEAD_REF (creates ps1). `--repo` required.
@@ -5789,6 +5901,65 @@ async fn run(cli: Cli) -> Result<()> {
             daemon,
             json,
         } => branches_cmd(&daemon, &repo, &sort, json).await,
+        Cmd::Branch { cmd } => match cmd {
+            BranchCmd::Facts {
+                repo,
+                view,
+                query,
+                prefix,
+                fav,
+                limit,
+                offset,
+                pr,
+                ci,
+                patch_id,
+                daemon,
+                json,
+            } => {
+                branch_facts_cmd(
+                    &daemon,
+                    &BranchFactsArgs {
+                        repo,
+                        view,
+                        query,
+                        prefix,
+                        fav,
+                        limit,
+                        offset,
+                        pr,
+                        ci,
+                        patch_id,
+                    },
+                    json,
+                )
+                .await
+            }
+            BranchCmd::Conflicts {
+                repo,
+                against,
+                limit,
+                query,
+                daemon,
+                json,
+            } => {
+                branch_conflicts_cmd(&daemon, &repo, &against, limit, query.as_deref(), json).await
+            }
+            BranchCmd::Fav {
+                repo,
+                ref_name,
+                off,
+                daemon,
+                json,
+            } => branch_fav_cmd(&daemon, &repo, ref_name.as_deref(), off, json).await,
+            BranchCmd::Review {
+                ref_name,
+                repo,
+                base,
+                title,
+                daemon,
+                json,
+            } => branch_review_cmd(&daemon, &repo, &ref_name, &base, title.as_deref(), json).await,
+        },
         Cmd::Compare {
             from,
             to,
@@ -14365,6 +14536,406 @@ async fn branches_cmd(daemon: &str, repo: &str, sort: &str, json: bool) -> Resul
         return Ok(());
     }
     print_branches_human(&body, sort == "suggested");
+    Ok(())
+}
+
+// --- V75-M3 (D15): the `branch-facts/1` family --------------------------
+//
+// Four verbs over three routes plus one loopback mutation. The request
+// builders below are what
+// `cli_requests_send_every_param_their_route_requires` walks against
+// `kb_code_server::branches::V75_M3_ROUTES`, so a param the route needs
+// and the CLI forgets fails a `cargo test -p kb-code-cli`, by name.
+
+/// Every `branch facts` knob, in one struct — clap hands over ten fields
+/// and a ten-argument fn is where an argument gets passed in the wrong
+/// position.
+struct BranchFactsArgs {
+    repo: String,
+    view: String,
+    query: Option<String>,
+    prefix: Option<String>,
+    fav: bool,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    pr: bool,
+    ci: bool,
+    patch_id: bool,
+}
+
+/// The `GET /api/branches/facts` request: `(path, query)`.
+fn branch_facts_request(args: &BranchFactsArgs) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", args.repo.clone()), ("view", args.view.clone())];
+    if let Some(v) = &args.query {
+        q.push(("q", v.clone()));
+    }
+    if let Some(v) = &args.prefix {
+        q.push(("prefix", v.clone()));
+    }
+    if args.fav {
+        q.push(("fav", "1".to_string()));
+    }
+    if let Some(v) = args.limit {
+        q.push(("limit", v.to_string()));
+    }
+    if let Some(v) = args.offset {
+        q.push(("offset", v.to_string()));
+    }
+    if args.pr || args.ci {
+        q.push(("pr", "1".to_string()));
+    }
+    if args.ci {
+        q.push(("ci", "1".to_string()));
+    }
+    if args.patch_id {
+        q.push(("patch_id", "1".to_string()));
+    }
+    (kb_code_server::branches::BRANCH_FACTS_ROUTE.path, q)
+}
+
+/// The `GET /api/branches/conflicts` request: `(path, query)`.
+fn branch_conflicts_request(
+    repo: &str,
+    against: &str,
+    limit: Option<usize>,
+    query: Option<&str>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string()), ("against", against.to_string())];
+    if let Some(v) = limit {
+        q.push(("limit", v.to_string()));
+    }
+    if let Some(v) = query {
+        q.push(("q", v.to_string()));
+    }
+    (kb_code_server::branches::BRANCH_CONFLICTS_ROUTE.path, q)
+}
+
+/// The `GET /api/branches/favourites` request: `(path, query)`.
+fn branch_favourites_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::branches::BRANCH_FAVOURITES_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
+async fn branch_facts_cmd(daemon: &str, args: &BranchFactsArgs, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = branch_facts_request(args);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    print_branch_facts_human(&body);
+    Ok(())
+}
+
+fn opt_u64(v: &serde_json::Value) -> String {
+    v.as_u64().map(|n| n.to_string()).unwrap_or("–".to_string())
+}
+
+/// The ONE human rendering of `branch-facts/1`. Every number it prints is
+/// read off the wire; it derives nothing, so it cannot disagree with the
+/// SPA about what a row means.
+fn print_branch_facts_human(body: &serde_json::Value) {
+    let s = |k: &str| body[k].as_str().unwrap_or("?");
+    println!(
+        "repo {} · default {} · view {} · {} of {} branch(es){}",
+        s("repo"),
+        body["default"].as_str().unwrap_or("(none)"),
+        s("view"),
+        body["rows"].as_array().map(|r| r.len()).unwrap_or(0),
+        body["total"].as_u64().unwrap_or(0),
+        if body["enumeration_truncated"].as_bool().unwrap_or(false) {
+            " (enumeration truncated)"
+        } else {
+            ""
+        }
+    );
+    for row in body["rows"].as_array().cloned().unwrap_or_default() {
+        let base = &row["base"];
+        println!(
+            "  {}{}  +{}/-{}  base {} ({}){}{}{}",
+            if row["favourite"].as_bool().unwrap_or(false) {
+                "*"
+            } else {
+                " "
+            },
+            row["name"].as_str().unwrap_or("?"),
+            opt_u64(&row["ahead"]),
+            opt_u64(&row["behind"]),
+            base["ref"].as_str().unwrap_or("(none)"),
+            base["class"].as_str().unwrap_or("?"),
+            match row["agent"]["class"].as_str() {
+                Some("none") | None => String::new(),
+                Some(c) => format!("  agent:{c}"),
+            },
+            row["pr"]["number"]
+                .as_u64()
+                .map(|n| format!("  PR #{n}"))
+                .unwrap_or_default(),
+            row["ci"]["status"]
+                .as_str()
+                .map(|c| format!("  ci:{c}"))
+                .unwrap_or_default(),
+        );
+        if let Some(st) = row["stack"].as_object() {
+            println!(
+                "      stack: depth {} on {}{}",
+                st["depth"].as_u64().unwrap_or(0),
+                st["base"].as_str().unwrap_or("?"),
+                if st["stale"].as_bool().unwrap_or(false) {
+                    " (base moved)"
+                } else {
+                    ""
+                }
+            );
+        }
+        let reasons: Vec<String> = row["reasons"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r["text"].as_str().map(str::to_string))
+            .collect();
+        if !reasons.is_empty() {
+            println!("      {}", reasons.join("; "));
+        }
+    }
+    let prefixes: Vec<String> = body["prefixes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|p| {
+            format!(
+                "{} ({})",
+                p["prefix"].as_str().unwrap_or("?"),
+                p["count"].as_u64().unwrap_or(0)
+            )
+        })
+        .collect();
+    if !prefixes.is_empty() {
+        println!("prefixes: {}", prefixes.join(", "));
+    }
+    // The RULES, printed rather than assumed — a view whose membership the
+    // caller cannot restate is a number they have to trust blindly.
+    let rules = &body["rules"];
+    println!("rules:");
+    println!(
+        "  base    {} (ladder: {})",
+        rules["base_note"].as_str().unwrap_or("?"),
+        rules["base_ladder"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+            .join(" → ")
+    );
+    println!(
+        "  stale   {}{}",
+        rules["stale"]["rule"].as_str().unwrap_or("?"),
+        match rules["stale"]["degraded_reason"].as_str() {
+            Some(r) => format!(" — NOT APPLIED: {r}"),
+            None => String::new(),
+        }
+    );
+    println!(
+        "  merged  {} — probed {} of {} candidate(s), cap {}",
+        rules["merged"]["rule"].as_str().unwrap_or("?"),
+        rules["merged"]["patch_id_probed"].as_u64().unwrap_or(0),
+        rules["merged"]["patch_id_candidates"].as_u64().unwrap_or(0),
+        rules["merged"]["patch_id_cap"].as_u64().unwrap_or(0),
+    );
+    println!(
+        "  agent   exact={} · likely={} · never={}",
+        rules["agent"]["exact"].as_str().unwrap_or("?"),
+        rules["agent"]["likely"].as_str().unwrap_or("?"),
+        rules["agent"]["never"].as_str().unwrap_or("?"),
+    );
+    if let Some(t) = rules["touches"].as_object() {
+        println!(
+            "  touches {} — scanned {} of {} candidate(s), cap {}",
+            t["path"].as_str().unwrap_or("?"),
+            t["scanned"].as_u64().unwrap_or(0),
+            t["candidates"].as_u64().unwrap_or(0),
+            t["cap"].as_u64().unwrap_or(0),
+        );
+    }
+    println!(
+        "  numbers ahead/behind from {} · base cache {} hit / {} miss",
+        rules["ahead_behind_source"].as_str().unwrap_or("?"),
+        rules["base_cache_hits"].as_u64().unwrap_or(0),
+        rules["base_cache_misses"].as_u64().unwrap_or(0),
+    );
+    for d in body["degraded"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "  degraded[{}]: {}",
+            d["lane"].as_str().unwrap_or("?"),
+            d["reason"].as_str().unwrap_or("?")
+        );
+    }
+    for d in body["diagnostics"].as_array().cloned().unwrap_or_default() {
+        println!("  query: {}", d["message"].as_str().unwrap_or("?"));
+    }
+}
+
+async fn branch_conflicts_cmd(
+    daemon: &str,
+    repo: &str,
+    against: &str,
+    limit: Option<usize>,
+    query: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, q) = branch_conflicts_request(repo, against, limit, query);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&q)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "against {} @{}",
+        body["against"].as_str().unwrap_or("?"),
+        body["against_sha"]
+            .as_str()
+            .unwrap_or("?")
+            .chars()
+            .take(12)
+            .collect::<String>()
+    );
+    println!("{}", body["caption"].as_str().unwrap_or(""));
+    for row in body["rows"].as_array().cloned().unwrap_or_default() {
+        if let Some(err) = row["error"].as_str() {
+            println!("  {}  ERROR {err}", row["branch"].as_str().unwrap_or("?"));
+            continue;
+        }
+        let conflicts = row["conflicts"].as_array().cloned().unwrap_or_default();
+        if row["clean"].as_bool().unwrap_or(false) {
+            println!("  {}  clean", row["branch"].as_str().unwrap_or("?"));
+            continue;
+        }
+        println!(
+            "  {}  CONFLICT {} path(s)",
+            row["branch"].as_str().unwrap_or("?"),
+            conflicts.len()
+        );
+        for c in conflicts {
+            println!(
+                "      {}  {}  {}",
+                c["path"].as_str().unwrap_or("?"),
+                c["kind"].as_str().unwrap_or("?"),
+                match c["hunks"].as_u64() {
+                    Some(n) => format!("{n} hunk(s)"),
+                    // ABSENT, not zero — the budget ran out.
+                    None => "hunks not measured".to_string(),
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn branch_fav_cmd(
+    daemon: &str,
+    repo: &str,
+    ref_name: Option<&str>,
+    off: bool,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let Some(ref_name) = ref_name else {
+        if off {
+            anyhow::bail!("--off needs a --ref to unstar");
+        }
+        let (path, q) = branch_favourites_request(repo);
+        let body = get_json(&client, daemon, path, &as_query_pairs(&q)).await?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&body)?);
+            return Ok(());
+        }
+        let favs = body["favourites"].as_array().cloned().unwrap_or_default();
+        if favs.is_empty() {
+            println!("no starred branches in {repo}");
+        }
+        for f in favs {
+            println!("{}", f.as_str().unwrap_or("?"));
+        }
+        return Ok(());
+    };
+    let (status, body) = post_json_raw(
+        &client,
+        daemon,
+        kb_code_server::branches::BRANCH_FAVOURITES_ROUTE.path,
+        &serde_json::json!({ "repo": repo, "ref": ref_name, "on": !off }),
+    )
+    .await?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "POST /api/branches/favourites → {status}: {}",
+            body["error"].as_str().unwrap_or("(no message)")
+        );
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "{} {} ({})",
+        if off { "unstarred" } else { "starred" },
+        body["ref"].as_str().unwrap_or(ref_name),
+        if body["changed"].as_bool().unwrap_or(false) {
+            "changed"
+        } else {
+            "already in that state"
+        }
+    );
+    Ok(())
+}
+
+async fn branch_review_cmd(
+    daemon: &str,
+    repo: &str,
+    ref_name: &str,
+    base: &str,
+    title: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut payload = serde_json::json!({
+        "repo": repo,
+        "ref": ref_name,
+        "base": base,
+    });
+    if let Some(t) = title {
+        payload["title"] = serde_json::Value::String(t.to_string());
+    }
+    let (status, body) = post_json_raw(&client, daemon, "/api/branches/review", &payload).await?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "POST /api/branches/review → {status}: {}",
+            body["error"].as_str().unwrap_or("(no message)")
+        );
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "review #{} started against {} (class {}, chosen by {}){}",
+        body["review"]["id"].as_u64().unwrap_or(0),
+        body["base"]["ref"].as_str().unwrap_or("?"),
+        body["base"]["class"].as_str().unwrap_or("?"),
+        body["base_source"].as_str().unwrap_or("?"),
+        if body["three_dot"].as_bool().unwrap_or(false) {
+            " — three-dot (base...head)"
+        } else {
+            ""
+        }
+    );
     Ok(())
 }
 
@@ -25469,15 +26040,33 @@ mod tests {
             // V75-M1 — the Workspace list and the D14 frame table.
             workspaces_request(),
             frames_request(),
+            // V75-M3 — `branch-facts/1`'s three READS join the SAME walk.
+            branch_favourites_request("repo"),
+            branch_conflicts_request("repo", "main", Some(5), Some("branch:x")),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
         // so it is normalised into the same shape as the rest rather than
         // widening every builder above.
         let recipe_run = recipe_run_request("repo", &[], None, None, None);
+        // V75-M3 — `branch_facts_request` takes its knobs as a struct, so
+        // it is built here beside `recipe_run` rather than inline above.
+        let branch_facts = branch_facts_request(&BranchFactsArgs {
+            repo: "repo".to_string(),
+            view: "all".to_string(),
+            query: None,
+            prefix: None,
+            fav: false,
+            limit: Some(10),
+            offset: None,
+            pr: false,
+            ci: false,
+            patch_id: false,
+        });
         let built: Vec<(&'static str, Vec<(&'static str, String)>)> = built
             .into_iter()
             .chain([
+                branch_facts,
                 recipe_catalog_request("repo"),
                 recipe_show_request("repo"),
                 recipe_lint_request("repo"),
@@ -25532,7 +26121,9 @@ mod tests {
             // V73-K3 — the timeline, the claim register, the two
             // pseudo-file reads and the hunk↔turn join, the same way.
             .chain(kb_code_server::review_timeline::V73_K3_ROUTES.iter())
-            .chain(kb_code_server::workspace::V75_M1_ROUTES.iter());
+            .chain(kb_code_server::workspace::V75_M1_ROUTES.iter())
+            // V75-M3 — `branch-facts/1`'s three reads, the same way.
+            .chain(kb_code_server::branches::V75_M3_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

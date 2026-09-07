@@ -62,6 +62,13 @@ export const RAILS_NOUNS: string[] = [
   "concern",
 ];
 
+/**
+ * V75-M3 — `agent:`'s closed vocabulary, mirroring `grammar.rs`'s
+ * `AGENT_FILTER_VALUES`. `any` = any evidence (exact OR likely); there is
+ * deliberately no value meaning "definitely not an agent".
+ */
+export const AGENT_FILTER_VALUES = ["exact", "likely", "any", "none"] as const;
+
 export interface Filters {
   lang: string | null;
   path: string | null;
@@ -87,6 +94,16 @@ export interface Filters {
   job: string | null;
   /** `rails:<noun>` — the generic form; vocabulary is `RAILS_NOUNS`. */
   rails: string | null;
+  /**
+   * V75-M3 — the `~branches` atoms (`branch-facts/1`). Same posture as
+   * the Rails atoms: the value is carried verbatim and resolved by the
+   * daemon (`history::facts`), never here.
+   */
+  branch: string | null;
+  touches: string | null;
+  by: string | null;
+  /** `agent:` — vocabulary is `AGENT_FILTER_VALUES`. */
+  agent: string | null;
 }
 
 export interface QueryTerm {
@@ -145,6 +162,11 @@ export const FILTER_SPECS: FilterKeySpec[] = [
   { key: "route", multi: false, negatable: false, values: null },
   { key: "job", multi: false, negatable: false, values: null },
   { key: "rails", multi: false, negatable: false, values: [...RAILS_NOUNS] },
+  // V75-M3 — the ~branches omnibox atoms, APPENDED for the same reason.
+  { key: "branch", multi: false, negatable: false, values: null },
+  { key: "touches", multi: false, negatable: false, values: null },
+  { key: "by", multi: false, negatable: false, values: null },
+  { key: "agent", multi: false, negatable: false, values: [...AGENT_FILTER_VALUES] },
 ];
 
 export const SUGGEST_MAX_DISTANCE = 2;
@@ -175,6 +197,10 @@ export function emptyFilters(): Filters {
     route: null,
     job: null,
     rails: null,
+    branch: null,
+    touches: null,
+    by: null,
+    agent: null,
   };
 }
 
@@ -406,6 +432,22 @@ function extract(s: string): Extracted {
       case "rails:true":
         filters.rails = last;
         break;
+      case "branch:false":
+      case "branch:true":
+        filters.branch = last;
+        break;
+      case "touches:false":
+      case "touches:true":
+        filters.touches = last;
+        break;
+      case "by:false":
+      case "by:true":
+        filters.by = last;
+        break;
+      case "agent:false":
+      case "agent:true":
+        filters.agent = last;
+        break;
       case "sort:false":
       case "sort:true":
         sort = last === "path" ? "path" : "relevance";
@@ -601,6 +643,18 @@ export function normalize(p: ParsedQuery): string {
         break;
       case "rails":
         if (p.filters.rails !== null) parts.push(`rails:${quoteIfNeeded(p.filters.rails)}`);
+        break;
+      case "branch":
+        if (p.filters.branch !== null) parts.push(`branch:${quoteIfNeeded(p.filters.branch)}`);
+        break;
+      case "touches":
+        if (p.filters.touches !== null) parts.push(`touches:${quoteIfNeeded(p.filters.touches)}`);
+        break;
+      case "by":
+        if (p.filters.by !== null) parts.push(`by:${quoteIfNeeded(p.filters.by)}`);
+        break;
+      case "agent":
+        if (p.filters.agent !== null) parts.push(`agent:${quoteIfNeeded(p.filters.agent)}`);
         break;
       default:
         break;

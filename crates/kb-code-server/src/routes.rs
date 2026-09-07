@@ -4264,6 +4264,21 @@ impl From<crate::history::HistoryError> for ApiError {
             GitFailed { stderr, .. } => ApiError::bad_request(stderr.trim().to_string()),
             err @ BadRevspec(_) => ApiError::bad_request(err.to_string()),
             NotFound(sha) => ApiError::not_found(format!("no such commit: {sha:?}")),
+            // V75-M3 — the read-only-mount refusal. `503`, not `500`: the
+            // request was well-formed and the daemon is simply not in a
+            // state to answer it, and it may be next boot. Typed
+            // (`urn:kb:errors:scratch-unwritable`) and it names the
+            // DIRECTORY, so a caller does not go looking at the repo it
+            // asked about — the repo needs no write access at all (SEC-15).
+            // The io error's own text is deliberately not echoed.
+            ScratchUnwritable { path, .. } => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "the daemon's scratch object directory is not writable: {path} — a \
+                     merge-tree lane writes its result tree there, never into the browsed repo"
+                ),
+            )
+            .with_problem_type(crate::history::scratch::ERR_SCRATCH_UNWRITABLE),
         }
     }
 }
@@ -4590,7 +4605,7 @@ fn branch_name_key<'a>(name: &'a str, remote: Option<&'a str>) -> (&'a str, &'a 
 /// entry whenever a SAME-named local branch exists, which is the far more
 /// common shape); this fn does not attempt to resolve that residual,
 /// structurally-ambiguous case — the caller-supplied string alone can't.
-fn head_ref_matches(head_ref: &str, full_ref: &str, short_name: &str) -> bool {
+pub(crate) fn head_ref_names_branch(head_ref: &str, full_ref: &str, short_name: &str) -> bool {
     head_ref == full_ref || full_ref == format!("refs/heads/{head_ref}") || head_ref == short_name
 }
 
@@ -4693,7 +4708,7 @@ pub async fn branches_route(
                 });
                 let has_open_review = open_heads
                     .iter()
-                    .any(|h| head_ref_matches(h, &r.full_name, &r.name));
+                    .any(|h| head_ref_names_branch(h, &r.full_name, &r.name));
                 BranchPre {
                     name: r.name,
                     revspec: r.full_name,
