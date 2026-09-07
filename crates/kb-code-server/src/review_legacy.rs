@@ -553,7 +553,7 @@ fn render_document(
         if skipped.is_empty() {
             String::new()
         } else {
-            format!(" and {} were skipped for want of a location", skipped.len())
+            format!(" and {} skipped for want of a location", skipped.len())
         }
     ));
     out.push_str("---\n\n");
