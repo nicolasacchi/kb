@@ -84,6 +84,7 @@ const OWNER_FILES: Readonly<Record<string, readonly string[]>> = {
     "components/bookmarks/MnemonicPopup.tsx",
   ],
   search: ["routes/Search.tsx", "routes/searchCommands.ts"],
+  recipe: ["routes/Recipes.tsx", "routes/recipeCommands.ts"],
 };
 
 /// A row that binds no key in any preset documents a passive behaviour, not
