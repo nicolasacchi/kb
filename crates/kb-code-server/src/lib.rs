@@ -315,6 +315,7 @@ pub mod annotations;
 // (`GET /api/events.schema.json`), a different vocabulary this module does
 // not touch.
 pub mod api_schemas;
+pub mod backup;
 pub mod behavioral;
 pub mod blame;
 pub mod boards;
@@ -350,6 +351,7 @@ pub mod fanout;
 // as a routes-adjacent sibling of `frameworks` (the pure extraction lane),
 // not nested inside it — mirrors `resolve.rs`/`usages.rs`/`hierarchy.rs`'s
 // own top-level placement next to the tables/extractors they read.
+pub mod frames;
 pub mod framework_edges;
 pub mod frameworks;
 pub mod git;
@@ -401,6 +403,7 @@ pub mod recipes;
 /// V72-H2b (D7) — `reextract-bill/1`: what a salt bump would cost,
 /// measured rather than estimated.
 pub mod reextract;
+pub mod rekey;
 pub mod repo_state;
 pub mod resolve;
 pub mod review_analytics;
@@ -459,6 +462,7 @@ pub mod tree;
 pub mod unified_inbox;
 pub mod usages;
 pub mod usages2;
+pub mod workspace;
 pub mod yaml;
 
 use anyhow::{Context, Result};
@@ -658,6 +662,26 @@ pub async fn bind_and_spawn(
     // one of the three controls D17 requires to ship in the same milestone
     // as the ledger itself; it is not a follow-up.
     trails::gc::spawn_trail_retention_gc(store.clone(), config.trails.clone());
+
+    // V75-M1 — D13's Workspace re-key: resolve every configured repo to
+    // its workspace + worktree, then backfill the key columns V0040 added.
+    // SPAWNED, never awaited, on the same V72-B0(a) rule as the two sweeps
+    // above and for a sharper reason: resolution runs `git rev-list
+    // --max-parents=0 HEAD`, which walks the whole reachable history. Paid
+    // once per volume (the recorded root commit is reused on later boots),
+    // and never between `Store::open` and the bind.
+    //
+    // Until it lands, `GET /api/identity` reports `rekey: "pending"` and
+    // every key column is NULL — which is exactly what the read fallback
+    // in `Store::workspace_repo_ids` is for.
+    let rekey_state = Arc::new(std::sync::atomic::AtomicU8::new(
+        if store.rekey_is_done().unwrap_or(false) {
+            rekey::STATE_DONE
+        } else {
+            rekey::STATE_PENDING
+        },
+    ));
+    rekey::spawn_rekey(store.clone(), config.repos.clone(), rekey_state.clone());
 
     // W1.6 (a) — initial background index: a HEAD-tree walk per repo
     // (W1.5's `ingest::index_repo_working_tree`), spawned so it never delays
@@ -1080,6 +1104,7 @@ pub async fn bind_and_spawn(
         repos: config.repos,
         store,
         repo_ids,
+        rekey: rekey_state,
         bus,
         watch_mode: watch_mode_label,
         watcher: Arc::new(watcher),
@@ -1264,6 +1289,25 @@ pub(crate) async fn build_state_for_test(
     if let Err(e) = store.sweep_stale_salt_derived() {
         tracing::warn!(error = %e, "kb-code: boot stale-salt sweep failed");
     }
+    // V75-M1 — the same Workspace resolution + re-key backfill
+    // `bind_and_spawn` spawns, but driven INLINE to completion, for the
+    // identical reason the sweep above is: a fixture store holds a handful
+    // of rows, and an in-crate test wants the post-backfill state
+    // deterministically rather than whenever a background task lands.
+    let rekey_state = Arc::new(std::sync::atomic::AtomicU8::new(rekey::STATE_PENDING));
+    {
+        let resolved = workspace::resolve_and_upsert(&store, &config.repos);
+        let fingerprint = rekey::identity_fingerprint(&resolved);
+        let report = rekey::run_backfill(&store, &fingerprint, None, std::time::Duration::ZERO);
+        rekey_state.store(
+            if report.complete {
+                rekey::STATE_DONE
+            } else {
+                rekey::STATE_PENDING
+            },
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
 
     let kb_client = Arc::new(join::kb_client::KbClient::new(config.kb_daemon.clone()));
     let github_client = Arc::new(github::GithubClient::new(&config.github));
@@ -1356,6 +1400,13 @@ pub(crate) async fn build_state_for_test(
         repos: config.repos,
         store,
         repo_ids,
+        // V75-M1 — the fixture resolves the re-key INLINE and to
+        // completion, which is safe here and nowhere else: a fixture store
+        // holds a handful of rows and an in-crate test wants the
+        // post-backfill state deterministically, not whenever a background
+        // task happens to land (the same carve-out the stale-salt sweep
+        // takes three lines up).
+        rekey: rekey_state,
         bus,
         watch_mode: watch_mode_label,
         watcher: Arc::new(watcher),

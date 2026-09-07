@@ -1872,6 +1872,71 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RailsCmd,
     },
+    // ── V75-M1 (kb-code v7.5 "Worktrees, branches, time") — appended at
+    // the END of `Cmd` per the standing convention. ──────────────────────
+    /// `kb-code workspaces [--json]` — D13's WORKSPACES (`GET
+    /// /api/workspaces`): one shared git object store per row, its
+    /// worktrees, and the derived rows each one owns.
+    ///
+    /// NOT `kb-code workspace` (singular), which is D26's Desk — a reading
+    /// set of kind `workspace`. Two nouns, one letter apart, and the
+    /// collision is older than this verb: see `kb_code_server::workspace`'s
+    /// module doc.
+    Workspaces {
+        /// Show only this workspace (`GET /api/workspaces/{id}/worktrees`).
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code frames [--json]` — D14's `@ref` FRAME TABLE (`GET
+    /// /api/frames`): per lane, what it reads off the working tree and
+    /// what it may claim about a ref that is not checked out.
+    ///
+    /// Published as fact so every off-HEAD banner in the reader derives
+    /// from one tested table instead of being written by hand per surface.
+    Frames {
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code backup [--db PATH] [--json]` — a `VACUUM INTO` snapshot of
+    /// the kb-code volume, beside it, named for the schema epoch it
+    /// restores to, plus a receipt the boot-time gate reuses.
+    ///
+    /// A LOCAL FILE operation: no daemon, no route, no new mutation
+    /// surface. Safe to run while the daemon is up — `VACUUM INTO` reads
+    /// through one consistent transaction, so a WAL that has not
+    /// checkpointed is included and a live writer never tears the copy.
+    Backup {
+        /// The volume. Defaults to `<state>/kb-code/index.db`.
+        #[arg(long)]
+        db: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code rehearse-migration --from PATH [--keep] [--json]` — run
+    /// this binary's migrations against a COPY of a real volume and report
+    /// what they did, before they go near the real one.
+    ///
+    /// Emits `rehearsal/1`: the epoch before and after, the pre-migration
+    /// snapshot the backup gate took, a per-table row census (a re-key adds
+    /// columns, never rows), and the paged backfill's wall clock on a
+    /// volume this size. The copy is deleted unless `--keep`, and the
+    /// SOURCE is never written.
+    RehearseMigration {
+        /// A kb-code `index.db` — typically a copy of production state.
+        #[arg(long)]
+        from: std::path::PathBuf,
+        /// Leave the migrated copy on disk for inspection.
+        #[arg(long)]
+        keep: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// `kb-code rails <sub>` — V72-I1. One subcommand per `rails/1` surface;
@@ -6494,6 +6559,11 @@ async fn run(cli: Cli) -> Result<()> {
                 rails_orphans_cmd(&daemon, &repo, json).await
             }
         },
+        // ── V75-M1 ────────────────────────────────────────────────────
+        Cmd::Workspaces { id, daemon, json } => workspaces_cmd(&daemon, id.as_deref(), json).await,
+        Cmd::Frames { daemon, json } => frames_cmd(&daemon, json).await,
+        Cmd::Backup { db, json } => backup_cmd(db.as_deref(), json),
+        Cmd::RehearseMigration { from, keep, json } => rehearse_migration_cmd(&from, keep, json),
     }
 }
 
@@ -8244,6 +8314,21 @@ async fn doctor_cmd(daemon: &str, agent: bool, json: bool) -> Result<()> {
                 "ok": matched.is_some(),
                 "cwd": cwd_str,
                 "matched_repo": matched,
+            }));
+
+            // V75-M1 — the Workspace re-key backfill's progress.
+            // INFORMATIONAL, like `bearer_token` below: `pending` is a
+            // normal state on a daemon that has just booted or has just
+            // gained a repo, every route answers correctly in it, and
+            // failing doctor for it would train an operator to ignore
+            // doctor. What it buys is a place to LOOK when
+            // `GET /api/workspaces` is empty and you expected rows.
+            let rekey = body["rekey"].as_str();
+            checks.push(serde_json::json!({
+                "check": "workspace_rekey",
+                "state": rekey.unwrap_or("unknown (daemon predates V75-M1)"),
+                "note": "pending|running means resolution has not finished; \
+                         workspace ids and the per-table key columns may still be null",
             }));
         }
         Err(e) => {
@@ -22280,6 +22365,286 @@ fn print_rails_notes(body: &serde_json::Value) {
     }
 }
 
+// ── V75-M1 (kb-code v7.5) — the Workspace re-key's CLI half ───────────
+//
+// Two DAEMON reads (`workspaces`, `frames`) built the way every verb since
+// V71-G0 is: the path comes from the server crate's own `RouteContract`,
+// never a string literal, so `cli_requests_send_every_param_their_route_
+// requires` can walk the two sides against each other.
+//
+// Two LOCAL verbs (`backup`, `rehearse-migration`) that deliberately do
+// NOT talk to a daemon. Both operate on a sqlite file with the engine
+// living in `kb_code_server` (one home for "snapshot a volume" and one for
+// "rehearse a migration", testable by `cargo test -p kb-code-server`); this
+// file is the argument parsing and the rendering. A backup you can only
+// take through a running daemon is exactly the backup you cannot take when
+// the daemon refuses to boot.
+
+/// The `GET /api/workspaces` request: `(path, query)`.
+fn workspaces_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::workspace::WORKSPACES_ROUTE.path, Vec::new())
+}
+
+/// The `GET /api/frames` request: `(path, query)`.
+fn frames_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::frames::FRAMES_ROUTE.path, Vec::new())
+}
+
+async fn workspaces_cmd(daemon: &str, id: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let body = match id {
+        // The narrowed read is a PATH-param route, so it is composed here
+        // rather than through a `RouteContract` (which describes a
+        // query-param surface — see `workspace::V75_M1_ROUTES`' own doc).
+        Some(id) => {
+            let path = format!("{}/{}/worktrees", workspaces_request().0, id);
+            get_json(&client, daemon, &path, &[]).await?
+        }
+        None => {
+            let (path, query) = workspaces_request();
+            get_json(&client, daemon, path, &as_query_pairs(&query)).await?
+        }
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let rekey = body["rekey"].as_str().unwrap_or("unknown");
+    println!("re-key: {rekey}");
+    let empty: Vec<serde_json::Value> = Vec::new();
+    let single = body.get("workspace").cloned();
+    let list: Vec<serde_json::Value> = match &single {
+        Some(w) if !w.is_null() => vec![w.clone()],
+        _ => body["workspaces"].as_array().cloned().unwrap_or_default(),
+    };
+    if list.is_empty() {
+        // `pending` and "none" are different answers, and the difference
+        // is the whole reason `rekey` rides this response.
+        if rekey == "done" {
+            println!("no workspaces");
+        } else {
+            println!("no workspaces yet — resolution has not run (re-key {rekey})");
+        }
+        return Ok(());
+    }
+    for w in &list {
+        println!(
+            "\n{}  {}",
+            w["id"].as_str().unwrap_or("?"),
+            w["common_dir"].as_str().unwrap_or("?")
+        );
+        println!(
+            "  root commit: {}",
+            w["root_commit"].as_str().unwrap_or("unresolved")
+        );
+        let repos: Vec<&str> = w["repos"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .filter_map(|r| r.as_str())
+            .collect();
+        println!(
+            "  repos: {}",
+            if repos.is_empty() {
+                "-".to_string()
+            } else {
+                repos.join(", ")
+            }
+        );
+        for wt in w["worktrees"].as_array().unwrap_or(&empty) {
+            let flags = [
+                (wt["is_main"].as_bool().unwrap_or(false), "main"),
+                (wt["bare"].as_bool().unwrap_or(false), "bare"),
+                (wt["detached"].as_bool().unwrap_or(false), "detached"),
+                (wt["locked"].as_bool().unwrap_or(false), "locked"),
+                (wt["prunable"].as_bool().unwrap_or(false), "prunable"),
+            ]
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, l)| *l)
+            .collect::<Vec<_>>()
+            .join(",");
+            println!(
+                "  {:<20} {:<9} {:<40} {}{}",
+                wt["id"].as_str().unwrap_or("?"),
+                wt["path_resolution"].as_str().unwrap_or("?"),
+                wt["path"].as_str().unwrap_or("(no path)"),
+                wt["branch"].as_str().unwrap_or("(detached)"),
+                if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!("  [{flags}]")
+                },
+            );
+            if !wt["mounted"].as_bool().unwrap_or(false) {
+                println!("      known, not mounted — outside every configured repo root");
+            }
+            if let Some(reason) = wt["lock_reason"].as_str() {
+                println!("      lock reason: {reason}");
+            }
+            if let Some(reason) = wt["prunable_reason"].as_str() {
+                println!("      prunable: {reason}");
+            }
+        }
+        if let Some(derived) = w["derived"].as_object() {
+            if !derived.is_empty() {
+                let cells: Vec<String> = derived
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", v.as_i64().unwrap_or(0)))
+                    .collect();
+                println!("  derived rows owned: {}", cells.join(" "));
+            }
+        }
+        if let Some(note) = w["note"].as_str() {
+            println!("  note: {note}");
+        }
+    }
+    Ok(())
+}
+
+async fn frames_cmd(daemon: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = frames_request();
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "{:<18} {:<14} {:<10} REF-AWARE",
+        "LANE", "SOURCE", "OFF-HEAD"
+    );
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for f in body["frames"].as_array().unwrap_or(&empty) {
+        println!(
+            "{:<18} {:<14} {:<10} {}",
+            f["lane"].as_str().unwrap_or("?"),
+            f["source"].as_str().unwrap_or("?"),
+            f["off_head"].as_str().unwrap_or("?"),
+            if f["ref_aware"].as_bool().unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            },
+        );
+        if let Some(why) = f["why"].as_str() {
+            println!("    {why}");
+        }
+    }
+    if let Some(note) = body["note"].as_str() {
+        println!("\nnote: {note}");
+    }
+    Ok(())
+}
+
+/// `<state>/kb-code/index.db` — the same path `bind_and_spawn` opens.
+fn default_kb_code_db() -> Result<std::path::PathBuf> {
+    let paths = kb_core::paths::KbPaths::new("kb-code")
+        .map_err(|e| anyhow::anyhow!("resolve the kb-code state directory: {e}"))?;
+    Ok(paths.state.join("index.db"))
+}
+
+fn backup_cmd(db: Option<&std::path::Path>, json: bool) -> Result<()> {
+    let db = match db {
+        Some(p) => p.to_path_buf(),
+        None => default_kb_code_db()?,
+    };
+    anyhow::ensure!(db.is_file(), "no kb-code volume at {}", db.display());
+    // The snapshot is named for the epoch the VOLUME is on, not for this
+    // binary's — that is the number an operator has to match a rollback
+    // binary against. `take_at_current_epoch` reads it, so this file needs
+    // no sqlite dependency of its own.
+    let receipt =
+        kb_code_server::backup::take_at_current_epoch(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&receipt)?);
+        return Ok(());
+    }
+    println!(
+        "backup: {} -> {} ({} bytes, restores to schema epoch {})",
+        receipt.db_path,
+        receipt.backup_path,
+        receipt.bytes,
+        receipt
+            .volume_epoch
+            .map(|e| format!("V{e:04}"))
+            .unwrap_or_else(|| "none (unmigrated volume)".to_string()),
+    );
+    println!(
+        "receipt: {}",
+        kb_code_server::backup::marker_path(&db).display()
+    );
+    Ok(())
+}
+
+fn rehearse_migration_cmd(from: &std::path::Path, keep: bool, json: bool) -> Result<()> {
+    let r = kb_code_server::rekey::rehearsal::rehearse(from, keep)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r)?);
+    } else {
+        println!("rehearsal/1 — {}", r.source);
+        println!(
+            "  epoch: {} -> {}",
+            r.epoch_before
+                .map(|e| format!("V{e:04}"))
+                .unwrap_or_else(|| "none".into()),
+            r.epoch_after
+                .map(|e| format!("V{e:04}"))
+                .unwrap_or_else(|| "none".into()),
+        );
+        match &r.backup {
+            Some(b) => println!("  backup: {} ({} bytes)", b.backup_path, b.bytes),
+            None => println!("  backup: none taken (this volume had already crossed the epoch)"),
+        }
+        println!(
+            "  backfill: {} row(s) over {} page(s), {}/{} tables{}",
+            r.backfill.rows_keyed,
+            r.backfill.pages,
+            r.backfill.tables_done,
+            r.backfill.tables_total,
+            if r.backfill.complete {
+                ""
+            } else {
+                " (INCOMPLETE)"
+            },
+        );
+        println!("  identity: synthetic (the copy only — the source is never written)");
+        println!("  elapsed: {} ms", r.elapsed_ms);
+        println!(
+            "\n  {:<28} {:>10} {:>10} {:>7}  KEY",
+            "TABLE", "BEFORE", "AFTER", "DELTA"
+        );
+        for t in &r.tables {
+            let fmt = |v: Option<i64>| v.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
+            let key = match (t.key_column, t.keyed, t.unkeyed) {
+                (Some(k), Some(y), Some(n)) => format!("{k} {y} keyed / {n} unkeyed"),
+                (Some(k), _, _) => k.to_string(),
+                _ => t.class.unwrap_or("").to_string(),
+            };
+            println!(
+                "  {:<28} {:>10} {:>10} {:>7}  {}",
+                t.name,
+                fmt(t.rows_before),
+                fmt(t.rows_after),
+                fmt(t.delta),
+                key,
+            );
+        }
+        println!("\n  verdict: {}", if r.ok { "OK" } else { "PROBLEMS" });
+        for p in &r.problems {
+            println!("    - {p}");
+        }
+        if r.kept {
+            println!("\n  copy kept at {}", r.work_dir);
+        }
+    }
+    if !r.ok {
+        anyhow::bail!("the rehearsal found problems — see the list above");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25080,6 +25445,9 @@ mod tests {
             review_pseudo_list_request(Some("latest")),
             review_pseudo_file_request(Some("latest")),
             review_turns_request(Some("latest")),
+            // V75-M1 — the Workspace list and the D14 frame table.
+            workspaces_request(),
+            frames_request(),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -25142,7 +25510,8 @@ mod tests {
             .chain(kb_code_server::boards::V74_L1_ROUTES.iter())
             // V73-K3 — the timeline, the claim register, the two
             // pseudo-file reads and the hunk↔turn join, the same way.
-            .chain(kb_code_server::review_timeline::V73_K3_ROUTES.iter());
+            .chain(kb_code_server::review_timeline::V73_K3_ROUTES.iter())
+            .chain(kb_code_server::workspace::V75_M1_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

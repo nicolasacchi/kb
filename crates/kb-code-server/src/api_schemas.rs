@@ -61,6 +61,8 @@ pub struct IdentitySchema {
     pub sibling_protocol: String,
     pub sibling_major: u32,
     pub schema_epoch: u32,
+    /// V75-M1 — `pending` | `running` | `done`.
+    pub rekey: String,
     pub repos: Vec<RepoSummarySchema>,
 }
 
@@ -99,6 +101,11 @@ pub struct RepoEntrySchema {
     pub watcher: String,
     pub writable: bool,
     pub is_worktree: bool,
+    // V75-M1 — the two D13 identities `RepoListEntry` gained. `Option` on
+    // the real struct, mirrored as such: both are `null` until the
+    // background re-key resolves them.
+    pub workspace_id: Option<String>,
+    pub worktree_id: Option<String>,
 }
 
 /// The registry's name set — `GET /api/schemas`' `names` field and
@@ -134,7 +141,8 @@ fn example_json(name: &str) -> Option<serde_json::Value> {
             "build_sha": "b42b3167",
             "sibling_protocol": "kbc-sibling/1",
             "sibling_major": 1,
-            "schema_epoch": 27,
+            "schema_epoch": 38,
+            "rekey": "done",
             "repos": [{
                 "name": "kb",
                 "path": "/home/user/project/kb",
@@ -152,6 +160,8 @@ fn example_json(name: &str) -> Option<serde_json::Value> {
             "watcher": "watching",
             "writable": true,
             "is_worktree": false,
+            "workspace_id": "ws_4f2a19c0b3de",
+            "worktree_id": "(main)",
         })),
         _ => None,
     }

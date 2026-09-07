@@ -113,6 +113,18 @@ pub struct IdentityResponse {
     /// themselves; this field only lets a client render the capability
     /// (e.g. a Settings chip) without probing.
     pub remote_mutations: bool,
+    /// V75-M1 — the Workspace re-key backfill's state: `pending` |
+    /// `running` | `done` (`crate::rekey::state_label`).
+    ///
+    /// An HONESTY flag, never a capability: every route answers correctly
+    /// in all three states because the read fallback
+    /// (`Store::workspace_repo_ids`) resolves to the caller's own repo id
+    /// while the identity is unresolved. What `pending` tells a reader is
+    /// that `GET /api/workspaces` may be EMPTY because resolution has not
+    /// run yet — a different statement from "there are no workspaces" —
+    /// and that the per-table key columns may still be NULL. `kb-code
+    /// doctor` reports it; nothing gates on it.
+    pub rekey: &'static str,
 }
 
 /// `GET /api/identity` — under the `/api` nest, so it's behind
@@ -168,6 +180,7 @@ pub async fn identity(State(state): State<SharedState>) -> impl IntoResponse {
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: crate::store::schema_epoch(),
         remote_mutations: state.review.remote_mutations,
+        rekey: crate::rekey::state_label(&state.rekey),
         repos,
         started_at: state.started_at.to_rfc3339(),
     });
@@ -567,6 +580,16 @@ pub struct RepoListEntry {
     /// on-disk tell `git worktree` itself relies on. `false` for a bare
     /// repo, a main checkout, or a repo root that can't be read.
     pub is_worktree: bool,
+    /// V75-M1 (D13) — the shared object store this repo entry reads
+    /// through, and which of its checkouts this entry IS.
+    ///
+    /// ADDITIVE, and both `null` until the background re-key pass has
+    /// resolved them (`GET /api/identity`'s `rekey` says which state that
+    /// is). A client that never reads them sees the pre-V75-M1 response
+    /// plus two keys; `kb-code repos` prints `?` rather than a false claim
+    /// when they are absent, the same way it already does for `writable`.
+    pub workspace_id: Option<String>,
+    pub worktree_id: Option<String>,
 }
 
 /// PRR-L2 — one repo's lip/1 provider status
@@ -914,6 +937,7 @@ fn repos_entry_for(store: &Store, state: &SharedState, r: &RepoEntry) -> RepoLis
             server_version: snap.server_version,
         })
         .collect();
+    let identity = store.repo_identity(&r.name).ok().flatten();
     RepoListEntry {
         name: r.name.clone(),
         path: r.path.display().to_string(),
@@ -926,6 +950,12 @@ fn repos_entry_for(store: &Store, state: &SharedState, r: &RepoEntry) -> RepoLis
         intel_providers,
         writable: repo_writable(&r.path),
         is_worktree: repo_is_worktree(&r.path),
+        // V75-M1 — read off `repos`, the canonical holder. `None` while
+        // the background re-key pass has not resolved this repo yet; never
+        // computed here, so `/api/repos` and `/api/workspaces` cannot
+        // disagree about what a repo's identity is.
+        workspace_id: identity.as_ref().map(|(w, _)| w.clone()),
+        worktree_id: identity.as_ref().map(|(_, t)| t.clone()),
     }
 }
 

@@ -493,6 +493,21 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/schemas", get(crate::api_schemas::list_schemas_route))
         .route("/schemas/{name}", get(crate::api_schemas::get_schema_route))
         .route("/repos", get(routes::repos))
+        // V75-M1 (D13/D14) — the Workspace re-key's two reads and the
+        // `@ref` frame table. Ordinary `auth_bearer` reads on the same
+        // sub-router as `/repos`: they carry repository PATHS and git
+        // state, which `/repos` already reports, and no file content at
+        // all. `workspace::WORKSPACES_ROUTE` and `frames::FRAMES_ROUTE`
+        // declare them for invariant 15's contract walk; the `{id}`
+        // sub-route is registered here and covered by its own route test
+        // (a `RouteContract` describes a query-param surface and has
+        // nothing to say about a path segment).
+        .route("/workspaces", get(crate::workspace::workspaces_route))
+        .route(
+            "/workspaces/{id}/worktrees",
+            get(crate::workspace::workspace_worktrees_route),
+        )
+        .route("/frames", get(crate::frames::frames_route))
         // V70-A7 — `GET /api/themes` (`routes::themes`) serves the
         // kbc-theme/1 registry verbatim from `include_str!`, on the same
         // ordinary `auth_bearer`-gated `api` router as `/repos`: it is a
