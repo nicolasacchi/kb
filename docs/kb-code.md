@@ -1477,7 +1477,8 @@ Two reader surfaces come with it. A model file carrying an annotaterb
 `# == Schema Information` banner gets a **Schema card** in the inspector
 rail — the column table, parsed in the browser out of the text `GET
 /api/file` already returned, captioned as a client read rather than a daemon
-fact — and the banner itself is FOLDED in the buffer behind a one-line
+fact (`comments/1`'s `GET /api/comments/file` landed on main mid-unit and is
+the named follow-up source for the block's RANGE) — and the banner itself is FOLDED in the buffer behind a one-line
 placeholder (a browser-local opt-out pref, `Space z`, or the card's own
 button). Hovering (`K`) a line that produced rails-lens edges adds a **Rails
 atom table** to the hover card: the association/render/i18n/enqueue targets
