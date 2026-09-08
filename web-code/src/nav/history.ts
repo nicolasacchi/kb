@@ -113,7 +113,7 @@ interface NavigationLike extends EventTarget {
   updateCurrentEntry(opts: { state: unknown }): void;
 }
 
-interface WindowWithNavigation extends Window {
+interface WindowWithNavigation {
   navigation?: NavigationLike;
 }
 

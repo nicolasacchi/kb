@@ -29,7 +29,7 @@ export default defineConfig({
     // prod from maps, and they dominated dist/ size + build IO on the
     // disk-bound host.
     sourcemap: false,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
