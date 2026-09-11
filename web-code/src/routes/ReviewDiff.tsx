@@ -44,11 +44,14 @@ import { mergeQuery, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeU
 // route only wires them together.
 import {
   deepLinkFileTarget,
+  deepLinkNavKey,
   fileCollapse,
   hunkCollapse,
   reduceCollapseTick,
+  reduceDeepLinkCourtesy,
   toggleSectionCollapse,
   withDeepLinkTarget,
+  type DeepLinkCourtesyState,
 } from "../lib/collapseOnTick";
 import { hunkId } from "../lib/diffHunks";
 import {
@@ -344,6 +347,23 @@ export default function ReviewDiff() {
   const expandedFileSet = useMemo(() => new Set(expandedFiles), [expandedFiles]);
   const expandedHunkSet = useMemo(() => new Set(expandedHunks), [expandedHunks]);
 
+  // Inbound `?hunk=` at THIS navigation, snapshotted on first render.
+  // The cursor later echoes the current hunk into `?hunk=` (`setParam`
+  // below); that write is view state, not a new deep-link, and must not
+  // keep the current hunk expanded after a tick.
+  const [landedHunk] = useState(() => hunkParam || null);
+  const [courtesy, setCourtesy] = useState<DeepLinkCourtesyState>(() => ({
+    key: deepLinkNavKey({
+      line,
+      side,
+      file: focusPath || fileHint || null,
+      hunk: landedHunk,
+      thread: threadId,
+      finding: findingParam,
+    }),
+    cleared: new Set<string>(),
+  }));
+
   function writeExpanded(files: ReadonlySet<string>, hunks: ReadonlySet<string>) {
     setExpanded([...files], [...hunks]);
   }
@@ -431,6 +451,7 @@ export default function ReviewDiff() {
         { type: wasViewed ? "markUnviewed" : "markViewed", kind: "file", id: file.path },
       );
       writeExpanded(next.expandedFiles, next.expandedHunks);
+      setCourtesy((s) => reduceDeepLinkCourtesy(s, { type: "clear", id: file.path }));
       if (wasViewed) {
         setKeys((s) => {
           if (!s.collapsed.has(file.path)) return s;
@@ -546,6 +567,7 @@ export default function ReviewDiff() {
             { type: viewed ? "markUnviewed" : "markViewed", kind: "hunk", id: hid },
           );
           setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+          setCourtesy((s) => reduceDeepLinkCourtesy(s, { type: "clear", id: hid }));
           if (viewed) setFold(hid, false);
         } catch (err) {
           toast.err(`couldn't update hunk viewed: ${msg(err)}`);
@@ -688,10 +710,12 @@ export default function ReviewDiff() {
     }
   }, [threadId, findingParam, findingsQ.data, findingsSlugMap]);
 
-  // V76-R2c round 2 — a `?line=` / thread / hunk / finding deep-link is an
-  // implicit `?expanded=` override for THAT file so the flash target is
-  // actually mounted. Derived, not written: the URL grammar is unchanged
-  // and collapse-on-tick still applies to every other viewed section.
+  // V76-R2c round 3 — a `?line=` / thread / inbound `?hunk=` / finding
+  // deep-link is an INITIAL-NAVIGATION courtesy (implicit expand) for THAT
+  // section so the flash target is mounted. Tick / un-tick of that section
+  // clears the courtesy (`courtesy.cleared`); a fresh navigation (new
+  // `deepLinkNavKey`) re-establishes it. The cursor's live `?hunk=` echo
+  // is not a navigation — only `landedHunk` (first-render snapshot) is.
   const focusThreadPath = useMemo(() => {
     const want = focusThreadId ?? threadId;
     if (!want || !commentsQ.data) return null;
@@ -711,19 +735,42 @@ export default function ReviewDiff() {
         side,
         fileHint,
         focusPath,
-        hunkParam,
+        hunkParam: landedHunk,
         threadPath: focusThreadPath,
         findingPath,
       }),
-    [line, side, fileHint, focusPath, hunkParam, focusThreadPath, findingPath],
+    [line, side, fileHint, focusPath, landedHunk, focusThreadPath, findingPath],
   );
+  const navKey = deepLinkNavKey({
+    line,
+    side,
+    file: deepLinkFile,
+    hunk: landedHunk,
+    thread: threadId,
+    finding: findingParam,
+  });
+  if (courtesy.key !== navKey) {
+    setCourtesy({ key: navKey, cleared: new Set() });
+  }
   const derivedExpandedFiles = useMemo(
-    () => new Set(withDeepLinkTarget([...expandedFileSet], deepLinkFile)),
-    [expandedFileSet, deepLinkFile],
+    () =>
+      new Set(
+        withDeepLinkTarget(
+          [...expandedFileSet],
+          deepLinkFile && !courtesy.cleared.has(deepLinkFile) ? deepLinkFile : null,
+        ),
+      ),
+    [expandedFileSet, deepLinkFile, courtesy],
   );
   const derivedExpandedHunks = useMemo(
-    () => new Set(withDeepLinkTarget([...expandedHunkSet], hunkParam)),
-    [expandedHunkSet, hunkParam],
+    () =>
+      new Set(
+        withDeepLinkTarget(
+          [...expandedHunkSet],
+          landedHunk && !courtesy.cleared.has(landedHunk) ? landedHunk : null,
+        ),
+      ),
+    [expandedHunkSet, landedHunk, courtesy],
   );
 
   function stepThread(dir: 1 | -1) {
@@ -894,6 +941,8 @@ export default function ReviewDiff() {
       deepLinkFile,
       deepLinkLine: line,
       deepLinkSide: side,
+      deepLinkHunk: landedHunk,
+      deepLinkCleared: courtesy.cleared,
       folded,
       expand: expandByHunk,
       drafts,
@@ -916,6 +965,8 @@ export default function ReviewDiff() {
       deepLinkFile,
       line,
       side,
+      landedHunk,
+      courtesy,
       folded,
       expandByHunk,
       drafts,

@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   deepLinkExpands,
   deepLinkFileTarget,
+  deepLinkNavKey,
   emptyCollapseTick,
+  emptyDeepLinkCourtesy,
   fileCollapse,
   formatExpandedParam,
   hunkCollapse,
   parseExpandedParam,
   reduceCollapseTick,
+  reduceDeepLinkCourtesy,
   toggleSectionCollapse,
   withDeepLinkTarget,
 } from "./collapseOnTick";
@@ -235,5 +238,142 @@ describe("deep-link expand override", () => {
   it("withDeepLinkTarget is a no-op on empty / already-present", () => {
     expect(withDeepLinkTarget([], null)).toEqual([]);
     expect(withDeepLinkTarget(["a.ts"], "a.ts")).toEqual(["a.ts"]);
+  });
+
+  it("a tick on the deep-link target clears the override and collapses it", () => {
+    let s = reduceDeepLinkCourtesy(emptyDeepLinkCourtesy(), {
+      type: "nav",
+      key: deepLinkNavKey({
+        line: 1,
+        side: "new",
+        file: "feature_x.rs",
+        hunk: null,
+        thread: null,
+        finding: null,
+      }),
+    });
+    expect(s.key).toBe("line=1|side=new|file=feature_x.rs");
+    expect(
+      hunkCollapse({
+        viewed: true,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("hunk-1")),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+    expect(
+      fileCollapse({
+        viewed: true,
+        userCollapsed: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("feature_x.rs")),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+
+    s = reduceDeepLinkCourtesy(s, { type: "clear", id: "hunk-1" });
+    s = reduceDeepLinkCourtesy(s, { type: "clear", id: "feature_x.rs" });
+    expect(
+      hunkCollapse({
+        viewed: true,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("hunk-1")),
+      }),
+    ).toEqual({ collapsed: true, collapsedBy: "viewed" });
+    expect(
+      fileCollapse({
+        viewed: true,
+        userCollapsed: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("feature_x.rs")),
+      }),
+    ).toEqual({ collapsed: true, collapsedBy: "viewed" });
+  });
+
+  it("un-tick after clearing the courtesy expands", () => {
+    const s = reduceDeepLinkCourtesy(
+      reduceDeepLinkCourtesy(emptyDeepLinkCourtesy(), {
+        type: "nav",
+        key: "line=1|side=new|file=feature_x.rs",
+      }),
+      { type: "clear", id: "hunk-1" },
+    );
+    expect(
+      hunkCollapse({
+        viewed: false,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("hunk-1")),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+    expect(
+      fileCollapse({
+        viewed: false,
+        userCollapsed: false,
+        expanded: deepLinkExpands(false, true, true),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+  });
+
+  it("a fresh navigation re-establishes the courtesy", () => {
+    let s = reduceDeepLinkCourtesy(emptyDeepLinkCourtesy(), {
+      type: "nav",
+      key: "line=1|side=new|file=feature_x.rs",
+    });
+    s = reduceDeepLinkCourtesy(s, { type: "clear", id: "hunk-1" });
+    s = reduceDeepLinkCourtesy(s, { type: "clear", id: "feature_x.rs" });
+    // Same key is not a new navigation — the tick still wins.
+    s = reduceDeepLinkCourtesy(s, { type: "nav", key: "line=1|side=new|file=feature_x.rs" });
+    expect(s.cleared.has("hunk-1")).toBe(true);
+    expect(
+      hunkCollapse({
+        viewed: true,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("hunk-1")),
+      }),
+    ).toEqual({ collapsed: true, collapsedBy: "viewed" });
+
+    // Distinct navigation identity (a new goto, even to the same section).
+    s = reduceDeepLinkCourtesy(s, {
+      type: "nav",
+      key: "line=1|side=new|file=feature_x.rs|hunk=abc",
+    });
+    expect(s.cleared.size).toBe(0);
+    expect(
+      hunkCollapse({
+        viewed: true,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("hunk-1")),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+    expect(
+      fileCollapse({
+        viewed: true,
+        userCollapsed: false,
+        expanded: deepLinkExpands(false, true, s.cleared.has("feature_x.rs")),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+  });
+
+  it("a bare URL is not a deep-link navigation (cursor-echo ?hunk= is not a key)", () => {
+    expect(
+      deepLinkNavKey({
+        line: null,
+        side: null,
+        file: null,
+        hunk: null,
+        thread: null,
+        finding: null,
+      }),
+    ).toBeNull();
+    expect(deepLinkExpands(false, false)).toBe(false);
+    expect(
+      hunkCollapse({
+        viewed: true,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, false),
+      }),
+    ).toEqual({ collapsed: true, collapsedBy: "viewed" });
   });
 });

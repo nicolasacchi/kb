@@ -163,12 +163,74 @@ export function formatExpandedParam(ids: readonly string[]): string | null {
   return [...ids].sort().map((id) => encodeURIComponent(id)).join(",");
 }
 
-/// A deep-link (`?line=` / `?thread=` / `?hunk=` / `?finding=`) is an
-/// implicit `?expanded=` / `?hexpanded=` override for THAT section — same
-/// boolean `fileCollapse` / `hunkCollapse` already read, no new query
+/// A deep-link (`?line=` / `?thread=` / inbound `?hunk=` / `?finding=`) is
+/// an implicit `?expanded=` / `?hexpanded=` override for THAT section —
+/// same boolean `fileCollapse` / `hunkCollapse` already read, no new query
 /// param. `explicit` is membership in the parsed URL set.
-export function deepLinkExpands(explicit: boolean, isTarget: boolean): boolean {
-  return explicit || isTarget;
+///
+/// This is an INITIAL-NAVIGATION courtesy, not permanent state: `cleared`
+/// is true once the user has ticked or un-ticked this section under the
+/// current navigation, and then the derived collapse applies again
+/// (tick ⇒ collapsed, un-tick ⇒ expanded). A fresh navigation (new
+/// `deepLinkNavKey`) resets `cleared` so the target lands expanded with
+/// the flash. Default `cleared = false` is the land-time case.
+export function deepLinkExpands(explicit: boolean, isTarget: boolean, cleared = false): boolean {
+  return explicit || (isTarget && !cleared);
+}
+
+/// Identity of a deep-link NAVIGATION. `null` when the URL names no
+/// target (a bare `/diff`, including after the cursor later echoes
+/// `?hunk=`). TOTAL: empty / unknown fields are skipped, never thrown.
+export interface DeepLinkNavInput {
+  line: number | null;
+  side: "old" | "new" | null;
+  file: string | null;
+  hunk: string | null;
+  thread: string | null;
+  finding: string | null;
+}
+
+export function deepLinkNavKey(input: DeepLinkNavInput): string | null {
+  const parts: string[] = [];
+  if (input.line != null && Number.isFinite(input.line)) parts.push(`line=${input.line}`);
+  if (input.side === "old" || input.side === "new") parts.push(`side=${input.side}`);
+  if (input.file) parts.push(`file=${input.file}`);
+  if (input.hunk) parts.push(`hunk=${input.hunk}`);
+  if (input.thread) parts.push(`thread=${input.thread}`);
+  if (input.finding) parts.push(`finding=${input.finding}`);
+  return parts.length === 0 ? null : parts.join("|");
+}
+
+export interface DeepLinkCourtesyState {
+  key: string | null;
+  cleared: ReadonlySet<string>;
+}
+
+export type DeepLinkCourtesyAction = { type: "nav"; key: string | null } | { type: "clear"; id: string };
+
+export function emptyDeepLinkCourtesy(): DeepLinkCourtesyState {
+  return { key: null, cleared: new Set() };
+}
+
+/// `nav` with a different key (including null → some key) resets `cleared`.
+/// Same key is a no-op so a tick's clear survives URL-echo writes that
+/// do not change the navigation identity. `clear` records that the user
+/// acted on that section; an empty id is ignored.
+export function reduceDeepLinkCourtesy(
+  state: DeepLinkCourtesyState,
+  action: DeepLinkCourtesyAction,
+): DeepLinkCourtesyState {
+  switch (action.type) {
+    case "nav":
+      if (action.key === state.key) return state;
+      return { key: action.key, cleared: new Set() };
+    case "clear": {
+      if (action.id === "" || state.cleared.has(action.id)) return state;
+      return { ...state, cleared: withSet(state.cleared, action.id, true) };
+    }
+    default:
+      return state;
+  }
 }
 
 /// Merge a deep-link target id into an `?expanded=` / `?hexpanded=` list
