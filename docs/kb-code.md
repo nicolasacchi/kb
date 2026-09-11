@@ -63,11 +63,38 @@ dispositions, answer with nav-verb evidence, apply fixes, run the publish
 round — is `plugins/kb-code/skills/kb-review-work` (`/kb-review-work`).
 
 **PR-bound reviews.** `kb-code review start-pr --repo R --pr N [--base]
-[--title] [--session] [--gh-token-from-cli] [--dry-run]` (`POST
-/api/reviews/pr`, LOOPBACK-ONLY) fetches `refs/pull/N/head` into
-`refs/kbc/pr/N` (400 on failure — this is load-bearing), creates the review,
-captures ps1, and best-effort-enriches with GitHub PR metadata; the review
-exists either way, even when the GitHub enrichment itself fails.
+[--title] [--session] [--reopen|--new] [--gh-token-from-cli] [--dry-run]`
+(`POST /api/reviews/pr[?on_closed=reopen|new]`, LOOPBACK-ONLY) fetches `refs/pull/N/head` into `refs/kbc/pr/N` (400 on
+failure — this is load-bearing), creates the review, captures ps1, and
+best-effort-enriches with GitHub PR metadata; the review exists either way,
+even when the GitHub enrichment itself fails. An **OPEN** existing review
+for the same `(repo, PR)` is reused (HTTP 200, `reused: true`; a patchset
+is captured only if the fetched head moved). A **CLOSED** existing review
+is **not** silently reused: the route 409s `urn:kb:errors:review-closed`
+naming the review id and the two options — `--reopen` / `?on_closed=reopen`
+reopens that review and adds a patchset if the head moved; `--new` /
+`?on_closed=new` mints a new review id and leaves the closed row in place
+(the unique `(repo, pr_number)` index is OPEN-only). CLI 409 exits 3.
+
+**Review lifecycle.** `kb-code review close ID` / `kb-code review reopen ID`
+(`PATCH /api/reviews/{id}` with `state=closed|open`) stop or resume
+auto-capture; history stays. `kb-code review delete ID --yes [--force]`
+(`DELETE /api/reviews/{id}`, LOOPBACK-ONLY) removes the row and its
+`refs/kbc/review/<id>/ps*` refs (and `refs/kbc/pr/<n>` when no remaining
+review still binds that PR). It refuses without `--yes` (exit 2, no
+prompt). A published verdict (`POST …/verdict/published`) 409s
+`urn:kb:errors:review-verdict-published` unless `--force` / `?force=1`.
+
+**Review refs.** `kb-code review refs list --repo R` (`GET
+/api/reviews/refs?repo=`, bearer) lists every `refs/kbc/pr/*` and
+`refs/kbc/review/*` in the mirror with the review it belongs to, or
+`orphan` when no review references it. `kb-code review refs gc --repo R
+[--apply]` (`POST /api/reviews/refs/gc?repo=&dry_run=`, LOOPBACK-ONLY,
+audited) deletes orphan refs and refs of deleted reviews; `dry_run=1` is
+the default, `--apply` sets `dry_run=0`. Over 10,000 refs is a refusal
+naming the cap, never a silent truncate. `git update-ref -d` only ever
+sees reconstructed `refs/kbc/pr/<n>` / `refs/kbc/review/<id>/ps<n>` names
+(digits-only).
 
 GitHub credentials for that enrichment (and every other GitHub read) are a
 documented ladder, resolved at request time, never logged:
