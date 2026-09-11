@@ -12,6 +12,7 @@ mod bookmarks_route;
 mod canvas_route;
 mod checkout_route;
 mod comments_route;
+mod file_at_ref;
 mod fusion_route;
 mod impact_analysis_route;
 mod join_route;

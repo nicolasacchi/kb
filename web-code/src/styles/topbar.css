@@ -121,6 +121,59 @@
   outline-offset: -1px;
 }
 
+/* V76-R3c — the reader's @ref chip. Lives in the shared topbar so every
+ * reader URL (including a split) has one home for "which ref is this". */
+.kbc-topbar__ref-class {
+  margin-left: 4px;
+  font-size: var(--fs-xs, 0.75rem);
+  color: var(--ink-mute);
+  text-transform: lowercase;
+}
+
+.kbc-ref-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-popover, 40);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: color-mix(in srgb, var(--bg, #111) 40%, transparent);
+}
+.kbc-ref-overlay__card {
+  min-width: 28rem;
+  max-width: 40rem;
+  padding: var(--pad-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md, 6px);
+  box-shadow: var(--shadow);
+}
+.kbc-ref-overlay__wt {
+  margin-top: var(--pad-1);
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  font: inherit;
+  cursor: pointer;
+}
+.kbc-ref-overlay__wt:hover {
+  color: var(--ink);
+}
+.kbc-ref-overlay__cap {
+  margin: var(--pad-1) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kbc-frame-banner {
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  background: var(--bg-raised, var(--bg-panel));
+  border-bottom: 1px solid var(--rule);
+}
+
 .kbc-iconbtn {
   display: inline-flex;
   align-items: center;

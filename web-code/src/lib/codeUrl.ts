@@ -917,3 +917,13 @@ export function parseEntParam(v: string | null): string | null {
   const t = v.trim();
   return t === "" ? null : t;
 }
+
+/// True for a reader file/tree URL (`/r/:repo/...`) that is not a `~`
+/// sentinel page. Used by the TopBar ref chip so it only renders where
+/// `?ref=` is meaningful.
+export function isReaderFilePath(pathname: string): boolean {
+  const m = pathname.match(/^\/r\/[^/]+(?:\/(.*))?$/);
+  if (!m) return false;
+  const rest = m[1] ?? "";
+  return !rest.split("/").some((s) => s.startsWith("~"));
+}

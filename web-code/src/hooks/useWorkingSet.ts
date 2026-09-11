@@ -4,7 +4,7 @@ import type { WorkingSetEntry } from "../lib/workingSet";
 
 export interface WorkingSetHandle {
   entries: WorkingSetEntry[];
-  touch: (path: string) => void;
+  touch: (path: string, ref?: string) => void;
   pin: (path: string) => void;
   unpin: (path: string) => void;
   remove: (path: string) => void;
@@ -40,7 +40,7 @@ export function useWorkingSet(repo: string): WorkingSetHandle {
 
   return {
     entries: state.entries,
-    touch: (path) => setState((s) => ws.touch(s, path)),
+    touch: (path, ref) => setState((s) => ws.touch(s, path, ref)),
     pin: (path) => setState((s) => ws.pin(s, path)),
     unpin: (path) => setState((s) => ws.unpin(s, path)),
     remove: (path) => setState((s) => ws.remove(s, path)),

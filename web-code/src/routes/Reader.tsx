@@ -61,6 +61,7 @@ import HistoryPanel from "../components/history/HistoryPanel";
 import CitedBy from "../components/lens/CitedBy";
 import ClaimsCard from "../components/lens/ClaimsCard";
 import RefPicker from "../components/RefPicker";
+import RefTypeaheadOverlay from "../components/RefTypeaheadOverlay";
 import StoryPlayer from "../components/story/StoryPlayer";
 import WorkingSetStrip, { type ActiveWorkspaceChip } from "../components/WorkingSetStrip";
 import SaveWorkspaceDialog from "../components/workspaces/SaveWorkspaceDialog";
@@ -108,6 +109,7 @@ import {
 } from "../hooks/useBookmarks";
 import { useDiagnostics } from "../hooks/useDiagnostics";
 import { useFile } from "../hooks/useFile";
+import { useFrames } from "../hooks/useFrames";
 import { useFileHistory } from "../hooks/useFileHistory";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useRailSubject } from "../hooks/useRailSubject";
@@ -157,6 +159,7 @@ import { workspacesUrl } from "../lib/setsUrl";
 import { isWorkingSetDirty } from "../lib/workspaceDirty";
 import { buildWorkspaceSnapshot, parseWorkspaceSnapshot } from "../lib/workspaceSnapshot";
 import { initialLadderState, ladderReducer } from "../lib/ladderState";
+import { frameBanner } from "../lib/frameBanner";
 import { fileChangedPaneLabel } from "../lib/liveMirror";
 import { nextKeyboardRegion, type KeyboardRegion } from "../lib/keyboardRegion";
 import {
@@ -525,6 +528,7 @@ export default function Reader() {
   // reset on breakpoint change, since a `!isMobile` guard already keeps the
   // CSS + `asSheet` prop inert regardless of this flag's value.
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [refOverlayOpen, setRefOverlayOpen] = useState(false);
   const [gotoSel1, setGotoSel1] = useState<GotoSel | null>(null);
   const [gotoSel2, setGotoSel2] = useState<GotoSel | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -585,6 +589,7 @@ export default function Reader() {
   const isFile = path !== "" && !path.endsWith("/");
   const activeFile = isFile && !diffMode && !storyMode ? path : undefined;
   const file = useFile(repo, activeFile, gitRef);
+  const frames = useFrames();
   const lenses1 = useLenses(
     repo,
     activeFile,
@@ -607,6 +612,7 @@ export default function Reader() {
   // diff view, story mode, or a directory listing.
   const canSplit = isFile && !diffMode && !storyMode;
   const pane2Loc = useMemo<PaneLoc | null>(() => (canSplit ? parsePane2(pane2Param) : null), [canSplit, pane2Param]);
+  const compareMode = !!(canSplit && pane2Loc && activeFile && pane2Loc.path === activeFile);
   const pane2File = useFile(repo, pane2Loc?.path, pane2Loc?.ref);
   const lenses2 = useLenses(
     repo,
@@ -649,13 +655,13 @@ export default function Reader() {
   // keying this off the resolved path itself (not each individual call
   // site) is what makes that guarantee total rather than best-effort.
   useEffect(() => {
-    if (activeFile) workingSet.touch(activeFile);
+    if (activeFile) workingSet.touch(activeFile, gitRef);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFile]);
+  }, [activeFile, gitRef]);
   useEffect(() => {
-    if (pane2Loc?.path) workingSet.touch(pane2Loc.path);
+    if (pane2Loc?.path) workingSet.touch(pane2Loc.path, pane2Loc.ref);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane2Loc?.path]);
+  }, [pane2Loc?.path, pane2Loc?.ref]);
 
   // V3.N1 — record a jump on every file open (path change). Skipped when
   // the navigation came from Ctrl-o / Ctrl-i (`skipNavRecordRef`).
@@ -728,6 +734,19 @@ export default function Reader() {
     const pane1 = next.pane1 ?? { path: activeFile ?? "", ref: gitRef, line: currentPane1Line };
     const pane2 = next.pane2 === undefined ? pane2Loc ?? undefined : (next.pane2 ?? undefined);
     return codeUrl({ repo, path: pane1.path, ref: pane1.ref, line: pane1.line, pane2 });
+  }
+
+  function applyRef(insert: string | undefined) {
+    const line = parseLineParam(lineParam) ?? undefined;
+    if (focusedPane === 2 && pane2Loc) {
+      navigate(buildReaderUrl({ pane2: { ...pane2Loc, ref: insert } }));
+      return;
+    }
+    navigate(
+      buildReaderUrl({
+        pane1: { path: activeFile ?? path, ref: insert, line },
+      }),
+    );
   }
 
   /// A resolved candidate/peek-row landing: same-repo lands in `pane`
@@ -3550,6 +3569,29 @@ export default function Reader() {
     // implies" — `actions.rs`), so the leader and the menu can never disagree
     // about what "this" means.
     "boards.add": () => void addCaretToBoard(),
+    // V76-R3c — @ref. Ctrl-r is a hard-reserved browser chord, so the
+    // typeahead is Space @. Bare `c` is inert in the read-only vim layer
+    // (vimKeys.test.ts) and is ratified against diff.compose-new.
+    "reader.ref-typeahead": () => setRefOverlayOpen(true),
+    "reader.ref-chip": () => {
+      const chip = document.querySelector<HTMLButtonElement>("[data-kbc-ref-chip]");
+      chip?.focus();
+      setRefOverlayOpen(true);
+    },
+    "reader.ref-clear": () => applyRef(undefined),
+    "reader.compare": () => {
+      if (!activeFile || !canSplit) return;
+      if (pane2Loc && pane2Loc.path === activeFile) {
+        navigate(buildReaderUrl({ pane2: null }));
+        return;
+      }
+      const line = parseLineParam(lineParam) ?? undefined;
+      navigate(
+        buildReaderUrl({
+          pane2: { path: activeFile, ref: gitRef ? undefined : "HEAD", line },
+        }),
+      );
+    },
   });
 
   // F5 — Esc closes the mobile reader-tools sheet (mirrors `MobileDrawer`'s
@@ -4044,6 +4086,16 @@ export default function Reader() {
       {liveMirror1.headMoved && (
         <HeadMovedBanner newRef={liveMirror1.headMoved.new} onRefreshTree={refreshTree} onDismiss={liveMirror1.dismissHeadMoved} />
       )}
+      {gitRef &&
+        (() => {
+          const row = frames.data?.frames.find((f) => f.lane === "file_at_ref");
+          const text = row ? frameBanner("file_at_ref", row, gitRef) : null;
+          return text ? (
+            <div className="kbc-frame-banner" data-kbc-frame-banner>
+              {text}
+            </div>
+          ) : null;
+        })()}
     </>
   );
 
@@ -4327,6 +4379,16 @@ export default function Reader() {
                   </div>
                 </>
               )}
+            </div>
+          )}
+          {compareMode && activeFile && (gitRef || pane2Loc?.ref) && (
+            <div data-kbc-compare-file>
+              <DiffView
+                repo={repo}
+                path={activeFile}
+                from={gitRef ?? pane2Loc?.ref ?? "HEAD"}
+                to={gitRef ? pane2Loc?.ref : undefined}
+              />
             </div>
           )}
           {peek.open && (
@@ -4698,6 +4760,13 @@ export default function Reader() {
           readerBody
         )}
       </Desk>
+      <RefTypeaheadOverlay
+        repo={repo}
+        open={refOverlayOpen}
+        currentRef={focusedRef}
+        onClose={() => setRefOverlayOpen(false)}
+        onPick={applyRef}
+      />
       {/* V71-E2 — the ONE action menu, rendered once at the reader root.
           The drag-select pill is the same response's top three rows. */}
       {actionMenu &&
