@@ -183,7 +183,7 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
       </div>
       {report ? (
         <div className="kbc-verdicts" data-kbc-verdict-dialectic>
-          <AgentVerdictCard report={report} />
+          <AgentVerdictCard report={report} repo={repo} reviewId={id} />
           <VerdictBar repo={repo} reviewId={id} review={review} />
         </div>
       ) : (

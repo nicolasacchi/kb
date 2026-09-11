@@ -25,6 +25,7 @@ import {
 import { toast } from "../../lib/toast";
 import SuggestionEditor from "./SuggestionEditor";
 import UnifiedHunks from "./UnifiedHunks";
+import ProseBlock from "../prose/ProseBlock";
 
 /// Session-wide latch: one 404 from apply hides the button on every
 /// thread for the rest of this SPA session (VerdictBar / StartReviewDialog
@@ -268,22 +269,34 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       </div>
       {finding ? (
         <div className="kbc-rthread__finding-body" data-kbc-finding-body={finding.slug}>
-          <p className="kbc-rthread__finding-title">{finding.title}</p>
-          <p className="kbc-rthread__body">{finding.rationale}</p>
+          <div className="kbc-rthread__finding-title">
+            <ProseBlock text={finding.title} refs={finding.title_refs} repo={repo} reviewId={comments.reviewId} inline />
+          </div>
+          <div className="kbc-rthread__body">
+            <ProseBlock text={finding.rationale} refs={finding.rationale_refs} repo={repo} reviewId={comments.reviewId} />
+          </div>
           {finding.evidence?.source && (
             <pre className="kbc-rthread__finding-evidence" data-kbc-finding-evidence>
               <code>{finding.evidence.source}</code>
             </pre>
           )}
           {finding.recommendation && (
-            <p className="kbc-rthread__finding-recommendation">
+            <div className="kbc-rthread__finding-recommendation">
               <span aria-hidden="true">→ </span>
-              {finding.recommendation}
-            </p>
+              <ProseBlock
+                text={finding.recommendation}
+                refs={finding.recommendation_refs}
+                repo={repo}
+                reviewId={comments.reviewId}
+                inline
+              />
+            </div>
           )}
         </div>
       ) : (
-        <p className="kbc-rthread__body">{thread.body}</p>
+        <div className="kbc-rthread__body">
+          <ProseBlock text={thread.body} refs={thread.body_refs} repo={repo} reviewId={comments.reviewId} />
+        </div>
       )}
       {thread.suggestion && !editing && (
         <SuggestionBlock
@@ -307,7 +320,9 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       )}
       {thread.replies.map((r) => (
         <div key={r.id} className="kbc-rthread__reply" data-kbc-review-thread-reply={r.id}>
-          <p className="kbc-rthread__body">{r.body}</p>
+          <div className="kbc-rthread__body">
+            <ProseBlock text={r.body} refs={r.body_refs} repo={repo} reviewId={comments.reviewId} />
+          </div>
           <span className="kbc-rthread__meta">
             {r.author} · {relativeTime(r.created_at)}
           </span>

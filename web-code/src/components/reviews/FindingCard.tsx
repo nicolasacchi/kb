@@ -16,6 +16,7 @@ import DispositionMenu from "./DispositionMenu";
 // without threading a new prop through `ReportPanel`/`ReviewThreadsCard`.
 import { eligibleForPublishMark, toggleMark, useIsMarked } from "../../lib/publishMarks";
 import RecurrenceChip from "./RecurrenceChip";
+import ProseBlock from "../prose/ProseBlock";
 
 /// Section 02's severity ordering (blockers first, then concerns, then
 /// verified-ok) — the SAME 3-value vocab `store::is_valid_severity`
@@ -222,11 +223,11 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
         </button>
       </div>
       <div className="kbc-finding__ti" data-kbc-finding-title>
-        {finding.title}
+        <ProseBlock text={finding.title} refs={finding.title_refs} repo={repo} reviewId={reviewId} inline />
       </div>
-      <p className="kbc-finding__ra" data-kbc-finding-rationale>
-        {finding.rationale}
-      </p>
+      <div className="kbc-finding__ra" data-kbc-finding-rationale>
+        <ProseBlock text={finding.rationale} refs={finding.rationale_refs} repo={repo} reviewId={reviewId} />
+      </div>
       {finding.evidence && (finding.evidence.source || finding.evidence.lang) && (
         <div className="kbc-codewrap" data-kbc-finding-evidence>
           <div className="head">
@@ -238,7 +239,12 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
       )}
       {finding.recommendation && (
         <div className="kbc-finding__rc" data-kbc-finding-recommendation>
-          {finding.recommendation}
+          <ProseBlock
+            text={finding.recommendation}
+            refs={finding.recommendation_refs}
+            repo={repo}
+            reviewId={reviewId}
+          />
         </div>
       )}
       {/* SECONDARY refs (findings v2). They never compete with the PRIMARY

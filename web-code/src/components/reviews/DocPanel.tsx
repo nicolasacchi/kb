@@ -171,7 +171,7 @@ export default function DocPanel({
 
       {doc.summary_md.trim() !== "" && (
         <section className="kbc-doc__summary" data-kbc-doc-summary aria-label="Summary">
-          <DocMarkdown blocks={summaryBlocks} {...mdProps} />
+          <DocMarkdown blocks={summaryBlocks} {...mdProps} proseRefs={doc.summary_refs} />
         </section>
       )}
 

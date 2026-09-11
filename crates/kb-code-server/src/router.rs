@@ -699,6 +699,17 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/resolve-symbol",
             get(crate::symbol_addr::resolve_symbol_route),
         )
+        // V76-B3 — `kbc-prose/1`: the ONE standalone prose-ref route, a
+        // read-shaped POST (its payload IS the contract), beside
+        // `/code-actions`, the other read-shaped POST. Declared as
+        // `prose_refs::V76_B3_ROUTES` (invariant 15): `params_accept_without`
+        // deserialises the JSON body. Every OTHER prose surface gets its
+        // refs additively on the wire that already carries the prose
+        // (see `prose_refs.rs`'s module doc).
+        .route(
+            "/prose/resolve",
+            post(crate::prose_refs::prose_resolve_route),
+        )
         // V3.1-H1 — call/type hierarchy (single-level; see hierarchy.rs).
         .route("/hierarchy/callees", get(crate::hierarchy::callees_route))
         .route("/hierarchy/callers", get(crate::hierarchy::callers_route))

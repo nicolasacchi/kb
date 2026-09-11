@@ -4,6 +4,7 @@
 // mock's `.kbc-averdict::before`).
 import type { FindingSeverity, ReviewReport } from "../../api/types";
 import { Icon } from "../icons";
+import ProseBlock from "../prose/ProseBlock";
 import RiskDial from "./RiskDial";
 
 /// Severity → the CSS custom property name (not the resolved color) so the
@@ -28,13 +29,15 @@ export function severityWord(severity: FindingSeverity | undefined): string {
 
 export interface AgentVerdictCardProps {
   report: ReviewReport;
+  repo?: string;
+  reviewId?: number;
 }
 
 /// Renders `null` when the report carries no verdict signal at all (no
 /// `verdict` AND no `verdict_headline`/`risk_score`) — a report can exist
 /// but be summary-only (§8's "report/count drift" honesty extends to "a
 /// report authored before this field existed").
-export default function AgentVerdictCard({ report }: AgentVerdictCardProps) {
+export default function AgentVerdictCard({ report, repo, reviewId }: AgentVerdictCardProps) {
   const hasSignal =
     report.verdict != null || report.verdict_headline != null || report.risk_score != null;
   if (!hasSignal) return null;
@@ -62,7 +65,11 @@ export default function AgentVerdictCard({ report }: AgentVerdictCardProps) {
         )}
         {report.verdict_body && (
           <div className="kbc-averdict__body" data-kbc-agent-verdict-body>
-            {report.verdict_body}
+            {repo ? (
+              <ProseBlock text={report.verdict_body} refs={report.verdict_body_refs} repo={repo} reviewId={reviewId} />
+            ) : (
+              report.verdict_body
+            )}
           </div>
         )}
       </div>

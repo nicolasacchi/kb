@@ -986,6 +986,13 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RecipeCmd,
     },
+    /// `kb-code prose resolve --repo R --text - [--review ID] [--ps N] [--json]`
+    /// — V76-B3 `kbc-prose/1`: `POST /api/prose/resolve` for client-composed
+    /// prose. Daemon-only, ordinary bearer read. `--text -` reads stdin.
+    Prose {
+        #[command(subcommand)]
+        cmd: ProseCmd,
+    },
     /// `kb-code hook install|uninstall|status` — W5.3: the
     /// `kb-code-why.sh` PreToolUse hook's install surface. NEVER edits
     /// `~/.claude/settings.json` (or any project one) itself — `install`/
@@ -2779,6 +2786,32 @@ enum RecipeCmd {
     /// loopback only). A builtin and a repo file are not deletable here.
     Delete {
         slug: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `kb-code prose resolve --repo R --text - [--review ID] [--ps N] [--json]`
+/// — V76-B3 `kbc-prose/1`: `POST /api/prose/resolve`. A read-shaped POST
+/// (nothing is persisted). `--text -` reads stdin.
+#[derive(Subcommand, Debug)]
+enum ProseCmd {
+    /// Resolve refs in a client-composed prose string
+    /// (`POST /api/prose/resolve`, `kbc-prose-refs/1`).
+    Resolve {
+        #[arg(long)]
+        repo: String,
+        /// The prose, or `-` to read it from stdin.
+        #[arg(long)]
+        text: String,
+        /// Gives `finding` hints their slug space.
+        #[arg(long)]
+        review: Option<i64>,
+        /// Patchset number or `"latest"`. Validated to exist when given.
+        #[arg(long)]
+        ps: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -5421,6 +5454,16 @@ async fn run(cli: Cli) -> Result<()> {
                 recipe_delete_cmd(&daemon, &slug, json).await
             }
         },
+        Cmd::Prose { cmd } => match cmd {
+            ProseCmd::Resolve {
+                repo,
+                text,
+                review,
+                ps,
+                daemon,
+                json,
+            } => prose_resolve_cmd(&daemon, &repo, &text, review, ps.as_deref(), json).await,
+        },
         Cmd::Hook { cmd } => match cmd {
             HookCmd::Install => {
                 hook_install();
@@ -7265,7 +7308,9 @@ fn parse_since(spec: &str) -> Result<i64> {
             return Ok(dt.and_utc().timestamp());
         }
     }
-    anyhow::bail!("could not parse --since {s:?} (want `90m`/`24h`/`7d`, `YYYY-MM-DD`, or an RFC 3339 instant)")
+    anyhow::bail!(
+        "could not parse --since {s:?} (want `90m`/`24h`/`7d`, `YYYY-MM-DD`, or an RFC 3339 instant)"
+    )
 }
 
 /// `kb-code audit` — V70-A2 (SEC-20). See the clap variant's doc.
@@ -13003,7 +13048,9 @@ async fn doclens_pins_cmd(daemon: &str, kb: Option<&str>, json: bool) -> Result<
     }
     let pins = body["pins"].as_array().cloned().unwrap_or_default();
     if pins.is_empty() {
-        println!("no remembered checkouts. Pin one:  kb-code doclens pin --kb <KB> --doc <DOC> --repo <NAME>");
+        println!(
+            "no remembered checkouts. Pin one:  kb-code doclens pin --kb <KB> --doc <DOC> --repo <NAME>"
+        );
         return Ok(());
     }
     println!("{:<12}{:<16}{:<16}PINNED", "KB", "DOC", "REPO");
@@ -17057,7 +17104,10 @@ async fn review_sweep_cmd(
                 .as_i64()
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "?".to_string()),
-            checks["pass"], checks["fail"], checks["warn"], checks["pending"],
+            checks["pass"],
+            checks["fail"],
+            checks["warn"],
+            checks["pending"],
             r["review_decision"].as_str().unwrap_or("-"),
             r["unanswered_questions"],
             r["verdict_stale"],
@@ -17107,7 +17157,10 @@ async fn review_analytics_cmd(
         println!(
             "  {:<10} accepted={:<3} rejected={:<3} risk_accepted={:<3} undecided={:<3} rate={rate}",
             a["severity"].as_str().unwrap_or("?"),
-            a["accepted"], a["rejected"], a["risk_accepted"], a["undecided"],
+            a["accepted"],
+            a["rejected"],
+            a["risk_accepted"],
+            a["undecided"],
         );
     }
     println!(
@@ -18427,7 +18480,9 @@ async fn comments_cmd(cmd: CommentsCmd) -> Result<()> {
                 print_comment_basis(body);
             }
             if !any {
-                println!("(nothing actionable: no drifted docs, aged annotations or unreasoned suppressions)");
+                println!(
+                    "(nothing actionable: no drifted docs, aged annotations or unreasoned suppressions)"
+                );
             }
             Ok(())
         }
@@ -20062,6 +20117,66 @@ async fn hover_cmd(
     Ok(())
 }
 
+/// `kb-code prose resolve --repo R --text - [--review ID] [--ps N] [--json]`
+/// — V76-B3: `POST /api/prose/resolve` (`kbc-prose-refs/1`). Read-shaped;
+/// nothing is persisted. `--text -` reads stdin.
+async fn prose_resolve_cmd(
+    daemon: &str,
+    repo: &str,
+    text_arg: &str,
+    review: Option<i64>,
+    ps: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let text = if text_arg == "-" {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("read --text from stdin")?;
+        buf
+    } else {
+        text_arg.to_string()
+    };
+    let client = http_client()?;
+    let mut body = serde_json::json!({ "repo": repo, "text": text });
+    if let Some(id) = review {
+        body["review"] = serde_json::json!(id);
+    }
+    if let Some(ps) = ps {
+        body["ps"] = serde_json::json!(ps);
+    }
+    let (status, resp) = post_json_raw(
+        &client,
+        daemon,
+        kb_code_server::prose_refs::PROSE_RESOLVE_ROUTE.path,
+        &body,
+    )
+    .await?;
+    if !status.is_success() {
+        return Err(annotation_api_error("prose resolve", status, &resp));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+    let refs = resp["refs"].as_array().cloned().unwrap_or_default();
+    let truncated = resp["truncated"].as_bool().unwrap_or(false);
+    println!(
+        "prose resolve · {} · {} ref{}{}",
+        repo,
+        refs.len(),
+        if refs.len() == 1 { "" } else { "s" },
+        if truncated { " (truncated)" } else { "" },
+    );
+    for r in refs {
+        let kind = r["kind"].as_str().unwrap_or("?");
+        let text = r["text"].as_str().unwrap_or("");
+        let state = r["resolution"]["state"].as_str().unwrap_or("-");
+        println!("  {kind:<8} {state:<10} {text}");
+    }
+    Ok(())
+}
+
 // --- PRR-L2 (append-only fn; delimited from concurrent edits elsewhere in
 // this file — see the Cmd::Diagnostics variant's own doc).
 
@@ -21403,6 +21518,17 @@ async fn workspace_export_cmd(daemon: &str, repo: &str, name_or_id: &str) -> Res
 /// empty; they join the walk anyway, because the half of it that matters
 /// here is "a `kb-code` verb exists that addresses this route at all" — the
 /// v7.0 dead-surface defect in its CLI-side shape.
+/// V76-B3 — `POST /api/prose/resolve`. The JSON body is the contract;
+/// the dead-surface walk treats those fields as the request's "query"
+/// pairs so a required key the CLI omits still fails by name.
+#[cfg(test)]
+fn prose_resolve_request(repo: &str, text: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::prose_refs::PROSE_RESOLVE_ROUTE.path,
+        vec![("repo", repo.to_string()), ("text", text.to_string())],
+    )
+}
+
 fn review_doc_request(
     ps: Option<&str>,
     resolve: bool,
@@ -25711,6 +25837,64 @@ mod tests {
     // ── S2-B2: `kb-code inbox` CLI parsing ──────────────────────────────
 
     #[test]
+    fn prose_resolve_parses() {
+        match parse_cli(&[
+            "prose", "resolve", "--repo", "r", "--text", "hello", "--json",
+        ])
+        .unwrap()
+        {
+            Cmd::Prose {
+                cmd:
+                    ProseCmd::Resolve {
+                        repo,
+                        text,
+                        review,
+                        ps,
+                        json,
+                        ..
+                    },
+            } => {
+                assert_eq!(repo, "r");
+                assert_eq!(text, "hello");
+                assert!(review.is_none());
+                assert!(ps.is_none());
+                assert!(json);
+            }
+            other => panic!("expected Prose{{Resolve}}, got {other:?}"),
+        }
+        match parse_cli(&[
+            "prose", "resolve", "--repo", "r", "--text", "-", "--review", "7", "--ps", "latest",
+        ])
+        .unwrap()
+        {
+            Cmd::Prose {
+                cmd:
+                    ProseCmd::Resolve {
+                        text,
+                        review,
+                        ps,
+                        json,
+                        ..
+                    },
+            } => {
+                assert_eq!(text, "-");
+                assert_eq!(review, Some(7));
+                assert_eq!(ps.as_deref(), Some("latest"));
+                assert!(!json);
+            }
+            other => panic!("expected Prose{{Resolve}} with review/ps, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prose_resolve_request_sends_repo_and_text() {
+        let (path, q) = prose_resolve_request("repo", "hello");
+        assert_eq!(path, "/api/prose/resolve");
+        assert!(q.iter().any(|(k, v)| *k == "repo" && v == "repo"));
+        assert!(q.iter().any(|(k, v)| *k == "text" && v == "hello"));
+    }
+
+    #[test]
     fn inbox_parses_with_defaults() {
         match parse_cli(&["inbox"]).unwrap() {
             Cmd::Inbox {
@@ -26043,6 +26227,9 @@ mod tests {
             // V75-M3 — `branch-facts/1`'s three READS join the SAME walk.
             branch_favourites_request("repo"),
             branch_conflicts_request("repo", "main", Some(5), Some("branch:x")),
+            // V76-B3 — `POST /api/prose/resolve`. Body fields ride as the
+            // walk's pairs so a required key the CLI omits fails HERE.
+            prose_resolve_request("repo", "hello"),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -26123,7 +26310,9 @@ mod tests {
             .chain(kb_code_server::review_timeline::V73_K3_ROUTES.iter())
             .chain(kb_code_server::workspace::V75_M1_ROUTES.iter())
             // V75-M3 — `branch-facts/1`'s three reads, the same way.
-            .chain(kb_code_server::branches::V75_M3_ROUTES.iter());
+            .chain(kb_code_server::branches::V75_M3_ROUTES.iter())
+            // V76-B3 — `POST /api/prose/resolve`, same walk.
+            .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
