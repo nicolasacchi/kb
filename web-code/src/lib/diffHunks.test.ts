@@ -4,6 +4,7 @@ import {
   HUNK_ID_SCHEMA,
   hunkFingerprintInput,
   hunkHasThreads,
+  hunkThreadCount,
   hunkId,
   hunkIds,
   hunkNewSpan,
@@ -130,5 +131,15 @@ describe("hunkHasThreads", () => {
 
   it("a side-less thread is matched against BOTH spans (over-report, never hide)", () => {
     expect(hunkHasThreads(hunk, [{ side: null, line: 15 }])).toBe(true);
+  });
+
+  it("hunkThreadCount counts every landing thread", () => {
+    expect(
+      hunkThreadCount(hunk, [
+        { side: "new", line: 13 },
+        { side: "new", line: 14 },
+        { side: "new", line: 900 },
+      ]),
+    ).toBe(2);
   });
 });

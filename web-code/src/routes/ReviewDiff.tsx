@@ -42,6 +42,12 @@ import { mergeQuery, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeU
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
+import {
+  fileCollapse,
+  hunkCollapse,
+  reduceCollapseTick,
+  toggleSectionCollapse,
+} from "../lib/collapseOnTick";
 import { hunkId } from "../lib/diffHunks";
 import {
   buildMovedIndex,
@@ -131,6 +137,8 @@ export default function ReviewDiff() {
     overlay,
     mode,
     tourParamOn,
+    expandedFiles,
+    expandedHunks,
     setParam,
     setPs,
     setCtx,
@@ -140,6 +148,7 @@ export default function ReviewDiff() {
     setOverlay,
     setTourParam,
     withQuery,
+    setExpanded,
   } = useReviewDiffState();
 
   const reviewQ = useReview(repo, idOk ? id : undefined);
@@ -330,6 +339,12 @@ export default function ReviewDiff() {
     () => new Set((filesQ.data?.hunks_viewed ?? []).map((h) => h.hunk_id)),
     [filesQ.data],
   );
+  const expandedFileSet = useMemo(() => new Set(expandedFiles), [expandedFiles]);
+  const expandedHunkSet = useMemo(() => new Set(expandedHunks), [expandedHunks]);
+
+  function writeExpanded(files: ReadonlySet<string>, hunks: ReadonlySet<string>) {
+    setExpanded([...files], [...hunks]);
+  }
   const draftsByPath = useMemo(() => draftCountByPath(drafts), [drafts]);
 
   const apply = useCallback(
@@ -402,11 +417,25 @@ export default function ReviewDiff() {
   );
 
   async function toggleViewed(file: ReviewFileRow) {
+    const wasViewed = !!(file.viewed && !file.viewed_stale);
     try {
-      if (file.viewed && !file.viewed_stale) {
+      if (wasViewed) {
         await delViewed.mutateAsync(file.path);
       } else {
         await putViewed.mutateAsync({ path: file.path, blob_sha: file.blob_sha });
+      }
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: wasViewed ? "markUnviewed" : "markViewed", kind: "file", id: file.path },
+      );
+      writeExpanded(next.expandedFiles, next.expandedHunks);
+      if (wasViewed) {
+        setKeys((s) => {
+          if (!s.collapsed.has(file.path)) return s;
+          const collapsed = new Set(s.collapsed);
+          collapsed.delete(file.path);
+          return { ...s, collapsed };
+        });
       }
     } catch (err) {
       toast.err(`couldn't update viewed: ${msg(err)}`);
@@ -510,12 +539,59 @@ export default function ReviewDiff() {
         try {
           if (viewed) await delHunkViewed.mutateAsync(hid);
           else await putHunkViewed.mutateAsync({ hunkId: hid, path });
+          const next = reduceCollapseTick(
+            { expandedFiles: new Set(expandedFiles), expandedHunks: new Set(expandedHunks) },
+            { type: viewed ? "markUnviewed" : "markViewed", kind: "hunk", id: hid },
+          );
+          setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+          if (viewed) setFold(hid, false);
         } catch (err) {
           toast.err(`couldn't update hunk viewed: ${msg(err)}`);
         }
       })();
     },
-    [hunkViewedSet, delHunkViewed, putHunkViewed],
+    [hunkViewedSet, delHunkViewed, putHunkViewed, expandedFiles, expandedHunks, setExpanded, setFold],
+  );
+
+  const onToggleHunkSection = useCallback(
+    (id: string, viewed: boolean, collapsed: boolean) => {
+      const decision = toggleSectionCollapse({
+        collapsed,
+        viewed,
+        expanded: expandedHunkSet.has(id),
+      });
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "toggleSection", kind: "hunk", id, viewed, collapsed },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+      setFold(id, decision.userCollapsed);
+    },
+    [expandedFileSet, expandedHunkSet, setExpanded, setFold],
+  );
+
+  const onToggleFileSection = useCallback(
+    (path: string, viewed: boolean, collapsed: boolean) => {
+      const decision = toggleSectionCollapse({
+        collapsed,
+        viewed,
+        expanded: expandedFileSet.has(path),
+      });
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "toggleSection", kind: "file", id: path, viewed, collapsed },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+      setKeys((s) => {
+        const has = s.collapsed.has(path);
+        if (has === decision.userCollapsed) return s;
+        const collapsedSet = new Set(s.collapsed);
+        if (decision.userCollapsed) collapsedSet.add(path);
+        else collapsedSet.delete(path);
+        return { ...s, collapsed: collapsedSet };
+      });
+    },
+    [expandedFileSet, expandedHunkSet, setExpanded],
   );
 
   // --- V73-K2a — drafts --------------------------------------------------
@@ -774,6 +850,7 @@ export default function ReviewDiff() {
       movedIndex,
       fileNoise: [],
       hunkViewed: hunkViewedSet,
+      expandedHunks: expandedHunkSet,
       folded,
       expand: expandByHunk,
       drafts,
@@ -781,6 +858,7 @@ export default function ReviewDiff() {
       onParsed,
       onToggleHunkViewed: toggleHunkViewed,
       onToggleFold: toggleFold,
+      onToggleHunkSection,
       onExpandHunk: expandHunkBy,
       onDraftCreate: draftCreate,
       turnsOpenId,
@@ -791,12 +869,14 @@ export default function ReviewDiff() {
       noiseMode,
       movedIndex,
       hunkViewedSet,
+      expandedHunkSet,
       folded,
       expandByHunk,
       drafts,
       onParsed,
       toggleHunkViewed,
       toggleFold,
+      onToggleHunkSection,
       expandHunkBy,
       draftCreate,
       turnsOpenId,
@@ -953,7 +1033,19 @@ export default function ReviewDiff() {
       const L = live.current;
       L.setView(L.mode === "split" ? "unified" : "split");
     }),
-    "diff.collapse": gated(() => live.current.apply({ type: "toggleCollapse" })),
+    "diff.collapse": gated(() => {
+      const L = live.current;
+      const path = L.keys.files[L.keys.cursor.fileIdx];
+      const row = L.cursorRow;
+      if (!path || !row) return;
+      const viewed = !!(row.viewed && !row.viewed_stale);
+      const fc = fileCollapse({
+        viewed,
+        userCollapsed: L.keys.collapsed.has(path),
+        expanded: expandedFileSet.has(path),
+      });
+      onToggleFileSection(path, viewed, fc.collapsed);
+    }),
     "diff.thread-next": gated(() => live.current.stepThread(1)),
     "diff.thread-prev": gated(() => live.current.stepThread(-1)),
     "diff.overlay-cycle": gated(() => {
@@ -974,13 +1066,78 @@ export default function ReviewDiff() {
       if (cursorHunkId) toggleHunkViewed(cursorPath, cursorHunkId);
     }),
     "diff.fold": gated(() => {
-      if (cursorHunkId) setFold(cursorHunkId, true);
+      if (!cursorHunkId) return;
+      setFold(cursorHunkId, true);
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "markViewed", kind: "hunk", id: cursorHunkId },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
     }),
     "diff.unfold": gated(() => {
-      if (cursorHunkId) setFold(cursorHunkId, false);
+      if (!cursorHunkId) return;
+      setFold(cursorHunkId, false);
+      if (!hunkViewedSet.has(cursorHunkId)) return;
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "toggleSection", kind: "hunk", id: cursorHunkId, viewed: true, collapsed: true },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
     }),
     "diff.fold-toggle": gated(() => {
-      if (cursorHunkId) toggleFold(cursorHunkId);
+      if (!cursorHunkId) return;
+      const viewed = hunkViewedSet.has(cursorHunkId);
+      const c = hunkCollapse({
+        viewed,
+        folded: folded.has(cursorHunkId),
+        byNoise: false,
+        expanded: expandedHunkSet.has(cursorHunkId),
+      });
+      onToggleHunkSection(cursorHunkId, viewed, c.collapsed);
+    }),
+    "diff.section-toggle": gated(() => {
+      if (cursorHunkId) {
+        const viewed = hunkViewedSet.has(cursorHunkId);
+        const c = hunkCollapse({
+          viewed,
+          folded: folded.has(cursorHunkId),
+          byNoise: false,
+          expanded: expandedHunkSet.has(cursorHunkId),
+        });
+        onToggleHunkSection(cursorHunkId, viewed, c.collapsed);
+        return;
+      }
+      const path = cursorPath;
+      const row = cursorRow;
+      if (!path || !row) return;
+      const viewed = !!(row.viewed && !row.viewed_stale);
+      const fc = fileCollapse({
+        viewed,
+        userCollapsed: keys.collapsed.has(path),
+        expanded: expandedFileSet.has(path),
+      });
+      onToggleFileSection(path, viewed, fc.collapsed);
+    }),
+    "diff.collapse-viewed": gated(() => {
+      const fileIds = ordered.filter((f) => f.viewed && !f.viewed_stale).map((f) => f.path);
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "collapseAllViewed", fileIds, hunkIds: [...hunkViewedSet] },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+    }),
+    "diff.expand-all": gated(() => {
+      const hunkIds: string[] = [];
+      for (const [p, parsed] of parsedByPath) {
+        for (const h of parsed.hunks) hunkIds.push(hunkId(p, h));
+      }
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "expandAll", fileIds: paths, hunkIds },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+      setKeys((s) => (s.collapsed.size === 0 ? s : { ...s, collapsed: new Set() }));
+      setFolded(new Set());
     }),
     "diff.context-cycle": gated(() => setCtx(nextDiffCtx(ctxDial))),
     "diff.noise-toggle": gated(() =>
@@ -1222,8 +1379,6 @@ export default function ReviewDiff() {
         ordered={ordered}
         paths={paths}
         keys={keys}
-        setKeys={setKeys}
-        hunkCounts={hunkCounts}
         cursorPath={cursorPath}
         cursorIdx={cursorIdx}
         hasPrev={hasPrev}
@@ -1242,6 +1397,8 @@ export default function ReviewDiff() {
         onSetMapOpen={setMapOpen}
         onSetParam={setParam}
         onToggleViewed={toggleViewed}
+        onToggleFileSection={onToggleFileSection}
+        expandedFiles={expandedFileSet}
         composeFor={composeFor}
         v2For={v2For}
         withQuery={withQuery}

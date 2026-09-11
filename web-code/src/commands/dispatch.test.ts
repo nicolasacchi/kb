@@ -753,11 +753,14 @@ describe("scope goldens", () => {
       "t → diff.thread-next",
       "u → nav.back",
       "x → diff.collapse",
+      "z O → diff.expand-all",
+      "z V → diff.collapse-viewed",
       "z a → diff.fold-toggle",
       "z c → diff.fold",
       "z f → diff.tree-toggle-folder",
       "z m → diff.tree-collapse-all",
       "z o → diff.unfold",
+      "z v → diff.section-toggle",
     ]);
   });
 
