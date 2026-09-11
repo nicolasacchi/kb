@@ -15654,7 +15654,21 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 // comments,fetch} -----------------------------------------------------------
 
 /// `kb-code review start-pr --repo R --pr N [--base][--title][--session]
-/// [--reopen|--new] [--json]` — `POST /api/reviews/pr`. LOOPBACK-ONLY.
+/// [--reopen|--new] [--json]` — `POST /api/reviews/pr` (design doc §2 row 1).
+/// LOOPBACK-ONLY.
+///
+/// V76-R1a — this verb ALWAYS runs the daemon-side job (`?async=1`) and
+/// polls `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
+/// up to [`START_PR_POLL_BUDGET`], because the first fetch against a cold
+/// mirror outlived this client's old 10 s timeout every single time: the
+/// fetch completed server-side while the CLI had already given up, and a
+/// confusing second call "succeeded". The final envelope printed is the
+/// SAME one the synchronous route returns (the job carries it verbatim
+/// under `result`); the stale-mirror refusal
+/// (`urn:kb:errors:stale-mirror`) is printed verbatim, hint included.
+///
+/// V76-R1b — `--reopen`/`--new` become `?on_closed=reopen|new` (an OPEN
+/// existing (repo, PR) review is reused; a CLOSED one 409s without a flag).
 #[allow(clippy::too_many_arguments)]
 async fn review_start_pr_cmd(
     daemon: &str,
@@ -15677,51 +15691,179 @@ async fn review_start_pr_cmd(
     if let Some(s) = session {
         payload["session_id"] = serde_json::json!(s);
     }
-    let mut query: Vec<(&str, &str)> = Vec::new();
+    let mut query: Vec<(&str, &str)> = vec![("async", "1")];
     if reopen {
         query.push(("on_closed", "reopen"));
     } else if new {
         query.push(("on_closed", "new"));
     }
-    let client = http_client()?;
+    // V76-R1a — 600 s for THIS verb (the daemon-side fetch outlives
+    // `http_client`'s 10 s on a cold mirror); every other verb keeps its
+    // own timeout. `recipe_client`'s precedent, second instance.
+    let client = client_builder()
+        .timeout(START_PR_CLIENT_TIMEOUT)
+        .build()
+        .context("build start-pr http client")?;
     let (status, body) =
         post_json_query_raw(&client, daemon, "/api/reviews/pr", &query, &payload).await?;
+    if status == reqwest::StatusCode::ACCEPTED {
+        let job_id = body["job_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("start-pr: 202 response without a job_id: {body}"))?;
+        if body["attached"].as_bool().unwrap_or(false) && !json {
+            eprintln!("start-pr: attached to already-running job {job_id}");
+        }
+        let terminal = poll_start_pr_job(&client, daemon, job_id, json).await?;
+        return match classify_start_pr_job(&terminal) {
+            StartPrJob::Done(result) => print_start_pr_envelope(&result, json),
+            StartPrJob::Failed { error, error_type } => {
+                start_pr_failed(&error, error_type.as_deref(), &terminal, json)
+            }
+            StartPrJob::Running(_) => unreachable!("poll_start_pr_job returns on a terminal state"),
+        };
+    }
+    // A pre-V76 daemon has no job mode and answers the POST synchronously
+    // (202 never happens) — keep the legacy handling, including R1b's
+    // closed-binding 409 (`--reopen`/`--new`).
     if !status.is_success() {
+        return start_pr_http_failure(daemon, status, &body, json);
+    }
+    print_start_pr_envelope(&body, json)
+}
+
+fn start_pr_closed_hint() -> &'static str {
+    "pass --reopen to reopen and add a patchset, or --new to mint a new review id"
+}
+
+fn start_pr_is_closed_error(error_type: Option<&str>, body: &serde_json::Value) -> bool {
+    error_type == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+        || body["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+        || body["result"]["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+}
+
+fn start_pr_failed(
+    error: &str,
+    error_type: Option<&str>,
+    terminal: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    if start_pr_is_closed_error(error_type, terminal) {
         if json {
             envelope::print_err(
-                body["type"].as_str().unwrap_or("error"),
-                body["error"].as_str().unwrap_or("start-pr failed"),
-                if body["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED) {
-                    Some(
-                        "pass --reopen to reopen and add a patchset, or --new to mint a new review id",
-                    )
-                } else {
-                    None
-                },
+                kb_code_server::reviews::ERR_REVIEW_CLOSED,
+                error,
+                Some(start_pr_closed_hint()),
+            );
+        } else {
+            let existing = terminal["result"]["existing_review_id"]
+                .as_i64()
+                .map(|id| format!(" — existing review id {id}"))
+                .unwrap_or_default();
+            eprintln!("review start-pr failed (409): {error}{existing} (pass --reopen or --new)");
+        }
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    // The refusal verbatim — the stale-mirror message's retry command is
+    // IN the text, so nothing is re-worded here.
+    let urn = error_type.map(|t| format!(" [{t}]")).unwrap_or_default();
+    Err(anyhow::anyhow!("review start-pr failed{urn}: {error}"))
+}
+
+fn start_pr_http_failure(
+    daemon: &str,
+    status: reqwest::StatusCode,
+    body: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    let closed = start_pr_is_closed_error(body["type"].as_str(), body);
+    if json {
+        envelope::print_err(
+            body["type"].as_str().unwrap_or("error"),
+            body["error"].as_str().unwrap_or("start-pr failed"),
+            if closed {
+                Some(start_pr_closed_hint())
+            } else {
+                None
+            },
+        );
+    }
+    if status == reqwest::StatusCode::CONFLICT {
+        if !json {
+            eprintln!(
+                "review start-pr failed (409): {} — existing review id {} \
+                 (pass --reopen or --new)",
+                body["error"].as_str().unwrap_or("already bound"),
+                body["existing_review_id"]
             );
         }
-        if status == reqwest::StatusCode::CONFLICT {
-            if !json {
-                eprintln!(
-                    "review start-pr failed (409): {} — existing review id {} \
-                     (pass --reopen or --new)",
-                    body["error"].as_str().unwrap_or("already bound"),
-                    body["existing_review_id"]
-                );
-            }
-            std::process::exit(envelope::EXIT_CONFLICT);
-        }
-        return Err(loopback_or_api_error(
-            "review start-pr",
-            daemon,
-            status,
-            &body,
-        ));
+        std::process::exit(envelope::EXIT_CONFLICT);
     }
+    Err(loopback_or_api_error(
+        "review start-pr",
+        daemon,
+        status,
+        body,
+    ))
+}
+
+/// V76-R1a — the start-pr client timeout, 600 s: the daemon-side
+/// fetch + patchset creation on a cold mirror, with margin. Both the POST
+/// and each poll GET share it.
+const START_PR_CLIENT_TIMEOUT: Duration = Duration::from_secs(600);
+/// V76-R1a — poll cadence for `GET /api/reviews/jobs/{id}`.
+const START_PR_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// V76-R1a — the whole poll budget. Matches the client timeout: a job
+/// still running after ten minutes is reported as still-running (with the
+/// job id to poll by hand), never silently abandoned.
+const START_PR_POLL_BUDGET: Duration = Duration::from_secs(600);
+
+/// One poll observation of `GET /api/reviews/jobs/{id}`'s body, classified.
+enum StartPrJob {
+    Running(String),
+    Done(serde_json::Value),
+    Failed {
+        error: String,
+        error_type: Option<String>,
+    },
+}
+
+/// Classify a job body into running / done / failed — pure, so the poll
+/// loop's three exits are unit-tested without a daemon.
+fn classify_start_pr_job(body: &serde_json::Value) -> StartPrJob {
+    match body["status"].as_str() {
+        Some("done") => StartPrJob::Done(body["result"].clone()),
+        Some("failed") => StartPrJob::Failed {
+            error: body["error"]
+                .as_str()
+                .unwrap_or("start-pr failed (no error message)")
+                .to_string(),
+            error_type: body["error_type"].as_str().map(str::to_string),
+        },
+        other => StartPrJob::Running(
+            body["progress"]["stage"]
+                .as_str()
+                .or(other)
+                .unwrap_or("running")
+                .to_string(),
+        ),
+    }
+}
+
+/// The success envelope printer, shared by the job's `done` result and
+/// (pre-V76 daemon fallback) the synchronous 201 body. `--json` gets the
+/// envelope pretty-printed, nothing else; the human line is the pre-V76
+/// one verbatim.
+fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
     if json {
-        envelope::print_ok("reviews/1", &body, Vec::new(), false, None);
-        return Ok(());
+        println!("{}", serde_json::to_string_pretty(body)?);
+    } else {
+        print_start_pr_human(body);
     }
+    Ok(())
+}
+
+/// The pre-V76 human success line, one place for both paths above.
+fn print_start_pr_human(body: &serde_json::Value) {
     let meta_note = if body["pr_meta"].is_null() {
         format!(
             " (metadata unavailable: {})",
@@ -15739,7 +15881,66 @@ async fn review_start_pr_cmd(
         "✓ review {}{reused} bound to {}#{} (ps{}){meta_note}",
         body["id"], body["pr_repo_slug"], body["pr_number"], body["latest_ps"],
     );
-    Ok(())
+}
+
+/// `GET /api/reviews/jobs/{id}` — the declared path carries the `{id}`
+/// placeholder; [`poll_start_pr_job`] substitutes the real one. The route
+/// takes no query params, so the pair is empty — the builder exists so the
+/// CLI half of invariant 15's dead-surface walk covers the route, and the
+/// poll loop below builds its path from the SAME declaration rather than
+/// a second hand-typed copy that could drift.
+fn review_job_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::review_jobs::REVIEW_JOB_ROUTE.path, vec![])
+}
+
+/// Poll `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
+/// until the job settles or [`START_PR_POLL_BUDGET`] is spent. Progress
+/// goes to STDERR (never stdout — `--json` output must stay parseable,
+/// and even the human path keeps stdout to the one final line), and only
+/// when the stage CHANGES, so a long fetch prints one line, not 300.
+async fn poll_start_pr_job(
+    client: &reqwest::Client,
+    daemon: &str,
+    job_id: &str,
+    json: bool,
+) -> Result<serde_json::Value> {
+    let deadline = std::time::Instant::now() + START_PR_POLL_BUDGET;
+    let mut last_stage = String::new();
+    loop {
+        tokio::time::sleep(START_PR_POLL_INTERVAL).await;
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "review start-pr: job {job_id} still running after {} s — the daemon is \
+                 still working; poll it by hand with GET /api/reviews/jobs/{job_id}",
+                START_PR_POLL_BUDGET.as_secs()
+            );
+        }
+        let (declared_path, _) = review_job_request();
+        let path = declared_path.replace("{id}", job_id);
+        let (status, body) = get_json_raw(client, daemon, &path, &[]).await?;
+        if status == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "review start-pr: job {job_id} vanished (unknown or swept past its 1 h TTL)"
+            );
+        }
+        if !status.is_success() {
+            return Err(loopback_or_api_error(
+                "review start-pr (job poll)",
+                daemon,
+                status,
+                &body,
+            ));
+        }
+        match classify_start_pr_job(&body) {
+            StartPrJob::Running(stage) => {
+                if !json && stage != last_stage {
+                    eprintln!("start-pr: {stage}…");
+                    last_stage = stage;
+                }
+            }
+            _ => return Ok(body),
+        }
+    }
 }
 
 /// `kb-code review report ID [--json]` — `GET /api/reviews/{id}/report`
@@ -25847,6 +26048,73 @@ mod tests {
         }
     }
 
+    // --- V76-R1a: the start-pr job poll loop -------------------------------
+
+    #[test]
+    fn start_pr_job_classify_running_reports_the_stage() {
+        let body = serde_json::json!({
+            "job_id": "job_abc", "status": "running",
+            "progress": {"stage": "fetch"},
+        });
+        match classify_start_pr_job(&body) {
+            StartPrJob::Running(stage) => assert_eq!(stage, "fetch"),
+            _ => panic!("a running job must classify as Running"),
+        }
+    }
+
+    #[test]
+    fn start_pr_job_classify_done_carries_the_result_envelope() {
+        let body = serde_json::json!({
+            "job_id": "job_abc", "status": "done", "review_id": 7,
+            "result": {"id": 7, "base_source": "merge-base", "latest_ps": 1},
+        });
+        match classify_start_pr_job(&body) {
+            StartPrJob::Done(result) => {
+                assert_eq!(result["id"], 7);
+                assert_eq!(result["base_source"], "merge-base");
+            }
+            _ => panic!("a done job must classify as Done"),
+        }
+    }
+
+    #[test]
+    fn start_pr_job_classify_failed_keeps_the_refusal_verbatim() {
+        let hint = "stale mirror: the local default branch \"main\" is 214 commits behind \
+                    the fetched origin/main (0 ahead, 214 behind; refusal limit 50). \
+                    ps1 would be based on its merge-base with the PR head; to proceed \
+                    against that base explicitly, run:\n  \
+                    kb-code review start-pr --repo widget --pr 42 --base deadbeef";
+        let body = serde_json::json!({
+            "job_id": "job_abc", "status": "failed",
+            "error": hint,
+            "error_type": "urn:kb:errors:stale-mirror",
+        });
+        match classify_start_pr_job(&body) {
+            StartPrJob::Failed { error, error_type } => {
+                // Verbatim, hint included — the CLI adds nothing and
+                // re-words nothing.
+                assert_eq!(error, hint);
+                assert!(
+                    error.contains("kb-code review start-pr --repo widget --pr 42 --base deadbeef")
+                );
+                assert_eq!(error_type.as_deref(), Some("urn:kb:errors:stale-mirror"));
+            }
+            _ => panic!("a failed job must classify as Failed"),
+        }
+    }
+
+    #[test]
+    fn start_pr_job_classify_failed_without_an_error_message_is_still_honest() {
+        let body = serde_json::json!({"job_id": "job_abc", "status": "failed"});
+        match classify_start_pr_job(&body) {
+            StartPrJob::Failed { error, error_type } => {
+                assert_eq!(error, "start-pr failed (no error message)");
+                assert!(error_type.is_none());
+            }
+            _ => panic!("a failed job must classify as Failed"),
+        }
+    }
+
     #[test]
     fn review_github_threads_parses_id_and_json_flag() {
         match parse_cli(&["review", "github-threads", "12", "--json"]).unwrap() {
@@ -26435,6 +26703,8 @@ mod tests {
             branch_conflicts_request("repo", "main", Some(5), Some("branch:x")),
             // V76-R1b — `GET /api/reviews/refs`.
             review_refs_list_request("repo"),
+            // V76-R1a — the start-pr job read joins the SAME walk.
+            review_job_request(),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -26517,7 +26787,9 @@ mod tests {
             // V75-M3 — `branch-facts/1`'s three reads, the same way.
             .chain(kb_code_server::branches::V75_M3_ROUTES.iter())
             // V76-R1b — `GET /api/reviews/refs`.
-            .chain(kb_code_server::reviews::V76_R1B_ROUTES.iter());
+            .chain(kb_code_server::reviews::V76_R1B_ROUTES.iter())
+            // V76-R1a — the start-pr job read, the same way.
+            .chain(kb_code_server::review_jobs::V76_R1A_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

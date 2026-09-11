@@ -16,6 +16,14 @@
 //! - read-only: `diff --name-status/-numstat`, `rev-list --count`,
 //!   `ls-tree`, `range-diff` (via `history::` helpers)
 //!
+//! V76-R1a adds, for the `start-pr` base ladder ONLY
+//! ([`start_pr_base`]): `git fetch origin
+//! +refs/heads/<d>:refs/remotes/origin/<d>` (refresh the remote default
+//! branch before merge-basing against it — the only write outside
+//! `refs/kbc/`, and it is a remote-TRACKING ref, never a local branch) and
+//! `git rev-list --left-right --count <local>...<remote>` (the
+//! stale-mirror refusal's ahead/behind probe).
+//!
 //! `id` and `n` are daemon-generated integers; shas are validated as
 //! full 40-hex after `rev-parse` before any `update-ref`. User-supplied
 //! ref names go through [`reject_user_ref`] (no leading `-`, no
@@ -32,6 +40,10 @@
 //! `PUT /api/reviews/{id}/viewed`, `DELETE /api/reviews/{id}/viewed/{path}`,
 //! `POST /api/reviews/pr` ([`create_review_pr`], PRR-R2),
 //! `PUT /api/reviews/{id}/report` ([`put_review_report`], PRR-R2).
+//! V76-R1a: `POST /api/reviews/pr` stays synchronous by default and gains
+//! an opt-in `?async=1` daemon-side job mode ([`crate::review_jobs`]) —
+//! same loopback-only gate, one shared implementation
+//! ([`create_review_pr_value`]).
 //!
 //! **Gated** (S2-B, `router.rs`'s `review_remote` sub-router — loopback
 //! unconditionally, else `[review] remote_mutations`-gated bearer, default
@@ -595,6 +607,199 @@ pub fn default_base_ref(repo_root: &Path) -> String {
         Ok(git) => crate::git::default_branch(&git).unwrap_or_else(|| "main".to_string()),
         Err(_) => "main".to_string(),
     }
+}
+
+// --- V76-R1a — the start-pr base ladder (explicit > merge-base > local-default) --
+
+/// V76-R1a — the stale-mirror refusal threshold. When `start-pr` is called
+/// WITHOUT `--base` and the mirror's LOCAL default branch is behind the
+/// just-fetched remote default by MORE than this many commits, the route
+/// refuses with [`ERR_STALE_MIRROR`] instead of silently basing ps1 on a
+/// merge-base the operator never saw. 50 is a judgment call, not a
+/// measurement: a mirror a handful of commits behind is the ordinary case
+/// (the merge-base default handles it correctly), a mirror MONTHS behind is
+/// the incident this unit fixes — the operator must say so explicitly.
+pub const STALE_MIRROR_BEHIND_LIMIT: u64 = 50;
+
+/// The RFC 7807 `type` URN of the stale-mirror refusal.
+pub const ERR_STALE_MIRROR: &str = "urn:kb:errors:stale-mirror";
+
+/// What fed ps1's `base_sha` on a `start-pr` review — reported on the
+/// `POST /api/reviews/pr` envelope as `base_source` and merged into the
+/// stored `pr_meta_json` snapshot when that snapshot exists (see
+/// [`create_review_pr_value`]'s doc for why it is not its own column and
+/// what that means when GitHub enrichment is unavailable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseSource {
+    /// `--base` was given (or `base_ref` rode the POST body).
+    Explicit,
+    /// No `--base`: ps1's base is the merge-base of the PR head against
+    /// the freshly-fetched `refs/remotes/origin/<default>`.
+    MergeBase,
+    /// No `--base` and no usable remote default (no `origin` remote, the
+    /// fetch failed, or the remote lacks the branch): the pre-V76
+    /// behaviour, the mirror's LOCAL default branch.
+    LocalDefault,
+}
+
+impl BaseSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BaseSource::Explicit => "explicit",
+            BaseSource::MergeBase => "merge-base",
+            BaseSource::LocalDefault => "local-default",
+        }
+    }
+}
+
+/// `git config --get remote.origin.url` exits 1 when the key is unset, so
+/// this is exactly "the repo has an `origin` remote configured".
+fn has_origin_remote(repo_root: &Path) -> bool {
+    run_git(repo_root, &["config", "--get", "remote.origin.url"]).is_ok()
+}
+
+/// `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>` —
+/// refresh the ONE remote-tracking ref the merge-base default needs. An
+/// explicit refspec (rather than a bare `git fetch origin <branch>`) so the
+/// remote-tracking ref updates regardless of the repo's configured fetch
+/// refspec. `branch` is a validated [`Revspec`]; a `:` can never appear in
+/// a real branch name, so its presence here is refused outright rather than
+/// handed to git's refspec parser.
+fn fetch_remote_default(repo_root: &Path, branch: &Revspec) -> Result<(), ReviewGitError> {
+    let b = branch.as_str();
+    if b.contains(':') {
+        return Err(ReviewGitError::BadRef(b.to_string()));
+    }
+    let refspec = format!("+refs/heads/{b}:refs/remotes/origin/{b}");
+    run_git(repo_root, &["fetch", "origin", &refspec])?;
+    Ok(())
+}
+
+/// `git rev-list --left-right --count <local>...<remote>` → `(ahead,
+/// behind)` of the LOCAL default branch against the fetched remote tip.
+/// Both endpoints are validated full shas, so the interpolated range token
+/// can only ever be `<hex>...<hex>`.
+fn ahead_behind(
+    repo_root: &Path,
+    local_sha: &str,
+    remote_sha: &str,
+) -> Result<(u64, u64), ReviewGitError> {
+    if !is_full_sha(local_sha) || !is_full_sha(remote_sha) {
+        return Err(ReviewGitError::BadSha(format!(
+            "{local_sha}...{remote_sha}"
+        )));
+    }
+    let range = format!("{local_sha}...{remote_sha}");
+    let out = run_git(repo_root, &["rev-list", "--left-right", "--count", &range])?;
+    let text = String::from_utf8_lossy(&out);
+    let mut parts = text.split_whitespace();
+    let ahead = parts
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| ReviewGitError::GitFailed {
+            status: -1,
+            stderr: format!("malformed rev-list --left-right --count output: {text:?}"),
+        })?;
+    let behind = parts
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| ReviewGitError::GitFailed {
+            status: -1,
+            stderr: format!("malformed rev-list --left-right --count output: {text:?}"),
+        })?;
+    Ok((ahead, behind))
+}
+
+/// V76-R1a — the `start-pr` base ladder: **explicit > merge-base >
+/// local-default**. Returns the `base_ref` to store on the review row plus
+/// the [`BaseSource`] for the envelope. Spawns git — call it from the
+/// blocking pool.
+///
+/// - `explicit` (`--base`) wins outright, is validated exactly as before,
+///   and BYPASSES the stale-mirror refusal: an operator who named a base
+///   has already answered the question the refusal asks.
+/// - Otherwise, when the repo has an `origin` remote, the remote default
+///   branch is FETCHED first (`git fetch origin +refs/heads/<d>:refs/
+///   remotes/origin/<d>`) and the stored `base_ref` becomes
+///   `refs/remotes/origin/<d>` — so ps1's `base_sha` (merge-based in
+///   [`capture_patchset`] as always) is the merge-base of the PR head
+///   against the FRESH remote tip, not whatever months-old local `main`
+///   the mirror last saw. Before that answer is accepted, the stale-mirror
+///   check runs: a LOCAL default branch behind the fetched tip by more
+///   than [`STALE_MIRROR_BEHIND_LIMIT`] commits refuses with
+///   [`ERR_STALE_MIRROR`] (409), the message naming the exact retry
+///   command and the ahead/behind numbers.
+/// - A repo without an `origin` remote, a failed default-branch fetch, or
+///   a remote that lacks the branch degrades to the pre-V76 answer (the
+///   mirror's local default branch) with `base_source: local-default` —
+///   the PR fetch itself stays the load-bearing one.
+pub fn start_pr_base(
+    repo_root: &Path,
+    explicit: Option<&str>,
+    pr_head_sha: &str,
+    repo_name: &str,
+    pr_number: u32,
+) -> Result<(String, BaseSource), ApiError> {
+    if let Some(b) = explicit {
+        reject_user_ref(b)?;
+        return Ok((b.to_string(), BaseSource::Explicit));
+    }
+    let local_default = default_base_ref(repo_root);
+    if !has_origin_remote(repo_root) {
+        return Ok((local_default, BaseSource::LocalDefault));
+    }
+    let branch = match parse_user_ref(&local_default) {
+        Ok(b) => b,
+        // A default branch name this crate's own validator cannot carry
+        // never reaches a fetch argv — degrade, naming the source.
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+    };
+    if fetch_remote_default(repo_root, &branch).is_err() {
+        return Ok((local_default, BaseSource::LocalDefault));
+    }
+    let remote_ref = format!("refs/remotes/origin/{}", branch.as_str());
+    let remote_spec = match parse_user_ref(&remote_ref) {
+        Ok(s) => s,
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+    };
+    let remote_sha = match resolve_commit_sha(repo_root, &remote_spec) {
+        Ok(s) => s,
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+    };
+    // The stale-mirror refusal. A LOCAL default branch that cannot be
+    // resolved at all (unborn/missing) has nothing to compare — the
+    // merge-base default against the fresh remote tip is then the only
+    // sane answer and stands.
+    let local_ref = format!("refs/heads/{}", branch.as_str());
+    if let Ok(local_spec) = parse_user_ref(&local_ref) {
+        if let Ok(local_sha) = resolve_commit_sha(repo_root, &local_spec) {
+            if let Ok((ahead, behind)) = ahead_behind(repo_root, &local_sha, &remote_sha) {
+                if behind > STALE_MIRROR_BEHIND_LIMIT {
+                    // The hint's `--base` is the merge-base the refusal is
+                    // about — retrying with it explicit reproduces exactly
+                    // the patchset this base WOULD have produced. With no
+                    // merge-base at all (unrelated histories) the fetched
+                    // remote tip is the most honest suggestion left.
+                    let hint_base = merge_base_sha(repo_root, &remote_sha, pr_head_sha)
+                        .unwrap_or_else(|_| remote_sha.clone());
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        format!(
+                            "stale mirror: the local default branch {branch:?} is {behind} \
+                             commits behind the fetched origin/{branch} ({ahead} ahead, \
+                             {behind} behind; refusal limit {STALE_MIRROR_BEHIND_LIMIT}). \
+                             ps1 would be based on its merge-base with the PR head; to \
+                             proceed against that base explicitly, run:\n  \
+                             kb-code review start-pr --repo {repo_name} --pr {pr_number} \
+                             --base {hint_base}"
+                        ),
+                    )
+                    .with_problem_type(ERR_STALE_MIRROR));
+                }
+            }
+        }
+    }
+    Ok((remote_ref, BaseSource::MergeBase))
 }
 
 fn now_unix() -> i64 {
@@ -1460,8 +1665,8 @@ fn review_verdict_published_error(id: i64) -> Response {
     resp
 }
 
-fn review_closed_error(id: i64) -> Response {
-    let body = serde_json::json!({
+fn review_closed_error_body(id: i64) -> serde_json::Value {
+    serde_json::json!({
         "type": ERR_REVIEW_CLOSED,
         "title": "Conflict",
         "status": 409,
@@ -1470,15 +1675,7 @@ fn review_closed_error(id: i64) -> Response {
         ),
         "existing_review_id": id,
         "options": ["reopen", "new"],
-    });
-    let mut resp = (StatusCode::CONFLICT, Json(body)).into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/problem+json"),
-    );
-    resp
+    })
 }
 
 /// `PUT /api/reviews/{id}/viewed` — mark a path viewed at blob_sha. Loopback.
@@ -2401,23 +2598,41 @@ pub struct CreateReviewPrBody {
     pub session_id: Option<String>,
 }
 
-/// V76-R1b — `?on_closed=reopen|new` on `POST /api/reviews/pr`.
+/// V76-R1a `?async=` + V76-R1b `?on_closed=reopen|new` on `POST /api/reviews/pr`.
 #[derive(Debug, Deserialize, Default)]
-pub struct CreateReviewPrParams {
+pub struct StartPrParams {
+    #[serde(default, rename = "async")]
+    pub async_: Option<String>,
     #[serde(default)]
     pub on_closed: Option<String>,
 }
 
+impl StartPrParams {
+    /// `?async=1`/`true`/`yes` opt into the daemon-side job
+    /// (`crate::review_jobs`); everything else — absent, `0`, `false` —
+    /// keeps the synchronous behaviour byte-identical to the pre-V76
+    /// route. The server cannot know a fetch's cost ahead of time, so
+    /// "the fetch will take time" is the CALLER's statement: `kb-code
+    /// review start-pr` always sends `?async=1` and polls the job.
+    pub fn wants_async(&self) -> bool {
+        matches!(
+            self.async_.as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        )
+    }
+}
+
 /// Reuse an existing PR-bound review: optionally reopen, fetch the PR ref,
 /// capture a patchset if the head moved (`skip_if_same`), stamp `pr_head_sha`.
-/// Returns 200 with `reused: true`.
+/// Returns 200 with `reused: true`. Lives inside [`create_review_pr_value`]
+/// so the async job path gets the same behaviour.
 async fn reuse_pr_review(
     state: &SharedState,
     repo: &RepoEntry,
     existing: ReviewRow,
     pr_number: u32,
     reopen: bool,
-) -> Result<axum::response::Response, ApiError> {
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let id = existing.id;
     if reopen && existing.state != "open" {
         let now = now_unix();
@@ -2515,8 +2730,7 @@ async fn reuse_pr_review(
 
     Ok((
         StatusCode::OK,
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
+        serde_json::json!({
             "schema": SCHEMA,
             "id": updated.id,
             "repo": updated.repo,
@@ -2536,31 +2750,85 @@ async fn reuse_pr_review(
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": serde_json::Value::Null,
             "reused": true,
-        })),
-    )
-        .into_response())
+        }),
+    ))
 }
 
 /// `POST /api/reviews/pr` — create a review bound to a GitHub PR + capture
 /// ps1 off the fetched ref. LOOPBACK-ONLY (see the module doc + `router.rs`).
 /// See the PRR-R2 section doc above for the git-fetch/github_repo decoupling.
 ///
+/// V76-R1a: synchronous by default; `?async=1` runs the same flow as a
+/// daemon-side job (`crate::review_jobs`).
+///
 /// V76-R1b: an OPEN existing (repo, PR) review is reused (200, capture if
 /// the fetched head moved). A CLOSED existing review 409s
 /// [`ERR_REVIEW_CLOSED`] unless `?on_closed=reopen` (reopen + capture) or
 /// `?on_closed=new` (mint a new review id; the closed row keeps its
-/// binding).
+/// binding). Both the sync route and the async job share this via
+/// [`create_review_pr_value`].
 pub async fn create_review_pr(
     State(state): State<SharedState>,
-    Query(params): Query<CreateReviewPrParams>,
+    Query(params): Query<StartPrParams>,
     Json(body): Json<CreateReviewPrBody>,
 ) -> Result<axum::response::Response, ApiError> {
-    let (repo, _repo_id) = find_repo(&state, &body.repo)?;
-    let repo_root = repo.path.clone();
     let on_closed = parse_on_closed(params.on_closed.as_deref()).map_err(ApiError::bad_request)?;
+    if params.wants_async() {
+        return crate::review_jobs::start_or_attach(state, body, on_closed).await;
+    }
+    let (status, value) = create_review_pr_value(&state, body, None, on_closed).await?;
+    Ok(start_pr_value_response(status, value))
+}
+
+/// Render [`create_review_pr_value`]'s `(status, body)` as the HTTP
+/// response. The closed-binding 409 is RFC 7807 problem+json
+/// ([`ERR_REVIEW_CLOSED`]); everything else is ordinary JSON.
+fn start_pr_value_response(status: StatusCode, value: serde_json::Value) -> Response {
+    let problem = value.get("type").and_then(|v| v.as_str()) == Some(ERR_REVIEW_CLOSED);
+    let mut resp = (status, [(header::CACHE_CONTROL, "no-store")], Json(value)).into_response();
+    if problem {
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+    }
+    resp
+}
+
+/// The whole start-pr flow as one value-producing coroutine — the body of
+/// the pre-V76 `create_review_pr` handler, extracted so the synchronous
+/// route and [`crate::review_jobs`]' async runner share ONE implementation
+/// (and therefore one base ladder, one refusal, one envelope shape).
+/// `job`, when `Some`, gets coarse stage updates for
+/// `GET /api/reviews/jobs/{id}`'s `progress.stage`.
+///
+/// V76-R1a — the response envelope carries `base_source`
+/// (`explicit`/`merge-base`/`local-default`, [`start_pr_base`]'s ladder);
+/// the same value is merged into the stored `pr_meta_json` snapshot when
+/// that snapshot exists. `pr_meta_json` is the review row's only JSON blob
+/// (no migration), and it is wholesale-replaced by `review sweep` — which
+/// therefore carries `base_source` FORWARD across refreshes
+/// (`review_sweep.rs`). When GitHub enrichment is unavailable there is no
+/// `pr_meta_json` at all and `base_source` lives ONLY on this envelope —
+/// recorded here rather than silently fabricated into a snapshot the
+/// degraded-metadata contract says is `null`.
+///
+/// V76-R1b — `on_closed` is the parsed `?on_closed=reopen|new` query. An
+/// OPEN existing (repo, PR) review is reused; a CLOSED one 409s
+/// [`ERR_REVIEW_CLOSED`] unless reopen/new. This lives HERE so the async
+/// job cannot diverge from the sync route.
+pub(crate) async fn create_review_pr_value(
+    state: &SharedState,
+    body: CreateReviewPrBody,
+    job: Option<crate::review_jobs::JobHandle>,
+    on_closed: Option<OnClosed>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let (repo, _repo_id) = find_repo(state, &body.repo)?;
+    let repo_root = repo.path.clone();
 
     // Duplicate-binding pre-check. OPEN → reuse. CLOSED → 409 unless
-    // on_closed=reopen|new.
+    // on_closed=reopen|new. R1a's old "already bound" 409 is replaced by
+    // this R1b ladder so both the sync route and the async job agree.
     let dup_repo = body.repo.clone();
     let dup_pr_number = body.pr_number as i64;
     if let Some(existing) = state
@@ -2569,12 +2837,14 @@ pub async fn create_review_pr(
         .await?
     {
         if existing.state == "open" {
-            return reuse_pr_review(&state, repo, existing, body.pr_number, false).await;
+            return reuse_pr_review(state, repo, existing, body.pr_number, false).await;
         }
         match on_closed {
-            None => return Ok(review_closed_error(existing.id)),
+            None => {
+                return Ok((StatusCode::CONFLICT, review_closed_error_body(existing.id)));
+            }
             Some(OnClosed::Reopen) => {
-                return reuse_pr_review(&state, repo, existing, body.pr_number, true).await;
+                return reuse_pr_review(state, repo, existing, body.pr_number, true).await;
             }
             Some(OnClosed::New) => {
                 // Fall through and mint a new review id. The closed row
@@ -2623,19 +2893,36 @@ pub async fn create_review_pr(
             })?
             .map_err(|e| ApiError::bad_request(format!("PR fetch failed: {e}")))?;
 
+    crate::review_jobs::set_stage(&job, "base");
+
+    // V76-R1a — the base ladder (explicit > merge-base > local-default),
+    // [`start_pr_base`]. Runs in the blocking pool: it spawns git (the
+    // remote-default fetch, the ahead/behind probe, the refusal hint's
+    // merge-base). The stale-mirror refusal (`urn:kb:errors:stale-mirror`,
+    // 409) surfaces from here; an explicit `--base` bypasses it.
+    let root_for_base = repo.path.clone();
+    let explicit_base = body.base_ref.clone();
+    let head_for_base = fetched_sha.clone();
+    let repo_for_base = body.repo.clone();
+    let pr_for_base = body.pr_number;
+    let (base_ref, base_source) = tokio::task::spawn_blocking(move || {
+        start_pr_base(
+            &root_for_base,
+            explicit_base.as_deref(),
+            &head_for_base,
+            &repo_for_base,
+            pr_for_base,
+        )
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+
     // Pre-resolve base so we fail clean before inserting (mirrors
     // `create_review`'s own precedent).
-    let base_ref = body
-        .base_ref
-        .clone()
-        .unwrap_or_else(|| default_base_ref(&repo.path));
-    if let Some(b) = body.base_ref.as_deref() {
-        reject_user_ref(b)?;
-    }
-    let root_for_base = repo.path.clone();
+    let root_for_resolve = repo.path.clone();
     let base_for_resolve = base_ref.clone();
     tokio::task::spawn_blocking(move || {
-        resolve_commit_sha(&root_for_base, &parse_user_ref(&base_for_resolve)?)
+        resolve_commit_sha(&root_for_resolve, &parse_user_ref(&base_for_resolve)?)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -2665,6 +2952,8 @@ pub async fn create_review_pr(
         })
         .await?;
 
+    crate::review_jobs::set_stage(&job, "patchset");
+
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
@@ -2675,6 +2964,8 @@ pub async fn create_review_pr(
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+
+    crate::review_jobs::set_stage(&job, "enrich");
 
     // Best-effort GitHub metadata enrichment (design doc §2 row 1 /
     // §1.2's `pr_meta_json` shape). Only attempted when the origin
@@ -2717,6 +3008,10 @@ pub async fn create_review_pr(
                     // own `meta` snapshot below.
                     "body": pull.body,
                     "checks": checks,
+                    // V76-R1a — the daemon-recorded base ladder answer
+                    // (NOT GitHub metadata; `review_sweep` carries it
+                    // forward across refreshes for that reason).
+                    "base_source": base_source.as_str(),
                 });
                 let meta_str = serde_json::to_string(&meta)
                     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -2767,8 +3062,7 @@ pub async fn create_review_pr(
 
     Ok((
         StatusCode::CREATED,
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
+        serde_json::json!({
             "schema": SCHEMA,
             "id": review.id,
             "repo": review.repo,
@@ -2782,14 +3076,17 @@ pub async fn create_review_pr(
             "latest_ps": ps.ps_number,
             "tip_sha": ps.tip_sha,
             "base_sha": ps.base_sha,
+            // V76-R1a — which rung of the base ladder produced
+            // `base_ref`/`base_sha` (`explicit` > `merge-base` >
+            // `local-default`).
+            "base_source": base_source.as_str(),
             "pr_number": number,
             "pr_repo_slug": pr_repo_slug,
             "pr_head_sha": fetched_sha,
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": pr_meta_unavailable_reason,
-        })),
-    )
-        .into_response())
+        }),
+    ))
 }
 
 /// `GET /api/reviews/{id}/report` (design doc §2 row 4) — the agent-authored
@@ -3535,6 +3832,240 @@ mod tests {
         assert_eq!(out[1].review_id, Some(9));
         assert_eq!(out[2].status, "orphan");
         assert_eq!(out[2].review_id, None);
+    }
+
+    // --- V76-R1a: start_pr_base (the base ladder) ---------------------------
+
+    fn lgit(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn lgit_out(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// A (repo, bare `origin`) pair sharing one base commit on `main`,
+    /// where origin's `main` then advances `extra` empty commits past the
+    /// local one (via a second clone), and a PR ref `refs/pull/<n>/head`
+    /// carries one commit on top of the base. Returns the three tempdirs
+    /// (alive for the whole test), the repo dir, the base sha, the PR head
+    /// sha and the advanced remote tip.
+    fn ladder_fixture(
+        pr_number: u32,
+        extra: u32,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        std::path::PathBuf,
+        String,
+        String,
+        String,
+    ) {
+        let bare_tmp = tempfile::tempdir().unwrap();
+        let bare_dir = bare_tmp.path().join("origin.git");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        lgit(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+        let repo_tmp = tempfile::tempdir().unwrap();
+        let repo_dir = repo_tmp.path().to_path_buf();
+        lgit(&repo_dir, &["init", "-q", "-b", "main"]);
+        lgit(&repo_dir, &["config", "user.email", "t@e.com"]);
+        lgit(&repo_dir, &["config", "user.name", "T"]);
+        std::fs::write(repo_dir.join("base.txt"), "base\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "base"]);
+        let base_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        lgit(
+            &repo_dir,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", bare_dir.display()),
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        // Origin gets main at the base commit…
+        lgit(&repo_dir, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+
+        // …then a second clone advances origin's main past the local one.
+        let clone_tmp = tempfile::tempdir().unwrap();
+        let clone_dir = clone_tmp.path().join("clone");
+        lgit(
+            repo_tmp.path(),
+            &[
+                "clone",
+                "-q",
+                bare_dir.to_str().unwrap(),
+                clone_dir.to_str().unwrap(),
+            ],
+        );
+        lgit(&clone_dir, &["config", "user.email", "t@e.com"]);
+        lgit(&clone_dir, &["config", "user.name", "T"]);
+        for i in 0..extra {
+            lgit(
+                &clone_dir,
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    &format!("remote {i}"),
+                ],
+            );
+        }
+        lgit(
+            &clone_dir,
+            &["push", "-q", "origin", "HEAD:refs/heads/main"],
+        );
+        let remote_tip = lgit_out(&clone_dir, &["rev-parse", "HEAD"]);
+
+        // The PR branch forks from the BASE commit (so the merge-base
+        // answer is exactly `base_sha`).
+        lgit(&repo_dir, &["checkout", "-q", "-b", "pr-branch"]);
+        std::fs::write(repo_dir.join("feature.txt"), "feature\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "pr commit"]);
+        let pr_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &[
+                "push",
+                "-q",
+                "origin",
+                &format!("HEAD:refs/pull/{pr_number}/head"),
+            ],
+        );
+        lgit(&repo_dir, &["checkout", "-q", "main"]);
+
+        (
+            repo_tmp, bare_tmp, clone_tmp, repo_dir, base_sha, pr_sha, remote_tip,
+        )
+    }
+
+    #[test]
+    fn start_pr_base_without_a_remote_keeps_the_local_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        lgit(dir, &["init", "-q", "-b", "main"]);
+        lgit(dir, &["config", "user.email", "t@e.com"]);
+        lgit(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c1"]);
+        let head = lgit_out(dir, &["rev-parse", "HEAD"]);
+
+        let (base_ref, source) = start_pr_base(dir, None, &head, "r", 1).unwrap();
+        assert_eq!(base_ref, "main");
+        assert_eq!(source, BaseSource::LocalDefault);
+    }
+
+    #[test]
+    fn start_pr_base_against_a_slightly_ahead_origin_uses_the_merge_base_rung() {
+        let (_r, _b, _c, dir, base_sha, pr_sha, remote_tip) = ladder_fixture(7, 2);
+
+        let (base_ref, source) = start_pr_base(&dir, None, &pr_sha, "widget", 7).unwrap();
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(base_ref, "refs/remotes/origin/main");
+        // The fetch really refreshed the remote-tracking ref…
+        assert_eq!(
+            lgit_out(&dir, &["rev-parse", "refs/remotes/origin/main"]),
+            remote_tip
+        );
+        // …and ps1's base_sha (merge-based in `capture_patchset`) is the
+        // TRUE fork point, not the stale local main's own tip — same sha
+        // here only because the fixture's local main never moved; what
+        // pins the behaviour is that the merge-base ran against
+        // `remote_tip`.
+        assert_eq!(
+            merge_base_sha(&dir, &remote_tip, &pr_sha).unwrap(),
+            base_sha
+        );
+    }
+
+    #[test]
+    fn start_pr_base_refuses_a_stale_mirror_with_the_retry_hint() {
+        let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
+        let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+
+        let err = start_pr_base(&dir, None, &pr_sha, "widget", 7).unwrap_err();
+        assert_eq!(err.problem_type(), Some(ERR_STALE_MIRROR));
+        assert_eq!(err.status_code(), StatusCode::CONFLICT);
+        let msg = err.message().to_string();
+        // The ahead/behind numbers…
+        assert!(msg.contains("0 ahead"), "{msg}");
+        assert!(msg.contains(&format!("{extra} behind")), "{msg}");
+        // …and the exact retry command with the merge-base sha.
+        assert!(
+            msg.contains(&format!(
+                "kb-code review start-pr --repo widget --pr 7 --base {base_sha}"
+            )),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn start_pr_base_explicit_bypasses_the_stale_mirror_refusal() {
+        let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
+        let (_r, _b, _c, dir, _base, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+
+        let (base_ref, source) = start_pr_base(&dir, Some("main"), &pr_sha, "widget", 7).unwrap();
+        assert_eq!(base_ref, "main");
+        assert_eq!(source, BaseSource::Explicit);
+    }
+
+    #[test]
+    fn start_pr_base_degrades_to_local_default_when_the_remote_lacks_the_branch() {
+        // An origin that exists (the PR fetch needs one) but has no
+        // `main` branch at all: the default-branch fetch fails and the
+        // ladder falls to the pre-V76 answer, honestly labelled.
+        let bare_tmp = tempfile::tempdir().unwrap();
+        let bare_dir = bare_tmp.path().join("origin.git");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        lgit(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        lgit(&dir, &["init", "-q", "-b", "main"]);
+        lgit(&dir, &["config", "user.email", "t@e.com"]);
+        lgit(&dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+        lgit(&dir, &["add", "-A"]);
+        lgit(&dir, &["commit", "-q", "-m", "c1"]);
+        let head = lgit_out(&dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &dir,
+            &["remote", "add", "origin", bare_dir.to_str().unwrap()],
+        );
+
+        let (base_ref, source) = start_pr_base(&dir, None, &head, "r", 1).unwrap();
+        assert_eq!(base_ref, "main");
+        assert_eq!(source, BaseSource::LocalDefault);
     }
 
     // --- normalize_report_shape (V70-A3X) -----------------------------

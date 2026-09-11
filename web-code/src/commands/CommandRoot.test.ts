@@ -260,6 +260,8 @@ describe("chordConsumesKey (V71-K4)", () => {
       ["Space R h", "rail.tab.history"], // vim `h` = move.left
       ["Space R v", "rail.tab.review"], // vim `v` = visual mode
       ["Space R n", "rail.tab.notes"], // vim `n` = find.next
+      ["Space R f", "rail.tab.facts"], // vim `f` = hint.jump
+      ["Space R g", "facts.coverage-band"], // vim `g` prefix
       ["Space p", "rail.pin"], // vim `p` = pane.pin
     ];
     for (const [keys, id] of cases) {

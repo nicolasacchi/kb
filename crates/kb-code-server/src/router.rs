@@ -866,6 +866,19 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // (design-addendum-2 §C, `crate::review_analytics`). Same
         // literal-before-param placement as `/reviews/inbox` just above.
         .route("/reviews/analytics", get(review_analytics::analytics_route))
+        // V76-R1a — the start-pr job read (`crate::review_jobs`; `POST
+        // /api/reviews/pr?async=1`'s polling target). An ordinary bearer
+        // READ on this sub-router: the envelope a `done` job returns is
+        // exactly what the loopback-only POST would have returned to the
+        // same operator's CLI. `crate::review_jobs::V76_R1A_ROUTES`
+        // declares it; a unit test walks that declaration against THIS
+        // file. Literal `/reviews/jobs` at the same depth as
+        // `/reviews/{id}` — axum resolves literals over params, same as
+        // `/reviews/inbox` above.
+        .route(
+            "/reviews/jobs/{id}",
+            get(crate::review_jobs::review_job_route),
+        )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
         .route("/reviews/{id}/interdiff", get(reviews::review_interdiff))

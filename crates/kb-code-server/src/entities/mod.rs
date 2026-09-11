@@ -865,6 +865,9 @@ mod tests {
             // is absent from the list for the same reason
             // `boards::V74_L1_ROUTES` omits apply.
             .chain(crate::reviews::V76_R1B_ROUTES.iter())
+            // V76-R1a — the start-pr job read joins the SAME walk, one
+            // milestone later.
+            .chain(crate::review_jobs::V76_R1A_ROUTES.iter())
         {
             let nested = c
                 .path

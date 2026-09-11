@@ -738,6 +738,30 @@ every one is a `Space`-leader chord or a `[`/`]`-prefixed mixed chord, and
 D2's "Space is only the leader" plus the mixed-prefix precedent both mean
 none of them needs a vim-layer forwarding arm.
 
+## Facts / aug-lane/1 (`V76-R3a`, H4b)
+
+Facts is a **rail tab + hover + variants on existing gutters**. kbc-theme/1's
+Lane Budget assigns the intent/facts column "gutter slot four or a rail
+row, never a fifth slot"; V72-J2 took slot four for comments/1, so Facts
+MUST NOT add a fifth `createLineGutter` call (`lib/lanes.test.ts` counts
+the four in `CodeView.tsx`).
+
+- **Rail tab** `facts` (`Space R f`) — UNCONDITIONAL like comments/trail.
+  `components/lanes/FactsPanel.tsx` groups `GET /api/lanes/facts` by lane
+  (enabled / disabled-with-reason / empty-with-reason). Trust is LINE STYLE
+  (`kbc-trust-*` / orphan dotted + glyph). `age_secs` folds into a
+  display-only "aging"/"stale" caption (`freshnessCaption` — never rewrites
+  the wire class). A "lanes" chip links to `~lanes`.
+- **Diagnostics gutter (slot 3)** — rubocop/SARIF facts ride as a variant
+  (`source=lane`, square marker `.kbc-diag-dot--src-lane`). The inspector
+  Diagnostics card says `lane:<id>`.
+- **Blame gutter (slot 1)** — coverage is a band variant (covered /
+  uncovered / no-data), toggled from the Facts tab / `Space R g`, **off by
+  default**. `git.behavior` stays rail-only.
+- **Hover** — `FactsPeek` in PeekPanel's `cardExtra` (the V72-I2 slot).
+- **Dock** — `~lanes` (`Space g l`), `GET /api/lanes`. Unmodelled in
+  `PageId`, same footing as `~rails`.
+
 ## Review diff v2 (`V73-K2a`, design §D9, Track K)
 
 `routes/ReviewDiff.tsx` is the full-page review reader. Diff v2 added a

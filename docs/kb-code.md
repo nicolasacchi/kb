@@ -105,6 +105,48 @@ sweep {--repo R | --all-repos} [--include-closed]` (`POST
 `state=open`) and reconciles each against live GitHub — the cron/agent
 entry point for "every PR the LLM touched."
 
+**The `start-pr` base ladder and the stale-mirror refusal (v7.6,
+V76-R1a).** When `--base` is absent, `start-pr` no longer silently bases
+ps1 on the mirror's LOCAL default branch (a mirror that has not fetched
+for months produced a patchset spanning everything since — the review
+files then timed out and the review was ruined). The base is chosen by a
+three-rung ladder, and the rung taken rides the response as `base_source`
+(also merged into the stored `pr_meta_json` snapshot when that snapshot
+exists, carried forward by `review sweep`):
+
+1. **`explicit`** — `--base <ref>` was given. It wins outright and
+   bypasses the stale-mirror refusal.
+2. **`merge-base`** — no `--base`, and the repo has an `origin` remote:
+   the remote default branch is FETCHED first (`git fetch origin
+   +refs/heads/<d>:refs/remotes/origin/<d>`), and ps1's `base_sha` is the
+   merge-base of the PR head against the FRESH `refs/remotes/origin/<d>`
+   (stored as the review's `base_ref`). Exception: if the mirror's LOCAL
+   default branch is behind the fetched remote default by more than 50
+   commits, the route REFUSES with `409 urn:kb:errors:stale-mirror`; the
+   message carries the ahead/behind numbers and the exact retry command
+   (`kb-code review start-pr --repo R --pr N --base <merge-base-sha>`),
+   which reproduces the same patchset explicitly.
+3. **`local-default`** — no `--base` and no usable remote default (no
+   `origin` remote, the fetch failed, or the remote lacks the branch):
+   the pre-v7.6 answer, the mirror's local default branch.
+
+**`start-pr` as a daemon-side job.** The first `start-pr` against a cold
+mirror always outlived the CLI's old 10 s timeout in `git fetch` (the
+fetch finished server-side; the retry "succeeded" confusingly). `kb-code
+review start-pr` now posts `POST /api/reviews/pr?async=1`, which returns
+`202 {job_id, status: "running"}` immediately and runs the same flow as a
+job, then polls `GET /api/reviews/jobs/{id}` (bearer) every 2 s for up to
+600 s — progress lines go to stderr unless `--json`. A second `POST` for
+the same `(repo, PR)` while the job runs ATTACHES to it (same `job_id`)
+instead of starting a second fetch. The settled job reports `{status:
+done|failed, progress: {stage}, review_id?, error?}` with the full
+creation envelope under `result`; a failure carries the refusal verbatim
+plus its `type` URN in `error_type`. Jobs are in-memory only and swept 1
+h after creation (an unknown or swept id 404s). The route's synchronous
+behaviour is unchanged for any caller that does not pass `?async=1`; the
+CLI's reqwest timeout for THIS verb is 600 s (every other verb keeps its
+own).
+
 **Findings ledger (`kbc-findings/1`).** `kb-code review findings import ID
 {--from-file FILE|--stdin} [--mode full|additive]` (`POST
 /api/reviews/{id}/findings/import`, LOOPBACK-ONLY) batch-imports a
@@ -1795,10 +1837,20 @@ spawned before the bind and never awaited, one short transaction per page,
 recomputed cutoff per page so an interrupted pass simply resumes. A
 disabled lane is never swept out from under a re-enable.
 
-Not in this unit, by design: the SPA's Facts gutter, rail and hover
-(H4b); any lane beyond the four; the retrofit of kb-lip, rails-lens and
-the DCB doc-lens as lanes; and LLM-produced facts, which this daemon has
-no place for at all.
+**SPA (V76-R3a / H4b).** Facts is a **rail tab** (`Space R f`) plus hover
+and marker **variants on existing gutters** — never a fifth `lineGutter`
+slot (kbc-theme/1 Lane Budget: slot four is comments/1). The rail groups
+the current file's `GET /api/lanes/facts` rows by lane (enabled /
+disabled-with-reason / empty-with-reason); trust is LINE STYLE; `age_secs`
+is folded into a display-only "aging"/"stale" caption and never rewrites
+the wire class. RuboCop/SARIF diagnostics ride the diagnostics gutter
+(slot 3) as a lane variant; coverage rides the blame gutter as a band
+toggled from the Facts tab (off by default); `git.behavior` stays
+rail-only. `~lanes` (`Space g l`) is the registry dock (`GET /api/lanes`).
+
+Not in this unit, by design: any lane beyond the four; the retrofit of
+kb-lip, rails-lens and the DCB doc-lens as lanes; and LLM-produced facts,
+which this daemon has no place for at all.
 
 **V72-H2a (D7) — three grammars, one injection layer, `outline/1`.**
 

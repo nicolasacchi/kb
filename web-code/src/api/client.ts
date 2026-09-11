@@ -75,6 +75,9 @@ import type {
   CommentsFileOut,
   CommentsSummaryOut,
   CommentKeywordsOut,
+  LanesOut,
+  FactsOut,
+  LanesSummaryOut,
   TodosListOut,
   TreeResponse,
   TreeV2Response,
@@ -2553,4 +2556,28 @@ export function fetchReviewPseudoFile(
 /// than an in-handler check.
 export function fetchHunkTurns(id: number, hunk: string, ps?: string): Promise<HunkTurnsOut> {
   return getJson<HunkTurnsOut>(`/api/reviews/${id}/hunks/${encodeURIComponent(hunk)}/turns`, { ps });
+}
+
+/// `GET /api/lanes[?repo=]` — `aug-lane/1` registry + enablement + counts.
+export function fetchLanes(repo?: string): Promise<LanesOut> {
+  return getJson<LanesOut>("/api/lanes", { repo });
+}
+
+/// `GET /api/lanes/facts?repo=&path=[&lane=][&at_blob=]` — per-request classing.
+export function fetchLaneFacts(
+  repo: string,
+  path: string,
+  opts?: { lane?: string; atBlob?: string },
+): Promise<FactsOut> {
+  return getJson<FactsOut>("/api/lanes/facts", {
+    repo,
+    path,
+    lane: opts?.lane,
+    at_blob: opts?.atBlob,
+  });
+}
+
+/// `GET /api/lanes/summary?repo=` — stored-claim counts, no class.
+export function fetchLanesSummary(repo: string): Promise<LanesSummaryOut> {
+  return getJson<LanesSummaryOut>("/api/lanes/summary", { repo });
 }
