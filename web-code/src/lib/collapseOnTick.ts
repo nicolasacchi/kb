@@ -1,0 +1,275 @@
+// V76-R2c — collapse-on-tick.
+//
+// Ticking a hunk viewed (K2a's per-hunk mark) or a FILE viewed collapses
+// that section; un-ticking expands. The two existing per-file controls
+// (the chevron / `x`, and the viewed checkbox) stay where they are — this
+// module is the extra derived collapse, not a consolidation.
+//
+// Viewed is SERVER state. Collapse-from-viewed is derived from it. The
+// exception — a viewed section the operator re-expanded without un-ticking
+// — lives in the URL (`?expanded=` file paths, `?hexpanded=` hunk ids),
+// because the review diff's rule is that the URL is the only view state.
+// A reload of a viewed file that was not explicitly expanded collapses it
+// again.
+//
+// `folded` (hunk `z c`) and `userCollapsed` (file `x`) stay independent
+// user folds. Noise-dial collapse is unchanged. Precedence for the WHY
+// chip: fold > noise > viewed.
+
+export type CollapseReason = "fold" | "noise" | "viewed" | null;
+
+export interface HunkCollapseInput {
+  viewed: boolean;
+  folded: boolean;
+  byNoise: boolean;
+  /// Present in `?hexpanded=` — a viewed hunk the operator opened again.
+  expanded: boolean;
+}
+
+export function hunkCollapse(input: HunkCollapseInput): { collapsed: boolean; collapsedBy: CollapseReason } {
+  if (input.folded) return { collapsed: true, collapsedBy: "fold" };
+  if (input.byNoise) return { collapsed: true, collapsedBy: "noise" };
+  if (input.viewed && !input.expanded) return { collapsed: true, collapsedBy: "viewed" };
+  return { collapsed: false, collapsedBy: null };
+}
+
+export interface FileCollapseInput {
+  viewed: boolean;
+  userCollapsed: boolean;
+  expanded: boolean;
+}
+
+export function fileCollapse(input: FileCollapseInput): { collapsed: boolean; collapsedBy: CollapseReason } {
+  if (input.userCollapsed) return { collapsed: true, collapsedBy: "fold" };
+  if (input.viewed && !input.expanded) return { collapsed: true, collapsedBy: "viewed" };
+  return { collapsed: false, collapsedBy: null };
+}
+
+/// Toggle the displayed collapse of one section. Expanding a viewed
+/// section records an override; collapsing a viewed-and-expanded section
+/// drops the override. The `folded`/`userCollapsed` bit is the existing
+/// chevron/`x`/`z c` control, returned so the caller writes both stores.
+export function toggleSectionCollapse(input: {
+  collapsed: boolean;
+  viewed: boolean;
+  expanded: boolean;
+}): { expanded: boolean; userCollapsed: boolean } {
+  if (input.collapsed) {
+    return { expanded: input.viewed ? true : input.expanded, userCollapsed: false };
+  }
+  return { expanded: false, userCollapsed: true };
+}
+
+export interface CollapseTickState {
+  /// Viewed-but-expanded FILE paths.
+  expandedFiles: ReadonlySet<string>;
+  /// Viewed-but-expanded hunk ids (`kbc-hunkid/1`).
+  expandedHunks: ReadonlySet<string>;
+}
+
+export type CollapseTickAction =
+  | { type: "set"; files: readonly string[]; hunks: readonly string[] }
+  | { type: "markViewed"; kind: "file" | "hunk"; id: string }
+  | { type: "markUnviewed"; kind: "file" | "hunk"; id: string }
+  | { type: "toggleSection"; kind: "file" | "hunk"; id: string; viewed: boolean; collapsed: boolean }
+  | { type: "collapseAllViewed"; fileIds: readonly string[]; hunkIds: readonly string[] }
+  | { type: "expandAll"; fileIds: readonly string[]; hunkIds: readonly string[] };
+
+function withSet(set: ReadonlySet<string>, id: string, present: boolean): Set<string> {
+  if (set.has(id) === present) return new Set(set);
+  const next = new Set(set);
+  if (present) next.add(id);
+  else next.delete(id);
+  return next;
+}
+
+export function emptyCollapseTick(): CollapseTickState {
+  return { expandedFiles: new Set(), expandedHunks: new Set() };
+}
+
+export function reduceCollapseTick(state: CollapseTickState, action: CollapseTickAction): CollapseTickState {
+  switch (action.type) {
+    case "set":
+      return {
+        expandedFiles: new Set(action.files),
+        expandedHunks: new Set(action.hunks),
+      };
+    case "markViewed": {
+      // Ticking viewed collapses: drop any expand override.
+      if (action.kind === "file") {
+        return { ...state, expandedFiles: withSet(state.expandedFiles, action.id, false) };
+      }
+      return { ...state, expandedHunks: withSet(state.expandedHunks, action.id, false) };
+    }
+    case "markUnviewed": {
+      // Un-ticking expands; the override is meaningless once unviewed.
+      if (action.kind === "file") {
+        return { ...state, expandedFiles: withSet(state.expandedFiles, action.id, false) };
+      }
+      return { ...state, expandedHunks: withSet(state.expandedHunks, action.id, false) };
+    }
+    case "toggleSection": {
+      const next = toggleSectionCollapse({
+        collapsed: action.collapsed,
+        viewed: action.viewed,
+        expanded:
+          action.kind === "file" ? state.expandedFiles.has(action.id) : state.expandedHunks.has(action.id),
+      });
+      if (action.kind === "file") {
+        return { ...state, expandedFiles: withSet(state.expandedFiles, action.id, next.expanded) };
+      }
+      return { ...state, expandedHunks: withSet(state.expandedHunks, action.id, next.expanded) };
+    }
+    case "collapseAllViewed": {
+      const files = new Set(state.expandedFiles);
+      const hunks = new Set(state.expandedHunks);
+      for (const id of action.fileIds) files.delete(id);
+      for (const id of action.hunkIds) hunks.delete(id);
+      return { expandedFiles: files, expandedHunks: hunks };
+    }
+    case "expandAll": {
+      const files = new Set(state.expandedFiles);
+      const hunks = new Set(state.expandedHunks);
+      for (const id of action.fileIds) files.add(id);
+      for (const id of action.hunkIds) hunks.add(id);
+      return { expandedFiles: files, expandedHunks: hunks };
+    }
+    default:
+      return state;
+  }
+}
+
+/// TOTAL parser for `?expanded=` / `?hexpanded=`. Empty / null / junk
+/// commas → `[]`. Each item is decoded; a broken percent-encoding is kept
+/// verbatim rather than throwing.
+export function parseExpandedParam(raw: string | null): string[] {
+  if (raw == null || raw === "") return [];
+  const out: string[] = [];
+  for (const part of raw.split(",")) {
+    if (part === "") continue;
+    try {
+      out.push(decodeURIComponent(part));
+    } catch {
+      out.push(part);
+    }
+  }
+  return out;
+}
+
+/// Serialise a set for `?expanded=` / `?hexpanded=`. Empty → `null` (omit
+/// the param — the default is "nothing extra-expanded").
+export function formatExpandedParam(ids: readonly string[]): string | null {
+  if (ids.length === 0) return null;
+  return [...ids].sort().map((id) => encodeURIComponent(id)).join(",");
+}
+
+/// A deep-link (`?line=` / `?thread=` / inbound `?hunk=` / `?finding=`) is
+/// an implicit `?expanded=` / `?hexpanded=` override for THAT section —
+/// same boolean `fileCollapse` / `hunkCollapse` already read, no new query
+/// param. `explicit` is membership in the parsed URL set.
+///
+/// This is an INITIAL-NAVIGATION courtesy, not permanent state: `cleared`
+/// is true once the user has ticked or un-ticked this section under the
+/// current navigation, and then the derived collapse applies again
+/// (tick ⇒ collapsed, un-tick ⇒ expanded). A fresh navigation (new
+/// `deepLinkNavKey`) resets `cleared` so the target lands expanded with
+/// the flash. Default `cleared = false` is the land-time case.
+export function deepLinkExpands(explicit: boolean, isTarget: boolean, cleared = false): boolean {
+  return explicit || (isTarget && !cleared);
+}
+
+/// Identity of a deep-link NAVIGATION. `null` when the URL names no
+/// target (a bare `/diff`, including after the cursor later echoes
+/// `?hunk=`). TOTAL: empty / unknown fields are skipped, never thrown.
+export interface DeepLinkNavInput {
+  line: number | null;
+  side: "old" | "new" | null;
+  file: string | null;
+  hunk: string | null;
+  thread: string | null;
+  finding: string | null;
+}
+
+export function deepLinkNavKey(input: DeepLinkNavInput): string | null {
+  const parts: string[] = [];
+  if (input.line != null && Number.isFinite(input.line)) parts.push(`line=${input.line}`);
+  if (input.side === "old" || input.side === "new") parts.push(`side=${input.side}`);
+  if (input.file) parts.push(`file=${input.file}`);
+  if (input.hunk) parts.push(`hunk=${input.hunk}`);
+  if (input.thread) parts.push(`thread=${input.thread}`);
+  if (input.finding) parts.push(`finding=${input.finding}`);
+  return parts.length === 0 ? null : parts.join("|");
+}
+
+export interface DeepLinkCourtesyState {
+  key: string | null;
+  cleared: ReadonlySet<string>;
+}
+
+export type DeepLinkCourtesyAction = { type: "nav"; key: string | null } | { type: "clear"; id: string };
+
+export function emptyDeepLinkCourtesy(): DeepLinkCourtesyState {
+  return { key: null, cleared: new Set() };
+}
+
+/// `nav` with a different key (including null → some key) resets `cleared`.
+/// Same key is a no-op so a tick's clear survives URL-echo writes that
+/// do not change the navigation identity. `clear` records that the user
+/// acted on that section; an empty id is ignored.
+export function reduceDeepLinkCourtesy(
+  state: DeepLinkCourtesyState,
+  action: DeepLinkCourtesyAction,
+): DeepLinkCourtesyState {
+  switch (action.type) {
+    case "nav":
+      if (action.key === state.key) return state;
+      return { key: action.key, cleared: new Set() };
+    case "clear": {
+      if (action.id === "" || state.cleared.has(action.id)) return state;
+      return { ...state, cleared: withSet(state.cleared, action.id, true) };
+    }
+    default:
+      return state;
+  }
+}
+
+/// Merge a deep-link target id into an `?expanded=` / `?hexpanded=` list
+/// so callers can feed the SAME grammar `formatExpandedParam` already
+/// serialises (appended LAST by `reviewDiffHref`). Empty / null target is
+/// a no-op. Malformed ids are not rejected here — the parsers above are
+/// the TOTAL gate.
+export function withDeepLinkTarget(
+  expanded: readonly string[],
+  target: string | null | undefined,
+): string[] {
+  if (target == null || target === "") return [...expanded];
+  if (expanded.includes(target)) return [...expanded];
+  return [...expanded, target];
+}
+
+export interface DeepLinkFileInput {
+  line: number | null;
+  side: "old" | "new" | null;
+  fileHint: string;
+  focusPath: string;
+  hunkParam: string | null;
+  threadPath: string | null;
+  findingPath: string | null;
+}
+
+/// Which FILE a deep-link names. `?file=` / the single-file splat win when
+/// a line / side / hunk / thread / finding target is present; otherwise
+/// the thread or finding's own path. No target ⇒ `null` (a bare `?file=`
+/// scroll hint is not an expand override).
+export function deepLinkFileTarget(input: DeepLinkFileInput): string | null {
+  const hasTarget =
+    input.line != null ||
+    input.side != null ||
+    Boolean(input.hunkParam) ||
+    input.threadPath != null ||
+    input.findingPath != null;
+  if (!hasTarget) return null;
+  if (input.focusPath !== "") return input.focusPath;
+  if (input.fileHint !== "") return input.fileHint;
+  return input.threadPath ?? input.findingPath ?? null;
+}

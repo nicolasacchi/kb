@@ -453,6 +453,93 @@
   font-size: var(--fs-sm);
 }
 
+/* V76-R2c — token-level suggestion diff. Trust/emphasis is LINE STYLE
+ * (underline) plus background, never hue-only. Add vs del use different
+ * underline styles so colour-vision still separates them. */
+.kbc-sugdiff {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-md);
+}
+.kbc-sugdiff__caption {
+  margin: 0 0 var(--pad-1);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kbc-sugdiff__line {
+  display: flex;
+  gap: var(--pad-1);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.kbc-sugdiff__line--eq {
+  opacity: 0.55;
+}
+.kbc-sugdiff__line--old {
+  background: var(--diff-del-bg);
+}
+.kbc-sugdiff__line--new {
+  background: var(--diff-add-bg);
+}
+.kbc-sugdiff__gutter {
+  flex: 0 0 1.2em;
+  color: var(--ink-mute);
+  user-select: none;
+}
+.kbc-sugdiff__tok--add {
+  background: var(--diff-add-bg-strong);
+  text-decoration: underline;
+  text-decoration-style: solid;
+  text-underline-offset: 2px;
+}
+.kbc-sugdiff__tok--del {
+  background: var(--diff-del-bg-strong);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+/* Unpainted add/del keep the lane fg; a `.kbc-hl-*` run uses syntax colour
+ * (kbc-theme/1: syntax on the TEXT, diff emphasis on BACKGROUND / UNDERLINE). */
+.kbc-sugdiff__tok--add:not([data-kbc-hl]) {
+  color: var(--diff-add-fg);
+}
+.kbc-sugdiff__tok--del:not([data-kbc-hl]) {
+  color: var(--diff-del-fg);
+}
+.kbc-sugdiff__tok--eq {
+  background: transparent;
+}
+.kbc-sugdiff__tok[data-kbc-sugdiff-trailing="1"] {
+  text-decoration-style: double;
+}
+/* Same as `.kbc-diff`: italic comments would shift line metrics. */
+.kbc-sugdiff .kbc-hl-comment {
+  font-style: inherit;
+}
+.kbc-sugdiff .kbc-hl-no-grammar {
+  display: block;
+  margin-top: var(--pad-1);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kbc-sugdiff-apply__blob {
+  margin: var(--pad-1) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kbc-sugdiff-apply__blob[data-kbc-suggestion-blob="drifted"] {
+  color: var(--warn);
+}
+.kbc-sugdiff-apply__wt {
+  margin: var(--pad-1) 0 0;
+  max-height: 8rem;
+  overflow: auto;
+  padding: var(--pad-1);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
 .kbc-rthread-orphans {
   padding: var(--pad-2) 14px;
   background: var(--bg-card);

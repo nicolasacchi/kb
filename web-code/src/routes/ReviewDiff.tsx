@@ -42,6 +42,17 @@ import { mergeQuery, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeU
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
+import {
+  deepLinkFileTarget,
+  deepLinkNavKey,
+  fileCollapse,
+  hunkCollapse,
+  reduceCollapseTick,
+  reduceDeepLinkCourtesy,
+  toggleSectionCollapse,
+  withDeepLinkTarget,
+  type DeepLinkCourtesyState,
+} from "../lib/collapseOnTick";
 import { hunkId } from "../lib/diffHunks";
 import {
   buildMovedIndex,
@@ -131,6 +142,8 @@ export default function ReviewDiff() {
     overlay,
     mode,
     tourParamOn,
+    expandedFiles,
+    expandedHunks,
     setParam,
     setPs,
     setCtx,
@@ -140,6 +153,7 @@ export default function ReviewDiff() {
     setOverlay,
     setTourParam,
     withQuery,
+    setExpanded,
   } = useReviewDiffState();
 
   const reviewQ = useReview(repo, idOk ? id : undefined);
@@ -330,6 +344,29 @@ export default function ReviewDiff() {
     () => new Set((filesQ.data?.hunks_viewed ?? []).map((h) => h.hunk_id)),
     [filesQ.data],
   );
+  const expandedFileSet = useMemo(() => new Set(expandedFiles), [expandedFiles]);
+  const expandedHunkSet = useMemo(() => new Set(expandedHunks), [expandedHunks]);
+
+  // Inbound `?hunk=` at THIS navigation, snapshotted on first render.
+  // The cursor later echoes the current hunk into `?hunk=` (`setParam`
+  // below); that write is view state, not a new deep-link, and must not
+  // keep the current hunk expanded after a tick.
+  const [landedHunk] = useState(() => hunkParam || null);
+  const [courtesy, setCourtesy] = useState<DeepLinkCourtesyState>(() => ({
+    key: deepLinkNavKey({
+      line,
+      side,
+      file: focusPath || fileHint || null,
+      hunk: landedHunk,
+      thread: threadId,
+      finding: findingParam,
+    }),
+    cleared: new Set<string>(),
+  }));
+
+  function writeExpanded(files: ReadonlySet<string>, hunks: ReadonlySet<string>) {
+    setExpanded([...files], [...hunks]);
+  }
   const draftsByPath = useMemo(() => draftCountByPath(drafts), [drafts]);
 
   const apply = useCallback(
@@ -402,11 +439,26 @@ export default function ReviewDiff() {
   );
 
   async function toggleViewed(file: ReviewFileRow) {
+    const wasViewed = !!(file.viewed && !file.viewed_stale);
     try {
-      if (file.viewed && !file.viewed_stale) {
+      if (wasViewed) {
         await delViewed.mutateAsync(file.path);
       } else {
         await putViewed.mutateAsync({ path: file.path, blob_sha: file.blob_sha });
+      }
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: wasViewed ? "markUnviewed" : "markViewed", kind: "file", id: file.path },
+      );
+      writeExpanded(next.expandedFiles, next.expandedHunks);
+      setCourtesy((s) => reduceDeepLinkCourtesy(s, { type: "clear", id: file.path }));
+      if (wasViewed) {
+        setKeys((s) => {
+          if (!s.collapsed.has(file.path)) return s;
+          const collapsed = new Set(s.collapsed);
+          collapsed.delete(file.path);
+          return { ...s, collapsed };
+        });
       }
     } catch (err) {
       toast.err(`couldn't update viewed: ${msg(err)}`);
@@ -510,12 +562,60 @@ export default function ReviewDiff() {
         try {
           if (viewed) await delHunkViewed.mutateAsync(hid);
           else await putHunkViewed.mutateAsync({ hunkId: hid, path });
+          const next = reduceCollapseTick(
+            { expandedFiles: new Set(expandedFiles), expandedHunks: new Set(expandedHunks) },
+            { type: viewed ? "markUnviewed" : "markViewed", kind: "hunk", id: hid },
+          );
+          setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+          setCourtesy((s) => reduceDeepLinkCourtesy(s, { type: "clear", id: hid }));
+          if (viewed) setFold(hid, false);
         } catch (err) {
           toast.err(`couldn't update hunk viewed: ${msg(err)}`);
         }
       })();
     },
-    [hunkViewedSet, delHunkViewed, putHunkViewed],
+    [hunkViewedSet, delHunkViewed, putHunkViewed, expandedFiles, expandedHunks, setExpanded, setFold],
+  );
+
+  const onToggleHunkSection = useCallback(
+    (id: string, viewed: boolean, collapsed: boolean) => {
+      const decision = toggleSectionCollapse({
+        collapsed,
+        viewed,
+        expanded: expandedHunkSet.has(id),
+      });
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "toggleSection", kind: "hunk", id, viewed, collapsed },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+      setFold(id, decision.userCollapsed);
+    },
+    [expandedFileSet, expandedHunkSet, setExpanded, setFold],
+  );
+
+  const onToggleFileSection = useCallback(
+    (path: string, viewed: boolean, collapsed: boolean) => {
+      const decision = toggleSectionCollapse({
+        collapsed,
+        viewed,
+        expanded: expandedFileSet.has(path),
+      });
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "toggleSection", kind: "file", id: path, viewed, collapsed },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+      setKeys((s) => {
+        const has = s.collapsed.has(path);
+        if (has === decision.userCollapsed) return s;
+        const collapsedSet = new Set(s.collapsed);
+        if (decision.userCollapsed) collapsedSet.add(path);
+        else collapsedSet.delete(path);
+        return { ...s, collapsed: collapsedSet };
+      });
+    },
+    [expandedFileSet, expandedHunkSet, setExpanded],
   );
 
   // --- V73-K2a — drafts --------------------------------------------------
@@ -609,6 +709,69 @@ export default function ReviewDiff() {
       if (f) setFocusThreadId(f.annotation_id);
     }
   }, [threadId, findingParam, findingsQ.data, findingsSlugMap]);
+
+  // V76-R2c round 3 — a `?line=` / thread / inbound `?hunk=` / finding
+  // deep-link is an INITIAL-NAVIGATION courtesy (implicit expand) for THAT
+  // section so the flash target is mounted. Tick / un-tick of that section
+  // clears the courtesy (`courtesy.cleared`); a fresh navigation (new
+  // `deepLinkNavKey`) re-establishes it. The cursor's live `?hunk=` echo
+  // is not a navigation — only `landedHunk` (first-render snapshot) is.
+  const focusThreadPath = useMemo(() => {
+    const want = focusThreadId ?? threadId;
+    if (!want || !commentsQ.data) return null;
+    for (const g of commentsQ.data.groups) {
+      if (g.comments.some((c) => c.id === want)) return g.path;
+    }
+    return null;
+  }, [focusThreadId, threadId, commentsQ.data]);
+  const findingPath = useMemo(() => {
+    if (!findingParam) return null;
+    return findingsSlugMap.get(findingParam)?.location.path ?? null;
+  }, [findingParam, findingsSlugMap]);
+  const deepLinkFile = useMemo(
+    () =>
+      deepLinkFileTarget({
+        line,
+        side,
+        fileHint,
+        focusPath,
+        hunkParam: landedHunk,
+        threadPath: focusThreadPath,
+        findingPath,
+      }),
+    [line, side, fileHint, focusPath, landedHunk, focusThreadPath, findingPath],
+  );
+  const navKey = deepLinkNavKey({
+    line,
+    side,
+    file: deepLinkFile,
+    hunk: landedHunk,
+    thread: threadId,
+    finding: findingParam,
+  });
+  if (courtesy.key !== navKey) {
+    setCourtesy({ key: navKey, cleared: new Set() });
+  }
+  const derivedExpandedFiles = useMemo(
+    () =>
+      new Set(
+        withDeepLinkTarget(
+          [...expandedFileSet],
+          deepLinkFile && !courtesy.cleared.has(deepLinkFile) ? deepLinkFile : null,
+        ),
+      ),
+    [expandedFileSet, deepLinkFile, courtesy],
+  );
+  const derivedExpandedHunks = useMemo(
+    () =>
+      new Set(
+        withDeepLinkTarget(
+          [...expandedHunkSet],
+          landedHunk && !courtesy.cleared.has(landedHunk) ? landedHunk : null,
+        ),
+      ),
+    [expandedHunkSet, landedHunk, courtesy],
+  );
 
   function stepThread(dir: 1 | -1) {
     const next = stepThreadStop(threadStops, focusThreadId, dir);
@@ -774,6 +937,12 @@ export default function ReviewDiff() {
       movedIndex,
       fileNoise: [],
       hunkViewed: hunkViewedSet,
+      expandedHunks: derivedExpandedHunks,
+      deepLinkFile,
+      deepLinkLine: line,
+      deepLinkSide: side,
+      deepLinkHunk: landedHunk,
+      deepLinkCleared: courtesy.cleared,
       folded,
       expand: expandByHunk,
       drafts,
@@ -781,6 +950,7 @@ export default function ReviewDiff() {
       onParsed,
       onToggleHunkViewed: toggleHunkViewed,
       onToggleFold: toggleFold,
+      onToggleHunkSection,
       onExpandHunk: expandHunkBy,
       onDraftCreate: draftCreate,
       turnsOpenId,
@@ -791,12 +961,19 @@ export default function ReviewDiff() {
       noiseMode,
       movedIndex,
       hunkViewedSet,
+      derivedExpandedHunks,
+      deepLinkFile,
+      line,
+      side,
+      landedHunk,
+      courtesy,
       folded,
       expandByHunk,
       drafts,
       onParsed,
       toggleHunkViewed,
       toggleFold,
+      onToggleHunkSection,
       expandHunkBy,
       draftCreate,
       turnsOpenId,
@@ -953,7 +1130,19 @@ export default function ReviewDiff() {
       const L = live.current;
       L.setView(L.mode === "split" ? "unified" : "split");
     }),
-    "diff.collapse": gated(() => live.current.apply({ type: "toggleCollapse" })),
+    "diff.collapse": gated(() => {
+      const L = live.current;
+      const path = L.keys.files[L.keys.cursor.fileIdx];
+      const row = L.cursorRow;
+      if (!path || !row) return;
+      const viewed = !!(row.viewed && !row.viewed_stale);
+      const fc = fileCollapse({
+        viewed,
+        userCollapsed: L.keys.collapsed.has(path),
+        expanded: expandedFileSet.has(path),
+      });
+      onToggleFileSection(path, viewed, fc.collapsed);
+    }),
     "diff.thread-next": gated(() => live.current.stepThread(1)),
     "diff.thread-prev": gated(() => live.current.stepThread(-1)),
     "diff.overlay-cycle": gated(() => {
@@ -974,13 +1163,78 @@ export default function ReviewDiff() {
       if (cursorHunkId) toggleHunkViewed(cursorPath, cursorHunkId);
     }),
     "diff.fold": gated(() => {
-      if (cursorHunkId) setFold(cursorHunkId, true);
+      if (!cursorHunkId) return;
+      setFold(cursorHunkId, true);
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "markViewed", kind: "hunk", id: cursorHunkId },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
     }),
     "diff.unfold": gated(() => {
-      if (cursorHunkId) setFold(cursorHunkId, false);
+      if (!cursorHunkId) return;
+      setFold(cursorHunkId, false);
+      if (!hunkViewedSet.has(cursorHunkId)) return;
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "toggleSection", kind: "hunk", id: cursorHunkId, viewed: true, collapsed: true },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
     }),
     "diff.fold-toggle": gated(() => {
-      if (cursorHunkId) toggleFold(cursorHunkId);
+      if (!cursorHunkId) return;
+      const viewed = hunkViewedSet.has(cursorHunkId);
+      const c = hunkCollapse({
+        viewed,
+        folded: folded.has(cursorHunkId),
+        byNoise: false,
+        expanded: expandedHunkSet.has(cursorHunkId),
+      });
+      onToggleHunkSection(cursorHunkId, viewed, c.collapsed);
+    }),
+    "diff.section-toggle": gated(() => {
+      if (cursorHunkId) {
+        const viewed = hunkViewedSet.has(cursorHunkId);
+        const c = hunkCollapse({
+          viewed,
+          folded: folded.has(cursorHunkId),
+          byNoise: false,
+          expanded: expandedHunkSet.has(cursorHunkId),
+        });
+        onToggleHunkSection(cursorHunkId, viewed, c.collapsed);
+        return;
+      }
+      const path = cursorPath;
+      const row = cursorRow;
+      if (!path || !row) return;
+      const viewed = !!(row.viewed && !row.viewed_stale);
+      const fc = fileCollapse({
+        viewed,
+        userCollapsed: keys.collapsed.has(path),
+        expanded: expandedFileSet.has(path),
+      });
+      onToggleFileSection(path, viewed, fc.collapsed);
+    }),
+    "diff.collapse-viewed": gated(() => {
+      const fileIds = ordered.filter((f) => f.viewed && !f.viewed_stale).map((f) => f.path);
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "collapseAllViewed", fileIds, hunkIds: [...hunkViewedSet] },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+    }),
+    "diff.expand-all": gated(() => {
+      const hunkIds: string[] = [];
+      for (const [p, parsed] of parsedByPath) {
+        for (const h of parsed.hunks) hunkIds.push(hunkId(p, h));
+      }
+      const next = reduceCollapseTick(
+        { expandedFiles: expandedFileSet, expandedHunks: expandedHunkSet },
+        { type: "expandAll", fileIds: paths, hunkIds },
+      );
+      setExpanded([...next.expandedFiles], [...next.expandedHunks]);
+      setKeys((s) => (s.collapsed.size === 0 ? s : { ...s, collapsed: new Set() }));
+      setFolded(new Set());
     }),
     "diff.context-cycle": gated(() => setCtx(nextDiffCtx(ctxDial))),
     "diff.noise-toggle": gated(() =>
@@ -1061,12 +1315,14 @@ export default function ReviewDiff() {
     if (!focusThreadId || lastFlashed.current === focusThreadId) return;
     const el = document.querySelector(`[data-kbc-review-thread="${cssAttr(focusThreadId)}"]`);
     if (!el) return;
+    const section = el.closest("[data-kbc-rdiff-file]");
+    if (section?.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
     lastFlashed.current = focusThreadId;
     el.classList.add("kbc-rdiff__flash");
     el.scrollIntoView({ block: "center" });
     const t = window.setTimeout(() => el.classList.remove("kbc-rdiff__flash"), 1400);
     return () => window.clearTimeout(t);
-  }, [focusThreadId, commentsQ.data, hunkCounts, mode]);
+  }, [focusThreadId, commentsQ.data, hunkCounts, mode, derivedExpandedFiles]);
 
   // `?line=N&side=` deep-link: scroll + flash. Works in both unified and split
   // (rows carry data-old-line / data-new-line).
@@ -1077,6 +1333,7 @@ export default function ReviewDiff() {
     if (!path) return;
     const root = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
     if (!root) return;
+    if (root.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
     const attr = side === "old" ? "data-old-line" : "data-new-line";
     const row = root.querySelector(`[${attr}="${line}"]`);
     if (!row) return;
@@ -1085,7 +1342,18 @@ export default function ReviewDiff() {
     row.scrollIntoView({ block: "center" });
     const t = window.setTimeout(() => row.classList.remove("kbc-rdiff__flash"), 1400);
     return () => window.clearTimeout(t);
-  }, [line, side, focusPath, fileHint, paths, keys.cursor.fileIdx, hunkCounts, mode]);
+  }, [
+    line,
+    side,
+    focusPath,
+    fileHint,
+    paths,
+    keys.cursor.fileIdx,
+    hunkCounts,
+    mode,
+    derivedExpandedFiles,
+    derivedExpandedHunks,
+  ]);
 
   // `?file=` all-files scroll hint (once the section exists).
   const fileScrolled = useRef(false);
@@ -1222,8 +1490,6 @@ export default function ReviewDiff() {
         ordered={ordered}
         paths={paths}
         keys={keys}
-        setKeys={setKeys}
-        hunkCounts={hunkCounts}
         cursorPath={cursorPath}
         cursorIdx={cursorIdx}
         hasPrev={hasPrev}
@@ -1242,6 +1508,9 @@ export default function ReviewDiff() {
         onSetMapOpen={setMapOpen}
         onSetParam={setParam}
         onToggleViewed={toggleViewed}
+        onToggleFileSection={onToggleFileSection}
+        expandedFiles={derivedExpandedFiles}
+        eagerPath={deepLinkFile}
         composeFor={composeFor}
         v2For={v2For}
         withQuery={withQuery}

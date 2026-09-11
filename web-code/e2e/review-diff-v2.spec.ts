@@ -148,6 +148,8 @@ test.describe("review diff v2 (V73-K2a)", () => {
     // rather than a local flag.
     await page.locator(`[data-kbc-hunk-viewed-toggle="${hunkId}"]`).click();
     await expect(firstStrip).toHaveAttribute("data-kbc-hunk-viewed", "1", { timeout: 10_000 });
+    // V76-R2c — ticking viewed collapses the hunk. The fold control stays.
+    await expect(firstStrip).toHaveAttribute("data-kbc-hunk-collapsed", "1");
     const filesRes = await request.get(`${BASE}/api/reviews/${reviewId}/files`);
     expect(filesRes.ok()).toBeTruthy();
     const filesBody = (await filesRes.json()) as { hunks_viewed?: Array<{ hunk_id: string }> };
@@ -160,17 +162,30 @@ test.describe("review diff v2 (V73-K2a)", () => {
       "1",
       { timeout: 15_000 },
     );
+    await expect(page.locator(`[data-kbc-hunk="${hunkId}"]`)).toHaveAttribute(
+      "data-kbc-hunk-collapsed",
+      "1",
+    );
 
     // --- fold -------------------------------------------------------------
+    // V76-R2c: the fold control on a viewed-collapsed hunk EXPANDS it
+    // without un-viewing (the expand override). A second click collapses
+    // it again. Previously fold was independent of viewed, so this spec
+    // asserted 0→1→0; collapse-on-tick means the reload already left it
+    // at 1.
     await page.locator(`[data-kbc-hunk-fold="${hunkId}"]`).click();
     await expect(page.locator(`[data-kbc-hunk="${hunkId}"]`)).toHaveAttribute(
       "data-kbc-hunk-collapsed",
+      "0",
+    );
+    await expect(page.locator(`[data-kbc-hunk="${hunkId}"]`)).toHaveAttribute(
+      "data-kbc-hunk-viewed",
       "1",
     );
     await page.locator(`[data-kbc-hunk-fold="${hunkId}"]`).click();
     await expect(page.locator(`[data-kbc-hunk="${hunkId}"]`)).toHaveAttribute(
       "data-kbc-hunk-collapsed",
-      "0",
+      "1",
     );
 
     // --- the noise toggle is a COLLAPSE, never a filter --------------------
