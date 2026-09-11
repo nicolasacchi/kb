@@ -487,23 +487,39 @@
 }
 .kbc-sugdiff__tok--add {
   background: var(--diff-add-bg-strong);
-  color: var(--diff-add-fg);
   text-decoration: underline;
   text-decoration-style: solid;
   text-underline-offset: 2px;
 }
 .kbc-sugdiff__tok--del {
   background: var(--diff-del-bg-strong);
-  color: var(--diff-del-fg);
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 2px;
+}
+/* Unpainted add/del keep the lane fg; a `.kbc-hl-*` run uses syntax colour
+ * (kbc-theme/1: syntax on the TEXT, diff emphasis on BACKGROUND / UNDERLINE). */
+.kbc-sugdiff__tok--add:not([data-kbc-hl]) {
+  color: var(--diff-add-fg);
+}
+.kbc-sugdiff__tok--del:not([data-kbc-hl]) {
+  color: var(--diff-del-fg);
 }
 .kbc-sugdiff__tok--eq {
   background: transparent;
 }
 .kbc-sugdiff__tok[data-kbc-sugdiff-trailing="1"] {
   text-decoration-style: double;
+}
+/* Same as `.kbc-diff`: italic comments would shift line metrics. */
+.kbc-sugdiff .kbc-hl-comment {
+  font-style: inherit;
+}
+.kbc-sugdiff .kbc-hl-no-grammar {
+  display: block;
+  margin-top: var(--pad-1);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
 }
 .kbc-sugdiff-apply__blob {
   margin: var(--pad-1) 0 0;
