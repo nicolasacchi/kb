@@ -227,6 +227,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         branch_base_cache: std::sync::Arc::new(parking_lot::Mutex::new(
             kb_code_server::history::facts::BaseCache::default(),
         )),
+        review_jobs: std::sync::Arc::new(kb_code_server::review_jobs::ReviewJobs::default()),
     }))
 }
 
