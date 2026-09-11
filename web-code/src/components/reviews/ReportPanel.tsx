@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 import type {
   ClaimOut,
+  FindingSeverity,
   ReviewDetailPr,
   ReviewFinding,
   ReviewReport,
@@ -14,11 +15,20 @@ import type {
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
 import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
 import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
+// V76-R2a — the live-counts derivation's home moved to `lib/reviewRoom.ts`
+// (the hero needs it without a component↔lib cycle); re-exported here so
+// existing importers (`ReportPanel.test.ts`) keep working.
+import { liveFindingCounts, type LiveCounts } from "../../lib/reviewRoom";
+export { liveFindingCounts, type LiveCounts };
 import AgentVerdictCard from "./AgentVerdictCard";
 import CiChecksCard from "./CiChecksCard";
 import ClaimRegister from "./ClaimRegister";
-import FindingCard, { severityRank } from "./FindingCard";
+import FindingCard, { findingAct, severityRank } from "./FindingCard";
 import GithubConversationCard from "./GithubConversationCard";
+// ── V76-R2a — the hero + section decorators (icon + colour token per
+// section kind) replace the bare `kbc-eyebrow` text rows. ──
+import ReportHero from "./ReportHero";
+import { SectionDecor } from "./RoomChips";
 
 /// `GET /api/reviews/{id}/report`'s ONLY structural signal for "no report
 /// exists" is the literal `{report: null}` shape — every OTHER response is
@@ -28,25 +38,6 @@ export function hasReviewReport(out: ReviewReportOut | undefined): out is Review
   if (!out) return false;
   if ("report" in out && (out as { report: unknown }).report === null) return false;
   return true;
-}
-
-export interface LiveCounts {
-  blockers: number;
-  concerns: number;
-  verified: number;
-}
-
-/// Stat tiles are ALWAYS derived from live finding rows (§8) — this is that
-/// derivation, pure and shared with the drift-caption check below.
-export function liveFindingCounts(findings: ReviewFinding[]): LiveCounts {
-  const counts: LiveCounts = { blockers: 0, concerns: 0, verified: 0 };
-  for (const f of findings) {
-    if (f.superseded) continue;
-    if (f.severity === "blocker") counts.blockers += 1;
-    else if (f.severity === "concern") counts.concerns += 1;
-    else counts.verified += 1;
-  }
-  return counts;
 }
 
 /// §8's "report/count drift" caption — a quiet `ⓘ` note when the imported
@@ -144,9 +135,22 @@ export interface ReportPanelProps {
   /// V73-K2c (kbc-claim/1, design D18) — this review's claims, fetched once
   /// by `ReviewDetail.tsx` and rendered beside the findings list below.
   claims: ClaimOut[];
+  /// V76-R2a — a hero count chip filters the findings rail to that
+  /// severity. The rail's filter state lives in `ReviewDetail.tsx` (lifted,
+  /// so this panel and the rail can never disagree about what "filtered"
+  /// means); absent in tests that render the panel standalone.
+  onFilterFindings?: (severity: FindingSeverity) => void;
 }
 
-export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }: ReportPanelProps) {
+/// findings v2's `act` splits the list one more way: a `praise` finding is
+/// not a finding at all in the severity sense — it gets its own green
+/// section (below), and Section 02's count/counts stay honest about what
+/// they exclude.
+export function isPraiseFinding(f: ReviewFinding): boolean {
+  return findingAct(f) === "praise";
+}
+
+export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims, onFilterFindings }: ReportPanelProps) {
   const reportQ = useReviewReport(repo, review.id);
   const findingsQ = useReviewFindings(repo, review.id, { ps });
   const filesQ = useReviewFiles(repo, review.id, ps);
@@ -178,32 +182,33 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }
   const report = reportQ.data;
   const findings = (findingsQ.data?.findings ?? []).filter((f) => !f.superseded);
   const sorted = [...findings].sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
+  // V76-R2a — praise findings leave the findings list for their own green
+  // section. Both lists are CUTS of the SAME `sorted` array; the counts
+  // below name what each cut holds, so the split never hides a row.
+  const praise = sorted.filter(isPraiseFinding);
+  const actionable = sorted.filter((f) => !isPraiseFinding(f));
   const live = liveFindingCounts(findings);
   const drift = statDriftCaption(report.stats, live);
   const files = filesQ.data?.files ?? [];
 
   return (
     <div data-kbc-report-panel={review.id}>
-      {report.deck && <p className="kbc-report__deck" data-kbc-report-deck>{report.deck}</p>}
+      {/* V76-R2a — the hero: title, PR/base/head chips, risk dial, the
+          three live counts as rail-filtering chips, lede, files-viewed.
+          The agent block inside is HIDDEN when unset. */}
+      <ReportHero
+        repo={repo}
+        review={review}
+        report={report}
+        findings={findings}
+        files={files}
+        onFilterFindings={(sev) => onFilterFindings?.(sev)}
+      />
 
-      <div className="kbc-verdicts">
+      <div className="kbc-verdicts" data-kbc-room-section="verdict">
         <AgentVerdictCard report={report} />
       </div>
 
-      <div className="kbc-stats" data-kbc-report-stats>
-        <div className="cell b">
-          <div className="l">Blockers</div>
-          <div className="v">{live.blockers}</div>
-        </div>
-        <div className="cell c">
-          <div className="l">Concerns</div>
-          <div className="v">{live.concerns}</div>
-        </div>
-        <div className="cell o">
-          <div className="l">Verified</div>
-          <div className="v">{live.verified}</div>
-        </div>
-      </div>
       {drift && (
         <p className="kbc-report__drift-caption" data-kbc-report-drift title={drift}>
           ⓘ {drift}
@@ -212,29 +217,45 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }
 
       {report.summary && (
         <>
-          <div className="kbc-eyebrow">Section 01 · Summary</div>
+          <SectionDecor kind="summary" />
           <MarkdownLite text={report.summary} />
         </>
       )}
 
-      <div className="kbc-eyebrow">
-        Section 02 · {sorted.length} finding{sorted.length === 1 ? "" : "s"}
-      </div>
+      <SectionDecor
+        kind="findings"
+        title={`Findings · ${actionable.length}`}
+        count={undefined}
+      />
       {/* findings v2 (V73-K2b) — the act/blocking facets. DERIVED from the
           rows this section already renders and from nothing else: a second
           VIEW of one list, never a second count (which is exactly how
           kb-code once shipped three disagreeing "usages" numbers). */}
-      {sorted.length > 0 && (
+      {actionable.length > 0 && (
         <p className="kbc-report__facets" data-kbc-report-facets>
-          {findingFacetText(findingFacets(sorted))}
+          {findingFacetText(findingFacets(actionable))}
         </p>
       )}
-      {sorted.length === 0 ? (
+      {actionable.length === 0 ? (
         <p className="kbc-review__card-empty" data-kbc-report-findings-empty>
           No findings on this patchset.
         </p>
       ) : (
-        sorted.map((f) => <FindingCard key={f.slug} repo={repo} reviewId={review.id} finding={f} ps={ps} />)
+        actionable.map((f) => <FindingCard key={f.slug} repo={repo} reviewId={review.id} finding={f} ps={ps} />)
+      )}
+
+      {/* V76-R2a — praise is its own green section, AFTER the actionable
+          list: it re-orders nothing and hides nothing (the split is named
+          in both sections' counts). */}
+      {praise.length > 0 && (
+        <>
+          <SectionDecor kind="praise" title={`Praise · ${praise.length}`} />
+          <div className="kbc-room-praise" data-kbc-room-praise>
+            {praise.map((f) => (
+              <FindingCard key={f.slug} repo={repo} reviewId={review.id} finding={f} ps={ps} />
+            ))}
+          </div>
+        </>
       )}
 
       {/* V73-K2c (kbc-claim/1, design D18) — the claim register, BESIDE the
@@ -243,6 +264,9 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }
           judgement — two different registers on the same page. */}
       <ClaimRegister repo={repo} reviewId={review.id} claims={claims} scopeLabel="this review" />
 
+      {/* Files/CI/GitHub keep the plain eyebrow — the decorator vocabulary
+          (lib/reviewRoom.ts's `RoomSectionKind`) covers the Room's PROSE
+          sections; these three are wire listings, not prose. */}
       <div className="kbc-eyebrow">Section 03 · Files</div>
       {files.length === 0 ? (
         <p className="kbc-review__card-empty">No file changes on this patchset.</p>
