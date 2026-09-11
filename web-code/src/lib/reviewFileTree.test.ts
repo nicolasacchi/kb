@@ -199,9 +199,47 @@ describe("shipped e2e hooks the tree / map must keep", () => {
     expect(stream).not.toContain("height: 100%");
     expect(stream).not.toContain("overflow: auto");
     expect(css).toContain("position: sticky");
-    const fileDiff = css.match(/\.kbc-review__file-diff \{[^}]+\}/)?.[0] ?? "";
-    expect(fileDiff).not.toContain("max-height: 480px");
-    expect(fileDiff).toContain("overflow: visible");
+  });
+
+  it("sticky section-head does not use --z-bar or a mapped topbar offset (would cover the first strip)", () => {
+    const css = readFileSync(fileURLToPath(new URL("../styles/reviews.css", import.meta.url)), "utf-8");
+    const head = css.match(/\.kbc-rdiff__section-head \{[^}]+\}/)?.[0] ?? "";
+    expect(head).toContain("position: sticky");
+    expect(head).toMatch(/z-index:\s*1;/);
+    expect(head).not.toContain("var(--z-bar)");
+    const mapped = css.match(/\.kbc-rdiff__body--mapped \.kbc-rdiff__section-head \{[^}]+\}/)?.[0] ?? "";
+    expect(mapped).toMatch(/top:\s*0;/);
+    expect(mapped).not.toContain("var(--topbar-h)");
+  });
+
+  it("hunk strip stacks above the section-head and has scroll-margin below the sticky chrome", () => {
+    const css = readFileSync(fileURLToPath(new URL("../styles/reviews.css", import.meta.url)), "utf-8");
+    const head = css.match(/\.kbc-rdiff__section-head \{[^}]+\}/)?.[0] ?? "";
+    const strip = css.match(/\.kbc-hunkstrip \{[^}]+\}/)?.[0] ?? "";
+    const headZ = Number((head.match(/z-index:\s*(\d+)/) ?? [])[1]);
+    const stripZ = Number((strip.match(/z-index:\s*(\d+)/) ?? [])[1]);
+    expect(headZ).toBeGreaterThan(0);
+    expect(stripZ).toBeGreaterThan(headZ);
+    expect(strip).toContain("position: relative");
+    expect(strip).toContain("scroll-margin-top:");
+    expect(css).toMatch(/\.kbc-rdiff__section \{[^}]*isolation:\s*isolate;/);
+  });
+
+  it("both viewed controls stay on the header and the strip (operator ruling)", () => {
+    const section = readFileSync(
+      fileURLToPath(new URL("../routes/reviewDiff/DiffSections.tsx", import.meta.url)),
+      "utf-8",
+    );
+    const center = readFileSync(
+      fileURLToPath(new URL("../routes/reviewDiff/ReviewDiffCenter.tsx", import.meta.url)),
+      "utf-8",
+    );
+    const strip = readFileSync(fileURLToPath(new URL("../components/diff/HunkStrip.tsx", import.meta.url)), "utf-8");
+    expect(section).toContain("data-kbc-review-viewed={file.path}");
+    expect(center).toContain("data-kbc-review-viewed={file.path}");
+    expect(strip).toContain("data-kbc-hunk-viewed-toggle={view.id}");
+    expect(section).toContain('className="kbc-rdiff__section-head"');
+    expect(strip).toContain("kbc-hunkstrip__viewed");
   });
 
   it("ReviewMapSplit panels overflow:visible so the page, not the panel, scrolls", () => {
