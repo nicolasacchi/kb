@@ -94,6 +94,7 @@ pub struct LintRow {
     /// The nearest things the author might have meant. Never a fix that is
     /// applied for them — a suggestion, in their own vocabulary.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     #[cfg_attr(feature = "ts-export", ts(as = "Option<Vec<String>>", optional))]
     pub candidates: Vec<String>,
 }
