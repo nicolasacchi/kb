@@ -24,8 +24,6 @@ import { toast } from "../../lib/toast";
 import SuggestionEditor from "./SuggestionEditor";
 import SafeMarkdown from "../SafeMarkdown";
 import HighlightedSnippet from "../HighlightedSnippet";
-import { offsetHighlightSpans, padSnippetLines, wireSpansToLineMap } from "../../lib/paintSpans";
-import type { DiffHighlights } from "../../lib/diffHighlight";
 import { ApplySuggestionPreview, SuggestionDiffPanel } from "./SuggestionDiff";
 
 /// Session-wide latch: one 404 from apply hides the button on every
@@ -418,9 +416,6 @@ function SuggestionBlock({
 }) {
   const confirm = useConfirm();
   const suggestion = thread.suggestion;
-  const orig = suggestion?.original ?? "";
-  const repl = suggestion?.replacement ?? "";
-  const start = thread.resolution.line ?? 1;
   // V76-R2c — the saved suggestion renders through SuggestionDiffPanel
   // (two verbatim rows, token marks); server-span painting of those rows
   // is the V76-R2c.4 follow-up on useHighlight.
