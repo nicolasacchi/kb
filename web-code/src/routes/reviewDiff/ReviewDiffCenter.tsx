@@ -13,7 +13,8 @@ import ReviewMapColumn from "../../components/reviews/ReviewMapColumn";
 import ReviewMapSplit, { type ReviewMapSplitHandle } from "../../components/reviews/ReviewMapSplit";
 import type { ReviewFileTreeHandle } from "../../components/reviews/ReviewFileTree";
 import PseudoFileView from "../../components/reviews/PseudoFileView";
-import { reduceDiffKeys, type DiffKeysState } from "../../lib/diffKeys";
+import { fileCollapse } from "../../lib/collapseOnTick";
+import { type DiffKeysState } from "../../lib/diffKeys";
 import type { MapChapter, MapRowState } from "../../lib/reviewMapColumn";
 import type { OverlayMode } from "../../lib/diffFindings";
 import { pseudoNameFromPath } from "../../lib/pseudoFiles";
@@ -34,8 +35,6 @@ export interface ReviewDiffCenterProps {
   ordered: ReviewFileRow[];
   paths: string[];
   keys: DiffKeysState;
-  setKeys: (fn: (s: DiffKeysState) => DiffKeysState) => void;
-  hunkCounts: number[];
   cursorPath: string;
   cursorIdx: number;
   hasPrev: boolean;
@@ -54,6 +53,8 @@ export interface ReviewDiffCenterProps {
   onSetMapOpen: (next: boolean) => void;
   onSetParam: (key: string, value: string | null) => void;
   onToggleViewed: (file: ReviewFileRow) => Promise<void>;
+  onToggleFileSection: (path: string, viewed: boolean, collapsed: boolean) => void;
+  expandedFiles: ReadonlySet<string>;
   composeFor: (path: string) => { side: DiffSide; line: number; token?: number } | null;
   v2For: (path: string) => DiffV2Api;
   withQuery: (href: string) => string;
@@ -80,8 +81,6 @@ export default function ReviewDiffCenter({
   ordered,
   paths,
   keys,
-  setKeys,
-  hunkCounts,
   cursorPath,
   cursorIdx,
   hasPrev,
@@ -100,6 +99,8 @@ export default function ReviewDiffCenter({
   onSetMapOpen: setMapOpen,
   onSetParam: setParam,
   onToggleViewed: toggleViewed,
+  onToggleFileSection,
+  expandedFiles,
   composeFor,
   v2For,
   withQuery,
@@ -234,7 +235,14 @@ export default function ReviewDiffCenter({
             </footer>
           </>
         ) : (
-          ordered.map((file) => (
+          ordered.map((file) => {
+            const viewed = !!(file.viewed && !file.viewed_stale);
+            const fc = fileCollapse({
+              viewed,
+              userCollapsed: keys.collapsed.has(file.path),
+              expanded: expandedFiles.has(file.path),
+            });
+            return (
             <LazyDiffSection
               key={file.path}
               repo={repo}
@@ -248,22 +256,18 @@ export default function ReviewDiffCenter({
               flashThreadId={flashThreadId}
               overlay={overlay}
               githubThreads={githubThreads}
-              collapsed={keys.collapsed.has(file.path)}
+              collapsed={fc.collapsed}
+              collapsedBy={fc.collapsedBy}
               current={file.path === cursorPath}
-              checked={!!(file.viewed && !file.viewed_stale)}
+              checked={viewed}
               focusHref={withQuery(reviewDiffHref(repo, id, file.path))}
               onHunks={onHunks}
               onToggleViewed={(f) => void toggleViewed(f)}
-              onToggleCollapse={() => {
-                const idx = paths.indexOf(file.path);
-                setKeys((s) => {
-                  const at = idx >= 0 ? reduceDiffKeys(s, { type: "gotoFile", fileIdx: idx }, hunkCounts) : s;
-                  return reduceDiffKeys(at, { type: "toggleCollapse" }, hunkCounts);
-                });
-              }}
+              onToggleCollapse={() => onToggleFileSection(file.path, viewed, fc.collapsed)}
               v2={v2For(file.path)}
             />
-          ))
+            );
+          })
         )}
         </div>
   );
