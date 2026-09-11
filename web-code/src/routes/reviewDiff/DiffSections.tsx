@@ -30,12 +30,13 @@ import { githubThreadVisibleInOverlay, type OverlayMode } from "../../lib/diffFi
 import { githubOrphansForPath, indexGithubThreadsByLine } from "../../lib/githubThreads";
 import { impactChipText, topChangedSymbol } from "../../lib/reviewImpact";
 import { codeUrl, type DiffCtxDial } from "../../lib/codeUrl";
-import { hunkCollapse } from "../../lib/collapseOnTick";
+import { deepLinkExpands, hunkCollapse } from "../../lib/collapseOnTick";
 import {
   hunkHasThreads,
   hunkId,
   hunkStats,
   hunkNewSpan,
+  hunkOldSpan,
   hunkThreadCount,
   type HunkThreadRef,
 } from "../../lib/diffHunks";
@@ -73,6 +74,12 @@ export interface DiffV2Api {
   hunkViewed: ReadonlySet<string>;
   /// V76-R2c — viewed-but-expanded hunk ids (`?hexpanded=`).
   expandedHunks: ReadonlySet<string>;
+  /// V76-R2c round 2 — the file / line a `?line=` / `?hunk=` deep-link
+  /// names. The matching hunk treats this as an implicit `?hexpanded=`
+  /// override so the flash row is mounted.
+  deepLinkFile: string | null;
+  deepLinkLine: number | null;
+  deepLinkSide: "old" | "new" | null;
   /// Operator folds, keyed by hunk id so a fold survives a re-render, a
   /// patchset switch that carries the hunk forward, and a layout toggle.
   folded: ReadonlySet<string>;
@@ -207,11 +214,23 @@ export function FileDiffBody({
       const byNoise = noiseCollapses(v2.noiseMode, noise);
       const folded = v2.folded.has(id);
       const viewed = v2.hunkViewed.has(id);
+      const deepSpan =
+        v2.deepLinkSide === "old"
+          ? hunkOldSpan(hunk)
+          : v2.deepLinkSide === "new"
+            ? hunkNewSpan(hunk)
+            : null;
+      const isDeepLinkHunk =
+        v2.deepLinkFile === path &&
+        v2.deepLinkLine != null &&
+        deepSpan != null &&
+        v2.deepLinkLine >= deepSpan.start &&
+        v2.deepLinkLine <= deepSpan.end;
       const collapse = hunkCollapse({
         viewed,
         folded,
         byNoise,
-        expanded: v2.expandedHunks.has(id),
+        expanded: deepLinkExpands(v2.expandedHunks.has(id), isDeepLinkHunk),
       });
       const expanded = expandHunk(hunk, contentLines, combineExpand(v2.ctx, v2.expand.get(id)));
       const span = hunkNewSpan(hunk);
@@ -388,6 +407,7 @@ export function LazyDiffSection({
   overlay,
   githubThreads,
   v2,
+  eager,
 }: {
   repo: string;
   reviewId: number;
@@ -409,6 +429,9 @@ export function LazyDiffSection({
   overlay?: OverlayMode;
   githubThreads?: GithubThread[];
   v2?: DiffV2Api | null;
+  /// Mount the body without waiting for IntersectionObserver — used for a
+  /// deep-link target so the flash row exists as soon as the diff loads.
+  eager?: boolean;
 }) {
   const { ref, inView } = useInViewOnce();
   return (
@@ -450,7 +473,7 @@ export function LazyDiffSection({
       </header>
       {!collapsed && (
         <div className="kbc-rdiff__section-body">
-          {inView ? (
+          {inView || eager ? (
             <FileDiffBody
               repo={repo}
               reviewId={reviewId}

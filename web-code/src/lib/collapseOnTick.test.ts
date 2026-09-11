@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  deepLinkExpands,
+  deepLinkFileTarget,
   emptyCollapseTick,
   fileCollapse,
   formatExpandedParam,
@@ -7,6 +9,7 @@ import {
   parseExpandedParam,
   reduceCollapseTick,
   toggleSectionCollapse,
+  withDeepLinkTarget,
 } from "./collapseOnTick";
 
 describe("hunkCollapse", () => {
@@ -155,5 +158,82 @@ describe("expanded URL param", () => {
 
   it("keeps a broken percent-encoding rather than throwing", () => {
     expect(parseExpandedParam("%zz")).toEqual(["%zz"]);
+  });
+});
+
+describe("deep-link expand override", () => {
+  it("deep-link target ⇒ that section is expanded even when viewed", () => {
+    const fromUrl = parseExpandedParam(null);
+    const file = "feature_x.rs";
+    const merged = withDeepLinkTarget(fromUrl, file);
+    // Same URL grammar `?expanded=` already uses (formatExpandedParam).
+    expect(formatExpandedParam(merged)).toBe("feature_x.rs");
+    expect(deepLinkExpands(fromUrl.includes(file), merged.includes(file))).toBe(true);
+    expect(
+      fileCollapse({
+        viewed: true,
+        userCollapsed: false,
+        expanded: deepLinkExpands(false, true),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+    expect(
+      hunkCollapse({
+        viewed: true,
+        folded: false,
+        byNoise: false,
+        expanded: deepLinkExpands(false, true),
+      }),
+    ).toEqual({ collapsed: false, collapsedBy: null });
+  });
+
+  it("does not expand a viewed section that is not the target", () => {
+    expect(deepLinkExpands(false, false)).toBe(false);
+    expect(
+      fileCollapse({ viewed: true, userCollapsed: false, expanded: deepLinkExpands(false, false) }),
+    ).toEqual({ collapsed: true, collapsedBy: "viewed" });
+  });
+
+  it("?line=&file= names that file; a bare ?file= scroll hint does not", () => {
+    expect(
+      deepLinkFileTarget({
+        line: 1,
+        side: "new",
+        fileHint: "feature_x.rs",
+        focusPath: "",
+        hunkParam: null,
+        threadPath: null,
+        findingPath: null,
+      }),
+    ).toBe("feature_x.rs");
+    expect(
+      deepLinkFileTarget({
+        line: null,
+        side: null,
+        fileHint: "feature_x.rs",
+        focusPath: "",
+        hunkParam: null,
+        threadPath: null,
+        findingPath: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("thread / finding path fills in when ?file= is absent", () => {
+    expect(
+      deepLinkFileTarget({
+        line: null,
+        side: null,
+        fileHint: "",
+        focusPath: "",
+        hunkParam: null,
+        threadPath: "src/a.ts",
+        findingPath: null,
+      }),
+    ).toBe("src/a.ts");
+  });
+
+  it("withDeepLinkTarget is a no-op on empty / already-present", () => {
+    expect(withDeepLinkTarget([], null)).toEqual([]);
+    expect(withDeepLinkTarget(["a.ts"], "a.ts")).toEqual(["a.ts"]);
   });
 });
