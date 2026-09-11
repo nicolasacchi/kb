@@ -886,9 +886,7 @@ fn repo_writable(path: &Path) -> bool {
 /// V70-A8 — linked-worktree detection for [`RepoListEntry::is_worktree`].
 /// See that field's doc.
 fn repo_is_worktree(path: &Path) -> bool {
-    std::fs::metadata(path.join(".git"))
-        .map(|m| m.is_file())
-        .unwrap_or(false)
+    crate::worktrees::is_linked(path)
 }
 
 /// One [`RepoListEntry`] — split out of [`repos`] so the whole per-repo

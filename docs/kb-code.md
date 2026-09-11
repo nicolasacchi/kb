@@ -3224,13 +3224,54 @@ identity is unresolved. What `pending` tells you is that
 `GET /api/workspaces` may be EMPTY because resolution has not finished,
 which is a different statement from "there are no workspaces".
 
-### Not in this unit
+### Worktree lifecycle (v7.6, V76-R3b)
 
-The worktree LIFECYCLE verbs (`create`/`lock`/`unlock`/`repair`/`prune`),
-the branch views, the reader's `@ref` chip and compare mode, and the
-transcript scrubber are each their own unit. Nothing here mutates a
-worktree; `checkout.rs`'s loopback-only working-tree lane is untouched and
-remains the only place this daemon changes a checkout.
+One oracle: `worktrees::classify(path)` → `{workspace_id, worktree_id,
+kind: main|linked|bare|not-a-repo, common_dir, admin_dir}`. `GET
+/api/repos` `is_worktree` and `entity_defs.worktree` go through it;
+`GitRepo::is_worktree` stays the gix primitive (`git_dir != common_dir`)
+and a fixture with a main checkout, two linked worktrees (one moved), a
+bare repo and a plain directory pins that they agree. The `worktrees`
+table is fed from it.
+
+Lifecycle verbs JOIN `checkout.rs`'s loopback-only working-tree lane
+(never a bearer mutation). The daemon never provisions a worktree on
+behalf of an agent beyond these verbs, and it never spawns anything but
+git.
+
+| verb | HTTP | git |
+| --- | --- | --- |
+| create | `POST /api/worktrees` `{workspace_id, branch\|new_branch, path}` | `git worktree add` — path must sit under a configured `[[repos]]` root or as a sibling of one; anything else is refused **by name** |
+| lock / unlock | `POST /api/worktrees/{id}/lock` `{reason}` / `…/unlock` | `git worktree lock --reason=… -- <path>` / `unlock` |
+| repair | `POST /api/worktrees/{id}/repair` optional `{path}` | `git worktree repair -- <path>` |
+| prune | `POST /api/worktrees/prune?dry_run=1` (default dry-run) | `git worktree prune [--dry-run]` — lists prunable with git's reason |
+| rm | `DELETE /api/worktrees/{id}` `{confirm: "<id>", preview_seen: true}` | `git worktree remove -- <path>` **only** when `created_by_daemon`; otherwise 403 naming the manual command |
+| loss-preview | `GET /api/worktrees/{id}/loss-preview` | uncommitted files, unpushed commits, stashes — read this before `rm` |
+| readiness | `GET /api/worktrees/{id}/readiness` | detects, never fixes: missing `.git` link, stale admin dir, detached HEAD, lock without reason, branch behind upstream, uncommitted changes, mirror not yet indexed — each with the exact command to run |
+| list | `GET /api/worktrees` | the M1 table, plus `created_by_daemon` and a defensive lock-owner parse |
+
+Every git call uses `Revspec` for caller-supplied branches and `--` before
+a caller-supplied path. Mutations are recorded in the `mutations` audit
+ledger with a `before`/`after` body.
+
+CLI: `kb-code worktree {list,create,lock,unlock,repair,prune,rm,loss-preview,readiness}`
+with `--json`. Exit 4 is HTTP 401/403 (the crate's refused table); a
+loopback-only 404 is named as such rather than guessed into 4.
+
+**Owner oracle.** The lock-reason parse is `likely` at best. A parse
+failure renders `"locked — owner unknown"`. Holder × silence stay
+independent axes — lock age is not an input.
+
+**Inbox.** `GET /api/inbox` (`unified-inbox/1`) gains a `worktrees` lane
+(surfaced-never-scored): locked-without-reason, prunable, unreadiness, a
+linked worktree whose branch has an open review. When the workspace table
+is empty the lane degrades honestly (`available: false, reason:
+"empty-table"`) rather than pretending there is nothing to see.
+
+Removal is only for worktrees the daemon recorded creating. An
+operator-created worktree is listed and lockable/repairable; deleting it
+is a command you run yourself.
+
 ## Branches — `branch-facts/1` (v7.5, Track M)
 
 The pre-v7.5 `GET /api/branches` (`branches/1`) is unchanged and still

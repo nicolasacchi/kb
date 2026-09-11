@@ -59,6 +59,11 @@ pub enum InboxSeenKey {
         id: String,
         updated_unix: i64,
     },
+    Worktree {
+        workspace_id: String,
+        worktree_id: String,
+        kind: String,
+    },
 }
 
 /// Which of the (up to) four lanes an [`InboxRow`] came from — drives
@@ -69,6 +74,7 @@ pub enum Lane {
     Annotation,
     KbDesk,
     KbComment,
+    Worktree,
 }
 
 /// One row plus its dedupe key and lane tag — the diffable unit
@@ -169,7 +175,27 @@ pub fn rows_from_body(body: &Value) -> Vec<InboxRow> {
     if let Some(items) = body["kb"]["comments"]["items"].as_array() {
         out.extend(items.iter().filter_map(kb_comment_row));
     }
+    if body["worktrees"]["available"].as_bool().unwrap_or(false) {
+        if let Some(items) = body["worktrees"]["items"].as_array() {
+            out.extend(items.iter().filter_map(worktree_row));
+        }
+    }
     out
+}
+
+fn worktree_row(row: &Value) -> Option<InboxRow> {
+    let workspace_id = row["workspace_id"].as_str()?.to_string();
+    let worktree_id = row["worktree_id"].as_str()?.to_string();
+    let kind = row["kind"].as_str()?.to_string();
+    Some(InboxRow {
+        lane: Lane::Worktree,
+        key: InboxSeenKey::Worktree {
+            workspace_id,
+            worktree_id,
+            kind,
+        },
+        value: row.clone(),
+    })
 }
 
 /// `body.kb.available` — `None` when the field itself is absent/non-bool
@@ -220,6 +246,7 @@ impl InboxSeenKey {
             | InboxSeenKey::Annotation { updated_at, .. }
             | InboxSeenKey::KbComment { updated_at, .. } => *updated_at,
             InboxSeenKey::KbDesk { updated_unix, .. } => *updated_unix,
+            InboxSeenKey::Worktree { .. } => 0,
         }
     }
 }
@@ -321,7 +348,18 @@ pub fn format_row(row: &InboxRow) -> String {
         Lane::Annotation => format_annotation_row(&row.value),
         Lane::KbDesk => format_kb_desk_row(&row.value),
         Lane::KbComment => format_kb_comment_row(&row.value),
+        Lane::Worktree => format_worktree_row(&row.value),
     }
+}
+
+fn format_worktree_row(row: &Value) -> String {
+    format!(
+        "worktree {:<16} {:<20} {:<22} {}",
+        row["workspace_id"].as_str().unwrap_or("?"),
+        row["worktree_id"].as_str().unwrap_or("?"),
+        row["kind"].as_str().unwrap_or("?"),
+        row["summary"].as_str().unwrap_or(""),
+    )
 }
 
 /// Full one-shot human render: three headered lane sections. The kb
@@ -404,6 +442,32 @@ pub fn format_body_human(body: &Value) -> String {
             out.push_str(&format!("  unavailable ({reason})\n"));
         }
         None => out.push_str("  (no kb lane in response)\n"),
+    }
+
+    out.push_str("\nWorktrees\n");
+    match body["worktrees"]["available"].as_bool() {
+        Some(true) => {
+            let items = body["worktrees"]["items"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let truncated = body["worktrees"]["truncated"].as_bool().unwrap_or(false);
+            out.push_str(&format!(
+                "  items={}{}\n",
+                items.len(),
+                if truncated { " (truncated)" } else { "" },
+            ));
+            for w in &items {
+                out.push_str("    ");
+                out.push_str(&format_worktree_row(w));
+                out.push('\n');
+            }
+        }
+        Some(false) => {
+            let reason = body["worktrees"]["reason"].as_str().unwrap_or("unknown");
+            out.push_str(&format!("  unavailable ({reason})\n"));
+        }
+        None => out.push_str("  (no worktrees lane in response)\n"),
     }
 
     out
@@ -768,6 +832,19 @@ mod tests {
                     "total_open": 7,
                 },
             },
+            "worktrees": {
+                "available": true,
+                "reason": null,
+                "items": [{
+                    "kind": "locked-without-reason",
+                    "workspace_id": "ws_acme",
+                    "worktree_id": "feature",
+                    "path": "/repos/acme-app-feature",
+                    "summary": "locked — owner unknown",
+                    "command": "git worktree lock --reason=\"<why>\" -- /repos/acme-app-feature"
+                }],
+                "truncated": false,
+            },
         })
     }
 
@@ -857,14 +934,15 @@ mod tests {
     fn rows_from_body_flattens_all_four_lanes_in_order() {
         let body = full_body_available();
         let rows = rows_from_body(&body);
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 5);
         assert_eq!(
             rows.iter().map(|r| r.lane).collect::<Vec<_>>(),
             vec![
                 Lane::Review,
                 Lane::Annotation,
                 Lane::KbDesk,
-                Lane::KbComment
+                Lane::KbComment,
+                Lane::Worktree,
             ]
         );
     }
@@ -907,7 +985,7 @@ mod tests {
         let mut seen = HashSet::new();
         let rows = rows_from_body(&full_body_available());
         let first = take_new(&mut seen, &rows);
-        assert_eq!(first.len(), 4);
+        assert_eq!(first.len(), 5);
         let second = take_new(&mut seen, &rows);
         assert!(second.is_empty(), "unchanged rows must not re-surface");
     }
@@ -946,7 +1024,8 @@ mod tests {
         let mut seen = HashSet::new();
         let rows = rows_from_body(&full_body_available());
         seed_seen(&mut seen, &rows);
-        assert_eq!(seen.len(), 4);
+        // V76-R3b — the fixture's worktrees lane adds a fifth row.
+        assert_eq!(seen.len(), 5);
         // A subsequent take_new over the SAME rows now sees nothing new.
         assert!(take_new(&mut seen, &rows).is_empty());
     }
@@ -965,8 +1044,9 @@ mod tests {
         );
         assert!(surfaced.iter().all(|r| r.key.timestamp() >= 3000));
         // Every row is still seeded regardless — a later identical refetch
-        // sees nothing new.
-        assert_eq!(seen.len(), 4);
+        // sees nothing new (V76-R3b: five rows incl. the worktree row,
+        // whose timestamp is 0 so it never qualifies for the window).
+        assert_eq!(seen.len(), 5);
         assert!(take_new(&mut seen, &rows).is_empty());
     }
 
@@ -982,7 +1062,8 @@ mod tests {
         let mut seen = HashSet::new();
         let rows = rows_from_body(&full_body_available());
         let surfaced = seed_seen_since(&mut seen, &rows, true, Some(999_999));
-        assert_eq!(surfaced.len(), 4);
+        // V76-R3b — backlog surfaces the worktree row too.
+        assert_eq!(surfaced.len(), 5);
     }
 
     #[test]
@@ -1065,11 +1146,12 @@ mod tests {
     fn format_row_dispatches_by_lane() {
         let rows = rows_from_body(&full_body_available());
         let rendered: Vec<String> = rows.iter().map(format_row).collect();
-        assert_eq!(rendered.len(), 4);
+        assert_eq!(rendered.len(), 5);
         assert!(rendered[0].starts_with("review"));
         assert!(rendered[1].starts_with("annotation"));
         assert!(rendered[2].starts_with("desk"));
         assert!(rendered[3].starts_with("comment"));
+        assert!(rendered[4].starts_with("worktree"));
     }
 
     #[test]
@@ -1080,6 +1162,8 @@ mod tests {
         assert!(out.contains("From kb"));
         assert!(out.contains("attention=3"));
         assert!(out.contains("total_open=7"));
+        assert!(out.contains("Worktrees"));
+        assert!(out.contains("locked-without-reason"));
     }
 
     #[test]

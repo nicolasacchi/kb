@@ -1,7 +1,7 @@
 //! S2-A ("One Inbox," kb-code v6.0, design doc `/tmp/design-s2.md` § S2-A)
-//! — `GET /api/inbox`: a federated, THREE-LANE attention queue composing
-//! kb-code's own two review/annotation lanes with a live, degrade-honest
-//! pull from kb. Never a merged cross-lane score (surfaced-never-scored,
+//! — `GET /api/inbox`: a federated attention queue composing
+//! kb-code's own review/annotation lanes with a live, degrade-honest
+//! pull from kb, plus V76-R3b's worktrees lane. Never a merged cross-lane score (surfaced-never-scored,
 //! same law `review_inbox`'s own doc names for ITS score): the lanes have
 //! incommensurable units, so each keeps its own source ordering and the
 //! response is a plain three-way JSON split, `unified-inbox/1`.
@@ -121,6 +121,14 @@ pub async fn unified_inbox_route(
     // --- kb lane — two concurrent federated pulls, honest degrade. -------
     let kb = compose_kb_lane(&state).await;
 
+    // --- worktrees lane (V76-R3b). Surfaced-never-scored; degrades
+    // honestly when the workspace table is empty. -----------------------
+    let state_wt = state.clone();
+    let worktrees = state
+        .store
+        .run_blocking(move |_store| crate::worktrees::compose_inbox_lane(&state_wt))
+        .await;
+
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -128,6 +136,7 @@ pub async fn unified_inbox_route(
             "reviews": reviews,
             "annotations": annotations,
             "kb": kb,
+            "worktrees": worktrees,
         })),
     ))
 }
