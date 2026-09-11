@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   suggestionCaption,
   suggestionDiff,
+  suggestionRenderRows,
   tokenize,
   tokenDiff,
   TOKEN_DIFF_LINE_FALLBACK,
@@ -139,6 +140,29 @@ describe("suggestionDiff", () => {
     expect(view.linesChanged).toBe(0);
     expect(view.tokensChanged).toBe(0);
     expect(view.caption).toBe("identical");
+  });
+
+  it("a rendered NEW row's text equals the replacement line exactly", () => {
+    const original = "e2e-suggest-target-line";
+    const replacement = "e2e-suggest-replacement-a";
+    const view = suggestionDiff(original, replacement);
+    const rows = view.lines.flatMap(suggestionRenderRows);
+    const oldRow = rows.find((r) => r.side === "old");
+    const newRow = rows.find((r) => r.side === "new");
+    expect(oldRow?.text).toBe(original);
+    expect(newRow?.text).toBe(replacement);
+    expect(oldRow?.ops.map((o) => o.text).join("")).toBe(original);
+    expect(newRow?.ops.map((o) => o.text).join("")).toBe(replacement);
+  });
+
+  it("a trailing suffix still paints two verbatim rows", () => {
+    const original = "e2e-r2c-target-line";
+    const replacement = "e2e-r2c-target-line #changed";
+    const view = suggestionDiff(original, replacement);
+    const rows = view.lines.flatMap(suggestionRenderRows);
+    expect(rows.find((r) => r.side === "old")?.text).toBe(original);
+    expect(rows.find((r) => r.side === "new")?.text).toBe(replacement);
+    expect(view.caption).toContain("tokens");
   });
 
   it("large suggestions fall back to line-level", () => {

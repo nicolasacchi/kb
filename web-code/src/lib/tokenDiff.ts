@@ -48,6 +48,61 @@ export interface SuggestionDiffLine {
   trailing: boolean;
 }
 
+/// One painted row of a suggestion preview. A `replace` line becomes TWO
+/// rows (old then new) so each row's text is the full line verbatim —
+/// word-diff over full lines, never a spliced line.
+export type SuggestionRenderSide = "eq" | "old" | "new";
+
+export interface SuggestionRenderRow {
+  side: SuggestionRenderSide;
+  text: string;
+  ops: TokenOp[];
+  trailing: boolean;
+}
+
+/// Split a logical suggestion line into the rows the preview paints.
+/// Old rows keep eq+del tokens; new rows keep eq+add tokens; `ops`
+/// concatenated equal `text`.
+export function suggestionRenderRows(line: SuggestionDiffLine): SuggestionRenderRow[] {
+  if (line.kind === "eq") {
+    const text = line.newText ?? line.oldText ?? "";
+    return [
+      {
+        side: "eq",
+        text,
+        ops: line.ops.filter((o) => o.kind === "eq"),
+        trailing: false,
+      },
+    ];
+  }
+  if (line.kind === "add") {
+    const text = line.newText ?? "";
+    const ops = line.ops.filter((o) => o.kind !== "del");
+    return [{ side: "new", text, ops, trailing: ops.some((o) => o.trailing) }];
+  }
+  if (line.kind === "del") {
+    const text = line.oldText ?? "";
+    const ops = line.ops.filter((o) => o.kind !== "add");
+    return [{ side: "old", text, ops, trailing: ops.some((o) => o.trailing) }];
+  }
+  const oldOps = line.ops.filter((o) => o.kind !== "add");
+  const newOps = line.ops.filter((o) => o.kind !== "del");
+  return [
+    {
+      side: "old",
+      text: line.oldText ?? "",
+      ops: oldOps,
+      trailing: oldOps.some((o) => o.trailing),
+    },
+    {
+      side: "new",
+      text: line.newText ?? "",
+      ops: newOps,
+      trailing: newOps.some((o) => o.trailing),
+    },
+  ];
+}
+
 export type SuggestionDiffMode = "token" | "line";
 
 export interface SuggestionDiffView {

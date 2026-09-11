@@ -162,3 +162,52 @@ export function formatExpandedParam(ids: readonly string[]): string | null {
   if (ids.length === 0) return null;
   return [...ids].sort().map((id) => encodeURIComponent(id)).join(",");
 }
+
+/// A deep-link (`?line=` / `?thread=` / `?hunk=` / `?finding=`) is an
+/// implicit `?expanded=` / `?hexpanded=` override for THAT section — same
+/// boolean `fileCollapse` / `hunkCollapse` already read, no new query
+/// param. `explicit` is membership in the parsed URL set.
+export function deepLinkExpands(explicit: boolean, isTarget: boolean): boolean {
+  return explicit || isTarget;
+}
+
+/// Merge a deep-link target id into an `?expanded=` / `?hexpanded=` list
+/// so callers can feed the SAME grammar `formatExpandedParam` already
+/// serialises (appended LAST by `reviewDiffHref`). Empty / null target is
+/// a no-op. Malformed ids are not rejected here — the parsers above are
+/// the TOTAL gate.
+export function withDeepLinkTarget(
+  expanded: readonly string[],
+  target: string | null | undefined,
+): string[] {
+  if (target == null || target === "") return [...expanded];
+  if (expanded.includes(target)) return [...expanded];
+  return [...expanded, target];
+}
+
+export interface DeepLinkFileInput {
+  line: number | null;
+  side: "old" | "new" | null;
+  fileHint: string;
+  focusPath: string;
+  hunkParam: string | null;
+  threadPath: string | null;
+  findingPath: string | null;
+}
+
+/// Which FILE a deep-link names. `?file=` / the single-file splat win when
+/// a line / side / hunk / thread / finding target is present; otherwise
+/// the thread or finding's own path. No target ⇒ `null` (a bare `?file=`
+/// scroll hint is not an expand override).
+export function deepLinkFileTarget(input: DeepLinkFileInput): string | null {
+  const hasTarget =
+    input.line != null ||
+    input.side != null ||
+    Boolean(input.hunkParam) ||
+    input.threadPath != null ||
+    input.findingPath != null;
+  if (!hasTarget) return null;
+  if (input.focusPath !== "") return input.focusPath;
+  if (input.fileHint !== "") return input.fileHint;
+  return input.threadPath ?? input.findingPath ?? null;
+}
