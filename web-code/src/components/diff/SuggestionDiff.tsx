@@ -4,76 +4,99 @@
 // card share this view. The CM6 suggestion EDITOR (edit mode) does not —
 // it is untouched and still paints via UnifiedHunks.
 //
-// TODO(V76-C1): when `hooks/useHighlight.ts` lands, paint old/new text with
-// server spans here. useHighlight.ts is absent on this base; do not invent
-// a C1 hook.
+// Syntax paint: one `useHighlight` batch (`id: "old"` / `id: "new"`,
+// `lang: null`, `path` from the thread) composed with token marks in
+// `lib/suggestionPaint.ts`. Never blocks the diff on the paint.
 
 import { useMemo } from "react";
 import type { ReviewComment } from "../../api/types";
 import { useFile } from "../../hooks/useFile";
+import { useHighlight } from "../../hooks/useHighlight";
 import { sliceAnchoredLines, splitSuggestionLines } from "../../lib/suggestions";
 import {
-  suggestionDiff,
-  suggestionRenderRows,
-  type SuggestionDiffLine,
-  type TokenOp,
-} from "../../lib/tokenDiff";
+  composePaintedRows,
+  suggestionHighlightItems,
+  type ComposedSeg,
+} from "../../lib/suggestionPaint";
 
 export function SuggestionDiffPanel({
   original,
   replacement,
+  path,
 }: {
   original: string;
   replacement: string;
+  path?: string;
 }) {
-  const view = useMemo(() => suggestionDiff(original, replacement), [original, replacement]);
+  const items = useMemo(
+    () => suggestionHighlightItems(original, replacement, path),
+    [original, replacement, path],
+  );
+  const { byId } = useHighlight(items);
+  const oldResult = byId.get("old");
+  const newResult = byId.get("new");
+  const composed = useMemo(
+    () => composePaintedRows(original, replacement, oldResult, newResult),
+    [original, replacement, oldResult, newResult],
+  );
+  const none = items.some((it) => byId.get(it.id)?.tier === "none");
+  const pending = items.some((it) => !byId.has(it.id));
+  const panelTier = pending
+    ? "pending"
+    : none
+      ? "none"
+      : (oldResult?.tier ?? newResult?.tier ?? "pending");
+
   return (
-    <div className="kbc-sugdiff" data-kbc-sugdiff data-kbc-sugdiff-mode={view.mode}>
+    <div
+      className="kbc-sugdiff"
+      data-kbc-sugdiff
+      data-kbc-sugdiff-mode={composed.mode}
+      data-kbc-hl-tier={panelTier}
+    >
       <p className="kbc-sugdiff__caption" data-kbc-sugdiff-caption>
-        {view.caption}
+        {composed.caption}
       </p>
       <div className="kbc-sugdiff__body">
-        {view.lines.map((line, i) => (
-          <SuggestionLineRow key={i} line={line} />
+        {composed.rows.map((row, i) => (
+          <div
+            key={i}
+            className={`kbc-sugdiff__line kbc-sugdiff__line--${row.side}`}
+            data-kbc-sugdiff-line={row.side}
+            data-kbc-sugdiff-trailing={row.trailing ? "1" : "0"}
+            data-kbc-hl-tier={row.tier}
+          >
+            <span className="kbc-sugdiff__gutter" aria-hidden>
+              {row.side === "new" ? "+" : row.side === "old" ? "−" : " "}
+            </span>
+            <span className="kbc-sugdiff__text">
+              {row.segs.map((seg, j) => (
+                <TokenSpan key={j} seg={seg} />
+              ))}
+            </span>
+          </div>
         ))}
       </div>
+      {none && (
+        <span className="kbc-hl-no-grammar" data-kbc-hl-no-grammar>
+          {oldResult?.honesty.reason ?? newResult?.honesty.reason ?? "no grammar"}
+        </span>
+      )}
     </div>
   );
 }
 
-function SuggestionLineRow({ line }: { line: SuggestionDiffLine }) {
-  const rows = suggestionRenderRows(line);
-  return (
-    <>
-      {rows.map((row, i) => (
-        <div
-          key={i}
-          className={`kbc-sugdiff__line kbc-sugdiff__line--${row.side}`}
-          data-kbc-sugdiff-line={row.side}
-          data-kbc-sugdiff-trailing={row.trailing ? "1" : "0"}
-        >
-          <span className="kbc-sugdiff__gutter" aria-hidden>
-            {row.side === "new" ? "+" : row.side === "old" ? "−" : " "}
-          </span>
-          <span className="kbc-sugdiff__text">
-            {row.ops.map((op, j) => (
-              <TokenSpan key={j} op={op} />
-            ))}
-          </span>
-        </div>
-      ))}
-    </>
-  );
-}
-
-function TokenSpan({ op }: { op: TokenOp }) {
+function TokenSpan({ seg }: { seg: ComposedSeg }) {
+  const cls = ["kbc-sugdiff__tok", `kbc-sugdiff__tok--${seg.tokKind}`];
+  if (seg.hlCls) cls.push(seg.hlCls);
   return (
     <span
-      className={`kbc-sugdiff__tok kbc-sugdiff__tok--${op.kind}`}
-      data-kbc-sugdiff-tok={op.kind}
-      data-kbc-sugdiff-trailing={op.trailing ? "1" : "0"}
+      className={cls.join(" ")}
+      data-kbc-sugdiff-tok={seg.tokKind}
+      data-kbc-sugdiff-trailing={seg.trailing ? "1" : "0"}
+      {...(seg.hlCls ? { "data-kbc-hl": "" } : {})}
     >
-      {op.text === "" ? "\u00a0" : op.text}
+      {seg.text === "" ? "\u00a0" : seg.text}
     </span>
   );
 }
@@ -105,7 +128,11 @@ export function ApplySuggestionPreview({
     <div className="kbc-sugdiff-apply" data-kbc-suggestion-apply-preview>
       <p>Apply this suggestion to the working tree?</p>
       {suggestion && (
-        <SuggestionDiffPanel original={suggestion.original} replacement={suggestion.replacement} />
+        <SuggestionDiffPanel
+          original={suggestion.original}
+          replacement={suggestion.replacement}
+          path={thread.path}
+        />
       )}
       <p className="kbc-sugdiff-apply__blob" data-kbc-suggestion-blob={blobState}>
         target lines {blobState}
