@@ -101,6 +101,10 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "history/commit.rs",
     "history/compare.rs",
     "history/file_history.rs",
+    // V76-R3d — production code spawns nothing (`run_git_raw`); the only
+    // `Command::new("git")` is the `#[cfg(test)]` fixture helper aliased
+    // as `StdCommand` (the `file_history.rs` case). Pathspecs go after `--`.
+    "history/scrub.rs",
     "history/merge_check.rs",
     "history/mod.rs",
     // V75-M3's conflict radar. It spawns `git` directly for the same
@@ -244,6 +248,26 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
     assert!(
         fh.contains("\"--\""),
         "file_history must separate its pathspec with `--`"
+    );
+
+    // V76-R3d — `history/scrub.rs` takes a caller-supplied PATH into
+    // `git log --follow … -- <path>`. Production spawns go through
+    // `run_git_raw`; the pathspec rule is about ARGV.
+    let scrub = std::fs::read_to_string(src_root().join("history/scrub.rs")).unwrap();
+    let sep = scrub
+        .find("args.push(\"--\");")
+        .expect("file_stops separates its pathspec with `--`");
+    let path_push = scrub
+        .find("args.push(path);")
+        .expect("file_stops pushes the pathspec");
+    assert!(
+        sep < path_push,
+        "file_stops must push `--` BEFORE the pathspec"
+    );
+    let floor_src: String = scrub.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        floor_src.contains("\"--\",path]"),
+        "file_floor must place `--` immediately before its caller-supplied pathspec"
     );
 
     // V72-H4a — `lanes/git_behavior.rs` takes a caller-supplied PATH

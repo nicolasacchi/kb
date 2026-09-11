@@ -221,6 +221,14 @@
         "false"
       ],
       "note": "V74-L2 — a kbc-canvas/1 board is running its walkthrough (`?step=`). It splits the board's own key set in two PROVABLY DISJOINT halves (`!walkthrough` vs `walkthrough`), which is what lets `k` mean \"previous card\" while reading and \"previous step\" while walking without either row shadowing the other."
+    },
+    {
+      "key": "reader.scrub",
+      "values": [
+        "true",
+        "false"
+      ],
+      "note": "V76-R3d — the file-scoped time scrubber strip is open. Gates `[ H`/`] H` so they cannot shadow the mixed `[`/`]` prefix family when the strip is closed. Space H toggles this; Esc never navigates (D2)."
     }
   ],
   "scopes": [
@@ -4082,6 +4090,91 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "central"
+    },
+    {
+      "id": "reader.scrub-toggle",
+      "title": "Toggle the file time scrubber",
+      "aka": [
+        "scrubber",
+        "time scrubber",
+        "file history scrub"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [
+          "Space H"
+        ],
+        "plain": [
+          "Space H"
+        ],
+        "helix": [
+          "Space H"
+        ]
+      },
+      "scope": "global",
+      "when": "center == reader",
+      "cli": "kb-code stops",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3d. Space t is view.theme-cycle (vim/helix), so Space t s is a shadowed prefix — tours.test.ts's own rule. Space H is a free complete binding. The strip lives in the reader <main>, not a new landmark."
+    },
+    {
+      "id": "reader.scrub-prev",
+      "title": "Previous file stop (older)",
+      "aka": [
+        "scrub back",
+        "older stop"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [
+          "[ H"
+        ],
+        "plain": [
+          "[ H"
+        ],
+        "helix": [
+          "[ H"
+        ]
+      },
+      "scope": "reader",
+      "when": "reader.scrub",
+      "cli": "none:steps the in-browser file scrubber; the daemon has no cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3d. Bare [ would shadow the mixed-prefix family ([ d, [ c, [ f, …]). Lowercase h is move.left (vim-owned), so the step is capital H — same letter as the Space H toggle, not a vim motion. Gated on reader.scrub so the prefix is inert while the strip is closed. No vim_kind — the mixed-prefix precedent."
+    },
+    {
+      "id": "reader.scrub-next",
+      "title": "Next file stop (newer)",
+      "aka": [
+        "scrub forward",
+        "newer stop"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [
+          "] H"
+        ],
+        "plain": [
+          "] H"
+        ],
+        "helix": [
+          "] H"
+        ]
+      },
+      "scope": "reader",
+      "when": "reader.scrub",
+      "cli": "none:steps the in-browser file scrubber; the daemon has no cursor",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3d. Mirror of reader.scrub-prev. Esc is not bound (D2); the strip's working-tree button runs reader.ref-clear."
     },
     {
       "id": "diff.hunk-next",

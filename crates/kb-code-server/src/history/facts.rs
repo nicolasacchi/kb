@@ -632,39 +632,61 @@ pub struct AgentProvenance {
     pub session_id: Option<String>,
 }
 
-/// See the module doc. `agent_emails` is compared case-insensitively; a
-/// `Co-authored-by:` trailer is deliberately not an input at all.
-pub fn agent_provenance(raw: &RawRef, agent_emails: &[String]) -> AgentProvenance {
-    if let Some(v) = raw.kb_session_trailers.first() {
-        return AgentProvenance {
-            class: AgentClass::Exact,
-            via: "kb-session-trailer",
-            session_id: Some(v.clone()),
-        };
+/// D18's class ladder over one commit's author email + machine trailers.
+/// Same rule [`agent_provenance`] uses for a branch tip; V76-R3d's file
+/// scrubber applies it per stop. A `Co-authored-by:` trailer is
+/// deliberately not an input at all.
+pub fn agent_class_for(
+    author_email: &str,
+    kb_session_trailers: &[String],
+    kb_agent_trailers: &[String],
+    agent_emails: &[String],
+) -> AgentClass {
+    agent_provenance_parts(
+        author_email,
+        kb_session_trailers,
+        kb_agent_trailers,
+        agent_emails,
+    )
+    .0
+}
+
+fn agent_provenance_parts(
+    author_email: &str,
+    kb_session_trailers: &[String],
+    kb_agent_trailers: &[String],
+    agent_emails: &[String],
+) -> (AgentClass, &'static str, Option<String>) {
+    if let Some(v) = kb_session_trailers.first() {
+        return (AgentClass::Exact, "kb-session-trailer", Some(v.clone()));
     }
-    if let Some(v) = raw.kb_agent_trailers.first() {
-        return AgentProvenance {
-            class: AgentClass::Exact,
-            via: "kb-agent-trailer",
-            session_id: Some(v.clone()),
-        };
+    if let Some(v) = kb_agent_trailers.first() {
+        return (AgentClass::Exact, "kb-agent-trailer", Some(v.clone()));
     }
-    let email = raw.author_email.trim().to_ascii_lowercase();
+    let email = author_email.trim().to_ascii_lowercase();
     if !email.is_empty()
         && agent_emails
             .iter()
             .any(|e| e.trim().to_ascii_lowercase() == email)
     {
-        return AgentProvenance {
-            class: AgentClass::Likely,
-            via: "author-email",
-            session_id: None,
-        };
+        return (AgentClass::Likely, "author-email", None);
     }
+    (AgentClass::None, "no-evidence", None)
+}
+
+/// See the module doc. `agent_emails` is compared case-insensitively; a
+/// `Co-authored-by:` trailer is deliberately not an input at all.
+pub fn agent_provenance(raw: &RawRef, agent_emails: &[String]) -> AgentProvenance {
+    let (class, via, session_id) = agent_provenance_parts(
+        &raw.author_email,
+        &raw.kb_session_trailers,
+        &raw.kb_agent_trailers,
+        agent_emails,
+    );
     AgentProvenance {
-        class: AgentClass::None,
-        via: "no-evidence",
-        session_id: None,
+        class,
+        via,
+        session_id,
     }
 }
 

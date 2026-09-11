@@ -1184,6 +1184,51 @@ export interface FileHistoryResponse {
   truncated: boolean;
 }
 
+/// `scrub/1` stop row — `GET /api/file/stops` (V76-R3d). Newest-first.
+export type ScrubAuthorKind = "exact" | "likely" | "none";
+
+export interface ScrubStopOut {
+  sha: string;
+  when: number;
+  author_kind: ScrubAuthorKind;
+  subject: string;
+  insertions: number;
+  deletions: number;
+  path: string;
+  renamed_from?: string | null;
+}
+
+export interface ScrubFloorOut {
+  sha: string;
+  when: number;
+}
+
+export interface FileStopsResponse {
+  schema: string;
+  repo: string;
+  path: string;
+  stops: ScrubStopOut[];
+  total: number;
+  truncated: boolean;
+  floor: ScrubFloorOut | null;
+}
+
+export interface FileAtResponse {
+  schema: string;
+  repo: string;
+  path: string;
+  at: number;
+  resolution: "exact" | "nearest-prior";
+  stop: ScrubStopOut;
+  floor: ScrubFloorOut | null;
+  ref: string;
+  size: number;
+  blob_hash: string;
+  encoding: FileEncoding;
+  content: string;
+  frame?: FrameClaim;
+}
+
 // --- Resolve (B3 — position-based lookup, the peek's PRIMARY path) --------
 //
 // Mirrors `crates/kb-code-server/src/resolve.rs`, field-for-field (see the
