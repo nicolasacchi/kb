@@ -10,6 +10,9 @@ import { actChipClass, findingCites, findingTombstoneText } from "../../lib/revi
 import { relativeTime } from "../../lib/format";
 import { reviewDiffHref } from "./ReviewHeader";
 import DispositionMenu from "./DispositionMenu";
+// ── V76-R2a — severity/act/category chips with icons (mappings live in
+// `lib/reviewRoom.ts`, never in this component). ──
+import { ActChip, CategoryChip, SeverityChip } from "./RoomChips";
 // ── PRR-U56 (design-ui.md §2 S5 — publish preview) — the ephemeral
 // "mark for publish" toggle. Lives in the module store, not props, so it
 // slots into both `FindingCard` (Report tab) and `FindingRow` (side panel)
@@ -131,17 +134,20 @@ function SeverityMeta({ finding, showAgentMark = true }: { finding: ReviewFindin
   const author = findingAuthorDisplay(finding);
   return (
     <div className="kbc-finding__meta">
-      {/* findings v2 (V73-K2b, design D9) — `act` is the SPEECH-ACT axis
-          BESIDE severity, not a second severity: an issue and a question
-          about the same line at the same severity are different things to a
-          reader, and v1 could not say which was which. It orders nothing. */}
-      <span className={findingActClass(finding)} data-kbc-finding-act={findingAct(finding)}>
-        {findingAct(finding)}
+      {/* V76-R2a — severity, act and category are coloured CHIPS WITH ICONS
+          now (`RoomChips.tsx`, mappings in `lib/reviewRoom.ts`). The act is
+          still the SPEECH-ACT axis BESIDE severity, not a second severity
+          (findings v2, V73-K2b): an issue and a question about the same
+          line at the same severity are different things to a reader. The
+          `data-kbc-finding-act`/`data-kbc-finding-severity` hooks ride the
+          chips so existing selectors keep working. */}
+      <span data-kbc-finding-severity={finding.severity} className="kbc-finding__chipslot">
+        <SeverityChip severity={finding.severity} />
       </span>
-      <span aria-hidden="true">·</span>
-      <span className="kbc-finding__sev" data-kbc-finding-severity={finding.severity}>
-        {finding.severity}
+      <span data-kbc-finding-act={findingAct(finding)} className="kbc-finding__chipslot">
+        <ActChip act={finding.act} />
       </span>
+      <CategoryChip category={finding.category} />
       {/* `blocking` is the reviewer's OWN call and deliberately not derived
           from `severity` ("a blocker that is not blocking this PR" is a real
           thing to say). It reads as WEIGHT — never as a score. */}
@@ -154,10 +160,7 @@ function SeverityMeta({ finding, showAgentMark = true }: { finding: ReviewFindin
           blocking
         </span>
       )}
-      <span aria-hidden="true">·</span>
-      <span>{finding.category}</span>
-      <span aria-hidden="true">·</span>
-      <span className="kbc-finding__loc" data-kbc-finding-loc>
+      <span className="kbc-finding__loc" data-kbc-finding-loc title={findingLocationLabel(finding.location)}>
         {findingLocationLabel(finding.location)}
       </span>
       {findingTombstone(finding) && (
@@ -209,33 +212,41 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
       className={`kbc-finding ${severityStripeClass(finding.severity)}`}
       data-kbc-finding={finding.slug}
     >
-      <SeverityMeta finding={finding} />
-      <div className="kbc-finding__slugrow">
-        <button
-          type="button"
-          className="kbc-finding__slug"
-          title="copy permalink"
-          onClick={() => copyText(new URL(href, window.location.origin).toString())}
-          data-kbc-finding-slug={finding.slug}
-        >
-          <Icon.Copy /> {finding.slug}
-        </button>
-      </div>
-      <div className="kbc-finding__ti" data-kbc-finding-title>
-        {finding.title}
-      </div>
-      <p className="kbc-finding__ra" data-kbc-finding-rationale>
-        {finding.rationale}
-      </p>
-      {finding.evidence && (finding.evidence.source || finding.evidence.lang) && (
-        <div className="kbc-codewrap" data-kbc-finding-evidence>
-          <div className="head">
-            <span>{finding.location.path}</span>
-            <span>{finding.evidence.lang ?? ""}</span>
-          </div>
-          <pre>{finding.evidence.source ?? ""}</pre>
+      {/* V76-R2a — visibly separated zones: header (chips + slug) · body
+          (title + rationale + evidence) · suggestion callout · actions.
+          The left severity stripe (`.kbc-finding--*` `::before`) is
+          unchanged. */}
+      <header className="kbc-finding__head">
+        <SeverityMeta finding={finding} />
+        <div className="kbc-finding__slugrow">
+          <button
+            type="button"
+            className="kbc-finding__slug"
+            title="copy permalink"
+            onClick={() => copyText(new URL(href, window.location.origin).toString())}
+            data-kbc-finding-slug={finding.slug}
+          >
+            <Icon.Copy /> {finding.slug}
+          </button>
         </div>
-      )}
+      </header>
+      <div className="kbc-finding__body">
+        <h3 className="kbc-finding__ti" data-kbc-finding-title>
+          {finding.title}
+        </h3>
+        <p className="kbc-finding__ra" data-kbc-finding-rationale>
+          {finding.rationale}
+        </p>
+        {finding.evidence && (finding.evidence.source || finding.evidence.lang) && (
+          <div className="kbc-codewrap" data-kbc-finding-evidence>
+            <div className="head">
+              <span>{finding.location.path}</span>
+              <span>{finding.evidence.lang ?? ""}</span>
+            </div>
+            <pre>{finding.evidence.source ?? ""}</pre>
+          </div>
+        )}
+      </div>
       {finding.recommendation && (
         <div className="kbc-finding__rc" data-kbc-finding-recommendation>
           {finding.recommendation}
@@ -259,7 +270,7 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
           ))}
         </div>
       )}
-      <div className="kbc-finding__foot">
+      <div className="kbc-finding__foot kbc-finding__actions">
         <DispositionMenu repo={repo} reviewId={reviewId} finding={finding} />
         {eligibleForPublishMark(finding) && <PublishMarkToggle reviewId={reviewId} slug={finding.slug} />}
         <RecurrenceChip repo={repo} reviewId={reviewId} slug={finding.slug} />
@@ -300,6 +311,7 @@ export function FindingRow({ repo, reviewId, finding, ps }: FindingRowProps) {
       : finding.severity === "concern"
         ? "bar--concern"
         : "bar--ok";
+  const loc = findingLocationLabel(finding.location);
   return (
     <div className="kbc-frow-row" data-kbc-finding-row-wrap={finding.slug}>
       <a
@@ -308,9 +320,16 @@ export function FindingRow({ repo, reviewId, finding, ps }: FindingRowProps) {
         data-kbc-finding-row={finding.slug}
       >
         <span className={`bar ${barClass}`} aria-hidden="true" />
+        {/* V76-R2a — the two-line row: slug line over `path:line` line,
+            both middle-truncatable with the full value on hover, and the
+            disposition chip pinned right, never wrapping mid-token. */}
         <div className="kbc-frow__body">
-          <div className="slug">{finding.slug}</div>
-          <div className="loc">{findingLocationLabel(finding.location)}</div>
+          <div className="slug" title={finding.slug}>
+            {finding.slug}
+          </div>
+          <div className="loc" title={loc}>
+            {loc}
+          </div>
         </div>
         <span
           className={`state state--${finding.disposition?.state ?? "open"}`}
