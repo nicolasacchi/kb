@@ -6,6 +6,7 @@ import {
   canvasPageUrl,
   codeUrl,
   commentsUrl,
+  lanesUrl,
   commitUrl,
   compareUrl,
   findingUrl,
@@ -365,6 +366,16 @@ describe("commentsUrl", () => {
 
   it("encodes a repo name needing it", () => {
     expect(commentsUrl("my repo")).toBe("/r/my%20repo/~comments");
+  });
+});
+
+describe("lanesUrl", () => {
+  it("builds the repo-scoped aug-lane/1 dock URL", () => {
+    expect(lanesUrl("kb")).toBe("/r/kb/~lanes");
+  });
+
+  it("encodes a repo name needing it", () => {
+    expect(lanesUrl("my repo")).toBe("/r/my%20repo/~lanes");
   });
 });
 

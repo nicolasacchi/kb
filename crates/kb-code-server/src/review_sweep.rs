@@ -307,7 +307,7 @@ async fn sweep_one(
     let suggest_close = review.state == "open" && (pull.merged || pull.state == "closed");
 
     // --- persist the refreshed snapshot -------------------------------------
-    let meta = serde_json::json!({
+    let mut meta = serde_json::json!({
         "title": pull.title,
         "author": pull.author,
         "head_ref": pull.head_ref,
@@ -322,6 +322,19 @@ async fn sweep_one(
         "body": pull.body,
         "checks": checks_list.into_iter().take(crate::github::MAX_CHECKS).collect::<Vec<_>>(),
     });
+    // V76-R1a — `base_source` is a DAEMON-recorded fact about how ps1's
+    // base was chosen (`reviews::create_review_pr_value`'s ladder), not
+    // GitHub metadata this refresh re-derives. A wholesale replace would
+    // silently drop it, so it rides forward across sweeps; an old row
+    // without the key simply stays without it (never fabricated).
+    if let Some(bs) = binding
+        .pr_meta_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("base_source").cloned())
+    {
+        meta["base_source"] = bs;
+    }
     let meta_str = serde_json::to_string(&meta)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let changed = old_head.as_deref() != Some(pull.head_sha.as_str())
