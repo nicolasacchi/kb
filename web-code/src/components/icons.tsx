@@ -86,6 +86,13 @@ export const Icon = {
       <path d="M2 4.5a1 1 0 0 1 1-1h3l1.4 1.6H13a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" />
     </svg>
   ),
+  // V76-R2b — generic file-kind fallback when syntax/1 has no lang for the path.
+  File: (p: P) => (
+    <svg {...base(14)} {...p}>
+      <path d="M4 2.5h5.5L12 5.5V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z" />
+      <path d="M9.5 2.5V5.5H12" />
+    </svg>
+  ),
   // F6 — the Branches page's single-branch EmptyState — a small git-fork
   // glyph (two tips merging into one base).
   Branch: (p: P) => (
