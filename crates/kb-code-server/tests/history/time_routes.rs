@@ -1120,3 +1120,141 @@ async fn file_history_rejects_a_path_traversal_attempt() {
         .unwrap();
     assert_eq!(resp.status(), 400);
 }
+
+// --- GET /api/file/stops, GET /api/file/at (V76-R3d) ----------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_stops_follows_rename_reports_floor_and_true_total() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&dir);
+    commit_dated(&dir, "a.txt", "one\n", "c1", 1_700_000_000);
+    commit_dated(&dir, "a.txt", "one\ntwo\n", "c2", 1_700_001_000);
+    git(&dir, &["mv", "a.txt", "renamed.txt"]);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["commit", "-q", "-m", "rename it"])
+        .env("GIT_AUTHOR_DATE", "1700002000 +0000")
+        .env("GIT_COMMITTER_DATE", "1700002000 +0000")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let (_tmp, base) = boot_with_repo("fixture", &dir).await;
+    let client = reqwest::Client::new();
+    let body: serde_json::Value = client
+        .get(format!("{base}/api/file/stops"))
+        .query(&[("repo", "fixture"), ("path", "renamed.txt")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["schema"], "scrub/1");
+    assert_eq!(body["truncated"], false);
+    assert_eq!(body["total"], 3);
+    let subjects: Vec<&str> = body["stops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, vec!["rename it", "c2", "c1"]);
+    assert_eq!(body["stops"][0]["renamed_from"], "a.txt");
+    assert_eq!(body["floor"]["when"], 1_700_000_000);
+
+    let limited: serde_json::Value = client
+        .get(format!("{base}/api/file/stops"))
+        .query(&[("repo", "fixture"), ("path", "renamed.txt"), ("limit", "2")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(limited["stops"].as_array().unwrap().len(), 2);
+    assert_eq!(limited["truncated"], true);
+    assert_eq!(limited["total"], 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_at_exact_nearest_prior_and_before_floor() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&dir);
+    commit_dated(&dir, "a.txt", "one\n", "c1", 1_700_000_000);
+    commit_dated(&dir, "a.txt", "two\n", "c2", 1_700_001_000);
+
+    let (_tmp, base) = boot_with_repo("fixture", &dir).await;
+    let client = reqwest::Client::new();
+
+    let exact: serde_json::Value = client
+        .get(format!("{base}/api/file/at"))
+        .query(&[("repo", "fixture"), ("path", "a.txt"), ("at", "1700001000")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(exact["schema"], "scrub/1");
+    assert_eq!(exact["resolution"], "exact");
+    assert_eq!(exact["stop"]["subject"], "c2");
+    assert_eq!(exact["encoding"], "utf8");
+    assert_eq!(exact["content"], "two\n");
+    assert_eq!(exact["frame"]["lane"], "file_at_ref");
+
+    let prior: serde_json::Value = client
+        .get(format!("{base}/api/file/at"))
+        .query(&[("repo", "fixture"), ("path", "a.txt"), ("at", "1700000500")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prior["resolution"], "nearest-prior");
+    assert_eq!(prior["stop"]["subject"], "c1");
+    assert_eq!(prior["content"], "one\n");
+
+    let miss = client
+        .get(format!("{base}/api/file/at"))
+        .query(&[("repo", "fixture"), ("path", "a.txt"), ("at", "1699999999")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(miss.status(), 404);
+    let body: serde_json::Value = miss.json().await.unwrap();
+    assert_eq!(body["type"], "urn:kb:errors:before-floor");
+    let err = body["error"].as_str().unwrap();
+    assert!(err.contains("floor"), "{err}");
+    assert!(err.contains("1700000000") || err.contains("unix"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_stops_refuses_an_over_cap_limit() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&dir);
+    commit_dated(&dir, "a.txt", "1\n", "c1", 1_700_000_000);
+
+    let (_tmp, base) = boot_with_repo("fixture", &dir).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{base}/api/file/stops"))
+        .query(&[("repo", "fixture"), ("path", "a.txt"), ("limit", "9999")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let err = body["error"].as_str().unwrap();
+    assert!(err.contains("9999"), "{err}");
+    assert!(err.contains("500"), "{err}");
+}

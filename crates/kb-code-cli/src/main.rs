@@ -320,6 +320,11 @@ enum Cmd {
         /// Revspec to read at: full/short sha, branch, tag, `HEAD~n`, ...
         #[arg(long = "ref", default_value = "HEAD")]
         rev: String,
+        /// Unix seconds — nearest-prior stop of this file (`GET /api/file/at`).
+        /// Conflicts with an explicit `--ref` other than the default; when
+        /// set, the blob is the stop's, not `--ref`'s.
+        #[arg(long)]
+        at: Option<i64>,
         /// Read via a running kb-code daemon instead of in-process.
         #[arg(long)]
         daemon: Option<String>,
@@ -1652,6 +1657,22 @@ enum Cmd {
     /// `kb-code file-history PATH --repo R [--limit N] [--before UNIX]
     /// [--json]` — `GET /api/file-history`.
     FileHistory {
+        path: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Unix seconds — commits authored after this are excluded.
+        #[arg(long)]
+        before: Option<i64>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code stops PATH --repo R [--limit N] [--before UNIX] [--json]` —
+    /// `GET /api/file/stops` (`scrub/1`). Daemon-only.
+    Stops {
         path: String,
         #[arg(long)]
         repo: String,
@@ -4951,10 +4972,17 @@ async fn run(cli: Cli) -> Result<()> {
             path,
             repo,
             rev,
+            at,
             daemon,
-        } => match daemon {
-            Some(base) => cat_daemon(&base, &repo, &path, &rev).await,
-            None => cat(Path::new(&repo), &path, &rev),
+        } => match at {
+            Some(at) => match daemon {
+                Some(base) => cat_at_daemon(&base, &repo, &path, at).await,
+                None => cat_at(Path::new(&repo), &path, at),
+            },
+            None => match daemon {
+                Some(base) => cat_daemon(&base, &repo, &path, &rev).await,
+                None => cat(Path::new(&repo), &path, &rev),
+            },
         },
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
         Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
@@ -6901,6 +6929,14 @@ async fn run(cli: Cli) -> Result<()> {
             daemon,
             json,
         } => file_history_cmd(&daemon, &repo, &path, limit, before, json).await,
+        Cmd::Stops {
+            path,
+            repo,
+            limit,
+            before,
+            daemon,
+            json,
+        } => stops_cmd(&daemon, &repo, &path, limit, before, json).await,
         Cmd::RangeDiff {
             repo,
             old,
@@ -7396,6 +7432,23 @@ fn cat(repo_path: &Path, path: &str, rev: &str) -> Result<()> {
     Ok(())
 }
 
+fn cat_at(repo_path: &Path, path: &str, at: i64) -> Result<()> {
+    let emails: Vec<String> = Vec::new();
+    match kb_code_server::history::scrub::file_at(repo_path, path, at, &emails)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
+        kb_code_server::history::scrub::AtHit::Hit { stop, .. } => {
+            cat(repo_path, &stop.path, &stop.sha)
+        }
+        kb_code_server::history::scrub::AtHit::BeforeFloor { floor } => {
+            anyhow::bail!(kb_code_server::history::scrub::before_floor_message(
+                path,
+                floor.as_ref()
+            ))
+        }
+    }
+}
+
 /// Shared human-readable tree table, used by both the offline `tree` (typed
 /// `git::TreeEntry`s) and daemon `tree_daemon` (parsed JSON) paths, so the
 /// two render byte-identically.
@@ -7682,6 +7735,18 @@ async fn cat_daemon(daemon: &str, repo: &str, path: &str, rev: &str) -> Result<(
         &[("repo", repo), ("path", path), ("ref", rev)],
     )
     .await?;
+    let bytes = decode_file_content(&body)?;
+    std::io::stdout()
+        .write_all(&bytes)
+        .context("write stdout")?;
+    Ok(())
+}
+
+async fn cat_at_daemon(daemon: &str, repo: &str, path: &str, at: i64) -> Result<()> {
+    let client = http_client()?;
+    let at_s = at.to_string();
+    let (route, query) = file_at_request(repo, path, at_s.as_str());
+    let body = get_json(&client, daemon, route, &as_query_pairs(&query)).await?;
     let bytes = decode_file_content(&body)?;
     std::io::stdout()
         .write_all(&bytes)
@@ -9127,6 +9192,89 @@ async fn file_history_cmd(
     }
     if body["truncated"].as_bool().unwrap_or(false) {
         println!("(truncated — pass --limit/--before to page further back)");
+    }
+    Ok(())
+}
+
+fn file_stops_request(
+    repo: &str,
+    path: &str,
+    limit: Option<usize>,
+    before: Option<i64>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query = vec![("repo", repo.to_string()), ("path", path.to_string())];
+    if let Some(n) = limit {
+        query.push(("limit", n.to_string()));
+    }
+    if let Some(b) = before {
+        query.push(("before", b.to_string()));
+    }
+    (kb_code_server::history::scrub::STOPS_ROUTE.path, query)
+}
+
+fn file_at_request(
+    repo: &str,
+    path: &str,
+    at: &str,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::history::scrub::AT_ROUTE.path,
+        vec![
+            ("repo", repo.to_string()),
+            ("path", path.to_string()),
+            ("at", at.to_string()),
+        ],
+    )
+}
+
+async fn stops_cmd(
+    daemon: &str,
+    repo: &str,
+    path: &str,
+    limit: Option<usize>,
+    before: Option<i64>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (route, query) = file_stops_request(repo, path, limit, before);
+    let body = get_json(&client, daemon, route, &as_query_pairs(&query)).await?;
+    if json {
+        envelope::print_ok("scrub/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    let stops = body["stops"].as_array().cloned().unwrap_or_default();
+    for s in &stops {
+        let sha = s["sha"].as_str().unwrap_or("?");
+        let short = &sha[..sha.len().min(12)];
+        let plus = s["insertions"].as_u64().unwrap_or(0);
+        let minus = s["deletions"].as_u64().unwrap_or(0);
+        let kind = s["author_kind"].as_str().unwrap_or("none");
+        let subject = s["subject"].as_str().unwrap_or("");
+        let rename = s["renamed_from"]
+            .as_str()
+            .map(|from| format!("  (renamed from {from})"))
+            .unwrap_or_default();
+        println!("{short}  +{plus}/-{minus}  {kind}  {subject}{rename}");
+    }
+    if let Some(floor) = body.get("floor") {
+        if !floor.is_null() {
+            println!(
+                "floor: {}  unix {}",
+                floor["sha"]
+                    .as_str()
+                    .unwrap_or("?")
+                    .get(..12)
+                    .unwrap_or("?"),
+                floor["when"]
+            );
+        }
+    }
+    if body["truncated"].as_bool().unwrap_or(false) {
+        println!(
+            "(truncated {} of {} — pass --limit/--before to page further back)",
+            stops.len(),
+            body["total"].as_u64().unwrap_or(0)
+        );
     }
     Ok(())
 }
@@ -27577,6 +27725,9 @@ mod tests {
             // V76-R3c — typeahead + compare-file.
             refs_typeahead_request("repo", "main", Some(25)),
             compare_file_request("repo", "src/lib.rs", "HEAD~1", "HEAD"),
+            // V76-R3d — scrub/1.
+            file_stops_request("repo", "src/lib.rs", Some(10), None),
+            file_at_request("repo", "src/lib.rs", "1700000000"),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -27667,7 +27818,9 @@ mod tests {
             // V76-C1 — `highlight/1`. No query params (JSON body); this
             // half of the walk proves a verb builds a request for each path.
             .chain(kb_code_server::highlight::V76_C1_ROUTES.iter())
-            .chain(kb_code_server::worktrees::V76_R3B_ROUTES.iter());
+            .chain(kb_code_server::worktrees::V76_R3B_ROUTES.iter())
+            // V76-R3d — scrub/1 stops + at.
+            .chain(kb_code_server::history::scrub::V76_R3D_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
