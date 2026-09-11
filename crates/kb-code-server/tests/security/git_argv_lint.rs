@@ -250,26 +250,6 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
         "file_history must separate its pathspec with `--`"
     );
 
-    // V76-R3d — `history/scrub.rs` takes a caller-supplied PATH into
-    // `git log --follow … -- <path>`. Production spawns go through
-    // `run_git_raw`; the pathspec rule is about ARGV.
-    let scrub = std::fs::read_to_string(src_root().join("history/scrub.rs")).unwrap();
-    let sep = scrub
-        .find("args.push(\"--\");")
-        .expect("file_stops separates its pathspec with `--`");
-    let path_push = scrub
-        .find("args.push(path);")
-        .expect("file_stops pushes the pathspec");
-    assert!(
-        sep < path_push,
-        "file_stops must push `--` BEFORE the pathspec"
-    );
-    let floor_src: String = scrub.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(
-        floor_src.contains("\"--\",path]"),
-        "file_floor must place `--` immediately before its caller-supplied pathspec"
-    );
-
     // V72-H4a — `lanes/git_behavior.rs` takes a caller-supplied PATH
     // (`?path=` off the facts route) into two `git log` invocations. It
     // spawns nothing itself (every call goes through
@@ -331,5 +311,25 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
     assert!(
         wt.contains("args.push(\"--\");args.push(path_s.as_ref());"),
         "worktrees::run_git_path must push `--` immediately before its caller-supplied path"
+    );
+
+    // V76-R3d — `history/scrub.rs` takes a caller-supplied PATH into
+    // `git log --follow … -- <path>` (one walk, `collect_stops`). The
+    // floor is derived from that walk (`file_floor(stops: &[Stop])`), so
+    // there is no second git invocation to lint — pin that it stays pure.
+    let scrub = std::fs::read_to_string(src_root().join("history/scrub.rs")).unwrap();
+    let sep = scrub
+        .find("args.push(\"--\");")
+        .expect("collect_stops separates its pathspec with `--`");
+    let path_push = scrub
+        .find("args.push(path);")
+        .expect("collect_stops pushes the pathspec");
+    assert!(
+        sep < path_push,
+        "collect_stops must push `--` BEFORE the pathspec"
+    );
+    assert!(
+        scrub.contains("fn file_floor(stops: &[Stop])"),
+        "file_floor must derive the floor from the followed walk, never a second git call"
     );
 }
