@@ -479,7 +479,9 @@ async fn prs_route_degrades_to_unavailable_reason_on_a_403_never_500s() {
     assert!(body["unavailable_reason"]
         .as_str()
         .unwrap()
-        .contains("rate-limited"));
+        // V76-R1c — a BARE 403 is `forbidden`; `rate-limited` needs
+        // `X-RateLimit-Remaining: 0` (see `pr_status_degrades_the_live_half…`).
+        .contains("forbidden"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1156,11 +1158,93 @@ async fn create_review_pr_degrades_metadata_on_a_github_side_403_but_still_creat
     );
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["pr_meta"].is_null());
-    assert!(body["pr_meta_unavailable_reason"]
-        .as_str()
-        .unwrap()
-        .contains("rate-limited"));
+    assert_eq!(
+        body["pr_meta_unavailable_reason"]["code"], "forbidden",
+        "{body}"
+    );
+    assert!(
+        body["pr_meta_unavailable_reason"]["hint"]
+            .as_str()
+            .unwrap()
+            .len()
+            >= 3,
+        "{body}"
+    );
     assert_eq!(body["latest_ps"], 1, "ps1 is still captured");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_review_pr_reports_no_credentials_on_a_404_without_a_token() {
+    let _guard = SERIAL.lock().await;
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(45);
+
+    let gh_router = Router::new().route(
+        "/repos/acme/widget/pulls/45",
+        get(|| async { axum::http::StatusCode::NOT_FOUND }),
+    );
+    let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
+
+    let cfg = KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: "fixture".to_string(),
+            path: dir.clone(),
+        }],
+        kb_daemon: disabled_kb_daemon(),
+        github: GithubSection {
+            token_file: None,
+            api_base: format!("http://{gh_addr}"),
+        },
+        ..KbCodeConfig::default()
+    };
+    let (_tmp, base) = boot(cfg).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 45 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["pr_meta"].is_null());
+    assert_eq!(
+        body["pr_meta_unavailable_reason"]["code"], "no-credentials",
+        "{body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_review_pr_gh_token_is_refused_off_loopback() {
+    let _guard = SERIAL.lock().await;
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(46);
+
+    let cfg = KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: "fixture".to_string(),
+            path: dir.clone(),
+        }],
+        kb_daemon: disabled_kb_daemon(),
+        ..KbCodeConfig::default()
+    };
+    let (_tmp, base) = boot(cfg).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .json(&serde_json::json!({
+            "repo": "fixture",
+            "pr_number": 46,
+            "gh_token": "ghp_from_cli_must_not_leave_loopback",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "the start-pr route is loopback-only; a CLI token off loopback is refused: {}",
+        resp.text().await.unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1968,10 +2052,17 @@ async fn pr_status_reports_local_mismatch_after_a_further_local_commit_without_a
 async fn pr_status_degrades_the_live_half_when_github_is_unavailable() {
     let _guard = SERIAL.lock().await;
     let (_repo_tmp, _bare_tmp, dir, pr_sha) = fixture_pr_repo(62);
-    // A GitHub mock that 403s the pull-detail call — RateLimited.
+    // A GitHub mock that 403s the pull-detail call with the exhausted-quota header — RateLimited.
     let gh_router = Router::new().route(
         "/repos/acme/widget/pulls/62",
-        get(|| async { axum::http::StatusCode::FORBIDDEN }),
+        get(|| async {
+            // V76-R1c — `rate-limited` is minted ONLY from a 403 that carries
+            // `X-RateLimit-Remaining: 0`; a bare 403 is `forbidden`.
+            (
+                axum::http::StatusCode::FORBIDDEN,
+                [("x-ratelimit-remaining", "0")],
+            )
+        }),
     );
     let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
 
