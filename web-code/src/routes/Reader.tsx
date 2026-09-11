@@ -542,7 +542,13 @@ export default function Reader() {
   const [gotoSel2, setGotoSel2] = useState<GotoSel | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [scrubOpen, setScrubOpen] = useState(false);
-  const [scrubMiss, setScrubMiss] = useState(false);
+  const [scrubSelection, setScrubSelection] = useState<{
+    repo: string;
+    path: string;
+    ref?: string;
+    walkRef?: string;
+    pos: ScrubPos;
+  } | null>(null);
   /// D24 — the one-time `gd` coach-mark for the commitment Ramp.
   const coach = useGdCoachMark();
   /// V3.N1 — Recent Locations popup (`g.`).
@@ -598,7 +604,16 @@ export default function Reader() {
   const lastSelRef2 = useRef<{ start: number; end: number } | null>(null);
 
   const isFile = path !== "" && !path.endsWith("/");
-  const fileStops = useFileStops(repo, isFile ? path : undefined, scrubOpen && isFile && !diffMode && !storyMode);
+  // Keep the original history while navigating its SHAs. A different
+  // file or external ref navigation starts a new walk.
+  const activeScrubSelection =
+    scrubSelection?.repo === repo && scrubSelection.path === path && scrubSelection.ref === gitRef
+      ? scrubSelection
+      : null;
+  const scrubWalkRef = activeScrubSelection ? activeScrubSelection.walkRef : gitRef;
+  const fileStops = useFileStops(
+    repo, isFile ? path : undefined, scrubOpen && isFile && !diffMode && !storyMode, scrubWalkRef,
+  );
   const activeFile = isFile && !diffMode && !storyMode ? path : undefined;
   const file = useFile(repo, activeFile, gitRef);
   const frames = useFrames();
@@ -763,22 +778,20 @@ export default function Reader() {
 
   const scrubStops = fileStops.data?.stops ?? [];
   const scrubFloor = fileStops.data?.floor ?? null;
-  const scrubPos: ScrubPos = scrubMiss
-    ? { kind: "before-floor" }
+  // The URL owns stop identity; a history refresh can shift its index.
+  const scrubPos: ScrubPos = activeScrubSelection?.pos.kind === "before-floor"
+    ? activeScrubSelection.pos
     : posFromRef(scrubStops, gitRef);
-
-  function applyScrubPos(next: ScrubPos) {
-    if (next.kind === "before-floor") {
-      setScrubMiss(true);
-      return;
-    }
-    setScrubMiss(false);
-    applyRef(shaForPos(next, scrubStops));
+  if (scrubPos.kind === "stop" && activeScrubSelection?.pos.kind === "stop") {
+    scrubPos.resolution = activeScrubSelection.pos.resolution;
   }
 
-  useEffect(() => {
-    setScrubMiss(false);
-  }, [gitRef]);
+  function applyScrubPos(next: ScrubPos) {
+    const ref = next.kind === "before-floor" ? gitRef : shaForPos(next, scrubStops);
+    setScrubSelection({ repo, path, ref, walkRef: scrubWalkRef, pos: next });
+    if (next.kind !== "before-floor") applyRef(ref);
+  }
+
 
   /// A resolved candidate/peek-row landing: same-repo lands in `pane`
   /// (preserving whatever the OTHER pane is showing); a different repo
@@ -3339,7 +3352,7 @@ export default function Reader() {
     // `desk/centerModes.ts`'s `CenterMode`, declared in `registry.json`'s
     // `context_keys` so `commands doctor` can reason about disjointness.
     center: dossierMode ? "dossier" : "reader",
-    "reader.scrub": scrubOpen && isFile && !diffMode && !storyMode,
+    "reader.scrub": scrubOpen && isFile && !diffMode && !storyMode && fileStops.isSuccess,
   });
   useCommandHandlers({
     // V72-G1.2 — the dossier family. `entity.dossier.open` is the only one
@@ -3613,6 +3626,7 @@ export default function Reader() {
     "reader.ref-clear": () => applyRef(undefined),
     "reader.scrub-toggle": () => {
       if (!isFile || diffMode || storyMode) return;
+      setScrubSelection(null);
       setScrubOpen((v) => !v);
     },
     "reader.scrub-prev": () => applyScrubPos(stepPrev(scrubPos, scrubStops)),
@@ -4564,7 +4578,7 @@ export default function Reader() {
               {vimStat.pending !== "" && <span className="kbc-vim-status__pending">{vimStat.pending}</span>}
             </div>
           )}
-          {scrubOpen && isFile && !diffMode && !storyMode && (
+          {scrubOpen && isFile && !diffMode && !storyMode && fileStops.isSuccess && (
             <ScrubberStrip
               stops={scrubStops}
               floor={scrubFloor}
@@ -4572,11 +4586,11 @@ export default function Reader() {
               truncated={fileStops.data?.truncated}
               total={fileStops.data?.total}
               onStep={applyScrubPos}
-              onWorkingTree={() => {
-                setScrubMiss(false);
-                applyRef(undefined);
+              onWorkingTree={() => applyScrubPos({ kind: "working-tree" })}
+              onClose={() => {
+                setScrubSelection(null);
+                setScrubOpen(false);
               }}
-              onClose={() => setScrubOpen(false)}
             />
           )}
         </main>

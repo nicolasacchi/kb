@@ -6,10 +6,11 @@ export function useFileStops(
   repo: string | undefined,
   path: string | undefined,
   enabled: boolean,
+  ref?: string,
 ) {
   return useQuery({
-    queryKey: ["file-stops", repo, path],
-    queryFn: () => fetchFileStops(repo as string, path as string),
+    queryKey: ["file-stops", repo, path, ref ?? null],
+    queryFn: () => fetchFileStops(repo as string, path as string, undefined, undefined, ref),
     enabled: enabled && repo !== undefined && path !== undefined,
   });
 }
