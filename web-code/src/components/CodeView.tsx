@@ -32,11 +32,13 @@ import type { AgeLineInfo } from "../lib/ageHeatmap";
 import type { BlameDotInfo } from "../lib/blameGutter";
 import type { CommentGutterMark } from "../lib/comments";
 import type { DiagnosticGutterMark } from "../lib/diagnostics";
+import type { CoverageBand } from "../lib/lanes";
 import { scanLinkTokens } from "../lib/linkifyScan";
 import StickyContext from "./StickyContext";
 import "../styles/reader.css";
 import "../styles/provenance.css";
 import "../styles/history.css";
+import "../styles/lanes.css";
 
 // CodeMirror 6, READ-ONLY. Renders a file's content with server-derived
 // syntax-highlight decorations (`highlightField.ts`) and line numbers, plus
@@ -164,6 +166,11 @@ export interface CodeViewProps {
   /// identity (see that module's doc for why each call needs its own).
   diagnosticMarkers?: Map<number, DiagnosticGutterMark> | null;
 
+  /// V76-R3a — coverage band as a VARIANT on the blame gutter (slot 1),
+  /// never a fifth `lineGutter`. `null`/`undefined` = toggle off (default).
+  /// An empty map is "toggle on, nothing to say".
+  coverageMarkers?: Map<number, CoverageBand> | null;
+
   // --- V72-J2 (D8) — the comments/1 gutter (kbc-theme/1 Lane Budget's
   // "gutter slot four") -------------------------------------------------
   /// `null`/`undefined` = gutter renders no marks (comments/1 hasn't loaded
@@ -266,11 +273,25 @@ const BLAME_DOT_SOLID: LineMarkerSpec["className"] = "kbc-blame-dot kbc-blame-do
 const BLAME_DOT_OUTLINE: LineMarkerSpec["className"] = "kbc-blame-dot kbc-blame-dot--outline";
 const ANNOTATION_PLUS: LineMarkerSpec = { className: "kbc-annot-plus", title: "Add annotation" };
 
-function blameMarkersFrom(dots: Map<number, BlameDotInfo> | null | undefined): Map<number, LineMarkerSpec> {
+function blameMarkersFrom(
+  dots: Map<number, BlameDotInfo> | null | undefined,
+  coverage?: Map<number, CoverageBand> | null,
+): Map<number, LineMarkerSpec> {
   const out = new Map<number, LineMarkerSpec>();
-  if (!dots) return out;
-  for (const [line, info] of dots) {
-    out.set(line, { className: info.solid ? BLAME_DOT_SOLID : BLAME_DOT_OUTLINE, title: info.label });
+  const lines = new Set<number>();
+  if (dots) for (const line of dots.keys()) lines.add(line);
+  if (coverage) for (const line of coverage.keys()) lines.add(line);
+  for (const line of lines) {
+    const info = dots?.get(line);
+    const band = coverage?.get(line);
+    const base = info
+      ? info.solid
+        ? BLAME_DOT_SOLID
+        : BLAME_DOT_OUTLINE
+      : "kbc-blame-dot kbc-blame-dot--cov-only";
+    const covClass = band ? ` kbc-cov-${band}` : "";
+    const title = [info?.label, band ? `coverage: ${band}` : ""].filter(Boolean).join(" · ");
+    out.set(line, { className: `${base}${covClass}`, title });
   }
   return out;
 }
@@ -286,7 +307,12 @@ function diagMarkersFrom(
   const out = new Map<number, LineMarkerSpec>();
   if (!marks) return out;
   for (const [line, mark] of marks) {
-    out.set(line, { className: `kbc-diag-dot kbc-diag-dot--${mark.severity}`, title: mark.title });
+    const src =
+      mark.source === "lane" ? " kbc-diag-dot--src-lane" : mark.source === "both" ? " kbc-diag-dot--src-both" : "";
+    out.set(line, {
+      className: `kbc-diag-dot kbc-diag-dot--${mark.severity}${src}`,
+      title: mark.title,
+    });
   }
   return out;
 }
@@ -359,6 +385,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     annotationMarkers,
     onAnnotationClick,
     diagnosticMarkers,
+    coverageMarkers,
     commentMarkers,
     onCommentHover,
     onCommentUnhover,
@@ -741,7 +768,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
     // triggered this very effect via `blobHash`) — the marker-sync effect
     // below only fires on marker-prop changes, which won't happen again if
     // they were already set before this file/ref switch.
-    blameGutterHandle.setMarkers(view, blameMarkersFrom(blameDots));
+    blameGutterHandle.setMarkers(view, blameMarkersFrom(blameDots, coverageMarkers));
     annotGutterHandle.setMarkers(view, annotationMarkers ?? new Map());
     diagGutterHandle.setMarkers(view, diagMarkersFrom(diagnosticMarkers));
     commentGutterHandle.setMarkers(view, commentMarkersFrom(commentMarkers));
@@ -784,8 +811,8 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    blameGutterHandle.setMarkers(view, blameMarkersFrom(blameDots));
-  }, [blameDots, blameGutterHandle]);
+    blameGutterHandle.setMarkers(view, blameMarkersFrom(blameDots, coverageMarkers));
+  }, [blameDots, coverageMarkers, blameGutterHandle]);
 
   useEffect(() => {
     const view = viewRef.current;

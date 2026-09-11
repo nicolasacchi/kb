@@ -36,7 +36,8 @@ function memStorage(seed: Record<string, string> = {}): StorageLike & { data: Re
 /// Every reachable shape, enumerated: four presets × the eight
 /// collapsed combinations × both pane counts × every rail tab, plus the
 /// dirty flag. Small enough to be exhaustive, which is the point — the
-/// round-trip golden below has nothing to sample.
+/// round-trip golden below has nothing to sample. Rail-tab count rides
+/// `RAIL_TABS.length` (9 as of V76-R3a).
 function everyState(): DeskState[] {
   const out: DeskState[] = [];
   for (const preset of DESK_PRESET_NAMES) {
@@ -71,11 +72,11 @@ function everyState(): DeskState[] {
 describe("deskState — the golden round trip", () => {
   it("survives JSON serialise → parse → migrate byte-for-byte, for every reachable state", () => {
     const states = everyState();
-    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `8` is
+    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `9` is
     // `RAIL_TABS.length` — V72-J2 added `comments` as a seventh tab (it was
-    // 6 through V72-G1.2, 5 through V71) and V74-L3b added `trail` as an
-    // eighth, so this product moves with it.
-    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 8 * 2);
+    // 6 through V72-G1.2, 5 through V71), V74-L3b added `trail` as an
+    // eighth, V76-R3a added `facts` as a ninth, so this product moves with it.
+    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 9 * 2);
     for (const s of states) {
       const back = migrateDeskState(JSON.parse(JSON.stringify(s)));
       expect(back, `round trip lost ${JSON.stringify(s)}`).toEqual(s);

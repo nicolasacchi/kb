@@ -16,6 +16,7 @@ import {
   branchesUrl,
   canvasPageUrl,
   commentsUrl,
+  lanesUrl,
   hotspotsUrl,
   prsUrl,
   recipesPageUrl,
@@ -92,6 +93,8 @@ const Todos = lazy(() => import("./routes/Todos"));
 // ~todos above, which it supersedes as the richer, kind-aware surface —
 // `~todos` keeps working, unchanged, and links forward to this one).
 const Comments = lazy(() => import("./routes/Comments"));
+// V76-R3a — `~lanes`: aug-lane/1 registry dock (Facts rail chip target).
+const Lanes = lazy(() => import("./routes/Lanes"));
 // V72-I2 — `~rails`: the `rails/1` entity-index dashboard. Repo-scoped
 // sentinel, mounted EXACTLY like `~todos`/`~workspaces` above — §D1's "any
 // new surface lands in an existing region", not a second app shell and not a
@@ -319,6 +322,7 @@ function AppShell() {
     "nav.branches": () => navigate(repoRoute(branchesUrl)),
     "nav.todos": () => navigate(repoRoute(todosUrl)),
     "nav.comments": () => navigate(repoRoute(commentsUrl)),
+    "nav.lanes": () => navigate(repoRoute(lanesUrl)),
     "nav.rails": () => navigate(repoRoute((r) => railsUrl(r))),
     "nav.sets": () => navigate(repoRoute(setsUrl)),
     "nav.prs": () => navigate(repoRoute(prsUrl)),
@@ -401,6 +405,7 @@ function AppShell() {
                 <Route path="/r/:repo/~workspaces" element={<Workspaces />} />
                 <Route path="/r/:repo/~todos" element={<Todos />} />
                 <Route path="/r/:repo/~comments" element={<Comments />} />
+                <Route path="/r/:repo/~lanes" element={<Lanes />} />
                 <Route path="/r/:repo/~rails" element={<Rails />} />
                 <Route path="/r/:repo/~hotspots" element={<Hotspots />} />
                 <Route path="/r/:repo/~reviews" element={<Reviews />} />

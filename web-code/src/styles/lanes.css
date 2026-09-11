@@ -1,0 +1,232 @@
+/* V76-R3a — aug-lane/1 Facts rail, hover extra, ~lanes dock, and the
+ * two EXISTING-gutter variants (diagnostics slot 3, blame coverage band).
+ * Every colour is a tokens.css variable. Trust is LINE STYLE, never hue-only. */
+
+.kbc-facts {
+  font-size: 12px;
+  color: var(--ink);
+}
+.kbc-facts__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.kbc-facts__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 11px;
+}
+.kbc-facts__chip:hover {
+  background: var(--bg-elev);
+}
+.kbc-facts__toggle {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+.kbc-facts__toggle.is-on {
+  border-style: solid;
+  background: var(--bg-elev);
+}
+.kbc-facts__hint,
+.kbc-facts__error,
+.kbc-facts__partial {
+  margin: 0 0 8px;
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+.kbc-facts__error {
+  color: var(--red);
+}
+.kbc-facts__lane {
+  margin: 0 0 10px;
+  padding: 0;
+  border: none;
+}
+.kbc-facts__lane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.kbc-facts__lane-title {
+  font-weight: 600;
+}
+.kbc-facts__lane-status {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-facts__lane-status[data-kbc-lane-status="disabled"] {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.kbc-facts__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-facts__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-top: 1px solid var(--rule-faint, var(--rule));
+}
+.kbc-facts__jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kbc-facts__kind {
+  font-weight: 600;
+  font-size: 11px;
+}
+.kbc-facts__value {
+  flex: 1 1 12em;
+  min-width: 0;
+}
+.kbc-facts__age {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.kbc-fact-trust {
+  font-size: 11px;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: currentColor;
+  text-underline-offset: 2px;
+}
+.kbc-fact-trust.kbc-trust-exact {
+  text-decoration-style: solid;
+}
+.kbc-fact-trust.kbc-trust-likely {
+  text-decoration-style: dashed;
+}
+.kbc-fact-trust.kbc-trust-candidate {
+  text-decoration-style: dotted;
+}
+.kbc-fact-trust--orphan {
+  text-decoration-style: dotted;
+}
+.kbc-fact-trust--orphan::before {
+  content: "◇ ";
+}
+.kbc-facts__fresh {
+  font-size: 10px;
+  color: var(--ink-mute);
+  text-transform: lowercase;
+}
+
+.kbc-facts-peek {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+}
+.kbc-facts-peek__head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.kbc-facts-peek__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  margin: 2px 0;
+}
+
+/* Blame-gutter coverage BAND (slot 1 variant). Line style, not hue. */
+.kbc-linegutter-dot.kbc-cov-covered {
+  box-shadow: 0 2px 0 0 currentColor;
+}
+.kbc-linegutter-dot.kbc-cov-uncovered {
+  box-shadow: 0 2px 0 0 currentColor;
+  background: transparent;
+  border: 1.5px dashed var(--ink-dim);
+}
+.kbc-linegutter-dot.kbc-cov-nodata {
+  box-shadow: 0 2px 0 0 var(--ink-faint, var(--ink-dim));
+  opacity: 0.55;
+}
+.kbc-blame-dot--cov-only {
+  background: transparent;
+  border: 1px solid var(--ink-faint, var(--ink-dim));
+}
+
+/* Diagnostics gutter VARIANT (slot 3): lane = square, both = square outline. */
+.kbc-linegutter-dot.kbc-diag-dot--src-lane {
+  border-radius: 1px;
+}
+.kbc-linegutter-dot.kbc-diag-dot--src-both {
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--ink-dim);
+}
+
+/* ~lanes dock */
+.kbc-lanes {
+  max-width: var(--measure, 100ch);
+  margin: 0 auto;
+  padding: 16px 20px 48px;
+}
+.kbc-lanes__title {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.kbc-lanes__lede {
+  margin: 0 0 16px;
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+.kbc-lanes__unknown {
+  margin: 0 0 12px;
+  color: var(--warn);
+  font-size: 12px;
+}
+.kbc-lanes__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.kbc-lanes__table th,
+.kbc-lanes__table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+.kbc-lanes__table th {
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-weight: 600;
+}
+.kbc-lanes__id {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.kbc-lanes__note {
+  color: var(--ink-mute);
+  font-size: 12px;
+}

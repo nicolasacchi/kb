@@ -233,6 +233,14 @@ export function commentsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~comments`;
 }
 
+/// `lanesUrl(repo)` → `/r/{repo}/~lanes` — V76-R3a aug-lane/1 registry dock.
+/// Unmodelled in the Location Contract's `PageId` set, same footing as
+/// `~rails`/`~browser`: nothing needs a push/replace ruling about moving
+/// between two `~lanes` views, and a different URL is a different place.
+export function lanesUrl(repo: string): string {
+  return `${codeBasePath(repo, "")}/~lanes`;
+}
+
 /// `railsUrl(repo, noun?)` → `/r/{repo}/~rails[?noun=view]` — V72-I2's
 /// `rails/1` dashboard. `noun` names the section the page opens on and is
 /// the ONLY thing this page puts in the URL: the per-section `q=` filter and

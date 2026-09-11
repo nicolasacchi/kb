@@ -1766,10 +1766,20 @@ spawned before the bind and never awaited, one short transaction per page,
 recomputed cutoff per page so an interrupted pass simply resumes. A
 disabled lane is never swept out from under a re-enable.
 
-Not in this unit, by design: the SPA's Facts gutter, rail and hover
-(H4b); any lane beyond the four; the retrofit of kb-lip, rails-lens and
-the DCB doc-lens as lanes; and LLM-produced facts, which this daemon has
-no place for at all.
+**SPA (V76-R3a / H4b).** Facts is a **rail tab** (`Space R f`) plus hover
+and marker **variants on existing gutters** — never a fifth `lineGutter`
+slot (kbc-theme/1 Lane Budget: slot four is comments/1). The rail groups
+the current file's `GET /api/lanes/facts` rows by lane (enabled /
+disabled-with-reason / empty-with-reason); trust is LINE STYLE; `age_secs`
+is folded into a display-only "aging"/"stale" caption and never rewrites
+the wire class. RuboCop/SARIF diagnostics ride the diagnostics gutter
+(slot 3) as a lane variant; coverage rides the blame gutter as a band
+toggled from the Facts tab (off by default); `git.behavior` stays
+rail-only. `~lanes` (`Space g l`) is the registry dock (`GET /api/lanes`).
+
+Not in this unit, by design: any lane beyond the four; the retrofit of
+kb-lip, rails-lens and the DCB doc-lens as lanes; and LLM-produced facts,
+which this daemon has no place for at all.
 
 **V72-H2a (D7) — three grammars, one injection layer, `outline/1`.**
 

@@ -115,6 +115,8 @@ export interface Prefs {
   /// here follows: comments/1 itself has no display-mode concept, this is
   /// purely how the margin reads for THIS operator.
   commentGutterMode?: CommentGutterMode;
+  /// V76-R3a — coverage band on the blame gutter (default off).
+  coverageBand?: boolean;
 }
 
 const PREFS_KEY = "kbc:prefs";
@@ -146,6 +148,7 @@ const DEFAULT_PREFS: Prefs = {
   coachGd: 0,
   learnToasts: {},
   commentGutterMode: "all",
+  coverageBand: false,
 };
 
 export function loadPrefs(): Prefs {
@@ -475,6 +478,17 @@ export function saveCommentGutterMode(mode: CommentGutterMode): void {
   const cur = loadPrefs();
   if (cur.commentGutterMode === mode) return;
   savePrefs({ ...cur, commentGutterMode: mode });
+}
+
+/// V76-R3a — coverage band on the blame gutter. Default OFF.
+export function loadCoverageBand(): boolean {
+  return loadPrefs().coverageBand === true;
+}
+
+export function saveCoverageBand(on: boolean): void {
+  const cur = loadPrefs();
+  if (cur.coverageBand === on) return;
+  savePrefs({ ...cur, coverageBand: on });
 }
 
 /// SH.C3 — clamp to the reader font-size stepper's bounds; a non-finite

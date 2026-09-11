@@ -170,6 +170,12 @@ export const Icon = {
       <path d="M2 3.5h10a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H6l-3 2.5v-2.5H2a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z" />
     </svg>
   ),
+  // V76-R3a — Facts tab: three bars, a histogram of claims about a file.
+  Facts: (p: P) => (
+    <svg {...base(14)} {...p} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12V8M7 12V4M11 12V6" />
+    </svg>
+  ),
   Expand: (p: P) => (
     <svg {...base(14)} {...p} strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" />
