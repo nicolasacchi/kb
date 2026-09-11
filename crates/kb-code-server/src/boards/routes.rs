@@ -9,14 +9,15 @@
 //! | `GET /api/boards/{slug}/export?repo=&format=[&base=]` | `auth_bearer` |
 //! | `GET /api/boards/sweep?repo=[&slug=]` | `auth_bearer` |
 //! | `POST /api/boards/apply` | **loopback-only** |
-//! | `POST /api/boards/{slug}/accept?repo=` | **loopback-only** |
-//! | `POST /api/boards/{slug}/archive?repo=` | **loopback-only** |
-//! | `DELETE /api/boards/{slug}?repo=` | **loopback-only** |
+//! | `POST /api/boards/{slug}/accept?repo=` | `[review] remote_mutations` |
+//! | `POST /api/boards/{slug}/archive?repo=` | `[review] remote_mutations` |
+//! | `DELETE /api/boards/{slug}?repo=` | `[review] remote_mutations` |
 //!
-//! The mutation gate is the `transcripts_api` sub-router the review
-//! mutations already ride — not a new gate, and
-//! `security::audit_mutations` (invariant 1) therefore records every apply,
-//! accept, archive and delete with its actual outcome for free.
+//! Apply stays on `transcripts_api` (loopback-only HARD). Accept / archive
+//! / DELETE ride the SAME `review_mutations_gate` as the five review
+//! families (V76-R4a, D10) — no second gate, no new config key.
+//! `security::audit_mutations` (invariant 1) records every attempt with
+//! its actual outcome for free.
 //!
 //! # Why `/api/boards` and not `/api/canvas`
 //!
@@ -106,7 +107,7 @@ pub async fn list_boards(
             return Err(ApiError::bad_request(format!(
                 "unknown status {s:?} — expected one of {}",
                 STATUSES.join(", ")
-            )))
+            )));
         }
         other => other.clone(),
     };
@@ -663,14 +664,15 @@ pub struct StatusOut {
     pub revision: i64,
 }
 
-/// `POST /api/boards/{slug}/accept?repo=` — LOOPBACK-ONLY.
+/// `POST /api/boards/{slug}/accept?repo=` — `[review] remote_mutations`
+/// (loopback always; non-loopback bearer when the flag is on).
 ///
 /// D21: an agent-proposed board is PENDING until a human accepts it. This
 /// route is the only way `accepted` is ever written; `apply` refuses to
 /// author it (`lint`'s `status` rule), which is what makes "impossible by
-/// the gate" true by construction rather than by convention — a bearer
-/// caller never reaches this handler at all, and a bearer-authored document
-/// naming `accepted` is refused before any gate matters.
+/// the lint" true by construction rather than by convention — a
+/// bearer-authored document naming `accepted` is refused before any gate
+/// matters. Apply itself stays loopback-only.
 pub async fn accept_board(
     State(state): State<SharedState>,
     AxumPath(slug): AxumPath<String>,
@@ -679,7 +681,7 @@ pub async fn accept_board(
     set_status(state, slug, params.repo, STATUS_ACCEPTED).await
 }
 
-/// `POST /api/boards/{slug}/archive?repo=` — LOOPBACK-ONLY.
+/// `POST /api/boards/{slug}/archive?repo=` — `[review] remote_mutations`.
 pub async fn archive_board(
     State(state): State<SharedState>,
     AxumPath(slug): AxumPath<String>,
@@ -724,7 +726,7 @@ async fn set_status(
     ))
 }
 
-/// `DELETE /api/boards/{slug}?repo=` — LOOPBACK-ONLY, audited.
+/// `DELETE /api/boards/{slug}?repo=` — `[review] remote_mutations`, audited.
 pub async fn delete_board(
     State(state): State<SharedState>,
     AxumPath(slug): AxumPath<String>,

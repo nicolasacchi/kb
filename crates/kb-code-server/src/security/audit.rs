@@ -69,17 +69,24 @@ const DEFAULT_SINCE_SECS: i64 = 24 * 60 * 60;
 fn is_review_gate_path(path: &str) -> bool {
     // `/api/reviews/{id}/findings`, `.../findings/{slug}/disposition`,
     // `.../findings/{slug}/published`, `.../verdict`, `.../verdict/published`.
-    let Some(rest) = path.strip_prefix("/api/reviews/") else {
+    if let Some(rest) = path.strip_prefix("/api/reviews/") {
+        if let Some((_id, tail)) = rest.split_once('/') {
+            return tail == "findings"
+                || tail == "verdict"
+                || tail == "verdict/published"
+                || (tail.starts_with("findings/")
+                    && (tail.ends_with("/disposition") || tail.ends_with("/published")));
+        }
         return false;
-    };
-    let Some((_id, tail)) = rest.split_once('/') else {
-        return false;
-    };
-    tail == "findings"
-        || tail == "verdict"
-        || tail == "verdict/published"
-        || (tail.starts_with("findings/")
-            && (tail.ends_with("/disposition") || tail.ends_with("/published")))
+    }
+    // V76-R4a — board mutations on `review_remote` (not apply).
+    if let Some(rest) = path.strip_prefix("/api/boards/") {
+        if rest == "apply" || rest == "sweep" {
+            return false;
+        }
+        return rest.ends_with("/accept") || rest.ends_with("/archive") || !rest.contains('/');
+    }
+    false
 }
 
 /// A per-request correlation id. Not a UUID crate dependency: 12 hex
@@ -323,6 +330,9 @@ mod tests {
             "/api/reviews/7/verdict/published",
             "/api/reviews/7/findings/f-abc/disposition",
             "/api/reviews/7/findings/f-abc/published",
+            "/api/boards/checkout-flow/accept",
+            "/api/boards/checkout-flow/archive",
+            "/api/boards/checkout-flow",
         ] {
             assert!(is_review_gate_path(p), "{p}");
         }
@@ -333,6 +343,9 @@ mod tests {
             "/api/reviews",
             "/api/checkout",
             "/api/annotations/abc/apply",
+            "/api/boards/apply",
+            "/api/boards/sweep",
+            "/api/boards/checkout-flow/export",
         ] {
             assert!(!is_review_gate_path(p), "{p}");
         }

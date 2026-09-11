@@ -40,6 +40,7 @@ permissions:
 #     family         written by       restored read-only by
 #     workspace      workspace-test   workspace-lint
 #     drift          drift            —
+#     code-drift     code-drift       —   (V76-R4a; kb-code ts-export)
 #     code           code-test        code-lint
 #     e2e-fast       e2e              —
 #     code-e2e-fast  code-e2e         —
@@ -355,6 +356,75 @@ jobs:
 
       - name: Generated-artifact drift
         run: just types-check
+
+  code-drift:
+    name: code-drift (kb-code TS wire bindings)
+    # V76-R4a — own job, never a step on `drift` (the kb SPA generator).
+    # `--features ts-export` on kb-code-server is a third flavor on top of
+    # the two kb-core/kb-server ts-export passes; sharing `drift` or `code`
+    # would recompile the tree-sitter/gix graph the way sharing `workspace`
+    # made the kb drift job stay cold. Path-filtered like the other
+    # `code-*` jobs so a kb-only PR does not pay this compile.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for kb-code-relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
+               | grep -qE '^(crates/kb-code-(server|cli)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space (drop preinstalled SDKs)
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                   /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                   /usr/local/share/boost; do
+            ( sudo rm -rf "$d" || true ) &
+          done
+          wait
+          df -h /
+
+      - name: Install Rust toolchain
+        if: steps.changes.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo + target
+        if: steps.changes.outputs.run == 'true'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: code-drift
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep)
+        if: steps.changes.outputs.run == 'true'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install just (drift-check recipes)
+        if: steps.changes.outputs.run == 'true'
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Generated kb-code wire-type drift
+        if: steps.changes.outputs.run == 'true'
+        run: just gen-ts-code-check
+
+      - name: Skipped (no kb-code-relevant changes)
+        if: steps.changes.outputs.run != 'true'
+        run: echo "No changes under crates/kb-code-*/, web-code/, Cargo.toml, Cargo.lock, or justfile — skipping."
 
   e2e:
     name: e2e (Playwright iframe smoke)

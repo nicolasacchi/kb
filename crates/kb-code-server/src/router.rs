@@ -1363,17 +1363,13 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/canvas/{id}",
             put(canvas::update_canvas).delete(canvas::delete_canvas),
         )
-        // V74-L1 (D10 + D21, Track L) — `kbc-canvas/1` board mutations.
-        // Same loopback-only family as the canvas-set mutations directly
-        // above and as every review mutation: NOT `auth_bearer`, and NOT
-        // the `review_remote` gate. D10 sketches a later graduation onto a
-        // named-family `[review] remote_mutations = ["review", "canvas"]`
-        // allowlist; that is its own unit, and nothing here weakens kb root
-        // invariant #4. `accept` is the ONLY writer of the `accepted`
-        // status (D21: an agent-proposed board is PENDING until a human
-        // accepts it) — `apply`'s own lint refuses to author that status at
-        // all, so the rule holds for a loopback caller too, not just by
-        // virtue of this gate.
+        // V74-L1 (D10 + D21, Track L) — `kbc-canvas/1` board APPLY stays
+        // on this loopback-only family. V76-R4a (D10 graduation) moved
+        // `accept`/`archive`/`DELETE` onto `review_remote` below (the SAME
+        // `[review] remote_mutations` gate, no second key). Apply is the
+        // whole-document write and stays loopback-only HARD. `accept` is
+        // still the ONLY writer of the `accepted` status (D21) — `apply`'s
+        // own lint refuses to author that status at all.
         // V74-L3a — kbc-recipe/1's four WRITERS. `materialise` stores a
         // run snapshot, `trust` records a trust-on-first-use decision,
         // `new` writes a server-stored recipe and `delete` removes one:
@@ -1393,18 +1389,6 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             delete(crate::recipe::routes::delete_route),
         )
         .route("/boards/apply", post(crate::boards::routes::apply_board))
-        .route(
-            "/boards/{slug}/accept",
-            post(crate::boards::routes::accept_board),
-        )
-        .route(
-            "/boards/{slug}/archive",
-            post(crate::boards::routes::archive_board),
-        )
-        .route(
-            "/boards/{slug}",
-            delete(crate::boards::routes::delete_board),
-        )
         // V74-L3b — `kbc-tour/1`'s two mutations, the same loopback-only
         // family as the board mutations directly above (a tour IS a board
         // row). `accepted`/`archived` stay reachable only through the
@@ -1486,6 +1470,23 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/reviews/{id}/verdict",
             put(reviews::put_verdict).delete(reviews::delete_verdict),
+        )
+        // V76-R4a (D10) — board mutations other than apply, graduated onto
+        // the SAME `[review] remote_mutations` gate. Apply stays on
+        // `transcripts_api` above (loopback-only HARD). GET `/boards/{slug}`
+        // lives on the bearer `api` router; DELETE is this method only —
+        // same split `GET/PUT /reviews/{id}/report` already uses.
+        .route(
+            "/boards/{slug}/accept",
+            post(crate::boards::routes::accept_board),
+        )
+        .route(
+            "/boards/{slug}/archive",
+            post(crate::boards::routes::archive_board),
+        )
+        .route(
+            "/boards/{slug}",
+            delete(crate::boards::routes::delete_board),
         )
         .layer(from_fn_with_state(auth.clone(), auth_bearer))
         .layer(from_fn_with_state(
