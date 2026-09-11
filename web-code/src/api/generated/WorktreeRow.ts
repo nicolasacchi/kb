@@ -5,13 +5,17 @@
  */
 export type WorktreeRow = { workspace_id: string, id: string, path: string | null, branch: string | null, head_sha: string | null, is_main: boolean, bare: boolean, detached: boolean, locked: boolean, 
 /**
- * The lock reason VERBATIM. D13's owner oracle is parsed defensively
- * by a later unit (M2) and can only ever mint `likely`; this unit
- * stores the bytes and interprets none of them.
+ * The lock reason VERBATIM. D13's owner oracle (`worktrees::
+ * parse_lock_owner`) is `likely` at best and never rewrites this.
  */
 lock_reason: string | null, prunable: boolean, prunable_reason: string | null, mounted: boolean, path_resolution: string, 
 /**
  * The `[[repos]]` entry this worktree is reachable through, when it is
  * mounted. `None` for "known, not mounted".
  */
-repo: string | null, };
+repo: string | null, 
+/**
+ * V76-R3b — the daemon may DELETE this worktree only when it recorded
+ * creating it. Preserved across [`Store::replace_worktrees`].
+ */
+created_by_daemon: boolean, };
