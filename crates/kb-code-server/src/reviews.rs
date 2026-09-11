@@ -723,6 +723,26 @@ pub(crate) fn report_risk_score_numeric(report_json: Option<&str>) -> Option<f64
         .and_then(|v| v.get("risk_score").and_then(serde_json::Value::as_f64))
 }
 
+/// When a PR-bound review has no stored `pr_meta`, surface a typed
+/// `pr_meta_unavailable_reason` so the Room header can say why. Computed
+/// at read time from current credentials — never persisted.
+fn attach_live_pr_meta_reason(body: &mut serde_json::Value, has_credentials: bool) {
+    let pr_bound = body.get("pr_number").map(|v| !v.is_null()).unwrap_or(false);
+    let meta_missing = body.get("pr_meta").map(|v| v.is_null()).unwrap_or(true);
+    if pr_bound && meta_missing {
+        let reason = if has_credentials {
+            crate::github::PrMetaUnavailable::not_found(
+                "PR metadata was not stored at bind time (GitHub returned 404 or the fetch failed)",
+            )
+        } else {
+            crate::github::PrMetaUnavailable::no_credentials()
+        };
+        if let Ok(v) = serde_json::to_value(reason) {
+            body["pr_meta_unavailable_reason"] = v;
+        }
+    }
+}
+
 /// Splice [`pr_binding_and_report_fields`]'s keys into an existing review
 /// JSON object in place — `list_reviews`/`get_review` build their base
 /// shape via the `json!` macro (a `serde_json::Value::Object`), so this
@@ -1734,13 +1754,17 @@ pub async fn list_reviews(
     // (store batch fan-out + per-review git diff + CPU-only aggregation)
     // is now ONE blocking-pool trip, down from one initial fetch plus up
     // to three more PER REVIEW.
-    let out = state
+    let has_creds = state.github.has_credentials();
+    let mut out = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let rows = store.list_reviews(&repo_name, state_filter.as_deref())?;
             compose_review_list_rows(store, &root, repo_id, rows)
         })
         .await?;
+    for row in &mut out {
+        attach_live_pr_meta_reason(row, has_creds);
+    }
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -1810,6 +1834,7 @@ pub async fn get_review(
         "verdict_stale": verdict_stale,
     });
     merge_pr_binding_and_report_fields(&mut body, &binding, &report);
+    attach_live_pr_meta_reason(&mut body, state.github.has_credentials());
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
 }
 
@@ -2333,6 +2358,12 @@ pub struct CreateReviewPrBody {
     pub title: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// V76-R1c — the CLI `--gh-token-from-cli` path. The CLI runs
+    /// `gh auth token` itself and sends the value here. Loopback-only,
+    /// never persisted, never logged. Refused off loopback even if this
+    /// route later graduates off the loopback-only sub-router.
+    #[serde(default)]
+    pub gh_token: Option<String>,
 }
 
 /// V76-R1a — `POST /api/reviews/pr`'s `?async=` query flag.
@@ -2364,9 +2395,25 @@ impl StartPrParams {
 /// daemon-side job (`crate::review_jobs`).
 pub async fn create_review_pr(
     State(state): State<SharedState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<StartPrParams>,
-    Json(body): Json<CreateReviewPrBody>,
+    Json(mut body): Json<CreateReviewPrBody>,
 ) -> Result<axum::response::Response, ApiError> {
+    // V76-R1c — the CLI-supplied GitHub token (`gh_token`, loopback-only)
+    // is admitted ONCE here, ahead of BOTH the synchronous path and the
+    // `?async=1` job path (the job keeps the body in memory only —
+    // `review_jobs` persists nothing — and the token is never echoed).
+    let is_loopback = kb_server::middleware::is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.auth.trusted_proxies,
+    );
+    body.gh_token =
+        match crate::github::admit_cli_github_token(is_loopback, body.gh_token.as_deref()) {
+            Ok(t) => t,
+            Err(msg) => return Err(ApiError::bad_request(msg)),
+        };
     if params.wants_async() {
         return crate::review_jobs::start_or_attach(state, body).await;
     }
@@ -2396,6 +2443,9 @@ pub(crate) async fn create_review_pr_value(
     body: CreateReviewPrBody,
     job: Option<crate::review_jobs::JobHandle>,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    // V76-R1c — request-time credential ladder (file > env > the admitted
+    // CLI token > none); the same client serves the sync and the job path.
+    let github = state.github.with_cli_token(body.gh_token.clone());
     let (repo, _repo_id) = find_repo(state, &body.repo)?;
     let repo_root = repo.path.clone();
 
@@ -2539,15 +2589,11 @@ pub(crate) async fn create_review_pr_value(
     // resolved as GitHub; any failure (including "not GitHub") degrades to
     // `pr_meta_json=null` + a reason — the review is already created either
     // way.
+    let had_credentials = github.has_credentials();
     let (pr_meta_json, pr_meta_unavailable_reason) = if let Some(ref gh) = gh_repo {
-        match state
-            .github
-            .get_pull(&gh.owner, &gh.name, number as u64)
-            .await
-        {
+        match github.get_pull(&gh.owner, &gh.name, number as u64).await {
             Ok(pull) => {
-                let checks = match state
-                    .github
+                let checks = match github
                     .list_checks(&gh.owner, &gh.name, &pull.head_sha)
                     .await
                 {
@@ -2584,16 +2630,14 @@ pub(crate) async fn create_review_pr_value(
                     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 (Some(meta_str), None)
             }
-            Err(e) => (None, Some(e.to_string())),
+            Err(e) => (None, Some(e.to_pr_meta_unavailable(had_credentials))),
         }
     } else {
         (
             None,
-            Some(
-                "repo origin is not a recognized GitHub remote; \
-                 metadata enrichment skipped"
-                    .to_string(),
-            ),
+            Some(crate::github::PrMetaUnavailable::not_found(
+                "repo origin is not a recognized GitHub remote; metadata enrichment skipped",
+            )),
         )
     };
 

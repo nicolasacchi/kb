@@ -213,6 +213,166 @@ pub fn is_valid_category_v2(s: &str) -> bool {
     CATEGORIES.contains(&s)
 }
 
+/// V76-R1c — documented aliases the V0 `kbc-compose/1` path accepts for
+/// [`CATEGORIES`]. Identity members of [`CATEGORIES`] are not listed here
+/// (they pass through unchanged). Unknown values fall through to `"other"`.
+///
+/// | free-text | maps to |
+/// |---|---|
+/// | `bug` \| `logic` \| `error` | `correctness` |
+/// | `perf` | `performance` |
+/// | `sec` | `security` |
+/// | `lint` \| `naming` | `style` |
+/// | `test` \| `spec` | `tests` |
+/// | `doc` | `docs` |
+/// | `arch` \| `architecture` | `design` |
+/// | anything else | `other` |
+pub const V0_CATEGORY_ALIASES: &[(&str, &str)] = &[
+    ("bug", "correctness"),
+    ("logic", "correctness"),
+    ("error", "correctness"),
+    ("perf", "performance"),
+    ("sec", "security"),
+    ("lint", "style"),
+    ("naming", "style"),
+    ("test", "tests"),
+    ("spec", "tests"),
+    ("doc", "docs"),
+    ("arch", "design"),
+    ("architecture", "design"),
+];
+
+/// Result of [`map_v0_category`]: the closed-vocabulary value a V0 compose
+/// will store, plus whether a rewrite happened (so lint can emit INFO).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedCategory {
+    pub canonical: &'static str,
+    /// The trimmed, lowercased input that was classified. Empty when `raw`
+    /// was whitespace-only (still maps to `"other"`).
+    pub normalised: String,
+    /// `true` when the stored value is not the author's original token —
+    /// an alias hit, or the fallback to `"other"`. Identity members of
+    /// [`CATEGORIES`] are `false` and do not produce a lint INFO.
+    pub rewritten: bool,
+}
+
+/// Map a V0 free-text `category` onto [`CATEGORIES`]. Never rejects: an
+/// unknown token becomes `"other"` with `rewritten = true`. Comparison is
+/// ASCII-lowercase and trimmed.
+pub fn map_v0_category(raw: &str) -> MappedCategory {
+    let normalised = raw.trim().to_ascii_lowercase();
+    if let Some(&canonical) = CATEGORIES.iter().find(|c| **c == normalised) {
+        return MappedCategory {
+            canonical,
+            normalised,
+            rewritten: false,
+        };
+    }
+    let canonical = V0_CATEGORY_ALIASES
+        .iter()
+        .find(|(from, _)| *from == normalised)
+        .map(|(_, to)| *to)
+        .unwrap_or("other");
+    MappedCategory {
+        canonical,
+        normalised,
+        rewritten: true,
+    }
+}
+
+/// V76-R1c — synthesise a `minimal`-tier `kbc-review/1` document from a V0
+/// `kbc-compose/1` payload. Findings must already carry closed-vocabulary
+/// categories (call [`map_v0_category`] first). The body states that this
+/// is a synthesis; [`omitted_blocks`] lists everything the V0 shape cannot
+/// carry (risk, reading order, flows, questions, author, ci, named
+/// sections).
+pub fn synthesize_v0_document(summary_md: &str, findings: &[DocFinding]) -> String {
+    let mut out = String::from("---\n");
+    out.push_str("schema: kbc-review/1\n");
+    out.push_str("summary_md: ");
+    out.push_str(&yaml_double_quoted(summary_md));
+    out.push('\n');
+    if findings.is_empty() {
+        out.push_str("findings: []\n");
+    } else {
+        out.push_str("findings:\n");
+        for f in findings {
+            out.push_str("  - slug: ");
+            out.push_str(&yaml_double_quoted(f.slug.as_deref().unwrap_or("")));
+            out.push('\n');
+            out.push_str("    act: ");
+            out.push_str(&yaml_double_quoted(&f.act));
+            out.push('\n');
+            out.push_str("    severity: ");
+            out.push_str(&yaml_double_quoted(&f.severity));
+            out.push('\n');
+            out.push_str("    category: ");
+            out.push_str(&yaml_double_quoted(&f.category));
+            out.push('\n');
+            out.push_str("    blocking: ");
+            out.push_str(if f.blocking { "true" } else { "false" });
+            out.push('\n');
+            out.push_str("    title: ");
+            out.push_str(&yaml_double_quoted(&f.title));
+            out.push('\n');
+            out.push_str("    rationale: ");
+            out.push_str(&yaml_double_quoted(&f.rationale));
+            out.push('\n');
+            if let Some(rec) = &f.recommendation {
+                out.push_str("    recommendation: ");
+                out.push_str(&yaml_double_quoted(rec));
+                out.push('\n');
+            }
+            out.push_str("    location:\n");
+            out.push_str("      path: ");
+            out.push_str(&yaml_double_quoted(&f.location.path));
+            out.push('\n');
+            out.push_str("      kind: ");
+            out.push_str(&yaml_double_quoted(&f.location.kind));
+            out.push('\n');
+            if let Some(lines) = &f.location.lines {
+                out.push_str("      lines: [");
+                for (i, n) in lines.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&n.to_string());
+                }
+                out.push_str("]\n");
+            }
+            if f.location.removed {
+                out.push_str("      removed: true\n");
+            }
+        }
+    }
+    out.push_str("---\n\n");
+    out.push_str(
+        "This document was synthesised from a `kbc-compose/1` payload at tier `minimal`.\n\
+         The V0 shape cannot carry risk, a reading order, flows, questions, an author\n\
+         block, CI, or named sections; those absences are listed in `omitted[]`.\n",
+    );
+    out
+}
+
+/// Double-quoted YAML scalar the closed front-matter subset accepts
+/// (`\\`, `\"`, `\n`, `\t`, `\r`). Always quoted so a title containing
+/// `:` or `#` cannot be misread as a mapping or a comment.
+fn yaml_double_quoted(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// A finding's CHANGE DETECTOR: FNV-1a 64 over
 /// `act \0 category \0 normalised(title) \0 primary path`, rendered as 16
 /// hex digits.
@@ -519,7 +679,7 @@ pub fn parse(doc: &str) -> Result<ReviewDoc, DocError> {
                     }
                     None | Some(Value::Null) => Vec::new(),
                     Some(_) => {
-                        return Err(DocError::msg("`reading_order[].stops` must be a sequence"))
+                        return Err(DocError::msg("`reading_order[].stops` must be a sequence"));
                     }
                 };
                 out.push(Chapter {
@@ -552,7 +712,7 @@ pub fn parse(doc: &str) -> Result<ReviewDoc, DocError> {
         Some(_) => {
             return Err(DocError::msg(
                 "`blocks` must be a mapping of named sections",
-            ))
+            ));
         }
     }
 
@@ -697,7 +857,7 @@ pub fn parse(doc: &str) -> Result<ReviewDoc, DocError> {
                         DocError::msg("`ci[].observed_at` must be a whole number")
                     })?),
                     Some(_) => {
-                        return Err(DocError::msg("`ci[].observed_at` must be a unix timestamp"))
+                        return Err(DocError::msg("`ci[].observed_at` must be a unix timestamp"));
                     }
                 };
                 out.push(CiCheck {
@@ -1125,5 +1285,102 @@ mod tests {
         for t in TIERS {
             assert_eq!(Tier::parse(t).map(Tier::as_str), Some(t));
         }
+    }
+
+    // --- V76-R1c: V0 category mapping + synthesised minimal document ------
+
+    #[test]
+    fn v0_category_mapping_table_covers_every_documented_row() {
+        // Identity members of CATEGORIES pass through, not rewritten.
+        for c in CATEGORIES {
+            let m = map_v0_category(c);
+            assert_eq!(m.canonical, c, "identity {c}");
+            assert!(!m.rewritten, "identity {c} must not emit a mapping INFO");
+        }
+        // Case and surrounding whitespace are folded.
+        let mixed = map_v0_category("  Correctness\t");
+        assert_eq!(mixed.canonical, "correctness");
+        assert!(!mixed.rewritten);
+
+        // Every alias row.
+        for (from, to) in V0_CATEGORY_ALIASES {
+            let m = map_v0_category(from);
+            assert_eq!(m.canonical, *to, "alias {from} → {to}");
+            assert!(m.rewritten, "alias {from} must emit a mapping INFO");
+            // Uppercase form of the same alias.
+            let m = map_v0_category(&from.to_ascii_uppercase());
+            assert_eq!(
+                m.canonical,
+                *to,
+                "uppercase alias {}",
+                from.to_ascii_uppercase()
+            );
+        }
+
+        // Unknown → other, rewritten.
+        let unknown = map_v0_category("n+1-query");
+        assert_eq!(unknown.canonical, "other");
+        assert!(unknown.rewritten);
+        let empty = map_v0_category("   ");
+        assert_eq!(empty.canonical, "other");
+        assert!(empty.rewritten);
+    }
+
+    #[test]
+    fn synthesise_v0_document_is_a_minimal_kbc_review_that_parses() {
+        let findings = vec![DocFinding {
+            slug: Some("f-dedup-race".into()),
+            act: "issue".into(),
+            severity: "concern".into(),
+            category: "correctness".into(),
+            blocking: false,
+            title: "Dedup key ignores the attempt: retry".into(),
+            rationale: "Two submits\ncollide.".into(),
+            recommendation: Some("hash the nonce".into()),
+            location: crate::review_findings::FindingLocationBody {
+                path: "app/models/order.rb".into(),
+                kind: "single".into(),
+                lines: Some(vec![4]),
+                removed: false,
+            },
+            cites: vec![],
+            supersedes: vec![],
+            evidence: None,
+        }];
+        let doc_md = synthesize_v0_document("the v0 shape", &findings);
+        let doc = parse(&doc_md).unwrap_or_else(|e| panic!("synthesised document must parse: {e}"));
+        assert_eq!(doc.summary_md, "the v0 shape");
+        assert_eq!(doc.findings.as_ref().map(|f| f.len()), Some(1));
+        let f = &doc.findings.as_ref().unwrap()[0];
+        assert_eq!(f.slug.as_deref(), Some("f-dedup-race"));
+        assert_eq!(f.category, "correctness");
+        assert_eq!(f.title, "Dedup key ignores the attempt: retry");
+        assert_eq!(f.rationale, "Two submits\ncollide.");
+        assert_eq!(f.location.path, "app/models/order.rb");
+        assert_eq!(f.location.lines.as_deref(), Some(&[4][..]));
+        let omitted = omitted_blocks(&doc);
+        for name in [
+            "risk",
+            "reading_order",
+            "flows",
+            "questions",
+            "author",
+            "ci",
+            "blocks.context",
+            "blocks.approach",
+            "blocks.alternatives_considered",
+            "blocks.tests",
+            "blocks.rollout",
+            "blocks.open_questions",
+        ] {
+            assert!(
+                omitted.iter().any(|s| s == name),
+                "V0 synthesis must omit {name}: {omitted:?}"
+            );
+        }
+        assert!(
+            doc_md.contains("synthesised from a `kbc-compose/1` payload"),
+            "{doc_md}"
+        );
     }
 }

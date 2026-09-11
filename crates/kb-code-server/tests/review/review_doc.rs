@@ -943,9 +943,46 @@ async fn the_v0_compose_form_still_works_and_still_requires_its_own_fields() {
         "an author-supplied slug is still identity on the v0 path"
     );
     assert!(
-        body.get("revision").is_none(),
-        "the v0 path stores no document: {body}"
+        body["revision"].as_i64().is_some(),
+        "V76-R1c: V0 compose synthesises a kbc-review/1 document: {body}"
     );
+    assert_eq!(body["doc"]["tier"], "minimal", "{body}");
+    assert!(
+        body["doc"]["omitted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some("risk")),
+        "V0 omitted[] names what the shape cannot carry: {body}"
+    );
+
+    let doc: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}/doc"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(doc["schema"], "kbc-review/1");
+    assert_eq!(doc["summary_md"], "the v0 shape");
+
+    let render: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}/doc/render"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let html = render["html"].as_str().unwrap();
+    assert!(
+        html.contains(r#"<meta name="kb-category" content="review">"#),
+        "{html}"
+    );
+    assert!(html.contains(r#"id="summary""#), "{html}");
+    assert!(html.contains(r#"id="findings""#), "{html}");
+    assert!(html.contains(r#"id="verdict""#), "{html}");
 
     let (status, body) = compose(
         &client,
@@ -957,6 +994,88 @@ async fn the_v0_compose_form_still_works_and_still_requires_its_own_fields() {
     assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
     assert!(
         body["error"].as_str().unwrap().contains("findings"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn v0_compose_maps_free_text_categories_and_refuses_an_invalid_slug() {
+    let repo = fixture_repo();
+    let (_tmp, base) = boot_with_repo("acme-app", repo.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "acme-app").await;
+
+    let (status, body) = compose(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "summary": "mapped",
+            "findings": {
+                "schema": "kbc-findings/1",
+                "findings": [{
+                    "slug": "f-mapped",
+                    "severity": "concern",
+                    "category": "bug",
+                    "location": { "path": "app/models/order.rb", "kind": "single", "lines": [4] },
+                    "title": "a bug",
+                    "rationale": "it is a bug",
+                }],
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    let infos = body["lint"]["rows"].as_array().cloned().unwrap_or_default();
+    assert!(
+        infos.iter().any(|r| {
+            r["rule"] == "category_mapped"
+                && r["message"].as_str().unwrap_or("").contains("bug")
+                && r["message"].as_str().unwrap_or("").contains("correctness")
+        }),
+        "expected category_mapped INFO: {body}"
+    );
+    let findings: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}/findings"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let row = findings["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["slug"] == "f-mapped")
+        .expect("finding stored");
+    assert_eq!(row["category"], "correctness", "{row}");
+
+    let (status, body) = compose(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "summary": "bad slug",
+            "findings": {
+                "schema": "kbc-findings/1",
+                "findings": [{
+                    "slug": "F-Not-Valid",
+                    "severity": "concern",
+                    "category": "other",
+                    "location": { "path": "app/models/order.rb", "kind": "single", "lines": [4] },
+                    "title": "bad",
+                    "rationale": "bad",
+                }],
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["regex"], "f-[a-z0-9-]+", "{body}");
+    assert_eq!(body["slug"], "F-Not-Valid", "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("f-[a-z0-9-]+"),
         "{body}"
     );
 }

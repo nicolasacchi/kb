@@ -20,13 +20,24 @@
 //!
 //! [`GithubClient`] mirrors `join::kb_client::KbClient`'s own federation
 //! precedent: one pooled `reqwest::Client` built once at construction, a
-//! fixed [`TIMEOUT`] (5s, no retries), `Authorization: Bearer <token>`
-//! applied ONLY when `[github] token_file` is configured (an
-//! unauthenticated request still works for a PUBLIC repo — just GitHub's
-//! lower unauthenticated rate limit). A network failure or a non-2xx
-//! response (403 rate-limit, 404 unknown repo, ...) is reported as a
-//! [`GithubApiError`] the ROUTE then folds into an honest
-//! `unavailable_reason` string with an EMPTY result set and an ordinary
+//! fixed [`TIMEOUT`] (5s, no retries). The bearer token is resolved **at
+//! request time** (never baked at boot, never logged) via
+//! [`resolve_github_token`]:
+//!
+//! 1. `[github] token_file` — mode 0600 (or 0400); a missing, unreadable,
+//!    empty, or group/world-readable file falls through to the next rung.
+//! 2. env [`GITHUB_TOKEN_ENV`] (`KB_CODE_GITHUB_TOKEN`).
+//! 3. CLI-supplied token (`review start-pr --gh-token-from-cli`) — the CLI
+//!    runs `gh auth token` and sends it in the request body. Loopback-only,
+//!    never persisted. [`admit_cli_github_token`] refuses it off loopback.
+//! 4. none — an unauthenticated request still works for a PUBLIC repo
+//!    (GitHub's lower unauthenticated rate limit); a private repo 404s
+//!    and is reported as [`PrMetaUnavailableCode::NoCredentials`].
+//!
+//! A network failure or a non-2xx response is reported as a
+//! [`GithubApiError`] the ROUTE then folds into a typed
+//! [`PrMetaUnavailable`] (`no-credentials|not-found|forbidden|
+//! rate-limited|network`) with an EMPTY result set and an ordinary
 //! HTTP 200 — never a 5xx for "GitHub had a bad day" — mirroring how
 //! `search::sessions`'s lane degrades kb-unreachable rather than failing
 //! the whole Search-Everywhere box.
@@ -42,6 +53,10 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
+
+/// Env rung of the GitHub credential ladder. Read at request time, never
+/// logged.
+pub const GITHUB_TOKEN_ENV: &str = "KB_CODE_GITHUB_TOKEN";
 
 /// Fixed, non-configurable — see the module doc. This lane must never be
 /// the reason a `GET /api/prs`/`GET /api/prs/{n}/comments` request hangs.
@@ -556,23 +571,180 @@ pub enum GithubApiError {
     ClientBuild(String),
     #[error("github unreachable at {0}: {1}")]
     Unreachable(String, String),
+    #[error("github unauthorized (401)")]
+    Unauthorized,
     #[error("github rate-limited (403)")]
     RateLimited,
+    #[error("github forbidden (403)")]
+    Forbidden,
+    #[error("github not found (404)")]
+    NotFound,
     #[error("github returned {0}")]
     BadStatus(reqwest::StatusCode),
     #[error("parse github response: {0}")]
     Parse(String),
 }
 
+/// Typed `pr_meta_unavailable_reason` on the wire (V76-R1c). Always an
+/// object `{code, hint}` so the Room header can show both a stable enum
+/// and a sentence that names the fix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrMetaUnavailable {
+    pub code: PrMetaUnavailableCode,
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrMetaUnavailableCode {
+    NoCredentials,
+    NotFound,
+    Forbidden,
+    RateLimited,
+    Network,
+}
+
+impl PrMetaUnavailable {
+    pub fn no_credentials() -> Self {
+        Self {
+            code: PrMetaUnavailableCode::NoCredentials,
+            hint: "no GitHub credentials: set [github] token_file (mode 0600), \
+                   export KB_CODE_GITHUB_TOKEN, or pass --gh-token-from-cli on \
+                   `kb-code review start-pr` (loopback-only)"
+                .to_string(),
+        }
+    }
+    pub fn not_found(hint: impl Into<String>) -> Self {
+        Self {
+            code: PrMetaUnavailableCode::NotFound,
+            hint: hint.into(),
+        }
+    }
+    pub fn forbidden() -> Self {
+        Self {
+            code: PrMetaUnavailableCode::Forbidden,
+            hint: "GitHub returned 403 forbidden (the token may lack repo scope)".to_string(),
+        }
+    }
+    pub fn rate_limited() -> Self {
+        Self {
+            code: PrMetaUnavailableCode::RateLimited,
+            hint: "GitHub rate-limited this token (X-RateLimit-Remaining is 0); wait and retry"
+                .to_string(),
+        }
+    }
+    pub fn network(hint: impl Into<String>) -> Self {
+        Self {
+            code: PrMetaUnavailableCode::Network,
+            hint: hint.into(),
+        }
+    }
+}
+
+impl GithubApiError {
+    /// Fold a GitHub API failure into the typed Room-header reason.
+    /// A 404 without credentials is `no-credentials` (private repos 404
+    /// rather than 401 so as not to leak existence); a 404 with credentials
+    /// is `not-found`.
+    pub fn to_pr_meta_unavailable(&self, had_credentials: bool) -> PrMetaUnavailable {
+        match self {
+            GithubApiError::Unauthorized => PrMetaUnavailable::no_credentials(),
+            GithubApiError::RateLimited => PrMetaUnavailable::rate_limited(),
+            GithubApiError::Forbidden => PrMetaUnavailable::forbidden(),
+            GithubApiError::NotFound if !had_credentials => PrMetaUnavailable::no_credentials(),
+            GithubApiError::NotFound => PrMetaUnavailable::not_found(
+                "GitHub returned 404: no such pull request (or the token cannot see it)",
+            ),
+            GithubApiError::Unreachable(url, e) => {
+                PrMetaUnavailable::network(format!("github unreachable at {url}: {e}"))
+            }
+            GithubApiError::ClientBuild(e) => {
+                PrMetaUnavailable::network(format!("build http client: {e}"))
+            }
+            GithubApiError::Parse(e) => {
+                PrMetaUnavailable::network(format!("parse github response: {e}"))
+            }
+            GithubApiError::BadStatus(s) => {
+                PrMetaUnavailable::network(format!("github returned {s}"))
+            }
+        }
+    }
+}
+
+/// Replace a secret with a constant token so a dry-run / Debug / log line
+/// can never contain the credential. The input is unused on purpose.
+pub fn redact_secret(_secret: &str) -> &'static str {
+    "[redacted]"
+}
+
+/// Rung 1 of the credential ladder: the owner-only token file, read at
+/// request time via the ONE token-file reader (`GithubSection::bearer_token`,
+/// which enforces 0600/0400 and degrades to `None` so the next rung can run).
+fn token_from_file(cfg: &GithubSection) -> Option<String> {
+    cfg.bearer_token()
+}
+
+/// Credential ladder: `token_file` (0600) > env `KB_CODE_GITHUB_TOKEN` >
+/// CLI-supplied token > none. Pure in the env/cli arguments so tests do
+/// not have to mutate process environment.
+pub fn resolve_github_token(
+    cfg: &GithubSection,
+    env_token: Option<&str>,
+    cli_token: Option<&str>,
+) -> Option<String> {
+    if let Some(t) = token_from_file(cfg) {
+        return Some(t);
+    }
+    if let Some(t) = env_token.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(t.to_string());
+    }
+    if let Some(t) = cli_token.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(t.to_string());
+    }
+    None
+}
+
+/// The CLI `--gh-token-from-cli` body field is loopback-only. Off loopback
+/// it is refused by name (even if the route later graduates off the
+/// loopback-only sub-router).
+pub fn admit_cli_github_token(
+    is_loopback: bool,
+    token: Option<&str>,
+) -> std::result::Result<Option<String>, String> {
+    match token.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(_) if !is_loopback => Err(
+            "`gh_token` is loopback-only (the CLI --gh-token-from-cli path); refused off loopback"
+                .to_string(),
+        ),
+        Some(t) => Ok(Some(t.to_string())),
+        None => Ok(None),
+    }
+}
+
 pub type ApiResult<T> = std::result::Result<T, GithubApiError>;
 
 /// Per-boot GitHub REST API handle (`AppState::github`) — see the module
-/// doc. Stateless beyond the pooled client/token/`api_base`, unlike
-/// `join::kb_client::KbClient` (no cached snapshot to own here).
+/// doc. The pooled HTTP client is built once; the bearer token is resolved
+/// at request time (never stored, never logged). Unlike
+/// `join::kb_client::KbClient` there is no cached snapshot to own here.
 pub struct GithubClient {
-    api_base: String,
-    token: Option<String>,
+    cfg: GithubSection,
+    /// Set only by [`Self::with_cli_token`] for a single `start-pr` call.
+    cli_token: Option<String>,
     client: std::result::Result<reqwest::Client, String>,
+}
+
+impl std::fmt::Debug for GithubClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubClient")
+            .field("api_base", &self.cfg.api_base)
+            .field("token_file", &self.cfg.token_file)
+            .field(
+                "cli_token",
+                &self.cli_token.as_ref().map(|_| redact_secret("x")),
+            )
+            .finish()
+    }
 }
 
 impl GithubClient {
@@ -583,10 +755,30 @@ impl GithubClient {
             .build()
             .map_err(|e| e.to_string());
         Self {
-            api_base: cfg.api_base.clone(),
-            token: cfg.bearer_token(),
+            cfg: cfg.clone(),
+            cli_token: None,
             client,
         }
+    }
+
+    /// Overlay a loopback-only CLI token for one call. The file and env
+    /// rungs still win if they resolve.
+    pub fn with_cli_token(&self, token: Option<String>) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            cli_token: token,
+            client: self.client.clone(),
+        }
+    }
+
+    /// Request-time credential resolution (file > env > cli).
+    pub fn resolve_token(&self) -> Option<String> {
+        let env = std::env::var(GITHUB_TOKEN_ENV).ok();
+        resolve_github_token(&self.cfg, env.as_deref(), self.cli_token.as_deref())
+    }
+
+    pub fn has_credentials(&self) -> bool {
+        self.resolve_token().is_some()
     }
 
     fn client(&self) -> ApiResult<&reqwest::Client> {
@@ -598,7 +790,7 @@ impl GithubClient {
     fn get(&self, client: &reqwest::Client, path: &str) -> reqwest::RequestBuilder {
         self.get_url(
             client,
-            &format!("{}{}", self.api_base.trim_end_matches('/'), path),
+            &format!("{}{}", self.cfg.api_base.trim_end_matches('/'), path),
         )
     }
 
@@ -611,10 +803,34 @@ impl GithubClient {
         let rb = client
             .get(url)
             .header("Accept", "application/vnd.github+json");
-        match &self.token {
+        match self.resolve_token() {
             Some(t) => rb.bearer_auth(t),
             None => rb,
         }
+    }
+
+    fn classify_status(resp: &reqwest::Response) -> ApiResult<()> {
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(GithubApiError::Unauthorized);
+        }
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(GithubApiError::NotFound);
+        }
+        if status == reqwest::StatusCode::FORBIDDEN {
+            let remaining = resp
+                .headers()
+                .get("x-ratelimit-remaining")
+                .and_then(|v| v.to_str().ok());
+            if remaining == Some("0") {
+                return Err(GithubApiError::RateLimited);
+            }
+            return Err(GithubApiError::Forbidden);
+        }
+        Err(GithubApiError::BadStatus(status))
     }
 
     /// GET `first_path` (relative, `api_base`-prefixed) and follow its
@@ -645,7 +861,7 @@ impl GithubClient {
         let mut items: Vec<T> = Vec::new();
         let mut next_url = Some(format!(
             "{}{}",
-            self.api_base.trim_end_matches('/'),
+            self.cfg.api_base.trim_end_matches('/'),
             first_path
         ));
         let mut truncated = false;
@@ -655,12 +871,7 @@ impl GithubClient {
                 .send()
                 .await
                 .map_err(|e| GithubApiError::Unreachable(url.clone(), e.to_string()))?;
-            if resp.status() == reqwest::StatusCode::FORBIDDEN {
-                return Err(GithubApiError::RateLimited);
-            }
-            if !resp.status().is_success() {
-                return Err(GithubApiError::BadStatus(resp.status()));
-            }
+            Self::classify_status(&resp)?;
             let link_next = resp
                 .headers()
                 .get(reqwest::header::LINK)
@@ -691,18 +902,13 @@ impl GithubClient {
     pub async fn list_pulls(&self, owner: &str, repo: &str) -> ApiResult<Vec<PrOut>> {
         let client = self.client()?;
         let path = format!("/repos/{owner}/{repo}/pulls?state=open&per_page=100");
-        let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
+        let url = format!("{}{}", self.cfg.api_base.trim_end_matches('/'), path);
         let resp = self
             .get(client, &path)
             .send()
             .await
             .map_err(|e| GithubApiError::Unreachable(url, e.to_string()))?;
-        if resp.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(GithubApiError::RateLimited);
-        }
-        if !resp.status().is_success() {
-            return Err(GithubApiError::BadStatus(resp.status()));
-        }
+        Self::classify_status(&resp)?;
         let body: Vec<GhPull> = resp
             .json()
             .await
@@ -800,18 +1006,13 @@ impl GithubClient {
     pub async fn get_pull(&self, owner: &str, repo: &str, number: u64) -> ApiResult<PrDetailOut> {
         let client = self.client()?;
         let path = format!("/repos/{owner}/{repo}/pulls/{number}");
-        let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
+        let url = format!("{}{}", self.cfg.api_base.trim_end_matches('/'), path);
         let resp = self
             .get(client, &path)
             .send()
             .await
             .map_err(|e| GithubApiError::Unreachable(url, e.to_string()))?;
-        if resp.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(GithubApiError::RateLimited);
-        }
-        if !resp.status().is_success() {
-            return Err(GithubApiError::BadStatus(resp.status()));
-        }
+        Self::classify_status(&resp)?;
         let p: GhPullDetail = resp
             .json()
             .await
@@ -848,18 +1049,13 @@ impl GithubClient {
     ) -> ApiResult<Vec<CheckRunOut>> {
         let client = self.client()?;
         let path = format!("/repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100");
-        let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
+        let url = format!("{}{}", self.cfg.api_base.trim_end_matches('/'), path);
         let resp = self
             .get(client, &path)
             .send()
             .await
             .map_err(|e| GithubApiError::Unreachable(url, e.to_string()))?;
-        if resp.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(GithubApiError::RateLimited);
-        }
-        if !resp.status().is_success() {
-            return Err(GithubApiError::BadStatus(resp.status()));
-        }
+        Self::classify_status(&resp)?;
         let body: GhCheckRunsResponse = resp
             .json()
             .await
@@ -907,18 +1103,17 @@ impl GithubClient {
         let client = self.client()?;
 
         let reviews_path = format!("/repos/{owner}/{repo}/pulls/{number}/reviews?per_page=100");
-        let reviews_url = format!("{}{}", self.api_base.trim_end_matches('/'), reviews_path);
+        let reviews_url = format!(
+            "{}{}",
+            self.cfg.api_base.trim_end_matches('/'),
+            reviews_path
+        );
         let reviews_resp = self
             .get(client, &reviews_path)
             .send()
             .await
             .map_err(|e| GithubApiError::Unreachable(reviews_url, e.to_string()))?;
-        if reviews_resp.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(GithubApiError::RateLimited);
-        }
-        if !reviews_resp.status().is_success() {
-            return Err(GithubApiError::BadStatus(reviews_resp.status()));
-        }
+        Self::classify_status(&reviews_resp)?;
         let mut raw: Vec<GhReview> = reviews_resp
             .json()
             .await
@@ -950,18 +1145,17 @@ impl GithubClient {
         }
 
         let requested_path = format!("/repos/{owner}/{repo}/pulls/{number}/requested_reviewers");
-        let requested_url = format!("{}{}", self.api_base.trim_end_matches('/'), requested_path);
+        let requested_url = format!(
+            "{}{}",
+            self.cfg.api_base.trim_end_matches('/'),
+            requested_path
+        );
         let requested_resp = self
             .get(client, &requested_path)
             .send()
             .await
             .map_err(|e| GithubApiError::Unreachable(requested_url, e.to_string()))?;
-        if requested_resp.status() == reqwest::StatusCode::FORBIDDEN {
-            return Err(GithubApiError::RateLimited);
-        }
-        if !requested_resp.status().is_success() {
-            return Err(GithubApiError::BadStatus(requested_resp.status()));
-        }
+        Self::classify_status(&requested_resp)?;
         let requested: GhRequestedReviewers = requested_resp
             .json()
             .await
@@ -1233,7 +1427,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_pulls_reports_rate_limited_on_403() {
+    async fn list_pulls_reports_forbidden_on_403_without_rate_limit_header() {
         let router = Router::new().route(
             "/repos/acme/widget/pulls",
             get(|| async { axum::http::StatusCode::FORBIDDEN }),
@@ -1241,7 +1435,7 @@ mod tests {
         let (addr, _server) = mock_kb_server(router).await;
         let client = GithubClient::new(&test_cfg(format!("http://{addr}")));
         let err = client.list_pulls("acme", "widget").await.unwrap_err();
-        assert!(matches!(err, GithubApiError::RateLimited));
+        assert!(matches!(err, GithubApiError::Forbidden));
     }
 
     #[tokio::test]
@@ -1550,10 +1744,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_pull_reports_rate_limited_on_403() {
+    async fn get_pull_reports_forbidden_on_403_without_rate_limit_header() {
         let router = Router::new().route(
             "/repos/acme/widget/pulls/7",
             get(|| async { axum::http::StatusCode::FORBIDDEN }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = GithubClient::new(&test_cfg(format!("http://{addr}")));
+        let err = client.get_pull("acme", "widget", 7).await.unwrap_err();
+        assert!(matches!(err, GithubApiError::Forbidden));
+    }
+
+    #[tokio::test]
+    async fn get_pull_reports_rate_limited_when_remaining_is_zero() {
+        let router = Router::new().route(
+            "/repos/acme/widget/pulls/7",
+            get(|| async {
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    [("x-ratelimit-remaining", "0")],
+                )
+            }),
         );
         let (addr, _server) = mock_kb_server(router).await;
         let client = GithubClient::new(&test_cfg(format!("http://{addr}")));
@@ -1627,7 +1838,7 @@ mod tests {
             .list_checks("acme", "widget", "deadbeef")
             .await
             .unwrap_err();
-        assert!(matches!(err, GithubApiError::RateLimited));
+        assert!(matches!(err, GithubApiError::Forbidden));
     }
 
     // --- GithubClient::list_reviews ------------------------------------------
@@ -1725,6 +1936,125 @@ mod tests {
         let (addr, _server) = mock_kb_server(router).await;
         let client = GithubClient::new(&test_cfg(format!("http://{addr}")));
         let err = client.list_reviews("acme", "widget", 7).await.unwrap_err();
-        assert!(matches!(err, GithubApiError::RateLimited));
+        assert!(matches!(err, GithubApiError::Forbidden));
+    }
+
+    // --- V76-R1c: credential ladder + typed unavailability + redaction -----
+
+    #[test]
+    fn token_file_wins_over_env_and_cli() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("token");
+        std::fs::write(&path, "file-token\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&path).unwrap().permissions();
+            p.set_mode(0o600);
+            std::fs::set_permissions(&path, p).unwrap();
+        }
+        let cfg = GithubSection {
+            token_file: Some(path),
+            api_base: GithubSection::DEFAULT_API_BASE.to_string(),
+        };
+        assert_eq!(
+            resolve_github_token(&cfg, Some("env-token"), Some("cli-token")).as_deref(),
+            Some("file-token")
+        );
+    }
+
+    #[test]
+    fn missing_token_file_falls_through_to_env() {
+        let cfg = GithubSection {
+            token_file: Some(std::path::PathBuf::from("/no/such/github-token-file")),
+            api_base: GithubSection::DEFAULT_API_BASE.to_string(),
+        };
+        assert_eq!(
+            resolve_github_token(&cfg, Some("env-token"), Some("cli-token")).as_deref(),
+            Some("env-token")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_readable_token_file_falls_through_to_env() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("token");
+        std::fs::write(&path, "file-token\n").unwrap();
+        let mut p = std::fs::metadata(&path).unwrap().permissions();
+        p.set_mode(0o644);
+        std::fs::set_permissions(&path, p).unwrap();
+        let cfg = GithubSection {
+            token_file: Some(path),
+            api_base: GithubSection::DEFAULT_API_BASE.to_string(),
+        };
+        assert_eq!(
+            resolve_github_token(&cfg, Some("env-token"), None).as_deref(),
+            Some("env-token"),
+            "a group/world-readable token file is skipped, not used"
+        );
+    }
+
+    #[test]
+    fn cli_token_is_the_last_rung() {
+        let cfg = GithubSection {
+            token_file: None,
+            api_base: GithubSection::DEFAULT_API_BASE.to_string(),
+        };
+        assert_eq!(
+            resolve_github_token(&cfg, None, Some("cli-token")).as_deref(),
+            Some("cli-token")
+        );
+        assert!(resolve_github_token(&cfg, None, None).is_none());
+    }
+
+    #[test]
+    fn cli_token_is_refused_off_loopback() {
+        assert!(admit_cli_github_token(false, Some("ghp_secret")).is_err());
+        assert_eq!(
+            admit_cli_github_token(true, Some("ghp_secret"))
+                .unwrap()
+                .as_deref(),
+            Some("ghp_secret")
+        );
+        assert!(admit_cli_github_token(false, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn pr_meta_unavailable_reason_enum_round_trips_on_the_wire() {
+        for (reason, code) in [
+            (PrMetaUnavailable::no_credentials(), "no-credentials"),
+            (PrMetaUnavailable::not_found("gone"), "not-found"),
+            (PrMetaUnavailable::forbidden(), "forbidden"),
+            (PrMetaUnavailable::rate_limited(), "rate-limited"),
+            (PrMetaUnavailable::network("timeout"), "network"),
+        ] {
+            let v = serde_json::to_value(&reason).unwrap();
+            assert_eq!(v["code"], code, "{v}");
+            assert!(v["hint"].as_str().unwrap().len() >= 3, "{v}");
+        }
+        let err = GithubApiError::NotFound;
+        assert_eq!(
+            err.to_pr_meta_unavailable(false).code,
+            PrMetaUnavailableCode::NoCredentials
+        );
+        assert_eq!(
+            err.to_pr_meta_unavailable(true).code,
+            PrMetaUnavailableCode::NotFound
+        );
+    }
+
+    #[test]
+    fn dry_run_never_emits_a_token_shaped_string() {
+        const TOKEN: &str = "ghp_thisIsAFakeTokenValueForTheDryRunTest0001";
+        let line = format!("dry-run: would POST with gh_token={}", redact_secret(TOKEN));
+        assert!(!line.contains(TOKEN), "{line}");
+        assert!(line.contains("[redacted]"), "{line}");
+        let client = GithubClient::new(&test_cfg("http://127.0.0.1:9".into()))
+            .with_cli_token(Some(TOKEN.to_string()));
+        let dbg = format!("{client:?}");
+        assert!(!dbg.contains(TOKEN), "{dbg}");
+        assert!(dbg.contains("[redacted]"), "{dbg}");
     }
 }
