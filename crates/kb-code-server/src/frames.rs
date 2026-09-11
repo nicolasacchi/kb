@@ -44,6 +44,7 @@ use crate::entities::RouteContract;
 ///
 /// A closed vocabulary of four, on purpose: three real sources and one
 /// refusal. A fifth would mean a fifth thing that can be stale.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FrameSource {
@@ -73,6 +74,7 @@ impl FrameSource {
 
 /// The highest trust class a lane may mint for an address that is NOT the
 /// checked-out HEAD.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OffHeadClass {
@@ -99,6 +101,7 @@ impl OffHeadClass {
 }
 
 /// One lane's frame contract.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Frame {
     /// The lane, named as the route/verb that serves it.
@@ -204,6 +207,7 @@ pub const FRAMES_ROUTE: RouteContract = RouteContract {
     params_accept_without: |_| true,
 };
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, serde::Serialize)]
 pub struct FramesResponse {
     pub schema: &'static str,
@@ -211,6 +215,7 @@ pub struct FramesResponse {
     /// either closed set.
     pub sources: Vec<&'static str>,
     pub classes: Vec<&'static str>,
+    #[cfg_attr(feature = "ts-export", ts(as = "Vec<Frame>"))]
     pub frames: &'static [Frame],
     pub note: &'static str,
 }

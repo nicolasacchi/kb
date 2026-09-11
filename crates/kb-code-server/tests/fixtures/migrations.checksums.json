@@ -203,5 +203,10 @@
     "version": 42,
     "name": "reviews_pr_binding_open_unique",
     "checksum": "17538098860423482001"
+  },
+  {
+    "version": 43,
+    "name": "worktree_created_by_daemon",
+    "checksum": "6621651597497858744"
   }
 ]

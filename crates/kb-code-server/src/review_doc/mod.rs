@@ -422,38 +422,45 @@ pub fn normalize_title(s: &str) -> String {
 
 // --- the typed document ----------------------------------------------------
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Risk {
     pub level: String,
     pub why: String,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stop {
     /// The ref, as written.
     pub r#ref: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub why: Option<String>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Chapter {
     pub chapter: String,
     pub stops: Vec<Stop>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Flow {
     pub name: String,
     pub steps: Vec<String>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Question {
     /// `to_author` | `to_reviewer` | `to_agent`.
     pub to: String,
     pub ask: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub r#ref: Option<String>,
     /// V73-K5 (gap 7, "nothing formally links a question to its answer") —
     /// a ref naming what answered this question: typically `finding:<slug>`
@@ -463,6 +470,7 @@ pub struct Question {
     /// resolved into a card on demand, and an unresolvable one is an honest
     /// orphan, never a parse error.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub answers: Option<String>,
 }
 
@@ -470,6 +478,7 @@ pub struct Question {
 /// AUTHORED directly or DERIVED from the review's own `pr_meta_json.checks`
 /// (`review_doc::routes::derive_ci`). Never re-fetched live — see
 /// [`refs::Ref::Ci`]'s doc for why that is `is_inert`, not a defect.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CiCheck {
     pub name: String,
@@ -480,18 +489,23 @@ pub struct CiCheck {
     /// `routes::derive_ci` maps into it.
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub observed_at: Option<i64>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Author {
     /// `agent` | `human`.
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub session_id: Option<String>,
     pub considered: Vec<String>,
     pub not_considered: Vec<String>,

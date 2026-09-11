@@ -1291,6 +1291,27 @@ invariant #2 records).
     future off-HEAD banner DERIVES from these bytes instead of restating
     them — invariant 17(a)'s one-projection-two-renderers rule, stated
     before the second renderer exists.
+    (g) **One worktree oracle; lifecycle is the loopback working-tree
+    lane; removal only for daemon-created** (V76-R3b, `src/worktrees.rs`).
+    `worktrees::classify(path)` is the only function that answers "what is
+    this path?" (`kind: main|linked|bare|not-a-repo` plus workspace id,
+    admin-dir name, common dir). `routes::repo_is_worktree` and
+    `entities::worktree_key_for` call it; `GitRepo::is_worktree` stays the
+    gix primitive (`git_dir != common_dir`) so a gix handle does not spawn
+    git or walk history, and a fixture test pins that it agrees with
+    `classify.kind == Linked`. `workspace::enumerate` takes linked ids
+    from it — a second "is this a worktree?" helper is a regression. Create /
+    lock / unlock / repair / prune / delete ride the SAME loopback-only
+    sub-router `checkout.rs` already uses (the working-tree mutation lane);
+    the daemon never provisions a worktree on behalf of an agent beyond
+    these verbs. `DELETE` is refused unless `created_by_daemon` (preserved
+    across `replace_worktrees`) and the caller has seen the loss preview
+    (`preview_seen: true`, `confirm` equals the id). Readiness detects and
+    never fixes; the lock-reason owner parse is `likely` at best
+    (`"locked — owner unknown"` on failure) and does not take silence as
+    an input. The unified inbox's `worktrees` lane is
+    surfaced-never-scored and degrades honestly on an empty workspace
+    table.
 
 26. **`kbc-tour/1` is a BOARD (one step model), and `kbc-trail/1` is OFF
     by default with pause, purge and retention shipped in the same unit**

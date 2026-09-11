@@ -12,10 +12,12 @@
         "sensitivity": "local",
         "trust_ceiling": "exact",
         "retention_days": 30,
+        "adapter": null,
         "enabled": true,
         "family": false,
         "facts": 0,
         "runs": 0,
+        "last_ingest_at": null,
         "note": "derived on demand from git and never stored, so it holds no rows"
       },
       {
@@ -62,6 +64,9 @@
         "adapter": "builtin:sarif",
         "enabled": false,
         "family": true,
+        "facts": null,
+        "runs": null,
+        "last_ingest_at": null,
         "note": "a template, not an addressable lane: declare one instance per tool in `[lanes] enabled`"
       },
       {
@@ -85,13 +90,16 @@
         "title": "Off lane",
         "kind": "ingested",
         "fact_schema": "lane-fact/coverage/1",
+        "fact_kinds": ["coverage", "coverage_summary"],
         "sensitivity": "local_tool",
         "trust_ceiling": "exact",
         "retention_days": 30,
+        "adapter": "builtin:simplecov",
         "enabled": false,
         "family": false,
         "facts": 0,
         "runs": 0,
+        "last_ingest_at": null,
         "note": "not in [lanes] enabled"
       }
     ],
@@ -102,6 +110,7 @@
     "repo": "fx",
     "path": "app/widget.rb",
     "blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "at_blob": null,
     "facts": [
       {
         "lane": "coverage.simplecov",
@@ -324,6 +333,7 @@
     "returned": 14,
     "truncated": false,
     "absent": [],
-    "withheld_disabled": 0
+    "withheld_disabled": 0,
+    "notes": []
   }
 }

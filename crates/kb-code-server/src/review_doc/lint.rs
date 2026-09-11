@@ -77,6 +77,7 @@ pub fn severity_of(rule: &str) -> &'static str {
         .unwrap_or(SEVERITY_ERROR)
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LintRow {
     pub rule: &'static str,
@@ -84,13 +85,17 @@ pub struct LintRow {
     pub message: String,
     /// 1-based document line, when the finding has one.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line: Option<u32>,
     /// The ref body this row is about, when it is about one.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub r#ref: Option<String>,
     /// The nearest things the author might have meant. Never a fix that is
     /// applied for them — a suggestion, in their own vocabulary.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    #[cfg_attr(feature = "ts-export", ts(as = "Option<Vec<String>>", optional))]
     pub candidates: Vec<String>,
 }
 
@@ -130,6 +135,7 @@ impl LintRow {
 /// The whole lint result. `errors`/`warnings`/`infos` are COUNTS of `rows`,
 /// derived here so no consumer has to re-count (and so two consumers can
 /// never disagree).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct LintOut {
     pub schema: &'static str,

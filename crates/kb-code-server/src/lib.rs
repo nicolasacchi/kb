@@ -467,10 +467,17 @@ pub mod transcripts;
 pub mod tree;
 // S2-A ("One Inbox," kb-code v6.0) — `GET /api/inbox`; see that module's
 // own doc for the three-lane composition.
+/// V76-R4a — ts-rs export gate + the `skip_serializing_if` → `field?: T`
+/// pin. Empty in the shipping binary; tests live under `#[cfg(test)]`.
+#[cfg(test)]
+mod ts_export;
 pub mod unified_inbox;
 pub mod usages;
 pub mod usages2;
 pub mod workspace;
+/// V76-R3b (D13 M2) — one worktree oracle, loopback lifecycle verbs,
+/// readiness, and the worktrees inbox lane.
+pub mod worktrees;
 pub mod yaml;
 
 use anyhow::{Context, Result};

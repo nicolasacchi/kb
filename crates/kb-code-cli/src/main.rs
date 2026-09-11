@@ -1955,6 +1955,15 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code worktree {list,create,lock,unlock,repair,prune,rm,loss-preview,readiness}`
+    /// — V76-R3b worktree lifecycle. Mutations are LOOPBACK-ONLY (the
+    /// same working-tree lane as `kb-code checkout`). Removal is only for
+    /// worktrees this daemon created. NOT `kb-code workspaces` (the
+    /// object-store list) and NOT `kb-code workspace` (the Desk).
+    Worktree {
+        #[command(subcommand)]
+        cmd: WorktreeCmd,
+    },
     /// `kb-code frames [--json]` — D14's `@ref` FRAME TABLE (`GET
     /// /api/frames`): per lane, what it reads off the working tree and
     /// what it may claim about a ref that is not checked out.
@@ -1998,6 +2007,118 @@ enum Cmd {
         /// Leave the migrated copy on disk for inspection.
         #[arg(long)]
         keep: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// V76-R3b — `kb-code worktree <sub>`. Mutations are loopback-only;
+/// `--json` prints the daemon body. Exit 4 = HTTP 401/403 (the crate's
+/// refused/loopback table in `envelope.rs`).
+#[derive(Subcommand, Debug)]
+enum WorktreeCmd {
+    /// `GET /api/worktrees`
+    List {
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `POST /api/worktrees` (loopback) — `git worktree add` under a
+    /// configured root.
+    Create {
+        #[arg(long)]
+        workspace: String,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        new_branch: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `POST /api/worktrees/{id}/lock` (loopback).
+    Lock {
+        id: String,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `POST /api/worktrees/{id}/unlock` (loopback).
+    Unlock {
+        id: String,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `POST /api/worktrees/{id}/repair` (loopback).
+    Repair {
+        id: String,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `POST /api/worktrees/prune` (loopback). Default dry-run; `--apply`
+    /// actually prunes.
+    Prune {
+        #[arg(long)]
+        apply: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `DELETE /api/worktrees/{id}` (loopback) — daemon-created only,
+    /// behind `--confirm <id> --preview-seen`.
+    Rm {
+        id: String,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long)]
+        confirm: String,
+        #[arg(long)]
+        preview_seen: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `GET /api/worktrees/{id}/loss-preview`
+    LossPreview {
+        id: String,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `GET /api/worktrees/{id}/readiness` — detects, never fixes; each
+    /// issue names the command to run.
+    Readiness {
+        id: String,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
         #[arg(long)]
         json: bool,
     },
@@ -3029,8 +3150,9 @@ enum CanvasCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Accept a board (`POST /api/boards/{slug}/accept`, LOOPBACK-ONLY) —
-    /// the ONLY way a board reaches `accepted` (D21).
+    /// Accept a board (`POST /api/boards/{slug}/accept`, loopback or
+    /// `[review] remote_mutations`) — the ONLY way a board reaches
+    /// `accepted` (D21).
     Accept {
         slug: String,
         #[arg(long)]
@@ -3040,7 +3162,8 @@ enum CanvasCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Archive a board (`POST /api/boards/{slug}/archive`, LOOPBACK-ONLY).
+    /// Archive a board (`POST /api/boards/{slug}/archive`, loopback or
+    /// `[review] remote_mutations`).
     Archive {
         slug: String,
         #[arg(long)]
@@ -3050,7 +3173,8 @@ enum CanvasCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a board (`DELETE /api/boards/{slug}`, LOOPBACK-ONLY).
+    /// Delete a board (`DELETE /api/boards/{slug}`, loopback or
+    /// `[review] remote_mutations`).
     Rm {
         slug: String,
         #[arg(long)]
@@ -6981,6 +7105,7 @@ async fn run(cli: Cli) -> Result<()> {
         },
         // ── V75-M1 ────────────────────────────────────────────────────
         Cmd::Workspaces { id, daemon, json } => workspaces_cmd(&daemon, id.as_deref(), json).await,
+        Cmd::Worktree { cmd } => worktree_cmd(cmd).await,
         Cmd::Frames { daemon, json } => frames_cmd(&daemon, json).await,
         Cmd::Backup { db, json } => backup_cmd(db.as_deref(), json),
         Cmd::RehearseMigration { from, keep, json } => rehearse_migration_cmd(&from, keep, json),
@@ -13320,6 +13445,24 @@ async fn delete_json_raw(
     let text = resp.text().await.unwrap_or_default();
     let body = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     Ok((status, body))
+}
+
+async fn delete_json_body_raw(
+    client: &reqwest::Client,
+    daemon: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<(reqwest::StatusCode, serde_json::Value)> {
+    let url = format!("{}{path}", daemon.trim_end_matches('/'));
+    let resp = client
+        .delete(&url)
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("DELETE {url} — is kb-code-server running at {daemon}?"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    Ok((status, json_body_or_null(&text)))
 }
 
 async fn doclens_pins_list(
@@ -24105,6 +24248,349 @@ async fn workspaces_cmd(daemon: &str, id: Option<&str>, json: bool) -> Result<()
     Ok(())
 }
 
+fn worktrees_list_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::worktrees::WORKTREES_LIST_ROUTE.path,
+        Vec::new(),
+    )
+}
+
+fn worktree_item_path(id: &str, suffix: &str) -> String {
+    format!("/api/worktrees/{}{suffix}", percent_encode_segment(id))
+}
+
+async fn worktree_cmd(cmd: WorktreeCmd) -> Result<()> {
+    match cmd {
+        WorktreeCmd::List {
+            workspace,
+            daemon,
+            json,
+        } => worktree_list_cmd(&daemon, workspace.as_deref(), json).await,
+        WorktreeCmd::Create {
+            workspace,
+            path,
+            branch,
+            new_branch,
+            daemon,
+            json,
+        } => {
+            worktree_create_cmd(
+                &daemon,
+                &workspace,
+                &path,
+                branch.as_deref(),
+                new_branch.as_deref(),
+                json,
+            )
+            .await
+        }
+        WorktreeCmd::Lock {
+            id,
+            workspace,
+            reason,
+            daemon,
+            json,
+        } => worktree_lock_cmd(&daemon, &id, workspace.as_deref(), reason.as_deref(), json).await,
+        WorktreeCmd::Unlock {
+            id,
+            workspace,
+            daemon,
+            json,
+        } => worktree_unlock_cmd(&daemon, &id, workspace.as_deref(), json).await,
+        WorktreeCmd::Repair {
+            id,
+            workspace,
+            path,
+            daemon,
+            json,
+        } => worktree_repair_cmd(&daemon, &id, workspace.as_deref(), path.as_deref(), json).await,
+        WorktreeCmd::Prune {
+            apply,
+            daemon,
+            json,
+        } => worktree_prune_cmd(&daemon, apply, json).await,
+        WorktreeCmd::Rm {
+            id,
+            workspace,
+            confirm,
+            preview_seen,
+            daemon,
+            json,
+        } => {
+            worktree_rm_cmd(
+                &daemon,
+                &id,
+                workspace.as_deref(),
+                &confirm,
+                preview_seen,
+                json,
+            )
+            .await
+        }
+        WorktreeCmd::LossPreview {
+            id,
+            workspace,
+            daemon,
+            json,
+        } => worktree_loss_preview_cmd(&daemon, &id, workspace.as_deref(), json).await,
+        WorktreeCmd::Readiness {
+            id,
+            workspace,
+            daemon,
+            json,
+        } => worktree_readiness_cmd(&daemon, &id, workspace.as_deref(), json).await,
+    }
+}
+
+async fn worktree_list_cmd(daemon: &str, workspace: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, _) = worktrees_list_request();
+    let mut query: Vec<(&str, String)> = Vec::new();
+    if let Some(ws) = workspace {
+        query.push(("workspace_id", ws.to_string()));
+    }
+    let pairs: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let body = get_json(&client, daemon, path, &pairs).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let empty: Vec<serde_json::Value> = Vec::new();
+    let list = body["worktrees"].as_array().unwrap_or(&empty);
+    if list.is_empty() {
+        println!("no worktrees");
+        return Ok(());
+    }
+    for wt in list {
+        let flags = [
+            (wt["is_main"].as_bool().unwrap_or(false), "main"),
+            (wt["locked"].as_bool().unwrap_or(false), "locked"),
+            (wt["prunable"].as_bool().unwrap_or(false), "prunable"),
+            (wt["created_by_daemon"].as_bool().unwrap_or(false), "daemon"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, l)| *l)
+        .collect::<Vec<_>>()
+        .join(",");
+        println!(
+            "{:<16} {:<20} {} {}",
+            wt["workspace_id"].as_str().unwrap_or("?"),
+            wt["id"].as_str().unwrap_or("?"),
+            wt["path"].as_str().unwrap_or("(no path)"),
+            if flags.is_empty() {
+                String::new()
+            } else {
+                format!("[{flags}]")
+            }
+        );
+        if let Some(owner) = wt["owner"]["display"].as_str() {
+            println!("    {owner}");
+        }
+    }
+    Ok(())
+}
+
+async fn worktree_print_mutation(
+    daemon: &str,
+    json: bool,
+    status: reqwest::StatusCode,
+    body: &serde_json::Value,
+    what: &str,
+) -> Result<()> {
+    if !status.is_success() {
+        return Err(loopback_or_api_error(what, daemon, status, body));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(body)?);
+        return Ok(());
+    }
+    println!("{}", serde_json::to_string_pretty(body)?);
+    Ok(())
+}
+
+async fn worktree_create_cmd(
+    daemon: &str,
+    workspace: &str,
+    path: &str,
+    branch: Option<&str>,
+    new_branch: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut body = serde_json::json!({
+        "workspace_id": workspace,
+        "path": path,
+    });
+    if let Some(b) = branch {
+        body["branch"] = serde_json::json!(b);
+    }
+    if let Some(b) = new_branch {
+        body["new_branch"] = serde_json::json!(b);
+    }
+    let (status, resp) = post_json_raw(&client, daemon, "/api/worktrees", &body).await?;
+    worktree_print_mutation(daemon, json, status, &resp, "worktree create").await
+}
+
+async fn worktree_lock_cmd(
+    daemon: &str,
+    id: &str,
+    workspace: Option<&str>,
+    reason: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut body = serde_json::json!({});
+    if let Some(ws) = workspace {
+        body["workspace_id"] = serde_json::json!(ws);
+    }
+    if let Some(r) = reason {
+        body["reason"] = serde_json::json!(r);
+    }
+    let path = worktree_item_path(id, "/lock");
+    let (status, resp) = post_json_raw(&client, daemon, &path, &body).await?;
+    worktree_print_mutation(daemon, json, status, &resp, "worktree lock").await
+}
+
+async fn worktree_unlock_cmd(
+    daemon: &str,
+    id: &str,
+    workspace: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut body = serde_json::json!({});
+    if let Some(ws) = workspace {
+        body["workspace_id"] = serde_json::json!(ws);
+    }
+    let path = worktree_item_path(id, "/unlock");
+    let (status, resp) = post_json_raw(&client, daemon, &path, &body).await?;
+    worktree_print_mutation(daemon, json, status, &resp, "worktree unlock").await
+}
+
+async fn worktree_repair_cmd(
+    daemon: &str,
+    id: &str,
+    workspace: Option<&str>,
+    new_path: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut body = serde_json::json!({});
+    if let Some(ws) = workspace {
+        body["workspace_id"] = serde_json::json!(ws);
+    }
+    if let Some(p) = new_path {
+        body["path"] = serde_json::json!(p);
+    }
+    let path = worktree_item_path(id, "/repair");
+    let (status, resp) = post_json_raw(&client, daemon, &path, &body).await?;
+    worktree_print_mutation(daemon, json, status, &resp, "worktree repair").await
+}
+
+async fn worktree_prune_cmd(daemon: &str, apply: bool, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let dry = if apply { "0" } else { "1" };
+    let (status, resp) = post_json_query_raw(
+        &client,
+        daemon,
+        "/api/worktrees/prune",
+        &[("dry_run", dry)],
+        &serde_json::json!({}),
+    )
+    .await?;
+    worktree_print_mutation(daemon, json, status, &resp, "worktree prune").await
+}
+
+async fn worktree_rm_cmd(
+    daemon: &str,
+    id: &str,
+    workspace: Option<&str>,
+    confirm: &str,
+    preview_seen: bool,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let mut body = serde_json::json!({
+        "confirm": confirm,
+        "preview_seen": preview_seen,
+    });
+    if let Some(ws) = workspace {
+        body["workspace_id"] = serde_json::json!(ws);
+    }
+    let path = worktree_item_path(id, "");
+    let (status, resp) = delete_json_body_raw(&client, daemon, &path, &body).await?;
+    worktree_print_mutation(daemon, json, status, &resp, "worktree rm").await
+}
+
+async fn worktree_loss_preview_cmd(
+    daemon: &str,
+    id: &str,
+    workspace: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let path = worktree_item_path(id, "/loss-preview");
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if let Some(ws) = workspace {
+        query.push(("workspace_id", ws));
+    }
+    let body = get_json(&client, daemon, &path, &query).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "uncommitted: {}",
+        body["uncommitted"].as_array().map(|a| a.len()).unwrap_or(0)
+    );
+    println!(
+        "unpushed:    {}",
+        body["unpushed"].as_array().map(|a| a.len()).unwrap_or(0)
+    );
+    println!(
+        "stashes:     {}",
+        body["stashes"].as_array().map(|a| a.len()).unwrap_or(0)
+    );
+    if let Some(cmd) = body["manual_remove"].as_str() {
+        println!("manual:      {cmd}");
+    }
+    Ok(())
+}
+
+async fn worktree_readiness_cmd(
+    daemon: &str,
+    id: &str,
+    workspace: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let path = worktree_item_path(id, "/readiness");
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if let Some(ws) = workspace {
+        query.push(("workspace_id", ws));
+    }
+    let body = get_json(&client, daemon, &path, &query).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    if body["ready"].as_bool().unwrap_or(false) {
+        println!("ready");
+        return Ok(());
+    }
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for issue in body["issues"].as_array().unwrap_or(&empty) {
+        println!(
+            "{}: {}\n  {}",
+            issue["code"].as_str().unwrap_or("?"),
+            issue["message"].as_str().unwrap_or(""),
+            issue["command"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
 async fn frames_cmd(daemon: &str, json: bool) -> Result<()> {
     let client = http_client()?;
     let (path, query) = frames_request();
@@ -27250,6 +27736,9 @@ mod tests {
             // V75-M1 — the Workspace list and the D14 frame table.
             workspaces_request(),
             frames_request(),
+            // V76-R3b — the worktree list. Path-param reads and loopback
+            // mutations are absent from the contract (same as boards).
+            worktrees_list_request(),
             // V75-M3 — `branch-facts/1`'s three READS join the SAME walk.
             branch_favourites_request("repo"),
             branch_conflicts_request("repo", "main", Some(5), Some("branch:x")),
@@ -27353,6 +27842,7 @@ mod tests {
             // V76-C1 — `highlight/1`. No query params (JSON body); this
             // half of the walk proves a verb builds a request for each path.
             .chain(kb_code_server::highlight::V76_C1_ROUTES.iter())
+            .chain(kb_code_server::worktrees::V76_R3B_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`, same walk.
             .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter());
         for c in declared {
