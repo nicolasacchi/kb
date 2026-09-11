@@ -36,6 +36,7 @@ import {
 } from "../../lib/diffFindings";
 import { parseNoiseMode, type NoiseMode } from "../../lib/diffNoise";
 import { loadDiffMode, saveDiffMode, type DiffMode } from "../../lib/prefs";
+import { formatExpandedParam, parseExpandedParam } from "../../lib/collapseOnTick";
 import { parseLine, parseSide, parseView } from "./helpers";
 
 export interface ReviewDiffUrlState {
@@ -59,6 +60,10 @@ export interface ReviewDiffUrlState {
   /** `?view=` when present, else the persisted layout preference. */
   mode: DiffMode;
   tourParamOn: boolean;
+  /// V76-R2c — viewed-but-expanded file paths (`?expanded=`) and hunk ids
+  /// (`?hexpanded=`). Empty is the omitted default.
+  expandedFiles: readonly string[];
+  expandedHunks: readonly string[];
 
   setParam: (key: string, value: string | null) => void;
   setPs: (next: DiffPsSelection | null) => void;
@@ -70,6 +75,7 @@ export interface ReviewDiffUrlState {
   setTourParam: (on: boolean) => void;
   /** `href` + the page's CURRENT query string — the single-file focus link. */
   withQuery: (href: string) => string;
+  setExpanded: (files: readonly string[], hunks: readonly string[]) => void;
 }
 
 export function useReviewDiffState(): ReviewDiffUrlState {
@@ -96,6 +102,8 @@ export function useReviewDiffState(): ReviewDiffUrlState {
 
   const [prefMode, setPrefMode] = useState<DiffMode>(() => loadDiffMode());
   const mode: DiffMode = urlView ?? prefMode;
+  const expandedFiles = parseExpandedParam(searchParams.get("expanded"));
+  const expandedHunks = parseExpandedParam(searchParams.get("hexpanded"));
 
   function withQuery(href: string): string {
     const q = searchParams.toString();
@@ -159,6 +167,20 @@ export function useReviewDiffState(): ReviewDiffUrlState {
     [setParam],
   );
 
+  const setExpanded = useCallback(
+    (files: readonly string[], hunks: readonly string[]) => {
+      const next = new URLSearchParams(searchParams);
+      const f = formatExpandedParam(files);
+      const h = formatExpandedParam(hunks);
+      if (f) next.set("expanded", f);
+      else next.delete("expanded");
+      if (h) next.set("hexpanded", h);
+      else next.delete("hexpanded");
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
   return {
     psSel,
     psRange,
@@ -176,6 +198,8 @@ export function useReviewDiffState(): ReviewDiffUrlState {
     overlay,
     mode,
     tourParamOn: searchParams.get("tour") === "1",
+    expandedFiles,
+    expandedHunks,
     setParam,
     setPs,
     setCtx,
@@ -185,5 +209,6 @@ export function useReviewDiffState(): ReviewDiffUrlState {
     setOverlay,
     setTourParam,
     withQuery,
+    setExpanded,
   };
 }

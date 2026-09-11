@@ -12,13 +12,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { continuations, resolve } from "./dispatch";
+import { continuations, keysFor, resolve } from "./dispatch";
 import { shouldWithholdFromBuffer } from "./CommandRoot";
 import { KBC_COMMANDS } from "./registry.gen";
 
-/// The twelve rows, with the key each is authored on. Written out rather
-/// than derived from the registry: this table is the CLAIM, and the
-/// registry is what it is checked against.
+/// Diff-v2 surface rows, with the key each is authored on. Written out
+/// rather than derived from the registry: this table is the CLAIM, and the
+/// registry is what it is checked against. V76-R2c added the last three.
 const DIFF_V2_ROWS: ReadonlyArray<[string, string]> = [
   ["diff.hunk-viewed", "Space h"],
   ["diff.fold", "z c"],
@@ -32,6 +32,9 @@ const DIFF_V2_ROWS: ReadonlyArray<[string, string]> = [
   ["diff.drafts", "Space w"],
   ["diff.publish", "Space W"],
   ["diff.drafts-discard", "Space X"],
+  ["diff.section-toggle", "z v"],
+  ["diff.collapse-viewed", "z V"],
+  ["diff.expand-all", "z O"],
 ];
 
 const REVIEW_DIFF_SRC = readFileSync(
@@ -96,6 +99,35 @@ describe("diff v2's registry rows", () => {
     expect(REVIEW_DIFF_SRC).toContain("useCommandHandlers");
     for (const [id] of DIFF_V2_ROWS) {
       expect(REVIEW_DIFF_SRC.includes(`"${id}":`), `${id} has no handler`).toBe(true);
+    }
+  });
+
+  it("V76-R2c keys collide with nothing and are not a leader PREFIX either way", () => {
+    const ids = ["diff.section-toggle", "diff.collapse-viewed", "diff.expand-all"] as const;
+    for (const preset of ["vim", "plain", "helix"] as const) {
+      const byKey = new Map<string, string[]>();
+      for (const c of KBC_COMMANDS) {
+        for (const k of keysFor(c, preset)) {
+          byKey.set(k, [...(byKey.get(k) ?? []), c.id]);
+        }
+      }
+      for (const id of ids) {
+        const row = KBC_COMMANDS.find((c) => c.id === id);
+        expect(row, id).toBeDefined();
+        for (const k of keysFor(row!, preset)) {
+          expect(byKey.get(k), `${preset} ${k}`).toEqual([id]);
+          const toks = k.split(" ");
+          for (let i = 1; i < toks.length; i += 1) {
+            const prefix = toks.slice(0, i).join(" ");
+            expect(byKey.has(prefix), `${preset}: ${k} is shadowed by ${prefix}`).toBe(false);
+          }
+          for (const other of byKey.keys()) {
+            if (other !== k) {
+              expect(other.startsWith(`${k} `), `${preset}: ${k} would shadow ${other}`).toBe(false);
+            }
+          }
+        }
+      }
     }
   });
 

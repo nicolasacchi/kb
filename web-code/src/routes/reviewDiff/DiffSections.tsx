@@ -30,11 +30,14 @@ import { githubThreadVisibleInOverlay, type OverlayMode } from "../../lib/diffFi
 import { githubOrphansForPath, indexGithubThreadsByLine } from "../../lib/githubThreads";
 import { impactChipText, topChangedSymbol } from "../../lib/reviewImpact";
 import { codeUrl, type DiffCtxDial } from "../../lib/codeUrl";
+import { deepLinkExpands, hunkCollapse } from "../../lib/collapseOnTick";
 import {
   hunkHasThreads,
   hunkId,
   hunkStats,
   hunkNewSpan,
+  hunkOldSpan,
+  hunkThreadCount,
   type HunkThreadRef,
 } from "../../lib/diffHunks";
 import {
@@ -69,6 +72,18 @@ export interface DiffV2Api {
   fileNoise: readonly NoiseLabel[];
   /// Server-backed per-hunk viewed ids (`review_hunk_viewed`).
   hunkViewed: ReadonlySet<string>;
+  /// V76-R2c — viewed-but-expanded hunk ids (`?hexpanded=`).
+  expandedHunks: ReadonlySet<string>;
+  /// V76-R2c — the file / line / inbound hunk a deep-link names. The
+  /// matching hunk treats this as an implicit `?hexpanded=` courtesy so
+  /// the flash row is mounted. `deepLinkCleared` is the set of section
+  /// ids the user has ticked/un-ticked under this navigation — those no
+  /// longer get the courtesy.
+  deepLinkFile: string | null;
+  deepLinkLine: number | null;
+  deepLinkSide: "old" | "new" | null;
+  deepLinkHunk: string | null;
+  deepLinkCleared: ReadonlySet<string>;
   /// Operator folds, keyed by hunk id so a fold survives a re-render, a
   /// patchset switch that carries the hunk forward, and a layout toggle.
   folded: ReadonlySet<string>;
@@ -81,6 +96,8 @@ export interface DiffV2Api {
   onParsed: (path: string, parsed: ParsedDiff) => void;
   onToggleHunkViewed: (path: string, id: string) => void;
   onToggleFold: (id: string) => void;
+  /// V76-R2c — toggle the displayed collapse (fold + viewed-override).
+  onToggleHunkSection: (id: string, viewed: boolean, collapsed: boolean) => void;
   onExpandHunk: (id: string, dir: "up" | "down") => void;
   /// Compose a DRAFT instead of posting (`lib/reviewDrafts.ts`). Replaces
   /// `DiffCommentsApi.onCreate` for the composer only — resolve/reply/
@@ -200,17 +217,43 @@ export function FileDiffBody({
       const noise = classifyHunk(path, hunk, v2.fileNoise, v2.movedIndex);
       const byNoise = noiseCollapses(v2.noiseMode, noise);
       const folded = v2.folded.has(id);
+      const viewed = v2.hunkViewed.has(id);
+      const deepSpan =
+        v2.deepLinkSide === "old"
+          ? hunkOldSpan(hunk)
+          : v2.deepLinkSide === "new"
+            ? hunkNewSpan(hunk)
+            : null;
+      const isDeepLinkHunk =
+        (v2.deepLinkHunk != null && v2.deepLinkHunk === id) ||
+        (v2.deepLinkFile === path &&
+          v2.deepLinkLine != null &&
+          deepSpan != null &&
+          v2.deepLinkLine >= deepSpan.start &&
+          v2.deepLinkLine <= deepSpan.end);
+      const collapse = hunkCollapse({
+        viewed,
+        folded,
+        byNoise,
+        expanded: deepLinkExpands(
+          v2.expandedHunks.has(id),
+          isDeepLinkHunk,
+          v2.deepLinkCleared.has(id),
+        ),
+      });
       const expanded = expandHunk(hunk, contentLines, combineExpand(v2.ctx, v2.expand.get(id)));
       const span = hunkNewSpan(hunk);
       const stats = hunkStats(hunk);
+      const threadCount = hunkThreadCount(hunk, threadRefs);
       return {
         id,
         index: i,
         header: hunk.header,
         additions: stats.additions,
         deletions: stats.deletions,
-        viewed: v2.hunkViewed.has(id),
+        viewed,
         hasThreads: hunkHasThreads(hunk, threadRefs),
+        threadCount,
         draftCount: span
           ? draftsInSpan(v2.drafts, path, "new", span.start, span.end).length
           : 0,
@@ -220,8 +263,8 @@ export function FileDiffBody({
         addedAfter: expanded.addedAfter,
         moreAbove: expanded.moreAbove,
         moreBelow: expanded.moreBelow,
-        collapsed: folded || byNoise,
-        collapsedBy: folded ? ("fold" as const) : byNoise ? ("noise" as const) : null,
+        collapsed: collapse.collapsed,
+        collapsedBy: collapse.collapsedBy,
       };
     });
   }, [v2, parsed, path, contentLines, rawComments?.byLine]);
@@ -320,7 +363,7 @@ export function FileDiffBody({
       currentHunk={v2?.currentHunk ?? null}
       onHunkFold={(hi) => {
         const view = hunkViews?.[hi];
-        if (view) v2?.onToggleFold(view.id);
+        if (view) v2?.onToggleHunkSection(view.id, view.viewed, view.collapsed);
       }}
       onHunkViewed={(hi) => {
         const view = hunkViews?.[hi];
@@ -361,6 +404,7 @@ export function LazyDiffSection({
   to,
   mode,
   collapsed,
+  collapsedBy,
   current,
   checked,
   focusHref,
@@ -372,6 +416,7 @@ export function LazyDiffSection({
   overlay,
   githubThreads,
   v2,
+  eager,
 }: {
   repo: string;
   reviewId: number;
@@ -381,6 +426,7 @@ export function LazyDiffSection({
   to: string;
   mode: DiffMode;
   collapsed: boolean;
+  collapsedBy?: "fold" | "noise" | "viewed" | null;
   current: boolean;
   checked: boolean;
   focusHref: string;
@@ -392,6 +438,9 @@ export function LazyDiffSection({
   overlay?: OverlayMode;
   githubThreads?: GithubThread[];
   v2?: DiffV2Api | null;
+  /// Mount the body without waiting for IntersectionObserver — used for a
+  /// deep-link target so the flash row exists as soon as the diff loads.
+  eager?: boolean;
 }) {
   const { ref, inView } = useInViewOnce();
   return (
@@ -399,6 +448,8 @@ export function LazyDiffSection({
       ref={ref}
       className={"kbc-rdiff__section" + (current ? " kbc-rdiff__section--current" : "")}
       data-kbc-rdiff-file={file.path}
+      data-kbc-rdiff-collapsed={collapsed ? "1" : "0"}
+      data-kbc-rdiff-collapsed-by={collapsedBy ?? undefined}
     >
       <header className="kbc-rdiff__section-head" data-kbc-rdiff-section={file.path}>
         <button
@@ -431,7 +482,7 @@ export function LazyDiffSection({
       </header>
       {!collapsed && (
         <div className="kbc-rdiff__section-body">
-          {inView ? (
+          {inView || eager ? (
             <FileDiffBody
               repo={repo}
               reviewId={reviewId}

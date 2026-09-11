@@ -686,6 +686,31 @@ describe("reviewDiffHref", () => {
       ],
       "/r/kb/~reviews/7/diff/a.rs?finding=f-x&overlay=findings&ps=1..2&ctx=full&noise=collapsed&map=0&file=a.rs&hunk=deadbeefdeadbeef",
     ],
+    // V76-R2c — collapse-on-tick overrides, appended LAST.
+    [
+      "expanded= viewed-but-open files",
+      ["kb", 7, undefined, { expanded: ["src/a.ts"] }],
+      "/r/kb/~reviews/7/diff?expanded=src%2Fa.ts",
+    ],
+    [
+      "hexpanded= viewed-but-open hunks",
+      ["kb", 7, undefined, { hexpanded: ["deadbeefdeadbeef"] }],
+      "/r/kb/~reviews/7/diff?hexpanded=deadbeefdeadbeef",
+    ],
+    [
+      "param ORDER grows at the end: hunk then expanded then hexpanded",
+      [
+        "kb",
+        7,
+        "a.rs",
+        {
+          hunk: "deadbeefdeadbeef",
+          expanded: ["a.rs"],
+          hexpanded: ["deadbeefdeadbeef"],
+        },
+      ],
+      "/r/kb/~reviews/7/diff/a.rs?hunk=deadbeefdeadbeef&expanded=a.rs&hexpanded=deadbeefdeadbeef",
+    ],
   ];
   for (const [name, args, expected] of cases) {
     it(name, () => {

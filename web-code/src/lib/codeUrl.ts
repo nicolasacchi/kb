@@ -12,6 +12,8 @@
 // URLs bookmarked before this module existed keep resolving the same way:
 // `ref`, then `line`, then `pane2`.
 
+import { formatExpandedParam } from "./collapseOnTick";
+
 export type LineSel = number | { start: number; end: number };
 
 export interface PaneLoc {
@@ -413,6 +415,10 @@ export interface ReviewDiffHrefOpts {
   /// address (`kbc-hunkid/1`), so a shared URL lands on the same CHANGE
   /// even after a rebase renumbers the file around it.
   hunk?: string;
+  /// V76-R2c — `?expanded=` viewed-but-open FILE paths. Omitted when empty.
+  expanded?: readonly string[];
+  /// V76-R2c — `?hexpanded=` viewed-but-open hunk ids. Omitted when empty.
+  hexpanded?: readonly string[];
 }
 
 /// `?ps=` — one patchset number, or an inclusive `from..to` interdiff
@@ -475,9 +481,9 @@ export function parseDiffMap(raw: string | null): boolean {
 
 /// `reviewDiffHref(repo, id, file?, opts?)` → `/r/{repo}/~reviews/{id}/diff
 /// [/file]` `[?finding=][&overlay=][&ps=][&ctx=][&noise=][&map=][&file=]
-/// [&hunk=]`. `opts` params are appended LAST (the `pane2` precedent,
-/// `codeUrl`'s own module doc) so every existing 2/3-arg call site's URL
-/// stays byte-identical — `opts` is purely additive.
+/// [&hunk=][&expanded=][&hexpanded=]`. `opts` params are appended LAST (the
+/// `pane2` precedent, `codeUrl`'s own module doc) so every existing 2/3-arg
+/// call site's URL stays byte-identical — `opts` is purely additive.
 export function reviewDiffHref(
   repo: string,
   id: number | string,
@@ -501,6 +507,10 @@ export function reviewDiffHref(
   if (opts?.map === false) params.push("map=0");
   if (opts?.file) params.push(`file=${encodeURIComponent(opts.file)}`);
   if (opts?.hunk) params.push(`hunk=${encodeURIComponent(opts.hunk)}`);
+  const expanded = opts?.expanded ? formatExpandedParam(opts.expanded) : null;
+  if (expanded) params.push(`expanded=${expanded}`);
+  const hexpanded = opts?.hexpanded ? formatExpandedParam(opts.hexpanded) : null;
+  if (hexpanded) params.push(`hexpanded=${hexpanded}`);
   return params.length > 0 ? `${withFile}?${params.join("&")}` : withFile;
 }
 

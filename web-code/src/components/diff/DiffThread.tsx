@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useParams } from "react-router-dom";
 import { ApiError, ApplyConflictError } from "../../api/client";
 import type { ReviewComment } from "../../api/types";
@@ -17,19 +17,14 @@ import { questionStateForThread } from "../../lib/questionState";
 import type { DiffCommentsApi } from "../../lib/reviewComments";
 import {
   formatApplyConflictHint,
-  splitSuggestionLines,
   suggestionIsOutdated,
-  synthesizeSuggestionDiff,
   threadAcceptsSuggestion,
 } from "../../lib/suggestions";
 import { toast } from "../../lib/toast";
 import SuggestionEditor from "./SuggestionEditor";
-import UnifiedHunks from "./UnifiedHunks";
 import ProseBlock from "../prose/ProseBlock";
 import HighlightedSnippet from "../HighlightedSnippet";
-import { useHighlight } from "../../hooks/useHighlight";
-import { offsetHighlightSpans, padSnippetLines, wireSpansToLineMap } from "../../lib/paintSpans";
-import type { DiffHighlights } from "../../lib/diffHighlight";
+import { ApplySuggestionPreview, SuggestionDiffPanel } from "./SuggestionDiff";
 
 /// Session-wide latch: one 404 from apply hides the button on every
 /// thread for the rest of this SPA session (VerdictBar / StartReviewDialog
@@ -314,6 +309,7 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       )}
       {thread.suggestion && !editing && (
         <SuggestionBlock
+          repo={repo}
           thread={thread}
           comments={comments}
           loopback={loopback}
@@ -422,11 +418,13 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
 }
 
 function SuggestionBlock({
+  repo,
   thread,
   comments,
   loopback,
   onEdit,
 }: {
+  repo: string;
   thread: ReviewComment;
   comments: DiffCommentsApi;
   loopback: boolean;
@@ -434,48 +432,13 @@ function SuggestionBlock({
 }) {
   const confirm = useConfirm();
   const suggestion = thread.suggestion;
-  const orig = suggestion?.original ?? "";
-  const repl = suggestion?.replacement ?? "";
-  const start = thread.resolution.line ?? 1;
-  const hlItems = useMemo(
-    () =>
-      suggestion
-        ? [
-            { id: "old", lang: null as string | null, text: orig, path: thread.path },
-            { id: "new", lang: null as string | null, text: repl, path: thread.path },
-          ]
-        : [],
-    [suggestion, orig, repl, thread.path],
-  );
-  const { byId } = useHighlight(hlItems);
-  const highlights: DiffHighlights | null = useMemo(() => {
-    if (!suggestion) return null;
-    const old = byId.get("old");
-    const neu = byId.get("new");
-    if (!old && !neu) return null;
-    const oldSpans = old
-      ? wireSpansToLineMap(padSnippetLines(orig, start).join("\n"), offsetHighlightSpans(old.spans, start))
-      : new Map();
-    const newSpans = neu
-      ? wireSpansToLineMap(padSnippetLines(repl, start).join("\n"), offsetHighlightSpans(neu.spans, start))
-      : new Map();
-    return {
-      oldLineSpans: oldSpans,
-      newLineSpans: newSpans,
-      oldLines: padSnippetLines(orig, start),
-      newLines: padSnippetLines(repl, start),
-    };
-  }, [suggestion, byId, orig, repl, start]);
+  // V76-R2c — the saved suggestion renders through SuggestionDiffPanel
+  // (two verbatim rows, token marks + highlight/1 syntax spans).
   if (!suggestion) return null;
 
   const outdated = suggestionIsOutdated(thread);
   const applied = suggestion.applied;
   const applyDisabled = applied || outdated;
-  const parsed = synthesizeSuggestionDiff(
-    splitSuggestionLines(suggestion.original),
-    suggestion.replacement,
-    start,
-  );
 
   async function onRemove() {
     const ok = await confirm({
@@ -496,7 +459,7 @@ function SuggestionBlock({
     const resolveRef = { current: false };
     const ok = await confirm({
       title: "Apply this suggestion to the working tree?",
-      body: <ApplyConfirmBody resolveRef={resolveRef} />,
+      body: <ApplySuggestionPreview repo={repo} thread={thread} resolveRef={resolveRef} />,
       confirmLabel: "Apply",
       danger: true,
     });
@@ -541,8 +504,12 @@ function SuggestionBlock({
           </span>
         )}
       </div>
-      <div className="kbc-suggestion__preview kbc-diff" data-kbc-suggestion-preview>
-        <UnifiedHunks path={thread.path} parsed={parsed} highlights={highlights} />
+      <div className="kbc-suggestion__preview" data-kbc-suggestion-preview>
+        <SuggestionDiffPanel
+          original={suggestion.original}
+          replacement={suggestion.replacement}
+          path={thread.path}
+        />
       </div>
       <div className="kbc-suggestion__actions">
         {threadAcceptsSuggestion(thread) && (
@@ -569,26 +536,5 @@ function SuggestionBlock({
         )}
       </div>
     </div>
-  );
-}
-
-function ApplyConfirmBody({ resolveRef }: { resolveRef: { current: boolean } }) {
-  const [also, setAlso] = useState(false);
-  return (
-    <>
-      <p>Apply this suggestion to the working tree?</p>
-      <label className="kbc-suggestion__resolve">
-        <input
-          type="checkbox"
-          checked={also}
-          onChange={(e) => {
-            setAlso(e.target.checked);
-            resolveRef.current = e.target.checked;
-          }}
-          data-kbc-suggestion-apply-resolve
-        />
-        Also resolve the thread
-      </label>
-    </>
   );
 }
