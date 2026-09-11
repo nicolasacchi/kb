@@ -531,6 +531,16 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // fails the build rather than shipping dead.
         .route("/syntax", get(crate::syntax::syntax_route))
         .route("/parity", get(crate::syntax::parity_route))
+        // V76-C1 — `highlight/1`: paint ANY snippet with the same
+        // tree-sitter spans the reader uses. Bearer read; nothing
+        // persisted. Caps refuse with the size. `crate::highlight::
+        // V76_C1_ROUTES` declares the pair; a unit test walks that
+        // declaration against THIS file.
+        .route("/highlight", post(crate::highlight::highlight_route))
+        .route(
+            "/highlight/batch",
+            post(crate::highlight::highlight_batch_route),
+        )
         // V72-H4a (D7, §P8) — `aug-lane/1`'s three READS. A bearer caller
         // may read facts; only loopback may write them, so the ingest
         // route lives on `transcripts_api` below rather than here.

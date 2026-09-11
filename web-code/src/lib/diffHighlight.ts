@@ -7,6 +7,7 @@
 
 import type { HighlightClass, Span } from "../api/types";
 import { cssClassFor, makeByteToUtf16Mapper } from "./decorations";
+import type { ParsedDiff } from "./diff";
 
 /** Server span — same shape as `api/types.Span`. */
 export type ServerSpan = Span;
@@ -43,6 +44,32 @@ function utf8ByteLength(codePoint: number): number {
 /// (drop a single trailing empty element from a final `"\n"`). CRLF is
 /// NOT stripped — a `\r` left on the line fails the integrity guard,
 /// which is the point (wrong-eol is unsafe to paint).
+/// Rebuild one side of a parsed unified diff as a sparse file: lines the
+/// hunks did not mention are empty strings. Used when `GET /api/file`
+/// highlights are unavailable (new files, pseudo-files, interdiff
+/// snippets) so `POST /api/highlight` still has text to paint. The
+/// per-line integrity guard then refuses to colour a line whose text does
+/// not match.
+export function reconstructSide(parsed: ParsedDiff, side: "old" | "new"): string | null {
+  let max = 0;
+  const byLine = new Map<number, string>();
+  for (const h of parsed.hunks) {
+    for (const l of h.lines) {
+      const n = side === "old" ? l.oldLine : l.newLine;
+      if (n == null) continue;
+      if (l.kind === "header" || l.kind === "hunk") continue;
+      if (side === "old" && l.kind === "add") continue;
+      if (side === "new" && l.kind === "remove") continue;
+      byLine.set(n, l.text);
+      if (n > max) max = n;
+    }
+  }
+  if (max === 0) return null;
+  const lines: string[] = [];
+  for (let i = 1; i <= max; i++) lines.push(byLine.get(i) ?? "");
+  return lines.join("\n");
+}
+
 export function splitContentLines(content: string): string[] {
   const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();

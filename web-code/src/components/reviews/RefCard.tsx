@@ -13,11 +13,11 @@
 // wrong-`exact` failure the crate's oracle bar names as a release blocker.
 //
 // **Highlighting is the server's.** `card.highlights` are byte offsets
-// already REBASED onto `card.snippet`; `lib/diffHighlight.ts`'s
-// `buildLineSpans`/`paintLine` turn them into the same `.kbc-hl-*` segments
-// the diff and the dossier paint. A client-side highlighter would be a
-// second, disagreeing source of truth (`GET /api/file`'s own rule), so an
-// unindexed blob simply renders unpainted.
+// already REBASED onto `card.snippet`; `lib/paintSpans.ts` is the ONE
+// painter (`byteSpansToHighlightSpans` → `paintSpans`) that maps them onto
+// the same `.kbc-hl-*` segments the diff and the dossier paint. A
+// client-side highlighter would be a second, disagreeing source of truth
+// (`GET /api/file`'s own rule), so an unindexed blob simply renders unpainted.
 //
 // **Trust is LINE STYLE.** The tier rides the shared `TrustBadge`
 // (kbc-theme/1's Lane Budget) and never a hue this feature picks.
@@ -26,7 +26,8 @@ import { Link } from "react-router-dom";
 import type { ReviewDocCard } from "../../api/types";
 import { Icon } from "../icons";
 import TrustBadge from "../TrustBadge";
-import { buildLineSpans, paintLine, type LineSpan } from "../../lib/diffHighlight";
+import { paintLine, type PaintedSegment } from "../../lib/diffHighlight";
+import { byteSpansToHighlightSpans, paintSpans } from "../../lib/paintSpans";
 import {
   cardAddress,
   cardHref,
@@ -68,12 +69,12 @@ export function snippetLines(card: ReviewDocCard): { n: number | null; text: str
   }));
 }
 
-function PaintedLine({ text, spans }: { text: string; spans: LineSpan[] | undefined }) {
-  const segs = paintLine(text, spans);
-  if (segs.length === 1 && !segs[0].cls) return <>{text}</>;
+function PaintedLine({ text, segs }: { text: string; segs: PaintedSegment[] | undefined }) {
+  const painted = segs && segs.length > 0 ? segs : paintLine(text, undefined);
+  if (painted.length === 1 && !painted[0].cls) return <>{text}</>;
   return (
     <>
-      {segs.map((s, i) =>
+      {painted.map((s, i) =>
         s.cls ? (
           <span key={i} className={s.cls} data-kbc-hl>
             {s.text}
@@ -192,13 +193,14 @@ export function LiveRefCard({
 }) {
   const href = hrefOverride !== undefined ? hrefOverride : refCardHref(card, repo, reviewId);
   const lines = useMemo(() => snippetLines(card), [card]);
-  const spansByLine = useMemo(
-    () =>
-      card.snippet && card.highlights && card.highlights.length > 0
-        ? buildLineSpans(card.snippet, card.highlights)
-        : null,
-    [card.snippet, card.highlights],
-  );
+  const paintedLines = useMemo(() => {
+    if (!card.snippet) return null;
+    const wire =
+      card.highlights && card.highlights.length > 0
+        ? byteSpansToHighlightSpans(card.snippet, card.highlights)
+        : [];
+    return paintSpans(card.snippet, wire);
+  }, [card.snippet, card.highlights]);
   const address = cardAddress(card);
   return (
     <span
@@ -256,7 +258,7 @@ export function LiveRefCard({
             <span className="kbc-refcard__line" key={i}>
               <span className="kbc-refcard__gutter">{l.n ?? ""}</span>
               <span className="kbc-refcard__text">
-                <PaintedLine text={l.text} spans={spansByLine?.get(i + 1)} />
+                <PaintedLine text={l.text} segs={paintedLines?.[i]} />
               </span>
             </span>
           ))}

@@ -917,10 +917,17 @@ document read is pinned to the patchset it was composed against), so
 in `lib/reviewDoc.test.ts`.
 
 **Highlighting, trust, captions and counts are all the server's.** A card's
-snippet is painted with `lib/diffHighlight.ts`'s `buildLineSpans`/`paintLine`
-over the spans the daemon already rebased onto that snippet — a client-side
+snippet is painted with `lib/paintSpans.ts` (`paintSpans` — the ONE painter)
+over spans the daemon already minted; `cssClassFor` in `lib/decorations.ts`
+is the ONE 18-role → `.kbc-hl-*` class table (kbc-theme/1). LiveRefCard
+converts file-style byte spans through `byteSpansToHighlightSpans` onto
+that painter so a card and a fence cannot disagree. A client-side
 highlighter would be a second, disagreeing source of truth, so an unindexed
-blob renders unpainted. Trust rides the shared `TrustBadge` (LINE STYLE, the
+blob (or `highlight/1` `tier: none`) renders unpainted, with a "no grammar"
+caption on snippet surfaces — never a spinner forever. The suggestion
+EDITOR stays CM6; every other read-only surface (diff hunks when file
+spans are missing, suggestion previews, markdown fences, board code nodes)
+POSTs `highlight/1`. Trust rides the shared `TrustBadge` (LINE STYLE, the
 Lane Budget) and is omitted entirely when the daemon minted no tier, because
 `trustTierFrom` classifies a missing class DOWN to `candidate` — which would
 be a claim. `revisions`, `omitted[]` and the reading order's `source`/

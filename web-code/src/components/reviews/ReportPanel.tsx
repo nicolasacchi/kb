@@ -14,6 +14,7 @@ import type {
 } from "../../api/types";
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
 import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
+import { FenceBlock } from "../SafeMarkdown";
 import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
 // V76-R2a — the live-counts derivation's home moved to `lib/reviewRoom.ts`
 // (the hero needs it without a component↔lib cycle); re-exported here so
@@ -85,7 +86,10 @@ function InlineRuns({ runs }: { runs: InlineRun[] }) {
 }
 
 function MarkdownLite({ text }: { text: string }) {
-  const blocks: MarkdownBlock[] = useMemo(() => parseMarkdownLite(text), [text]);
+  const blocks: MarkdownBlock[] = useMemo(
+    () => parseMarkdownLite(text, { fences: true }),
+    [text],
+  );
   return (
     <div className="kbc-report__summary">
       {blocks.map((b, i) => {
@@ -107,13 +111,8 @@ function MarkdownLite({ text }: { text: string }) {
             </ul>
           );
         }
-        // V73-K2b added `heading` and `code` to `MarkdownBlock`, both behind
-        // `MarkdownLiteOptions` and both OFF here — this panel calls
-        // `parseMarkdownLite(text)` with no options, so neither arm is
-        // reachable and the rendered summary is byte-identical to before.
-        // They are handled rather than dropped so that this stays an
-        // assertion about the OPTIONS, never about the content: a block this
-        // renderer cannot name must still reach the reader.
+        // V76-C1 opts fences ON so a report summary that cites a snippet
+        // paints through highlight/1. Headings stay rendered as prose.
         if (b.kind === "heading") {
           return (
             <p key={i}>
@@ -121,7 +120,7 @@ function MarkdownLite({ text }: { text: string }) {
             </p>
           );
         }
-        return <pre key={i}>{b.text}</pre>;
+        return <FenceBlock key={i} text={b.text} lang={b.lang} />;
       })}
     </div>
   );

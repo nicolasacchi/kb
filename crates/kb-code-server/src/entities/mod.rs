@@ -870,6 +870,10 @@ mod tests {
             .chain(crate::review_jobs::V76_R1A_ROUTES.iter())
             // V76-R3c — typeahead + compare-file.
             .chain(crate::refs_typeahead::V76_R3C_ROUTES.iter())
+            // V76-C1 — `highlight/1`. The pair takes a JSON body (no
+            // query params); the walk still proves the path is registered
+            // and the handler is named.
+            .chain(crate::highlight::V76_C1_ROUTES.iter())
         {
             let nested = c
                 .path
