@@ -8,6 +8,7 @@
 // an HTML string and there is no `dangerouslySetInnerHTML` in `web-code/` at
 // all. Every run becomes a React text child, which React escapes.
 import type { DocBlock, DocRun } from "../../lib/reviewDoc";
+import { FenceBlock } from "../SafeMarkdown";
 import RefCard from "./RefCard";
 
 export interface DocMarkdownProps {
@@ -62,9 +63,9 @@ export default function DocMarkdown(props: DocMarkdownProps) {
       {blocks.map((b, i) => {
         if (b.kind === "code") {
           return (
-            <pre className="kbc-doc__fence" key={i} data-kbc-doc-fence={b.lang ?? undefined}>
-              <code>{b.text}</code>
-            </pre>
+            <span key={i} data-kbc-doc-fence={b.lang ?? undefined}>
+              <FenceBlock text={b.text} lang={b.lang} />
+            </span>
           );
         }
         if (b.kind === "list") {

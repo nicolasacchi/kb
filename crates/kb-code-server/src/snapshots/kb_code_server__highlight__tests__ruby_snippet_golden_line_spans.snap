@@ -1,0 +1,68 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: "wire(Some(\"ruby\"), RUBY_SNIPPET)"
+---
+HighlightOut {
+    schema: "highlight/1",
+    lang: Some(
+        "ruby",
+    ),
+    tier: "full",
+    spans: [
+        LineRoleSpan {
+            line: 1,
+            start: 0,
+            end: 3,
+            role: Keyword,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 4,
+            end: 9,
+            role: Function,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 9,
+            end: 10,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 10,
+            end: 14,
+            role: Variable,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 14,
+            end: 15,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 2,
+            end: 10,
+            role: Comment,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 2,
+            end: 14,
+            role: String,
+        },
+        LineRoleSpan {
+            line: 4,
+            start: 0,
+            end: 3,
+            role: Keyword,
+        },
+    ],
+    honesty: HighlightHonesty {
+        tier: "full",
+        engine: "tree-sitter:tree-sitter-ruby",
+        derived_from: "highlights",
+        reason: None,
+    },
+    salt: None,
+}
