@@ -37,7 +37,7 @@
 //! that opts into async (its `start-pr` always sends `?async=1` and
 //! polls).
 
-use crate::reviews::CreateReviewPrBody;
+use crate::reviews::{CreateReviewPrBody, OnClosed, ERR_REVIEW_CLOSED};
 use crate::routes::ApiError;
 use crate::state::SharedState;
 use axum::extract::{Path as AxumPath, State};
@@ -117,13 +117,15 @@ fn sweep(jobs: &ReviewJobs) {
 pub async fn start_or_attach(
     state: SharedState,
     body: CreateReviewPrBody,
+    on_closed: Option<OnClosed>,
 ) -> Result<Response, ApiError> {
     sweep(&state.review_jobs);
 
     // Attach: one fetch per (repo, PR) at a time. A settled job (done or
     // failed) does NOT attach — a caller retrying after a failure gets a
-    // fresh job, and a caller re-POSTing after success gets the ordinary
-    // duplicate-binding 409 from inside the new job.
+    // fresh job, and a caller re-POSTing after success runs
+    // `create_review_pr_value` again (OPEN → reuse 200; CLOSED → 409
+    // unless `on_closed=reopen|new`).
     let attached = {
         let jobs = state.review_jobs.lock();
         jobs.values()
@@ -168,7 +170,8 @@ pub async fn start_or_attach(
     let id2 = job_id.clone();
     tokio::spawn(async move {
         let handle: JobHandle = (state2.review_jobs.clone(), id2.clone());
-        let outcome = crate::reviews::create_review_pr_value(&state2, body, Some(handle)).await;
+        let outcome =
+            crate::reviews::create_review_pr_value(&state2, body, Some(handle), on_closed).await;
         // One lock, dropped before this task ends — never across an await.
         let mut jobs = state2.review_jobs.lock();
         if let Some(j) = jobs.get_mut(&id2) {
@@ -180,8 +183,9 @@ pub async fn start_or_attach(
                     j.result = Some(value);
                 }
                 Ok((_status, value)) => {
-                    // A non-success VALUE outcome (the duplicate-binding
-                    // 409 is the only one today) — the poller sees the same
+                    // A non-success VALUE outcome (closed-binding 409
+                    // [`ERR_REVIEW_CLOSED`], historically also the
+                    // duplicate-binding 409) — the poller sees the same
                     // payload the synchronous route would have returned.
                     j.status = "failed";
                     j.error = value
@@ -189,6 +193,9 @@ pub async fn start_or_attach(
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
                         .or_else(|| Some("start-pr failed".to_string()));
+                    if value.get("type").and_then(|v| v.as_str()) == Some(ERR_REVIEW_CLOSED) {
+                        j.error_type = Some(ERR_REVIEW_CLOSED);
+                    }
                     j.result = Some(value);
                 }
                 Err(e) => {

@@ -504,6 +504,21 @@ export function reviewDiffHref(
   return params.length > 0 ? `${withFile}?${params.join("&")}` : withFile;
 }
 
+/// Overlay extra query keys onto a builder result (which may already carry
+/// a query). Used by the review-diff tree pick so `?file=` can join the
+/// page's live params without the route assembling a URL itself.
+export function mergeQuery(href: string, extra: Record<string, string | null>): string {
+  const qIndex = href.indexOf("?");
+  const path = qIndex >= 0 ? href.slice(0, qIndex) : href;
+  const q = new URLSearchParams(qIndex >= 0 ? href.slice(qIndex + 1) : "");
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === null) q.delete(k);
+    else q.set(k, v);
+  }
+  const s = q.toString();
+  return s ? `${path}?${s}` : path;
+}
+
 /// `findingUrl(repo, id, slug)` → `/r/{repo}/~reviews/{id}/f/{slug}` — the
 /// short, share/CLI-printable form (design-ui.md §5). `routes/
 /// FindingEntry.tsx` (V70-A3S) registers the redirect route for this

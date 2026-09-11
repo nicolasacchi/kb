@@ -35,6 +35,11 @@
 //! | `{{author}}` | the author block, including what was NOT considered |
 //! | `{{omitted}}` | the stated omissions — an absence is never silent, not even in an export |
 //! | `{{body}}` | the Markdown body, rendered |
+//! | `{{pr_number}}` | the review's PR binding, or an honest `n/a` |
+//! | `{{risk_score}}` | the document risk level and/or the report score, or `n/a` |
+//! | `{{tags}}` | kb-tags value: `review`, `pr-<n>` when bound, the repo, then PR labels |
+//! | `{{summary_text}}` | plain-text summary, HTML-escaped, capped at [`SUMMARY_TEXT_CAP`] characters |
+//! | `{{repo}}` | the configured repo name, escaped |
 //!
 //! # Escaping
 //!
@@ -117,7 +122,11 @@ impl FindingLine {
 /// the PR Room) and `risk_score` is the pre-K1 `report_json.risk_score`
 /// lane the coverage table already names as that concept's real home —
 /// `risk` stays deliberately level-plus-why, never a score, by design.
-pub const PLACEHOLDERS: [&str; 15] = [
+///
+/// V76-R1c adds `tags`, `summary_text`, and `repo` so the built-in template
+/// is a legal kb artifact (`kb-tags` / `kb-summary` / a named repo) without
+/// a custom template. Existing placeholder names stay byte-identical.
+pub const PLACEHOLDERS: [&str; 18] = [
     "title",
     "meta",
     "summary",
@@ -133,7 +142,15 @@ pub const PLACEHOLDERS: [&str; 15] = [
     "body",
     "pr_number",
     "risk_score",
+    "tags",
+    "summary_text",
+    "repo",
 ];
+
+/// Cap on `{{summary_text}}` (the `kb-summary` meta). Truncated at a char
+/// boundary, never mid-codepoint; a refusal would make the export unusable,
+/// so this is a hard cap with an ellipsis rather than a 400.
+pub const SUMMARY_TEXT_CAP: usize = 300;
 
 /// The built-in template — what `render` uses when the operator names none.
 /// Deliberately plain and dependency-free: it exists so `render` is usable
@@ -157,6 +174,11 @@ pub struct RenderCtx<'a> {
     /// when the review has an authored report carrying one. Independent of
     /// `doc.risk` (which has no numeric axis by design).
     pub risk_score: Option<f64>,
+    /// V76-R1c — comma-separated kb-tags (`review`, `pr-<n>`, repo, labels).
+    /// Already slug-shaped; [`render`] HTML-escapes it for the meta tag.
+    pub tags: &'a str,
+    /// V76-R1c — plain-text summary, already capped; [`render`] escapes it.
+    pub summary_text: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -194,7 +216,57 @@ pub fn render(
         "risk_score",
         risk_score_html(doc.risk.as_ref(), ctx.risk_score),
     );
+    values.insert("tags", esc(ctx.tags));
+    values.insert("summary_text", esc(ctx.summary_text));
+    values.insert("repo", esc(ctx.repo));
     substitute(template, &values)
+}
+
+/// Collapse whitespace, trim, cap at [`SUMMARY_TEXT_CAP`]. Used for the
+/// `kb-summary` meta — a Markdown body is the wrong shape for a one-line
+/// description.
+pub fn summary_text(summary_md: &str) -> String {
+    let collapsed: String = summary_md.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= SUMMARY_TEXT_CAP {
+        return collapsed;
+    }
+    let mut out: String = collapsed
+        .chars()
+        .take(SUMMARY_TEXT_CAP.saturating_sub(1))
+        .collect();
+    out.push('…');
+    out
+}
+
+/// `review`, plus `pr-<n>` when bound, plus the repo (slashes folded to
+/// dashes so kb's tag slugifier does not drop the owner), plus any PR
+/// labels. Empty labels are skipped. Order is stable.
+pub fn kb_tags(repo: &str, pr_number: Option<i64>, labels: &[String]) -> String {
+    let mut tags = vec!["review".to_string()];
+    if let Some(n) = pr_number {
+        tags.push(format!("pr-{n}"));
+    }
+    let repo_tag = repo.replace(['/', ' '], "-").to_ascii_lowercase();
+    if !repo_tag.is_empty() && !tags.iter().any(|t| t == &repo_tag) {
+        tags.push(repo_tag);
+    }
+    for label in labels {
+        let slug: String = label
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let slug = slug.trim_matches('-');
+        if !slug.is_empty() && !tags.iter().any(|t| t == slug) {
+            tags.push(slug.to_string());
+        }
+    }
+    tags.join(",")
 }
 
 /// Replace every `{{known}}`; leave every other `{{…}}` byte-for-byte and
@@ -568,6 +640,8 @@ mod tests {
             omitted,
             pr_number: Some(42),
             risk_score: Some(0.5),
+            tags: "review,pr-42,acme-app",
+            summary_text: "s",
         }
     }
 
@@ -823,5 +897,72 @@ mod tests {
         let out = render(DEFAULT_TEMPLATE, &doc, &[], &[], &ctx);
         assert!(out.html.contains("15476"), "{}", out.html);
         assert!(out.unknown_placeholders.is_empty());
+    }
+
+    #[test]
+    fn kb_tags_are_review_pr_repo_then_labels() {
+        assert_eq!(kb_tags("acme-app", None, &[]), "review,acme-app");
+        assert_eq!(
+            kb_tags(
+                "acme/widget",
+                Some(7),
+                &["Needs Review".into(), "bug".into()]
+            ),
+            "review,pr-7,acme-widget,needs-review,bug"
+        );
+    }
+
+    #[test]
+    fn summary_text_collapses_whitespace_and_caps_at_300() {
+        assert_eq!(summary_text("  hello   world\n"), "hello world");
+        let long = "word ".repeat(200);
+        let out = summary_text(&long);
+        assert!(
+            out.chars().count() <= SUMMARY_TEXT_CAP,
+            "{}",
+            out.chars().count()
+        );
+        assert!(out.ends_with('…'), "{out}");
+    }
+
+    #[test]
+    fn the_default_template_emits_kb_legal_metas_and_stable_section_ids() {
+        let doc = parse(FIXTURE).expect("parses");
+        let omitted = crate::review_doc::omitted_blocks(&doc);
+        let mut ctx = ctx("t", &omitted);
+        ctx.tags = "review,pr-42,acme-app";
+        ctx.summary_text = "hello <script>";
+        let out = render(DEFAULT_TEMPLATE, &doc, &[], &[], &ctx);
+        assert!(
+            out.html
+                .contains(r#"<meta name="kb-category" content="review">"#),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains(r#"<meta name="kb-tags" content="review,pr-42,acme-app">"#),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains(r#"<meta name="kb-summary" content="hello &lt;script&gt;">"#),
+            "summary_text must be escaped: {}",
+            out.html
+        );
+        for id in ["summary", "findings", "verdict", "risk", "omitted"] {
+            assert!(
+                out.html.contains(&format!(r#"id="{id}""#)),
+                "missing stable section id {id}"
+            );
+        }
+        assert!(!out.html.contains("<base "), "{}", out.html);
+        assert!(!out.html.contains(r#"target="_top""#), "{}", out.html);
+        assert!(
+            out.unknown_placeholders.is_empty(),
+            "{:?}",
+            out.unknown_placeholders
+        );
     }
 }

@@ -7,8 +7,11 @@
 // order, the map row states, the per-file `DiffV2Api`. Re-deriving any of
 // them here is what the kbc-tree/1 "renders rows it did NOT compute" rule
 // forbids, in this route's shape.
+import type { MutableRefObject } from "react";
 import type { GithubThread, PseudoFile, ReviewFileRow } from "../../api/types";
 import ReviewMapColumn from "../../components/reviews/ReviewMapColumn";
+import ReviewMapSplit, { type ReviewMapSplitHandle } from "../../components/reviews/ReviewMapSplit";
+import type { ReviewFileTreeHandle } from "../../components/reviews/ReviewFileTree";
 import PseudoFileView from "../../components/reviews/PseudoFileView";
 import { reduceDiffKeys, type DiffKeysState } from "../../lib/diffKeys";
 import type { MapChapter, MapRowState } from "../../lib/reviewMapColumn";
@@ -58,6 +61,11 @@ export interface ReviewDiffCenterProps {
   /// V73-K2c (kbc-pseudo/1) — the map column's chapter zero rows.
   pseudoFiles: PseudoFile[];
   onPickPseudo: (name: string) => void;
+  treeRef?: MutableRefObject<ReviewFileTreeHandle | null>;
+  splitRef?: MutableRefObject<ReviewMapSplitHandle | null>;
+  /// Navigate to single-file focus. Map click uses this so the center
+  /// actually opens THAT file (V76-R2b); `]f`/`[f` keep using `onGoFile`.
+  onOpenFile?: (path: string) => void;
 }
 
 export default function ReviewDiffCenter({
@@ -98,31 +106,42 @@ export default function ReviewDiffCenter({
   reviewDiffHref,
   pseudoFiles,
   onPickPseudo,
+  treeRef,
+  splitRef,
+  onOpenFile,
 }: ReviewDiffCenterProps) {
   const pseudoName = pseudoNameFromPath(focusPath);
-  return (
-      <div className={"kbc-rdiff__body" + (mapOpen ? " kbc-rdiff__body--mapped" : "")}>
-        {mapOpen && (
-          <ReviewMapColumn
-            chapters={chapters}
-            stateByPath={mapStateByPath}
-            currentPath={cursorPath}
-            fileCount={filesCount}
-            viewedCount={viewedCount}
-            derived={stops !== null && stops.length > 0}
-            pseudoFiles={pseudoFiles}
-            onPickPseudo={onPickPseudo}
-            onPick={(path) => {
-              const idx = paths.indexOf(path);
-              if (idx >= 0) goFile(idx);
-              document
-                .querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`)
-                ?.scrollIntoView({ block: "start" });
-              setParam("file", path);
-            }}
-            onClose={() => setMapOpen(false)}
-          />
-        )}
+
+  function pickFile(path: string) {
+    if (onOpenFile) {
+      onOpenFile(path);
+      return;
+    }
+    const idx = paths.indexOf(path);
+    if (idx >= 0) goFile(idx);
+    document
+      .querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`)
+      ?.scrollIntoView({ block: "start" });
+    setParam("file", path);
+  }
+
+  const mapColumn = mapOpen ? (
+    <ReviewMapColumn
+      chapters={chapters}
+      stateByPath={mapStateByPath}
+      currentPath={cursorPath}
+      fileCount={filesCount}
+      viewedCount={viewedCount}
+      derived={stops !== null && stops.length > 0}
+      pseudoFiles={pseudoFiles}
+      onPickPseudo={onPickPseudo}
+      onPick={pickFile}
+      onClose={() => setMapOpen(false)}
+      treeRef={treeRef}
+    />
+  ) : null;
+
+  const stream = (
         <div className="kbc-rdiff__stream">
         {/* V73-K2c (kbc-pseudo/1) — a pseudo path is never one of `ordered`
             (it is not a diffed file at all), so it is checked BEFORE the
@@ -247,6 +266,10 @@ export default function ReviewDiffCenter({
           ))
         )}
         </div>
-      </div>
   );
+
+  if (mapOpen) {
+    return <ReviewMapSplit map={mapColumn} stream={stream} handleRef={splitRef} />;
+  }
+  return <div className="kbc-rdiff__body">{stream}</div>;
 }

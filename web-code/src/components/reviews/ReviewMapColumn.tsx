@@ -1,13 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useMemo, type MutableRefObject } from "react";
 import type { PseudoFile, ReviewFileRow } from "../../api/types";
 import { Icon } from "../icons";
-import { mapCensusText, mapRowTitle, type MapChapter, type MapRowState } from "../../lib/reviewMapColumn";
+import { mapCensusText, type MapChapter, type MapRowState } from "../../lib/reviewMapColumn";
+import { useSyntax } from "../../hooks/useSyntax";
+import { buildStatusSections } from "../../lib/reviewFileTree";
+import ReviewFileTree, { type ReviewFileTreeHandle } from "./ReviewFileTree";
 
 export interface ReviewMapColumnProps {
   chapters: MapChapter[];
   /// Row state by path — built once by the route from data it already has
   /// (`ReviewFileRow`, the comments rollup, the findings join, the drafts
-  /// tray, `classifyFile`). This component computes NOTHING.
+  /// tray, `classifyFile`). This component computes NOTHING about chips.
   stateByPath: ReadonlyMap<string, MapRowState>;
   /// The cursor file — the SAME `keys.cursor.fileIdx` the `]f`/`[f`
   /// motions drive, so the column and the keyboard can never disagree
@@ -16,75 +19,56 @@ export interface ReviewMapColumnProps {
   fileCount: number;
   viewedCount: number;
   /// True when the chapters were derived from the reading order's own
-  /// `reason` strings rather than being a flat list — captioned, because
-  /// a derived grouping presented as an authored one is a lie about the
-  /// wire (authored chapters are a Track-K SHOULD, not built).
+  /// `reason` strings. Status sections replace those chapters as the
+  /// grouping (V76-R2b); the flag is kept so the call site is unchanged.
   derived: boolean;
   onPick: (path: string) => void;
   onClose: () => void;
   /// V73-K2c (kbc-pseudo/1) — "chapter zero": the four review-scoped
-  /// pseudo-files, listed BEFORE every real chapter (`docs/kb-code.md`'s
-  /// own wording: "a reviewer who reads the code before the description is
-  /// reading it without the question it was meant to answer"). A structurally
-  /// DIFFERENT shape from `ReviewFileRow` (no diff stats, just `present`/
-  /// `blob_sha`/`lines`), so this is its own small row renderer rather than
-  /// a `MapChapter.files` entry.
+  /// pseudo-files, listed BEFORE every real section.
   pseudoFiles: PseudoFile[];
   onPickPseudo: (name: string) => void;
+  treeRef?: MutableRefObject<ReviewFileTreeHandle | null>;
 }
 
-function Chip({
-  cls,
-  label,
-  title,
-  attr,
-}: {
-  cls: string;
-  label: string;
-  title: string;
-  attr?: Record<string, string>;
-}) {
-  return (
-    <span className={`kbc-rmap__chip ${cls}`} title={title} {...attr}>
-      {label}
-    </span>
-  );
-}
-
-/// The review diff's left FILE MAP column (V73-K2a). It is the desktop
-/// promotion of the mobile "Files" drawer this page already had — the same
-/// rows, the same cursor, one more home for neither: on mobile the drawer
-/// stays the single entry point (root CLAUDE.md #30's one-mobile-entry
-/// rule), and this column is simply not rendered there.
-///
+/// The review diff's left FILE MAP column (V73-K2a, tree in V76-R2b).
 /// It is a `<nav>`, not a new `<aside>` landmark: the region template in
 /// `e2e/__snapshots__/regions.spec.ts/review-diff.aria.yml` is matched in
-/// Playwright's CONTAIN mode (banner/banner/banner), so the golden is
-/// untouched by an added navigation region — and "jump to a file" is what
-/// a nav IS.
+/// Playwright's CONTAIN mode, so the golden is untouched.
 export default function ReviewMapColumn({
   chapters,
   stateByPath,
   currentPath,
   fileCount,
   viewedCount,
-  derived,
+  derived: _derived,
   onPick,
   onClose,
   pseudoFiles,
   onPickPseudo,
+  treeRef,
 }: ReviewMapColumnProps) {
-  const currentRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    currentRef.current?.scrollIntoView({ block: "nearest" });
-  }, [currentPath]);
+  const syntaxQ = useSyntax();
+  const files = useMemo(() => {
+    const out: ReviewFileRow[] = [];
+    const seen = new Set<string>();
+    for (const ch of chapters) {
+      for (const f of ch.files) {
+        if (seen.has(f.path)) continue;
+        seen.add(f.path);
+        out.push(f);
+      }
+    }
+    return out;
+  }, [chapters]);
+  const sections = useMemo(() => buildStatusSections(files), [files]);
 
   return (
     <nav className="kbc-rmap" aria-label="Review file map" data-kbc-rdiff-map>
       <header className="kbc-rmap__head">
         <span className="kbc-rmap__title">Files</span>
         <span className="kbc-rmap__census" data-kbc-rdiff-map-census>
-          {mapCensusText(fileCount, viewedCount, chapters.length)}
+          {mapCensusText(fileCount, viewedCount, sections.length, "section")}
         </span>
         <button
           type="button"
@@ -129,98 +113,15 @@ export default function ReviewMapColumn({
           </ul>
         </section>
       )}
-      {derived && (
-        <p className="kbc-rmap__note" data-kbc-rdiff-map-derived>
-          chapters derived from the reading order&rsquo;s own reasons — the wire carries no authored
-          chapters
-        </p>
-      )}
-      {chapters.length === 0 && (
-        <p className="kbc-rmap__note">No files in this patchset.</p>
-      )}
-      {chapters.map((ch, ci) => (
-        <section className="kbc-rmap__chapter" key={ci} data-kbc-rdiff-map-chapter={ch.reason ?? ""}>
-          <h2 className="kbc-rmap__chapter-head">
-            {ch.reason ?? "not in the reading order"}
-            <span className="kbc-rmap__chapter-n">{ch.files.length}</span>
-          </h2>
-          <ul className="kbc-rmap__list">
-            {ch.files.map((f: ReviewFileRow) => {
-              const st = stateByPath.get(f.path);
-              const current = f.path === currentPath;
-              return (
-                <li key={f.path}>
-                  <button
-                    ref={current ? currentRef : undefined}
-                    type="button"
-                    className={"kbc-rmap__row" + (current ? " is-current" : "")}
-                    title={st ? mapRowTitle(st) : f.path}
-                    onClick={() => onPick(f.path)}
-                    data-kbc-rdiff-map-row={f.path}
-                    data-kbc-rdiff-map-current={current ? "1" : undefined}
-                  >
-                    <span className="kbc-rmap__path">{f.path}</span>
-                    <span className="kbc-rmap__stats">
-                      <span className="kbc-review__file-add">+{f.additions}</span>{" "}
-                      <span className="kbc-review__file-del">−{f.deletions}</span>
-                    </span>
-                    <span className="kbc-rmap__chips">
-                      {st?.viewed && (
-                        <Chip
-                          cls={
-                            "kbc-rmap__chip--viewed" +
-                            (st.viewedStale ? " kbc-rmap__chip--stale" : "")
-                          }
-                          label={st.viewedStale ? "viewed?" : "viewed"}
-                          title={
-                            st.viewedStale
-                              ? "marked viewed, but this file's blob has changed since"
-                              : "marked viewed at this blob"
-                          }
-                          attr={{ "data-kbc-rdiff-map-viewed": st.viewedStale ? "stale" : "1" }}
-                        />
-                      )}
-                      {(st?.openComments ?? 0) > 0 && (
-                        <Chip
-                          cls="kbc-rmap__chip--comments"
-                          label={`${st?.openComments}`}
-                          title={`${st?.openComments} open comment thread(s)`}
-                          attr={{ "data-kbc-rdiff-map-comments": String(st?.openComments) }}
-                        />
-                      )}
-                      {(st?.findings ?? 0) > 0 && (
-                        <Chip
-                          cls="kbc-rmap__chip--findings"
-                          label={`f${st?.findings}`}
-                          title={`${st?.findings} finding(s) anchored in this file`}
-                          attr={{ "data-kbc-rdiff-map-findings": String(st?.findings) }}
-                        />
-                      )}
-                      {(st?.drafts ?? 0) > 0 && (
-                        <Chip
-                          cls="kbc-rmap__chip--draft"
-                          label={`${st?.drafts} draft`}
-                          title={`${st?.drafts} unpublished draft(s) on this file`}
-                          attr={{ "data-kbc-rdiff-map-drafts": String(st?.drafts) }}
-                        />
-                      )}
-                      {(st?.noise ?? []).map((n) => (
-                        <Chip
-                          key={n}
-                          cls={`kbc-rmap__chip--noise kbc-noise--${n}`}
-                          label={n}
-                          title={`noise label: ${n} — the rule is on the hunk chip`}
-                          attr={{ "data-kbc-rdiff-map-noise": n }}
-                        />
-                      ))}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ))}
+      <ReviewFileTree
+        files={files}
+        stateByPath={stateByPath}
+        currentPath={currentPath}
+        syntaxRows={syntaxQ.data?.rows}
+        onPick={onPick}
+        rowAttr="map"
+        treeRef={treeRef}
+      />
     </nav>
   );
 }

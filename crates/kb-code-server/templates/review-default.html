@@ -22,6 +22,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="kb-category" content="review">
+<meta name="kb-tags" content="{{tags}}">
+<meta name="kb-summary" content="{{summary_text}}">
 <title>{{title}}</title>
 <style>
   :root { color-scheme: light dark; }
@@ -44,9 +47,13 @@
 <body>
 <h1>{{title}}</h1>
 {{meta}}
-<p class="kbc-meta">PR #{{pr_number}} · risk score {{risk_score}}</p>
+<p class="kbc-meta">{{repo}} · PR #{{pr_number}} · risk score {{risk_score}}</p>
 
 <section id="summary"><h2>Summary</h2>{{summary}}</section>
+<section id="verdict"><h2>Verdict</h2>
+<p class="kbc-meta">PR #{{pr_number}} · risk score {{risk_score}}</p>
+{{risk}}
+</section>
 <section id="risk"><h2>Risk</h2>{{risk}}</section>
 <section id="findings"><h2>Findings</h2>{{findings}}</section>
 <section id="reading-order"><h2>Reading order</h2>{{reading_order}}</section>
