@@ -2022,3 +2022,472 @@ async fn pr_status_degrades_the_live_half_when_github_is_unavailable() {
         .unwrap()
         .contains("rate-limited"));
 }
+
+// --- V76-R1a: the start-pr base ladder + async jobs --------------------------
+//
+// Fixture variant of `fixture_pr_repo` where the bare origin ALSO has a
+// `main` branch that advances `extra_main_commits` past the local one (a
+// second clone pushes empty commits) — the shape the merge-base default
+// and the stale-mirror refusal are about. Returns the three tempdirs
+// (all must outlive the test), the repo dir, the base sha, the PR head
+// sha and the advanced remote tip.
+fn fixture_pr_repo_remote_main(
+    pr_number: u32,
+    extra_main_commits: u32,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    String,
+    String,
+    String,
+) {
+    let bare_tmp = tempfile::tempdir().unwrap();
+    let bare_dir = std::fs::canonicalize(bare_tmp.path())
+        .unwrap()
+        .join("origin.git");
+    std::fs::create_dir_all(&bare_dir).unwrap();
+    git(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let repo_dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&repo_dir);
+    std::fs::write(repo_dir.join("base.txt"), "base\n").unwrap();
+    git(&repo_dir, &["add", "-A"]);
+    git(&repo_dir, &["commit", "-q", "-m", "base"]);
+    let base_sha = git_out(&repo_dir, &["rev-parse", "HEAD"]);
+    git(
+        &repo_dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    git(
+        &repo_dir,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", bare_dir.to_str().unwrap()),
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    git(&repo_dir, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+
+    // A second clone advances origin's main past the local one — the
+    // "the mirror has not fetched for months" shape, scaled down.
+    let clone_tmp = tempfile::tempdir().unwrap();
+    let clone_dir = std::fs::canonicalize(clone_tmp.path())
+        .unwrap()
+        .join("clone");
+    git(
+        &repo_dir,
+        &[
+            "clone",
+            "-q",
+            bare_dir.to_str().unwrap(),
+            clone_dir.to_str().unwrap(),
+        ],
+    );
+    git(&clone_dir, &["config", "user.email", "test@example.com"]);
+    git(&clone_dir, &["config", "user.name", "Test"]);
+    for i in 0..extra_main_commits {
+        git(
+            &clone_dir,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("remote {i}"),
+            ],
+        );
+    }
+    git(
+        &clone_dir,
+        &["push", "-q", "origin", "HEAD:refs/heads/main"],
+    );
+    let remote_tip = git_out(&clone_dir, &["rev-parse", "HEAD"]);
+
+    git(&repo_dir, &["checkout", "-q", "-b", "pr-branch"]);
+    std::fs::write(repo_dir.join("feature.txt"), "feature\n").unwrap();
+    git(&repo_dir, &["add", "-A"]);
+    git(&repo_dir, &["commit", "-q", "-m", "pr commit"]);
+    let pr_sha = git_out(&repo_dir, &["rev-parse", "HEAD"]);
+    git(
+        &repo_dir,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("HEAD:refs/pull/{pr_number}/head"),
+        ],
+    );
+    git(&repo_dir, &["checkout", "-q", "main"]);
+
+    (
+        repo_tmp, bare_tmp, clone_tmp, repo_dir, base_sha, pr_sha, remote_tip,
+    )
+}
+
+/// The GitHub mock `start-pr`'s metadata enrichment expects, with an
+/// optional artificial delay on the `pulls/{n}` route (the attach test
+/// needs the job to still be running when the second POST lands).
+fn gh_pull_router(pr_number: u32, pr_sha: &str, delay: std::time::Duration) -> Router {
+    let pulls_path = format!("/repos/acme/widget/pulls/{pr_number}");
+    let checks_path = format!("/repos/acme/widget/commits/{pr_sha}/check-runs");
+    let pr_sha_owned = pr_sha.to_string();
+    let router = Router::new()
+        .route(
+            &pulls_path,
+            get(move || {
+                let pr_sha = pr_sha_owned.clone();
+                async move {
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    Json(serde_json::json!({
+                        "number": 42,
+                        "title": "Add feature",
+                        "user": {"login": "octocat"},
+                        "head": {"ref": "pr-branch", "sha": pr_sha},
+                        "base": {"ref": "main"},
+                        "updated_at": "2024-01-01T00:00:00Z",
+                        "draft": false,
+                        "state": "open",
+                        "merged": false,
+                        "labels": [],
+                        "mergeable_state": "clean"
+                    }))
+                }
+            }),
+        )
+        .route(
+            &checks_path,
+            get(|| async { Json(serde_json::json!({ "check_runs": [] })) }),
+        );
+    router
+}
+
+async fn boot_pr_fixture(dir: &Path, gh_addr: SocketAddr) -> (tempfile::TempDir, String) {
+    let cfg = KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: "fixture".to_string(),
+            path: dir.to_path_buf(),
+        }],
+        kb_daemon: disabled_kb_daemon(),
+        github: GithubSection {
+            token_file: None,
+            api_base: format!("http://{gh_addr}"),
+        },
+        ..KbCodeConfig::default()
+    };
+    boot(cfg).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_merge_base_default_is_chosen_and_base_source_is_recorded() {
+    let _guard = SERIAL.lock().await;
+    let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(42, 2);
+
+    let gh_router = gh_pull_router(42, &pr_sha, std::time::Duration::ZERO);
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 42 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    // The merge-base rung: base_ref is the remote-tracking ref, ps1's
+    // base_sha is the merge-base against the FRESH remote tip (the base
+    // commit here — the fixture's fork point), and the ladder answer is
+    // named on the envelope.
+    assert_eq!(body["base_source"], "merge-base");
+    assert_eq!(body["base_ref"], "refs/remotes/origin/main");
+    assert_eq!(body["base_sha"], base_sha);
+    // …and the source is recorded on the stored pr_meta snapshot too.
+    assert_eq!(body["pr_meta"]["base_source"], "merge-base");
+    let id = body["id"].as_i64().unwrap();
+
+    // The remote-tracking ref was really refreshed to the advanced tip.
+    let local_tip = git_out(&dir, &["rev-parse", "refs/remotes/origin/main"]);
+    assert_ne!(local_tip, base_sha, "the fetch must move origin/main");
+
+    // GET /api/reviews/{id} reads the same recorded source back.
+    let show: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(show["pr_meta"]["base_source"], "merge-base");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_stale_mirror_refuses_with_the_retry_hint() {
+    let _guard = SERIAL.lock().await;
+    let extra = kb_code_server::reviews::STALE_MIRROR_BEHIND_LIMIT + 10;
+    let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(43, extra as u32);
+
+    let gh_router = gh_pull_router(43, &pr_sha, std::time::Duration::ZERO);
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 43 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409, "{}", resp.text().await.unwrap());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "urn:kb:errors:stale-mirror");
+    let msg = body["error"].as_str().unwrap();
+    assert!(msg.contains("0 ahead"), "{msg}");
+    assert!(msg.contains(&format!("{extra} behind")), "{msg}");
+    assert!(
+        msg.contains(&format!(
+            "kb-code review start-pr --repo fixture --pr 43 --base {base_sha}"
+        )),
+        "{msg}"
+    );
+
+    // No review row was written.
+    let list: serde_json::Value = client
+        .get(format!("{base}/api/reviews"))
+        .query(&[("repo", "fixture")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(list["reviews"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_explicit_base_bypasses_the_stale_mirror_refusal() {
+    let _guard = SERIAL.lock().await;
+    let extra = kb_code_server::reviews::STALE_MIRROR_BEHIND_LIMIT + 10;
+    let (_r, _b, _c, dir, _base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(44, extra as u32);
+
+    let gh_router = gh_pull_router(44, &pr_sha, std::time::Duration::ZERO);
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({
+            "repo": "fixture", "pr_number": 44, "base_ref": "main"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        201,
+        "an explicit --base bypasses the refusal: {}",
+        resp.text().await.unwrap()
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["base_source"], "explicit");
+    assert_eq!(body["base_ref"], "main");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_without_the_default_branch_on_the_remote_uses_local_default() {
+    let _guard = SERIAL.lock().await;
+    // The pre-V76 fixture shape: origin exists (the PR fetch needs it)
+    // but has no `main` branch, so the default-branch fetch fails and the
+    // ladder falls to the local default — labelled, never silent.
+    let (_repo_tmp, _bare_tmp, dir, pr_sha) = fixture_pr_repo(45);
+
+    let gh_router = gh_pull_router(45, &pr_sha, std::time::Duration::ZERO);
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 45 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["base_source"], "local-default");
+    assert_eq!(body["base_ref"], "main");
+    // The envelope is otherwise the pre-V76 one, additively widened.
+    assert_eq!(body["latest_ps"], 1);
+    assert_eq!(body["pr_head_sha"], pr_sha);
+}
+
+/// Poll the job route until the job settles; fail after ~20 s.
+async fn poll_job(base: &str, client: &reqwest::Client, job_id: &str) -> serde_json::Value {
+    for _ in 0..200 {
+        let body: serde_json::Value = client
+            .get(format!("{base}/api/reviews/jobs/{job_id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if body["status"] != "running" {
+            return body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("job {job_id} did not settle within 20 s");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_async_job_runs_to_done_and_a_second_post_attaches() {
+    let _guard = SERIAL.lock().await;
+    let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(46, 2);
+
+    // The metadata call stalls for 2 s, so the job is provably still
+    // running when the second POST lands.
+    let gh_router = gh_pull_router(46, &pr_sha, std::time::Duration::from_secs(2));
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let first = client
+        .post(format!("{base}/api/reviews/pr?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 46 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 202, "{}", first.text().await.unwrap());
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first_body["status"], "running");
+    let job_id = first_body["job_id"].as_str().unwrap().to_string();
+    assert!(job_id.starts_with("job_"), "{job_id}");
+
+    // The running job is observable on the bearer read route.
+    let running: serde_json::Value = client
+        .get(format!("{base}/api/reviews/jobs/{job_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(running["status"], "running");
+    assert_eq!(running["repo"], "fixture");
+    assert_eq!(running["pr_number"], 46);
+    assert!(running["progress"]["stage"].as_str().is_some(), "{running}");
+
+    // A second POST for the same (repo, PR) ATTACHES — same job id, no
+    // second fetch.
+    let second = client
+        .post(format!("{base}/api/reviews/pr?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 46 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 202, "{}", second.text().await.unwrap());
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(second_body["job_id"], job_id);
+    assert_eq!(second_body["attached"], true);
+
+    // The job settles done with the full creation envelope — the SAME
+    // shape the synchronous route returns, base_source included.
+    let settled = poll_job(&base, &client, &job_id).await;
+    assert_eq!(settled["status"], "done", "{settled}");
+    let review_id = settled["review_id"].as_i64().unwrap();
+    let result = &settled["result"];
+    assert_eq!(result["id"], review_id);
+    assert_eq!(result["base_source"], "merge-base");
+    assert_eq!(result["base_sha"], base_sha);
+    assert_eq!(result["latest_ps"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_async_job_fails_with_the_error_and_404s_for_an_unknown_id() {
+    let _guard = SERIAL.lock().await;
+    // No refs/pull/999/head on origin — the load-bearing fetch fails
+    // inside the job.
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(47);
+    let (_tmp, base) = boot_with_repo("fixture", &dir).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 999 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202, "{}", resp.text().await.unwrap());
+    let job_id = resp.json::<serde_json::Value>().await.unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let settled = poll_job(&base, &client, &job_id).await;
+    assert_eq!(settled["status"], "failed", "{settled}");
+    assert!(
+        settled["error"]
+            .as_str()
+            .unwrap()
+            .contains("PR fetch failed"),
+        "{settled}"
+    );
+    assert!(settled["review_id"].is_null());
+
+    // An unknown id is an honest 404.
+    let missing = client
+        .get(format!("{base}/api/reviews/jobs/job_000000000000"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_async_job_surfaces_the_stale_mirror_refusal_typed() {
+    let _guard = SERIAL.lock().await;
+    let extra = kb_code_server::reviews::STALE_MIRROR_BEHIND_LIMIT + 10;
+    let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(48, extra as u32);
+
+    let gh_router = gh_pull_router(48, &pr_sha, std::time::Duration::ZERO);
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 48 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202, "{}", resp.text().await.unwrap());
+    let job_id = resp.json::<serde_json::Value>().await.unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let settled = poll_job(&base, &client, &job_id).await;
+    assert_eq!(settled["status"], "failed", "{settled}");
+    assert_eq!(settled["error_type"], "urn:kb:errors:stale-mirror");
+    let err = settled["error"].as_str().unwrap();
+    assert!(
+        err.contains(&format!(
+            "kb-code review start-pr --repo fixture --pr 48 --base {base_sha}"
+        )),
+        "{err}"
+    );
+}
