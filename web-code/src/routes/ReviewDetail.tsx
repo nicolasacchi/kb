@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import type { ReviewDetailPr, ReviewPatchset } from "../api/types";
+import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
+import type { FindingSeverity, ReviewDetailPr, ReviewPatchset } from "../api/types";
 import { Icon } from "../components/icons";
 import CockpitTabs, { type CockpitView } from "../components/reviews/CockpitTabs";
 // ── V73-K2b (kbc-review/1, design D9/D9-a) — the Document tab ──
@@ -15,6 +16,7 @@ import ReportPanel, { hasReviewReport } from "../components/reviews/ReportPanel"
 import ReviewHeader from "../components/reviews/ReviewHeader";
 import ReviewMapPanel from "../components/reviews/ReviewMapPanel";
 import ReviewSidePanel from "../components/reviews/ReviewSidePanel";
+import type { FindingSeverityFilter } from "../components/reviews/ReviewThreadsCard";
 import TimelinePanel from "../components/reviews/TimelinePanel";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { useIsMobile } from "../hooks/useIsMobile";
@@ -35,6 +37,28 @@ import { readerUrl } from "../lib/breadcrumbs";
 import { parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
 import { cardList } from "../lib/reviewDoc";
 import { indexThreads } from "../lib/reviewComments";
+// ── V76-R2a — the Room's rail geometry + density. The rail's truth is the
+// pure reducer; react-resizable-panels is the mechanism; keyboard resize
+// goes through the DESK's resize submode (via `railKeyResize`) — no second
+// resizer. ──
+import {
+  REVIEW_RAIL_DEFAULT_WIDTH,
+  loadReviewRail,
+  railKeyResize,
+  railWidthFromLayout,
+  resetRail,
+  roomLayout,
+  saveReviewRail,
+  toggleRail,
+  type ReviewRailState,
+} from "../lib/reviewRail";
+import {
+  ROOM_DENSITY_STORAGE_KEY,
+  nextRoomDensity,
+  parseRoomDensity,
+  type RoomDensity,
+} from "../lib/reviewRoom";
+import { RESIZE_SUBMODE_HINT } from "../desk/resizeSubmode";
 import { toast } from "../lib/toast";
 import "../styles/reviews.css";
 import "../styles/review-room.css";
@@ -256,6 +280,110 @@ export default function ReviewDetail() {
     return () => window.removeEventListener("keydown", onKey);
   }, [sheetOpen]);
 
+  // ── V76-R2a — the findings rail as a RESIZABLE DOCK ─────────────────────
+  //
+  // The Desk's three rules, restated for the Room (see `lib/reviewRail.ts`'s
+  // header): the pure reducer is the truth, `react-resizable-panels` is the
+  // mechanism (no `autoSaveId`), and keyboard resize on the focused
+  // separator goes through the DESK's `resizeSubmodeKey` (`focus: "rail"`)
+  // — this route does not write a second resizer.
+  const [rail, setRail] = useState<ReviewRailState>(() => loadReviewRail());
+  const railPanel = usePanelRef();
+  useEffect(() => {
+    saveReviewRail(rail);
+  }, [rail]);
+  // Collapse/expand + imperative width live OUTSIDE the layout write-back,
+  // exactly as `Desk.tsx` does it: `defaultLayout` is read at mount only.
+  useLayoutEffect(() => {
+    if (isMobile) return;
+    if (rail.collapsed) railPanel.current?.collapse();
+    else railPanel.current?.expand();
+  }, [isMobile, rail.collapsed, railPanel]);
+  useLayoutEffect(() => {
+    if (isMobile || rail.collapsed) return;
+    // The `%` suffix is load-bearing: the library reads a bare NUMBER as
+    // PIXELS (Desk.tsx's own warning beside `defaultSize`).
+    railPanel.current?.resize(`${rail.width}%`);
+  }, [isMobile, rail.collapsed, rail.width, railPanel]);
+  const onRoomLayout = (layout: Layout, meta: { isUserInteraction: boolean }) => {
+    if (!meta.isUserInteraction) return;
+    const w = railWidthFromLayout(layout);
+    if (w == null) return;
+    setRail((cur) => (cur.width === w ? cur : { ...cur, width: w }));
+  };
+  /// The focused separator's keydown, routed through the Desk's resize
+  /// submode. Only keys the submode claims are stopped here (the
+  /// focused-panel rule: stop only the keys you handle). `rail` is read
+  /// from the closure (this handler is rebuilt every render, so it is never
+  /// stale) — the updater form would run side effects inside the reducer,
+  /// which StrictMode may invoke twice.
+  function onRailSepKey(e: React.KeyboardEvent) {
+    const result = railKeyResize(rail, e.key);
+    if (!result.handled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (result.command.t === "exit") (e.target as HTMLElement).blur();
+    if (result.command.t === "hint") toast.ok(RESIZE_SUBMODE_HINT);
+    if (result.state !== rail) setRail(result.state);
+  }
+
+  // ── V76-R2a — the Room density toggle. localStorage is the home;
+  // `?density=` only mirrors it (the `lib/branchViews.ts` precedent). ──
+  const [densityState, setDensityState] = useState<RoomDensity>(() =>
+    parseRoomDensity(
+      typeof localStorage !== "undefined" ? localStorage.getItem(ROOM_DENSITY_STORAGE_KEY) : null,
+    ),
+  );
+  // An explicit `?density=` wins (a shared link carries the density);
+  // absent, the mirrored/persisted state. Same posture as `?ps=` above.
+  const densityParam = searchParams.get("density");
+  const density: RoomDensity = densityParam ? parseRoomDensity(densityParam) : densityState;
+  function setDensity(next: RoomDensity) {
+    setDensityState(next);
+    try {
+      localStorage.setItem(ROOM_DENSITY_STORAGE_KEY, next);
+    } catch {
+      // private-mode refusal — the toggle still works for this session.
+    }
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === "compact") p.set("density", "compact");
+        else p.delete("density");
+        return p;
+      },
+      { replace: true },
+    );
+  }
+
+  // ── V76-R2a — the rail's findings severity filter, LIFTED so the Report
+  // hero's count chips and the rail's own filter row are ONE state. ──
+  const [findingSevFilter, setFindingSevFilter] = useState<FindingSeverityFilter>("all");
+  function filterRailTo(sev: FindingSeverity) {
+    setFindingSevFilter(sev);
+    if (isMobile) setSheetOpen(true);
+    else setRail((cur) => (cur.collapsed ? { ...cur, collapsed: false } : cur));
+    requestAnimationFrame(() => {
+      document
+        .querySelector("[data-kbc-review-findings]")
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+  }
+
+  /// V76-R2a — `review.jump.*`: open the Report tab (a no-op when already
+  /// there), then scroll the named section decorator into view.
+  function jumpToRoomSection(kind: "summary" | "findings" | "praise" | "verdict") {
+    if (!reportAvailable) return;
+    if (cockpitView !== "report") setCockpitView("report");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`[data-kbc-room-section="${kind}"]`)
+          ?.scrollIntoView({ block: "start", behavior: "smooth" });
+      });
+    });
+  }
+
   useEffect(() => {
     if (cockpitView === "map" && mapQ.isFetched && mapQ.data === null) {
       toast.err("Review map is not available on this server version.");
@@ -375,6 +503,22 @@ export default function ReviewDetail() {
       const el = document.querySelector("[data-kbc-timeline-github-toggle]");
       if (el instanceof HTMLElement) el.click();
     },
+    // ── V76-R2a — the Room's rail + density + section jumps. Same
+    // `dispatch: "surface"` / no-`vim_kind` posture as every row above.
+    // `Space r` was NOT free (it is `doc.cards-fold` in this very scope),
+    // so the rail toggle is `Space i`; all seven keys are whole-registry
+    // unique — `commands/reviewRoom.test.ts`'s prefix scan is the gate the
+    // doctor structurally cannot be for leader chords. ──
+    "review.rail.toggle": () => {
+      if (isMobile) setSheetOpen((v) => !v);
+      else setRail((cur) => toggleRail(cur));
+    },
+    "review.rail.reset": () => setRail(resetRail),
+    "review.density-toggle": () => setDensity(nextRoomDensity(density)),
+    "review.jump.summary": () => jumpToRoomSection("summary"),
+    "review.jump.findings": () => jumpToRoomSection("findings"),
+    "review.jump.praise": () => jumpToRoomSection("praise"),
+    "review.jump.verdict": () => jumpToRoomSection("verdict"),
   });
 
   const files = filesQ.data?.files ?? [];
@@ -429,11 +573,103 @@ export default function ReviewDetail() {
     setSheetOpen(false);
   }
 
+  // V76-R2a — the center content and the rail are rendered in TWO layout
+  // shells below (the mobile single-sheet grid vs. the desktop resizable
+  // dock), so both are bound ONCE here.
+  const mainContent = !compareMode && cockpitView === "report" ? (
+    <ReportPanel
+      repo={repo}
+      review={review as ReviewDetailPr}
+      ps={psQuery}
+      onOpenFilesTab={() => setCockpitView("files")}
+      claims={claims}
+      onFilterFindings={filterRailTo}
+    />
+  ) : !compareMode && cockpitView === "map" ? (
+    <ReviewMapPanel
+      repo={repo}
+      loading={mapQ.isLoading}
+      error={mapQ.error as Error | null}
+      data={mapQ.data}
+      onOpenFile={(path) => navigate(readerUrl(repo, path))}
+    />
+  ) : !compareMode && cockpitView === "order" ? (
+    <ReadingOrderPanel
+      repo={repo}
+      reviewId={id}
+      loading={orderQ.isLoading}
+      error={orderQ.error as Error | null}
+      data={orderQ.data}
+      tourIdx={tourIdx}
+      setTourIdx={setTourIdx}
+      onOpenFile={(path) => navigate(readerUrl(repo, path))}
+    />
+  ) : !compareMode && cockpitView === "timeline" ? (
+    <TimelinePanel repo={repo} reviewId={id} prBound={prNumberForThreads != null} />
+  ) : !compareMode && cockpitView === "doc" ? (
+    docQ.isLoading ? (
+      <div className="kbc-reader__hint">Loading the review document…</div>
+    ) : docQ.error ? (
+      <div className="kbc-reader__hint kbc-reader__hint--error">
+        {(docQ.error as Error).message}
+      </div>
+    ) : docQ.data ? (
+      <DocPanel
+        repo={repo}
+        id={id}
+        doc={docQ.data}
+        lint={docLintQ.data}
+        lintLoading={docLintQ.isLoading}
+        cardsFolded={cardsFolded}
+        onSetCardsFolded={setCardsFolded}
+        focusedRef={focusedRef}
+        claims={claims}
+      />
+    ) : (
+      <div className="kbc-reader__hint">
+        This review has no kbc-review/1 document yet.
+      </div>
+    )
+  ) : compareMode && interdiffReady ? (
+    <InterdiffPanel
+      repo={repo}
+      loading={interdiffQ.isLoading}
+      error={interdiffQ.error as Error | null}
+      data={interdiffQ.data}
+      fromTipSha={tipOf(interdiffFrom)}
+      toTipSha={tipOf(interdiffTo)}
+    />
+  ) : compareMode ? (
+    <div className="kbc-reader__hint">Select two patchsets to compare.</div>
+  ) : (
+    <FilesPanel
+      repo={repo}
+      reviewId={id}
+      files={files}
+      loading={filesQ.isLoading}
+      error={(filesQ.error as Error | null) ?? null}
+      expanded={expanded}
+      onOpenFile={openFile}
+      pathFilter={pathFilter}
+      onPathFilter={setPathFilter}
+      fileSort={fileSort}
+      onFileSort={setFileSort}
+      baseSha={baseSha}
+      tipSha={tipSha}
+      ps={psQuery}
+    />
+  );
+
   return (
     <div
-      className={"kbc-review" + (isMobile && sheetOpen ? " kbc-review--sheet-open" : "")}
+      className={
+        "kbc-review" +
+        (isMobile && sheetOpen ? " kbc-review--sheet-open" : "") +
+        (density === "compact" ? " kbc-review--compact" : "")
+      }
       id="main"
       data-kbc-review={id}
+      data-kbc-room-density={density}
     >
       <ReviewHeader
         repo={repo}
@@ -494,106 +730,104 @@ export default function ReviewDetail() {
           if (view === "order") setTourIdx(0);
         }}
       />
-      <div className="kbc-review__body">
-        <div className="kbc-review__main">
-          {!compareMode && cockpitView === "report" ? (
-            <ReportPanel
-              repo={repo}
-              review={review as ReviewDetailPr}
-              ps={psQuery}
-              onOpenFilesTab={() => setCockpitView("files")}
-              claims={claims}
+      {isMobile ? (
+        // ── ≤860px: the EXISTING single-sheet behaviour, untouched — the
+        // rail is the one bottom sheet, never a second surface (root
+        // CLAUDE.md invariant #30). ──
+        <div className="kbc-review__body">
+          <div className="kbc-review__main">{mainContent}</div>
+          <ReviewSidePanel
+            repo={repo}
+            id={id}
+            ps={psQuery}
+            sessionId={review.session_id ?? null}
+            onOpenFile={openFileAndCloseSheet}
+            asSheet
+            onMobileClose={() => setSheetOpen(false)}
+            onOpenPublishPreview={openPublishPreview}
+            prNumber={prNumberForThreads}
+            docCards={cockpitView === "doc" ? docCards : undefined}
+            focusedRef={focusedRef}
+            onFocusRef={setFocusedRef}
+            findingSeverityFilter={findingSevFilter}
+            onFindingSeverityFilter={setFindingSevFilter}
+          />
+        </div>
+      ) : (
+        // ── V76-R2a — desktop: the Room fills the viewport; the findings
+        // rail is a resizable dock. `react-resizable-panels` is the
+        // MECHANISM (the Desk's own library, same three rules — see
+        // `lib/reviewRail.ts`'s header); `lib/reviewRail.ts`'s reducer is
+        // the truth. ──
+        <>
+          <Group
+            id="room-cols"
+            className="kbc-review__body kbc-review__body--room"
+            orientation="horizontal"
+            // See Desk.tsx's header, rule 2 — the Lumino/Chromium trap.
+            disableCursor
+            defaultLayout={roomLayout(rail.width)}
+            onLayoutChanged={onRoomLayout}
+            resizeTargetMinimumSize={{ coarse: 24, fine: 8 }}
+          >
+            <Panel id="room-main" className="kbc-room__panel" minSize="35%" style={{ overflow: "hidden" }}>
+              <div className="kbc-review__main">{mainContent}</div>
+            </Panel>
+            <Separator
+              id="sep-room-rail"
+              className="kbc-desk__sep kbc-desk__sep--v kbc-room__sep"
+              data-kbc-room-sep
+              onKeyDown={onRailSepKey}
             />
-          ) : !compareMode && cockpitView === "map" ? (
-            <ReviewMapPanel
-              repo={repo}
-              loading={mapQ.isLoading}
-              error={mapQ.error as Error | null}
-              data={mapQ.data}
-              onOpenFile={(path) => navigate(readerUrl(repo, path))}
-            />
-          ) : !compareMode && cockpitView === "order" ? (
-            <ReadingOrderPanel
-              repo={repo}
-              reviewId={id}
-              loading={orderQ.isLoading}
-              error={orderQ.error as Error | null}
-              data={orderQ.data}
-              tourIdx={tourIdx}
-              setTourIdx={setTourIdx}
-              onOpenFile={(path) => navigate(readerUrl(repo, path))}
-            />
-          ) : !compareMode && cockpitView === "timeline" ? (
-            <TimelinePanel repo={repo} reviewId={id} prBound={prNumberForThreads != null} />
-          ) : !compareMode && cockpitView === "doc" ? (
-            docQ.isLoading ? (
-              <div className="kbc-reader__hint">Loading the review document…</div>
-            ) : docQ.error ? (
-              <div className="kbc-reader__hint kbc-reader__hint--error">
-                {(docQ.error as Error).message}
-              </div>
-            ) : docQ.data ? (
-              <DocPanel
+            <Panel
+              id="room-rail"
+              className="kbc-room__panel"
+              panelRef={railPanel}
+              collapsible
+              collapsedSize={0}
+              minSize="220px"
+              // The DEFAULT width, not the persisted one — this is what a
+              // separator double-click resets to (Desk.tsx's rule 3), the
+              // same value `Space I` restores.
+              defaultSize={`${REVIEW_RAIL_DEFAULT_WIDTH}%`}
+              style={{ overflow: "hidden" }}
+            >
+              <ReviewSidePanel
                 repo={repo}
                 id={id}
-                doc={docQ.data}
-                lint={docLintQ.data}
-                lintLoading={docLintQ.isLoading}
-                cardsFolded={cardsFolded}
-                onSetCardsFolded={setCardsFolded}
+                ps={psQuery}
+                sessionId={review.session_id ?? null}
+                onOpenFile={openFile}
+                onOpenPublishPreview={openPublishPreview}
+                prNumber={prNumberForThreads}
+                docCards={cockpitView === "doc" ? docCards : undefined}
                 focusedRef={focusedRef}
-                claims={claims}
+                onFocusRef={setFocusedRef}
+                density={density}
+                onToggleDensity={() => setDensity(nextRoomDensity(density))}
+                onCollapseRail={() => setRail((cur) => toggleRail(cur))}
+                findingSeverityFilter={findingSevFilter}
+                onFindingSeverityFilter={setFindingSevFilter}
               />
-            ) : (
-              <div className="kbc-reader__hint">
-                This review has no kbc-review/1 document yet.
-              </div>
-            )
-          ) : compareMode && interdiffReady ? (
-            <InterdiffPanel
-              repo={repo}
-              loading={interdiffQ.isLoading}
-              error={interdiffQ.error as Error | null}
-              data={interdiffQ.data}
-              fromTipSha={tipOf(interdiffFrom)}
-              toTipSha={tipOf(interdiffTo)}
-            />
-          ) : compareMode ? (
-            <div className="kbc-reader__hint">Select two patchsets to compare.</div>
-          ) : (
-            <FilesPanel
-              repo={repo}
-              reviewId={id}
-              files={files}
-              loading={filesQ.isLoading}
-              error={(filesQ.error as Error | null) ?? null}
-              expanded={expanded}
-              onOpenFile={openFile}
-              pathFilter={pathFilter}
-              onPathFilter={setPathFilter}
-              fileSort={fileSort}
-              onFileSort={setFileSort}
-              baseSha={baseSha}
-              tipSha={tipSha}
-              ps={psQuery}
-            />
+            </Panel>
+          </Group>
+          {/* The collapsed rail's stripe: the expand affordance, OUTSIDE
+              the resizable group (the Desk's own stripe posture). */}
+          {rail.collapsed && (
+            <button
+              type="button"
+              className="kbc-room__rail-strip"
+              onClick={() => setRail((cur) => toggleRail(cur))}
+              aria-label="show findings rail"
+              title="show findings rail (Space i)"
+              data-kbc-room-rail-expand
+            >
+              <Icon.Panel />
+              <span className="kbc-room__rail-strip-lab">Findings</span>
+            </button>
           )}
-        </div>
-        <ReviewSidePanel
-          repo={repo}
-          id={id}
-          ps={psQuery}
-          sessionId={review.session_id ?? null}
-          onOpenFile={openFileAndCloseSheet}
-          asSheet={isMobile}
-          onMobileClose={isMobile ? () => setSheetOpen(false) : undefined}
-          onOpenPublishPreview={openPublishPreview}
-          prNumber={prNumberForThreads}
-          docCards={cockpitView === "doc" ? docCards : undefined}
-          focusedRef={focusedRef}
-          onFocusRef={setFocusedRef}
-        />
-      </div>
+        </>
+      )}
       {isMobile && sheetOpen && (
         <div
           className="kbc-sheet-scrim is-open"
