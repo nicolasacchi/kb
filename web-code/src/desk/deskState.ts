@@ -67,6 +67,9 @@ export type ResizeTarget = DeskRegionId | "panes";
 /// `comments`, because the tab always has an honest body: with the ledger off
 /// it says so, and off is a state to render rather than an absence to hide
 /// (design D17's "visible indicator", one surface over).
+/// V76-R3a added `facts` (aug-lane/1) — UNCONDITIONAL like comments/trail:
+/// a file with every lane off still has an honest empty-with-reason body,
+/// and the Lane Budget forbids a fifth gutter, so this is a rail tab.
 export type RailTab =
   | "all"
   | "understand"
@@ -75,7 +78,8 @@ export type RailTab =
   | "comments"
   | "review"
   | "dossier"
-  | "trail";
+  | "trail"
+  | "facts";
 
 export const RAIL_TABS: readonly RailTab[] = [
   "all",
@@ -86,6 +90,7 @@ export const RAIL_TABS: readonly RailTab[] = [
   "review",
   "dossier",
   "trail",
+  "facts",
 ];
 
 export interface DeskRegionState {

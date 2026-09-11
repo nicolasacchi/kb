@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Server } from "node:http";
-import { createFixtureRepo } from "./fixture-repo";
+import { createFixtureRepo, KNOWN_FILE } from "./fixture-repo";
 import { DOCLENS_FIXTURE_PORT, DOCLENS_KB, BASE, PORT, REPO_NAME } from "./helpers";
 import { startDoclensFixture } from "./doclens-fixture";
 
@@ -84,6 +84,11 @@ enabled = true
 # A 5-second floor, so trails.spec.ts's 12s and 3s hops prove the
 # QUANTISATION (12 -> 10, 3 -> 0) rather than passing through unchanged.
 step_granularity_secs = 5
+
+# V76-R3a — enable rubocop so lanes.spec.ts can ingest one diagnostic
+# via the loopback route and show it on the Facts tab + diagnostics gutter.
+[lanes]
+enabled = ["rubocop"]
 `;
   writeFileSync(path, body, "utf-8");
 }
@@ -170,6 +175,33 @@ export default async function globalSetup() {
     proc.kill("SIGTERM");
     doclensFixture.close();
     throw new Error("kb-code-server never finished indexing the fixture repo");
+  }
+
+  // V76-R3a — one rubocop diagnostic on KNOWN_FILE so lanes.spec.ts has a
+  // fact to list and a diagnostics-gutter variant to show. Loopback ingest
+  // (this daemon binds 127.0.0.1). Distinctive cop name, not a fixture path.
+  const ingest = await fetch(`${BASE}/api/lanes/rubocop/ingest?repo=${encodeURIComponent(REPO_NAME)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", "X-Kbc-Request": "1" },
+    body: JSON.stringify({
+      schema: "lane-ingest/1",
+      run: { tool: "rubocop", tool_version: "1.66.1", argv_redacted: "rubocop --format json" },
+      facts: [
+        {
+          path: KNOWN_FILE,
+          range: 3,
+          kind: "diagnostic",
+          value: { cop: "Style/FactsLane", message: "facts-lane e2e cop" },
+          severity: "warning",
+        },
+      ],
+    }),
+  });
+  if (!ingest.ok) {
+    const text = await ingest.text();
+    proc.kill("SIGTERM");
+    doclensFixture.close();
+    throw new Error(`rubocop ingest for lanes.spec.ts failed ${ingest.status}: ${text}`);
   }
 
   globalThis.__KB_CODE_DAEMON__ = { process: proc, tmpDir };

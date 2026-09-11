@@ -51,6 +51,8 @@ import AddToSetMenu from "../components/sets/AddToSetMenu";
 import BlameChip from "../components/provenance/BlameChip";
 import CommentGutterCard from "../components/comments/CommentGutterCard";
 import CommentsPanel from "../components/comments/CommentsPanel";
+import FactsPanel from "../components/lanes/FactsPanel";
+import FactsPeek from "../components/lanes/FactsPeek";
 import DiagnosticsCard from "../components/provenance/DiagnosticsCard";
 import FrameworkCard from "../components/provenance/FrameworkCard";
 import StoryTimeline from "../components/provenance/StoryTimeline";
@@ -97,6 +99,7 @@ import { useActiveWorkspace } from "../hooks/useActiveWorkspace";
 import { useAnnotations, useCreateAnnotation } from "../hooks/useAnnotations";
 import { useBlame } from "../hooks/useBlame";
 import { useCommentKeywords, useCommentsFile } from "../hooks/useComments";
+import { useLaneFacts } from "../hooks/useLanes";
 import { useBlameAttributions } from "../hooks/useBlameAttributions";
 import {
   useBookmarks,
@@ -128,6 +131,12 @@ import {
   type CommentGutterMode,
 } from "../lib/comments";
 import { diagnosticGutterMarks, type DiagnosticGutterMark } from "../lib/diagnostics";
+import {
+  coverageBandMarks,
+  diagnosticFactsOf,
+  laneDiagnosticMarks,
+  mergeDiagnosticMarks,
+} from "../lib/lanes";
 import {
   codeUrl,
   commitUrl,
@@ -212,6 +221,7 @@ import { loadProvisionalPanes } from "../lib/prefs";
 import {
   loadCodeLenses,
   loadCommentGutterMode,
+  loadCoverageBand,
   loadParamHints,
   loadReaderFontSize,
   loadStickyContext,
@@ -221,6 +231,7 @@ import {
   READER_FONT_SIZE_MIN,
   saveCodeLenses,
   saveCommentGutterMode,
+  saveCoverageBand,
   saveParamHints,
   saveReaderFontSize,
   saveSchemaFold,
@@ -1188,10 +1199,33 @@ export default function Reader() {
   // `useDiagnostics` itself gates on the repo's intel provider covering
   // `focusedPath`'s language, so this fetch is a no-op for most repos/files.
   const diagnostics = useDiagnostics(repo, focusedPath);
+  // V76-R3a — aug-lane/1 facts for the focused file. Always fetched; the
+  // coverage-band toggle is a client filter over this ONE response.
+  const laneFactsQ = useLaneFacts(repo, focusedPath);
+  const laneFacts = laneFactsQ.data?.facts ?? [];
+  const [coverageBandOn, setCoverageBandOn] = useState(() => loadCoverageBand());
+  function toggleCoverageBand() {
+    setCoverageBandOn((v) => {
+      const next = !v;
+      saveCoverageBand(next);
+      return next;
+    });
+  }
+  const [factsActiveLine, setFactsActiveLine] = useState<number | null>(null);
   const diagMarks = useMemo<Map<number, DiagnosticGutterMark> | null>(() => {
-    if (!diagnostics.data?.diagnostics) return null;
-    return diagnosticGutterMarks(diagnostics.data.diagnostics);
-  }, [diagnostics.data]);
+    const lsp = diagnostics.data?.diagnostics ? diagnosticGutterMarks(diagnostics.data.diagnostics) : null;
+    const lane = laneDiagnosticMarks(diagnosticFactsOf(laneFacts));
+    const merged = mergeDiagnosticMarks(lsp, lane);
+    return merged.size > 0 ? merged : null;
+  }, [diagnostics.data, laneFacts]);
+  const coverageLineCount = ((focusedPane === 1 ? file.data : pane2File.data)?.content ?? "").split(
+    "\n",
+  ).length;
+  const coverageMarkers = useMemo(() => {
+    if (!coverageBandOn) return null;
+    const marks = coverageBandMarks(laneFacts, coverageLineCount);
+    return marks.size > 0 ? marks : new Map();
+  }, [coverageBandOn, laneFacts, coverageLineCount]);
 
   const [ladder, dispatchLadder] = useReducer(ladderReducer, initialLadderState);
   const [hoverChip, setHoverChip] = useState<
@@ -1677,6 +1711,7 @@ export default function Reader() {
       key={`diagnostics:${focusedPath}`}
       repo={repo}
       path={focusedPath}
+      laneFacts={diagnosticFactsOf(laneFacts)}
       onJumpLine={(line, lineEnd) => {
         jumpToLine(focusedPane, line, lineEnd);
         paneRepoPath(focusedPane).viewRef.current?.focus();
@@ -3454,7 +3489,9 @@ export default function Reader() {
     "rail.tab.notes": () => selectRailTab("notes"),
     "rail.tab.comments": () => selectRailTab("comments"),
     "rail.tab.trail": () => selectRailTab("trail"),
+    "rail.tab.facts": () => selectRailTab("facts"),
     "rail.tab.review": () => selectRailTab("review"),
+    "facts.coverage-band": () => toggleCoverageBand(),
     // V72-J2 (D8) — comments/1: the gutter mode cycle, buffer navigation
     // (`]m`/`[m`, deliberately no `vim_kind` — see the registry row's own
     // note), and the claim → annotation bridge's keyboard doors. None of
@@ -4135,6 +4172,7 @@ export default function Reader() {
                       annotationMarkers={focusedPane === 1 ? annotationMarkers : null}
                       onAnnotationClick={focusedPane === 1 ? handleAnnotationClick : undefined}
                       diagnosticMarkers={focusedPane === 1 ? diagMarks : null}
+                      coverageMarkers={focusedPane === 1 ? coverageMarkers : null}
                       commentMarkers={focusedPane === 1 ? commentMarkers : null}
                       onCommentHover={focusedPane === 1 ? handleCommentHover : undefined}
                       onCommentUnhover={focusedPane === 1 ? handleCommentUnhover : undefined}
@@ -4249,6 +4287,7 @@ export default function Reader() {
                           annotationMarkers={focusedPane === 2 ? annotationMarkers : null}
                           onAnnotationClick={focusedPane === 2 ? handleAnnotationClick : undefined}
                           diagnosticMarkers={focusedPane === 2 ? diagMarks : null}
+                          coverageMarkers={focusedPane === 2 ? coverageMarkers : null}
                           commentMarkers={focusedPane === 2 ? commentMarkers : null}
                           onCommentHover={focusedPane === 2 ? handleCommentHover : undefined}
                           onCommentUnhover={focusedPane === 2 ? handleCommentUnhover : undefined}
@@ -4301,7 +4340,12 @@ export default function Reader() {
               onRamp={handlePeekRamp}
               scentFor={peekRowTarget}
               visitsFor={(row) => ramp.visits(peekRowTarget(row))}
-              cardExtra={<RailsAtomCard repo={repo} atoms={railsAtoms} gitRef={gitRef} />}
+              cardExtra={
+                <>
+                  <RailsAtomCard repo={repo} atoms={railsAtoms} gitRef={gitRef} />
+                  <FactsPeek repo={repo} facts={laneFacts} line={hoverPos?.line ?? null} />
+                </>
+              }
               // T1 — the hover card's "usages"/"callers" footer hints
               // (design-ui.md §9.1) reissue gr/gc against the position `K`
               // was pressed at; absent until a hover has actually happened.
@@ -4477,6 +4521,20 @@ export default function Reader() {
                   path={focusedPath ?? ""}
                   activeLine={commentActiveLine}
                   onGotoLine={(line, lineEnd) => {
+                    jumpToLine(focusedPane, line, lineEnd);
+                    paneRepoPath(focusedPane).viewRef.current?.focus();
+                  }}
+                />
+              }
+              factsPanel={
+                <FactsPanel
+                  repo={repo}
+                  path={focusedPath ?? ""}
+                  coverageBandOn={coverageBandOn}
+                  onToggleCoverageBand={toggleCoverageBand}
+                  activeLine={factsActiveLine}
+                  onGotoLine={(line, lineEnd) => {
+                    setFactsActiveLine(line);
                     jumpToLine(focusedPane, line, lineEnd);
                     paneRepoPath(focusedPane).viewRef.current?.focus();
                   }}
