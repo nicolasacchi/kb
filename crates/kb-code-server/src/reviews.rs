@@ -312,10 +312,7 @@ fn truthy_flag(v: &Option<String>) -> bool {
 /// `?dry_run=` default ON: omitted / `1` / `true` / `yes` → dry run;
 /// `0` / `false` / `no` → apply.
 pub fn dry_run_default_on(v: &Option<String>) -> bool {
-    match v.as_deref() {
-        Some("0") | Some("false") | Some("no") => false,
-        _ => true,
-    }
+    !matches!(v.as_deref(), Some("0") | Some("false") | Some("no"))
 }
 
 fn run_git(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, ReviewGitError> {
