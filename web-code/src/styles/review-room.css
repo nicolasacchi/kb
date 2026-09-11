@@ -1178,3 +1178,396 @@
   font-size: var(--fs-sm);
   color: var(--ink-faint);
 }
+
+/* ── V76-R2a — the Review Room for humans: full-width layout, resizable
+   findings rail, type scale, section decorators, chips with icons, the
+   Report hero. Appended — never edits a rule above. Token discipline:
+   colours are EXISTING tokens only (each chip keys off ONE token via
+   `--kbc-room-chip-color`); the Room's prose scale is a small set of local
+   size custom properties, declared once here. ── */
+
+.kbc-review {
+  /* the Room's prose scale (body ≥ 15px — the readability requirement) */
+  --room-fs-body: 15px;
+  --room-fs-small: 13px;
+  --room-fs-title: 17px;
+  --room-fs-hero: 26px;
+  --room-line: 1.62;
+}
+
+/* desktop: the resizable Group replaces the fixed 280px grid column */
+.kbc-review__body--room {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+/* neutralise the pre-V76 grid on the Group (the mobile branch below keeps
+   the plain `.kbc-review__body` grid) */
+.kbc-review__body--room.kbc-review__body {
+  grid-template-columns: none;
+}
+.kbc-room__panel {
+  min-width: 0;
+}
+.kbc-review__body--room .kbc-review__main {
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: 4px 18px 24px 4px;
+}
+.kbc-review__body--room .kbc-review__side {
+  position: static; /* sticky does not stick inside the Panel's overflow box */
+  height: 100%;
+  overflow-y: auto;
+  padding: 4px 4px 24px 12px;
+}
+
+/* the one separator — reuses the Desk's sep visuals (`.kbc-desk__sep`)
+   plus a Room-only keyboard-focus hint, since `hjkl`/arrows resize it via
+   the Desk's resize submode */
+.kbc-room__sep:focus-visible {
+  outline: 2px solid var(--accent-bor);
+  outline-offset: -1px;
+}
+
+/* the collapsed rail's stripe (outside the Group, like the Desk's stripes) */
+.kbc-room__rail-strip {
+  position: fixed;
+  right: 0;
+  top: 40%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border: 1px solid var(--rule-hi);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  z-index: 30;
+}
+.kbc-room__rail-strip:hover {
+  color: var(--ink);
+  border-color: var(--accent-bor);
+}
+.kbc-room__rail-strip-lab {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+}
+
+/* the rail dock's header strip (density toggle + collapse) */
+.kbc-review__rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-review__rail-lab {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: auto;
+}
+.kbc-review__rail-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.kbc-review__rail-btn:hover {
+  border-color: var(--accent-bor);
+  color: var(--ink);
+}
+.kbc-review__rail-btn[aria-pressed="true"] {
+  background: var(--accent-bg);
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
+
+/* ── the chip: ONE token drives wash, border and glyph ── */
+.kbc-room-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--kbc-room-chip-color, var(--ink-dim)) 40%, transparent);
+  background: color-mix(in srgb, var(--kbc-room-chip-color, var(--ink-dim)) 13%, transparent);
+  color: var(--kbc-room-chip-color, var(--ink-dim));
+  font-size: var(--room-fs-small);
+  font-weight: 600;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.kbc-room-chip--btn {
+  font: inherit;
+  font-size: var(--room-fs-small);
+  font-weight: 600;
+  cursor: pointer;
+}
+.kbc-room-chip--btn:hover {
+  border-color: var(--kbc-room-chip-color, var(--ink-dim));
+}
+.kbc-room-chip--link {
+  text-decoration: none;
+}
+.kbc-room-chip--link:hover {
+  border-color: var(--kbc-room-chip-color, var(--blue));
+}
+
+/* ── section decorators: icon + colour token per section kind ── */
+.kbc-room-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 30px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--room-fs-title);
+  font-weight: 650;
+  color: var(--ink);
+}
+.kbc-room-section__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  color: var(--kbc-room-section-color, var(--ink-dim));
+  background: color-mix(in srgb, var(--kbc-room-section-color, var(--ink-dim)) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kbc-room-section-color, var(--ink-dim)) 35%, transparent);
+}
+.kbc-room-section__n {
+  margin-left: auto;
+  font-size: var(--room-fs-small);
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+
+/* the praise section's green wash */
+.kbc-room-praise {
+  border: 1px solid color-mix(in srgb, var(--green) 30%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--green) 5%, transparent);
+  padding: 10px 12px 2px;
+}
+
+/* ── the Report hero ── */
+.kbc-room-hero {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+  margin: 6px 0 8px;
+}
+.kbc-room-hero__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+.kbc-room-hero__id {
+  flex: 1;
+  min-width: 0;
+}
+.kbc-room-hero__title {
+  margin: 0 0 8px;
+  font-size: var(--room-fs-hero);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.kbc-room-hero__refs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kbc-room-hero__arrow {
+  color: var(--ink-faint);
+}
+.kbc-room-hero__src {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
+.kbc-room-hero__counts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.kbc-room-hero__lede {
+  margin: 14px 0 0;
+  font-size: var(--room-fs-title);
+  line-height: 1.5;
+  color: var(--ink);
+  max-width: 78ch;
+}
+.kbc-room-hero__agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rule);
+  color: var(--accent-soft);
+  font-size: var(--room-fs-small);
+}
+.kbc-room-hero__session {
+  color: var(--blue);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+}
+.kbc-room-hero__session:hover {
+  text-decoration: underline;
+}
+.kbc-room-hero__verdict {
+  margin-top: 10px;
+}
+.kbc-room-hero__verdict .kbc-room-section {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* ── type scale + prose spacing on the Room's body ── */
+.kbc-review__main {
+  font-size: var(--room-fs-body);
+  line-height: var(--room-line);
+}
+.kbc-review__main p {
+  margin: 0 0 12px;
+}
+.kbc-review__main ul,
+.kbc-review__main ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.kbc-review__main li {
+  margin: 5px 0;
+}
+
+/* finding cards: the four zones, separated */
+.kbc-finding__head {
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-finding__chipslot {
+  display: inline-flex;
+}
+.kbc-finding__body {
+  margin-bottom: 4px;
+}
+.kbc-finding__ti {
+  font-size: var(--room-fs-title);
+  font-weight: 650;
+  margin: 0 0 6px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.kbc-finding__ra {
+  font-size: var(--room-fs-body);
+}
+.kbc-finding__rc {
+  border-left: 3px solid color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 6%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 8px 12px;
+  font-size: var(--room-fs-body);
+}
+.kbc-finding__rc::before {
+  content: none; /* the callout's own left bar + wash replaces the "→ " glyph */
+}
+.kbc-finding__actions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rule);
+}
+/* long identifiers/paths never overflow their column; full value on hover */
+.kbc-finding__loc,
+.kbc-finding__slug,
+.kbc-filerow .path,
+.kbc-room-chip {
+  overflow-wrap: anywhere;
+}
+
+/* rail rows: the two-line layout, disposition chip pinned right, no
+   mid-token wrap */
+.kbc-frow {
+  align-items: stretch;
+}
+.kbc-frow__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.kbc-frow .slug {
+  font-size: var(--room-fs-small);
+  overflow-wrap: anywhere;
+}
+.kbc-frow .loc {
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.kbc-frow .state {
+  flex: 0 0 auto;
+  align-self: center;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+}
+
+/* ── density: compact tightens the Room's spacing, never its facts ── */
+.kbc-review--compact {
+  --room-fs-body: 14px;
+  --room-fs-title: 15px;
+  --room-fs-hero: 22px;
+  --room-line: 1.45;
+}
+.kbc-review--compact .kbc-finding {
+  padding: 10px 12px 8px 15px;
+  margin-bottom: 6px;
+}
+.kbc-review--compact .kbc-room-section {
+  margin: 18px 0 8px;
+}
+.kbc-review--compact .kbc-review__main p,
+.kbc-review--compact .kbc-review__main ul,
+.kbc-review--compact .kbc-review__main ol {
+  margin-bottom: 8px;
+}
+.kbc-review--compact .kbc-room-hero {
+  padding: 12px 14px;
+}
+
+@media (max-width: 860px) {
+  /* ≤860px = the existing single-sheet behaviour: the Room's dock,
+     separator and stripe are not rendered at all (JS branch), so nothing
+     here may rely on them. */
+  .kbc-review {
+    padding: 16px 12px 48px;
+  }
+}

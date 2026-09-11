@@ -7,6 +7,12 @@
   margin: 0 auto;
   padding: 32px 16px 64px;
 }
+/* V76-R2a — the Review Room (the DETAIL route) fills the viewport like the
+ * reader; the `~reviews` LIST keeps the centred column above. */
+.kbc-review {
+  max-width: none;
+  padding: 24px 20px 64px;
+}
 .kbc-reviews__head,
 .kbc-review__head {
   margin-bottom: 16px;
@@ -374,6 +380,10 @@
 .kbc-review__file-diff {
   padding: 0 8px 12px;
   border-top: 1px dashed var(--rule);
+  /* Cockpit inline diff: a nested pane so one huge file does not blow the
+   * review page. Round-2 dropped this cap as a guessed cause of
+   * suggestions.spec.ts; that spec fails at the hunk-viewed toggle on the
+   * full-page diff, not a clipped preview. Restore the pre-R2b clip. */
   max-height: 480px;
   overflow: auto;
 }
@@ -902,14 +912,21 @@
 .kbc-rdiff__body {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
 }
 .kbc-rdiff__section {
   border-bottom: 1px solid var(--rule);
+  /* Local stacking: the sticky head covers this section's diff LINES,
+   * never the hunk strips (V76-R2b.2). --z-bar here painted the file-level
+   * viewed checkbox over data-kbc-hunk-viewed-toggle. */
+  isolation: isolate;
 }
 .kbc-rdiff__section-head {
   position: sticky;
+  /* Map closed: sticky ancestor is `.kbc-approute`; sit below the rdiff
+   * toolbar (min-height --topbar-h). Mapped override is below. */
   top: var(--topbar-h);
-  z-index: var(--z-bar);
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--pad-2);
@@ -1512,16 +1529,37 @@ span.kbc-diff__impact-chip {
 
 /* --- the map column --------------------------------------------------- */
 .kbc-rdiff__body--mapped {
+  /* Pre-V76 scroll model: the STREAM is a document (`.kbc-approute`
+   * scrolls). Desk's height:100% + overflow:hidden chain is for CM6;
+   * applying it here clipped `.kbc-diff__line` / compose gutters /
+   * hunk-viewed toggles (mobile.spec, review-diff-v2, review-drafts). */
   display: flex;
   align-items: flex-start;
   gap: 0;
+  min-width: 0;
+}
+.kbc-rdiff__split {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+/* Map open: the library Group is `overflow:hidden` (inline, sticky
+ * containing block) and already sits below the toolbar. `top: var(--topbar-h)`
+ * on the section-head pulled the header down over the first hunk strip so
+ * `data-kbc-review-viewed` intercepted `data-kbc-hunk-viewed-toggle`. */
+.kbc-rdiff__body--mapped .kbc-rdiff__section-head {
+  top: 0;
+}
+.kbc-rdiff__map-panel,
+.kbc-rdiff__stream-panel {
+  min-width: 0;
+  overflow: visible;
 }
 .kbc-rdiff__stream {
   flex: 1 1 auto;
   min-width: 0;
 }
 .kbc-rmap {
-  flex: 0 0 clamp(200px, 22vw, 320px);
   position: sticky;
   top: var(--topbar-h);
   max-height: calc(100vh - var(--topbar-h));
@@ -1610,7 +1648,6 @@ span.kbc-diff__impact-chip {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl;
   text-align: left;
   font-family: var(--font-mono, ui-monospace, monospace);
 }
@@ -1638,6 +1675,101 @@ span.kbc-diff__impact-chip {
   border-left: 2px dotted var(--accent);
 }
 
+/* --- V76-R2b — shared review file tree -------------------------------- */
+.kbc-ftree {
+  outline: none;
+}
+.kbc-ftree:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.kbc-ftree__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kbc-ftree__section {
+  margin-top: var(--pad-2);
+}
+.kbc-ftree__section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-ftree__section-head .kbc-rmap__chapter-head {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.kbc-ftree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-1, 4px);
+  cursor: pointer;
+}
+.kbc-ftree__row:hover {
+  background: var(--bg-hover, var(--bg-panel-2));
+}
+.kbc-ftree__row.is-current,
+.kbc-ftree__row.is-cursor {
+  border-left-color: var(--accent);
+  background: var(--bg-panel-2);
+}
+.kbc-ftree__twist {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+}
+.kbc-ftree__kind {
+  display: inline-flex;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+}
+.kbc-ftree__kind-abbr {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  line-height: 1;
+}
+.kbc-ftree__name,
+.kbc-ftree__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.kbc-ftree__counts {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- the per-hunk strip ------------------------------------------------ */
 .kbc-hunkstrip {
   display: flex;
@@ -1649,6 +1781,13 @@ span.kbc-diff__impact-chip {
   background: var(--bg-panel-2);
   border-left: 2px solid transparent;
   font-size: var(--fs-xs);
+  min-width: 0;
+  position: relative;
+  z-index: 2;
+  /* Map-closed: sticky ancestor is `.kbc-approute`. Leave room for the
+   * toolbar + section-head so scrollIntoView / Playwright do not park the
+   * first strip under the file-level viewed checkbox. */
+  scroll-margin-top: calc(var(--topbar-h) + var(--pad-2) * 2 + 1.75em);
 }
 .kbc-hunkstrip--current {
   border-left-color: var(--accent);
@@ -1657,6 +1796,10 @@ span.kbc-diff__impact-chip {
   opacity: 0.6;
 }
 .kbc-hunkstrip__header {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 .kbc-hunkstrip__spacer {

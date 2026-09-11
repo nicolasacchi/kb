@@ -219,8 +219,53 @@ test.describe("Review cockpit desktop-parity (1280×720)", () => {
     await expect(page.locator("#kbc-review-sheet")).toHaveCount(0);
     await expect(page.locator(".kbc-review__sheet-head")).toHaveCount(0);
     await expect(page.locator("[data-kbc-review-sheet-toggle]")).toBeHidden();
-    await expect(aside).toHaveCSS("position", "sticky");
-    await expect(page.locator(".kbc-review__body")).toHaveCSS("grid-template-columns", /280px/);
+    // ── V76-R2a — the Review Room replaced the pre-Room sticky 280px aside
+    // with a resizable dock inside a react-resizable-panels Group, so the
+    // two pins that used to sit here (`position: sticky` on the aside, a
+    // literal `280px` in the body's `grid-template-columns`) asserted a
+    // layout the design RETIRED. They were removed, not "fixed" back — the
+    // desktop-parity contract that survives is: the rail is in the grid VIA
+    // the resizable group, it is not a sheet and not a fixed overlay, and a
+    // fresh profile starts it at the rail module's default width. The
+    // library computes panel geometry at runtime (px/fr, not a literal
+    // `25%` in a CSS string), so the width pin below is the OBSERVED ratio,
+    // never a `toHaveCSS` on a hardcoded value — a px-pinned regex here is
+    // exactly the brittleness that broke this spec. ──
+
+    // In-grid proof: the aside is a DOM descendant of the resizable Group
+    // (`.kbc-review__body--room`). The ≤860px branch renders the plain
+    // `.kbc-review__body` div WITHOUT the `--room` modifier, so this
+    // locator can only match the desktop dock.
+    const roomGroup = page.locator(".kbc-review__body--room");
+    await expect(roomGroup).toBeVisible();
+    await expect(roomGroup.locator(".kbc-review__side")).toHaveCount(1);
+    // Not a sheet / not an overlay: `styles/review-room.css` pins the
+    // docked aside to `position: static` (sticky does not stick inside the
+    // Panel's overflow box; `fixed`/`absolute` would lift it out of the
+    // grid). This one computed-style read rejects every out-of-flow
+    // positioning at once.
+    await expect(aside).toHaveCSS("position", "static");
+    // Default width: this test runs on a fresh browser profile, so
+    // `kbc:review-rail` is absent from localStorage and the rail sits at
+    // its DEFAULT. The expected percent mirrors REVIEW_RAIL_DEFAULT_WIDTH
+    // in `src/lib/reviewRail.ts` — the single source of truth, cited here
+    // rather than imported because this e2e tsconfig deliberately does not
+    // type-check the app sources (no DOM lib; no e2e spec imports `src/`).
+    const RAIL_DEFAULT_WIDTH_PCT = 25; // src/lib/reviewRail.ts: REVIEW_RAIL_DEFAULT_WIDTH
+    const groupBox = await roomGroup.boundingBox();
+    const railBox = await aside.boundingBox();
+    expect(groupBox, "the Room group's bounding box").toBeTruthy();
+    expect(railBox, "the rail aside's bounding box").toBeTruthy();
+    const railPct = (railBox!.width / groupBox!.width) * 100;
+    // ±3pp absorbs the 5px separator and the library's px rounding —
+    // review-room-rail.spec.ts measured ~24px of cross-reload noise at
+    // this viewport (≈2pp of the ~1240px group).
+    expect(railPct, "rail width ≈ the default 25% of the Room group").toBeGreaterThan(
+      RAIL_DEFAULT_WIDTH_PCT - 3,
+    );
+    expect(railPct, "rail width ≈ the default 25% of the Room group").toBeLessThan(
+      RAIL_DEFAULT_WIDTH_PCT + 3,
+    );
   });
 });
 

@@ -3729,12 +3729,15 @@ enum ReviewCmd {
         json: bool,
     },
     /// `kb-code review start-pr --repo R --pr N [--base][--title]
-    /// [--session] [--reopen|--new]` — PRR-R2 + V76-R1b: `POST
-    /// /api/reviews/pr`. LOOPBACK-ONLY. Fetches `refs/pull/N/head` into
-    /// `refs/kbc/pr/N` (load-bearing — 400 on failure), creates the review
-    /// + captures ps1, and best-effort-enriches with GitHub PR metadata.
-    /// An OPEN existing (repo, PR) review is reused. A CLOSED existing
-    /// review 409s unless `--reopen` or `--new`.
+    /// [--session] [--reopen|--new] [--gh-token-from-cli] [--dry-run]` —
+    /// PRR-R2 + V76-R1b/R1c: `POST /api/reviews/pr`. LOOPBACK-ONLY. Fetches
+    /// `refs/pull/N/head` into `refs/kbc/pr/N` (load-bearing — 400 on
+    /// failure), creates the review + captures ps1, and best-effort-enriches
+    /// with GitHub PR metadata (degrades honestly on any GitHub-side failure
+    /// — the review is created either way). An OPEN existing (repo, PR)
+    /// review is reused; a CLOSED one 409s unless `--reopen` or `--new`.
+    /// `--gh-token-from-cli` runs `gh auth token` and sends the value in the
+    /// request body (never persisted, never printed; refused off loopback).
     StartPr {
         #[arg(long)]
         repo: String,
@@ -3754,6 +3757,12 @@ enum ReviewCmd {
         /// (`?on_closed=new`). Conflicts with `--reopen`.
         #[arg(long, conflicts_with = "reopen")]
         new: bool,
+        /// Run `gh auth token` and send it as `gh_token` (loopback-only).
+        #[arg(long = "gh-token-from-cli")]
+        gh_token_from_cli: bool,
+        /// Print the payload with the token redacted; do not POST.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -5637,6 +5646,8 @@ async fn run(cli: Cli) -> Result<()> {
                 session,
                 reopen,
                 new,
+                gh_token_from_cli,
+                dry_run,
                 daemon,
                 json,
             } => {
@@ -5649,6 +5660,8 @@ async fn run(cli: Cli) -> Result<()> {
                     session.as_deref(),
                     reopen,
                     new,
+                    gh_token_from_cli,
+                    dry_run,
                     json,
                 )
                 .await
@@ -14711,7 +14724,7 @@ async fn review_refs_list_cmd(daemon: &str, repo: &str, json: bool) -> Result<()
         println!("no refs/kbc/{{pr,review}}/* in {repo}");
         return Ok(());
     }
-    println!("{:<36} {:<10} {:>8} {}", "REF", "KIND", "REVIEW", "STATUS");
+    println!("{:<36} {:<10} {:>8} STATUS", "REF", "KIND", "REVIEW");
     for r in &refs {
         println!(
             "{:<36} {:<10} {:>8} {}",
@@ -15654,8 +15667,8 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 // comments,fetch} -----------------------------------------------------------
 
 /// `kb-code review start-pr --repo R --pr N [--base][--title][--session]
-/// [--reopen|--new] [--json]` — `POST /api/reviews/pr` (design doc §2 row 1).
-/// LOOPBACK-ONLY.
+/// [--reopen|--new] [--gh-token-from-cli] [--dry-run] [--json]` — `POST
+/// /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY.
 ///
 /// V76-R1a — this verb ALWAYS runs the daemon-side job (`?async=1`) and
 /// polls `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
@@ -15679,6 +15692,8 @@ async fn review_start_pr_cmd(
     session: Option<&str>,
     reopen: bool,
     new: bool,
+    gh_token_from_cli: bool,
+    dry_run: bool,
     json: bool,
 ) -> Result<()> {
     let mut payload = serde_json::json!({ "repo": repo, "pr_number": pr_number });
@@ -15696,6 +15711,51 @@ async fn review_start_pr_cmd(
         query.push(("on_closed", "reopen"));
     } else if new {
         query.push(("on_closed", "new"));
+    }
+    let mut gh_token: Option<String> = None;
+    if gh_token_from_cli {
+        let out = std::process::Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .context("run `gh auth token` for --gh-token-from-cli")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "gh auth token failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if token.is_empty() {
+            anyhow::bail!("gh auth token returned an empty token");
+        }
+        payload["gh_token"] = serde_json::json!(token);
+        gh_token = Some(token);
+    }
+    if dry_run {
+        let mut shown = payload.clone();
+        if shown.get("gh_token").is_some() {
+            shown["gh_token"] = serde_json::json!("[redacted]");
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&shown)?);
+        } else {
+            println!(
+                "· dry-run — would POST /api/reviews/pr?async=1 with gh_token={}",
+                if gh_token.is_some() {
+                    "[redacted]"
+                } else {
+                    "(none)"
+                }
+            );
+        }
+        if let Some(t) = &gh_token {
+            let printed = serde_json::to_string(&shown)?;
+            anyhow::ensure!(
+                !printed.contains(t),
+                "internal error: dry-run leaked the GitHub token"
+            );
+        }
+        return Ok(());
     }
     // V76-R1a — 600 s for THIS verb (the daemon-side fetch outlives
     // `http_client`'s 10 s on a cold mirror); every other verb keeps its
@@ -15865,10 +15925,23 @@ fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
 /// The pre-V76 human success line, one place for both paths above.
 fn print_start_pr_human(body: &serde_json::Value) {
     let meta_note = if body["pr_meta"].is_null() {
-        format!(
-            " (metadata unavailable: {})",
-            body["pr_meta_unavailable_reason"].as_str().unwrap_or("?")
-        )
+        // V76-R1c — the typed `{code, hint}` reason, with the pre-R1c
+        // plain-string shape still accepted from an older daemon.
+        let reason = &body["pr_meta_unavailable_reason"];
+        let shown = reason
+            .get("code")
+            .and_then(|c| c.as_str())
+            .map(|code| {
+                let hint = reason["hint"].as_str().unwrap_or("");
+                if hint.is_empty() {
+                    code.to_string()
+                } else {
+                    format!("{code}: {hint}")
+                }
+            })
+            .or_else(|| reason.as_str().map(str::to_string))
+            .unwrap_or_else(|| "?".to_string());
+        format!(" (metadata unavailable: {shown})")
     } else {
         String::new()
     };
@@ -16144,8 +16217,12 @@ async fn review_findings_import_cmd(
 /// revision, sets the report and any verdict — ONE sqlite transaction, ONE
 /// SSE event. `--dry-run` stops after the lint and writes nothing.
 ///
-/// **The V0 form** (V70-R) — `--from-file`/`--stdin`: the `kbc-compose/1`
-/// JSON body (summary + a `kbc-findings/1` block). Unchanged.
+/// **The V0 form** (V70-R, folded V76-R1c) — `--from-file`/`--stdin`: the
+/// `kbc-compose/1` JSON body (summary + a `kbc-findings/1` block). The
+/// daemon maps free-text categories onto the closed 8-value set, refuses
+/// invalid slugs with the `f-[a-z0-9-]+` regex, and synthesises a
+/// `minimal` `kbc-review/1` document so `doc`/`lint`/`render` work
+/// afterwards.
 ///
 /// Exit code 3 (`EXIT_CONFLICT`) when a lint reports any ERROR — the request
 /// was well-formed and the state refused it, which is what that slot means.

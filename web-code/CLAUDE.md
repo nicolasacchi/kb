@@ -849,6 +849,20 @@ invisible to `shouldWithholdFromBuffer`, which resolves in `"reader"`, so
 carry no `vim_kind`, following the `] u`/`] d`/`] s` precedent: `[`/`]` is
 a MIXED prefix and a vim arm would fire the step twice.
 
+**One file tree for Files + map; one resizer.** V76-R2b: the cockpit
+Files tab and the review-diff map column render the SAME
+`ReviewFileTree` (status sections of folder trees — added / modified /
+renamed / deleted — because a 38-file review already clustered into
+three status groups; mixing them into one folder walk would hide
+"deleted 15"). Kind icons come from the cached `GET /api/syntax`
+registry. Paths are middle-truncated, never a leading ellipsis. Click /
+Enter on a file writes `?file=` and opens that file's diff in the center
+on its first hunk; `]f`/`[f` stay in sync with the tree cursor. The map
+pane is resized with the Desk's `react-resizable-panels` mechanism (no
+second drag implementation, no `autoSaveId`); `g =` / a separator
+double-click resets the width. Tree keys: `g f` focus, `z f` toggle
+folder, `z m` collapse all.
+
 ## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
 
 `?tab=doc` is the Review Room's sixth cockpit tab. Four rules, each with a
@@ -1562,7 +1576,65 @@ coactive same-depth collision is ratified from both sides, because sharing
 `j` with every other list surface IS the design. **This unit adds no leader
 chord at all**, which is why the `Space g` letter space is untouched.
 
-## When to update this file
+## The Review Room's layout (`V76-R2a`, design §D9 continued)
+
+`routes/ReviewDetail.tsx` (`~reviews/:id`) fills the viewport like the
+reader — the centred ~1100px column remains only on the `~reviews` LIST.
+Five rules, each with a home.
+
+**One resizer, and it is the Desk's.** The findings rail is a resizable
+dock: `react-resizable-panels` `Group`/`Panel`/`Separator` (the Desk's own
+library, its own three rules — mechanism never truth, no `autoSaveId`,
+`defaultSize` is the DEFAULT so double-click and `Space I` agree). The
+truth is `lib/reviewRail.ts`'s pure reducer (percent width + `collapsed`,
+`StorageLike` persistence under `kbc:review-rail`, corrupt-blob-total like
+`deskState.ts`). Keyboard resize on the focused separator goes THROUGH
+`desk/resizeSubmode.ts`'s `resizeSubmodeKey(key, {focus: "rail"})` via
+`railKeyResize` — the Room adds NO second resizer keymap, and the separator
+stops only the keys the submode claims (the focused-panel rule). ≤860px
+keeps the pre-existing single-sheet behaviour untouched (the dock,
+separator and stripe are not rendered at all).
+
+**Chips carry an icon + ONE token.** Severity/act/category mappings live in
+`lib/reviewRoom.ts` (`SEVERITY_CHIPS`/`ACT_CHIPS`/`SECTION_DECORS`/
+`CATEGORY_CHIPS`), golden-pinned by `reviewRoom.test.ts`; components render
+what the mapping returns and never pick a hue themselves. Every chip sets
+`--kbc-room-chip-color` from its one token (`AgentVerdictCard`'s trick), so
+wash, border and glyph cannot disagree. An UNKNOWN act/category degrades
+neutrally (never another kind's colour, never a verdict-red for a
+category); the category fallback is deterministic (FNV-1a, the
+`lib/provHue.ts` precedent).
+
+**The hero's numbers are the wire's.** `ReportHero.tsx` derives counts via
+`liveFindingCounts` (whose home moved to `lib/reviewRoom.ts`;
+`ReportPanel` re-exports it) and the viewed meter via `filesViewedOf`
+(`viewed && !viewed_stale` — K2a's predicate). The agent block is ABSENT
+when neither report nor review names an agent/session (`heroAgentOf`
+returns `null`) — never an "UNSET" box. `base_source` is read as an
+optional structural field: no review wire carries it today, so it renders
+only if a future wire does. A hero count chip filters the rail — the
+severity filter is LIFTED to `ReviewDetail.tsx` (controlled props on
+`ReviewThreadsCard`), so the hero and the rail share one state.
+
+**Prose scale.** The Room's body is ≥15px via local size custom properties
+(`--room-fs-*`, declared once in `review-room.css`); finding titles are
+real `h3`s; section dividers are `RoomChips.tsx`'s `SectionDecor` (icon +
+token per `RoomSectionKind`) with a `data-kbc-room-section` anchor the
+`review.jump.*` rows scroll to. The density toggle (compact/comfortable)
+lives in localStorage with `?density=` as the share-link mirror — K2a's
+`lib/branchViews.ts` posture, `parseRoomDensity` total.
+
+**Keys.** Seven new `scope: "review"` / `dispatch: "surface"` rows, no
+`vim_kind` (this route mounts no CodeView): `Space i` rail toggle (`Space r`
+was NOT free — it is `doc.cards-fold` in this very scope), `Space I` rail
+reset, `Space M` density, `Space S`/`Space F`/`Space A`/`Space J` jump to
+summary/findings/praise/verdict (`Space V` is `diff.viewed-advance` in the
+coactive diff scope). `commands/reviewRoom.test.ts` runs the whole-registry
+prefix scan (`tours.test.ts`'s permanent form) on all seven in all three
+presets — the check `commands doctor` structurally cannot make for leader
+chords.
+
+
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)
 and a contributor could break it without touching kb-code-server or kb

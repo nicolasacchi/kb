@@ -63,8 +63,8 @@ dispositions, answer with nav-verb evidence, apply fixes, run the publish
 round — is `plugins/kb-code/skills/kb-review-work` (`/kb-review-work`).
 
 **PR-bound reviews.** `kb-code review start-pr --repo R --pr N [--base]
-[--title] [--session] [--reopen|--new]` (`POST /api/reviews/pr[?on_closed=reopen|new]`,
-LOOPBACK-ONLY) fetches `refs/pull/N/head` into `refs/kbc/pr/N` (400 on
+[--title] [--session] [--reopen|--new] [--gh-token-from-cli] [--dry-run]`
+(`POST /api/reviews/pr[?on_closed=reopen|new]`, LOOPBACK-ONLY) fetches `refs/pull/N/head` into `refs/kbc/pr/N` (400 on
 failure — this is load-bearing), creates the review, captures ps1, and
 best-effort-enriches with GitHub PR metadata; the review exists either way,
 even when the GitHub enrichment itself fails. An **OPEN** existing review
@@ -96,7 +96,22 @@ naming the cap, never a silent truncate. `git update-ref -d` only ever
 sees reconstructed `refs/kbc/pr/<n>` / `refs/kbc/review/<id>/ps<n>` names
 (digits-only).
 
-`kb-code review pr-status ID` (`GET
+GitHub credentials for that enrichment (and every other GitHub read) are a
+documented ladder, resolved at request time, never logged:
+
+1. `[github] token_file = "<path>"` — mode 0600 (or 0400). A missing,
+   unreadable, empty, or group/world-readable file falls through.
+2. env `KB_CODE_GITHUB_TOKEN`.
+3. CLI `--gh-token-from-cli` on `review start-pr` — the CLI runs
+   `gh auth token` and sends it in the request body (`gh_token`).
+   Loopback-only, never persisted; refused off loopback. `--dry-run`
+   prints the payload with the token redacted and does not POST.
+4. none — an unauthenticated request still works for a public repo; a
+   private repo 404s.
+
+When metadata is missing, `pr_meta_unavailable_reason` is a typed object
+`{code, hint}` whose `code` is one of `no-credentials` | `not-found` |
+`forbidden` | `rate-limited` | `network`. The Room header shows both. `kb-code review pr-status ID` (`GET
 /api/reviews/{id}/pr-status`) answers two halves: LOCAL (snapshot vs. local
 patchset tip) always answers; LIVE (a fresh GitHub fetch + `commits_behind`)
 degrades to `unavailable_reason` on any GitHub-side failure. `kb-code review
@@ -2156,9 +2171,38 @@ kb-code review compose <id> --doc review.md [--findings findings.json] \
 
 `findings import`, `report --set` and `verdict` remain the documented
 **low-level twins** — the same writes, one at a time, each with its own
-commit. The V0 `compose` form (`--from-file`/`--stdin`, a `kbc-compose/1`
-JSON body with `summary` + a `kbc-findings/1` block) is unchanged; `doc_md`
-is what selects the document path.
+commit.
+
+The V0 `compose` form (`--from-file`/`--stdin`, a `kbc-compose/1` JSON body
+with `summary` + a `kbc-findings/1` block) is folded into the same
+transaction (V76-R1c). The daemon:
+
+1. maps every finding's free-text `category` onto the closed 8-value set
+   (never a 400 — an unknown token becomes `other`, and a mapping is an
+   INFO lint row `category_mapped`),
+2. refuses an invalid slug with HTTP 400 naming the regex `f-[a-z0-9-]+`
+   and the offending value,
+3. synthesises a `minimal`-tier `kbc-review/1` document (`summary_md` from
+   `summary` or the verdict note; findings v2 from the sidecar; `omitted[]`
+   lists everything the V0 shape cannot carry) and stores it exactly as
+   `compose --doc` would, so `GET …/doc`, `lint` and `render` work
+   afterwards.
+
+Both paths share one reconcile core (`FindingIdentity::Fingerprint`).
+
+V0 category mapping (ASCII-lowercase, trimmed; identity members of the
+closed set pass through unchanged):
+
+| free-text | maps to |
+|---|---|
+| `bug` \| `logic` \| `error` | `correctness` |
+| `perf` | `performance` |
+| `sec` | `security` |
+| `lint` \| `naming` | `style` |
+| `test` \| `spec` | `tests` |
+| `doc` | `docs` |
+| `arch` \| `architecture` | `design` |
+| anything else | `other` |
 
 ### `lint` — the pre-flight
 
@@ -2184,6 +2228,8 @@ nothing.
 | `stale_sha` | info | the ref resolved by carrying forward, not by a blob match |
 | `bare_symbol_mention` | info | `Shop::Order` in prose with no `sym:`/`ent:` prefix (the `::` is required — a bare CapWord is never reported) |
 | `question_without_ref` | info | a question with no location |
+| `question_stale` | info | a `to_agent` question has had no `answers` ref for over 14 days |
+| `category_mapped` | info | a V0 free-text category was rewritten onto the closed 8-value set (never a refusal) |
 
 `kb-code review lint` exits **3** when the lint reports any error — the same
 `EXIT_CONFLICT` slot an HTTP 409 uses, and for the same reason: the request
@@ -2215,7 +2261,18 @@ and a typo is never a silent hole:
 `{{title}}` · `{{meta}}` (repo, review, patchset, revision, tier, render
 time) · `{{summary}}` · `{{risk}}` · `{{reading_order}}` · `{{blocks}}` ·
 `{{findings}}` · `{{cards}}` · `{{flows}}` · `{{questions}}` · `{{author}}` ·
-`{{omitted}}` · `{{body}}`
+`{{omitted}}` · `{{body}}` · `{{pr_number}}` · `{{risk_score}}` · `{{tags}}`
+(`review`, `pr-<n>` when bound, the repo, then PR labels) ·
+`{{summary_text}}` (plain-text, HTML-escaped, capped at 300 characters) ·
+`{{repo}}`
+
+The built-in template (`crates/kb-code-server/templates/review-default.html`)
+is a legal kb artifact without a custom template: it emits
+`<meta name="kb-category" content="review">`, `<meta name="kb-tags"
+content="{{tags}}">`, `<meta name="kb-summary" content="{{summary_text}}">`,
+a real `<title>` and `<h1>`, and `<h2>` sections with stable ids (`summary`,
+`findings`, `verdict`, …). No `<base href>`, no `target="_top"`, inline CSS
+only. kb-code still never generates a `<template id="kb-prompt">`.
 
 Every dynamic string is HTML-escaped, and every Markdown body goes through
 kb-core's existing UNTRUSTED-body renderer (`render.unsafe = false`), so raw

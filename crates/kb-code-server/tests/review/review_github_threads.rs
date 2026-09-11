@@ -542,5 +542,7 @@ async fn github_threads_degrades_to_unavailable_reason_when_github_is_down_never
     assert!(body["unavailable_reason"]
         .as_str()
         .unwrap()
-        .contains("rate-limited"));
+        // V76-R1c — a BARE 403 is `forbidden`; `rate-limited` needs
+        // `X-RateLimit-Remaining: 0` (see `pr_status_degrades_the_live_half…`).
+        .contains("forbidden"));
 }

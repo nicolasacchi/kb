@@ -3453,7 +3453,20 @@ export interface ReviewPrBinding {
   pr_repo_slug?: string;
   pr_head_sha?: string;
   pr_meta?: PrBindingMeta | null;
-  pr_meta_unavailable_reason?: string | null;
+  pr_meta_unavailable_reason?: PrMetaUnavailableReason | string | null;
+}
+
+/** V76-R1c — typed `pr_meta_unavailable_reason` on the wire. */
+export type PrMetaUnavailableCode =
+  | "no-credentials"
+  | "not-found"
+  | "forbidden"
+  | "rate-limited"
+  | "network";
+
+export interface PrMetaUnavailableReason {
+  code: PrMetaUnavailableCode;
+  hint: string;
 }
 
 /// The `pr_meta_json` snapshot shape (design-server.md §1.2's jsonc block) —
@@ -3654,7 +3667,7 @@ export interface CreateReviewPrOut {
   pr_repo_slug: string;
   pr_head_sha: string;
   pr_meta: PrBindingMeta | null;
-  pr_meta_unavailable_reason: string | null;
+  pr_meta_unavailable_reason: PrMetaUnavailableReason | string | null;
 }
 
 // ── PRR-U56 ── kb v0.39 "The PR Room," combined unit U5+U6 (publish
@@ -5993,4 +6006,30 @@ export interface LanesSummaryOut {
   scan_cap: number;
   capped: boolean;
   notes?: string[];
+}
+
+/// `syntax/1` — one row of `GET /api/syntax`. Vec fields are optional
+/// because Rust often `skip_serializing_if = "Vec::is_empty"` (absent, not
+/// `[]`); every reader guards.
+export interface SyntaxRowOut {
+  lang: string;
+  tier?: string;
+  grammar?: string | null;
+  scanner?: string | null;
+  symbol_salt?: string | null;
+  highlight_salt?: string | null;
+  injection_host?: boolean;
+  injections?: string[];
+  extensions?: string[];
+  filenames?: string[];
+  interpreters?: string[];
+  note?: string | null;
+}
+
+/// `GET /api/syntax` body.
+export interface SyntaxOut {
+  schema: string;
+  rows: SyntaxRowOut[];
+  total?: number;
+  truncated?: boolean;
 }

@@ -737,6 +737,8 @@ describe("scope goldens", () => {
       "c → diff.compose-new",
       "d → diff.disposition",
       "f → hint.jump",
+      "g = → diff.map-reset",
+      "g f → diff.tree-focus",
       "g g → diff.file-first",
       "j → diff.hunk-next",
       "k → diff.hunk-prev",
@@ -748,6 +750,8 @@ describe("scope goldens", () => {
       "x → diff.collapse",
       "z a → diff.fold-toggle",
       "z c → diff.fold",
+      "z f → diff.tree-toggle-folder",
+      "z m → diff.tree-collapse-all",
       "z o → diff.unfold",
     ]);
   });
@@ -780,13 +784,19 @@ describe("scope goldens", () => {
       "Shift-F10 → action.panel",
       "Space : → cmd.palette.commands",
       "Space ? → help.keys",
+      // V76-R2a — the Room's seven rows (rail dock, density, section jumps).
+      "Space A → review.jump.praise",
       "Space C c → comments.gutter-mode-cycle",
       "Space C o → comments.open-card",
       "Space C t → comments.track-as-annotation",
       "Space D → drawer.pin",
+      "Space F → review.jump.findings",
       // V73-K2c — the Timeline tab's live GitHub lane toggle.
       "Space G → review.timeline.github-toggle",
+      "Space I → review.rail.reset",
+      "Space J → review.jump.verdict",
       "Space K → drawer.keep",
+      "Space M → review.density-toggle",
       "Space P e → desk.preset.explore",
       "Space P p → desk.preset.present",
       "Space P r → desk.preset.read",
@@ -801,6 +811,7 @@ describe("scope goldens", () => {
       "Space R t → rail.tab.trail",
       "Space R u → rail.tab.understand",
       "Space R v → rail.tab.review",
+      "Space S → review.jump.summary",
       "Space b a → boards.add",
       "Space d → desk.toggle.drawer",
       "Space e d → entity.dossier.open",
@@ -823,6 +834,7 @@ describe("scope goldens", () => {
       "Space g t → nav.todos",
       "Space g w → nav.boards",
       "Space g x → nav.browser",
+      "Space i → review.rail.toggle",
       // V73-K2c — the Timeline tab's lane-visibility cycle.
       "Space j → review.timeline.lane-cycle",
       "Space k p → trail.pause",

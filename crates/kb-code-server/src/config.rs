@@ -1103,9 +1103,16 @@ pub struct GithubSection {
     /// Path to a file holding a GitHub personal access token — same
     /// file-not-secret convention as `[kb_daemon] token_file`
     /// (`KbDaemonSection::bearer_token`'s doc: the FILE path lives in
-    /// config, never the secret itself). `None` (the default) sends every
-    /// request unauthenticated — fine for a public repo, just GitHub's
-    /// lower unauthenticated rate limit.
+    /// config, never the secret itself). Mode 0600 (or 0400); the
+    /// credential ladder in `github::resolve_github_token` reads it at
+    /// request time and never logs the value. A missing, empty, or
+    /// group/world-readable file falls through to env
+    /// `KB_CODE_GITHUB_TOKEN`, then a loopback-only CLI token on
+    /// `review start-pr --gh-token-from-cli`. `None` (the default) with
+    /// no env/CLI token sends every request unauthenticated — fine for a
+    /// public repo, just GitHub's lower unauthenticated rate limit; a
+    /// private repo 404s as `pr_meta_unavailable_reason.code =
+    /// "no-credentials"`.
     #[serde(default)]
     pub token_file: Option<PathBuf>,
     /// The GitHub REST API base URL. `DEFAULT_API_BASE` in production; the
@@ -1124,11 +1131,16 @@ impl GithubSection {
         Self::DEFAULT_API_BASE.to_string()
     }
 
-    /// Read + trim the token from `token_file` — identical contract to
-    /// `KbDaemonSection::bearer_token` (degrades to `None` on a missing,
-    /// unreadable, or empty file; never an error).
+    /// Read + trim the token from `token_file` — the ONE token-file read
+    /// (the request-time credential ladder in `github.rs` delegates here).
+    /// Degrades to `None` on a missing, unreadable, empty, or group/world-
+    /// readable file (owner-only 0600/0400 required on unix); never an
+    /// error, so the next ladder rung can run.
     pub fn bearer_token(&self) -> Option<String> {
         let path = self.token_file.as_ref()?;
+        if !token_file_mode_ok(path) {
+            return None;
+        }
         let raw = std::fs::read_to_string(path).ok()?;
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -1136,6 +1148,26 @@ impl GithubSection {
         } else {
             Some(trimmed.to_string())
         }
+    }
+}
+
+/// Owner-only check for a credential file: 0600 or 0400 (group/world bits
+/// must be zero). Non-unix: no mode bits to check, always `true`.
+pub(crate) fn token_file_mode_ok(path: &std::path::Path) -> bool {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        mode & 0o077 == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        true
     }
 }
 
@@ -1676,6 +1708,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let token_path = tmp.path().join("gh-token");
         std::fs::write(&token_path, "ghp_sekrit\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let cfg = KbCodeConfig::from_toml_str(&format!(
             "[github]\ntoken_file = \"{}\"\napi_base = \"http://127.0.0.1:9\"\n",
             token_path.display()
