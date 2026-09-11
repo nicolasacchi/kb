@@ -5892,3 +5892,105 @@ export interface BranchReviewOut {
   three_dot: boolean;
   review: { id: number; repo: string; head_ref: string; base_ref: string };
 }
+
+// ── aug-lane/1 (V72-H4a wire, V76-R3a SPA) ────────────────────────────────
+//
+// Hand-mirrored from `crates/kb-code-server/src/lanes/routes.rs`. Several
+// `Vec` fields skip-serialize when empty — they are ABSENT, not `[]`.
+// Optional on the TS side; read via `?? []`.
+
+export type LaneKind = "derived" | "ingested";
+export type LaneSensitivity = "local" | "local_tool";
+export type LaneTrustClass = "exact" | "likely" | "candidate" | "orphan";
+
+export interface LaneEntry {
+  id: string;
+  title: string;
+  kind: LaneKind;
+  fact_schema: string;
+  /// Closed set of kinds this lane may write. Absent when empty.
+  fact_kinds?: string[];
+  sensitivity: LaneSensitivity;
+  trust_ceiling: string;
+  retention_days: number;
+  adapter?: string | null;
+  enabled: boolean;
+  /// `true` for the `sarif.*` TEMPLATE row — a declaration, never addressable.
+  family: boolean;
+  facts?: number | null;
+  runs?: number | null;
+  last_ingest_at?: number | null;
+  note?: string | null;
+}
+
+export interface LanesOut {
+  schema: string;
+  repo?: string | null;
+  lanes: LaneEntry[];
+  /// Ids in `[lanes] enabled` that match no registry row.
+  unknown_enabled?: string[];
+}
+
+export interface LaneRunOut {
+  id: string;
+  tool: string;
+  tool_version?: string | null;
+  origin: string;
+  ingested_at?: number | null;
+}
+
+export interface LaneFactOut {
+  lane: string;
+  kind: string;
+  /// Lane-specific payload (`hits` / `cop`+`message` / churn / partners / …).
+  value: Record<string, unknown>;
+  severity?: string | null;
+  /// Class computed for THIS request — never persisted.
+  class: LaneTrustClass | string;
+  reason: string;
+  line?: number | null;
+  line_end?: number | null;
+  shifted: boolean;
+  age_secs: number;
+  produced_at: number;
+  blob_sha: string;
+  sha_source: string;
+  run: LaneRunOut;
+}
+
+export interface AbsentLane {
+  lane: string;
+  reason: string;
+  refresh?: string | null;
+}
+
+export interface FactsOut {
+  schema: string;
+  repo: string;
+  path: string;
+  blob?: string | null;
+  at_blob?: string | null;
+  facts?: LaneFactOut[];
+  returned: number;
+  truncated: boolean;
+  absent?: AbsentLane[];
+  withheld_disabled: number;
+  notes?: string[];
+}
+
+export interface LaneSummaryBucket {
+  lane: string;
+  kind: string;
+  severity?: string | null;
+  count: number;
+}
+
+export interface LanesSummaryOut {
+  schema: string;
+  repo: string;
+  buckets?: LaneSummaryBucket[];
+  scanned: number;
+  scan_cap: number;
+  capped: boolean;
+  notes?: string[];
+}

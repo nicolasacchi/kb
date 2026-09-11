@@ -60,6 +60,8 @@ const ROUND_TRIP_URLS = [
   // `railsUrl` doc): both shapes must survive verbatim.
   "/r/kb/~rails",
   "/r/kb/~rails?noun=view",
+  // V76-R3a — `~lanes` stays unmodelled (see `codeUrl.ts`'s `lanesUrl` doc).
+  "/r/kb/~lanes",
   "/r/kb/~range-diff?old=a&new=b",
   "/r/kb/~lens/notes/doc1",
 ];
