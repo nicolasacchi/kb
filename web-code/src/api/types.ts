@@ -6007,3 +6007,29 @@ export interface LanesSummaryOut {
   capped: boolean;
   notes?: string[];
 }
+
+/// `syntax/1` — one row of `GET /api/syntax`. Vec fields are optional
+/// because Rust often `skip_serializing_if = "Vec::is_empty"` (absent, not
+/// `[]`); every reader guards.
+export interface SyntaxRowOut {
+  lang: string;
+  tier?: string;
+  grammar?: string | null;
+  scanner?: string | null;
+  symbol_salt?: string | null;
+  highlight_salt?: string | null;
+  injection_host?: boolean;
+  injections?: string[];
+  extensions?: string[];
+  filenames?: string[];
+  interpreters?: string[];
+  note?: string | null;
+}
+
+/// `GET /api/syntax` body.
+export interface SyntaxOut {
+  schema: string;
+  rows: SyntaxRowOut[];
+  total?: number;
+  truncated?: boolean;
+}

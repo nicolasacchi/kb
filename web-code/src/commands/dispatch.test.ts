@@ -737,6 +737,8 @@ describe("scope goldens", () => {
       "c → diff.compose-new",
       "d → diff.disposition",
       "f → hint.jump",
+      "g = → diff.map-reset",
+      "g f → diff.tree-focus",
       "g g → diff.file-first",
       "j → diff.hunk-next",
       "k → diff.hunk-prev",
@@ -748,6 +750,8 @@ describe("scope goldens", () => {
       "x → diff.collapse",
       "z a → diff.fold-toggle",
       "z c → diff.fold",
+      "z f → diff.tree-toggle-folder",
+      "z m → diff.tree-collapse-all",
       "z o → diff.unfold",
     ]);
   });

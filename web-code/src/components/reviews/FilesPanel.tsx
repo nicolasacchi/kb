@@ -2,9 +2,18 @@ import { useMemo } from "react";
 import type { ReviewFileRow, ReviewRiskFile } from "../../api/types";
 import EmptyState from "../EmptyState";
 import { Icon } from "../icons";
-import ReviewFileItem from "./ReviewFileItem";
+import { ReviewAwareDiff } from "./ReviewFileItem";
+import ReviewFileTree from "./ReviewFileTree";
+import BlastRadiusStrip from "./BlastRadiusStrip";
 import { useReviewRisk } from "../../hooks/useBehavioral";
+import { useDeleteReviewViewed, usePutReviewViewed } from "../../hooks/useReviews";
+import { useSyntax } from "../../hooks/useSyntax";
+import { toast } from "../../lib/toast";
+import { isLoopbackRefusal, LOOPBACK_HINT, msg } from "./ReviewHeader";
 import { speedFilterItems } from "../../lib/speedSearch";
+import { codeUrl } from "../../lib/codeUrl";
+import { useNavigate } from "react-router-dom";
+import type { MapRowState } from "../../lib/reviewMapColumn";
 
 export type FileSort = "diff" | "risk" | "path";
 
@@ -49,6 +58,25 @@ export default function FilesPanel({
     return m;
   }, [riskQ.data]);
 
+  const navigate = useNavigate();
+  const syntaxQ = useSyntax();
+  const putViewed = usePutReviewViewed(repo, reviewId);
+  const delViewed = useDeleteReviewViewed(repo, reviewId);
+  const stateByPath = useMemo(() => {
+    const m = new Map<string, MapRowState>();
+    for (const f of files) {
+      m.set(f.path, {
+        path: f.path,
+        viewed: f.viewed,
+        viewedStale: f.viewed_stale,
+        openComments: f.open_annotations,
+        findings: 0,
+        drafts: 0,
+        noise: [],
+      });
+    }
+    return m;
+  }, [files]);
   const filtered = useMemo(() => {
     const hits = speedFilterItems(
       files,
@@ -117,22 +145,52 @@ export default function FilesPanel({
         )}
       </div>
       <div className="kbc-review__files" data-kbc-review-files>
-        {filtered.map(({ item: f, ranges }) => (
-          <ReviewFileItem
-            key={f.path}
-            repo={repo}
-            reviewId={reviewId}
-            ps={ps}
-            file={f}
-            ranges={ranges}
-            isOpen={expanded === f.path}
-            riskAvailable={riskAvailable}
-            riskRow={riskAvailable ? riskByPath.get(f.path) : undefined}
-            baseSha={baseSha}
-            tipSha={tipSha}
-            onOpen={onOpenFile}
-          />
-        ))}
+        <ReviewFileTree
+          files={filtered.map((h) => h.item)}
+          stateByPath={stateByPath}
+          currentPath={expanded ?? ""}
+          syntaxRows={syntaxQ.data?.rows}
+          onPick={onOpenFile}
+          rowAttr="files"
+          riskAvailable={riskAvailable}
+          riskByPath={riskByPath}
+          onToggleViewed={(f) => {
+            void (async () => {
+              try {
+                if (f.viewed && !f.viewed_stale) await delViewed.mutateAsync(f.path);
+                else await putViewed.mutateAsync({ path: f.path, blob_sha: f.blob_sha });
+              } catch (err) {
+                toast.err(
+                  isLoopbackRefusal(err) ? LOOPBACK_HINT : `couldn't update viewed: ${msg(err)}`,
+                );
+              }
+            })();
+          }}
+          expandedPath={expanded}
+          expandedContent={
+            expanded && baseSha && tipSha ? (
+              <div className="kbc-review__file-diff" data-kbc-review-file-diff={expanded}>
+                <BlastRadiusStrip
+                  repo={repo}
+                  path={expanded}
+                  baseSha={baseSha}
+                  tipSha={tipSha}
+                  onOpenImpact={(sym) => {
+                    navigate(codeUrl({ repo, path: sym.path, ref: tipSha, line: sym.line }));
+                  }}
+                />
+                <ReviewAwareDiff
+                  repo={repo}
+                  reviewId={reviewId}
+                  ps={ps}
+                  path={expanded}
+                  from={baseSha}
+                  to={tipSha}
+                />
+              </div>
+            ) : null
+          }
+        />
       </div>
     </>
   );

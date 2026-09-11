@@ -32,6 +32,7 @@ import type {
   FileResponse,
   DossierOut,
   IdentityOut,
+  SyntaxOut,
   LineWhyOut,
   MergeCheckResponse,
   OpenAnnotationsResponse,
@@ -201,6 +202,12 @@ export function fetchRepos(): Promise<ReposResponse> {
 /// drives; see `IdentityOut`'s doc for the field this call exists for.
 export function fetchIdentity(): Promise<IdentityOut> {
   return getJson<IdentityOut>("/api/identity", {});
+}
+
+/// `GET /api/syntax` — the syntax/1 file-type registry. Build-time data,
+/// no repo content; cached by `hooks/useSyntax.ts`.
+export function fetchSyntax(): Promise<SyntaxOut> {
+  return getJson<SyntaxOut>("/api/syntax", {});
 }
 
 export function fetchTree(repo: string, path: string, ref?: string): Promise<TreeResponse> {

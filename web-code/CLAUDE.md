@@ -849,6 +849,20 @@ invisible to `shouldWithholdFromBuffer`, which resolves in `"reader"`, so
 carry no `vim_kind`, following the `] u`/`] d`/`] s` precedent: `[`/`]` is
 a MIXED prefix and a vim arm would fire the step twice.
 
+**One file tree for Files + map; one resizer.** V76-R2b: the cockpit
+Files tab and the review-diff map column render the SAME
+`ReviewFileTree` (status sections of folder trees — added / modified /
+renamed / deleted — because a 38-file review already clustered into
+three status groups; mixing them into one folder walk would hide
+"deleted 15"). Kind icons come from the cached `GET /api/syntax`
+registry. Paths are middle-truncated, never a leading ellipsis. Click /
+Enter on a file writes `?file=` and opens that file's diff in the center
+on its first hunk; `]f`/`[f` stay in sync with the tree cursor. The map
+pane is resized with the Desk's `react-resizable-panels` mechanism (no
+second drag implementation, no `autoSaveId`); `g =` / a separator
+double-click resets the width. Tree keys: `g f` focus, `z f` toggle
+folder, `z m` collapse all.
+
 ## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
 
 `?tab=doc` is the Review Room's sixth cockpit tab. Four rules, each with a
