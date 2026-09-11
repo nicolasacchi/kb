@@ -1,0 +1,68 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: "wire(Some(\"haml\"), \"%section#hero\\n  %p= t('.title')\\n\")"
+---
+HighlightOut {
+    schema: "highlight/1",
+    lang: Some(
+        "haml",
+    ),
+    tier: "full",
+    spans: [
+        LineRoleSpan {
+            line: 1,
+            start: 0,
+            end: 8,
+            role: Type,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 8,
+            end: 13,
+            role: Attribute,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 2,
+            end: 4,
+            role: Type,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 4,
+            end: 5,
+            role: Operator,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 6,
+            end: 7,
+            role: Function,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 7,
+            end: 8,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 8,
+            end: 16,
+            role: String,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 16,
+            end: 17,
+            role: Punctuation,
+        },
+    ],
+    honesty: HighlightHonesty {
+        tier: "full",
+        engine: "scanner:haml/1",
+        derived_from: "highlights",
+        reason: None,
+    },
+    salt: None,
+}

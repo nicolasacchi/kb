@@ -212,6 +212,10 @@ export interface DiagnosticGutterMark {
   /// touches the line, else a short count summary.
   title: string;
   count: number;
+  /// V76-R3a — `"lane"` when the mark is an aug-lane/1 diagnostic (rubocop
+  /// / SARIF) riding THIS gutter as a variant, `"lsp"` for lip, `"both"`
+  /// when a line carries both. Absent on pre-R3a marks (treated as lsp).
+  source?: "lsp" | "lane" | "both";
 }
 
 function markTitle(rows: readonly DiagnosticRow[]): string {

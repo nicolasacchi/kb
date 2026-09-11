@@ -30,7 +30,7 @@ export default function DiffView({ repo, path, from, to }: DiffViewProps) {
     parsed ? repo : undefined,
     parsed ? path : undefined,
     { oldSha: from, newSha: to },
-    { hasRemoves },
+    { hasRemoves, parsed },
   );
 
   if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;

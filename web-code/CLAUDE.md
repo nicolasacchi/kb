@@ -258,6 +258,26 @@ the single door without first modelling the whole app. Pane focus
 (root CLAUDE.md #30's recon R10 — pane location stays URL-derived via
 `?pane2=`, but which pane has keyboard focus does not belong in the URL).
 
+## `@ref` (V76-R3c)
+
+Every reader address may carry `?ref=` (absent = the working tree). The
+builder already emits `ref` **before** `line`/`pane2` (`lib/codeUrl.ts`);
+do not append it last — that would break the goldens. Changing the ref
+re-reads the same path at the same `?line=` (scroll/folds/inspector stay
+with the CodeView instance keyed on that address).
+
+**Banners are table-generated.** `lib/frameBanner.ts`'s `frameBanner(lane,
+row, atRef)` is the only renderer; it takes a `kbc-frames/1` row from
+`GET /api/frames` and produces the caption (or `null` on the working tree).
+Do not hand-write "file at ref: ODB" in a component — the golden
+(`frameBanner.test.ts`) walks the table × lanes.
+
+The TopBar chip (`data-kbc-ref-chip`) and `Space @` (`reader.ref-typeahead`)
+open the same `RefTypeahead` overlay over `GET /api/refs/typeahead`. Ctrl-r
+is a hard-reserved browser chord and must not be claimed. Bare `c`
+(`reader.compare`) toggles pane 2 onto the same path at the other ref;
+it is ratified against `diff.compose-new`.
+
 `nav/history.ts` provides the two router adapters (Navigation API where
 present — Chrome/Edge 102+, Firefox 145+ — falling back to the History API)
 behind one interface: **in-app Back IS the browser's Back.** There is no
@@ -738,6 +758,30 @@ every one is a `Space`-leader chord or a `[`/`]`-prefixed mixed chord, and
 D2's "Space is only the leader" plus the mixed-prefix precedent both mean
 none of them needs a vim-layer forwarding arm.
 
+## Facts / aug-lane/1 (`V76-R3a`, H4b)
+
+Facts is a **rail tab + hover + variants on existing gutters**. kbc-theme/1's
+Lane Budget assigns the intent/facts column "gutter slot four or a rail
+row, never a fifth slot"; V72-J2 took slot four for comments/1, so Facts
+MUST NOT add a fifth `createLineGutter` call (`lib/lanes.test.ts` counts
+the four in `CodeView.tsx`).
+
+- **Rail tab** `facts` (`Space R f`) — UNCONDITIONAL like comments/trail.
+  `components/lanes/FactsPanel.tsx` groups `GET /api/lanes/facts` by lane
+  (enabled / disabled-with-reason / empty-with-reason). Trust is LINE STYLE
+  (`kbc-trust-*` / orphan dotted + glyph). `age_secs` folds into a
+  display-only "aging"/"stale" caption (`freshnessCaption` — never rewrites
+  the wire class). A "lanes" chip links to `~lanes`.
+- **Diagnostics gutter (slot 3)** — rubocop/SARIF facts ride as a variant
+  (`source=lane`, square marker `.kbc-diag-dot--src-lane`). The inspector
+  Diagnostics card says `lane:<id>`.
+- **Blame gutter (slot 1)** — coverage is a band variant (covered /
+  uncovered / no-data), toggled from the Facts tab / `Space R g`, **off by
+  default**. `git.behavior` stays rail-only.
+- **Hover** — `FactsPeek` in PeekPanel's `cardExtra` (the V72-I2 slot).
+- **Dock** — `~lanes` (`Space g l`), `GET /api/lanes`. Unmodelled in
+  `PageId`, same footing as `~rails`.
+
 ## Review diff v2 (`V73-K2a`, design §D9, Track K)
 
 `routes/ReviewDiff.tsx` is the full-page review reader. Diff v2 added a
@@ -825,6 +869,20 @@ invisible to `shouldWithholdFromBuffer`, which resolves in `"reader"`, so
 carry no `vim_kind`, following the `] u`/`] d`/`] s` precedent: `[`/`]` is
 a MIXED prefix and a vim arm would fire the step twice.
 
+**One file tree for Files + map; one resizer.** V76-R2b: the cockpit
+Files tab and the review-diff map column render the SAME
+`ReviewFileTree` (status sections of folder trees — added / modified /
+renamed / deleted — because a 38-file review already clustered into
+three status groups; mixing them into one folder walk would hide
+"deleted 15"). Kind icons come from the cached `GET /api/syntax`
+registry. Paths are middle-truncated, never a leading ellipsis. Click /
+Enter on a file writes `?file=` and opens that file's diff in the center
+on its first hunk; `]f`/`[f` stay in sync with the tree cursor. The map
+pane is resized with the Desk's `react-resizable-panels` mechanism (no
+second drag implementation, no `autoSaveId`); `g =` / a separator
+double-click resets the width. Tree keys: `g f` focus, `z f` toggle
+folder, `z m` collapse all.
+
 ## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
 
 `?tab=doc` is the Review Room's sixth cockpit tab. Four rules, each with a
@@ -859,10 +917,17 @@ document read is pinned to the patchset it was composed against), so
 in `lib/reviewDoc.test.ts`.
 
 **Highlighting, trust, captions and counts are all the server's.** A card's
-snippet is painted with `lib/diffHighlight.ts`'s `buildLineSpans`/`paintLine`
-over the spans the daemon already rebased onto that snippet — a client-side
+snippet is painted with `lib/paintSpans.ts` (`paintSpans` — the ONE painter)
+over spans the daemon already minted; `cssClassFor` in `lib/decorations.ts`
+is the ONE 18-role → `.kbc-hl-*` class table (kbc-theme/1). LiveRefCard
+converts file-style byte spans through `byteSpansToHighlightSpans` onto
+that painter so a card and a fence cannot disagree. A client-side
 highlighter would be a second, disagreeing source of truth, so an unindexed
-blob renders unpainted. Trust rides the shared `TrustBadge` (LINE STYLE, the
+blob (or `highlight/1` `tier: none`) renders unpainted, with a "no grammar"
+caption on snippet surfaces — never a spinner forever. The suggestion
+EDITOR stays CM6; every other read-only surface (diff hunks when file
+spans are missing, suggestion previews, markdown fences, board code nodes)
+POSTs `highlight/1`. Trust rides the shared `TrustBadge` (LINE STYLE, the
 Lane Budget) and is omitted entirely when the daemon minted no tier, because
 `trustTierFrom` classifies a missing class DOWN to `candidate` — which would
 be a claim. `revisions`, `omitted[]` and the reading order's `source`/
@@ -1551,7 +1616,65 @@ coactive same-depth collision is ratified from both sides, because sharing
 `j` with every other list surface IS the design. **This unit adds no leader
 chord at all**, which is why the `Space g` letter space is untouched.
 
-## When to update this file
+## The Review Room's layout (`V76-R2a`, design §D9 continued)
+
+`routes/ReviewDetail.tsx` (`~reviews/:id`) fills the viewport like the
+reader — the centred ~1100px column remains only on the `~reviews` LIST.
+Five rules, each with a home.
+
+**One resizer, and it is the Desk's.** The findings rail is a resizable
+dock: `react-resizable-panels` `Group`/`Panel`/`Separator` (the Desk's own
+library, its own three rules — mechanism never truth, no `autoSaveId`,
+`defaultSize` is the DEFAULT so double-click and `Space I` agree). The
+truth is `lib/reviewRail.ts`'s pure reducer (percent width + `collapsed`,
+`StorageLike` persistence under `kbc:review-rail`, corrupt-blob-total like
+`deskState.ts`). Keyboard resize on the focused separator goes THROUGH
+`desk/resizeSubmode.ts`'s `resizeSubmodeKey(key, {focus: "rail"})` via
+`railKeyResize` — the Room adds NO second resizer keymap, and the separator
+stops only the keys the submode claims (the focused-panel rule). ≤860px
+keeps the pre-existing single-sheet behaviour untouched (the dock,
+separator and stripe are not rendered at all).
+
+**Chips carry an icon + ONE token.** Severity/act/category mappings live in
+`lib/reviewRoom.ts` (`SEVERITY_CHIPS`/`ACT_CHIPS`/`SECTION_DECORS`/
+`CATEGORY_CHIPS`), golden-pinned by `reviewRoom.test.ts`; components render
+what the mapping returns and never pick a hue themselves. Every chip sets
+`--kbc-room-chip-color` from its one token (`AgentVerdictCard`'s trick), so
+wash, border and glyph cannot disagree. An UNKNOWN act/category degrades
+neutrally (never another kind's colour, never a verdict-red for a
+category); the category fallback is deterministic (FNV-1a, the
+`lib/provHue.ts` precedent).
+
+**The hero's numbers are the wire's.** `ReportHero.tsx` derives counts via
+`liveFindingCounts` (whose home moved to `lib/reviewRoom.ts`;
+`ReportPanel` re-exports it) and the viewed meter via `filesViewedOf`
+(`viewed && !viewed_stale` — K2a's predicate). The agent block is ABSENT
+when neither report nor review names an agent/session (`heroAgentOf`
+returns `null`) — never an "UNSET" box. `base_source` is read as an
+optional structural field: no review wire carries it today, so it renders
+only if a future wire does. A hero count chip filters the rail — the
+severity filter is LIFTED to `ReviewDetail.tsx` (controlled props on
+`ReviewThreadsCard`), so the hero and the rail share one state.
+
+**Prose scale.** The Room's body is ≥15px via local size custom properties
+(`--room-fs-*`, declared once in `review-room.css`); finding titles are
+real `h3`s; section dividers are `RoomChips.tsx`'s `SectionDecor` (icon +
+token per `RoomSectionKind`) with a `data-kbc-room-section` anchor the
+`review.jump.*` rows scroll to. The density toggle (compact/comfortable)
+lives in localStorage with `?density=` as the share-link mirror — K2a's
+`lib/branchViews.ts` posture, `parseRoomDensity` total.
+
+**Keys.** Seven new `scope: "review"` / `dispatch: "surface"` rows, no
+`vim_kind` (this route mounts no CodeView): `Space i` rail toggle (`Space r`
+was NOT free — it is `doc.cards-fold` in this very scope), `Space I` rail
+reset, `Space M` density, `Space S`/`Space F`/`Space A`/`Space J` jump to
+summary/findings/praise/verdict (`Space V` is `diff.viewed-advance` in the
+coactive diff scope). `commands/reviewRoom.test.ts` runs the whole-registry
+prefix scan (`tours.test.ts`'s permanent form) on all seven in all three
+presets — the check `commands doctor` structurally cannot make for leader
+chords.
+
+
 
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)
 and a contributor could break it without touching kb-code-server or kb

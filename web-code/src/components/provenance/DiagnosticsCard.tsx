@@ -1,11 +1,17 @@
+import type { LaneFactOut } from "../../api/types";
 import { useDiagnostics } from "../../hooks/useDiagnostics";
 import { rangeFromDiagnostic } from "../../lib/codeActions";
 import { buildDiagnosticsView, formatSeveritySummary, severityLabel } from "../../lib/diagnostics";
+import { formatFactValue, laneSeverityLabel } from "../../lib/lanes";
 import QuickFixes from "./QuickFixes";
 
 export interface DiagnosticsCardProps {
   repo: string;
   path: string;
+  /// V76-R3a — aug-lane/1 diagnostic facts (rubocop / SARIF) riding this
+  /// card so it can say `source = lane`. Empty/absent leaves the card
+  /// byte-identical to pre-R3a when no LSP rows exist.
+  laneFacts?: readonly LaneFactOut[];
   /// Same-file jump — reuses `Reader.tsx`'s `jumpToLine` (the annotations/
   /// outline/bookmarks convention), never a full navigation `Link` the way
   /// `FrameworkCard`'s cross-file rows use `codeUrl`, since every diagnostic
@@ -32,11 +38,19 @@ export interface DiagnosticsCardProps {
 /// - refused/unavailable → one caption line naming the reason (`"reason"`).
 /// - provider ran, found nothing → "provider reports clean" (`"clean"`).
 /// - provider ran, found rows → counts summary + a jump-to-line list.
-export default function DiagnosticsCard({ repo, path, onJumpLine, reviewId, ps }: DiagnosticsCardProps) {
+export default function DiagnosticsCard({
+  repo,
+  path,
+  onJumpLine,
+  reviewId,
+  ps,
+  laneFacts = [],
+}: DiagnosticsCardProps) {
   const { data, isLoading, covered } = useDiagnostics(repo, path);
   const view = buildDiagnosticsView(covered, data, isLoading);
+  const laneRows = laneFacts.filter((f) => f.kind === "diagnostic");
 
-  if (view.kind === "absent") return null;
+  if (view.kind === "absent" && laneRows.length === 0) return null;
 
   return (
     <div className="kbc-diagnostics" data-kbc-diagnostics data-kbc-diagnostics-state={view.kind}>
@@ -98,6 +112,33 @@ export default function DiagnosticsCard({ repo, path, onJumpLine, reviewId, ps }
                   reviewId={reviewId}
                   ps={ps}
                 />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {laneRows.length > 0 && (
+        <ul className="kbc-diagnostics__list" data-kbc-diagnostics-lane>
+          {laneRows.map((row, i) => {
+            const sev = laneSeverityLabel(row.severity);
+            const line = row.line && row.line > 0 ? row.line : 1;
+            const lineEnd = row.line_end && row.line_end > line ? row.line_end : undefined;
+            return (
+              <li key={`lane:${row.lane}:${line}:${i}`} className="kbc-diagnostics__row" data-kbc-diagnostics-row>
+                <button
+                  type="button"
+                  className="kbc-diagnostics__jump"
+                  onClick={() => onJumpLine(line, lineEnd)}
+                  data-kbc-diagnostics-jump={line}
+                  data-kbc-diagnostics-severity={sev}
+                  data-kbc-diagnostics-source="lane"
+                  title={formatFactValue(row)}
+                >
+                  <span className={`kbc-diagnostics__dot kbc-diagnostics__dot--${sev}`} aria-hidden="true" />
+                  <span className="kbc-diagnostics__loc">{line}</span>
+                  <span className="kbc-diagnostics__message">{formatFactValue(row)}</span>
+                  <span className="kbc-diagnostics__meta">lane:{row.lane}</span>
+                </button>
               </li>
             );
           })}

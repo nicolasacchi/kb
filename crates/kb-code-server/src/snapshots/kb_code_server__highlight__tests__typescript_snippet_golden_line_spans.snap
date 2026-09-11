@@ -1,0 +1,128 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: "wire(Some(\"typescript\"), TYPESCRIPT_SNIPPET)"
+---
+HighlightOut {
+    schema: "highlight/1",
+    lang: Some(
+        "typescript",
+    ),
+    tier: "full",
+    spans: [
+        LineRoleSpan {
+            line: 1,
+            start: 0,
+            end: 8,
+            role: Keyword,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 9,
+            end: 12,
+            role: Function,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 12,
+            end: 13,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 13,
+            end: 14,
+            role: Variable,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 16,
+            end: 22,
+            role: Type,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 22,
+            end: 23,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 24,
+            end: 25,
+            role: Variable,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 27,
+            end: 33,
+            role: Type,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 33,
+            end: 34,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 36,
+            end: 42,
+            role: Type,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 43,
+            end: 44,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 4,
+            end: 10,
+            role: Comment,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 4,
+            end: 10,
+            role: Keyword,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 11,
+            end: 12,
+            role: Variable,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 13,
+            end: 14,
+            role: Operator,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 15,
+            end: 16,
+            role: Variable,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 16,
+            end: 17,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 4,
+            start: 0,
+            end: 1,
+            role: Punctuation,
+        },
+    ],
+    honesty: HighlightHonesty {
+        tier: "full",
+        engine: "tree-sitter:tree-sitter-typescript",
+        derived_from: "highlights",
+        reason: None,
+    },
+    salt: None,
+}

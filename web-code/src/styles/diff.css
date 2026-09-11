@@ -61,7 +61,13 @@
 
 .kbc-sdiff {
   display: grid;
-  grid-template-columns: 44px 1fr 44px 1fr;
+  /* V76-R2b — `minmax(0, 1fr)` not bare `1fr`. A long hunk strip
+   * (`@@ -0,0 +1,48 @@`) is a spanning min-content item; with `1fr` that
+   * blows the grid past the pane and clips the NEW column. For a pure-add
+   * hunk the visible leftover is then only the hatched old-side spacers. */
+  grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
   font-family: var(--font-mono);
   font-size: var(--fs-md);
 }
@@ -75,12 +81,16 @@
   padding: var(--pad-1) 14px;
   color: var(--accent-soft);
   background: var(--bg-panel-2);
+  min-width: 0;
+  /* minmax(0, 1fr) on the grid is the added-file clip fix. overflow:hidden
+   * here clipped HunkStrip's viewed checkbox (review-diff-v2.spec.ts). */
 }
 
 .kbc-sdiff__row {
   display: grid;
-  grid-template-columns: 44px 1fr 44px 1fr;
+  grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
   grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .kbc-sdiff__gutter {

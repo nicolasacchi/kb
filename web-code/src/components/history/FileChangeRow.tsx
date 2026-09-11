@@ -49,7 +49,7 @@ export default function FileChangeRow({ repo, file, from, to, disabledNote, brow
     parsed ? repo : undefined,
     parsed ? file.path : undefined,
     { oldSha: from, newSha: to },
-    { hasRemoves },
+    { hasRemoves, parsed },
   );
 
   return (

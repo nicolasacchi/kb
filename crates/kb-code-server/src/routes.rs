@@ -377,7 +377,11 @@ impl From<GitError> for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
-        ApiError::new(status, e.to_string())
+        let err = ApiError::new(status, e.to_string());
+        match e {
+            Resolve { .. } => err.with_problem_type(crate::frames::ERR_UNKNOWN_REF),
+            _ => err,
+        }
     }
 }
 
@@ -515,8 +519,12 @@ pub(crate) fn read_repo_file(
     crate::security::secrets::builtin_policy().check(path)?;
     let bytes = match rev {
         Some(rev) => {
+            // V76-R3c — a caller-supplied ref is a Revspec first (400 on
+            // injection shapes) and an ODB resolve second (404
+            // `urn:kb:errors:unknown-ref` on a well-formed miss).
+            let spec = parse_revspec(rev)?;
             let git = GitRepo::open(&repo.path)?;
-            git.read_blob(rev, path, DEFAULT_BLOB_SIZE_CAP)?
+            git.read_blob(spec.as_str(), path, DEFAULT_BLOB_SIZE_CAP)?
         }
         None => {
             let abs = crate::security::paths::contained_abs_path(&repo.path, path)?;
@@ -1215,6 +1223,10 @@ pub struct FileResponse {
     /// Additive: `false` on every non-text/base64 response, so a client
     /// that ignores the field sees byte-identical behaviour.
     pub redaction_hint: bool,
+    /// V76-R3c — the D14 frame claim for this read. Absent-ref is the
+    /// working tree (`source: working_tree`); a named ref is `file_at_ref`
+    /// / ODB. Derived from [`crate::frames::FRAMES`], never restated.
+    pub frame: crate::frames::FrameClaim,
 }
 
 /// `GET /api/file?repo=&path=&ref=` — blob content at `ref`, or (no `ref`)
@@ -1291,6 +1303,7 @@ pub async fn file(
         })
         .await?;
 
+    let working_tree = crate::frames::is_working_tree_rev(params.rev.as_deref());
     let body = FileResponse {
         repo: params.repo,
         path: params.path,
@@ -1315,6 +1328,7 @@ pub async fn file(
         }
         .as_str(),
         highlights,
+        frame: crate::frames::claim("file_at_ref", working_tree),
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
 }
@@ -1393,6 +1407,10 @@ pub async fn symbols(
                     "tier": tier.as_str(),
                     "tier_reason": tier_reason,
                     "symbols": symbols,
+                    "frame": crate::frames::claim(
+                        "file_at_ref",
+                        crate::frames::is_working_tree_rev(params.rev.as_deref()),
+                    ),
                 })),
             )
                 .into_response())

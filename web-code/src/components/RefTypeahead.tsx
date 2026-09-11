@@ -13,6 +13,8 @@ const LIST_CAP = 12;
 export interface RefTypeaheadProps {
   value: string;
   onChange: (next: string) => void;
+  /// Called when a list hit is confirmed (Enter / click), after `onChange`.
+  onSelect?: (next: string) => void;
   items: readonly string[];
   placeholder?: string;
   "aria-label"?: string;
@@ -39,6 +41,7 @@ export interface RefTypeaheadProps {
 export default function RefTypeahead({
   value,
   onChange,
+  onSelect,
   items,
   placeholder,
   "aria-label": ariaLabel,
@@ -59,6 +62,7 @@ export default function RefTypeahead({
 
   function select(name: string) {
     onChange(name);
+    onSelect?.(name);
     setOpen(false);
     inputRef.current?.focus();
   }

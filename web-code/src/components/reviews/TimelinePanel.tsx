@@ -318,7 +318,11 @@ export default function TimelinePanel({ repo, reviewId, prBound }: TimelinePanel
                       {row.author.model ? ` · ${row.author.model}` : ""}
                     </div>
                   )}
-                  {row.detail && <div className="kbc-timeline__detail">{row.detail}</div>}
+                  {row.detail && (
+                    <div className="kbc-timeline__detail">
+                      <ProseBlock text={row.detail} repo={repo} reviewId={reviewId} />
+                    </div>
+                  )}
                   {row.bodyMd && (
                     <div className="kbc-timeline__prose" data-kbc-timeline-body>
                       <ProseBlock text={row.bodyMd} refs={row.bodyRefs} repo={repo} reviewId={reviewId} />

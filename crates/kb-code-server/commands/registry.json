@@ -1695,6 +1695,57 @@
       "note": "The eighth rail tab (V74-L3b). Its body is the operator's own trail, which the daemon serves over loopback only — the tab renders that absence in its own words rather than being hidden."
     },
     {
+      "id": "rail.tab.facts",
+      "title": "Rail tab: Facts",
+      "aka": [
+        "facts rail",
+        "aug-lane",
+        "lanes rail"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R f"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R f"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local desk geometry",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3a (H4b) — the ninth rail tab. aug-lane/1 Facts: a RAIL row (Lane Budget: never a fifth gutter; slot four is comments/1). Space R f is free; Space R c is comments."
+    },
+    {
+      "id": "facts.coverage-band",
+      "title": "Toggle coverage band on the blame gutter",
+      "aka": [
+        "coverage gutter",
+        "coverage overlay"
+      ],
+      "group": "Rail",
+      "keys": {
+        "vim": [
+          "Space R g"
+        ],
+        "plain": [],
+        "helix": [
+          "Space R g"
+        ]
+      },
+      "scope": "global",
+      "cli": "none:browser-local reading toggle",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3a — coverage facts as a VARIANT on the existing blame gutter (slot 1), off by default. Never a fifth lineGutter. git.behavior stays rail-only."
+    },
+    {
       "id": "action.panel",
       "title": "Action panel for what's under the cursor",
       "aka": [
@@ -3938,6 +3989,101 @@
       ]
     },
     {
+      "id": "reader.ref-typeahead",
+      "title": "Pick a ref (@ref typeahead)",
+      "aka": [
+        "ref picker",
+        "at ref",
+        "checkout ref"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [
+          "Space @"
+        ],
+        "plain": [
+          "Space @"
+        ],
+        "helix": [
+          "Space @"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code refs typeahead",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3c. Ctrl-r is a hard-reserved browser chord (reload) AND vim redo, so the typeahead is Space @ — a free leader letter. Reuses the branches-landing RefTypeahead over GET /api/refs/typeahead."
+    },
+    {
+      "id": "reader.compare",
+      "title": "Compare this file at another ref",
+      "aka": [
+        "compare file",
+        "split at ref"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [
+          "c"
+        ],
+        "plain": [],
+        "helix": [
+          "c"
+        ]
+      },
+      "scope": "reader",
+      "cli": "kb-code compare-file",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "ratified_conflicts": [
+        "diff.compose-new"
+      ],
+      "note": "V76-R3c. Bare c is inert in the read-only vim layer (no operator-pending mode). Same-depth coactivity with diff.compose-new is ratified: the review-diff composer and the reader compare are never the same surface. Opens pane2 on the same path at HEAD (or the working tree if already at a ref) and the existing DiffView over GET /api/diff / GET /api/compare/file."
+    },
+    {
+      "id": "reader.ref-chip",
+      "title": "Focus the TopBar ref chip",
+      "aka": [
+        "ref chip"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "reader",
+      "cli": "none:the chip is browser chrome; picking a ref is reader.ref-typeahead",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
+      "id": "reader.ref-clear",
+      "title": "Clear the ref (back to the working tree)",
+      "aka": [
+        "working tree",
+        "clear ref"
+      ],
+      "group": "Ref",
+      "keys": {
+        "vim": [],
+        "plain": [],
+        "helix": []
+      },
+      "scope": "reader",
+      "cli": "none:clears ?ref= in the URL, the same no-ref default GET /api/file already has",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    },
+    {
       "id": "diff.hunk-next",
       "title": "Next hunk",
       "aka": [
@@ -4260,7 +4406,10 @@
       "mutation": "metadata",
       "side_effect": "none",
       "lifecycle": "shipped",
-      "dispatch": "surface"
+      "dispatch": "surface",
+      "ratified_conflicts": [
+        "reader.compare"
+      ]
     },
     {
       "id": "diff.compose-old",
@@ -4791,6 +4940,112 @@
       "side_effect": "none",
       "lifecycle": "shipped",
       "dispatch": "surface"
+    },
+    {
+      "id": "diff.tree-focus",
+      "title": "Focus the review file tree",
+      "aka": [
+        "focus files",
+        "focus map"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "g f"
+        ],
+        "plain": [
+          "g f"
+        ],
+        "helix": [
+          "g f"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:the review file tree is browser-local chrome; `kb-code review files` is the data",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. Sits beside `g g` (`diff.file-first`) under the same `g` prefix in diff scope. The review diff page has no CodeView, so a bare `g` is not a vim prefix here."
+    },
+    {
+      "id": "diff.tree-toggle-folder",
+      "title": "Expand or collapse the focused folder",
+      "aka": [
+        "toggle folder"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z f"
+        ],
+        "plain": [
+          "z f"
+        ],
+        "helix": [
+          "z f"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:folder collapse is browser-local tree state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. `z c`/`z o`/`z a` remain hunk folds; `z f` is the folder. Same `z` prefix, different second token — not a prefix collision."
+    },
+    {
+      "id": "diff.tree-collapse-all",
+      "title": "Collapse every folder in the file tree",
+      "aka": [
+        "collapse all folders"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z m"
+        ],
+        "plain": [
+          "z m"
+        ],
+        "helix": [
+          "z m"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:folder collapse is browser-local tree state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. Lowercase `z m` so it does not share a chord with `boards.fold-all` (`z M`). Same `z` prefix as the hunk folds, different second token."
+    },
+    {
+      "id": "diff.map-reset",
+      "title": "Reset the file map pane width",
+      "aka": [
+        "reset map width",
+        "resize reset"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "g ="
+        ],
+        "plain": [
+          "g ="
+        ],
+        "helix": [
+          "g ="
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:map pane width is browser-local layout, same as the Desk — double-click the separator also resets",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. Reuses the Desk resize mechanism (`react-resizable-panels`); this command is the keyboard twin of a separator double-click."
     },
     {
       "id": "diff.ps-next",
@@ -8469,6 +8724,35 @@
       "note": "V72-I2. `Space g r` is Reviews, so Rails takes the SHIFTED letter — the dispatcher folds Shift into the character for a printable key (`tokenOf`), so `Space g R` is one unambiguous token sequence, not a modifier chord. The page is `/r/:repo/~rails`, a repo-scoped sentinel mounted beside `~todos`/`~workspaces`; on a repo-less surface this degrades to Home like every other `nav.*` row."
     },
     {
+      "id": "nav.lanes",
+      "title": "Go to Lanes",
+      "aka": [
+        "lanes",
+        "~lanes",
+        "aug-lane registry"
+      ],
+      "group": "Go",
+      "keys": {
+        "vim": [
+          "Space g l"
+        ],
+        "plain": [],
+        "helix": [
+          "Space g l"
+        ]
+      },
+      "scope": "global",
+      "targets": [
+        "route"
+      ],
+      "cli": "kb-code lanes list",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central",
+      "note": "V76-R3a. `Space g l` is free (`Space g m` is comments, `Space g R` is Rails). The page is `/r/:repo/~lanes`, a repo-scoped sentinel mounted beside `~todos`/`~rails`; on a repo-less surface this degrades to Home like every other `nav.*` row."
+    },
+    {
       "id": "rails.section-next",
       "title": "Next noun section",
       "aka": [
@@ -8653,6 +8937,204 @@
       "lifecycle": "shipped",
       "dispatch": "surface",
       "note": "V73-K2c (review-timeline/2). Maps straight to the server's `?github=` param — a LIVE network call the other ten lanes are not."
+    },
+    {
+      "id": "review.rail.toggle",
+      "title": "Toggle the findings rail",
+      "aka": [
+        "rail",
+        "findings rail",
+        "collapse rail"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space i"
+        ],
+        "plain": [],
+        "helix": [
+          "Space i"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "none:a browser-local dock state — the rail width/collapse lives in localStorage, never on the daemon",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. `Space r` was NOT free (it is `doc.cards-fold` in this very scope), so the toggle is `Space i`. On mobile (≤860px) it toggles the single bottom sheet instead — the same ruling `desk.toggle.*` already makes."
+    },
+    {
+      "id": "review.rail.reset",
+      "title": "Reset the findings rail width",
+      "aka": [
+        "rail reset",
+        "resize reset"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space I"
+        ],
+        "plain": [],
+        "helix": [
+          "Space I"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "none:a browser-local dock state — see `review.rail.toggle`",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. Restores `lib/reviewRail.ts`'s default width and un-collapses the rail — the same value a separator double-click returns to (`defaultSize`)."
+    },
+    {
+      "id": "review.density-toggle",
+      "title": "Toggle Room density (compact/comfortable)",
+      "aka": [
+        "density",
+        "compact",
+        "comfortable"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space M"
+        ],
+        "plain": [],
+        "helix": [
+          "Space M"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "none:a reading preference — browser-local like the global data-density contract (D16), mirrored onto `?density=` for shareable links",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. K2a's `?density=` mirror (`lib/branchViews.ts`'s precedent) applied to the Room."
+    },
+    {
+      "id": "review.jump.summary",
+      "title": "Jump to the Summary section",
+      "aka": [
+        "summary",
+        "report summary"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space S"
+        ],
+        "plain": [],
+        "helix": [
+          "Space S"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review report ID",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. Opens the Report tab (a no-op there) and scrolls the section decorator into view. A no-op when the review has no report — the key means 'show me that section' and there is no section to show."
+    },
+    {
+      "id": "review.jump.findings",
+      "title": "Jump to the Findings section",
+      "aka": [
+        "findings",
+        "report findings"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space F"
+        ],
+        "plain": [],
+        "helix": [
+          "Space F"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review findings list ID",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. See `review.jump.summary`."
+    },
+    {
+      "id": "review.jump.praise",
+      "title": "Jump to the Praise section",
+      "aka": [
+        "praise",
+        "report praise"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space A"
+        ],
+        "plain": [],
+        "helix": [
+          "Space A"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review findings list ID",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. See `review.jump.summary`. The praise section renders only when a praise-act finding exists; the jump is then a no-op."
+    },
+    {
+      "id": "review.jump.verdict",
+      "title": "Jump to the Verdict section",
+      "aka": [
+        "verdict",
+        "report verdict"
+      ],
+      "group": "Review cockpit",
+      "keys": {
+        "vim": [
+          "Space J"
+        ],
+        "plain": [],
+        "helix": [
+          "Space J"
+        ]
+      },
+      "scope": "review",
+      "targets": [
+        "review"
+      ],
+      "cli": "kb-code review report ID",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2a. See `review.jump.summary`. `Space V` is `diff.viewed-advance` in the coactive diff scope, so the verdict jump is `Space J` (judgement)."
     },
     {
       "id": "diff.hunk-turns",

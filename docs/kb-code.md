@@ -63,11 +63,55 @@ dispositions, answer with nav-verb evidence, apply fixes, run the publish
 round — is `plugins/kb-code/skills/kb-review-work` (`/kb-review-work`).
 
 **PR-bound reviews.** `kb-code review start-pr --repo R --pr N [--base]
-[--title] [--session]` (`POST /api/reviews/pr`, LOOPBACK-ONLY) fetches
-`refs/pull/N/head` into `refs/kbc/pr/N` (400 on failure — this is
-load-bearing), creates the review, captures ps1, and best-effort-enriches
-with GitHub PR metadata; the review exists either way, even when the GitHub
-enrichment itself fails. `kb-code review pr-status ID` (`GET
+[--title] [--session] [--reopen|--new] [--gh-token-from-cli] [--dry-run]`
+(`POST /api/reviews/pr[?on_closed=reopen|new]`, LOOPBACK-ONLY) fetches `refs/pull/N/head` into `refs/kbc/pr/N` (400 on
+failure — this is load-bearing), creates the review, captures ps1, and
+best-effort-enriches with GitHub PR metadata; the review exists either way,
+even when the GitHub enrichment itself fails. An **OPEN** existing review
+for the same `(repo, PR)` is reused (HTTP 200, `reused: true`; a patchset
+is captured only if the fetched head moved). A **CLOSED** existing review
+is **not** silently reused: the route 409s `urn:kb:errors:review-closed`
+naming the review id and the two options — `--reopen` / `?on_closed=reopen`
+reopens that review and adds a patchset if the head moved; `--new` /
+`?on_closed=new` mints a new review id and leaves the closed row in place
+(the unique `(repo, pr_number)` index is OPEN-only). CLI 409 exits 3.
+
+**Review lifecycle.** `kb-code review close ID` / `kb-code review reopen ID`
+(`PATCH /api/reviews/{id}` with `state=closed|open`) stop or resume
+auto-capture; history stays. `kb-code review delete ID --yes [--force]`
+(`DELETE /api/reviews/{id}`, LOOPBACK-ONLY) removes the row and its
+`refs/kbc/review/<id>/ps*` refs (and `refs/kbc/pr/<n>` when no remaining
+review still binds that PR). It refuses without `--yes` (exit 2, no
+prompt). A published verdict (`POST …/verdict/published`) 409s
+`urn:kb:errors:review-verdict-published` unless `--force` / `?force=1`.
+
+**Review refs.** `kb-code review refs list --repo R` (`GET
+/api/reviews/refs?repo=`, bearer) lists every `refs/kbc/pr/*` and
+`refs/kbc/review/*` in the mirror with the review it belongs to, or
+`orphan` when no review references it. `kb-code review refs gc --repo R
+[--apply]` (`POST /api/reviews/refs/gc?repo=&dry_run=`, LOOPBACK-ONLY,
+audited) deletes orphan refs and refs of deleted reviews; `dry_run=1` is
+the default, `--apply` sets `dry_run=0`. Over 10,000 refs is a refusal
+naming the cap, never a silent truncate. `git update-ref -d` only ever
+sees reconstructed `refs/kbc/pr/<n>` / `refs/kbc/review/<id>/ps<n>` names
+(digits-only).
+
+GitHub credentials for that enrichment (and every other GitHub read) are a
+documented ladder, resolved at request time, never logged:
+
+1. `[github] token_file = "<path>"` — mode 0600 (or 0400). A missing,
+   unreadable, empty, or group/world-readable file falls through.
+2. env `KB_CODE_GITHUB_TOKEN`.
+3. CLI `--gh-token-from-cli` on `review start-pr` — the CLI runs
+   `gh auth token` and sends it in the request body (`gh_token`).
+   Loopback-only, never persisted; refused off loopback. `--dry-run`
+   prints the payload with the token redacted and does not POST.
+4. none — an unauthenticated request still works for a public repo; a
+   private repo 404s.
+
+When metadata is missing, `pr_meta_unavailable_reason` is a typed object
+`{code, hint}` whose `code` is one of `no-credentials` | `not-found` |
+`forbidden` | `rate-limited` | `network`. The Room header shows both. `kb-code review pr-status ID` (`GET
 /api/reviews/{id}/pr-status`) answers two halves: LOCAL (snapshot vs. local
 patchset tip) always answers; LIVE (a fresh GitHub fetch + `commits_behind`)
 degrades to `unavailable_reason` on any GitHub-side failure. `kb-code review
@@ -75,6 +119,48 @@ sweep {--repo R | --all-repos} [--include-closed]` (`POST
 /api/reviews/sweep`, LOOPBACK-ONLY) walks every PR-bound review (default
 `state=open`) and reconciles each against live GitHub — the cron/agent
 entry point for "every PR the LLM touched."
+
+**The `start-pr` base ladder and the stale-mirror refusal (v7.6,
+V76-R1a).** When `--base` is absent, `start-pr` no longer silently bases
+ps1 on the mirror's LOCAL default branch (a mirror that has not fetched
+for months produced a patchset spanning everything since — the review
+files then timed out and the review was ruined). The base is chosen by a
+three-rung ladder, and the rung taken rides the response as `base_source`
+(also merged into the stored `pr_meta_json` snapshot when that snapshot
+exists, carried forward by `review sweep`):
+
+1. **`explicit`** — `--base <ref>` was given. It wins outright and
+   bypasses the stale-mirror refusal.
+2. **`merge-base`** — no `--base`, and the repo has an `origin` remote:
+   the remote default branch is FETCHED first (`git fetch origin
+   +refs/heads/<d>:refs/remotes/origin/<d>`), and ps1's `base_sha` is the
+   merge-base of the PR head against the FRESH `refs/remotes/origin/<d>`
+   (stored as the review's `base_ref`). Exception: if the mirror's LOCAL
+   default branch is behind the fetched remote default by more than 50
+   commits, the route REFUSES with `409 urn:kb:errors:stale-mirror`; the
+   message carries the ahead/behind numbers and the exact retry command
+   (`kb-code review start-pr --repo R --pr N --base <merge-base-sha>`),
+   which reproduces the same patchset explicitly.
+3. **`local-default`** — no `--base` and no usable remote default (no
+   `origin` remote, the fetch failed, or the remote lacks the branch):
+   the pre-v7.6 answer, the mirror's local default branch.
+
+**`start-pr` as a daemon-side job.** The first `start-pr` against a cold
+mirror always outlived the CLI's old 10 s timeout in `git fetch` (the
+fetch finished server-side; the retry "succeeded" confusingly). `kb-code
+review start-pr` now posts `POST /api/reviews/pr?async=1`, which returns
+`202 {job_id, status: "running"}` immediately and runs the same flow as a
+job, then polls `GET /api/reviews/jobs/{id}` (bearer) every 2 s for up to
+600 s — progress lines go to stderr unless `--json`. A second `POST` for
+the same `(repo, PR)` while the job runs ATTACHES to it (same `job_id`)
+instead of starting a second fetch. The settled job reports `{status:
+done|failed, progress: {stage}, review_id?, error?}` with the full
+creation envelope under `result`; a failure carries the refusal verbatim
+plus its `type` URN in `error_type`. Jobs are in-memory only and swept 1
+h after creation (an unknown or swept id 404s). The route's synchronous
+behaviour is unchanged for any caller that does not pass `?async=1`; the
+CLI's reqwest timeout for THIS verb is 600 s (every other verb keeps its
+own).
 
 **Findings ledger (`kbc-findings/1`).** `kb-code review findings import ID
 {--from-file FILE|--stdin} [--mode full|additive]` (`POST
@@ -1332,6 +1418,37 @@ reviewable in the diff that causes it. CLI: `kb-code syntax [--json]`,
 `kb-code parity [--json]` — daemon reads, because the honest answer is what
 the DAEMON's build can do.
 
+**`highlight/1` (V76-C1) — `POST /api/highlight` and `POST /api/highlight/batch`.**
+Server-side tree-sitter spans for ANY snippet, the same extractor the
+reader uses for files (`highlight::extract_highlights`, including the
+injection layer so a Markdown fence's Ruby / ERB's Ruby / HAML's Ruby
+paint as guests). Nothing is persisted. Bearer read.
+
+Request: `{ lang: <syntax/1 id or fence alias, or null>, path?: <infer lang>, text: <≤ 256 KiB>, salt?: bool }`.
+Oversize is a 400 naming the size, never a silent truncate. An unknown
+or `none`-tier language is a 200 with `tier: "none"`, empty `spans`, and
+`honesty.reason` — never a 500.
+
+Response: `{ schema: "highlight/1", lang, tier, spans: [{line, start, end, role}], honesty, salt? }`.
+`line` is 1-based; `start`/`end` are 0-based UTF-8 byte columns within
+that line (tree-sitter `Point.column`). `role` is the 18-role
+`kbc-theme/1` vocabulary. `honesty` carries `tier`, `engine`
+(`tree-sitter:<crate>` / `scanner:<schema>` / `none`), `derived_from`
+(`highlights` | `none`), and an optional `reason`. `salt: true` echoes
+the current `highlight_salt`.
+
+Batch: `{ items: [{ id, lang, text, path? }, …] }` — at most 64 items,
+at most 1 MiB total text, unique ids. One unknown item does not 500
+the batch. Schema `highlight-batch/1`.
+
+CLI: `kb-code highlight --lang ruby --file snippet.rb --json`. Omit
+`--lang` and the daemon infers from `--path` or the file's name.
+`--file -` (or no `--file`) reads stdin.
+
+The SPA has one painter (`web-code/src/lib/paintSpans.ts`) and one class
+table (`.kbc-hl-*`). The live suggestion editor stays CM6; every other
+read-only surface paints these spans.
+
 Not in that unit, by design: new grammars (SCSS/CSS/Markdown), the
 injection-aware pipeline, the universal `outline/1` contract, and the
 `symbol_salt`/`highlight_salt` split. `highlight_only` therefore shipped as
@@ -1766,10 +1883,20 @@ spawned before the bind and never awaited, one short transaction per page,
 recomputed cutoff per page so an interrupted pass simply resumes. A
 disabled lane is never swept out from under a re-enable.
 
-Not in this unit, by design: the SPA's Facts gutter, rail and hover
-(H4b); any lane beyond the four; the retrofit of kb-lip, rails-lens and
-the DCB doc-lens as lanes; and LLM-produced facts, which this daemon has
-no place for at all.
+**SPA (V76-R3a / H4b).** Facts is a **rail tab** (`Space R f`) plus hover
+and marker **variants on existing gutters** — never a fifth `lineGutter`
+slot (kbc-theme/1 Lane Budget: slot four is comments/1). The rail groups
+the current file's `GET /api/lanes/facts` rows by lane (enabled /
+disabled-with-reason / empty-with-reason); trust is LINE STYLE; `age_secs`
+is folded into a display-only "aging"/"stale" caption and never rewrites
+the wire class. RuboCop/SARIF diagnostics ride the diagnostics gutter
+(slot 3) as a lane variant; coverage rides the blame gutter as a band
+toggled from the Facts tab (off by default); `git.behavior` stays
+rail-only. `~lanes` (`Space g l`) is the registry dock (`GET /api/lanes`).
+
+Not in this unit, by design: any lane beyond the four; the retrofit of
+kb-lip, rails-lens and the DCB doc-lens as lanes; and LLM-produced facts,
+which this daemon has no place for at all.
 
 **V72-H2a (D7) — three grammars, one injection layer, `outline/1`.**
 
@@ -2075,9 +2202,38 @@ kb-code review compose <id> --doc review.md [--findings findings.json] \
 
 `findings import`, `report --set` and `verdict` remain the documented
 **low-level twins** — the same writes, one at a time, each with its own
-commit. The V0 `compose` form (`--from-file`/`--stdin`, a `kbc-compose/1`
-JSON body with `summary` + a `kbc-findings/1` block) is unchanged; `doc_md`
-is what selects the document path.
+commit.
+
+The V0 `compose` form (`--from-file`/`--stdin`, a `kbc-compose/1` JSON body
+with `summary` + a `kbc-findings/1` block) is folded into the same
+transaction (V76-R1c). The daemon:
+
+1. maps every finding's free-text `category` onto the closed 8-value set
+   (never a 400 — an unknown token becomes `other`, and a mapping is an
+   INFO lint row `category_mapped`),
+2. refuses an invalid slug with HTTP 400 naming the regex `f-[a-z0-9-]+`
+   and the offending value,
+3. synthesises a `minimal`-tier `kbc-review/1` document (`summary_md` from
+   `summary` or the verdict note; findings v2 from the sidecar; `omitted[]`
+   lists everything the V0 shape cannot carry) and stores it exactly as
+   `compose --doc` would, so `GET …/doc`, `lint` and `render` work
+   afterwards.
+
+Both paths share one reconcile core (`FindingIdentity::Fingerprint`).
+
+V0 category mapping (ASCII-lowercase, trimmed; identity members of the
+closed set pass through unchanged):
+
+| free-text | maps to |
+|---|---|
+| `bug` \| `logic` \| `error` | `correctness` |
+| `perf` | `performance` |
+| `sec` | `security` |
+| `lint` \| `naming` | `style` |
+| `test` \| `spec` | `tests` |
+| `doc` | `docs` |
+| `arch` \| `architecture` | `design` |
+| anything else | `other` |
 
 ### `lint` — the pre-flight
 
@@ -2103,6 +2259,8 @@ nothing.
 | `stale_sha` | info | the ref resolved by carrying forward, not by a blob match |
 | `bare_symbol_mention` | info | `Shop::Order` in prose with no `sym:`/`ent:` prefix (the `::` is required — a bare CapWord is never reported) |
 | `question_without_ref` | info | a question with no location |
+| `question_stale` | info | a `to_agent` question has had no `answers` ref for over 14 days |
+| `category_mapped` | info | a V0 free-text category was rewritten onto the closed 8-value set (never a refusal) |
 
 `kb-code review lint` exits **3** when the lint reports any error — the same
 `EXIT_CONFLICT` slot an HTTP 409 uses, and for the same reason: the request
@@ -2134,7 +2292,18 @@ and a typo is never a silent hole:
 `{{title}}` · `{{meta}}` (repo, review, patchset, revision, tier, render
 time) · `{{summary}}` · `{{risk}}` · `{{reading_order}}` · `{{blocks}}` ·
 `{{findings}}` · `{{cards}}` · `{{flows}}` · `{{questions}}` · `{{author}}` ·
-`{{omitted}}` · `{{body}}`
+`{{omitted}}` · `{{body}}` · `{{pr_number}}` · `{{risk_score}}` · `{{tags}}`
+(`review`, `pr-<n>` when bound, the repo, then PR labels) ·
+`{{summary_text}}` (plain-text, HTML-escaped, capped at 300 characters) ·
+`{{repo}}`
+
+The built-in template (`crates/kb-code-server/templates/review-default.html`)
+is a legal kb artifact without a custom template: it emits
+`<meta name="kb-category" content="review">`, `<meta name="kb-tags"
+content="{{tags}}">`, `<meta name="kb-summary" content="{{summary_text}}">`,
+a real `<title>` and `<h1>`, and `<h2>` sections with stable ids (`summary`,
+`findings`, `verdict`, …). No `<base href>`, no `target="_top"`, inline CSS
+only. kb-code still never generates a `<template id="kb-prompt">`.
 
 Every dynamic string is HTML-escaped, and every Markdown body goes through
 kb-core's existing UNTRUSTED-body renderer (`render.unsafe = false`), so raw
@@ -3024,9 +3193,29 @@ from and what it may claim about a ref that is not checked out:
 
 `off_head` is a **ceiling, never a promise**; `ref_aware: false` means the
 lane ignores a ref and answers for the checkout, which a reader must SAY
-rather than silently substitute. This unit lays the table and consumes
-none of it — the reader's ref chip, compare mode and per-lane banners
-derive from these bytes rather than restating them.
+rather than silently substitute. V76-R3c (M4) **consumes** the table:
+
+* `GET /api/file?repo=&path=&ref=` (and the per-file `/api/symbols` /
+  `/api/outline` reads) return an additive `frame` claim derived from the
+  `file_at_ref` row. Absent `ref` is the working tree (`source:
+  working_tree`, ceiling `exact`) and is otherwise byte-identical. A
+  well-formed revspec that does not resolve is `404` with
+  `urn:kb:errors:unknown-ref`. A dash-prefixed injection shape is still
+  `400` via `Revspec::parse`.
+* `GET /api/refs/typeahead?repo=&q=` ranks branches, tags, `refs/kbc/pr/*`,
+  review patchsets, `HEAD~n`, SHA prefixes (≥ 7), and linked worktrees —
+  exact > prefix > recent, capped with **true totals** (`returned` /
+  `total` / `truncated`). CLI: `kb-code refs typeahead <q> --repo NAME`.
+* `GET /api/compare/file?repo=&path=&a=&b=` returns the two blobs plus a
+  hunk list parsed from `diff::diff_file`. CLI: `kb-code compare-file
+  <PATH> --a --b --repo NAME --json`.
+* The SPA's Location Contract already serialises `?ref=` **first** (before
+  `line` / `pane2`); that order is golden-pinned and was not moved. The
+  TopBar chip + `Space @` typeahead (Ctrl-r is a hard-reserved browser
+  chord) re-read the same file at the same line. Reader banners are
+  generated by `frameBanner(lane, row, atRef)` from `GET /api/frames` —
+  never hand-written. Compare `c` opens pane 2 on the same path at the
+  other ref and reuses `DiffView`.
 
 ### The migration treatment: backup, epoch, rehearsal
 

@@ -51,6 +51,9 @@ const TAB_META: Record<InspectorTab, { label: string; icon: ReactNode; hint: str
   // about the reader, not about the file, which is why this tab's body does
   // not change when the open file does.
   trail: { label: "Trail", icon: <Icon.Record />, hint: "where have I been?" },
+  // V76-R3a — aug-lane/1 Facts. A RAIL tab (Lane Budget: "gutter slot four
+  // or a rail row, never a fifth slot"; slot four is comments/1).
+  facts: { label: "Facts", icon: <Icon.Facts />, hint: "what do the lanes say?" },
 };
 
 export interface InspectorRailHandle {
@@ -180,6 +183,11 @@ export interface InspectorRailProps {
   /// Supplied by whoever mounts the rail; absent renders the honest "nothing
   /// is reading your trail here" hint rather than an empty panel.
   trailPanel?: ReactNode | null;
+
+  /// V76-R3a — the Facts tab's body (`components/lanes/FactsPanel.tsx`).
+  /// UNCONDITIONAL like Comments/Trail: every file has an honest (possibly
+  /// empty-with-reason) lane list. Built by `Reader.tsx`.
+  factsPanel?: ReactNode | null;
 }
 
 function SubjectChip({
@@ -298,6 +306,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     commentsPanel = null,
     commentsBadgeCount = 0,
     trailPanel = null,
+    factsPanel = null,
   },
   handleRef,
 ) {
@@ -361,6 +370,11 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
   const trailBody = trailPanel ?? (
     <div className="kbc-inspector__hint" data-kbc-rail-no-trail>
       Your trail is not readable here.
+    </div>
+  );
+  const factsBody = factsPanel ?? (
+    <div className="kbc-inspector__hint" data-kbc-rail-no-facts>
+      No file open.
     </div>
   );
   const dossierBody = hasDossierContext ? (
@@ -457,6 +471,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
             <Section title="Annotations">{annotationsBody}</Section>
             <Section title="Bookmarks">{bookmarksBody}</Section>
             <Section title="Comments">{commentsBody}</Section>
+            <Section title="Facts">{factsBody}</Section>
             {hasReviewContext && <Section title="Review">{reviewBody}</Section>}
           </>
         )}
@@ -481,6 +496,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
         )}
         {tab === "comments" && <Section title="Comments">{commentsBody}</Section>}
         {tab === "trail" && <Section title="Trail">{trailBody}</Section>}
+        {tab === "facts" && <Section title="Facts">{factsBody}</Section>}
         {tab === "review" && <Section title="Review">{reviewBody}</Section>}
         {tab === "dossier" && <Section title="Members">{dossierBody}</Section>}
       </div>

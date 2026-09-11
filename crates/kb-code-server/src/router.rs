@@ -531,6 +531,16 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // fails the build rather than shipping dead.
         .route("/syntax", get(crate::syntax::syntax_route))
         .route("/parity", get(crate::syntax::parity_route))
+        // V76-C1 — `highlight/1`: paint ANY snippet with the same
+        // tree-sitter spans the reader uses. Bearer read; nothing
+        // persisted. Caps refuse with the size. `crate::highlight::
+        // V76_C1_ROUTES` declares the pair; a unit test walks that
+        // declaration against THIS file.
+        .route("/highlight", post(crate::highlight::highlight_route))
+        .route(
+            "/highlight/batch",
+            post(crate::highlight::highlight_batch_route),
+        )
         // V72-H4a (D7, §P8) — `aug-lane/1`'s three READS. A bearer caller
         // may read facts; only loopback may write them, so the ingest
         // route lives on `transcripts_api` below rather than here.
@@ -551,6 +561,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // the extractors over a bounded sample and writes nothing.
         .route("/reextract/bill", get(crate::reextract::bill_route))
         .route("/refs", get(routes::refs))
+        // V76-R3c — ranked ref typeahead (branches/tags/PRs/patchsets/
+        // HEAD~n/SHA/worktrees) and the two-blob compare. Ordinary
+        // `auth_bearer` reads; `refs_typeahead::V76_R3C_ROUTES` declares
+        // both for invariant 15's contract walk.
+        .route(
+            "/refs/typeahead",
+            get(crate::refs_typeahead::typeahead_route),
+        )
+        .route(
+            "/compare/file",
+            get(crate::compare_file::compare_file_route),
+        )
         // V70-A3X — `GET /api/status` (`git_status`'s module doc): working-
         // tree/index status, same ordinary `auth_bearer`-gated `api` router
         // as every other read above (a bearer read, no loopback concern).
@@ -859,6 +881,10 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/actions", get(crate::actions::actions_route))
         // V3.R1 — local review sessions (reads; mutations on loopback-only).
         .route("/reviews", get(reviews::list_reviews))
+        // V76-R1b — every `refs/kbc/pr/*` and `refs/kbc/review/*` in the
+        // mirror, attributed to a review or `orphan`. Literal `/reviews/refs`
+        // ahead of `/reviews/{id}` (same inbox/analytics precedent). Bearer.
+        .route("/reviews/refs", get(reviews::list_review_refs))
         // PRR-R4 — the cross-repo attention inbox (design doc §2 row 13,
         // `crate::review_inbox`). Literal `/reviews/inbox` ahead of
         // `/reviews/{id}` — documentation, not a functional requirement
@@ -873,6 +899,19 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // (design-addendum-2 §C, `crate::review_analytics`). Same
         // literal-before-param placement as `/reviews/inbox` just above.
         .route("/reviews/analytics", get(review_analytics::analytics_route))
+        // V76-R1a — the start-pr job read (`crate::review_jobs`; `POST
+        // /api/reviews/pr?async=1`'s polling target). An ordinary bearer
+        // READ on this sub-router: the envelope a `done` job returns is
+        // exactly what the loopback-only POST would have returned to the
+        // same operator's CLI. `crate::review_jobs::V76_R1A_ROUTES`
+        // declares it; a unit test walks that declaration against THIS
+        // file. Literal `/reviews/jobs` at the same depth as
+        // `/reviews/{id}` — axum resolves literals over params, same as
+        // `/reviews/inbox` above.
+        .route(
+            "/reviews/jobs/{id}",
+            get(crate::review_jobs::review_job_route),
+        )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
         .route("/reviews/{id}/interdiff", get(reviews::review_interdiff))
@@ -1194,6 +1233,10 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // the param route (axum prioritizes literals regardless, but list
         // it first for readability — same pattern as `/annotations/open`).
         .route("/reviews/gc", post(reviews::gc_reviews))
+        // V76-R1b — GC orphan `refs/kbc/{pr,review}/*` (and refs of deleted
+        // reviews). Literal `/reviews/refs/gc` beside `/reviews/gc`. WRITE,
+        // loopback-only, `?dry_run=1` default ON. Not on `review_remote`.
+        .route("/reviews/refs/gc", post(reviews::gc_review_refs))
         // PRR-R2 (design doc §2 row 1) — bind a NEW review to a GitHub PR
         // (git-fetch into `refs/kbc/pr/<n>` + ps1 capture + best-effort
         // metadata enrichment). A literal `/reviews/pr` segment, so it

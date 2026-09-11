@@ -68,7 +68,10 @@ export default function PrChip({ repo, reviewId, review }: PrChipProps) {
           <>
             <span className="sep">·</span>
             <span className="kbc-review__card-empty" data-kbc-pr-meta-unavailable>
-              PR metadata unavailable at import ({review.pr_meta_unavailable_reason})
+              PR metadata unavailable
+              {typeof review.pr_meta_unavailable_reason === "string"
+                ? ` at import (${review.pr_meta_unavailable_reason})`
+                : ` (${review.pr_meta_unavailable_reason.code}: ${review.pr_meta_unavailable_reason.hint})`}
             </span>
           </>
         )

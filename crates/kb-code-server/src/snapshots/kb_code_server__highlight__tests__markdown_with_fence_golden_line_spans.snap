@@ -1,0 +1,56 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: "wire(Some(\"markdown\"), MARKDOWN_SNIPPET)"
+---
+HighlightOut {
+    schema: "highlight/1",
+    lang: Some(
+        "markdown",
+    ),
+    tier: "full",
+    spans: [
+        LineRoleSpan {
+            line: 1,
+            start: 0,
+            end: 1,
+            role: PunctuationSpecial,
+        },
+        LineRoleSpan {
+            line: 1,
+            start: 2,
+            end: 7,
+            role: Other,
+        },
+        LineRoleSpan {
+            line: 5,
+            start: 0,
+            end: 3,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 6,
+            start: 0,
+            end: 5,
+            role: Keyword,
+        },
+        LineRoleSpan {
+            line: 6,
+            start: 6,
+            end: 7,
+            role: Constant,
+        },
+        LineRoleSpan {
+            line: 7,
+            start: 0,
+            end: 3,
+            role: Keyword,
+        },
+    ],
+    honesty: HighlightHonesty {
+        tier: "full",
+        engine: "tree-sitter:tree-sitter-md",
+        derived_from: "highlights",
+        reason: None,
+    },
+    salt: None,
+}

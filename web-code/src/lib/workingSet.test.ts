@@ -25,6 +25,15 @@ describe("touch", () => {
     expect(s.entries.map((e) => e.path)).toEqual(["a.rs", "b.rs"]);
   });
 
+  it("carries the ref on touch and updates it in place", () => {
+    let s = emptyWorkingSet();
+    s = touch(s, "a.rs", "HEAD~1");
+    expect(s.entries[0].ref).toBe("HEAD~1");
+    s = touch(s, "a.rs", "main");
+    expect(s.entries[0].ref).toBe("main");
+    expect(s.entries.map((e) => e.path)).toEqual(["a.rs"]);
+  });
+
   it("re-touching an existing path bumps touchedAt but keeps its position", () => {
     let s = emptyWorkingSet();
     s = touch(s, "a.rs");
@@ -220,6 +229,12 @@ describe("sessionStorage persistence", () => {
     s = pin(s, "b.rs");
     saveWorkingSet("myrepo", s);
     expect(loadWorkingSet("myrepo")).toEqual(s);
+  });
+
+  it("round-trips the ref on an entry", () => {
+    const s = touch(emptyWorkingSet(), "a.rs", "HEAD~1");
+    saveWorkingSet("fixture", s);
+    expect(loadWorkingSet("fixture").entries[0].ref).toBe("HEAD~1");
   });
 
   it("is scoped per repo — a different repo's key doesn't leak in", () => {

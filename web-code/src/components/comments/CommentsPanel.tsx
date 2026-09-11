@@ -10,6 +10,7 @@ import {
 } from "../../lib/comments";
 import type { CommentOut } from "../../api/types";
 import { toast } from "../../lib/toast";
+import SafeMarkdown from "../SafeMarkdown";
 import "../../styles/comments.css";
 
 export interface CommentsPanelProps {
@@ -199,7 +200,9 @@ export default function CommentsPanel({ repo, path, activeLine, onGotoLine }: Co
               <div className="kbc-comments-panel__kind" data-kbc-comment-kind="orphan">
                 Orphaned claim
               </div>
-              <p className="kbc-comments-panel__text">{row.annotation!.body}</p>
+              <div className="kbc-comments-panel__text">
+                <SafeMarkdown text={row.annotation!.body} fences />
+              </div>
               <BridgeBadge
                 row={row}
                 onTrack={handleTrack}
@@ -256,7 +259,9 @@ export default function CommentsPanel({ repo, path, activeLine, onGotoLine }: Co
                   → {c.symbol.name}
                 </button>
               )}
-              <p className="kbc-comments-panel__text">{c.text}</p>
+              <div className="kbc-comments-panel__text">
+                <SafeMarkdown text={c.text} fences />
+              </div>
               {/* `row` here is never `state: "gone"` — a `gone` row carries
                   no `comment` by construction, so it can never be looked up
                   by THIS comment's own line; those render in the dedicated

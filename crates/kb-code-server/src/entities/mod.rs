@@ -864,6 +864,19 @@ mod tests {
             // route takes a JSON body (its own deserialization is the
             // contract, enforced by axum's `Json` extractor).
             .chain(crate::branches::V75_M3_ROUTES.iter())
+            // V76-R1b — `GET /api/reviews/refs`. POST gc is a mutation and
+            // is absent from the list for the same reason
+            // `boards::V74_L1_ROUTES` omits apply.
+            .chain(crate::reviews::V76_R1B_ROUTES.iter())
+            // V76-R1a — the start-pr job read joins the SAME walk, one
+            // milestone later.
+            .chain(crate::review_jobs::V76_R1A_ROUTES.iter())
+            // V76-R3c — typeahead + compare-file.
+            .chain(crate::refs_typeahead::V76_R3C_ROUTES.iter())
+            // V76-C1 — `highlight/1`. The pair takes a JSON body (no
+            // query params); the walk still proves the path is registered
+            // and the handler is named.
+            .chain(crate::highlight::V76_C1_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`. The JSON body IS the
             // contract; `params_accept_without` deserialises it so a
             // required field the CLI omits still fails HERE, by name.

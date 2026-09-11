@@ -197,7 +197,11 @@ export default function SplitHunks({
       out.push({ kind: "hunk", header: view?.header ?? hunk.header });
       idx.push(hi);
       if (view?.collapsed) return;
-      for (const row of buildSplitPairs(view ? view.lines : hunk.lines)) {
+      // Prefer the view's expanded lines, but never render an empty body
+      // when the wire hunk itself has rows (added-file + ctx-dial miss).
+      const lines =
+        view && view.lines.length > 0 ? view.lines : hunk.lines;
+      for (const row of buildSplitPairs(lines)) {
         out.push(row);
         idx.push(hi);
       }

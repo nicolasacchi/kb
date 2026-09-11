@@ -12,6 +12,7 @@ import type { ReviewDocCard } from "../../api/types";
 // batch card) ──
 import PublishCard from "./PublishCard";
 import SuggestionsBatchCard from "./SuggestionsBatchCard";
+import type { FindingSeverityFilter } from "./ReviewThreadsCard";
 
 export interface ReviewSidePanelProps {
   repo: string;
@@ -39,6 +40,16 @@ export interface ReviewSidePanelProps {
   docCards?: ReviewDocCard[];
   focusedRef?: string | null;
   onFocusRef?: (ref: string) => void;
+  /// V76-R2a — the rail dock's desktop header: density toggle + collapse
+  /// buttons (the mouse doors for `review.density-toggle` /
+  /// `review.rail.toggle`), and the lifted findings severity filter the
+  /// Report hero's count chips drive. All absent on mobile (the sheet head
+  /// above already owns close) or when the hero is not in play.
+  density?: "comfortable" | "compact";
+  onToggleDensity?: () => void;
+  onCollapseRail?: () => void;
+  findingSeverityFilter?: FindingSeverityFilter;
+  onFindingSeverityFilter?: (f: FindingSeverityFilter) => void;
 }
 
 export default function ReviewSidePanel({
@@ -54,6 +65,11 @@ export default function ReviewSidePanel({
   docCards,
   focusedRef = null,
   onFocusRef,
+  density,
+  onToggleDensity,
+  onCollapseRail,
+  findingSeverityFilter,
+  onFindingSeverityFilter,
 }: ReviewSidePanelProps) {
   const sessionDiff = useSessionDiff(sessionId ?? undefined, repo, !!sessionId);
 
@@ -92,11 +108,51 @@ export default function ReviewSidePanel({
           </button>
         </header>
       )}
+      {/* V76-R2a — the desktop rail dock's header strip: the mouse doors
+          for `review.density-toggle` and `review.rail.toggle`. Not rendered
+          on mobile, where the sheet head above owns the close affordance. */}
+      {!asSheet && (onToggleDensity || onCollapseRail) && (
+        <header className="kbc-review__rail-head" data-kbc-review-rail-head>
+          <span className="kbc-review__rail-lab">Findings rail</span>
+          {onToggleDensity && (
+            <button
+              type="button"
+              className="kbc-review__rail-btn"
+              onClick={onToggleDensity}
+              aria-pressed={density === "compact"}
+              title={density === "compact" ? "comfortable density (Space M)" : "compact density (Space M)"}
+              data-kbc-review-density-toggle
+            >
+              <Icon.List /> {density === "compact" ? "Compact" : "Comfortable"}
+            </button>
+          )}
+          {onCollapseRail && (
+            <button
+              type="button"
+              className="kbc-review__rail-btn"
+              onClick={onCollapseRail}
+              aria-label="collapse findings rail"
+              title="collapse findings rail (Space i)"
+              data-kbc-review-rail-collapse
+            >
+              <Icon.Collapse />
+            </button>
+          )}
+        </header>
+      )}
       {docCards && docCards.length > 0 && onFocusRef && (
         <RefCardsCard cards={docCards} focusedRef={focusedRef} onFocus={onFocusRef} />
       )}
 
-      <ReviewThreadsCard repo={repo} reviewId={id} ps={ps} onOpenFile={onOpenFile} prNumber={prNumber} />
+      <ReviewThreadsCard
+        repo={repo}
+        reviewId={id}
+        ps={ps}
+        onOpenFile={onOpenFile}
+        prNumber={prNumber}
+        sevFilter={findingSeverityFilter}
+        onSevFilter={onFindingSeverityFilter}
+      />
 
       <AskAgentCard repo={repo} reviewId={id} />
 

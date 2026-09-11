@@ -51,6 +51,8 @@ import AddToSetMenu from "../components/sets/AddToSetMenu";
 import BlameChip from "../components/provenance/BlameChip";
 import CommentGutterCard from "../components/comments/CommentGutterCard";
 import CommentsPanel from "../components/comments/CommentsPanel";
+import FactsPanel from "../components/lanes/FactsPanel";
+import FactsPeek from "../components/lanes/FactsPeek";
 import DiagnosticsCard from "../components/provenance/DiagnosticsCard";
 import FrameworkCard from "../components/provenance/FrameworkCard";
 import StoryTimeline from "../components/provenance/StoryTimeline";
@@ -59,6 +61,7 @@ import HistoryPanel from "../components/history/HistoryPanel";
 import CitedBy from "../components/lens/CitedBy";
 import ClaimsCard from "../components/lens/ClaimsCard";
 import RefPicker from "../components/RefPicker";
+import RefTypeaheadOverlay from "../components/RefTypeaheadOverlay";
 import StoryPlayer from "../components/story/StoryPlayer";
 import WorkingSetStrip, { type ActiveWorkspaceChip } from "../components/WorkingSetStrip";
 import SaveWorkspaceDialog from "../components/workspaces/SaveWorkspaceDialog";
@@ -97,6 +100,7 @@ import { useActiveWorkspace } from "../hooks/useActiveWorkspace";
 import { useAnnotations, useCreateAnnotation } from "../hooks/useAnnotations";
 import { useBlame } from "../hooks/useBlame";
 import { useCommentKeywords, useCommentsFile } from "../hooks/useComments";
+import { useLaneFacts } from "../hooks/useLanes";
 import { useBlameAttributions } from "../hooks/useBlameAttributions";
 import {
   useBookmarks,
@@ -105,6 +109,7 @@ import {
 } from "../hooks/useBookmarks";
 import { useDiagnostics } from "../hooks/useDiagnostics";
 import { useFile } from "../hooks/useFile";
+import { useFrames } from "../hooks/useFrames";
 import { useFileHistory } from "../hooks/useFileHistory";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useRailSubject } from "../hooks/useRailSubject";
@@ -129,6 +134,12 @@ import {
 } from "../lib/comments";
 import { diagnosticGutterMarks, type DiagnosticGutterMark } from "../lib/diagnostics";
 import {
+  coverageBandMarks,
+  diagnosticFactsOf,
+  laneDiagnosticMarks,
+  mergeDiagnosticMarks,
+} from "../lib/lanes";
+import {
   codeUrl,
   commitUrl,
   entityUrl,
@@ -148,6 +159,7 @@ import { workspacesUrl } from "../lib/setsUrl";
 import { isWorkingSetDirty } from "../lib/workspaceDirty";
 import { buildWorkspaceSnapshot, parseWorkspaceSnapshot } from "../lib/workspaceSnapshot";
 import { initialLadderState, ladderReducer } from "../lib/ladderState";
+import { frameBanner } from "../lib/frameBanner";
 import { fileChangedPaneLabel } from "../lib/liveMirror";
 import { nextKeyboardRegion, type KeyboardRegion } from "../lib/keyboardRegion";
 import {
@@ -212,6 +224,7 @@ import { loadProvisionalPanes } from "../lib/prefs";
 import {
   loadCodeLenses,
   loadCommentGutterMode,
+  loadCoverageBand,
   loadParamHints,
   loadReaderFontSize,
   loadStickyContext,
@@ -221,6 +234,7 @@ import {
   READER_FONT_SIZE_MIN,
   saveCodeLenses,
   saveCommentGutterMode,
+  saveCoverageBand,
   saveParamHints,
   saveReaderFontSize,
   saveSchemaFold,
@@ -514,6 +528,7 @@ export default function Reader() {
   // reset on breakpoint change, since a `!isMobile` guard already keeps the
   // CSS + `asSheet` prop inert regardless of this flag's value.
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [refOverlayOpen, setRefOverlayOpen] = useState(false);
   const [gotoSel1, setGotoSel1] = useState<GotoSel | null>(null);
   const [gotoSel2, setGotoSel2] = useState<GotoSel | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -574,6 +589,7 @@ export default function Reader() {
   const isFile = path !== "" && !path.endsWith("/");
   const activeFile = isFile && !diffMode && !storyMode ? path : undefined;
   const file = useFile(repo, activeFile, gitRef);
+  const frames = useFrames();
   const lenses1 = useLenses(
     repo,
     activeFile,
@@ -596,6 +612,7 @@ export default function Reader() {
   // diff view, story mode, or a directory listing.
   const canSplit = isFile && !diffMode && !storyMode;
   const pane2Loc = useMemo<PaneLoc | null>(() => (canSplit ? parsePane2(pane2Param) : null), [canSplit, pane2Param]);
+  const compareMode = !!(canSplit && pane2Loc && activeFile && pane2Loc.path === activeFile);
   const pane2File = useFile(repo, pane2Loc?.path, pane2Loc?.ref);
   const lenses2 = useLenses(
     repo,
@@ -638,13 +655,13 @@ export default function Reader() {
   // keying this off the resolved path itself (not each individual call
   // site) is what makes that guarantee total rather than best-effort.
   useEffect(() => {
-    if (activeFile) workingSet.touch(activeFile);
+    if (activeFile) workingSet.touch(activeFile, gitRef);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFile]);
+  }, [activeFile, gitRef]);
   useEffect(() => {
-    if (pane2Loc?.path) workingSet.touch(pane2Loc.path);
+    if (pane2Loc?.path) workingSet.touch(pane2Loc.path, pane2Loc.ref);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pane2Loc?.path]);
+  }, [pane2Loc?.path, pane2Loc?.ref]);
 
   // V3.N1 — record a jump on every file open (path change). Skipped when
   // the navigation came from Ctrl-o / Ctrl-i (`skipNavRecordRef`).
@@ -717,6 +734,19 @@ export default function Reader() {
     const pane1 = next.pane1 ?? { path: activeFile ?? "", ref: gitRef, line: currentPane1Line };
     const pane2 = next.pane2 === undefined ? pane2Loc ?? undefined : (next.pane2 ?? undefined);
     return codeUrl({ repo, path: pane1.path, ref: pane1.ref, line: pane1.line, pane2 });
+  }
+
+  function applyRef(insert: string | undefined) {
+    const line = parseLineParam(lineParam) ?? undefined;
+    if (focusedPane === 2 && pane2Loc) {
+      navigate(buildReaderUrl({ pane2: { ...pane2Loc, ref: insert } }));
+      return;
+    }
+    navigate(
+      buildReaderUrl({
+        pane1: { path: activeFile ?? path, ref: insert, line },
+      }),
+    );
   }
 
   /// A resolved candidate/peek-row landing: same-repo lands in `pane`
@@ -1188,10 +1218,33 @@ export default function Reader() {
   // `useDiagnostics` itself gates on the repo's intel provider covering
   // `focusedPath`'s language, so this fetch is a no-op for most repos/files.
   const diagnostics = useDiagnostics(repo, focusedPath);
+  // V76-R3a — aug-lane/1 facts for the focused file. Always fetched; the
+  // coverage-band toggle is a client filter over this ONE response.
+  const laneFactsQ = useLaneFacts(repo, focusedPath);
+  const laneFacts = laneFactsQ.data?.facts ?? [];
+  const [coverageBandOn, setCoverageBandOn] = useState(() => loadCoverageBand());
+  function toggleCoverageBand() {
+    setCoverageBandOn((v) => {
+      const next = !v;
+      saveCoverageBand(next);
+      return next;
+    });
+  }
+  const [factsActiveLine, setFactsActiveLine] = useState<number | null>(null);
   const diagMarks = useMemo<Map<number, DiagnosticGutterMark> | null>(() => {
-    if (!diagnostics.data?.diagnostics) return null;
-    return diagnosticGutterMarks(diagnostics.data.diagnostics);
-  }, [diagnostics.data]);
+    const lsp = diagnostics.data?.diagnostics ? diagnosticGutterMarks(diagnostics.data.diagnostics) : null;
+    const lane = laneDiagnosticMarks(diagnosticFactsOf(laneFacts));
+    const merged = mergeDiagnosticMarks(lsp, lane);
+    return merged.size > 0 ? merged : null;
+  }, [diagnostics.data, laneFacts]);
+  const coverageLineCount = ((focusedPane === 1 ? file.data : pane2File.data)?.content ?? "").split(
+    "\n",
+  ).length;
+  const coverageMarkers = useMemo(() => {
+    if (!coverageBandOn) return null;
+    const marks = coverageBandMarks(laneFacts, coverageLineCount);
+    return marks.size > 0 ? marks : new Map();
+  }, [coverageBandOn, laneFacts, coverageLineCount]);
 
   const [ladder, dispatchLadder] = useReducer(ladderReducer, initialLadderState);
   const [hoverChip, setHoverChip] = useState<
@@ -1677,6 +1730,7 @@ export default function Reader() {
       key={`diagnostics:${focusedPath}`}
       repo={repo}
       path={focusedPath}
+      laneFacts={diagnosticFactsOf(laneFacts)}
       onJumpLine={(line, lineEnd) => {
         jumpToLine(focusedPane, line, lineEnd);
         paneRepoPath(focusedPane).viewRef.current?.focus();
@@ -3454,7 +3508,9 @@ export default function Reader() {
     "rail.tab.notes": () => selectRailTab("notes"),
     "rail.tab.comments": () => selectRailTab("comments"),
     "rail.tab.trail": () => selectRailTab("trail"),
+    "rail.tab.facts": () => selectRailTab("facts"),
     "rail.tab.review": () => selectRailTab("review"),
+    "facts.coverage-band": () => toggleCoverageBand(),
     // V72-J2 (D8) — comments/1: the gutter mode cycle, buffer navigation
     // (`]m`/`[m`, deliberately no `vim_kind` — see the registry row's own
     // note), and the claim → annotation bridge's keyboard doors. None of
@@ -3513,6 +3569,29 @@ export default function Reader() {
     // implies" — `actions.rs`), so the leader and the menu can never disagree
     // about what "this" means.
     "boards.add": () => void addCaretToBoard(),
+    // V76-R3c — @ref. Ctrl-r is a hard-reserved browser chord, so the
+    // typeahead is Space @. Bare `c` is inert in the read-only vim layer
+    // (vimKeys.test.ts) and is ratified against diff.compose-new.
+    "reader.ref-typeahead": () => setRefOverlayOpen(true),
+    "reader.ref-chip": () => {
+      const chip = document.querySelector<HTMLButtonElement>("[data-kbc-ref-chip]");
+      chip?.focus();
+      setRefOverlayOpen(true);
+    },
+    "reader.ref-clear": () => applyRef(undefined),
+    "reader.compare": () => {
+      if (!activeFile || !canSplit) return;
+      if (pane2Loc && pane2Loc.path === activeFile) {
+        navigate(buildReaderUrl({ pane2: null }));
+        return;
+      }
+      const line = parseLineParam(lineParam) ?? undefined;
+      navigate(
+        buildReaderUrl({
+          pane2: { path: activeFile, ref: gitRef ? undefined : "HEAD", line },
+        }),
+      );
+    },
   });
 
   // F5 — Esc closes the mobile reader-tools sheet (mirrors `MobileDrawer`'s
@@ -4007,6 +4086,16 @@ export default function Reader() {
       {liveMirror1.headMoved && (
         <HeadMovedBanner newRef={liveMirror1.headMoved.new} onRefreshTree={refreshTree} onDismiss={liveMirror1.dismissHeadMoved} />
       )}
+      {gitRef &&
+        (() => {
+          const row = frames.data?.frames.find((f) => f.lane === "file_at_ref");
+          const text = row ? frameBanner("file_at_ref", row, gitRef) : null;
+          return text ? (
+            <div className="kbc-frame-banner" data-kbc-frame-banner>
+              {text}
+            </div>
+          ) : null;
+        })()}
     </>
   );
 
@@ -4135,6 +4224,7 @@ export default function Reader() {
                       annotationMarkers={focusedPane === 1 ? annotationMarkers : null}
                       onAnnotationClick={focusedPane === 1 ? handleAnnotationClick : undefined}
                       diagnosticMarkers={focusedPane === 1 ? diagMarks : null}
+                      coverageMarkers={focusedPane === 1 ? coverageMarkers : null}
                       commentMarkers={focusedPane === 1 ? commentMarkers : null}
                       onCommentHover={focusedPane === 1 ? handleCommentHover : undefined}
                       onCommentUnhover={focusedPane === 1 ? handleCommentUnhover : undefined}
@@ -4249,6 +4339,7 @@ export default function Reader() {
                           annotationMarkers={focusedPane === 2 ? annotationMarkers : null}
                           onAnnotationClick={focusedPane === 2 ? handleAnnotationClick : undefined}
                           diagnosticMarkers={focusedPane === 2 ? diagMarks : null}
+                          coverageMarkers={focusedPane === 2 ? coverageMarkers : null}
                           commentMarkers={focusedPane === 2 ? commentMarkers : null}
                           onCommentHover={focusedPane === 2 ? handleCommentHover : undefined}
                           onCommentUnhover={focusedPane === 2 ? handleCommentUnhover : undefined}
@@ -4290,6 +4381,16 @@ export default function Reader() {
               )}
             </div>
           )}
+          {compareMode && activeFile && (gitRef || pane2Loc?.ref) && (
+            <div data-kbc-compare-file>
+              <DiffView
+                repo={repo}
+                path={activeFile}
+                from={gitRef ?? pane2Loc?.ref ?? "HEAD"}
+                to={gitRef ? pane2Loc?.ref : undefined}
+              />
+            </div>
+          )}
           {peek.open && (
             <PeekPanel
               state={peek}
@@ -4301,7 +4402,12 @@ export default function Reader() {
               onRamp={handlePeekRamp}
               scentFor={peekRowTarget}
               visitsFor={(row) => ramp.visits(peekRowTarget(row))}
-              cardExtra={<RailsAtomCard repo={repo} atoms={railsAtoms} gitRef={gitRef} />}
+              cardExtra={
+                <>
+                  <RailsAtomCard repo={repo} atoms={railsAtoms} gitRef={gitRef} />
+                  <FactsPeek repo={repo} facts={laneFacts} line={hoverPos?.line ?? null} />
+                </>
+              }
               // T1 — the hover card's "usages"/"callers" footer hints
               // (design-ui.md §9.1) reissue gr/gc against the position `K`
               // was pressed at; absent until a hover has actually happened.
@@ -4482,6 +4588,20 @@ export default function Reader() {
                   }}
                 />
               }
+              factsPanel={
+                <FactsPanel
+                  repo={repo}
+                  path={focusedPath ?? ""}
+                  coverageBandOn={coverageBandOn}
+                  onToggleCoverageBand={toggleCoverageBand}
+                  activeLine={factsActiveLine}
+                  onGotoLine={(line, lineEnd) => {
+                    setFactsActiveLine(line);
+                    jumpToLine(focusedPane, line, lineEnd);
+                    paneRepoPath(focusedPane).viewRef.current?.focus();
+                  }}
+                />
+              }
               // F5 — `false`/`undefined` on desktop (isMobile is always
               // false there), so this `<aside>`'s markup is byte-identical
               // to pre-F5: no `asSheet` gate exercised, no sheet-head, no
@@ -4640,6 +4760,13 @@ export default function Reader() {
           readerBody
         )}
       </Desk>
+      <RefTypeaheadOverlay
+        repo={repo}
+        open={refOverlayOpen}
+        currentRef={focusedRef}
+        onClose={() => setRefOverlayOpen(false)}
+        onPick={applyRef}
+      />
       {/* V71-E2 — the ONE action menu, rendered once at the reader root.
           The drag-select pill is the same response's top three rows. */}
       {actionMenu &&
