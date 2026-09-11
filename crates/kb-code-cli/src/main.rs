@@ -3117,8 +3117,9 @@ enum CanvasCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Accept a board (`POST /api/boards/{slug}/accept`, LOOPBACK-ONLY) —
-    /// the ONLY way a board reaches `accepted` (D21).
+    /// Accept a board (`POST /api/boards/{slug}/accept`, loopback or
+    /// `[review] remote_mutations`) — the ONLY way a board reaches
+    /// `accepted` (D21).
     Accept {
         slug: String,
         #[arg(long)]
@@ -3128,7 +3129,8 @@ enum CanvasCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Archive a board (`POST /api/boards/{slug}/archive`, LOOPBACK-ONLY).
+    /// Archive a board (`POST /api/boards/{slug}/archive`, loopback or
+    /// `[review] remote_mutations`).
     Archive {
         slug: String,
         #[arg(long)]
@@ -3138,7 +3140,8 @@ enum CanvasCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a board (`DELETE /api/boards/{slug}`, LOOPBACK-ONLY).
+    /// Delete a board (`DELETE /api/boards/{slug}`, loopback or
+    /// `[review] remote_mutations`).
     Rm {
         slug: String,
         #[arg(long)]

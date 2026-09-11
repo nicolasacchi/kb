@@ -13,7 +13,7 @@
 
 mod common;
 
-use kb_code_server::config::{KbCodeConfig, KbDaemonSection, RepoEntry};
+use kb_code_server::config::{KbCodeConfig, KbDaemonSection, RepoEntry, ReviewSection};
 use kb_core::paths::KbPaths;
 use std::path::Path;
 use tokio::sync::Mutex as AsyncMutex;
@@ -51,6 +51,10 @@ struct Boot {
 }
 
 async fn boot_with_repo(name: &str, path: &Path) -> Boot {
+    boot_with_review(name, path, ReviewSection::default()).await
+}
+
+async fn boot_with_review(name: &str, path: &Path, review: ReviewSection) -> Boot {
     let cfg = KbCodeConfig {
         repos: vec![RepoEntry {
             name: name.to_string(),
@@ -62,6 +66,7 @@ async fn boot_with_repo(name: &str, path: &Path) -> Boot {
             token_file: None,
             public_url: None,
         },
+        review,
         ..KbCodeConfig::default()
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -478,4 +483,205 @@ async fn delete_removes_the_board_and_its_children() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+}
+
+// --- V76-R4a (D10): accept/archive/DELETE ride `[review] remote_mutations`
+
+const XFF: &str = "8.8.8.8";
+
+fn gate_on() -> ReviewSection {
+    ReviewSection {
+        remote_mutations: true,
+        ..ReviewSection::default()
+    }
+}
+
+/// One HTTP test per graduated family: bearer + flag ON succeeds; bearer +
+/// flag OFF 404s (the loopback-only refusal shape); loopback always works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_graduated_through_remote_mutations() {
+    const TOKEN: &str = "kb-code-boards-accept-gate-token";
+    let _g = SERIAL.lock().await;
+    std::env::set_var("KB_CODE_TOKEN", TOKEN);
+
+    let repo_off = fixture_repo();
+    let off = boot_with_review("r", repo_off.path(), ReviewSection::default()).await;
+    let mut d = doc("acc-off");
+    d["status"] = "draft".into();
+    assert_eq!(apply(&off.base, &d, &[]).await.0, 201);
+
+    let c = reqwest::Client::new();
+    let resp = c
+        .post(format!("{}/api/boards/acc-off/accept?repo=r", off.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "accept, gate off, non-loopback"
+    );
+
+    let resp = c
+        .post(format!("{}/api/boards/acc-off/accept?repo=r", off.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "accept, loopback, gate off");
+
+    let repo_on = fixture_repo();
+    let on = boot_with_review("r", repo_on.path(), gate_on()).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+    let mut d = doc("acc-on");
+    d["status"] = "draft".into();
+    assert_eq!(apply(&on.base, &d, &[]).await.0, 201);
+    let resp = c
+        .post(format!("{}/api/boards/acc-on/accept?repo=r", on.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "accept, gate on, bearer: {}",
+        resp.text().await.unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn archive_graduated_through_remote_mutations() {
+    const TOKEN: &str = "kb-code-boards-archive-gate-token";
+    let _g = SERIAL.lock().await;
+    std::env::set_var("KB_CODE_TOKEN", TOKEN);
+
+    let repo_off = fixture_repo();
+    let off = boot_with_review("r", repo_off.path(), ReviewSection::default()).await;
+    let mut d = doc("arc-off");
+    d["status"] = "draft".into();
+    assert_eq!(apply(&off.base, &d, &[]).await.0, 201);
+
+    let c = reqwest::Client::new();
+    let resp = c
+        .post(format!("{}/api/boards/arc-off/archive?repo=r", off.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "archive, gate off, non-loopback"
+    );
+
+    let resp = c
+        .post(format!("{}/api/boards/arc-off/archive?repo=r", off.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "archive, loopback, gate off");
+
+    let repo_on = fixture_repo();
+    let on = boot_with_review("r", repo_on.path(), gate_on()).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+    let mut d = doc("arc-on");
+    d["status"] = "draft".into();
+    assert_eq!(apply(&on.base, &d, &[]).await.0, 201);
+    let resp = c
+        .post(format!("{}/api/boards/arc-on/archive?repo=r", on.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "archive, gate on, bearer: {}",
+        resp.text().await.unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_graduated_through_remote_mutations() {
+    const TOKEN: &str = "kb-code-boards-delete-gate-token";
+    let _g = SERIAL.lock().await;
+    std::env::set_var("KB_CODE_TOKEN", TOKEN);
+
+    let repo_off = fixture_repo();
+    let off = boot_with_review("r", repo_off.path(), ReviewSection::default()).await;
+    assert_eq!(apply(&off.base, &doc("del-off"), &[]).await.0, 201);
+
+    let c = reqwest::Client::new();
+    let resp = c
+        .delete(format!("{}/api/boards/del-off?repo=r", off.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "delete, gate off, non-loopback"
+    );
+
+    let resp = c
+        .delete(format!("{}/api/boards/del-off?repo=r", off.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        204,
+        "delete, loopback, gate off (204, not 200)"
+    );
+
+    let repo_on = fixture_repo();
+    let on = boot_with_review("r", repo_on.path(), gate_on()).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+    assert_eq!(apply(&on.base, &doc("del-on"), &[]).await.0, 201);
+    let resp = c
+        .delete(format!("{}/api/boards/del-on?repo=r", on.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        204,
+        "delete, gate on, bearer (204, not 200)"
+    );
+}
+
+/// Apply stays loopback-only HARD even with the gate ON and a valid token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_stays_loopback_only_with_gate_on() {
+    const TOKEN: &str = "kb-code-boards-apply-never-moves-token";
+    let _g = SERIAL.lock().await;
+    std::env::set_var("KB_CODE_TOKEN", TOKEN);
+    let repo = fixture_repo();
+    let b = boot_with_review("r", repo.path(), gate_on()).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+
+    let c = reqwest::Client::new();
+    let resp = c
+        .post(format!("{}/api/boards/apply", b.base))
+        .header("X-Forwarded-For", XFF)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .json(&doc("never"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "apply must stay loopback-only: {}",
+        resp.text().await.unwrap()
+    );
 }

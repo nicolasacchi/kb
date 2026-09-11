@@ -49,12 +49,12 @@
 //!
 //! # Mutation posture
 //!
-//! Every write (`apply`, `accept`, `archive`, `DELETE`) is **loopback-only**
-//! — the same `transcripts_api` sub-router the review mutations ride, so
-//! `security::audit_mutations` (invariant 1) records each attempt with its
-//! outcome for free. D10 sketches a later graduation onto a named-family
-//! `[review] remote_mutations = ["review", "canvas"]` allowlist; that is
-//! NOT this unit, and nothing here weakens root invariant #4.
+//! `apply` is **loopback-only** (the whole-document write, on
+//! `transcripts_api`). V76-R4a (D10) graduates `accept` / `archive` /
+//! `DELETE` onto the existing `[review] remote_mutations` gate
+//! (`review_remote` — the SAME `review_mutations_gate`, no second key).
+//! The working-tree mutation lane never moves. `security::audit_mutations`
+//! (invariant 1) records each attempt with its outcome for free.
 
 pub mod export;
 pub mod layout;

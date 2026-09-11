@@ -188,6 +188,7 @@ pub struct ClaimBody {
 
 /// One claim on the wire. `state`/`caption`/`current_blob` are the
 /// per-request Ladder (rule (b)) and are never stored.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ClaimOut {
     pub schema: &'static str,
@@ -196,22 +197,29 @@ pub struct ClaimOut {
     pub subject_kind: String,
     pub subject: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub subject_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub review_id: Option<i64>,
     pub kind: String,
     pub body_md: String,
     /// The AGENT'S declaration, verbatim (rule (a)). Never a term.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub confidence: Option<f64>,
     pub evidence: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub blob_sha: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub current_blob: Option<String>,
     pub state: &'static str,
     pub caption: String,
@@ -318,12 +326,12 @@ fn validate(body: &ClaimBody) -> Result<(), ApiError> {
                 return Err(ApiError::bad_request(format!(
                     "evidence {e:?} names no kbc scheme — every ref must start with one of {:?}",
                     crate::review_doc::refs::SCHEMES
-                )))
+                )));
             }
             Err(reason) => {
                 return Err(ApiError::bad_request(format!(
                     "evidence {e:?} is malformed: {reason}"
-                )))
+                )));
             }
         }
     }

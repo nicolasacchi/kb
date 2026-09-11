@@ -2611,30 +2611,38 @@ fn review_risk_sync(
 // really is github.com.
 
 /// `POST /api/reviews/pr` body (design doc §2 row 1).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Deserialize)]
 pub struct CreateReviewPrBody {
     pub repo: String,
     pub pr_number: u32,
     #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub base_ref: Option<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub title: Option<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub session_id: Option<String>,
     /// V76-R1c — the CLI `--gh-token-from-cli` path. The CLI runs
     /// `gh auth token` itself and sends the value here. Loopback-only,
     /// never persisted, never logged. Refused off loopback even if this
     /// route later graduates off the loopback-only sub-router.
     #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub gh_token: Option<String>,
 }
 
 /// V76-R1a `?async=` + V76-R1b `?on_closed=reopen|new` on `POST /api/reviews/pr`.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Deserialize, Default)]
 pub struct StartPrParams {
     #[serde(default, rename = "async")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub async_: Option<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub on_closed: Option<String>,
 }
 

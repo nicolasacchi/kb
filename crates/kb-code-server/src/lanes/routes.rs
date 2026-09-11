@@ -57,12 +57,14 @@ pub struct SummaryParams {
     pub repo: String,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct LaneEntry {
     pub id: String,
     pub title: &'static str,
     pub kind: LaneKind,
     pub fact_schema: &'static str,
+    #[cfg_attr(feature = "ts-export", ts(as = "Vec<String>"))]
     pub fact_kinds: &'static [&'static str],
     pub sensitivity: super::Sensitivity,
     pub trust_ceiling: &'static str,
@@ -80,6 +82,7 @@ pub struct LaneEntry {
     pub note: Option<&'static str>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct LanesOut {
     pub schema: &'static str,
@@ -90,6 +93,7 @@ pub struct LanesOut {
     pub unknown_enabled: Vec<String>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct RunOut {
     pub id: String,
@@ -99,10 +103,12 @@ pub struct RunOut {
     pub ingested_at: Option<i64>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct FactOut {
     pub lane: String,
     pub kind: String,
+    #[cfg_attr(feature = "ts-export", ts(type = "Record<string, unknown>"))]
     pub value: Value,
     pub severity: Option<String>,
     /// The class computed for THIS request — never read from storage.
@@ -119,6 +125,7 @@ pub struct FactOut {
     pub run: RunOut,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct AbsentLane {
     pub lane: String,
@@ -126,6 +133,7 @@ pub struct AbsentLane {
     pub refresh: Option<&'static str>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct FactsOut {
     pub schema: &'static str,
@@ -146,6 +154,7 @@ pub struct FactsOut {
     pub notes: Vec<String>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct SummaryBucket {
     pub lane: String,
@@ -154,6 +163,7 @@ pub struct SummaryBucket {
     pub count: i64,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct SummaryOut {
     pub schema: &'static str,
@@ -226,7 +236,9 @@ fn entry(
     let enabled = !family && state.lanes.is_enabled(&id);
     let stat = by_lane.get(&id);
     let note = if family {
-        Some("a template, not an addressable lane: declare one instance per tool in `[lanes] enabled`")
+        Some(
+            "a template, not an addressable lane: declare one instance per tool in `[lanes] enabled`",
+        )
     } else if spec.kind == LaneKind::Derived {
         Some("derived on demand from git and never stored, so it holds no rows")
     } else {

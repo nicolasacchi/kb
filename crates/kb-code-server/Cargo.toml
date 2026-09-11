@@ -146,6 +146,12 @@ reqwest = { workspace = true }
 # see `router.rs`'s merge-point comment for what that would open.
 tower-http = { workspace = true }
 
+# V76-R4a — TypeScript bindings for the route wire types, generated into
+# `web-code/src/api/generated/` (see `just gen-ts-code`). Optional; the
+# shipping daemon does not enable this. Same crate and `chrono-impl`
+# workspace pin kb-server already uses — no new supply-chain surface.
+ts-rs = { workspace = true, optional = true }
+
 # W2.3 — kb-code's OWN lance chunk-vector store (`semantic/store.rs`), a
 # SEPARATE dataset from kb-core's per-kb `artifacts`/`artifact_chunks`
 # tables (per the decided architecture: kb-code owns its own lance tables in
@@ -160,6 +166,9 @@ lance-index = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+
+[features]
+ts-export = ["dep:ts-rs"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

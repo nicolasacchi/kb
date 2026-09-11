@@ -1,12 +1,44 @@
-// Hand-written wire types mirroring `crates/kb-code-server/src/routes.rs`'s
-// JSON response shapes. kb-code has no ts-rs export pipeline yet (unlike
-// kb's own `web/src/api/generated/` — see `just types` in the root
-// justfile) — these are typed by hand against the Rust `Serialize` structs
-// (field-for-field, same names: serde's default `snake_case` matches these
-// structs' own field names already, so no rename mapping is needed). If
-// kb-code ever grows a `ts-export` feature, these can be swapped for
-// generated bindings without changing any call site (same migration path
-// kb's own `web/src/api/client.ts` describes in its header comment).
+// Hand-written wire types mirroring `crates/kb-code-server` JSON response
+// shapes, plus re-exports of the ts-rs generated bindings in
+// `./generated/` (`just gen-ts-code`; V76-R4a). Never hand-write a type
+// the generator already emits — delete the copy here and re-export so
+// import paths do not churn. Optionality comes from serde:
+// `skip_serializing_if` → `field?: T` (absent on the wire), never
+// `field: T | null`. The rest of this file stays hand-written until a
+// later unit switches it, one module at a time, only where the shapes
+// match.
+
+import type { HighlightClass } from "./generated/HighlightClass";
+import type { Span } from "./generated/Span";
+import type { PrMetaUnavailableCode } from "./generated/PrMetaUnavailableCode";
+import type { PrMetaUnavailable } from "./generated/PrMetaUnavailable";
+import type { LaneKind } from "./generated/LaneKind";
+import type { Sensitivity as LaneSensitivity } from "./generated/Sensitivity";
+import type { LaneEntry } from "./generated/LaneEntry";
+import type { LanesOut } from "./generated/LanesOut";
+import type { RunOut as LaneRunOut } from "./generated/RunOut";
+import type { FactOut as LaneFactOut } from "./generated/FactOut";
+import type { AbsentLane } from "./generated/AbsentLane";
+import type { FactsOut } from "./generated/FactsOut";
+import type { SummaryBucket as LaneSummaryBucket } from "./generated/SummaryBucket";
+import type { SummaryOut as LanesSummaryOut } from "./generated/SummaryOut";
+
+export type {
+  HighlightClass,
+  Span,
+  PrMetaUnavailableCode,
+  LaneKind,
+  LaneSensitivity,
+  LaneEntry,
+  LanesOut,
+  LaneRunOut,
+  LaneFactOut,
+  AbsentLane,
+  FactsOut,
+  LaneSummaryBucket,
+  LanesSummaryOut,
+};
+export type PrMetaUnavailableReason = PrMetaUnavailable;
 
 export interface HeadInfo {
   detached: boolean;
@@ -146,37 +178,6 @@ export interface Symbol {
   /// below (B1) flattens this interface wholesale and must mirror the wire
   /// field-for-field.
   doc: string | null;
-}
-
-// Mirrors `highlight::HighlightClass`'s `#[serde(rename_all = "kebab-case")]`
-// — one CSS class per bucket (`styles/reader.css` `.kbc-hl-*`), and the
-// role vocabulary `themes/derive.ts`'s SYNTAX_ROLES binds. V72-H2b (D16)
-// widened it from fifteen to EIGHTEEN; the fifteen legacy names are
-// byte-identical under kebab-case, so nothing here moved.
-export type HighlightClass =
-  | "keyword"
-  | "string"
-  | "string-special"
-  | "comment"
-  | "function"
-  | "type"
-  | "number"
-  | "variable"
-  | "constant"
-  | "constant-builtin"
-  | "operator"
-  | "punctuation"
-  | "punctuation-special"
-  | "property"
-  | "attribute"
-  | "label"
-  | "escape"
-  | "other";
-
-export interface Span {
-  byte_start: number;
-  byte_len: number;
-  class: HighlightClass;
 }
 
 /// `highlight/1` line-relative span. `line` is 1-based; `start`/`end` are
@@ -3549,19 +3550,6 @@ export interface ReviewPrBinding {
   pr_meta_unavailable_reason?: PrMetaUnavailableReason | string | null;
 }
 
-/** V76-R1c — typed `pr_meta_unavailable_reason` on the wire. */
-export type PrMetaUnavailableCode =
-  | "no-credentials"
-  | "not-found"
-  | "forbidden"
-  | "rate-limited"
-  | "network";
-
-export interface PrMetaUnavailableReason {
-  code: PrMetaUnavailableCode;
-  hint: string;
-}
-
 /// The `pr_meta_json` snapshot shape (design-server.md §1.2's jsonc block) —
 /// a point-in-time capture, not a live mirror (GitHub stays the source of
 /// truth; see `CiChecksCard`/`PrChip`'s own docs for the live-vs-snapshot
@@ -6001,105 +5989,10 @@ export interface BranchReviewOut {
 
 // ── aug-lane/1 (V72-H4a wire, V76-R3a SPA) ────────────────────────────────
 //
-// Hand-mirrored from `crates/kb-code-server/src/lanes/routes.rs`. Several
-// `Vec` fields skip-serialize when empty — they are ABSENT, not `[]`.
-// Optional on the TS side; read via `?? []`.
-
-export type LaneKind = "derived" | "ingested";
-export type LaneSensitivity = "local" | "local_tool";
+// Generated from `lanes::routes` (`just gen-ts-code`). Re-exported at the
+// top of this file. LaneTrustClass stays hand-written: the wire `class`
+// field is a string; this union is the SPA's closed display set.
 export type LaneTrustClass = "exact" | "likely" | "candidate" | "orphan";
-
-export interface LaneEntry {
-  id: string;
-  title: string;
-  kind: LaneKind;
-  fact_schema: string;
-  /// Closed set of kinds this lane may write. Absent when empty.
-  fact_kinds?: string[];
-  sensitivity: LaneSensitivity;
-  trust_ceiling: string;
-  retention_days: number;
-  adapter?: string | null;
-  enabled: boolean;
-  /// `true` for the `sarif.*` TEMPLATE row — a declaration, never addressable.
-  family: boolean;
-  facts?: number | null;
-  runs?: number | null;
-  last_ingest_at?: number | null;
-  note?: string | null;
-}
-
-export interface LanesOut {
-  schema: string;
-  repo?: string | null;
-  lanes: LaneEntry[];
-  /// Ids in `[lanes] enabled` that match no registry row.
-  unknown_enabled?: string[];
-}
-
-export interface LaneRunOut {
-  id: string;
-  tool: string;
-  tool_version?: string | null;
-  origin: string;
-  ingested_at?: number | null;
-}
-
-export interface LaneFactOut {
-  lane: string;
-  kind: string;
-  /// Lane-specific payload (`hits` / `cop`+`message` / churn / partners / …).
-  value: Record<string, unknown>;
-  severity?: string | null;
-  /// Class computed for THIS request — never persisted.
-  class: LaneTrustClass | string;
-  reason: string;
-  line?: number | null;
-  line_end?: number | null;
-  shifted: boolean;
-  age_secs: number;
-  produced_at: number;
-  blob_sha: string;
-  sha_source: string;
-  run: LaneRunOut;
-}
-
-export interface AbsentLane {
-  lane: string;
-  reason: string;
-  refresh?: string | null;
-}
-
-export interface FactsOut {
-  schema: string;
-  repo: string;
-  path: string;
-  blob?: string | null;
-  at_blob?: string | null;
-  facts?: LaneFactOut[];
-  returned: number;
-  truncated: boolean;
-  absent?: AbsentLane[];
-  withheld_disabled: number;
-  notes?: string[];
-}
-
-export interface LaneSummaryBucket {
-  lane: string;
-  kind: string;
-  severity?: string | null;
-  count: number;
-}
-
-export interface LanesSummaryOut {
-  schema: string;
-  repo: string;
-  buckets?: LaneSummaryBucket[];
-  scanned: number;
-  scan_cap: number;
-  capped: boolean;
-  notes?: string[];
-}
 
 /// `syntax/1` — one row of `GET /api/syntax`. Vec fields are optional
 /// because Rust often `skip_serializing_if = "Vec::is_empty"` (absent, not

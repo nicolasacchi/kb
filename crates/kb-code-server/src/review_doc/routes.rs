@@ -92,6 +92,7 @@ pub struct RenderBody {
 
 /// A reading order that is either the author's or this daemon's, and always
 /// says which.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadingOrderOut {
     /// `authored` | `derived`.
@@ -103,6 +104,7 @@ pub struct ReadingOrderOut {
 /// V73-K5 — a `ci:` block that is either the author's or DERIVED from the
 /// review's own `pr_meta_json.checks` snapshot, and always says which
 /// (`ReadingOrderOut`'s exact pattern, applied to a second block).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct CiOut {
     /// `authored` | `derived`.
@@ -177,6 +179,7 @@ fn ci_status_from_check(status: &str, note: Option<&str>) -> &'static str {
 /// still the full view (carry-forward resolution, thread counts, publish
 /// state) — this is deliberately the compact half, so the document read is
 /// one round trip and never a second, slightly-different findings API.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct FindingBrief {
     pub slug: String,
@@ -187,14 +190,19 @@ pub struct FindingBrief {
     pub title: String,
     pub location_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub fingerprint: Option<String>,
     pub origin: String,
     pub superseded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub superseded_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub disposition: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
     pub cites: Option<Value>,
 }
 
@@ -222,6 +230,7 @@ impl From<&ReviewFindingRow> for FindingBrief {
 }
 
 /// Everything `GET …/doc` returns, and the same object `compose` echoes.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct DocOut {
     pub schema: &'static str,
@@ -238,6 +247,7 @@ pub struct DocOut {
     pub doc_md: String,
     pub summary_md: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub risk: Option<review_doc::Risk>,
     pub reading_order: ReadingOrderOut,
     /// V73-K5 — the `ci:` block, authored-or-derived (same dual-source
@@ -247,6 +257,7 @@ pub struct DocOut {
     pub flows: Vec<review_doc::Flow>,
     pub questions: Vec<review_doc::Question>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub author: Option<review_doc::Author>,
     pub findings: Vec<FindingBrief>,
     /// Every optional block this document does NOT carry. Always present,
@@ -254,6 +265,7 @@ pub struct DocOut {
     pub omitted: Vec<String>,
     /// `null` unless `?resolve=true`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub cards: Option<Vec<Card>>,
     pub cards_resolved: bool,
 }
@@ -741,6 +753,7 @@ pub async fn lint_and_resolve(
 
 // --- render ----------------------------------------------------------------
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct RenderOut {
     pub schema: &'static str,

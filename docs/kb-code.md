@@ -469,7 +469,11 @@ NEW gated sub-router (`review_remote`) admitting a non-loopback bearer
 caller when `[review] remote_mutations = true` (`kb-code.toml`, default
 `false`); OFF is BYTE-IDENTICAL to the pre-v0.40 loopback-only `404`
 (never a `401`/`403` that would confirm the route's existence to a probing
-caller). Every OTHER review mutation (create/snapshot/patch/delete/
+caller). V76-R4a (D10) extends the SAME gate (no second key) to the board
+mutations other than apply: `POST /api/boards/{slug}/accept`,
+`POST /api/boards/{slug}/archive`, and `DELETE /api/boards/{slug}`
+(success is **204**). `POST /api/boards/apply` stays loopback-only HARD.
+Every OTHER review mutation (create/snapshot/patch/delete/
 viewed/gc, `/reviews/pr`, `/reviews/sweep`, `/reviews/{id}/report` PUT,
 `/findings/import`) and the entire working-tree mutation lane (`checkout`,
 suggestion apply/apply-batch, `scip/ingest`, `prs/fetch`) stay
@@ -478,6 +482,16 @@ loopback-only HARD regardless of the flag — pinned by a one-test-per-route
 bool` for capability discovery (never required reading — every route
 enforces the gate itself); the SPA renders a small "Remote review
 mutations: on/off" chip on Home when present.
+
+**Wire types (V76-R4a).** kb-code-server exports a curated set of HTTP
+wire structs through ts-rs (the same generator kb-server uses, not
+schemars) behind the `ts-export` cargo feature. `just gen-ts-code` writes
+committed files to `web-code/src/api/generated/`; the `code-drift` CI job
+regenerates and `git diff --exit-code`s that directory (its own job —
+never a step on the kb SPA `drift` job). A `#[serde(skip_serializing_if)]`
+field is `field?: T` on the TS side (`#[ts(optional)]`); readers that
+still see a `Vec` must guard with `?? []`. Never hand-write a type the
+generator already emits.
 
 **Provider fleet + multi-provider status.** Four new reference lip/1
 provider configs join `ruby-lsp.toml`/`solargraph.toml`:
@@ -935,12 +949,11 @@ Reads (`/api/boards`, `/api/boards/{slug}`, `/api/boards/{slug}/export`,
 `/api/boards/sweep`) are ordinary `auth_bearer` and are declared as
 `RouteContract`s in `kb_code_server::boards::V74_L1_ROUTES`, walked from
 both the server and the CLI side by the dead-surface tests V71-G0 added.
-Mutations (`apply`, `accept`, `archive`, `DELETE`) ride the same
-loopback-only sub-router the review mutations do, so
-`security::audit_mutations` records each attempt with its outcome. D10
-sketches a later graduation onto a named-family
-`[review] remote_mutations = ["review", "canvas"]` allowlist; that is its
-own unit and nothing here weakens root invariant #4.
+`POST /api/boards/apply` stays loopback-only. `accept` / `archive` /
+`DELETE` ride the same `[review] remote_mutations` gate as the five
+review-mutation families (V76-R4a, D10 — no second config key).
+`security::audit_mutations` records each attempt with its outcome. The
+working-tree mutation lane never moves.
 
 CLI: `kb-code canvas {boards,show,apply,accept,archive,rm,export,sweep}`.
 `canvas list` keeps its pre-existing meaning — the v3.4-C1 canvas SETS — so

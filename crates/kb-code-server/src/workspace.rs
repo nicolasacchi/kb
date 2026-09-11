@@ -358,6 +358,7 @@ pub fn resolve_path(path: Option<&str>, repos: &[RepoEntry]) -> (PathResolution,
 }
 
 /// One worktree as the daemon recorded it — the wire and storage shape.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeRow {
     pub workspace_id: String,
@@ -583,6 +584,7 @@ pub const WORKSPACES_ROUTE: RouteContract = RouteContract {
 /// test.
 pub const V75_M1_ROUTES: &[RouteContract] = &[WORKSPACES_ROUTE, crate::frames::FRAMES_ROUTE];
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, serde::Serialize)]
 pub struct WorkspaceOut {
     pub id: String,
@@ -601,6 +603,7 @@ pub struct WorkspaceOut {
     pub note: Option<String>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, serde::Serialize)]
 pub struct WorkspacesResponse {
     pub schema: &'static str,
@@ -628,6 +631,7 @@ pub async fn workspaces_route(
     }))
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, serde::Serialize)]
 pub struct WorktreesResponse {
     pub schema: &'static str,
