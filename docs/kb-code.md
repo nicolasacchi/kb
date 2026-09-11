@@ -2201,6 +2201,86 @@ every finding CARD reads did not, so the two axes D9 added were storable and
 unreadable. They are additive — `"issue"` / `false` / `null` on every
 pre-V0034 row, which is what those rows always meant.
 
+## Prose refs — `kbc-prose/1` (v7.6, V76-B3)
+
+Finding bodies, report summaries, claims, timeline events, review comments
+and the Document tab's non-card prose are never raw text. Each prose field
+is rendered through the SPA's only Markdown path (`web-code/src/lib/markdownLite.ts`)
+and overlaid with a **closed-grammar ref extractor** that runs on the
+daemon, per request, persisted nowhere.
+
+There is no `GET /api/prose/refs`. The refs ride the wire that already
+carries the prose, as an additive `refs` / `<field>_refs` object
+(`{refs: [...], truncated: bool}`), capped at 64 per field with an honest
+`truncated` flag rather than a silent drop. Field names on a finding are
+`title_refs` / `rationale_refs` / `recommendation_refs` (the finding wire's
+own `title` / `rationale` / `recommendation` — not `message`/`suggestion`).
+A report carries `summary_refs` and `verdict_body_refs`; a claim carries
+`refs` beside `body_md`; comments and timeline events carry `body_refs`;
+the review document carries `summary_refs`.
+
+### The closed grammar
+
+The extractor is modelled on kb-core's `coderefs` (hints only; kb-code
+mints the class). Spans are UTF-16 code units, because the only consumer
+is the SPA's JS string slice. Golden-pinned by
+`crates/kb-code-server/grammar/prose_refs.golden.json` — the SPA has **no**
+mirror of this grammar (unlike kbcq/1 and kbc-refs/1); it consumes the
+server's `refs`.
+
+| kind | form | notes |
+|---|---|---|
+| `path` | a path whose final extension is in `syntax/1`'s REGISTRY, optionally `:LINE`, `:A-B`, `:A,B-C,…` or `#member` | exact iff the path exists in the mirror; the hinted line is echoed, never invented |
+| `symbol` | `Namespace::Class` (`::` REQUIRED — a bare CapWord is never a symbol), `Class#method`, `Class.method` | entity index, then symbols-table fallback |
+| `finding` | `f-<slug>` matching `review_findings::is_valid_finding_slug` | exact against this review's finding table; no review in context is an orphan that says so |
+| `code` | an inline backtick span | surfaced so tests cover the interplay; the SPA ignores this kind (the renderer already styles it) |
+| `call` | a bare `snake_case_name(` token, **only inside backticks** | never `exact` |
+
+Hard rejects: a URL (`://`), `..`, a directory (trailing `/`), shell/regex
+punctuation. A token inside a fenced block or a `[text](dest)` Markdown
+link is not extracted (the no-double-linking rule).
+
+Resolution is `exact` \| `likely` \| `candidate` \| `orphan`, minted per
+request through the existing ladders (`resolve.rs`, the entity index, the
+finding table). A wrong trust class is a release blocker. Nothing is
+cached.
+
+### `POST /api/prose/resolve`
+
+For client-composed prose (the composer, a paste). Bearer read. Body:
+
+```
+{ "repo": "<name>", "review": <id>?, "ps": "<n\|latest>"?, "text": "<markdown>" }
+```
+
+`repo` and `text` are required. `text` over 64 KiB is a 400 naming the
+byte count and the fix (split the prose). A `ps` that names nothing is a
+404, never silently ignored. Response schema `kbc-prose-refs/1`:
+`{schema, repo, review, ps, refs, truncated}`.
+
+Declared as `kb_code_server::prose_refs::V76_B3_ROUTES` and walked from
+both sides (server dead-surface test + the CLI's
+`cli_requests_send_every_param_their_route_requires`).
+
+CLI: `kb-code prose resolve --repo R --text - [--review ID] [--ps N] [--json]`.
+`--text -` reads stdin.
+
+### The SPA — `ProseBlock`
+
+`web-code/src/components/prose/ProseBlock.tsx` is the only prose renderer.
+It paints the markdown-lite tree, then overlays the wire's `refs` as links:
+
+| kind | click | hover | trust |
+|---|---|---|---|
+| `path[:line]` | reader address via the Location Contract (`codeUrl`) | peek caption `path:line` | line-style underline |
+| `symbol` / `call` | `?sym=` / `?ent=` address | peek caption | solid **only** for `exact`; dashed `likely`; dotted `candidate` |
+| `finding:` | focuses the finding card / rail row (`data-kbc-finding`) | slug | |
+| `orphan` | **never a link** — dotted underline + caption | the daemon's caption | |
+
+A ref inside a Markdown `[text](dest)` is not wrapped in a second `<a>`.
+Fences stay a plain `<pre>` until V76-C1's highlight hook lands (`.kbc-hl-*`,
+never a second `.tok-*` highlighter).
+
 ## The stream — timeline v2, pseudo-files, claims, hunk↔turn (v7.3, Track K)
 
 Design of record: D9 + D9-a + D18 + D25 of

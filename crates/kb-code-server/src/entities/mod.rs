@@ -618,8 +618,11 @@ pub async fn entity_route(
     let mut notes: Vec<String> = Vec::new();
     if zw.state == zeitwerk::STATE_DEGRADED {
         notes.push(match &zw.reason {
-            Some(r) => format!("zeitwerk read degraded: {r} — every convention-derived name is capped at candidate"),
-            None => "zeitwerk read degraded — every convention-derived name is capped at candidate".to_string(),
+            Some(r) => format!(
+                "zeitwerk read degraded: {r} — every convention-derived name is capped at candidate"
+            ),
+            None => "zeitwerk read degraded — every convention-derived name is capped at candidate"
+                .to_string(),
         });
     }
     let out = build_entity_query(&repo_name, &ent, rows, &zw, notes);
@@ -861,6 +864,10 @@ mod tests {
             // route takes a JSON body (its own deserialization is the
             // contract, enforced by axum's `Json` extractor).
             .chain(crate::branches::V75_M3_ROUTES.iter())
+            // V76-B3 — `POST /api/prose/resolve`. The JSON body IS the
+            // contract; `params_accept_without` deserialises it so a
+            // required field the CLI omits still fails HERE, by name.
+            .chain(crate::prose_refs::V76_B3_ROUTES.iter())
         {
             let nested = c
                 .path

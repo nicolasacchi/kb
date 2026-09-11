@@ -1,0 +1,90 @@
+/* kbc-prose/1 (V76-B3) — overlay links on every prose surface.
+   Trust is LINE STYLE (Lane Budget): solid = exact, dashed = likely,
+   dotted = candidate or orphan. Hue is reinforcement, never the signal. */
+
+.kbc-prose {
+  max-width: 76ch;
+}
+.kbc-prose p {
+  margin: 0 0 0.6em;
+}
+.kbc-prose p:last-child {
+  margin-bottom: 0;
+}
+.kbc-prose ul {
+  margin: 0 0 0.6em;
+  padding-left: 1.2em;
+}
+.kbc-prose__fence {
+  margin: 0.4em 0;
+  padding: 0.6em 0.8em;
+  overflow: auto;
+  background: var(--bg-card-hi);
+  border-radius: var(--radius-md);
+  font-size: 0.9em;
+}
+.kbc-prose code {
+  background: var(--bg-card-hi);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.kbc-prose-ref {
+  position: relative;
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: currentColor;
+  color: inherit;
+}
+.kbc-prose-ref--exact {
+  text-decoration-style: solid;
+}
+.kbc-prose-ref--likely {
+  text-decoration-style: dashed;
+}
+.kbc-prose-ref--candidate,
+.kbc-prose-ref--orphan {
+  text-decoration-style: dotted;
+}
+.kbc-prose-ref--nolink,
+.kbc-prose-ref--orphan {
+  cursor: help;
+}
+.kbc-prose-ref--orphan {
+  text-decoration-color: var(--ink-dim, currentColor);
+}
+
+.kbc-prose-ref:hover > .kbc-prose-peek,
+.kbc-prose-ref:focus-visible > .kbc-prose-peek {
+  display: block;
+}
+.kbc-prose-peek {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  padding: 4px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow, 0 4px 16px rgba(0, 0, 0, 0.18));
+  font-size: var(--fs-sm, 12px);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.kbc-prose__truncated {
+  font-size: var(--fs-sm, 12px);
+  color: var(--ink-dim);
+  margin: 0.4em 0 0;
+}
+
+.kbc-finding--prose-focus,
+[data-kbc-prose-focused] {
+  outline: 2px dotted var(--accent, currentColor);
+  outline-offset: 2px;
+}

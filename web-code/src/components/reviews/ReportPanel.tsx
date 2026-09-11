@@ -3,7 +3,6 @@
 // Summary (markdown-lite), Section 02 findings, Section 03 files (rows link
 // into the Files tab), Section 04 CI checks, and (v1, this unit's placement
 // call — see this unit's own report) Section 05 GitHub conversation.
-import { useMemo } from "react";
 import type {
   ClaimOut,
   ReviewDetailPr,
@@ -12,7 +11,7 @@ import type {
   ReviewReportOut,
 } from "../../api/types";
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
-import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
+import ProseBlock from "../prose/ProseBlock";
 import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
 import AgentVerdictCard from "./AgentVerdictCard";
 import CiChecksCard from "./CiChecksCard";
@@ -83,59 +82,6 @@ export function importCliCommands(reviewId: number): string[] {
   ];
 }
 
-function InlineRuns({ runs }: { runs: InlineRun[] }) {
-  return (
-    <>
-      {runs.map((r, i) =>
-        r.kind === "bold" ? <b key={i}>{r.text}</b> : r.kind === "code" ? <code key={i}>{r.text}</code> : <span key={i}>{r.text}</span>,
-      )}
-    </>
-  );
-}
-
-function MarkdownLite({ text }: { text: string }) {
-  const blocks: MarkdownBlock[] = useMemo(() => parseMarkdownLite(text), [text]);
-  return (
-    <div className="kbc-report__summary">
-      {blocks.map((b, i) => {
-        if (b.kind === "paragraph") {
-          return (
-            <p key={i}>
-              <InlineRuns runs={b.runs} />
-            </p>
-          );
-        }
-        if (b.kind === "list") {
-          return (
-            <ul key={i}>
-              {b.items.map((item, j) => (
-                <li key={j}>
-                  <InlineRuns runs={item} />
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        // V73-K2b added `heading` and `code` to `MarkdownBlock`, both behind
-        // `MarkdownLiteOptions` and both OFF here — this panel calls
-        // `parseMarkdownLite(text)` with no options, so neither arm is
-        // reachable and the rendered summary is byte-identical to before.
-        // They are handled rather than dropped so that this stays an
-        // assertion about the OPTIONS, never about the content: a block this
-        // renderer cannot name must still reach the reader.
-        if (b.kind === "heading") {
-          return (
-            <p key={i}>
-              <InlineRuns runs={b.runs} />
-            </p>
-          );
-        }
-        return <pre key={i}>{b.text}</pre>;
-      })}
-    </div>
-  );
-}
-
 export interface ReportPanelProps {
   repo: string;
   review: ReviewDetailPr;
@@ -184,10 +130,14 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }
 
   return (
     <div data-kbc-report-panel={review.id}>
-      {report.deck && <p className="kbc-report__deck" data-kbc-report-deck>{report.deck}</p>}
+      {report.deck && (
+        <div className="kbc-report__deck" data-kbc-report-deck>
+          <ProseBlock text={report.deck} repo={repo} reviewId={review.id} inline />
+        </div>
+      )}
 
       <div className="kbc-verdicts">
-        <AgentVerdictCard report={report} />
+        <AgentVerdictCard report={report} repo={repo} reviewId={review.id} />
       </div>
 
       <div className="kbc-stats" data-kbc-report-stats>
@@ -213,7 +163,13 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims }
       {report.summary && (
         <>
           <div className="kbc-eyebrow">Section 01 · Summary</div>
-          <MarkdownLite text={report.summary} />
+          <ProseBlock
+            className="kbc-report__summary"
+            text={report.summary}
+            refs={report.summary_refs}
+            repo={repo}
+            reviewId={review.id}
+          />
         </>
       )}
 

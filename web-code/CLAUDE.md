@@ -883,6 +883,19 @@ walks — the kbcq/1 discipline (§ Search grammar), applied to a second
 grammar. Touch the grammar on one side and the other side's test fails,
 naming the case.
 
+**`ProseBlock` is the only prose renderer (V76-B3, `kbc-prose/1`).** Every
+surface that shows finding/report/claim/comment/timeline/document prose
+goes through `components/prose/ProseBlock.tsx`. It renders via
+`markdownLite`, then overlays the wire's `refs` (UTF-16 spans the daemon
+already minted). The SPA does **not** parse the closed grammar — there is
+no TS mirror of `grammar/prose_refs.golden.json` (unlike kbcq/1 and
+kbc-refs/1). Path refs use the Location Contract (`codeUrl`); symbol/entity
+refs use `symbolUrl`/`entityUrl` with trust as LINE STYLE (solid only for
+`exact`); `f-<slug>` focuses `[data-kbc-finding]`; an orphan is a dotted
+underline with a caption, never a dead `<a>`; a ref inside `[text](dest)`
+is never double-linked. Fences stay a plain `<pre>` until V76-C1 lands
+(`.kbc-hl-*`, never a second `.tok-*` highlighter).
+
 **Keys.** Six new rows, all `scope: "review"` / `dispatch: "surface"` /
 no `vim_kind`: `6` (`review.tab.doc`), `Space r` (`doc.cards-fold`),
 `] r`/`[ r` (`doc.card-next`/`prev`), `Space o` (`doc.card-open`), `Space y`

@@ -394,6 +394,7 @@ pub mod numstat;
 pub mod occurrences;
 /// V72-H2a (D7) — the universal `outline/1` contract.
 pub mod outline;
+pub mod prose_refs;
 pub mod provenance;
 pub mod rails;
 pub mod reading_sets;
