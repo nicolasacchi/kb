@@ -474,6 +474,12 @@
 .kbc-sugdiff__line--eq {
   opacity: 0.55;
 }
+.kbc-sugdiff__line--old {
+  background: var(--diff-del-bg);
+}
+.kbc-sugdiff__line--new {
+  background: var(--diff-add-bg);
+}
 .kbc-sugdiff__gutter {
   flex: 0 0 1.2em;
   color: var(--ink-mute);

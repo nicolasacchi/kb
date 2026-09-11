@@ -43,10 +43,12 @@ import { mergeQuery, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeU
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
 import {
+  deepLinkFileTarget,
   fileCollapse,
   hunkCollapse,
   reduceCollapseTick,
   toggleSectionCollapse,
+  withDeepLinkTarget,
 } from "../lib/collapseOnTick";
 import { hunkId } from "../lib/diffHunks";
 import {
@@ -686,6 +688,44 @@ export default function ReviewDiff() {
     }
   }, [threadId, findingParam, findingsQ.data, findingsSlugMap]);
 
+  // V76-R2c round 2 — a `?line=` / thread / hunk / finding deep-link is an
+  // implicit `?expanded=` override for THAT file so the flash target is
+  // actually mounted. Derived, not written: the URL grammar is unchanged
+  // and collapse-on-tick still applies to every other viewed section.
+  const focusThreadPath = useMemo(() => {
+    const want = focusThreadId ?? threadId;
+    if (!want || !commentsQ.data) return null;
+    for (const g of commentsQ.data.groups) {
+      if (g.comments.some((c) => c.id === want)) return g.path;
+    }
+    return null;
+  }, [focusThreadId, threadId, commentsQ.data]);
+  const findingPath = useMemo(() => {
+    if (!findingParam) return null;
+    return findingsSlugMap.get(findingParam)?.location.path ?? null;
+  }, [findingParam, findingsSlugMap]);
+  const deepLinkFile = useMemo(
+    () =>
+      deepLinkFileTarget({
+        line,
+        side,
+        fileHint,
+        focusPath,
+        hunkParam,
+        threadPath: focusThreadPath,
+        findingPath,
+      }),
+    [line, side, fileHint, focusPath, hunkParam, focusThreadPath, findingPath],
+  );
+  const derivedExpandedFiles = useMemo(
+    () => new Set(withDeepLinkTarget([...expandedFileSet], deepLinkFile)),
+    [expandedFileSet, deepLinkFile],
+  );
+  const derivedExpandedHunks = useMemo(
+    () => new Set(withDeepLinkTarget([...expandedHunkSet], hunkParam)),
+    [expandedHunkSet, hunkParam],
+  );
+
   function stepThread(dir: 1 | -1) {
     const next = stepThreadStop(threadStops, focusThreadId, dir);
     if (!next) return;
@@ -850,7 +890,10 @@ export default function ReviewDiff() {
       movedIndex,
       fileNoise: [],
       hunkViewed: hunkViewedSet,
-      expandedHunks: expandedHunkSet,
+      expandedHunks: derivedExpandedHunks,
+      deepLinkFile,
+      deepLinkLine: line,
+      deepLinkSide: side,
       folded,
       expand: expandByHunk,
       drafts,
@@ -869,7 +912,10 @@ export default function ReviewDiff() {
       noiseMode,
       movedIndex,
       hunkViewedSet,
-      expandedHunkSet,
+      derivedExpandedHunks,
+      deepLinkFile,
+      line,
+      side,
       folded,
       expandByHunk,
       drafts,
@@ -1218,12 +1264,14 @@ export default function ReviewDiff() {
     if (!focusThreadId || lastFlashed.current === focusThreadId) return;
     const el = document.querySelector(`[data-kbc-review-thread="${cssAttr(focusThreadId)}"]`);
     if (!el) return;
+    const section = el.closest("[data-kbc-rdiff-file]");
+    if (section?.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
     lastFlashed.current = focusThreadId;
     el.classList.add("kbc-rdiff__flash");
     el.scrollIntoView({ block: "center" });
     const t = window.setTimeout(() => el.classList.remove("kbc-rdiff__flash"), 1400);
     return () => window.clearTimeout(t);
-  }, [focusThreadId, commentsQ.data, hunkCounts, mode]);
+  }, [focusThreadId, commentsQ.data, hunkCounts, mode, derivedExpandedFiles]);
 
   // `?line=N&side=` deep-link: scroll + flash. Works in both unified and split
   // (rows carry data-old-line / data-new-line).
@@ -1234,6 +1282,7 @@ export default function ReviewDiff() {
     if (!path) return;
     const root = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
     if (!root) return;
+    if (root.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
     const attr = side === "old" ? "data-old-line" : "data-new-line";
     const row = root.querySelector(`[${attr}="${line}"]`);
     if (!row) return;
@@ -1242,7 +1291,18 @@ export default function ReviewDiff() {
     row.scrollIntoView({ block: "center" });
     const t = window.setTimeout(() => row.classList.remove("kbc-rdiff__flash"), 1400);
     return () => window.clearTimeout(t);
-  }, [line, side, focusPath, fileHint, paths, keys.cursor.fileIdx, hunkCounts, mode]);
+  }, [
+    line,
+    side,
+    focusPath,
+    fileHint,
+    paths,
+    keys.cursor.fileIdx,
+    hunkCounts,
+    mode,
+    derivedExpandedFiles,
+    derivedExpandedHunks,
+  ]);
 
   // `?file=` all-files scroll hint (once the section exists).
   const fileScrolled = useRef(false);
@@ -1398,7 +1458,8 @@ export default function ReviewDiff() {
         onSetParam={setParam}
         onToggleViewed={toggleViewed}
         onToggleFileSection={onToggleFileSection}
-        expandedFiles={expandedFileSet}
+        expandedFiles={derivedExpandedFiles}
+        eagerPath={deepLinkFile}
         composeFor={composeFor}
         v2For={v2For}
         withQuery={withQuery}

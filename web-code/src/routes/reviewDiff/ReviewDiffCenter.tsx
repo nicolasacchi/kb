@@ -55,6 +55,8 @@ export interface ReviewDiffCenterProps {
   onToggleViewed: (file: ReviewFileRow) => Promise<void>;
   onToggleFileSection: (path: string, viewed: boolean, collapsed: boolean) => void;
   expandedFiles: ReadonlySet<string>;
+  /// Deep-link target file — its body mounts eagerly so the flash row exists.
+  eagerPath?: string | null;
   composeFor: (path: string) => { side: DiffSide; line: number; token?: number } | null;
   v2For: (path: string) => DiffV2Api;
   withQuery: (href: string) => string;
@@ -101,6 +103,7 @@ export default function ReviewDiffCenter({
   onToggleViewed: toggleViewed,
   onToggleFileSection,
   expandedFiles,
+  eagerPath,
   composeFor,
   v2For,
   withQuery,
@@ -265,6 +268,7 @@ export default function ReviewDiffCenter({
               onToggleViewed={(f) => void toggleViewed(f)}
               onToggleCollapse={() => onToggleFileSection(file.path, viewed, fc.collapsed)}
               v2={v2For(file.path)}
+              eager={eagerPath === file.path}
             />
             );
           })

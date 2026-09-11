@@ -12,7 +12,12 @@ import { useMemo } from "react";
 import type { ReviewComment } from "../../api/types";
 import { useFile } from "../../hooks/useFile";
 import { sliceAnchoredLines, splitSuggestionLines } from "../../lib/suggestions";
-import { suggestionDiff, type SuggestionDiffLine, type TokenOp } from "../../lib/tokenDiff";
+import {
+  suggestionDiff,
+  suggestionRenderRows,
+  type SuggestionDiffLine,
+  type TokenOp,
+} from "../../lib/tokenDiff";
 
 export function SuggestionDiffPanel({
   original,
@@ -37,21 +42,27 @@ export function SuggestionDiffPanel({
 }
 
 function SuggestionLineRow({ line }: { line: SuggestionDiffLine }) {
+  const rows = suggestionRenderRows(line);
   return (
-    <div
-      className={`kbc-sugdiff__line kbc-sugdiff__line--${line.kind}`}
-      data-kbc-sugdiff-line={line.kind}
-      data-kbc-sugdiff-trailing={line.trailing ? "1" : "0"}
-    >
-      <span className="kbc-sugdiff__gutter" aria-hidden>
-        {line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "replace" ? "±" : " "}
-      </span>
-      <span className="kbc-sugdiff__text">
-        {line.ops.map((op, j) => (
-          <TokenSpan key={j} op={op} />
-        ))}
-      </span>
-    </div>
+    <>
+      {rows.map((row, i) => (
+        <div
+          key={i}
+          className={`kbc-sugdiff__line kbc-sugdiff__line--${row.side}`}
+          data-kbc-sugdiff-line={row.side}
+          data-kbc-sugdiff-trailing={row.trailing ? "1" : "0"}
+        >
+          <span className="kbc-sugdiff__gutter" aria-hidden>
+            {row.side === "new" ? "+" : row.side === "old" ? "−" : " "}
+          </span>
+          <span className="kbc-sugdiff__text">
+            {row.ops.map((op, j) => (
+              <TokenSpan key={j} op={op} />
+            ))}
+          </span>
+        </div>
+      ))}
+    </>
   );
 }
 
