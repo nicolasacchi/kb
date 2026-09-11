@@ -670,6 +670,7 @@ pub(crate) fn compose_finding_view(
             let ctx = crate::prose_refs::RefCtx {
                 repo_id,
                 review_id: Some(row.review_id),
+                ps_number: Some(target_ps.ps_number),
             };
             if let (Some(obj), serde_json::Value::Object(m)) = (
                 view.as_object_mut(),
@@ -1611,7 +1612,7 @@ pub async fn list_findings_route(
     }
 
     // V76-B3 (kbc-prose/1) — every prose field carries its refs, computed
-    // per request through `prose_refs`'s ladders (store reads only, never
+    // per request through `prose_refs`'s store/ODB ladders (never
     // persisted, capped at `prose_refs::MAX_REFS_PER_FIELD` with an honest
     // `truncated`). ONE blocking-pool trip for the whole batch — the same
     // store-mutex discipline as the three reads above.
@@ -1631,6 +1632,7 @@ pub async fn list_findings_route(
             let ctx = crate::prose_refs::RefCtx {
                 repo_id,
                 review_id: Some(id),
+                ps_number: Some(target_ps.ps_number),
             };
             ref_inputs
                 .iter()

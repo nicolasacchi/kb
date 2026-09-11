@@ -1208,6 +1208,7 @@ pub async fn review_timeline_route(
                     let ctx = crate::prose_refs::RefCtx {
                         repo_id,
                         review_id: Some(id),
+                        ps_number: ps.as_ref().map(|p| p.ps_number),
                     };
                     bodies
                         .iter()

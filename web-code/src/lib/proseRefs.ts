@@ -26,6 +26,7 @@ export interface ProseSpan {
 export interface ProseRefResolution {
   state: string;
   path?: string;
+  ref?: string;
   line?: number;
   ent?: string;
   caption?: string;
@@ -167,7 +168,7 @@ export function proseRefHref(ref: ProseRef, ctx: ProseHrefCtx): string | null {
 
   if (ref.kind === "path") {
     if (!path) return null;
-    return codeUrl({ repo: ctx.repo, path, line });
+    return codeUrl({ repo: ctx.repo, path, ref: ref.resolution?.ref, line });
   }
 
   if (ref.kind === "symbol" || ref.kind === "call") {

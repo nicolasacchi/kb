@@ -3404,6 +3404,7 @@ export interface ProseSpan {
 export interface ProseRefResolution {
   state: string;
   path?: string;
+  ref?: string;
   line?: number;
   ent?: string;
   caption?: string;
@@ -3532,6 +3533,8 @@ export interface ReviewReport {
   schema?: string;
   /// One-line synopsis rendered under the header (mock's `.deck`).
   deck?: string;
+  /** Per-request prose refs for the hero's deck. */
+  deck_refs?: FieldRefs;
   /// Section 01 markdown body — rendered via `lib/markdownLite.ts`.
   summary?: string;
   /** V76-B3 — per-request prose refs for `summary`. */

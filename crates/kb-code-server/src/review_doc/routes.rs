@@ -449,6 +449,7 @@ async fn build_doc_out(
                 &crate::prose_refs::RefCtx {
                     repo_id,
                     review_id: Some(id),
+                    ps_number: Some(ps_c.ps_number),
                 },
                 &summary_for_refs,
             )?;
