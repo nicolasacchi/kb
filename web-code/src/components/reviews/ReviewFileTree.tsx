@@ -179,6 +179,14 @@ export default function ReviewFileTree({
   }, [treeRef, visible, treeCursor, currentPath, sections, collapsedSections]);
 
   function onTreeKey(e: KeyboardEvent<HTMLDivElement>) {
+    // Tree navigation ONLY for keys that originate on the tree itself or
+    // one of its rows. The Files tab mounts the inline diff (composer,
+    // CM6 suggestion editor) UNDER the picked row as `expandedContent`,
+    // so every keystroke typed there bubbles here — and an `Enter` that
+    // re-picked the file remounted the editor mid-edit (suggestions.spec).
+    const target = e.target as HTMLElement | null;
+    if (target && target !== e.currentTarget && !target.closest(".kbc-ftree__row")) return;
+    if (target && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     const keys = new Set(["j", "k", "ArrowDown", "ArrowUp", "h", "l", "Enter", "ArrowLeft", "ArrowRight"]);
     if (!keys.has(e.key)) return;
     e.preventDefault();

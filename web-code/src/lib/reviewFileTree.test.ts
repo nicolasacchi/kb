@@ -251,3 +251,25 @@ describe("shipped e2e hooks the tree / map must keep", () => {
     expect(src).not.toContain('overflow: "hidden"');
   });
 });
+
+describe("tree keydown scope (V76-R2b.3)", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../components/reviews/ReviewFileTree.tsx", import.meta.url)),
+    "utf8",
+  );
+  it("keys typed inside the expanded inline diff never drive tree navigation", () => {
+    // The inline diff (composer, CM6 suggestion editor) is `expandedContent`
+    // under the picked row, so its keystrokes bubble to the tree's
+    // onKeyDown; an `Enter` there re-picked the file and remounted the
+    // editor mid-edit. The guard bails unless the key came from the tree
+    // root or a `.kbc-ftree__row`, and always for editable targets.
+    const body = src.slice(src.indexOf("function onTreeKey("));
+    const guard = body.indexOf('closest(".kbc-ftree__row")');
+    const editable = body.indexOf("isContentEditable");
+    const keys = body.indexOf('new Set(["j", "k"');
+    expect(guard).toBeGreaterThan(-1);
+    expect(editable).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(keys);
+    expect(editable).toBeLessThan(keys);
+  });
+});
