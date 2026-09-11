@@ -135,14 +135,30 @@ export interface HunkThreadRef {
 /// matched against BOTH spans (the pre-side-aware rows the wire still
 /// carries), which can only ever over-report "this hunk has threads" —
 /// never hide one.
+function threadLandsInSpans(
+  t: HunkThreadRef,
+  oldSpan: { start: number; end: number } | null,
+  newSpan: { start: number; end: number } | null,
+): boolean {
+  if (t.line === null) return false;
+  if (t.side !== "new" && oldSpan && t.line >= oldSpan.start && t.line <= oldSpan.end) return true;
+  if (t.side !== "old" && newSpan && t.line >= newSpan.start && t.line <= newSpan.end) return true;
+  return false;
+}
+
 export function hunkHasThreads(hunk: DiffHunk, threads: readonly HunkThreadRef[]): boolean {
-  if (threads.length === 0) return false;
+  return hunkThreadCount(hunk, threads) > 0;
+}
+
+/// Count of `threads` that land in this hunk. Distinct from `hasThreads` so
+/// a collapsed strip can show "3 threads" rather than a boolean chip.
+export function hunkThreadCount(hunk: DiffHunk, threads: readonly HunkThreadRef[]): number {
+  if (threads.length === 0) return 0;
   const oldSpan = hunkOldSpan(hunk);
   const newSpan = hunkNewSpan(hunk);
+  let n = 0;
   for (const t of threads) {
-    if (t.line === null) continue;
-    if (t.side !== "new" && oldSpan && t.line >= oldSpan.start && t.line <= oldSpan.end) return true;
-    if (t.side !== "old" && newSpan && t.line >= newSpan.start && t.line <= newSpan.end) return true;
+    if (threadLandsInSpans(t, oldSpan, newSpan)) n += 1;
   }
-  return false;
+  return n;
 }

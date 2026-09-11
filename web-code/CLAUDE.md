@@ -856,18 +856,42 @@ feature. The composer's finding tab keeps its own gated route. Folding
 findings into the atomic publish is real work (a gated batch op) and is
 named as open, not smuggled in.
 
-**Keys.** Twelve `scope: "diff"`, `dispatch: "surface"` rows, all
+**Keys.** Diff-v2 `scope: "diff"`, `dispatch: "surface"` rows, all
 registered in `ReviewDiff.tsx` and re-checked by
 `commands/diffV2.test.ts` (the family `deadRows.test.ts` structurally
 cannot reach, since that suite gates `central` rows only). `Space h`
 (hunk viewed) is under the leader for the SAME reason V70-A5 moved
 `diff.toggle-viewed` there: bare `v` is the reader's visual mode and
-`diff`/`reader` are coactive at depth 20. `z c`/`z o`/`z a` are safe
+`diff`/`reader` are coactive at depth 20. `Space v` still toggles FILE
+viewed. `z c`/`z o`/`z a` are safe
 because `z` is a PURE-vim prefix in READER scope — diff-scope rows are
 invisible to `shouldWithholdFromBuffer`, which resolves in `"reader"`, so
 `z` is still withheld inside a CodeView exactly as before. `] p`/`[ p`
 carry no `vim_kind`, following the `] u`/`] d`/`] s` precedent: `[`/`]` is
-a MIXED prefix and a vim arm would fire the step twice.
+a MIXED prefix and a vim arm would fire the step twice. V76-R2c adds
+`z v` (collapse/expand section), `z V` (collapse all viewed), `z O`
+(expand all) on the same `z` prefix; uppercase `O`/`V` so they are not
+`z o`/`z v`.
+
+**Collapse-on-tick (V76-R2c).** Ticking a hunk viewed (the K2a checkbox /
+`Space h`) collapses that hunk to its one-line strip (range · ± · thread
+count · "viewed"); ticking a FILE viewed collapses the whole file. Un-ticking
+expands. The two existing per-file controls (chevron / `x`, and the viewed
+checkbox) stay where they are — the operator declined consolidation. A
+viewed section the operator re-opens without un-ticking is the URL
+(`?expanded=` file paths, `?hexpanded=` hunk ids, appended LAST on
+`reviewDiffHref`). Collapse animation runs only under
+`prefers-reduced-motion: no-preference`. The "N of M viewed" chip and the
+R2b tree still count server viewed state, not the layout.
+
+**Suggestion renderer is the token diff (V76-R2c).** Finding and comment
+suggestion blocks (and the apply-confirm card) render `lib/tokenDiff.ts`:
+LCS over identifiers / punctuation / whitespace runs, unchanged lines
+dimmed, changed TOKENS emphasised with background + underline (never
+hue-only). Captions read `changes N lines · M tokens · +a −b`. Suggestions
+over 200 lines fall back to line-level and say so. The CM6 suggestion
+EDITOR is untouched. `hooks/useHighlight.ts` (V76-C1) is absent on this
+base — paint stays as this renderer until C1 lands.
 
 **One file tree for Files + map; one resizer.** V76-R2b: the cockpit
 Files tab and the review-diff map column render the SAME

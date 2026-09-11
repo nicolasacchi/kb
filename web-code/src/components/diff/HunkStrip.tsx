@@ -23,6 +23,9 @@ export interface HunkView {
   viewed: boolean;
   /// A landed comment/finding thread resolves inside this hunk's span.
   hasThreads: boolean;
+  /// Count of those threads — the collapsed one-line header shows the
+  /// number, not a boolean chip.
+  threadCount: number;
   /// Unpublished drafts anchored inside this hunk (browser-local).
   draftCount: number;
   noise: NoiseLabel[];
@@ -35,10 +38,9 @@ export interface HunkView {
   moreAbove: boolean;
   moreBelow: boolean;
   collapsed: boolean;
-  /// WHY it is collapsed — an operator fold, or the noise dial. Rendered
-  /// verbatim on the collapsed strip, because "kb-code hid this and will
-  /// not say why" is the failure the noise feature exists to avoid.
-  collapsedBy: "fold" | "noise" | null;
+  /// WHY it is collapsed — an operator fold, the noise dial, or collapse-
+  /// on-tick (V76-R2c). Rendered verbatim on the collapsed strip.
+  collapsedBy: "fold" | "noise" | "viewed" | null;
 }
 
 export interface HunkStripProps {
@@ -108,7 +110,12 @@ export default function HunkStrip({
       </span>
       {view.hasThreads && (
         <span className="kbc-hunkstrip__chip" title="a comment or finding resolves inside this hunk" data-kbc-hunk-threads>
-          threads
+          {view.threadCount > 0 ? `${view.threadCount} thread${view.threadCount === 1 ? "" : "s"}` : "threads"}
+        </span>
+      )}
+      {view.viewed && (
+        <span className="kbc-hunkstrip__chip kbc-hunkstrip__chip--viewed" data-kbc-hunk-viewed-label>
+          viewed
         </span>
       )}
       {view.draftCount > 0 && (
@@ -142,7 +149,9 @@ export default function HunkStrip({
         <span className="kbc-hunkstrip__why" data-kbc-hunk-collapsed-by={view.collapsedBy}>
           {view.collapsedBy === "noise"
             ? "collapsed by the noise dial — still counted, one click to open"
-            : "folded"}
+            : view.collapsedBy === "viewed"
+              ? "viewed"
+              : "folded"}
         </span>
       )}
       <span className="kbc-hunkstrip__spacer" />
