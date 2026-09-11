@@ -274,6 +274,117 @@ async fn create_snapshot_interdiff_viewed_stale_delete() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_review_refuses_a_published_verdict_unless_force() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_feature_branch();
+    let dir = repo_tmp.path();
+    let (_daemon_tmp, base) = boot_with_repo("r", dir, ReviewSection::default()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews"))
+        .json(&serde_json::json!({
+            "repo": "r",
+            "head_ref": "feature",
+            "base_ref": "main",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
+    let id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let v = client
+        .put(format!("{base}/api/reviews/{id}/verdict"))
+        .json(&serde_json::json!({ "state": "approve" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(v.status(), 200, "{}", v.text().await.unwrap());
+
+    let pubd = client
+        .post(format!("{base}/api/reviews/{id}/verdict/published"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pubd.status(), 200, "{}", pubd.text().await.unwrap());
+
+    let refused = client
+        .delete(format!("{base}/api/reviews/{id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        refused.headers().get("content-type").unwrap(),
+        "application/problem+json"
+    );
+    let body: serde_json::Value = refused.json().await.unwrap();
+    assert_eq!(
+        body["type"],
+        kb_code_server::reviews::ERR_REVIEW_VERDICT_PUBLISHED
+    );
+
+    let forced = client
+        .delete(format!("{base}/api/reviews/{id}"))
+        .query(&[("force", "1")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forced.status(), 204, "{}", forced.text().await.unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_then_reopen_via_patch() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_feature_branch();
+    let dir = repo_tmp.path();
+    let (_daemon_tmp, base) = boot_with_repo("r", dir, ReviewSection::default()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews"))
+        .json(&serde_json::json!({
+            "repo": "r",
+            "head_ref": "feature",
+            "base_ref": "main",
+        }))
+        .send()
+        .await
+        .unwrap();
+    let id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let closed = client
+        .patch(format!("{base}/api/reviews/{id}"))
+        .json(&serde_json::json!({ "state": "closed" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(closed.status(), 200);
+    assert_eq!(
+        closed.json::<serde_json::Value>().await.unwrap()["state"],
+        "closed"
+    );
+
+    let opened = client
+        .patch(format!("{base}/api/reviews/{id}"))
+        .json(&serde_json::json!({ "state": "open" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(opened.status(), 200);
+    assert_eq!(
+        opened.json::<serde_json::Value>().await.unwrap()["state"],
+        "open"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn max_patchsets_gcs_oldest() {
     let _guard = SERIAL.lock().await;
     let repo_tmp = fixture_feature_branch();

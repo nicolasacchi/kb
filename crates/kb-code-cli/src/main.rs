@@ -3599,6 +3599,34 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Reopen a closed review (`PATCH /api/reviews/{id}` `state=open`).
+    Reopen {
+        id: i64,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a review (`DELETE /api/reviews/{id}`). LOOPBACK-ONLY.
+    /// Refuses without `--yes`. A published verdict 409s unless `--force`.
+    Delete {
+        id: i64,
+        /// Required. There is no prompt — missing `--yes` is a usage error.
+        #[arg(long)]
+        yes: bool,
+        /// Required when the review's verdict has been published.
+        #[arg(long)]
+        force: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List or GC `refs/kbc/pr/*` and `refs/kbc/review/*` in a repo's mirror.
+    Refs {
+        #[command(subcommand)]
+        cmd: ReviewRefsCmd,
+    },
     /// GC oldest patchsets down to `[review] max_patchsets`.
     Gc {
         #[arg(long = "review")]
@@ -3701,14 +3729,15 @@ enum ReviewCmd {
         json: bool,
     },
     /// `kb-code review start-pr --repo R --pr N [--base][--title]
-    /// [--session] [--gh-token-from-cli] [--dry-run]` — PRR-R2:
-    /// `POST /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY. Fetches
+    /// [--session] [--reopen|--new] [--gh-token-from-cli] [--dry-run]` —
+    /// PRR-R2 + V76-R1b/R1c: `POST /api/reviews/pr`. LOOPBACK-ONLY. Fetches
     /// `refs/pull/N/head` into `refs/kbc/pr/N` (load-bearing — 400 on
     /// failure), creates the review + captures ps1, and best-effort-enriches
     /// with GitHub PR metadata (degrades honestly on any GitHub-side failure
-    /// — the review is created either way). `--gh-token-from-cli` runs
-    /// `gh auth token` and sends the value in the request body (never
-    /// persisted, never printed; refused off loopback).
+    /// — the review is created either way). An OPEN existing (repo, PR)
+    /// review is reused; a CLOSED one 409s unless `--reopen` or `--new`.
+    /// `--gh-token-from-cli` runs `gh auth token` and sends the value in the
+    /// request body (never persisted, never printed; refused off loopback).
     StartPr {
         #[arg(long)]
         repo: String,
@@ -3720,6 +3749,14 @@ enum ReviewCmd {
         title: Option<String>,
         #[arg(long = "session")]
         session: Option<String>,
+        /// Reopen a closed review for this PR and add a patchset if the
+        /// head moved (`?on_closed=reopen`). Conflicts with `--new`.
+        #[arg(long, conflicts_with = "new")]
+        reopen: bool,
+        /// Mint a new review id; leave the closed one closed
+        /// (`?on_closed=new`). Conflicts with `--reopen`.
+        #[arg(long, conflicts_with = "reopen")]
+        new: bool,
         /// Run `gh auth token` and send it as `gh_token` (loopback-only).
         #[arg(long = "gh-token-from-cli")]
         gh_token_from_cli: bool,
@@ -4169,6 +4206,33 @@ pub struct ReviewComposeArgs {
     pub daemon: String,
     #[arg(long)]
     pub json: bool,
+}
+
+/// V76-R1b — `kb-code review refs list|gc`.
+#[derive(Subcommand, Debug)]
+enum ReviewRefsCmd {
+    /// `list --repo R` — `GET /api/reviews/refs?repo=`.
+    List {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `gc --repo R [--apply]` — `POST /api/reviews/refs/gc`. LOOPBACK-ONLY.
+    /// Dry-run by default; `--apply` sets `dry_run=0`.
+    Gc {
+        #[arg(long)]
+        repo: String,
+        /// Actually delete orphan refs. Default is dry-run.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// PRR-R3 — `kb-code review findings <SUBCOMMAND> ID …`.
@@ -5522,6 +5586,25 @@ async fn run(cli: Cli) -> Result<()> {
                 json,
             } => review_viewed_cmd(&daemon, id, &path, unset, blob_sha.as_deref(), json).await,
             ReviewCmd::Close { id, daemon, json } => review_close_cmd(&daemon, id, json).await,
+            ReviewCmd::Reopen { id, daemon, json } => review_reopen_cmd(&daemon, id, json).await,
+            ReviewCmd::Delete {
+                id,
+                yes,
+                force,
+                daemon,
+                json,
+            } => review_delete_cmd(&daemon, id, yes, force, json).await,
+            ReviewCmd::Refs { cmd } => match cmd {
+                ReviewRefsCmd::List { repo, daemon, json } => {
+                    review_refs_list_cmd(&daemon, &repo, json).await
+                }
+                ReviewRefsCmd::Gc {
+                    repo,
+                    apply,
+                    daemon,
+                    json,
+                } => review_refs_gc_cmd(&daemon, &repo, apply, json).await,
+            },
             ReviewCmd::Gc {
                 review,
                 daemon,
@@ -5561,6 +5644,8 @@ async fn run(cli: Cli) -> Result<()> {
                 base,
                 title,
                 session,
+                reopen,
+                new,
                 gh_token_from_cli,
                 dry_run,
                 daemon,
@@ -5573,6 +5658,8 @@ async fn run(cli: Cli) -> Result<()> {
                     base.as_deref(),
                     title.as_deref(),
                     session.as_deref(),
+                    reopen,
+                    new,
                     gh_token_from_cli,
                     dry_run,
                     json,
@@ -14499,14 +14586,196 @@ async fn review_close_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
         &serde_json::json!({ "state": "closed" }),
     )
     .await?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&body)?);
-    }
     if !status.is_success() {
+        if json {
+            envelope::print_err(
+                "error",
+                body["error"].as_str().unwrap_or("close failed"),
+                None,
+            );
+        }
         return Err(annotation_api_error("close review", status, &body));
     }
-    if !json {
+    if json {
+        envelope::print_ok("reviews/1", &body, Vec::new(), false, None);
+    } else {
         println!("✓ closed review #{id}");
+    }
+    Ok(())
+}
+
+async fn review_reopen_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (status, body) = patch_json_path(
+        &client,
+        daemon,
+        &format!("/api/reviews/{id}"),
+        &serde_json::json!({ "state": "open" }),
+    )
+    .await?;
+    if !status.is_success() {
+        if json {
+            envelope::print_err(
+                "error",
+                body["error"].as_str().unwrap_or("reopen failed"),
+                None,
+            );
+        }
+        return Err(annotation_api_error("reopen review", status, &body));
+    }
+    if json {
+        envelope::print_ok("reviews/1", &body, Vec::new(), false, None);
+    } else {
+        println!("✓ reopened review #{id}");
+    }
+    Ok(())
+}
+
+/// Missing `--yes` is a usage error (no prompt).
+fn review_delete_requires_yes(yes: bool) -> Result<()> {
+    if !yes {
+        anyhow::bail!(
+            "review delete refuses without --yes (this removes the review row and its \
+             refs/kbc/review/<id>/* refs). Pass --yes. A published verdict also needs --force."
+        );
+    }
+    Ok(())
+}
+
+async fn review_delete_cmd(
+    daemon: &str,
+    id: i64,
+    yes: bool,
+    force: bool,
+    json: bool,
+) -> Result<()> {
+    if let Err(e) = review_delete_requires_yes(yes) {
+        if json {
+            envelope::print_err(
+                "usage",
+                &e.to_string(),
+                Some("pass --yes (and --force if the verdict is published)"),
+            );
+        }
+        std::process::exit(envelope::EXIT_USAGE);
+    }
+    let client = http_client()?;
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if force {
+        query.push(("force", "1"));
+    }
+    let (status, body) =
+        delete_json_raw(&client, daemon, &format!("/api/reviews/{id}"), &query).await?;
+    if status == reqwest::StatusCode::NO_CONTENT {
+        if json {
+            envelope::print_ok(
+                "reviews/1",
+                serde_json::json!({ "id": id, "deleted": true }),
+                Vec::new(),
+                false,
+                None,
+            );
+        } else {
+            println!("✓ deleted review #{id}");
+        }
+        return Ok(());
+    }
+    if json {
+        envelope::print_err(
+            body["type"].as_str().unwrap_or("error"),
+            body["error"].as_str().unwrap_or("delete failed"),
+            body["type"].as_str().and_then(|t| {
+                if t.contains("review-verdict-published") {
+                    Some("pass --force with --yes")
+                } else {
+                    None
+                }
+            }),
+        );
+    }
+    if status == reqwest::StatusCode::CONFLICT {
+        if !json {
+            eprintln!(
+                "review delete failed (409): {} — existing review id {}",
+                body["error"].as_str().unwrap_or("conflict"),
+                body["existing_review_id"]
+            );
+        }
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    Err(loopback_or_api_error(
+        "review delete",
+        daemon,
+        status,
+        &body,
+    ))
+}
+
+async fn review_refs_list_cmd(daemon: &str, repo: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = review_refs_list_request(repo);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        envelope::print_ok("review-refs/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    let refs = body["refs"].as_array().cloned().unwrap_or_default();
+    if refs.is_empty() {
+        println!("no refs/kbc/{{pr,review}}/* in {repo}");
+        return Ok(());
+    }
+    println!("{:<36} {:<10} {:>8} STATUS", "REF", "KIND", "REVIEW");
+    for r in &refs {
+        println!(
+            "{:<36} {:<10} {:>8} {}",
+            r["ref"].as_str().unwrap_or("?"),
+            r["kind"].as_str().unwrap_or("?"),
+            r["review_id"]
+                .as_i64()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "-".into()),
+            r["status"].as_str().unwrap_or("?"),
+        );
+    }
+    Ok(())
+}
+
+async fn review_refs_gc_cmd(daemon: &str, repo: &str, apply: bool, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let dry = if apply { "0" } else { "1" };
+    let (status, body) = post_json_query_raw(
+        &client,
+        daemon,
+        "/api/reviews/refs/gc",
+        &[("repo", repo), ("dry_run", dry)],
+        &serde_json::json!({}),
+    )
+    .await?;
+    if json {
+        envelope::print_ok("review-refs/1", &body, Vec::new(), false, None);
+    }
+    if !status.is_success() {
+        return Err(loopback_or_api_error(
+            "review refs gc",
+            daemon,
+            status,
+            &body,
+        ));
+    }
+    if !json {
+        let n = body["deleted_count"].as_u64().unwrap_or(0);
+        if body["dry_run"].as_bool().unwrap_or(true) {
+            println!("dry-run: would delete {n} orphan ref(s) in {repo} (pass --apply)");
+        } else {
+            println!("✓ deleted {n} orphan ref(s) in {repo}");
+        }
+        if let Some(arr) = body["deleted"].as_array() {
+            for r in arr {
+                if let Some(s) = r.as_str() {
+                    println!("  {s}");
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -15398,8 +15667,8 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 // comments,fetch} -----------------------------------------------------------
 
 /// `kb-code review start-pr --repo R --pr N [--base][--title][--session]
-/// [--gh-token-from-cli] [--dry-run] [--json]` — `POST /api/reviews/pr`
-/// (design doc §2 row 1). LOOPBACK-ONLY.
+/// [--reopen|--new] [--gh-token-from-cli] [--dry-run] [--json]` — `POST
+/// /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY.
 ///
 /// V76-R1a — this verb ALWAYS runs the daemon-side job (`?async=1`) and
 /// polls `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
@@ -15410,6 +15679,9 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 /// SAME one the synchronous route returns (the job carries it verbatim
 /// under `result`); the stale-mirror refusal
 /// (`urn:kb:errors:stale-mirror`) is printed verbatim, hint included.
+///
+/// V76-R1b — `--reopen`/`--new` become `?on_closed=reopen|new` (an OPEN
+/// existing (repo, PR) review is reused; a CLOSED one 409s without a flag).
 #[allow(clippy::too_many_arguments)]
 async fn review_start_pr_cmd(
     daemon: &str,
@@ -15418,6 +15690,8 @@ async fn review_start_pr_cmd(
     base: Option<&str>,
     title: Option<&str>,
     session: Option<&str>,
+    reopen: bool,
+    new: bool,
     gh_token_from_cli: bool,
     dry_run: bool,
     json: bool,
@@ -15431,6 +15705,12 @@ async fn review_start_pr_cmd(
     }
     if let Some(s) = session {
         payload["session_id"] = serde_json::json!(s);
+    }
+    let mut query: Vec<(&str, &str)> = vec![("async", "1")];
+    if reopen {
+        query.push(("on_closed", "reopen"));
+    } else if new {
+        query.push(("on_closed", "new"));
     }
     let mut gh_token: Option<String> = None;
     if gh_token_from_cli {
@@ -15485,7 +15765,7 @@ async fn review_start_pr_cmd(
         .build()
         .context("build start-pr http client")?;
     let (status, body) =
-        post_json_raw(&client, daemon, "/api/reviews/pr?async=1", &payload).await?;
+        post_json_query_raw(&client, daemon, "/api/reviews/pr", &query, &payload).await?;
     if status == reqwest::StatusCode::ACCEPTED {
         let job_id = body["job_id"]
             .as_str()
@@ -15497,38 +15777,93 @@ async fn review_start_pr_cmd(
         return match classify_start_pr_job(&terminal) {
             StartPrJob::Done(result) => print_start_pr_envelope(&result, json),
             StartPrJob::Failed { error, error_type } => {
-                // The refusal verbatim — the stale-mirror message's retry
-                // command is IN the text, so nothing is re-worded here.
-                let urn = error_type.map(|t| format!(" [{t}]")).unwrap_or_default();
-                Err(anyhow::anyhow!("review start-pr failed{urn}: {error}"))
+                start_pr_failed(&error, error_type.as_deref(), &terminal, json)
             }
             StartPrJob::Running(_) => unreachable!("poll_start_pr_job returns on a terminal state"),
         };
     }
     // A pre-V76 daemon has no job mode and answers the POST synchronously
-    // (202 never happens) — keep the legacy handling byte-identical.
-    if json {
-        println!("{}", serde_json::to_string_pretty(&body)?);
-    }
+    // (202 never happens) — keep the legacy handling, including R1b's
+    // closed-binding 409 (`--reopen`/`--new`).
     if !status.is_success() {
-        if status == reqwest::StatusCode::CONFLICT {
-            return Err(anyhow::anyhow!(
-                "review start-pr failed (409): {} — existing review id {}",
+        return start_pr_http_failure(daemon, status, &body, json);
+    }
+    print_start_pr_envelope(&body, json)
+}
+
+fn start_pr_closed_hint() -> &'static str {
+    "pass --reopen to reopen and add a patchset, or --new to mint a new review id"
+}
+
+fn start_pr_is_closed_error(error_type: Option<&str>, body: &serde_json::Value) -> bool {
+    error_type == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+        || body["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+        || body["result"]["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+}
+
+fn start_pr_failed(
+    error: &str,
+    error_type: Option<&str>,
+    terminal: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    if start_pr_is_closed_error(error_type, terminal) {
+        if json {
+            envelope::print_err(
+                kb_code_server::reviews::ERR_REVIEW_CLOSED,
+                error,
+                Some(start_pr_closed_hint()),
+            );
+        } else {
+            let existing = terminal["result"]["existing_review_id"]
+                .as_i64()
+                .map(|id| format!(" — existing review id {id}"))
+                .unwrap_or_default();
+            eprintln!("review start-pr failed (409): {error}{existing} (pass --reopen or --new)");
+        }
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    // The refusal verbatim — the stale-mirror message's retry command is
+    // IN the text, so nothing is re-worded here.
+    let urn = error_type.map(|t| format!(" [{t}]")).unwrap_or_default();
+    Err(anyhow::anyhow!("review start-pr failed{urn}: {error}"))
+}
+
+fn start_pr_http_failure(
+    daemon: &str,
+    status: reqwest::StatusCode,
+    body: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    let closed = start_pr_is_closed_error(body["type"].as_str(), body);
+    if json {
+        envelope::print_err(
+            body["type"].as_str().unwrap_or("error"),
+            body["error"].as_str().unwrap_or("start-pr failed"),
+            if closed {
+                Some(start_pr_closed_hint())
+            } else {
+                None
+            },
+        );
+    }
+    if status == reqwest::StatusCode::CONFLICT {
+        if !json {
+            eprintln!(
+                "review start-pr failed (409): {} — existing review id {} \
+                 (pass --reopen or --new)",
                 body["error"].as_str().unwrap_or("already bound"),
                 body["existing_review_id"]
-            ));
+            );
         }
-        return Err(loopback_or_api_error(
-            "review start-pr",
-            daemon,
-            status,
-            &body,
-        ));
+        std::process::exit(envelope::EXIT_CONFLICT);
     }
-    if !json {
-        print_start_pr_human(&body);
-    }
-    Ok(())
+    Err(loopback_or_api_error(
+        "review start-pr",
+        daemon,
+        status,
+        body,
+    ))
 }
 
 /// V76-R1a — the start-pr client timeout, 600 s: the daemon-side
@@ -15610,8 +15945,13 @@ fn print_start_pr_human(body: &serde_json::Value) {
     } else {
         String::new()
     };
+    let reused = if body["reused"].as_bool().unwrap_or(false) {
+        " reused"
+    } else {
+        ""
+    };
     println!(
-        "✓ review {} bound to {}#{} (ps{}){meta_note}",
+        "✓ review {}{reused} bound to {}#{} (ps{}){meta_note}",
         body["id"], body["pr_repo_slug"], body["pr_number"], body["latest_ps"],
     );
 }
@@ -21652,6 +21992,13 @@ async fn workspace_export_cmd(daemon: &str, repo: &str, name_or_id: &str) -> Res
 /// empty; they join the walk anyway, because the half of it that matters
 /// here is "a `kb-code` verb exists that addresses this route at all" — the
 /// v7.0 dead-surface defect in its CLI-side shape.
+fn review_refs_list_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::reviews::REVIEW_REFS_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
 fn review_doc_request(
     ps: Option<&str>,
     resolve: bool,
@@ -24591,6 +24938,78 @@ mod tests {
         }
     }
 
+    #[test]
+    fn v76_r1b_review_lifecycle_verbs_parse() {
+        match parse_cli(&["review", "delete", "12", "--yes"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Delete { id, yes, force, .. },
+            } => {
+                assert_eq!(id, 12);
+                assert!(yes);
+                assert!(!force);
+            }
+            other => panic!("expected review delete, got {other:?}"),
+        }
+        match parse_cli(&["review", "delete", "12", "--yes", "--force"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Delete { force, .. },
+            } => assert!(force),
+            other => panic!("expected review delete --force, got {other:?}"),
+        }
+        match parse_cli(&["review", "reopen", "12", "--json"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Reopen { id, json, .. },
+            } => {
+                assert_eq!(id, 12);
+                assert!(json);
+            }
+            other => panic!("expected review reopen, got {other:?}"),
+        }
+        match parse_cli(&["review", "refs", "list", "--repo", "r"]).unwrap() {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Refs {
+                        cmd: ReviewRefsCmd::List { repo, .. },
+                    },
+            } => assert_eq!(repo, "r"),
+            other => panic!("expected review refs list, got {other:?}"),
+        }
+        match parse_cli(&["review", "refs", "gc", "--repo", "r", "--apply"]).unwrap() {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Refs {
+                        cmd: ReviewRefsCmd::Gc { apply, .. },
+                    },
+            } => assert!(apply),
+            other => panic!("expected review refs gc --apply, got {other:?}"),
+        }
+        match parse_cli(&["review", "start-pr", "--repo", "r", "--pr", "7", "--reopen"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::StartPr { reopen, new, .. },
+            } => {
+                assert!(reopen);
+                assert!(!new);
+            }
+            other => panic!("expected start-pr --reopen, got {other:?}"),
+        }
+        match parse_cli(&["review", "start-pr", "--repo", "r", "--pr", "7", "--new"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::StartPr { new, reopen, .. },
+            } => {
+                assert!(new);
+                assert!(!reopen);
+            }
+            other => panic!("expected start-pr --new, got {other:?}"),
+        }
+        assert!(
+            parse_cli(&["review", "start-pr", "--repo", "r", "--pr", "7", "--reopen", "--new"])
+                .is_err(),
+            "--reopen and --new conflict"
+        );
+        assert!(review_delete_requires_yes(false).is_err());
+        assert!(review_delete_requires_yes(true).is_ok());
+    }
+
     // --- reading sets (Phase E3) --------------------------------------------
 
     #[test]
@@ -26359,6 +26778,8 @@ mod tests {
             // V75-M3 — `branch-facts/1`'s three READS join the SAME walk.
             branch_favourites_request("repo"),
             branch_conflicts_request("repo", "main", Some(5), Some("branch:x")),
+            // V76-R1b — `GET /api/reviews/refs`.
+            review_refs_list_request("repo"),
             // V76-R1a — the start-pr job read joins the SAME walk.
             review_job_request(),
         ];
@@ -26442,6 +26863,8 @@ mod tests {
             .chain(kb_code_server::workspace::V75_M1_ROUTES.iter())
             // V75-M3 — `branch-facts/1`'s three reads, the same way.
             .chain(kb_code_server::branches::V75_M3_ROUTES.iter())
+            // V76-R1b — `GET /api/reviews/refs`.
+            .chain(kb_code_server::reviews::V76_R1B_ROUTES.iter())
             // V76-R1a — the start-pr job read, the same way.
             .chain(kb_code_server::review_jobs::V76_R1A_ROUTES.iter());
         for c in declared {
