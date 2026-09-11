@@ -417,8 +417,7 @@ function SuggestionBlock({
   const confirm = useConfirm();
   const suggestion = thread.suggestion;
   // V76-R2c — the saved suggestion renders through SuggestionDiffPanel
-  // (two verbatim rows, token marks); server-span painting of those rows
-  // is the V76-R2c.4 follow-up on useHighlight.
+  // (two verbatim rows, token marks + highlight/1 syntax spans).
   if (!suggestion) return null;
 
   const outdated = suggestionIsOutdated(thread);
@@ -490,7 +489,11 @@ function SuggestionBlock({
         )}
       </div>
       <div className="kbc-suggestion__preview" data-kbc-suggestion-preview>
-        <SuggestionDiffPanel original={suggestion.original} replacement={suggestion.replacement} />
+        <SuggestionDiffPanel
+          original={suggestion.original}
+          replacement={suggestion.replacement}
+          path={thread.path}
+        />
       </div>
       <div className="kbc-suggestion__actions">
         {threadAcceptsSuggestion(thread) && (
