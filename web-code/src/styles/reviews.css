@@ -908,6 +908,7 @@
 .kbc-rdiff__body {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
 }
 .kbc-rdiff__section {
   border-bottom: 1px solid var(--rule);
@@ -1519,17 +1520,32 @@ span.kbc-diff__impact-chip {
 /* --- the map column --------------------------------------------------- */
 .kbc-rdiff__body--mapped {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 0;
+  min-height: 0;
+  min-width: 0;
+}
+.kbc-rdiff__split {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+.kbc-rdiff__map-panel,
+.kbc-rdiff__stream-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 .kbc-rdiff__stream {
   flex: 1 1 auto;
   min-width: 0;
+  height: 100%;
+  overflow: auto;
 }
 .kbc-rmap {
-  flex: 0 0 clamp(200px, 22vw, 320px);
-  position: sticky;
-  top: var(--topbar-h);
+  height: 100%;
   max-height: calc(100vh - var(--topbar-h));
   overflow: auto;
   padding: var(--pad-2);
@@ -1616,7 +1632,6 @@ span.kbc-diff__impact-chip {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl;
   text-align: left;
   font-family: var(--font-mono, ui-monospace, monospace);
 }
@@ -1644,6 +1659,101 @@ span.kbc-diff__impact-chip {
   border-left: 2px dotted var(--accent);
 }
 
+/* --- V76-R2b — shared review file tree -------------------------------- */
+.kbc-ftree {
+  outline: none;
+}
+.kbc-ftree:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.kbc-ftree__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kbc-ftree__section {
+  margin-top: var(--pad-2);
+}
+.kbc-ftree__section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.kbc-ftree__section-head .kbc-rmap__chapter-head {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.kbc-ftree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-1, 4px);
+  cursor: pointer;
+}
+.kbc-ftree__row:hover {
+  background: var(--bg-hover, var(--bg-panel-2));
+}
+.kbc-ftree__row.is-current,
+.kbc-ftree__row.is-cursor {
+  border-left-color: var(--accent);
+  background: var(--bg-panel-2);
+}
+.kbc-ftree__twist {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+}
+.kbc-ftree__kind {
+  display: inline-flex;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+}
+.kbc-ftree__kind-abbr {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  line-height: 1;
+}
+.kbc-ftree__name,
+.kbc-ftree__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.kbc-ftree__counts {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- the per-hunk strip ------------------------------------------------ */
 .kbc-hunkstrip {
   display: flex;
@@ -1655,6 +1765,7 @@ span.kbc-diff__impact-chip {
   background: var(--bg-panel-2);
   border-left: 2px solid transparent;
   font-size: var(--fs-xs);
+  min-width: 0;
 }
 .kbc-hunkstrip--current {
   border-left-color: var(--accent);
@@ -1663,6 +1774,10 @@ span.kbc-diff__impact-chip {
   opacity: 0.6;
 }
 .kbc-hunkstrip__header {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 .kbc-hunkstrip__spacer {

@@ -7,3 +7,6 @@ test-results/
 playwright-report/
 # e2e/package-lock.json IS tracked — `npm ci` (`just ci-code-e2e`) requires
 # a committed lockfile, same discipline as the root tests/e2e's own.
+
+# local npm cache used by sandboxed builders (npm ci --cache $PWD/.npm-cache)
+.npm-cache/

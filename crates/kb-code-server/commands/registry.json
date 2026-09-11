@@ -4844,6 +4844,112 @@
       "dispatch": "surface"
     },
     {
+      "id": "diff.tree-focus",
+      "title": "Focus the review file tree",
+      "aka": [
+        "focus files",
+        "focus map"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "g f"
+        ],
+        "plain": [
+          "g f"
+        ],
+        "helix": [
+          "g f"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:the review file tree is browser-local chrome; `kb-code review files` is the data",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. Sits beside `g g` (`diff.file-first`) under the same `g` prefix in diff scope. The review diff page has no CodeView, so a bare `g` is not a vim prefix here."
+    },
+    {
+      "id": "diff.tree-toggle-folder",
+      "title": "Expand or collapse the focused folder",
+      "aka": [
+        "toggle folder"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z f"
+        ],
+        "plain": [
+          "z f"
+        ],
+        "helix": [
+          "z f"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:folder collapse is browser-local tree state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. `z c`/`z o`/`z a` remain hunk folds; `z f` is the folder. Same `z` prefix, different second token — not a prefix collision."
+    },
+    {
+      "id": "diff.tree-collapse-all",
+      "title": "Collapse every folder in the file tree",
+      "aka": [
+        "collapse all folders"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "z m"
+        ],
+        "plain": [
+          "z m"
+        ],
+        "helix": [
+          "z m"
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:folder collapse is browser-local tree state",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. Lowercase `z m` so it does not share a chord with `boards.fold-all` (`z M`). Same `z` prefix as the hunk folds, different second token."
+    },
+    {
+      "id": "diff.map-reset",
+      "title": "Reset the file map pane width",
+      "aka": [
+        "reset map width",
+        "resize reset"
+      ],
+      "group": "Review diff",
+      "keys": {
+        "vim": [
+          "g ="
+        ],
+        "plain": [
+          "g ="
+        ],
+        "helix": [
+          "g ="
+        ]
+      },
+      "scope": "diff",
+      "cli": "none:map pane width is browser-local layout, same as the Desk — double-click the separator also resets",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "surface",
+      "note": "V76-R2b. Reuses the Desk resize mechanism (`react-resizable-panels`); this command is the keyboard twin of a separator double-click."
+    },
+    {
       "id": "diff.ps-next",
       "title": "Next patchset",
       "aka": [

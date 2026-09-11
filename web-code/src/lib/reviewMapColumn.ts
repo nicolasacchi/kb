@@ -92,7 +92,7 @@ export function mapRowTitle(s: MapRowState): string {
 /// The column header's census: files, viewed, chapters. Deliberately
 /// separate from the toolbar's own `viewedCount/filesCount` pair rather
 /// than a second computation of it — the caller passes both in.
-export function mapCensusText(files: number, viewed: number, chapters: number): string {
-  const ch = chapters === 1 ? "1 chapter" : `${chapters} chapters`;
+export function mapCensusText(files: number, viewed: number, chapters: number, kind = "chapter"): string {
+  const ch = chapters === 1 ? `1 ${kind}` : `${chapters} ${kind}s`;
   return `${files} file${files === 1 ? "" : "s"} · ${viewed} viewed · ${ch}`;
 }

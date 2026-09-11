@@ -231,7 +231,7 @@ export default function UnifiedHunks({
         const view = hunkViews?.[hi] ?? null;
         // The context dial / expand buttons hand back a WIDER line list;
         // with no view (the non-review surfaces) it is the wire's own.
-        const lines = view ? view.lines : hunk.lines;
+        const lines = view && view.lines.length > 0 ? view.lines : hunk.lines;
         return (
         <div
           className={"kbc-diff__hunk" + (view?.collapsed ? " kbc-diff__hunk--collapsed" : "")}
