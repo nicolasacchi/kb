@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ReviewFileRow, SyntaxRowOut } from "../api/types";
 import { mergeQuery, reviewDiffHref } from "./codeUrl";
@@ -163,5 +165,51 @@ describe("countsText", () => {
   it("pluralises files and always prints both signs", () => {
     expect(countsText({ files: 1, additions: 4, deletions: 0 })).toBe("1 file +4 −0");
     expect(countsText({ files: 15, additions: 0, deletions: 40 })).toBe("15 files +0 −40");
+  });
+});
+
+describe("shipped e2e hooks the tree / map must keep", () => {
+  it("ReviewFileTree still stamps data-kbc-rdiff-map-row and data-kbc-rdiff-map-current", () => {
+    const src = readFileSync(fileURLToPath(new URL("../components/reviews/ReviewFileTree.tsx", import.meta.url)), "utf-8");
+    expect(src).toContain('attrs["data-kbc-rdiff-map-row"] = path');
+    expect(src).toContain('attrs["data-kbc-rdiff-map-current"] = "1"');
+  });
+
+  it("]f / goFile in all-files mode does not write ?file= (map click does)", () => {
+    const src = readFileSync(fileURLToPath(new URL("../routes/ReviewDiff.tsx", import.meta.url)), "utf-8");
+    const goFile = src.slice(src.indexOf("function goFile"), src.indexOf("function openFileInCenter"));
+    expect(goFile).toContain('apply({ type: "gotoFile"');
+    expect(goFile).not.toContain('setParam("file"');
+    const open = src.slice(src.indexOf("function openFileInCenter"), src.indexOf("function openPseudo"));
+    expect(open).toContain("file:");
+  });
+
+  it("first-hunk scroll after a tree click keys off focusPath, not all-files ?file=", () => {
+    const src = readFileSync(fileURLToPath(new URL("../routes/ReviewDiff.tsx", import.meta.url)), "utf-8");
+    const start = src.indexOf("const hunkScrolledFor");
+    expect(start).toBeGreaterThan(0);
+    const effect = src.slice(start, start + 1500);
+    expect(effect).toContain("const path = focusPath;");
+    expect(effect).not.toContain("focusPath || fileHint");
+  });
+
+  it("the stream is a document again (no nested height:100%/overflow clip)", () => {
+    const css = readFileSync(fileURLToPath(new URL("../styles/reviews.css", import.meta.url)), "utf-8");
+    const stream = css.match(/\.kbc-rdiff__stream \{[^}]+\}/)?.[0] ?? "";
+    expect(stream).not.toContain("height: 100%");
+    expect(stream).not.toContain("overflow: auto");
+    expect(css).toContain("position: sticky");
+    const fileDiff = css.match(/\.kbc-review__file-diff \{[^}]+\}/)?.[0] ?? "";
+    expect(fileDiff).not.toContain("max-height: 480px");
+    expect(fileDiff).toContain("overflow: visible");
+  });
+
+  it("ReviewMapSplit panels overflow:visible so the page, not the panel, scrolls", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("../components/reviews/ReviewMapSplit.tsx", import.meta.url)),
+      "utf-8",
+    );
+    expect(src).toContain('style={{ overflow: "visible" }}');
+    expect(src).not.toContain('overflow: "hidden"');
   });
 });
