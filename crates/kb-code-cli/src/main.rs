@@ -383,6 +383,31 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Paint a snippet with the daemon's tree-sitter spans
+    /// (`POST /api/highlight`, `highlight/1`). Same colours as the reader;
+    /// nothing is persisted. `--lang` is a `syntax/1` id or a fence alias
+    /// (`rb`); omit it and the daemon infers from `--path` or `--file`'s
+    /// name. `--json` is the machine form; without it a short summary
+    /// prints. Daemon-only.
+    Highlight {
+        /// syntax/1 language id or fence alias (`ruby`, `rb`, `rust`, …).
+        #[arg(long)]
+        lang: Option<String>,
+        /// Read the snippet from this path (`-` = stdin).
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Path used only to infer `lang` via syntax/1 detection.
+        #[arg(long)]
+        path: Option<String>,
+        /// Echo the current `highlight_salt` on the response.
+        #[arg(long)]
+        salt: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `highlight/1` JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// `kb-code outline <PATH> --repo R [--ref REF] [--json]` —
     /// `GET /api/outline` (`outline/1`): the structure of ONE file, for
     /// every registered file type. Rust items, YAML/TOML/JSON key paths,
@@ -4810,6 +4835,24 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
         Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
         Cmd::Parity { daemon, json } => parity_cmd(&daemon, json).await,
+        Cmd::Highlight {
+            lang,
+            file,
+            path,
+            salt,
+            daemon,
+            json,
+        } => {
+            highlight_cmd(
+                &daemon,
+                lang.as_deref(),
+                file.as_deref(),
+                path.as_deref(),
+                salt,
+                json,
+            )
+            .await
+        }
         Cmd::Reextract {
             bill,
             repo,
@@ -7596,6 +7639,22 @@ fn syntax_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::SYNTAX_ROUTE.path, Vec::new())
 }
 
+/// `POST /api/highlight` — JSON body, no query params.
+fn highlight_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::highlight::HIGHLIGHT_ROUTE.path, Vec::new())
+}
+
+/// `POST /api/highlight/batch` — JSON body, no query params.
+/// The SPA is the batch caller; the CLI paints one snippet. This helper
+/// exists so the dead-surface walk still sees a request for the path.
+#[cfg(test)]
+fn highlight_batch_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::highlight::HIGHLIGHT_BATCH_ROUTE.path,
+        Vec::new(),
+    )
+}
+
 /// The `GET /api/parity` request: `(path, query)`.
 fn parity_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::PARITY_ROUTE.path, Vec::new())
@@ -8254,6 +8313,83 @@ fn syntax_keys(row: &serde_json::Value) -> String {
     } else {
         keys.join(" ")
     }
+}
+
+/// `kb-code highlight` — `POST /api/highlight`.
+async fn highlight_cmd(
+    daemon: &str,
+    lang: Option<&str>,
+    file: Option<&Path>,
+    path: Option<&str>,
+    salt: bool,
+    json: bool,
+) -> Result<()> {
+    let text = match file {
+        Some(p) if p.as_os_str() == "-" => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("read snippet from stdin")?;
+            buf
+        }
+        Some(p) => std::fs::read_to_string(p)
+            .with_context(|| format!("read snippet from {}", p.display()))?,
+        None => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("read snippet from stdin (pass --file PATH to read a file)")?;
+            buf
+        }
+    };
+    let infer_path = path.map(str::to_string).or_else(|| {
+        file.and_then(|p| {
+            if p.as_os_str() == "-" {
+                None
+            } else {
+                p.file_name().and_then(|n| n.to_str()).map(str::to_string)
+            }
+        })
+    });
+    let mut body = serde_json::json!({ "text": text, "salt": salt });
+    if let Some(l) = lang {
+        body["lang"] = serde_json::Value::String(l.to_string());
+    } else {
+        body["lang"] = serde_json::Value::Null;
+    }
+    if let Some(p) = infer_path {
+        body["path"] = serde_json::Value::String(p);
+    }
+    let client = http_client()?;
+    let (route, _) = highlight_request();
+    let (status, resp) = post_json_raw(&client, daemon, route, &body).await?;
+    if !status.is_success() {
+        let err = resp
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("highlight failed");
+        anyhow::bail!("POST {route}: HTTP {status}: {err}");
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+    let lang_s = resp["lang"].as_str().unwrap_or("—");
+    let tier = resp["tier"].as_str().unwrap_or("?");
+    let n = resp["spans"].as_array().map(|a| a.len()).unwrap_or(0);
+    let derived = resp["honesty"]["derived_from"].as_str().unwrap_or("?");
+    let engine = resp["honesty"]["engine"].as_str().unwrap_or("?");
+    println!("lang:    {lang_s}");
+    println!("tier:    {tier}");
+    println!("spans:   {n}");
+    println!("honesty: {derived} via {engine}");
+    if let Some(reason) = resp["honesty"]["reason"].as_str() {
+        println!("reason:  {reason}");
+    }
+    if let Some(salt) = resp["salt"].as_str() {
+        println!("salt:    {salt}");
+    }
+    Ok(())
 }
 
 /// `kb-code syntax` — `GET /api/syntax`.
@@ -26865,6 +27001,8 @@ mod tests {
             }),
             syntax_request(),
             parity_request(),
+            highlight_request(),
+            highlight_batch_request(),
             // V72-H2b — the re-extract bill joins the SAME walk.
             reextract_bill_request("repo", Some(50)),
             // V72-G1.1 — the entity DOSSIER, on its own sibling path
@@ -27036,7 +27174,10 @@ mod tests {
             // V76-R1a — the start-pr job read, the same way.
             .chain(kb_code_server::review_jobs::V76_R1A_ROUTES.iter())
             // V76-R3c — typeahead + compare-file, the same way.
-            .chain(kb_code_server::refs_typeahead::V76_R3C_ROUTES.iter());
+            .chain(kb_code_server::refs_typeahead::V76_R3C_ROUTES.iter())
+            // V76-C1 — `highlight/1`. No query params (JSON body); this
+            // half of the walk proves a verb builds a request for each path.
+            .chain(kb_code_server::highlight::V76_C1_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
@@ -27050,6 +27191,30 @@ mod tests {
                     c.path
                 );
             }
+        }
+    }
+
+    #[test]
+    fn highlight_verb_parses_lang_and_file() {
+        let cli = Cli::try_parse_from([
+            "kb-code",
+            "highlight",
+            "--lang",
+            "ruby",
+            "--file",
+            "snippet.rb",
+            "--json",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Highlight {
+                lang, file, json, ..
+            } => {
+                assert_eq!(lang.as_deref(), Some("ruby"));
+                assert_eq!(file.as_deref(), Some(std::path::Path::new("snippet.rb")));
+                assert!(json);
+            }
+            other => panic!("expected Cmd::Highlight, got {other:?}"),
         }
     }
 

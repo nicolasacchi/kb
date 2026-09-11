@@ -118,7 +118,9 @@
 //! bounds painting at exactly one level.
 
 use crate::lang::{self, LangError};
-use std::collections::BTreeMap;
+use crate::syntax::{self, SyntaxRow};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
 use tree_sitter::StreamingIterator;
 
 pub type Result<T> = std::result::Result<T, LangError>;
@@ -362,6 +364,419 @@ fn map_class(cname: &str) -> HighlightClass {
         _ => HighlightClass::Other,
     }
 }
+
+// ── V76-C1 — `highlight/1`: paint ANY snippet, nothing persisted ──────────
+
+/// Wire schema for a single snippet.
+pub const HIGHLIGHT_SCHEMA: &str = "highlight/1";
+/// Wire schema for the batch form.
+pub const HIGHLIGHT_BATCH_SCHEMA: &str = "highlight-batch/1";
+/// One snippet may be at most this many UTF-8 bytes. Oversize is a 400
+/// naming the size, never a silent truncate.
+pub const MAX_SNIPPET_BYTES: usize = 256 * 1024;
+/// A batch may carry at most this many items.
+pub const MAX_BATCH_ITEMS: usize = 64;
+/// Sum of every item's `text` in a batch, UTF-8 bytes.
+pub const MAX_BATCH_BYTES: usize = 1024 * 1024;
+
+/// One role span, line-relative. `line` is 1-based; `start`/`end` are
+/// 0-based UTF-8 byte columns within that line (tree-sitter `Point.column`
+/// convention, exclusive end). The newline itself is never a column.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineRoleSpan {
+    pub line: u32,
+    pub start: u32,
+    pub end: u32,
+    pub role: HighlightClass,
+}
+
+/// What this paint is, and what it is not. Same four fields `outline/1`
+/// carries: a `none`-tier language is an honest empty result, never a 500.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HighlightHonesty {
+    pub tier: &'static str,
+    pub engine: String,
+    /// `highlights` when the extractor ran; `none` when the type does not
+    /// paint (unknown, named-but-unparsed, or a parse-only grammar).
+    pub derived_from: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `highlight/1` response. Computed per request, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HighlightOut {
+    pub schema: &'static str,
+    pub lang: Option<&'static str>,
+    pub tier: &'static str,
+    pub spans: Vec<LineRoleSpan>,
+    pub honesty: HighlightHonesty,
+    /// Present only when the request asked `salt: true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salt: Option<&'static str>,
+}
+
+/// `POST /api/highlight` body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HighlightIn {
+    /// A `syntax/1` language id, a fence alias (`rb`, `ts`, …), or `null`
+    /// to infer from [`path`].
+    pub lang: Option<String>,
+    /// Used only when `lang` is absent/empty: `syntax/1` detection.
+    pub path: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub salt: bool,
+}
+
+/// One item in `POST /api/highlight/batch`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HighlightBatchItemIn {
+    pub id: String,
+    pub lang: Option<String>,
+    pub path: Option<String>,
+    pub text: String,
+}
+
+/// `POST /api/highlight/batch` body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HighlightBatchIn {
+    pub items: Vec<HighlightBatchItemIn>,
+}
+
+/// One painted item in a batch response — the snippet's own `highlight/1`
+/// body plus the caller-supplied `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HighlightBatchItemOut {
+    pub id: String,
+    pub schema: &'static str,
+    pub lang: Option<&'static str>,
+    pub tier: &'static str,
+    pub spans: Vec<LineRoleSpan>,
+    pub honesty: HighlightHonesty,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salt: Option<&'static str>,
+}
+
+/// `highlight-batch/1` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HighlightBatchOut {
+    pub schema: &'static str,
+    pub items: Vec<HighlightBatchItemOut>,
+}
+
+impl HighlightBatchItemOut {
+    fn from_out(id: String, out: HighlightOut) -> Self {
+        Self {
+            id,
+            schema: out.schema,
+            lang: out.lang,
+            tier: out.tier,
+            spans: out.spans,
+            honesty: out.honesty,
+            salt: out.salt,
+        }
+    }
+}
+
+fn engine_label(row: Option<&SyntaxRow>) -> String {
+    match row.map(|r| r.engine) {
+        Some(syntax::Engine::TreeSitter(g)) => format!("tree-sitter:{g}"),
+        Some(syntax::Engine::Scanner(s)) => format!("scanner:{s}"),
+        _ => "none".to_string(),
+    }
+}
+
+/// Resolve a caller-supplied language token to a registry row.
+///
+/// Exact `syntax/1` id first (`row_for_lang`), then a Markdown fence
+/// alias (`rb` → `ruby`) via `markdown::resolve_info_string`. An unknown
+/// token is `None` — the caller paints `tier: none`, never 500s.
+fn row_for_lang_or_alias(token: &str) -> Option<&'static SyntaxRow> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Some(row) = syntax::row_for_lang(t) {
+        return Some(row);
+    }
+    crate::markdown::resolve_info_string(t).and_then(syntax::row_for_lang)
+}
+
+/// Pick the registry row for a snippet. `lang` wins when it is a non-empty
+/// token; otherwise `path` (plus the snippet bytes, for a shebang) decides.
+fn resolve_row<'a>(
+    lang: Option<&'a str>,
+    path: Option<&'a str>,
+    text: &[u8],
+) -> std::result::Result<Option<&'static SyntaxRow>, String> {
+    if let Some(token) = lang.map(str::trim).filter(|s| !s.is_empty()) {
+        return match row_for_lang_or_alias(token) {
+            Some(row) => Ok(Some(row)),
+            None => Err(format!(
+                "unknown language {token:?} — not a syntax/1 id or a fence alias this build paints"
+            )),
+        };
+    }
+    if let Some(p) = path.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(syntax::row_for_path(p, Some(text)));
+    }
+    Err("lang is null and no path to infer from — pass a syntax/1 id or a path".into())
+}
+
+/// Bucket byte-offset [`Span`]s onto 1-based lines as UTF-8 columns.
+/// Multi-line spans split at line boundaries; the newline is never a column.
+pub fn line_spans_from_bytes(source: &[u8], spans: &[Span]) -> Vec<LineRoleSpan> {
+    if source.is_empty() || spans.is_empty() {
+        return Vec::new();
+    }
+    let mut starts: Vec<u32> = vec![0];
+    for (i, &b) in source.iter().enumerate() {
+        if b == b'\n' {
+            starts.push((i + 1) as u32);
+        }
+    }
+    let total = source.len() as u32;
+    let line_index = |byte: u32| -> usize {
+        let mut lo = 0usize;
+        let mut hi = starts.len() - 1;
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if starts[mid] <= byte {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        lo
+    };
+    let mut out = Vec::new();
+    for span in spans {
+        if span.byte_len == 0 {
+            continue;
+        }
+        let span_start = span.byte_start;
+        let span_end = span.byte_start.saturating_add(span.byte_len);
+        if span_end <= span_start || span_start >= total {
+            continue;
+        }
+        let clipped_start = span_start;
+        let clipped_end = span_end.min(total);
+        let first = line_index(clipped_start);
+        let last = line_index(clipped_end.saturating_sub(1));
+        for li in first..=last {
+            let line_byte_start = starts[li];
+            let line_content_end = starts
+                .get(li + 1)
+                .map(|n| n.saturating_sub(1))
+                .unwrap_or(total);
+            let overlap_start = clipped_start.max(line_byte_start);
+            let overlap_end = clipped_end.min(line_content_end);
+            if overlap_end <= overlap_start {
+                continue;
+            }
+            out.push(LineRoleSpan {
+                line: (li as u32) + 1,
+                start: overlap_start - line_byte_start,
+                end: overlap_end - line_byte_start,
+                role: span.class,
+            });
+        }
+    }
+    out
+}
+
+fn empty_out(row: Option<&'static SyntaxRow>, reason: String, want_salt: bool) -> HighlightOut {
+    let tier = row.map(|r| r.tier.as_str()).unwrap_or("none");
+    HighlightOut {
+        schema: HIGHLIGHT_SCHEMA,
+        lang: row.map(|r| r.lang),
+        tier,
+        spans: Vec::new(),
+        honesty: HighlightHonesty {
+            tier,
+            engine: engine_label(row),
+            derived_from: "none",
+            reason: Some(reason),
+        },
+        salt: if want_salt {
+            row.and_then(|r| r.info).map(|i| i.highlight_salt)
+        } else {
+            None
+        },
+    }
+}
+
+fn refuse_size(kind: &str, got: usize, cap: usize, cap_label: &str) -> crate::routes::ApiError {
+    crate::routes::ApiError::bad_request(format!(
+        "{kind} is {got} bytes; highlight/1 refuses above {cap} ({cap_label}) — shrink the snippet"
+    ))
+}
+
+/// Paint one snippet. Caps refuse with a 400 naming the size; an unknown
+/// or `none`-tier language is a 200 with empty spans and a reason.
+pub fn highlight_snippet(
+    req: &HighlightIn,
+) -> std::result::Result<HighlightOut, crate::routes::ApiError> {
+    let n = req.text.len();
+    if n > MAX_SNIPPET_BYTES {
+        return Err(refuse_size("text", n, MAX_SNIPPET_BYTES, "256 KiB"));
+    }
+    let bytes = req.text.as_bytes();
+    let row = match resolve_row(req.lang.as_deref(), req.path.as_deref(), bytes) {
+        Ok(row) => row,
+        Err(reason) => return Ok(empty_out(None, reason, req.salt)),
+    };
+    let Some(row) = row else {
+        return Ok(empty_out(
+            None,
+            "no syntax/1 registry row for this file type".into(),
+            req.salt,
+        ));
+    };
+    if !row.plan().highlight {
+        let reason = row
+            .note
+            .unwrap_or("this file type's tier derives no highlight spans")
+            .to_string();
+        return Ok(empty_out(Some(row), reason, req.salt));
+    }
+    let spans = match extract_highlights(row.lang, bytes) {
+        Ok(s) => line_spans_from_bytes(bytes, &s),
+        Err(e) => {
+            return Ok(empty_out(
+                Some(row),
+                format!("extractor refused: {e}"),
+                req.salt,
+            ));
+        }
+    };
+    Ok(HighlightOut {
+        schema: HIGHLIGHT_SCHEMA,
+        lang: Some(row.lang),
+        tier: row.tier.as_str(),
+        spans,
+        honesty: HighlightHonesty {
+            tier: row.tier.as_str(),
+            engine: engine_label(Some(row)),
+            derived_from: "highlights",
+            reason: None,
+        },
+        salt: if req.salt {
+            row.info.map(|i| i.highlight_salt)
+        } else {
+            None
+        },
+    })
+}
+
+/// Paint a page of snippets. Caps refuse with numbers; each item is
+/// otherwise independent (one unknown language does not 500 the batch).
+pub fn highlight_batch(
+    req: &HighlightBatchIn,
+) -> std::result::Result<HighlightBatchOut, crate::routes::ApiError> {
+    let n = req.items.len();
+    if n == 0 {
+        return Err(crate::routes::ApiError::bad_request(
+            "items is empty; send at least one snippet",
+        ));
+    }
+    if n > MAX_BATCH_ITEMS {
+        return Err(crate::routes::ApiError::bad_request(format!(
+            "batch has {n} items; highlight/1 refuses above {MAX_BATCH_ITEMS} — split the request"
+        )));
+    }
+    let mut seen = HashSet::with_capacity(n);
+    let mut total = 0usize;
+    for item in &req.items {
+        if item.id.is_empty() {
+            return Err(crate::routes::ApiError::bad_request(
+                "every batch item needs a non-empty id",
+            ));
+        }
+        if !seen.insert(item.id.as_str()) {
+            return Err(crate::routes::ApiError::bad_request(format!(
+                "duplicate batch id {:?} — ids must be unique in one request",
+                item.id
+            )));
+        }
+        total = total.saturating_add(item.text.len());
+        if item.text.len() > MAX_SNIPPET_BYTES {
+            return Err(refuse_size(
+                &format!("item {:?} text", item.id),
+                item.text.len(),
+                MAX_SNIPPET_BYTES,
+                "256 KiB",
+            ));
+        }
+    }
+    if total > MAX_BATCH_BYTES {
+        return Err(crate::routes::ApiError::bad_request(format!(
+            "batch total is {total} bytes; highlight/1 refuses above {MAX_BATCH_BYTES} (1 MiB) — split the request"
+        )));
+    }
+    let mut items = Vec::with_capacity(n);
+    for item in &req.items {
+        let out = highlight_snippet(&HighlightIn {
+            lang: item.lang.clone(),
+            path: item.path.clone(),
+            text: item.text.clone(),
+            salt: false,
+        })?;
+        items.push(HighlightBatchItemOut::from_out(item.id.clone(), out));
+    }
+    Ok(HighlightBatchOut {
+        schema: HIGHLIGHT_BATCH_SCHEMA,
+        items,
+    })
+}
+
+// ── routes ───────────────────────────────────────────────────────────────
+
+use axum::http::header;
+use axum::response::IntoResponse;
+use axum::Json;
+
+/// `POST /api/highlight` — paint one snippet. Bearer read; nothing persisted.
+pub async fn highlight_route(
+    Json(body): Json<HighlightIn>,
+) -> std::result::Result<impl IntoResponse, crate::routes::ApiError> {
+    let out = highlight_snippet(&body)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
+}
+
+/// `POST /api/highlight/batch` — paint up to [`MAX_BATCH_ITEMS`] snippets.
+pub async fn highlight_batch_route(
+    Json(body): Json<HighlightBatchIn>,
+) -> std::result::Result<impl IntoResponse, crate::routes::ApiError> {
+    let out = highlight_batch(&body)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
+}
+
+fn no_query_params_accept_without(_omit: &str) -> bool {
+    true
+}
+
+pub const HIGHLIGHT_ROUTE: crate::entities::RouteContract = crate::entities::RouteContract {
+    path: "/api/highlight",
+    handler: "highlight::highlight_route",
+    required_params: &[],
+    params_accept_without: no_query_params_accept_without,
+};
+
+pub const HIGHLIGHT_BATCH_ROUTE: crate::entities::RouteContract = crate::entities::RouteContract {
+    path: "/api/highlight/batch",
+    handler: "highlight::highlight_batch_route",
+    required_params: &[],
+    params_accept_without: no_query_params_accept_without,
+};
+
+/// Every route V76-C1 adds. Walked from BOTH sides (this crate against
+/// `router.rs`, kb-code-cli against the verbs) — see
+/// `entities::V71_G0_ROUTES`. Required-params is empty: the contract is a
+/// JSON body, enforced by axum's `Json` extractor.
+pub const V76_C1_ROUTES: &[crate::entities::RouteContract] =
+    &[HIGHLIGHT_ROUTE, HIGHLIGHT_BATCH_ROUTE];
 
 #[cfg(test)]
 mod tests {
@@ -780,5 +1195,262 @@ mod tests {
             map_class("punctuation.special"),
             HighlightClass::PunctuationSpecial
         );
+    }
+
+    // ── V76-C1 — highlight/1 snippet wire ────────────────────────────────
+
+    fn wire(lang: Option<&str>, text: &str) -> HighlightOut {
+        highlight_snippet(&HighlightIn {
+            lang: lang.map(str::to_string),
+            path: None,
+            text: text.to_string(),
+            salt: false,
+        })
+        .expect("fixture snippets are under the cap")
+    }
+
+    #[test]
+    fn ruby_snippet_golden_line_spans() {
+        insta::assert_debug_snapshot!(wire(Some("ruby"), RUBY_SNIPPET));
+    }
+
+    #[test]
+    fn rust_snippet_golden_line_spans() {
+        insta::assert_debug_snapshot!(wire(Some("rust"), RUST_SNIPPET));
+    }
+
+    #[test]
+    fn typescript_snippet_golden_line_spans() {
+        insta::assert_debug_snapshot!(wire(Some("typescript"), TYPESCRIPT_SNIPPET));
+    }
+
+    #[test]
+    fn yaml_snippet_golden_line_spans() {
+        insta::assert_debug_snapshot!(wire(Some("yaml"), YAML_SNIPPET));
+    }
+
+    #[test]
+    fn haml_snippet_golden_line_spans() {
+        insta::assert_debug_snapshot!(wire(Some("haml"), "%section#hero\n  %p= t('.title')\n"));
+    }
+
+    #[test]
+    fn markdown_with_fence_golden_line_spans() {
+        insta::assert_debug_snapshot!(wire(Some("markdown"), MARKDOWN_SNIPPET));
+    }
+
+    #[test]
+    fn markdown_fence_guest_spans_are_in_host_line_coordinates() {
+        let out = wire(Some("markdown"), MARKDOWN_SNIPPET);
+        assert_eq!(out.tier, "full");
+        assert!(
+            out.spans
+                .iter()
+                .any(|s| s.line >= 5 && s.role == HighlightClass::Keyword),
+            "the Ruby `class`/`end` inside the fence must paint in Markdown line numbers: {:?}",
+            out.spans
+        );
+    }
+
+    #[test]
+    fn rb_alias_resolves_to_ruby() {
+        let out = wire(Some("rb"), RUBY_SNIPPET);
+        assert_eq!(out.lang, Some("ruby"));
+        assert_eq!(out.tier, "full");
+        assert!(!out.spans.is_empty());
+    }
+
+    #[test]
+    fn path_infers_lang() {
+        let out = highlight_snippet(&HighlightIn {
+            lang: None,
+            path: Some("lib/greet.rb".into()),
+            text: RUBY_SNIPPET.into(),
+            salt: true,
+        })
+        .unwrap();
+        assert_eq!(out.lang, Some("ruby"));
+        assert!(out.salt.is_some(), "salt=true must echo highlight_salt");
+        assert!(out.salt.unwrap().contains("ruby"));
+    }
+
+    #[test]
+    fn unknown_language_is_tier_none_never_500() {
+        let out = wire(Some("cobol"), "IDENTIFICATION DIVISION.\n");
+        assert_eq!(out.lang, None);
+        assert_eq!(out.tier, "none");
+        assert!(out.spans.is_empty());
+        assert_eq!(out.honesty.derived_from, "none");
+        let reason = out.honesty.reason.expect("unknown lang names why");
+        assert!(reason.contains("cobol"), "{reason}");
+        assert!(reason.contains("syntax/1"), "{reason}");
+    }
+
+    #[test]
+    fn named_none_tier_is_honest_not_an_error() {
+        let out = wire(Some("sql"), "SELECT 1;\n");
+        assert_eq!(out.lang, Some("sql"));
+        assert_eq!(out.tier, "none");
+        assert!(out.spans.is_empty());
+        assert!(out.honesty.reason.is_some());
+    }
+
+    #[test]
+    fn oversize_snippet_refuses_with_the_size() {
+        let n = MAX_SNIPPET_BYTES + 1;
+        let err = highlight_snippet(&HighlightIn {
+            lang: Some("ruby".into()),
+            path: None,
+            text: "x".repeat(n),
+            salt: false,
+        })
+        .unwrap_err();
+        assert_eq!(err.status_code(), axum::http::StatusCode::BAD_REQUEST);
+        let msg = err.message();
+        assert!(msg.contains(&n.to_string()), "{msg}");
+        assert!(msg.contains(&MAX_SNIPPET_BYTES.to_string()), "{msg}");
+        assert!(msg.contains("256 KiB"), "{msg}");
+    }
+
+    #[test]
+    fn batch_item_cap_refuses_with_the_count() {
+        let items: Vec<HighlightBatchItemIn> = (0..MAX_BATCH_ITEMS + 1)
+            .map(|i| HighlightBatchItemIn {
+                id: format!("i{i}"),
+                lang: Some("ruby".into()),
+                path: None,
+                text: "x".into(),
+            })
+            .collect();
+        let err = highlight_batch(&HighlightBatchIn { items }).unwrap_err();
+        assert_eq!(err.status_code(), axum::http::StatusCode::BAD_REQUEST);
+        let msg = err.message();
+        assert!(msg.contains(&(MAX_BATCH_ITEMS + 1).to_string()), "{msg}");
+        assert!(msg.contains(&MAX_BATCH_ITEMS.to_string()), "{msg}");
+    }
+
+    #[test]
+    fn batch_byte_cap_refuses_with_the_total() {
+        // Five items each AT the per-item cap: every item passes the
+        // 256 KiB gate on its own, but the batch total (1.25 MiB) crosses
+        // MAX_BATCH_BYTES — the refusal must name the total, the cap and
+        // the human unit. (Two such items sum to 512 KiB and are ACCEPTED.)
+        let chunk = "x".repeat(MAX_SNIPPET_BYTES);
+        let per_item = MAX_SNIPPET_BYTES;
+        let n_items = MAX_BATCH_BYTES / per_item + 1;
+        let items: Vec<HighlightBatchItemIn> = (0..n_items)
+            .map(|k| HighlightBatchItemIn {
+                id: format!("item-{k}"),
+                lang: Some("ruby".into()),
+                path: None,
+                text: chunk.clone(),
+            })
+            .collect();
+        let total = per_item * n_items;
+        assert!(total > MAX_BATCH_BYTES);
+        let err = highlight_batch(&HighlightBatchIn { items }).unwrap_err();
+        let msg = err.message();
+        assert!(msg.contains(&total.to_string()), "{msg}");
+        assert!(msg.contains(&MAX_BATCH_BYTES.to_string()), "{msg}");
+        assert!(msg.contains("1 MiB"), "{msg}");
+    }
+
+    #[test]
+    fn batch_duplicate_id_refuses_naming_the_id() {
+        let err = highlight_batch(&HighlightBatchIn {
+            items: vec![
+                HighlightBatchItemIn {
+                    id: "dup".into(),
+                    lang: Some("ruby".into()),
+                    path: None,
+                    text: "a".into(),
+                },
+                HighlightBatchItemIn {
+                    id: "dup".into(),
+                    lang: Some("rust".into()),
+                    path: None,
+                    text: "b".into(),
+                },
+            ],
+        })
+        .unwrap_err();
+        assert!(err.message().contains("dup"), "{}", err.message());
+    }
+
+    #[test]
+    fn batch_paints_each_item() {
+        let out = highlight_batch(&HighlightBatchIn {
+            items: vec![
+                HighlightBatchItemIn {
+                    id: "rb".into(),
+                    lang: Some("ruby".into()),
+                    path: None,
+                    text: RUBY_SNIPPET.into(),
+                },
+                HighlightBatchItemIn {
+                    id: "unknown".into(),
+                    lang: Some("cobol".into()),
+                    path: None,
+                    text: "x".into(),
+                },
+            ],
+        })
+        .unwrap();
+        assert_eq!(out.schema, HIGHLIGHT_BATCH_SCHEMA);
+        assert_eq!(out.items.len(), 2);
+        assert_eq!(out.items[0].id, "rb");
+        assert!(!out.items[0].spans.is_empty());
+        assert_eq!(out.items[1].id, "unknown");
+        assert_eq!(out.items[1].tier, "none");
+        assert!(out.items[1].spans.is_empty());
+    }
+
+    #[test]
+    fn line_spans_split_at_newlines_and_stay_in_bounds() {
+        let src = "ab\ncd\n";
+        let spans = vec![Span {
+            byte_start: 1,
+            byte_len: 3,
+            class: HighlightClass::Comment,
+        }];
+        let wire = line_spans_from_bytes(src.as_bytes(), &spans);
+        assert_eq!(
+            wire,
+            vec![
+                LineRoleSpan {
+                    line: 1,
+                    start: 1,
+                    end: 2,
+                    role: HighlightClass::Comment,
+                },
+                LineRoleSpan {
+                    line: 2,
+                    start: 0,
+                    end: 1,
+                    role: HighlightClass::Comment,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn v76_c1_routes_are_registered_in_router_src() {
+        const ROUTER_SRC: &str = include_str!("router.rs");
+        assert!(!V76_C1_ROUTES.is_empty());
+        for c in V76_C1_ROUTES {
+            let nested = c.path.strip_prefix("/api").expect("/api-nested");
+            assert!(
+                ROUTER_SRC.contains(&format!("\"{nested}\"")),
+                "{} missing from router.rs",
+                c.path
+            );
+            assert!(
+                ROUTER_SRC.contains(c.handler),
+                "{} handler {} missing from router.rs",
+                c.path,
+                c.handler
+            );
+            assert!((c.params_accept_without)(""));
+        }
     }
 }

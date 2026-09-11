@@ -19,6 +19,7 @@ import { ActChip, CategoryChip, SeverityChip } from "./RoomChips";
 // without threading a new prop through `ReportPanel`/`ReviewThreadsCard`.
 import { eligibleForPublishMark, toggleMark, useIsMarked } from "../../lib/publishMarks";
 import RecurrenceChip from "./RecurrenceChip";
+import HighlightedSnippet from "../HighlightedSnippet";
 
 /// Section 02's severity ordering (blockers first, then concerns, then
 /// verified-ok) — the SAME 3-value vocab `store::is_valid_severity`
@@ -243,7 +244,11 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
               <span>{finding.location.path}</span>
               <span>{finding.evidence.lang ?? ""}</span>
             </div>
-            <pre>{finding.evidence.source ?? ""}</pre>
+            <HighlightedSnippet
+              text={finding.evidence.source ?? ""}
+              lang={finding.evidence.lang}
+              path={finding.location.path}
+            />
           </div>
         )}
       </div>

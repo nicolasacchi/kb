@@ -207,7 +207,7 @@ export function ReviewAwareDiff({
     parsed ? repo : undefined,
     parsed ? path : undefined,
     { oldSha: from, newSha: to },
-    { hasRemoves },
+    { hasRemoves, parsed },
   );
   const comments = useReviewDiffComments(repo, reviewId, ps, path);
 

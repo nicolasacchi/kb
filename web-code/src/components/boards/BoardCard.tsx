@@ -34,6 +34,7 @@ import {
 } from "../../lib/boards";
 import { codeUrl, findingUrl, reviewDiffHref } from "../../lib/codeUrl";
 import { parseMarkdownLite } from "../../lib/markdownLite";
+import { FenceBlock } from "../SafeMarkdown";
 
 export interface BoardCardProps {
   node: BoardNode;
@@ -112,11 +113,7 @@ function NoteBody({ source }: { source: string }) {
     <div className="kbc-boardcard__note-md" data-kbc-board-note-md>
       {blocks.map((b, i) => {
         if (b.kind === "code") {
-          return (
-            <pre className="kbc-doc__fence" key={i}>
-              <code>{b.text}</code>
-            </pre>
-          );
+          return <FenceBlock key={i} text={b.text} lang={b.lang} />;
         }
         if (b.kind === "list") {
           return (

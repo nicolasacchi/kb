@@ -21,6 +21,7 @@ import {
 } from "../../lib/claims";
 import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
 import { Icon } from "../icons";
+import { FenceBlock } from "../SafeMarkdown";
 
 function InlineRuns({ runs }: { runs: InlineRun[] }) {
   return (
@@ -41,7 +42,10 @@ function InlineRuns({ runs }: { runs: InlineRun[] }) {
 /// the established pattern this crate already carries for `DocPanel`/
 /// `ReportPanel`).
 function ClaimBody({ text }: { text: string }) {
-  const blocks: MarkdownBlock[] = useMemo(() => parseMarkdownLite(text), [text]);
+  const blocks: MarkdownBlock[] = useMemo(
+    () => parseMarkdownLite(text, { fences: true }),
+    [text],
+  );
   return (
     <div className="kbc-claim__body">
       {blocks.map((b, i) => {
@@ -63,7 +67,7 @@ function ClaimBody({ text }: { text: string }) {
             </p>
           );
         }
-        return <pre key={i}>{b.text}</pre>;
+        return <FenceBlock key={i} text={b.text} lang={b.lang} />;
       })}
     </div>
   );

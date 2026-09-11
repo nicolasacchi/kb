@@ -32,6 +32,8 @@ import type {
   FileHistoryResponse,
   FileResponse,
   FramesResponse,
+  HighlightBatchOut,
+  HighlightOut,
   DossierOut,
   IdentityOut,
   SyntaxOut,
@@ -276,6 +278,62 @@ export function fetchCompareFile(
   b: string,
 ): Promise<CompareFileResponse> {
   return getJson<CompareFileResponse>("/api/compare/file", { repo, path, a, b });
+}
+
+/// `POST /api/highlight` (`highlight/1`) — paint one snippet. Nothing is
+/// persisted. Caps refuse with the size.
+export async function fetchHighlight(body: {
+  lang: string | null;
+  text: string;
+  path?: string;
+  salt?: boolean;
+}): Promise<HighlightOut> {
+  const res = await fetch("/api/highlight", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...KBC_REQUEST_HEADERS,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const err = (await res.json()) as { error?: string };
+      if (err.error) message = err.error;
+    } catch {
+      // non-JSON
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as HighlightOut;
+}
+
+/// `POST /api/highlight/batch` — a page of snippets (≤ 64, ≤ 1 MiB).
+export async function fetchHighlightBatch(
+  items: Array<{ id: string; lang: string | null; text: string; path?: string }>,
+): Promise<HighlightBatchOut> {
+  const res = await fetch("/api/highlight/batch", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...KBC_REQUEST_HEADERS,
+    },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const err = (await res.json()) as { error?: string };
+      if (err.error) message = err.error;
+    } catch {
+      // non-JSON
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as HighlightBatchOut;
 }
 
 export function fetchRefs(repo: string): Promise<RefsResponse> {

@@ -1418,6 +1418,37 @@ reviewable in the diff that causes it. CLI: `kb-code syntax [--json]`,
 `kb-code parity [--json]` — daemon reads, because the honest answer is what
 the DAEMON's build can do.
 
+**`highlight/1` (V76-C1) — `POST /api/highlight` and `POST /api/highlight/batch`.**
+Server-side tree-sitter spans for ANY snippet, the same extractor the
+reader uses for files (`highlight::extract_highlights`, including the
+injection layer so a Markdown fence's Ruby / ERB's Ruby / HAML's Ruby
+paint as guests). Nothing is persisted. Bearer read.
+
+Request: `{ lang: <syntax/1 id or fence alias, or null>, path?: <infer lang>, text: <≤ 256 KiB>, salt?: bool }`.
+Oversize is a 400 naming the size, never a silent truncate. An unknown
+or `none`-tier language is a 200 with `tier: "none"`, empty `spans`, and
+`honesty.reason` — never a 500.
+
+Response: `{ schema: "highlight/1", lang, tier, spans: [{line, start, end, role}], honesty, salt? }`.
+`line` is 1-based; `start`/`end` are 0-based UTF-8 byte columns within
+that line (tree-sitter `Point.column`). `role` is the 18-role
+`kbc-theme/1` vocabulary. `honesty` carries `tier`, `engine`
+(`tree-sitter:<crate>` / `scanner:<schema>` / `none`), `derived_from`
+(`highlights` | `none`), and an optional `reason`. `salt: true` echoes
+the current `highlight_salt`.
+
+Batch: `{ items: [{ id, lang, text, path? }, …] }` — at most 64 items,
+at most 1 MiB total text, unique ids. One unknown item does not 500
+the batch. Schema `highlight-batch/1`.
+
+CLI: `kb-code highlight --lang ruby --file snippet.rb --json`. Omit
+`--lang` and the daemon infers from `--path` or the file's name.
+`--file -` (or no `--file`) reads stdin.
+
+The SPA has one painter (`web-code/src/lib/paintSpans.ts`) and one class
+table (`.kbc-hl-*`). The live suggestion editor stays CM6; every other
+read-only surface paints these spans.
+
 Not in that unit, by design: new grammars (SCSS/CSS/Markdown), the
 injection-aware pipeline, the universal `outline/1` contract, and the
 `symbol_salt`/`highlight_salt` split. `highlight_only` therefore shipped as

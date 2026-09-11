@@ -179,6 +179,40 @@ export interface Span {
   class: HighlightClass;
 }
 
+/// `highlight/1` line-relative span. `line` is 1-based; `start`/`end` are
+/// 0-based UTF-8 byte columns within that line (tree-sitter Point.column).
+export interface HighlightSpan {
+  line: number;
+  start: number;
+  end: number;
+  role: HighlightClass;
+}
+
+export interface HighlightHonesty {
+  tier: string;
+  engine: string;
+  derived_from: string;
+  reason?: string;
+}
+
+export interface HighlightOut {
+  schema: "highlight/1";
+  lang: string | null;
+  tier: string;
+  spans: HighlightSpan[];
+  honesty: HighlightHonesty;
+  salt?: string;
+}
+
+export interface HighlightBatchItemOut extends HighlightOut {
+  id: string;
+}
+
+export interface HighlightBatchOut {
+  schema: "highlight-batch/1";
+  items: HighlightBatchItemOut[];
+}
+
 export type FileEncoding = "utf8" | "base64";
 
 export interface FrameClaim {
