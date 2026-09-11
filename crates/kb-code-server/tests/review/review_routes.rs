@@ -1164,15 +1164,10 @@ async fn create_review_pr_degrades_metadata_on_a_github_side_403_but_still_creat
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_review_pr_rejects_a_duplicate_binding_with_409_naming_the_existing_id() {
+async fn create_review_pr_reuses_an_open_binding() {
     let _guard = SERIAL.lock().await;
     let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(44);
 
-    // No GitHub mock needed for the metadata call — the origin isn't
-    // github-shaped is fine too, but here we reuse the github-shaped
-    // fixture and simply let metadata enrichment 404/degrade (no route
-    // registered on this bare mock router), since the 409 pre-check fires
-    // before any of that.
     let gh_router = Router::new();
     let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
 
@@ -1201,15 +1196,260 @@ async fn create_review_pr_rejects_a_duplicate_binding_with_409_naming_the_existi
     let first_body: serde_json::Value = first.json().await.unwrap();
     let existing_id = first_body["id"].as_i64().unwrap();
 
+    // V76-R1b: OPEN is idempotent (200 reuse), not a 409.
     let second = client
         .post(format!("{base}/api/reviews/pr"))
         .json(&serde_json::json!({ "repo": "fixture", "pr_number": 44 }))
         .send()
         .await
         .unwrap();
-    assert_eq!(second.status(), 409);
+    assert_eq!(second.status(), 200, "{}", second.text().await.unwrap());
     let second_body: serde_json::Value = second.json().await.unwrap();
-    assert_eq!(second_body["existing_review_id"], existing_id);
+    assert_eq!(second_body["id"], existing_id);
+    assert_eq!(second_body["reused"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_review_pr_closed_is_409_unless_on_closed_reopen_or_new() {
+    let _guard = SERIAL.lock().await;
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(45);
+
+    let gh_router = Router::new();
+    let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
+
+    let cfg = KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: "fixture".to_string(),
+            path: dir.clone(),
+        }],
+        kb_daemon: disabled_kb_daemon(),
+        github: GithubSection {
+            token_file: None,
+            api_base: format!("http://{gh_addr}"),
+        },
+        ..KbCodeConfig::default()
+    };
+    let (_tmp, base) = boot(cfg).await;
+    let client = reqwest::Client::new();
+
+    let first = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 45 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 201, "{}", first.text().await.unwrap());
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    let existing_id = first_body["id"].as_i64().unwrap();
+
+    let close = client
+        .patch(format!("{base}/api/reviews/{existing_id}"))
+        .json(&serde_json::json!({ "state": "closed" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(close.status(), 200, "{}", close.text().await.unwrap());
+
+    let refused = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 45 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        refused.headers().get("content-type").unwrap(),
+        "application/problem+json"
+    );
+    let refused_body: serde_json::Value = refused.json().await.unwrap();
+    assert_eq!(
+        refused_body["type"],
+        kb_code_server::reviews::ERR_REVIEW_CLOSED
+    );
+    assert_eq!(refused_body["existing_review_id"], existing_id);
+    assert!(refused_body["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "reopen"));
+    assert!(refused_body["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "new"));
+
+    let reopened = client
+        .post(format!("{base}/api/reviews/pr"))
+        .query(&[("on_closed", "reopen")])
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 45 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reopened.status(), 200, "{}", reopened.text().await.unwrap());
+    let reopened_body: serde_json::Value = reopened.json().await.unwrap();
+    assert_eq!(reopened_body["id"], existing_id);
+    assert_eq!(reopened_body["state"], "open");
+    assert_eq!(reopened_body["reused"], true);
+
+    let close2 = client
+        .patch(format!("{base}/api/reviews/{existing_id}"))
+        .json(&serde_json::json!({ "state": "closed" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(close2.status(), 200);
+
+    let minted = client
+        .post(format!("{base}/api/reviews/pr"))
+        .query(&[("on_closed", "new")])
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 45 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(minted.status(), 201, "{}", minted.text().await.unwrap());
+    let minted_body: serde_json::Value = minted.json().await.unwrap();
+    let new_id = minted_body["id"].as_i64().unwrap();
+    assert_ne!(new_id, existing_id);
+    assert_eq!(minted_body["state"], "open");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_refs_list_and_gc_dry_run_vs_apply() {
+    let _guard = SERIAL.lock().await;
+    let (_repo_tmp, _bare_tmp, dir, pr_sha) = fixture_pr_repo(46);
+
+    let gh_router = Router::new();
+    let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
+    let cfg = KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: "fixture".to_string(),
+            path: dir.clone(),
+        }],
+        kb_daemon: disabled_kb_daemon(),
+        github: GithubSection {
+            token_file: None,
+            api_base: format!("http://{gh_addr}"),
+        },
+        ..KbCodeConfig::default()
+    };
+    let (_tmp, base) = boot(cfg).await;
+    let client = reqwest::Client::new();
+
+    let created = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 46 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201, "{}", created.text().await.unwrap());
+    let created_body: serde_json::Value = created.json().await.unwrap();
+    let id = created_body["id"].as_i64().unwrap();
+
+    let listed: serde_json::Value = client
+        .get(format!("{base}/api/reviews/refs"))
+        .query(&[("repo", "fixture")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["schema"], "review-refs/1");
+    let refs = listed["refs"].as_array().unwrap();
+    assert!(
+        refs.iter()
+            .any(|r| r["ref"] == "refs/kbc/pr/46" && r["status"] == "bound"),
+        "{listed}"
+    );
+    assert!(
+        refs.iter()
+            .any(|r| { r["ref"] == format!("refs/kbc/review/{id}/ps1") && r["status"] == "bound" }),
+        "{listed}"
+    );
+
+    git(&dir, &["update-ref", "refs/kbc/pr/99", &pr_sha]);
+
+    let listed2: serde_json::Value = client
+        .get(format!("{base}/api/reviews/refs"))
+        .query(&[("repo", "fixture")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let orphan = listed2["refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["ref"] == "refs/kbc/pr/99")
+        .expect("planted orphan");
+    assert_eq!(orphan["status"], "orphan");
+
+    let dry: serde_json::Value = client
+        .post(format!("{base}/api/reviews/refs/gc"))
+        .query(&[("repo", "fixture")])
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dry["dry_run"], true);
+    assert!(
+        dry["deleted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "refs/kbc/pr/99"),
+        "{dry}"
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["show-ref", "--verify", "refs/kbc/pr/99"])
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "dry-run must leave the orphan in place"
+    );
+
+    let applied: serde_json::Value = client
+        .post(format!("{base}/api/reviews/refs/gc"))
+        .query(&[("repo", "fixture"), ("dry_run", "0")])
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(applied["dry_run"], false);
+    assert!(
+        !Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["show-ref", "--verify", "refs/kbc/pr/99"])
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "apply must delete the orphan"
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["show-ref", "--verify", "refs/kbc/pr/46"])
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "bound PR ref must survive gc"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

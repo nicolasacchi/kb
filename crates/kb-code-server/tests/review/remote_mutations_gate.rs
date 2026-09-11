@@ -797,3 +797,35 @@ async fn never_moves_prs_fetch_404s_non_loopback_even_with_gate_on_and_valid_tok
          gate ON + a valid token"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn never_moves_review_refs_gc_404s_non_loopback_even_with_gate_on_and_valid_token() {
+    const FIXTURE_TOKEN: &str = "kb-code-never-moves-review-refs-gc";
+    let _guard = crate::ENV_SERIAL.lock().await;
+    std::env::set_var("KB_CODE_TOKEN", FIXTURE_TOKEN);
+
+    let repo_tmp = fixture_feature_branch();
+    let review = ReviewSection {
+        remote_mutations: true,
+        ..ReviewSection::default()
+    };
+    let (_daemon_tmp, base) = boot_with_repo("r", repo_tmp.path(), review).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/reviews/refs/gc"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .query(&[("repo", "r"), ("dry_run", "0")])
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "POST /api/reviews/refs/gc must 404 a non-loopback caller even with the \
+         gate ON + a valid token — do not widen review_gate"
+    );
+}
