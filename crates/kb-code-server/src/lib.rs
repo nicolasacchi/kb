@@ -355,6 +355,7 @@ pub mod fanout;
 // as a routes-adjacent sibling of `frameworks` (the pure extraction lane),
 // not nested inside it — mirrors `resolve.rs`/`usages.rs`/`hierarchy.rs`'s
 // own top-level placement next to the tables/extractors they read.
+pub mod compare_file;
 pub mod frames;
 pub mod framework_edges;
 pub mod frameworks;
@@ -407,6 +408,7 @@ pub mod recipes;
 /// V72-H2b (D7) — `reextract-bill/1`: what a salt bump would cost,
 /// measured rather than estimated.
 pub mod reextract;
+pub mod refs_typeahead;
 pub mod rekey;
 pub mod repo_state;
 pub mod resolve;

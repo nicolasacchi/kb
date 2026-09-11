@@ -25,11 +25,13 @@ import type {
   CheckoutDirtyBody,
   CheckoutResponse,
   CommitPageResponse,
+  CompareFileResponse,
   ComparePageResponse,
   DefsOut,
   DiffResponse,
   FileHistoryResponse,
   FileResponse,
+  FramesResponse,
   DossierOut,
   IdentityOut,
   SyntaxOut,
@@ -43,6 +45,7 @@ import type {
   ReposResponse,
   RefsOut,
   RefsResponse,
+  RefsTypeaheadResponse,
   RepoStateResponse,
   ResolveOut,
   HierarchyCalleesOut,
@@ -248,6 +251,31 @@ export function fetchTreeV2(params: {
 
 export function fetchFile(repo: string, path: string, ref?: string): Promise<FileResponse> {
   return getJson<FileResponse>("/api/file", { repo, path, ref });
+}
+
+export function fetchFrames(): Promise<FramesResponse> {
+  return getJson<FramesResponse>("/api/frames", {});
+}
+
+export function fetchRefsTypeahead(
+  repo: string,
+  q: string,
+  limit?: number,
+): Promise<RefsTypeaheadResponse> {
+  return getJson<RefsTypeaheadResponse>("/api/refs/typeahead", {
+    repo,
+    q,
+    limit: limit !== undefined ? String(limit) : undefined,
+  });
+}
+
+export function fetchCompareFile(
+  repo: string,
+  path: string,
+  a: string,
+  b: string,
+): Promise<CompareFileResponse> {
+  return getJson<CompareFileResponse>("/api/compare/file", { repo, path, a, b });
 }
 
 export function fetchRefs(repo: string): Promise<RefsResponse> {

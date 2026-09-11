@@ -258,6 +258,26 @@ the single door without first modelling the whole app. Pane focus
 (root CLAUDE.md #30's recon R10 — pane location stays URL-derived via
 `?pane2=`, but which pane has keyboard focus does not belong in the URL).
 
+## `@ref` (V76-R3c)
+
+Every reader address may carry `?ref=` (absent = the working tree). The
+builder already emits `ref` **before** `line`/`pane2` (`lib/codeUrl.ts`);
+do not append it last — that would break the goldens. Changing the ref
+re-reads the same path at the same `?line=` (scroll/folds/inspector stay
+with the CodeView instance keyed on that address).
+
+**Banners are table-generated.** `lib/frameBanner.ts`'s `frameBanner(lane,
+row, atRef)` is the only renderer; it takes a `kbc-frames/1` row from
+`GET /api/frames` and produces the caption (or `null` on the working tree).
+Do not hand-write "file at ref: ODB" in a component — the golden
+(`frameBanner.test.ts`) walks the table × lanes.
+
+The TopBar chip (`data-kbc-ref-chip`) and `Space @` (`reader.ref-typeahead`)
+open the same `RefTypeahead` overlay over `GET /api/refs/typeahead`. Ctrl-r
+is a hard-reserved browser chord and must not be claimed. Bare `c`
+(`reader.compare`) toggles pane 2 onto the same path at the other ref;
+it is ratified against `diff.compose-new`.
+
 `nav/history.ts` provides the two router adapters (Navigation API where
 present — Chrome/Edge 102+, Firefox 145+ — falling back to the History API)
 behind one interface: **in-app Back IS the browser's Back.** There is no

@@ -551,6 +551,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // the extractors over a bounded sample and writes nothing.
         .route("/reextract/bill", get(crate::reextract::bill_route))
         .route("/refs", get(routes::refs))
+        // V76-R3c — ranked ref typeahead (branches/tags/PRs/patchsets/
+        // HEAD~n/SHA/worktrees) and the two-blob compare. Ordinary
+        // `auth_bearer` reads; `refs_typeahead::V76_R3C_ROUTES` declares
+        // both for invariant 15's contract walk.
+        .route(
+            "/refs/typeahead",
+            get(crate::refs_typeahead::typeahead_route),
+        )
+        .route(
+            "/compare/file",
+            get(crate::compare_file::compare_file_route),
+        )
         // V70-A3X — `GET /api/status` (`git_status`'s module doc): working-
         // tree/index status, same ordinary `auth_bearer`-gated `api` router
         // as every other read above (a bearer read, no loopback concern).

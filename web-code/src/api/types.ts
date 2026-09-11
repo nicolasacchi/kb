@@ -181,6 +181,13 @@ export interface Span {
 
 export type FileEncoding = "utf8" | "base64";
 
+export interface FrameClaim {
+  lane: string;
+  source: string;
+  class_ceiling: string;
+  refused?: string;
+}
+
 export interface FileResponse {
   repo: string;
   path: string;
@@ -192,6 +199,58 @@ export interface FileResponse {
   content: string;
   symbols: Symbol[];
   highlights: Span[] | null;
+  frame?: FrameClaim;
+}
+
+export interface FramesResponse {
+  schema: string;
+  sources: string[];
+  classes: string[];
+  frames: Array<{
+    lane: string;
+    source: string;
+    off_head: string;
+    ref_aware: boolean;
+    why: string;
+  }>;
+  note: string;
+}
+
+export interface RefsTypeaheadHit {
+  name: string;
+  kind: string;
+  insert: string;
+  sha?: string;
+  recent: boolean;
+}
+
+export interface RefsTypeaheadResponse {
+  schema: string;
+  repo: string;
+  q: string;
+  hits: RefsTypeaheadHit[];
+  returned: number;
+  total: number;
+  truncated: boolean;
+  cap: number;
+}
+
+export interface CompareFileHunk {
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  header: string;
+}
+
+export interface CompareFileResponse {
+  schema: string;
+  repo: string;
+  path: string;
+  a: { ref: string; size: number; blob_hash: string; encoding: FileEncoding; content: string; frame?: FrameClaim };
+  b: { ref: string; size: number; blob_hash: string; encoding: FileEncoding; content: string; frame?: FrameClaim };
+  diff: string;
+  hunks: CompareFileHunk[];
 }
 
 export type RefKind = "branch" | "tag";

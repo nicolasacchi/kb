@@ -139,6 +139,41 @@ pub(super) fn list_remote_branches(repo: &GitRepo) -> Result<Vec<RefInfo>> {
     Ok(out)
 }
 
+/// One `refs/kbc/…` entry (PR heads and review patchsets). Not a
+/// [`RefInfo`]: those are branches/tags, and a PR ref is neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KbcRef {
+    pub full_name: String,
+    pub target_sha: String,
+}
+
+/// `refs/kbc/pr/<n>` and `refs/kbc/review/<id>/ps<n>` — the two namespaces
+/// this daemon writes. Pure gix walk, no subprocess.
+pub(super) fn list_kbc_refs(repo: &GitRepo) -> Result<Vec<KbcRef>> {
+    let platform = repo.repo.references().map_err(|e| GitError::Refs {
+        message: e.to_string(),
+    })?;
+    let iter = platform.prefixed("refs/kbc/").map_err(|e| GitError::Refs {
+        message: e.to_string(),
+    })?;
+    let mut out = Vec::new();
+    for r in iter {
+        let mut r = r.map_err(|e| GitError::Refs {
+            message: e.to_string(),
+        })?;
+        let full_name = r.name().as_bstr().to_string();
+        let target = match r.peel_to_id() {
+            Ok(id) => id.to_string(),
+            Err(_) => continue,
+        };
+        out.push(KbcRef {
+            full_name,
+            target_sha: target,
+        });
+    }
+    Ok(out)
+}
+
 /// Split `refs/remotes/<remote>/<name>` → `(remote, name)`. Returns
 /// `None` for a malformed name or the `<remote>/HEAD` symref (that entry
 /// is the default-branch pointer, not a branch the operator can check

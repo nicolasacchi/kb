@@ -210,12 +210,33 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// List branches and tags. Direct library call against `--repo` — no
-    /// daemon involved.
+    /// List branches and tags, or `refs typeahead` for the ranked picker.
+    ///
+    /// Bare `kb-code refs --repo PATH` is the original offline listing
+    /// (in-process, no daemon). `kb-code refs typeahead <q> --repo NAME`
+    /// is daemon-only (`GET /api/refs/typeahead`).
     Refs {
-        /// Path to (or inside) the git repository.
+        /// Path to (or inside) the git repository. Required for the
+        /// offline listing; unused when a subcommand is given.
         #[arg(long)]
-        repo: PathBuf,
+        repo: Option<PathBuf>,
+        #[command(subcommand)]
+        cmd: Option<RefsCmd>,
+    },
+    /// `kb-code compare-file <PATH> --a REF --b REF --repo NAME --json`
+    /// — two blobs plus a hunk list (`GET /api/compare/file`). Daemon-only.
+    CompareFile {
+        path: String,
+        #[arg(long)]
+        a: String,
+        #[arg(long)]
+        b: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
     },
     /// List a directory at a ref (default: repo root at HEAD).
     ///
@@ -4569,6 +4590,24 @@ enum ScipCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum RefsCmd {
+    /// Ranked ref typeahead (`GET /api/refs/typeahead`). Daemon-only.
+    Typeahead {
+        /// Fuzzy needle. Empty string = recency listing.
+        #[arg(default_value = "")]
+        q: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum SearchCmd {
     /// Fuzzy-match file paths, blended with open-history frecency. An
     /// empty QUERY returns the most recently opened files instead.
@@ -4670,7 +4709,31 @@ async fn run(cli: Cli) -> Result<()> {
             daemon,
             json,
         } => audit_cmd(&daemon, since.as_deref(), limit, json).await,
-        Cmd::Refs { repo } => refs(&repo),
+        Cmd::Refs { repo, cmd } => {
+            match cmd {
+                Some(RefsCmd::Typeahead {
+                    q,
+                    repo,
+                    daemon,
+                    json,
+                    limit,
+                }) => refs_typeahead_cmd(&daemon, &repo, &q, limit, json).await,
+                None => {
+                    let repo = repo.ok_or_else(|| {
+                    anyhow::anyhow!("kb-code refs --repo PATH  (or: kb-code refs typeahead <q> --repo NAME)")
+                })?;
+                    refs(&repo)
+                }
+            }
+        }
+        Cmd::CompareFile {
+            path,
+            a,
+            b,
+            repo,
+            daemon,
+            json,
+        } => compare_file_cmd(&daemon, &repo, &path, &a, &b, json).await,
         Cmd::Tree {
             path,
             repo,
@@ -23578,6 +23641,108 @@ fn frames_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::frames::FRAMES_ROUTE.path, Vec::new())
 }
 
+/// The `GET /api/refs/typeahead` request.
+fn refs_typeahead_request(
+    repo: &str,
+    q: &str,
+    limit: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query = vec![("repo", repo.to_string()), ("q", q.to_string())];
+    if let Some(n) = limit {
+        query.push(("limit", n.to_string()));
+    }
+    (kb_code_server::refs_typeahead::TYPEAHEAD_ROUTE.path, query)
+}
+
+/// The `GET /api/compare/file` request.
+fn compare_file_request(
+    repo: &str,
+    path: &str,
+    a: &str,
+    b: &str,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::compare_file::COMPARE_FILE_ROUTE.path,
+        vec![
+            ("repo", repo.to_string()),
+            ("path", path.to_string()),
+            ("a", a.to_string()),
+            ("b", b.to_string()),
+        ],
+    )
+}
+
+async fn refs_typeahead_cmd(
+    daemon: &str,
+    repo: &str,
+    q: &str,
+    limit: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = refs_typeahead_request(repo, q, limit);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let hits = body["hits"].as_array().cloned().unwrap_or_default();
+    let total = body["total"].as_u64().unwrap_or(hits.len() as u64);
+    let returned = body["returned"].as_u64().unwrap_or(hits.len() as u64);
+    println!(
+        "refs typeahead {q:?} · {returned} of {total}{}",
+        if body["truncated"].as_bool().unwrap_or(false) {
+            " (truncated)"
+        } else {
+            ""
+        }
+    );
+    for h in &hits {
+        println!(
+            "{:<10} {:<24} {}",
+            h["kind"].as_str().unwrap_or("?"),
+            h["name"].as_str().unwrap_or("?"),
+            h["insert"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+async fn compare_file_cmd(
+    daemon: &str,
+    repo: &str,
+    path: &str,
+    a: &str,
+    b: &str,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (route, query) = compare_file_request(repo, path, a, b);
+    let body = get_json(&client, daemon, route, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "compare-file {path}  {} → {}",
+        body["a"]["ref"].as_str().unwrap_or(a),
+        body["b"]["ref"].as_str().unwrap_or(b),
+    );
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for h in body["hunks"].as_array().unwrap_or(&empty) {
+        println!("{}", h["header"].as_str().unwrap_or("@@"));
+    }
+    if let Some(diff) = body["diff"].as_str() {
+        if !diff.is_empty() {
+            print!("{diff}");
+            if !diff.ends_with('\n') {
+                println!();
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn workspaces_cmd(daemon: &str, id: Option<&str>, json: bool) -> Result<()> {
     let client = http_client()?;
     let body = match id {
@@ -26782,6 +26947,9 @@ mod tests {
             review_refs_list_request("repo"),
             // V76-R1a — the start-pr job read joins the SAME walk.
             review_job_request(),
+            // V76-R3c — typeahead + compare-file.
+            refs_typeahead_request("repo", "main", Some(25)),
+            compare_file_request("repo", "src/lib.rs", "HEAD~1", "HEAD"),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -26866,7 +27034,9 @@ mod tests {
             // V76-R1b — `GET /api/reviews/refs`.
             .chain(kb_code_server::reviews::V76_R1B_ROUTES.iter())
             // V76-R1a — the start-pr job read, the same way.
-            .chain(kb_code_server::review_jobs::V76_R1A_ROUTES.iter());
+            .chain(kb_code_server::review_jobs::V76_R1A_ROUTES.iter())
+            // V76-R3c — typeahead + compare-file, the same way.
+            .chain(kb_code_server::refs_typeahead::V76_R3C_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

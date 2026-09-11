@@ -231,6 +231,68 @@ pub async fn frames_route() -> axum::Json<FramesResponse> {
     axum::Json(frames_response())
 }
 
+/// RFC 7807 `type` for a revspec that parsed but did not resolve.
+pub const ERR_UNKNOWN_REF: &str = "urn:kb:errors:unknown-ref";
+
+/// Per-request frame claim that rides a file-at-ref (or sibling) read.
+///
+/// Vocabulary is the V75-M1 table's, not a second mapping: `source` is
+/// `working_tree` | `odb` | `git` | `refused`. A reader generates banners
+/// from these fields plus the matching [`FRAMES`] row's `why`; it must not
+/// invent a parallel string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FrameClaim {
+    pub lane: &'static str,
+    pub source: &'static str,
+    pub class_ceiling: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<&'static str>,
+}
+
+/// Look up a lane. Unknown names are a programmer error — the table is
+/// closed.
+pub fn frame_for(lane: &str) -> Option<&'static Frame> {
+    FRAMES.iter().find(|f| f.lane == lane)
+}
+
+/// Derive the claim for `lane` at either the working tree (`rev` absent)
+/// or an off-checkout ref.
+///
+/// Absent-ref is the working tree: source `working_tree`, ceiling `exact`,
+/// never refused. A present ref uses the table row as-is; a refused source
+/// or refused ceiling surfaces `why` on `refused` so the caller can say so
+/// instead of guessing.
+pub fn claim(lane: &str, working_tree: bool) -> FrameClaim {
+    let row = frame_for(lane).unwrap_or_else(|| {
+        panic!("unknown frame lane {lane:?} — add it to FRAMES or pick a real one")
+    });
+    if working_tree {
+        return FrameClaim {
+            lane: row.lane,
+            source: FrameSource::WorkingTree.as_str(),
+            class_ceiling: OffHeadClass::Exact.as_str(),
+            refused: None,
+        };
+    }
+    let refused = if row.source == FrameSource::Refused || row.off_head == OffHeadClass::Refused {
+        Some(row.why)
+    } else {
+        None
+    };
+    FrameClaim {
+        lane: row.lane,
+        source: row.source.as_str(),
+        class_ceiling: row.off_head.as_str(),
+        refused,
+    }
+}
+
+/// `true` when no `?ref=` was supplied (or it was blank). `HEAD` as an
+/// explicit ref is still an ODB read — it is not the dirty working tree.
+pub fn is_working_tree_rev(rev: Option<&str>) -> bool {
+    rev.map(str::trim).filter(|s| !s.is_empty()).is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +379,43 @@ mod tests {
             assert!(r.sources.contains(&f.source.as_str()), "{:?}", f.lane);
             assert!(r.classes.contains(&f.off_head.as_str()), "{:?}", f.lane);
         }
+    }
+
+    #[test]
+    fn a_working_tree_claim_is_exact_and_never_refused() {
+        for f in FRAMES {
+            let c = claim(f.lane, true);
+            assert_eq!(c.lane, f.lane);
+            assert_eq!(c.source, "working_tree");
+            assert_eq!(c.class_ceiling, "exact");
+            assert_eq!(c.refused, None);
+        }
+    }
+
+    #[test]
+    fn an_off_head_claim_copies_the_table_and_surfaces_a_refusal() {
+        let file = claim("file_at_ref", false);
+        assert_eq!(file.source, "odb");
+        assert_eq!(file.class_ceiling, "exact");
+        assert_eq!(file.refused, None);
+
+        let lsp = claim("lsp_live", false);
+        assert_eq!(lsp.source, "refused");
+        assert_eq!(lsp.class_ceiling, "refused");
+        assert!(lsp.refused.is_some_and(|w| w.contains("kb-lip")));
+
+        let symbols = claim("symbols", false);
+        assert_eq!(symbols.source, "working_tree");
+        assert_eq!(symbols.class_ceiling, "refused");
+        assert!(symbols.refused.is_some());
+    }
+
+    #[test]
+    fn blank_or_absent_rev_is_the_working_tree() {
+        assert!(is_working_tree_rev(None));
+        assert!(is_working_tree_rev(Some("")));
+        assert!(is_working_tree_rev(Some("  ")));
+        assert!(!is_working_tree_rev(Some("HEAD")));
+        assert!(!is_working_tree_rev(Some("main")));
     }
 }
