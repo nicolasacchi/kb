@@ -3701,11 +3701,14 @@ enum ReviewCmd {
         json: bool,
     },
     /// `kb-code review start-pr --repo R --pr N [--base][--title]
-    /// [--session]` — PRR-R2: `POST /api/reviews/pr` (design doc §2 row 1).
-    /// LOOPBACK-ONLY. Fetches `refs/pull/N/head` into `refs/kbc/pr/N`
-    /// (load-bearing — 400 on failure), creates the review + captures ps1,
-    /// and best-effort-enriches with GitHub PR metadata (degrades honestly
-    /// on any GitHub-side failure — the review is created either way).
+    /// [--session] [--gh-token-from-cli] [--dry-run]` — PRR-R2:
+    /// `POST /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY. Fetches
+    /// `refs/pull/N/head` into `refs/kbc/pr/N` (load-bearing — 400 on
+    /// failure), creates the review + captures ps1, and best-effort-enriches
+    /// with GitHub PR metadata (degrades honestly on any GitHub-side failure
+    /// — the review is created either way). `--gh-token-from-cli` runs
+    /// `gh auth token` and sends the value in the request body (never
+    /// persisted, never printed; refused off loopback).
     StartPr {
         #[arg(long)]
         repo: String,
@@ -3717,6 +3720,12 @@ enum ReviewCmd {
         title: Option<String>,
         #[arg(long = "session")]
         session: Option<String>,
+        /// Run `gh auth token` and send it as `gh_token` (loopback-only).
+        #[arg(long = "gh-token-from-cli")]
+        gh_token_from_cli: bool,
+        /// Print the payload with the token redacted; do not POST.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -5552,6 +5561,8 @@ async fn run(cli: Cli) -> Result<()> {
                 base,
                 title,
                 session,
+                gh_token_from_cli,
+                dry_run,
                 daemon,
                 json,
             } => {
@@ -5562,6 +5573,8 @@ async fn run(cli: Cli) -> Result<()> {
                     base.as_deref(),
                     title.as_deref(),
                     session.as_deref(),
+                    gh_token_from_cli,
+                    dry_run,
                     json,
                 )
                 .await
@@ -7265,7 +7278,9 @@ fn parse_since(spec: &str) -> Result<i64> {
             return Ok(dt.and_utc().timestamp());
         }
     }
-    anyhow::bail!("could not parse --since {s:?} (want `90m`/`24h`/`7d`, `YYYY-MM-DD`, or an RFC 3339 instant)")
+    anyhow::bail!(
+        "could not parse --since {s:?} (want `90m`/`24h`/`7d`, `YYYY-MM-DD`, or an RFC 3339 instant)"
+    )
 }
 
 /// `kb-code audit` — V70-A2 (SEC-20). See the clap variant's doc.
@@ -13003,7 +13018,9 @@ async fn doclens_pins_cmd(daemon: &str, kb: Option<&str>, json: bool) -> Result<
     }
     let pins = body["pins"].as_array().cloned().unwrap_or_default();
     if pins.is_empty() {
-        println!("no remembered checkouts. Pin one:  kb-code doclens pin --kb <KB> --doc <DOC> --repo <NAME>");
+        println!(
+            "no remembered checkouts. Pin one:  kb-code doclens pin --kb <KB> --doc <DOC> --repo <NAME>"
+        );
         return Ok(());
     }
     println!("{:<12}{:<16}{:<16}PINNED", "KB", "DOC", "REPO");
@@ -15381,7 +15398,8 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 // comments,fetch} -----------------------------------------------------------
 
 /// `kb-code review start-pr --repo R --pr N [--base][--title][--session]
-/// [--json]` — `POST /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY.
+/// [--gh-token-from-cli] [--dry-run] [--json]` — `POST /api/reviews/pr`
+/// (design doc §2 row 1). LOOPBACK-ONLY.
 ///
 /// V76-R1a — this verb ALWAYS runs the daemon-side job (`?async=1`) and
 /// polls `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
@@ -15400,6 +15418,8 @@ async fn review_start_pr_cmd(
     base: Option<&str>,
     title: Option<&str>,
     session: Option<&str>,
+    gh_token_from_cli: bool,
+    dry_run: bool,
     json: bool,
 ) -> Result<()> {
     let mut payload = serde_json::json!({ "repo": repo, "pr_number": pr_number });
@@ -15411,6 +15431,51 @@ async fn review_start_pr_cmd(
     }
     if let Some(s) = session {
         payload["session_id"] = serde_json::json!(s);
+    }
+    let mut gh_token: Option<String> = None;
+    if gh_token_from_cli {
+        let out = std::process::Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .context("run `gh auth token` for --gh-token-from-cli")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "gh auth token failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if token.is_empty() {
+            anyhow::bail!("gh auth token returned an empty token");
+        }
+        payload["gh_token"] = serde_json::json!(token);
+        gh_token = Some(token);
+    }
+    if dry_run {
+        let mut shown = payload.clone();
+        if shown.get("gh_token").is_some() {
+            shown["gh_token"] = serde_json::json!("[redacted]");
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&shown)?);
+        } else {
+            println!(
+                "· dry-run — would POST /api/reviews/pr?async=1 with gh_token={}",
+                if gh_token.is_some() {
+                    "[redacted]"
+                } else {
+                    "(none)"
+                }
+            );
+        }
+        if let Some(t) = &gh_token {
+            let printed = serde_json::to_string(&shown)?;
+            anyhow::ensure!(
+                !printed.contains(t),
+                "internal error: dry-run leaked the GitHub token"
+            );
+        }
+        return Ok(());
     }
     // V76-R1a — 600 s for THIS verb (the daemon-side fetch outlives
     // `http_client`'s 10 s on a cold mirror); every other verb keeps its
@@ -15525,10 +15590,23 @@ fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
 /// The pre-V76 human success line, one place for both paths above.
 fn print_start_pr_human(body: &serde_json::Value) {
     let meta_note = if body["pr_meta"].is_null() {
-        format!(
-            " (metadata unavailable: {})",
-            body["pr_meta_unavailable_reason"].as_str().unwrap_or("?")
-        )
+        // V76-R1c — the typed `{code, hint}` reason, with the pre-R1c
+        // plain-string shape still accepted from an older daemon.
+        let reason = &body["pr_meta_unavailable_reason"];
+        let shown = reason
+            .get("code")
+            .and_then(|c| c.as_str())
+            .map(|code| {
+                let hint = reason["hint"].as_str().unwrap_or("");
+                if hint.is_empty() {
+                    code.to_string()
+                } else {
+                    format!("{code}: {hint}")
+                }
+            })
+            .or_else(|| reason.as_str().map(str::to_string))
+            .unwrap_or_else(|| "?".to_string());
+        format!(" (metadata unavailable: {shown})")
     } else {
         String::new()
     };
@@ -15799,8 +15877,12 @@ async fn review_findings_import_cmd(
 /// revision, sets the report and any verdict — ONE sqlite transaction, ONE
 /// SSE event. `--dry-run` stops after the lint and writes nothing.
 ///
-/// **The V0 form** (V70-R) — `--from-file`/`--stdin`: the `kbc-compose/1`
-/// JSON body (summary + a `kbc-findings/1` block). Unchanged.
+/// **The V0 form** (V70-R, folded V76-R1c) — `--from-file`/`--stdin`: the
+/// `kbc-compose/1` JSON body (summary + a `kbc-findings/1` block). The
+/// daemon maps free-text categories onto the closed 8-value set, refuses
+/// invalid slugs with the `f-[a-z0-9-]+` regex, and synthesises a
+/// `minimal` `kbc-review/1` document so `doc`/`lint`/`render` work
+/// afterwards.
 ///
 /// Exit code 3 (`EXIT_CONFLICT`) when a lint reports any ERROR — the request
 /// was well-formed and the state refused it, which is what that slot means.
@@ -17216,7 +17298,10 @@ async fn review_sweep_cmd(
                 .as_i64()
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "?".to_string()),
-            checks["pass"], checks["fail"], checks["warn"], checks["pending"],
+            checks["pass"],
+            checks["fail"],
+            checks["warn"],
+            checks["pending"],
             r["review_decision"].as_str().unwrap_or("-"),
             r["unanswered_questions"],
             r["verdict_stale"],
@@ -17266,7 +17351,10 @@ async fn review_analytics_cmd(
         println!(
             "  {:<10} accepted={:<3} rejected={:<3} risk_accepted={:<3} undecided={:<3} rate={rate}",
             a["severity"].as_str().unwrap_or("?"),
-            a["accepted"], a["rejected"], a["risk_accepted"], a["undecided"],
+            a["accepted"],
+            a["rejected"],
+            a["risk_accepted"],
+            a["undecided"],
         );
     }
     println!(
@@ -18586,7 +18674,9 @@ async fn comments_cmd(cmd: CommentsCmd) -> Result<()> {
                 print_comment_basis(body);
             }
             if !any {
-                println!("(nothing actionable: no drifted docs, aged annotations or unreasoned suppressions)");
+                println!(
+                    "(nothing actionable: no drifted docs, aged annotations or unreasoned suppressions)"
+                );
             }
             Ok(())
         }
