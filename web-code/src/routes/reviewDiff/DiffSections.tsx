@@ -74,12 +74,16 @@ export interface DiffV2Api {
   hunkViewed: ReadonlySet<string>;
   /// V76-R2c — viewed-but-expanded hunk ids (`?hexpanded=`).
   expandedHunks: ReadonlySet<string>;
-  /// V76-R2c round 2 — the file / line a `?line=` / `?hunk=` deep-link
-  /// names. The matching hunk treats this as an implicit `?hexpanded=`
-  /// override so the flash row is mounted.
+  /// V76-R2c — the file / line / inbound hunk a deep-link names. The
+  /// matching hunk treats this as an implicit `?hexpanded=` courtesy so
+  /// the flash row is mounted. `deepLinkCleared` is the set of section
+  /// ids the user has ticked/un-ticked under this navigation — those no
+  /// longer get the courtesy.
   deepLinkFile: string | null;
   deepLinkLine: number | null;
   deepLinkSide: "old" | "new" | null;
+  deepLinkHunk: string | null;
+  deepLinkCleared: ReadonlySet<string>;
   /// Operator folds, keyed by hunk id so a fold survives a re-render, a
   /// patchset switch that carries the hunk forward, and a layout toggle.
   folded: ReadonlySet<string>;
@@ -221,16 +225,21 @@ export function FileDiffBody({
             ? hunkNewSpan(hunk)
             : null;
       const isDeepLinkHunk =
-        v2.deepLinkFile === path &&
-        v2.deepLinkLine != null &&
-        deepSpan != null &&
-        v2.deepLinkLine >= deepSpan.start &&
-        v2.deepLinkLine <= deepSpan.end;
+        (v2.deepLinkHunk != null && v2.deepLinkHunk === id) ||
+        (v2.deepLinkFile === path &&
+          v2.deepLinkLine != null &&
+          deepSpan != null &&
+          v2.deepLinkLine >= deepSpan.start &&
+          v2.deepLinkLine <= deepSpan.end);
       const collapse = hunkCollapse({
         viewed,
         folded,
         byNoise,
-        expanded: deepLinkExpands(v2.expandedHunks.has(id), isDeepLinkHunk),
+        expanded: deepLinkExpands(
+          v2.expandedHunks.has(id),
+          isDeepLinkHunk,
+          v2.deepLinkCleared.has(id),
+        ),
       });
       const expanded = expandHunk(hunk, contentLines, combineExpand(v2.ctx, v2.expand.get(id)));
       const span = hunkNewSpan(hunk);
