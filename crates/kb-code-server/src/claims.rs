@@ -265,7 +265,11 @@ async fn with_refs(
         .run_blocking(move |store| {
             crate::prose_refs::field_refs(
                 store,
-                &crate::prose_refs::RefCtx { repo_id, review_id },
+                &crate::prose_refs::RefCtx {
+                    repo_id,
+                    review_id,
+                    ps_number: None,
+                },
                 &body,
             )
         })
@@ -508,6 +512,7 @@ pub async fn list_claims(
                         &crate::prose_refs::RefCtx {
                             repo_id,
                             review_id: r.review_id,
+                            ps_number: None,
                         },
                         &r.body_md,
                     )

@@ -341,6 +341,7 @@ pub async fn review_comments(
             let ctx = crate::prose_refs::RefCtx {
                 repo_id,
                 review_id: Some(id),
+                ps_number: Some(target_ps.ps_number),
             };
             let groups_out = build_comment_groups(store, &repo_root, &target_ps, rows, &ctx)?;
             Ok((target_ps, groups_out))

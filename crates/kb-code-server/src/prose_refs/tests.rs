@@ -20,6 +20,123 @@ fn open_store() -> (tempfile::TempDir, Store, i64) {
     (tmp, store, repo_id)
 }
 
+#[test]
+fn review_only_paths_resolve_at_the_pinned_patchset() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    fn git(root: &std::path::Path, args: &[&str], input: &str) -> String {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "fixture")
+            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+            .env("GIT_COMMITTER_NAME", "fixture")
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git(root, &["init", "-q"], "");
+    // Write immutable objects, not a checkout: feature_x.rs is absent from
+    // both the working tree and mirror index, as in the Playwright fixture.
+    let blob = git(root, &["hash-object", "-w", "--stdin"], "// feature\n");
+    let tree = git(
+        root,
+        &["mktree"],
+        &format!("100644 blob {blob}\tfeature_x.rs\n"),
+    );
+    let tip = git(root, &["commit-tree", &tree, "-m", "feature"], "");
+    let store = Store::open(&root.join("index.db")).unwrap();
+    let repo_id = store
+        .upsert_repo("fixture", root.to_str().unwrap())
+        .unwrap();
+    let review_id = store
+        .create_review("fixture", None, "main", "feature-x", None, 1)
+        .unwrap();
+    store.insert_patchset(review_id, 1, &tip, &tip, 1).unwrap();
+    let ctx = RefCtx {
+        repo_id,
+        review_id: Some(review_id),
+        ps_number: None,
+    };
+    let refs = field_refs(&store, &ctx, "The bug is in feature_x.rs:1.").unwrap();
+    let resolved = serde_json::to_value(&refs.refs[0]).unwrap();
+    assert_eq!(resolved["resolution"]["state"], "exact");
+    assert_eq!(resolved["resolution"]["path"], "feature_x.rs");
+    assert_eq!(resolved["resolution"]["line"], 1);
+    assert_eq!(resolved["resolution"]["ref"], tip);
+    assert!(store.get_file(repo_id, "feature_x.rs").unwrap().is_none());
+    assert!(!root.join("feature_x.rs").exists());
+
+    // A later snapshot replaces the file with a directory. The mirror still
+    // knows the old file: neither fact may produce a live link at the new tip.
+    let empty = git(root, &["mktree"], "");
+    let directory = git(
+        root,
+        &["mktree"],
+        &format!("040000 tree {empty}\tfeature_x.rs\n"),
+    );
+    let next_tip = git(root, &["commit-tree", &directory, "-m", "replace file"], "");
+    store
+        .insert_patchset(review_id, 2, &next_tip, &tip, 2)
+        .unwrap();
+    store
+        .upsert_file(repo_id, "feature_x.rs", &blob, "rust", 11)
+        .unwrap();
+    let latest = field_refs(&store, &ctx, "feature_x.rs:1 and missing.rs:1").unwrap();
+    assert!(latest
+        .refs
+        .iter()
+        .all(|r| r.resolution.as_ref().unwrap().state == STATE_ORPHAN));
+
+    let selected = field_refs(
+        &store,
+        &RefCtx {
+            ps_number: Some(1),
+            ..ctx
+        },
+        "feature_x.rs:1",
+    )
+    .unwrap();
+    let resolution = selected.refs[0].resolution.as_ref().unwrap();
+    assert_eq!(resolution.state, crate::resolve::CLASS_EXACT);
+    assert_eq!(resolution.r#ref.as_deref(), Some(tip.as_str()));
+
+    // Outside a review the existing mirror-index contract is unchanged.
+    let generic = field_refs(
+        &store,
+        &RefCtx {
+            review_id: None,
+            ..ctx
+        },
+        "feature_x.rs:1",
+    )
+    .unwrap();
+    let resolution = generic.refs[0].resolution.as_ref().unwrap();
+    assert_eq!(resolution.state, crate::resolve::CLASS_EXACT);
+    assert_eq!(resolution.r#ref, None);
+}
+
 // --- the golden corpus ------------------------------------------------------
 
 /// ONE fixture pins the closed grammar: ~20 de-identified sentences shaped
@@ -223,6 +340,7 @@ fn a_path_resolves_exact_when_the_mirror_has_it_and_orphan_otherwise() {
     let ctx = RefCtx {
         repo_id,
         review_id: None,
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "app/models/order.rb:2 is the line.").unwrap();
     let res = fr.refs[0].resolution.as_ref().unwrap();
@@ -244,6 +362,7 @@ fn a_method_resolves_through_the_symbols_ladder() {
     let ctx = RefCtx {
         repo_id,
         review_id: None,
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "Order#total races with the webhook.").unwrap();
     let res = fr.refs[0].resolution.as_ref().unwrap();
@@ -290,6 +409,7 @@ fn a_const_resolves_through_the_entity_index() {
     let ctx = RefCtx {
         repo_id,
         review_id: None,
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "Billing::InvoiceService double-charges.").unwrap();
     let res = fr.refs[0].resolution.as_ref().unwrap();
@@ -308,6 +428,7 @@ fn a_finding_resolves_only_against_a_review_in_context() {
     let ctx = RefCtx {
         repo_id,
         review_id: None,
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "see f-double-charge for the earlier report.").unwrap();
     let res = fr.refs[0].resolution.as_ref().unwrap();
@@ -317,6 +438,7 @@ fn a_finding_resolves_only_against_a_review_in_context() {
     let ctx = RefCtx {
         repo_id,
         review_id: Some(1),
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "see f-double-charge for the earlier report.").unwrap();
     let res = fr.refs[0].resolution.as_ref().unwrap();
@@ -346,6 +468,7 @@ fn a_call_is_likely_at_best_and_never_exact() {
     let ctx = RefCtx {
         repo_id,
         review_id: None,
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "Call `enqueue_order(` without a key.").unwrap();
     let call = fr.refs.iter().find(|r| r.kind == "call").unwrap();
@@ -365,6 +488,7 @@ fn code_hints_are_never_resolved() {
     let ctx = RefCtx {
         repo_id,
         review_id: None,
+        ps_number: None,
     };
     let fr = field_refs(&store, &ctx, "`status: 'in_queue'` is never set.").unwrap();
     let code = fr.refs.iter().find(|r| r.kind == "code").unwrap();

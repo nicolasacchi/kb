@@ -139,6 +139,7 @@ fn compose_distill(
         crate::prose_refs::RefCtx {
             repo_id,
             review_id: Some(review.id),
+            ps_number: Some(latest_ps.ps_number),
         }
     })?;
 

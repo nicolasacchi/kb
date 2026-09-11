@@ -57,9 +57,11 @@
 //! A hint resolves to `exact | likely | candidate | orphan` — kb-code mints
 //! the class; the extractor mints only hints:
 //!
-//! * `path` → `exact` iff `Store::get_file` has the path in the mirror index
-//!   (the mirror tracks the review checkout's tip during a review), else
-//!   `orphan` with a caption. The hinted line is echoed, never invented.
+//! * `path` → `exact` iff the path is a blob in the selected review
+//!   patchset's tree, or in `Store::get_file` for non-review prose. Review
+//!   results carry the pinned commit as `resolution.ref`; opening a review
+//!   never changes the mirror's checkout. Missing paths are `orphan`, with
+//!   no fallback to another revision. Hinted lines are echoed, not invented.
 //! * `symbol` const → the entity index (`Store::entity_defs_for_name` +
 //!   `entities::class_for`, crate invariant 13), falling back to the symbols
 //!   table's exact `(name, container)` rung (the same rung
@@ -92,6 +94,7 @@
 //! those write; this POST is a read.
 
 use crate::entities::RouteContract;
+use crate::git::GitRepo;
 use crate::routes::ApiError;
 use crate::state::SharedState;
 use crate::store::{Store, StoreBlocking};
@@ -100,6 +103,7 @@ use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// The standalone resolve route's response schema tag.
 pub const SCHEMA: &str = "kbc-prose-refs/1";
@@ -170,6 +174,9 @@ pub struct RefResolution {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Pinned commit for a review path; omitted for current-mirror refs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +193,7 @@ impl RefResolution {
             line,
             ent: None,
             caption: None,
+            r#ref: None,
         }
     }
 
@@ -196,6 +204,7 @@ impl RefResolution {
             line: None,
             ent: None,
             caption: Some(caption.into()),
+            r#ref: None,
         }
     }
 }
@@ -783,9 +792,11 @@ pub fn extract(text: &str) -> FieldRefs {
 pub struct RefCtx {
     pub repo_id: i64,
     pub review_id: Option<i64>,
+    /// Selected patchset, or latest when the surface has no selector.
+    pub ps_number: Option<i64>,
 }
 
-/// Extract + resolve one prose field. Store reads only; no git, no clock.
+/// Extract + resolve one prose field. Store/ODB reads only; no checkout.
 pub fn field_refs(store: &Store, ctx: &RefCtx, text: &str) -> Result<FieldRefs, ApiError> {
     let mut out = extract(text);
     resolve_refs(store, ctx, &mut out.refs)?;
@@ -793,11 +804,30 @@ pub fn field_refs(store: &Store, ctx: &RefCtx, text: &str) -> Result<FieldRefs, 
 }
 
 /// Resolve each hint in place through the existing ladders (see the module
-/// doc for the per-kind rules). Infallible except for real store I/O errors.
+/// doc for the per-kind rules). Real store/ODB errors propagate.
 pub fn resolve_refs(store: &Store, ctx: &RefCtx, refs: &mut [ProseRef]) -> Result<(), ApiError> {
+    // Review creation pins a commit, not the indexed checkout. Resolve the
+    // selected snapshot once for this field, and only when it has paths.
+    let review_path = match ctx
+        .review_id
+        .filter(|_| refs.iter().any(|r| r.kind == "path"))
+    {
+        Some(id) => {
+            let ps = match ctx.ps_number {
+                Some(n) => store.get_patchset(id, n)?,
+                None => store.latest_patchset(id)?,
+            }
+            .ok_or_else(|| ApiError::not_found("review patchset not found"))?;
+            let root = store
+                .repo_root(ctx.repo_id)?
+                .ok_or_else(|| ApiError::not_found("repo not found"))?;
+            Some((GitRepo::open(Path::new(&root))?, ps.tip_sha))
+        }
+        None => None,
+    };
     for r in refs.iter_mut() {
         r.resolution = match r.kind.as_str() {
-            "path" => Some(resolve_path(store, ctx, r)?),
+            "path" => Some(resolve_path(store, ctx, r, review_path.as_ref())?),
             "symbol" => Some(resolve_symbol(store, ctx, r)?),
             "finding" => Some(resolve_finding(store, ctx, r)?),
             "call" => resolve_call(store, ctx, r)?,
@@ -807,12 +837,33 @@ pub fn resolve_refs(store: &Store, ctx: &RefCtx, refs: &mut [ProseRef]) -> Resul
     Ok(())
 }
 
-fn resolve_path(store: &Store, ctx: &RefCtx, r: &ProseRef) -> Result<RefResolution, ApiError> {
-    let path = r.path.clone().unwrap_or_default();
-    match store.get_file(ctx.repo_id, &path)? {
+fn resolve_path(
+    store: &Store,
+    ctx: &RefCtx,
+    r: &ProseRef,
+    review_path: Option<&(GitRepo, String)>,
+) -> Result<RefResolution, ApiError> {
+    let path = r.path.as_deref().unwrap_or_default();
+    if let Some((git, revision)) = review_path {
+        // ODB identity lookup only: do not load file contents to test existence.
+        if git.blob_oid(revision, path)?.is_some() {
+            let mut resolved = RefResolution::resolved(
+                crate::resolve::CLASS_EXACT,
+                Some(path.to_string()),
+                r.line_start,
+            );
+            resolved.r#ref = Some(revision.clone());
+            return Ok(resolved);
+        }
+        // Never fall back to a different checkout for a deleted review path.
+        return Ok(RefResolution::orphan(format!(
+            "no file {path:?} at review patchset commit {revision}"
+        )));
+    }
+    match store.get_file(ctx.repo_id, path)? {
         Some(_) => Ok(RefResolution::resolved(
             crate::resolve::CLASS_EXACT,
-            Some(path),
+            Some(path.to_string()),
             r.line_start,
         )),
         None => Ok(RefResolution::orphan(format!(
@@ -869,6 +920,7 @@ fn resolve_call(
                 "{n} symbols named {:?} in this repo — a bare call name cannot pick one",
                 r.text
             )),
+            r#ref: None,
         })),
     }
 }
@@ -910,6 +962,7 @@ fn resolve_method(
                 "{} symbols named {member:?} with container {container:?} — ambiguous",
                 full.len()
             )),
+            r#ref: None,
         });
     }
     let last = crate::entities::last_segment(container);
@@ -931,6 +984,7 @@ fn resolve_method(
             caption: Some(format!(
                 "matched on the container's last segment {last:?}, not the full {container:?}"
             )),
+            r#ref: None,
         });
     }
     if tail.len() > 1 {
@@ -943,6 +997,7 @@ fn resolve_method(
                 "{} symbols named {member:?} under a *::{last} container — ambiguous",
                 tail.len()
             )),
+            r#ref: None,
         });
     }
     Ok(RefResolution::orphan(format!(
@@ -1002,6 +1057,7 @@ fn resolve_const(store: &Store, ctx: &RefCtx, container: &str) -> Result<RefReso
             line: Some(row.line_start as u32),
             ent: Some(row.fqn.clone()),
             caption,
+            r#ref: None,
         });
     }
     // Symbols-table fallback (non-Ruby constants — the entity index covers
@@ -1034,6 +1090,7 @@ fn resolve_const(store: &Store, ctx: &RefCtx, container: &str) -> Result<RefReso
                 "{} symbols named {name:?} with container {prefix:?} — ambiguous",
                 exact.len()
             )),
+            r#ref: None,
         });
     }
     Ok(RefResolution::orphan(format!(
@@ -1061,8 +1118,8 @@ pub struct ProseResolveBody {
     pub review: Option<i64>,
     /// A patchset number or `"latest"`. Validated to EXIST when given
     /// (a `ps` naming nothing is a 404, never silently ignored — a param
-    /// nobody reads is the v7.0 dead-surface defect). Resolution itself is
-    /// against the current mirror; see the module doc.
+    /// nobody reads is the v7.0 dead-surface defect). Review paths resolve
+    /// at that patchset (latest when omitted); symbols use the mirror index.
     #[serde(default)]
     pub ps: Option<String>,
     pub text: String,
@@ -1070,8 +1127,8 @@ pub struct ProseResolveBody {
 
 /// `POST /api/prose/resolve` — `kbc-prose-refs/1`. A read-shaped POST on the
 /// bearer `api` router (the `/code-actions` precedent): computes the refs
-/// for one client-composed prose string. Nothing persisted, no git, one
-/// blocking-pool trip.
+/// for one client-composed prose string. Nothing persisted, one blocking-pool
+/// trip for store and read-only ODB resolution.
 pub async fn prose_resolve_route(
     State(state): State<SharedState>,
     Json(body): Json<ProseResolveBody>,
@@ -1107,7 +1164,11 @@ pub async fn prose_resolve_route(
                 }
                 _ => None,
             };
-            let ctx = RefCtx { repo_id, review_id };
+            let ctx = RefCtx {
+                repo_id,
+                review_id,
+                ps_number,
+            };
             let fr = field_refs(store, &ctx, &text)?;
             Ok((ps_number, fr))
         })

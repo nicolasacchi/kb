@@ -168,7 +168,7 @@ export default function ReportHero({
         >
           <ProseBlock
             text={lede}
-            refs={report.deck?.trim() ? undefined : report.summary_refs}
+            refs={report.deck?.trim() ? report.deck_refs : report.summary_refs}
             repo={repo}
             reviewId={review.id}
             inline

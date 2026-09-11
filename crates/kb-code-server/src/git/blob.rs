@@ -105,7 +105,9 @@ pub(super) fn blob_oid(repo: &GitRepo, rev: &str, path: &str) -> Result<Option<S
     let entry = tree.lookup_entry_by_path(norm).map_err(|e| GitError::Odb {
         message: e.to_string(),
     })?;
-    Ok(entry.map(|e| e.object_id().to_string()))
+    Ok(entry
+        .filter(|e| e.mode().is_blob_or_symlink())
+        .map(|e| e.object_id().to_string()))
 }
 
 /// Read the raw bytes of a blob addressed by its OWN object id (full or

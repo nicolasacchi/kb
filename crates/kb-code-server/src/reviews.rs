@@ -3153,39 +3153,31 @@ pub async fn get_review_report(
     // V76-B3 (kbc-prose/1) — the report's prose fields carry their refs,
     // additively, as `<field>_refs` keys beside the field. Per request,
     // never persisted; the stored `report_json` bytes are untouched.
-    let prose: Option<(Option<String>, Option<String>)> = value.as_ref().map(|v| {
-        (
-            v.get("summary")
-                .and_then(|s| s.as_str())
-                .map(str::to_string),
-            v.get("verdict_body")
-                .and_then(|s| s.as_str())
-                .map(str::to_string),
-        )
+    let prose = value.as_ref().map(|v| {
+        ["deck", "summary", "verdict_body"]
+            .into_iter()
+            .filter_map(|field| {
+                v.get(field)
+                    .and_then(|s| s.as_str())
+                    .map(|text| (field, text.to_string()))
+            })
+            .collect::<Vec<_>>()
     });
     let mut value = value;
-    if let (Some(v), Some((summary, verdict_body))) = (value.as_mut(), prose) {
+    if let (Some(v), Some(prose)) = (value.as_mut(), prose) {
         let refs = state
             .store
             .run_blocking(move |store| -> Result<_, ApiError> {
                 let ctx = crate::prose_refs::RefCtx {
                     repo_id,
                     review_id: Some(id),
+                    ps_number: None,
                 };
                 let mut m = serde_json::Map::new();
-                if let Some(summary) = summary {
+                for (field, text) in prose {
                     m.insert(
-                        "summary_refs".to_string(),
-                        serde_json::to_value(crate::prose_refs::field_refs(store, &ctx, &summary)?)
-                            .map_err(|e| {
-                                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-                            })?,
-                    );
-                }
-                if let Some(vb) = verdict_body {
-                    m.insert(
-                        "verdict_body_refs".to_string(),
-                        serde_json::to_value(crate::prose_refs::field_refs(store, &ctx, &vb)?)
+                        format!("{field}_refs"),
+                        serde_json::to_value(crate::prose_refs::field_refs(store, &ctx, &text)?)
                             .map_err(|e| {
                                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
                             })?,
