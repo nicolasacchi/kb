@@ -1,9 +1,12 @@
-//! `review_mutations_gate` — S2-B's admission gate for the FIVE review-
+//! `review_mutations_gate` — S2-B's admission gate for the review-
 //! mutation route families graduated off pure loopback-only (`router.rs`'s
 //! `review_remote` sub-router): finding disposition PUT/DELETE, verdict
 //! PUT/DELETE, finding/verdict publish-recording POST, and manual finding
-//! create POST. Gated by `[review] remote_mutations`
-//! (`config::ReviewSection`, default `false`).
+//! create POST, plus V76-R4a (D10)'s board mutations other than apply
+//! (`POST /boards/{slug}/accept`, `POST /boards/{slug}/archive`,
+//! `DELETE /boards/{slug}`). Gated by `[review] remote_mutations`
+//! (`config::ReviewSection`, default `false`). No second gate and no new
+//! config key — boards ride this same function.
 //!
 //! `review_remote` layers this gate LAST (chained last — OUTER, per axum's
 //! "each subsequent `.layer()` call wraps the previous ones" rule, the SAME
@@ -31,12 +34,14 @@
 //!
 //! **What this gate does NOT touch**: every other review mutation
 //! (create/snapshot/patch/delete/viewed/gc, `/reviews/pr`, `/reviews/sweep`,
-//! `/reviews/{id}/report` PUT, `/findings/import`) and the working-tree
+//! `/reviews/{id}/report` PUT, `/findings/import`), `POST /boards/apply`
+//! (the whole-document write stays loopback-only), and the working-tree
 //! mutation lane (`checkout`, suggestion apply/apply-batch, `scip/ingest`,
 //! `prs/fetch`) all stay on [`crate::transcripts::search::loopback_only`],
 //! which this module never wraps and `remote_mutations` never reaches — see
 //! `tests/review/remote_mutations_gate.rs`'s never-moves coverage (one test
-//! per route, gate ON + a valid token + non-loopback still 404s).
+//! per route, gate ON + a valid token + non-loopback still 404s) and
+//! `tests/boards_route.rs` for the board apply never-moves pin.
 
 use crate::state::SharedState;
 use axum::{

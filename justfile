@@ -190,6 +190,26 @@ types-check: types
       exit 1
     fi
 
+# V76-R4a — regenerate web-code/src/api/generated/ from kb-code-server
+# wire types (ts-rs, feature ts-export). Mirrors `types` (the kb SPA
+# generator; there is no `gen-ts` recipe). TS_RS_LARGE_INT=number — this
+# API serialises i64/u64 as JSON numbers. Committed, so CI can diff it.
+gen-ts-code:
+    rm -rf web-code/src/api/generated
+    TS_RS_EXPORT_DIR={{justfile_directory()}}/web-code/src/api/generated TS_RS_LARGE_INT=number cargo test -p kb-code-server --features ts-export --lib -- export_bindings
+
+# Drift guard: regenerating kb-code bindings must be a no-op against the
+# committed files. Own recipe — never folded into `types-check` (the kb
+# SPA drift job must stay a separate compile flavor).
+gen-ts-code-check: gen-ts-code
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "$(git status --porcelain -- web-code/src/api/generated)" ]; then
+      git status --short -- web-code/src/api/generated
+      echo "ERROR: web-code/src/api/generated is out of sync — run 'just gen-ts-code' and commit." >&2
+      exit 1
+    fi
+
 # Build the SPA bundle (web/dist) — required before ci-e2e
 ci-spa:
     cd web && npm ci && npm run build

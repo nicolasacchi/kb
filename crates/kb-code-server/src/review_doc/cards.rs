@@ -65,6 +65,7 @@ pub const STATE_INERT: &str = "inert";
 pub const MAX_SNIPPET_LINES: u32 = 40;
 
 /// What the whole ref set of one document resolves to.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct Card {
     /// The ref body exactly as the author wrote it — the key everything
@@ -76,30 +77,39 @@ pub struct Card {
     /// `exact` | `likely` | `candidate` — absent for an orphan (there is
     /// nothing to grade) and for an inert link (no claim is made).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub trust: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line_end: Option<u32>,
     /// The blob the REF pinned (`@sha`), verbatim as written.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub blob_sha: Option<String>,
     /// The blob that path has at the target patchset right now.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub current_blob: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub snippet: Option<String>,
     /// The first line number `snippet` shows (so a renderer can number the
     /// gutter without re-deriving it).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub snippet_start: Option<u32>,
     /// Server-computed highlight spans, byte offsets REBASED onto
     /// `snippet`. `null` when the target blob is not the one this daemon
     /// has indexed — a pure store lookup, never derived inside a request
     /// handler (`GET /api/file`'s own rule).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub highlights: Option<Vec<Span>>,
     /// Always present, always the truth about what this card is: why it is
     /// pinned, how it was carried, or why it is an orphan.
@@ -239,10 +249,14 @@ fn resolve_one(
             r,
             STATE_INERT,
             None,
-            format!("kb corpus {kb}, document {id} — kb-code does not own this corpus; this is a link, not a claim"),
+            format!(
+                "kb corpus {kb}, document {id} — kb-code does not own this corpus; this is a link, not a claim"
+            ),
         ),
         Ref::Finding { slug, .. } => resolve_finding(store, ctx, r, slug),
-        Ref::Hunk { path, ps, index, .. } => resolve_hunk(ctx, r, path, *ps, *index),
+        Ref::Hunk {
+            path, ps, index, ..
+        } => resolve_hunk(ctx, r, path, *ps, *index),
         Ref::Ci { name, .. } => resolve_ci(ctx, r, name),
         Ref::Question { index, .. } => resolve_question(ctx, r, *index),
         Ref::Ent { fqn, .. } => resolve_ent(store, ctx, r, fqn, cache, oid_cache),
@@ -379,8 +393,10 @@ fn resolve_code(
             Some(s) if s == 0 || s > total => {
                 return Card::orphan(
                     r,
-                    format!("line {s} is outside {path} ({total} lines) even though the blob matches — the ref's own line number is wrong"),
-                )
+                    format!(
+                        "line {s} is outside {path} ({total} lines) even though the blob matches — the ref's own line number is wrong"
+                    ),
+                );
             }
             Some(s) => (s, line_end.unwrap_or(s).min(total)),
         };
@@ -460,7 +476,8 @@ fn resolve_code(
         annotations::MatchConfidence::Fuzzy => "fuzzy",
     };
     finish_code(
-                store, r,
+        store,
+        r,
         path,
         &content,
         &current_blob,
@@ -767,20 +784,22 @@ fn positioned_card(
     let end = line_end.max(line_start).min(total);
     let (snippet, snippet_start, byte_range) = slice_snippet(&content, line_start, end);
     let highlights = highlights_for(store, path, &content, &current_blob, byte_range);
-    let caption =
-        if same {
-            format!(
-                "{what} — the indexed blob IS patchset {}'s blob for {path}",
-                ctx.target_ps.ps_number
-            )
-        } else {
-            format!(
+    let caption = if same {
+        format!(
+            "{what} — the indexed blob IS patchset {}'s blob for {path}",
+            ctx.target_ps.ps_number
+        )
+    } else {
+        format!(
             "{what} — position comes from the INDEXED checkout ({}), not patchset {}'s blob ({})",
-            indexed_blob.as_deref().map(short).unwrap_or_else(|| "not indexed".into()),
+            indexed_blob
+                .as_deref()
+                .map(short)
+                .unwrap_or_else(|| "not indexed".into()),
             ctx.target_ps.ps_number,
             short(&current_blob),
         )
-        };
+    };
     let mut trust = trust_for(state, same);
     if let Some(c) = ceiling {
         trust = cap_trust(trust, c);

@@ -65,6 +65,7 @@ pub const LANES_SCHEMA: &str = "aug-lane/1";
 pub const INGEST_SCHEMA: &str = "lane-ingest/1";
 
 /// Whether the daemon computes a lane's facts itself, or receives them.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LaneKind {
@@ -83,6 +84,7 @@ pub enum LaneKind {
 /// `candidate`) is deliberately NOT declared here, because nothing in this
 /// unit would ever produce one and a declared-but-empty vocabulary is the
 /// v7.0 dead-surface defect (`usages2::UNMINTED_KINDS`' precedent).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Sensitivity {
