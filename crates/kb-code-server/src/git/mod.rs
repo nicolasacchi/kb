@@ -30,7 +30,7 @@ mod tree;
 
 pub use blob::DEFAULT_BLOB_SIZE_CAP;
 pub use commit::CommitInfo;
-pub use refs::{default_branch, RefInfo, RefKind};
+pub use refs::{default_branch, KbcRef, RefInfo, RefKind};
 pub use revspec::{RefRange, Revspec, RevspecError};
 pub use tree::{EntryKind, TreeEntry};
 
@@ -220,6 +220,29 @@ impl GitRepo {
     /// symref). Short name is the full name minus `refs/remotes/<remote>/`.
     pub fn list_remote_branches(&self) -> Result<Vec<RefInfo>> {
         refs::list_remote_branches(self)
+    }
+
+    /// `refs/kbc/pr/<n>` and `refs/kbc/review/<id>/ps<n>`.
+    pub fn list_kbc_refs(&self) -> Result<Vec<KbcRef>> {
+        refs::list_kbc_refs(self)
+    }
+
+    /// Linked-worktree admin directory names under
+    /// `<common>/worktrees/<id>`. Empty for a repo with no linked
+    /// worktrees. Filesystem walk, not a git subprocess.
+    pub fn linked_worktree_ids(&self) -> Vec<String> {
+        let dir = self.common_dir().join("worktrees");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| !n.starts_with('.'))
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// `refs/remotes/origin/HEAD` symbolic target, else [`Self::head_info`]'s

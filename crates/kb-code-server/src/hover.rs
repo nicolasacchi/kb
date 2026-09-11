@@ -91,6 +91,12 @@ pub struct HoverOut {
     pub symbol: Option<HoverSymbol>,
     pub defsite: Option<HoverDefsite>,
     pub framework: Option<HoverFramework>,
+    /// V76-R3c — present only when a `?ref=` is in play. lsp-live is
+    /// refused off-HEAD (the overlay already no-ops); this field says so
+    /// rather than leaving the client to guess. Absent on working-tree
+    /// hovers so those bodies stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<crate::frames::FrameClaim>,
 }
 
 /// `GET /api/hover?repo=&path=&line=&col=`.
@@ -207,6 +213,11 @@ pub(crate) fn hover_at(
         symbol,
         defsite,
         framework,
+        frame: if crate::frames::is_working_tree_rev(rev) {
+            None
+        } else {
+            Some(crate::frames::claim("lsp_live", false))
+        },
     })
 }
 

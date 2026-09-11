@@ -139,6 +139,8 @@ pub struct OutlineOut {
     pub total: usize,
     pub truncated: bool,
     pub honesty: Honesty,
+    /// V76-R3c — file-at-ref frame claim (working tree vs ODB).
+    pub frame: crate::frames::FrameClaim,
 }
 
 /// Nest a flat symbol list into a tree by RANGE CONTAINMENT.
@@ -273,6 +275,7 @@ pub fn build(
     } else {
         None
     };
+    let working_tree = crate::frames::is_working_tree_rev(rev.as_deref());
     OutlineOut {
         schema: OUTLINE_SCHEMA,
         repo,
@@ -289,6 +292,7 @@ pub fn build(
             derived_from: if plans_symbols { "symbols" } else { "none" },
             reason,
         },
+        frame: crate::frames::claim("file_at_ref", working_tree),
     }
 }
 

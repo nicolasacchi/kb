@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useParams } from "react-router-dom";
 import { ApiError, ApplyConflictError } from "../../api/client";
 import type { ReviewComment } from "../../api/types";
@@ -26,6 +26,10 @@ import { toast } from "../../lib/toast";
 import SuggestionEditor from "./SuggestionEditor";
 import UnifiedHunks from "./UnifiedHunks";
 import ProseBlock from "../prose/ProseBlock";
+import HighlightedSnippet from "../HighlightedSnippet";
+import { useHighlight } from "../../hooks/useHighlight";
+import { offsetHighlightSpans, padSnippetLines, wireSpansToLineMap } from "../../lib/paintSpans";
+import type { DiffHighlights } from "../../lib/diffHighlight";
 
 /// Session-wide latch: one 404 from apply hides the button on every
 /// thread for the rest of this SPA session (VerdictBar / StartReviewDialog
@@ -269,19 +273,29 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       </div>
       {finding ? (
         <div className="kbc-rthread__finding-body" data-kbc-finding-body={finding.slug}>
-          <div className="kbc-rthread__finding-title">
+          <p className="kbc-rthread__finding-title">
             <ProseBlock text={finding.title} refs={finding.title_refs} repo={repo} reviewId={comments.reviewId} inline />
-          </div>
+          </p>
           <div className="kbc-rthread__body">
-            <ProseBlock text={finding.rationale} refs={finding.rationale_refs} repo={repo} reviewId={comments.reviewId} />
+            <ProseBlock
+              text={finding.rationale}
+              refs={finding.rationale_refs}
+              repo={repo}
+              reviewId={comments.reviewId}
+              fallbackLang={finding.evidence?.lang}
+            />
           </div>
           {finding.evidence?.source && (
-            <pre className="kbc-rthread__finding-evidence" data-kbc-finding-evidence>
-              <code>{finding.evidence.source}</code>
-            </pre>
+            <div className="kbc-rthread__finding-evidence" data-kbc-finding-evidence>
+              <HighlightedSnippet
+                text={finding.evidence.source}
+                lang={finding.evidence.lang}
+                path={finding.location.path}
+              />
+            </div>
           )}
           {finding.recommendation && (
-            <div className="kbc-rthread__finding-recommendation">
+            <p className="kbc-rthread__finding-recommendation">
               <span aria-hidden="true">→ </span>
               <ProseBlock
                 text={finding.recommendation}
@@ -290,7 +304,7 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
                 reviewId={comments.reviewId}
                 inline
               />
-            </div>
+            </p>
           )}
         </div>
       ) : (
@@ -420,12 +434,43 @@ function SuggestionBlock({
 }) {
   const confirm = useConfirm();
   const suggestion = thread.suggestion;
+  const orig = suggestion?.original ?? "";
+  const repl = suggestion?.replacement ?? "";
+  const start = thread.resolution.line ?? 1;
+  const hlItems = useMemo(
+    () =>
+      suggestion
+        ? [
+            { id: "old", lang: null as string | null, text: orig, path: thread.path },
+            { id: "new", lang: null as string | null, text: repl, path: thread.path },
+          ]
+        : [],
+    [suggestion, orig, repl, thread.path],
+  );
+  const { byId } = useHighlight(hlItems);
+  const highlights: DiffHighlights | null = useMemo(() => {
+    if (!suggestion) return null;
+    const old = byId.get("old");
+    const neu = byId.get("new");
+    if (!old && !neu) return null;
+    const oldSpans = old
+      ? wireSpansToLineMap(padSnippetLines(orig, start).join("\n"), offsetHighlightSpans(old.spans, start))
+      : new Map();
+    const newSpans = neu
+      ? wireSpansToLineMap(padSnippetLines(repl, start).join("\n"), offsetHighlightSpans(neu.spans, start))
+      : new Map();
+    return {
+      oldLineSpans: oldSpans,
+      newLineSpans: newSpans,
+      oldLines: padSnippetLines(orig, start),
+      newLines: padSnippetLines(repl, start),
+    };
+  }, [suggestion, byId, orig, repl, start]);
   if (!suggestion) return null;
 
   const outdated = suggestionIsOutdated(thread);
   const applied = suggestion.applied;
   const applyDisabled = applied || outdated;
-  const start = thread.resolution.line ?? 1;
   const parsed = synthesizeSuggestionDiff(
     splitSuggestionLines(suggestion.original),
     suggestion.replacement,
@@ -497,7 +542,7 @@ function SuggestionBlock({
         )}
       </div>
       <div className="kbc-suggestion__preview kbc-diff" data-kbc-suggestion-preview>
-        <UnifiedHunks path={thread.path} parsed={parsed} />
+        <UnifiedHunks path={thread.path} parsed={parsed} highlights={highlights} />
       </div>
       <div className="kbc-suggestion__actions">
         {threadAcceptsSuggestion(thread) && (

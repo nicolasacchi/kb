@@ -59,6 +59,7 @@ pub const RULES: &[(&str, &str)] = &[
     ("bare_symbol_mention", SEVERITY_INFO),
     ("question_without_ref", SEVERITY_INFO),
     ("question_stale", SEVERITY_INFO),
+    ("category_mapped", SEVERITY_INFO),
 ];
 
 /// V73-K5 (gap 7) — a `to_agent` question with no `answers` ref is worth a
@@ -116,6 +117,14 @@ impl LintRow {
         self.candidates = candidates;
         self
     }
+
+    /// V76-R1c — a V0 free-text category was rewritten onto the closed set.
+    pub fn category_mapped(slug: &str, from: &str, to: &str) -> LintRow {
+        LintRow::new(
+            "category_mapped",
+            format!("category {from:?} on {slug} mapped to {to:?}"),
+        )
+    }
 }
 
 /// The whole lint result. `errors`/`warnings`/`infos` are COUNTS of `rows`,
@@ -160,6 +169,17 @@ impl LintOut {
 
     pub fn ok(&self) -> bool {
         self.errors == 0
+    }
+
+    /// Append extra rows and re-derive the counts. Used by the V0 compose
+    /// path to splice `category_mapped` INFO onto the document lint.
+    pub fn with_extra(self, extra: Vec<LintRow>) -> LintOut {
+        if extra.is_empty() {
+            return self;
+        }
+        let mut rows = self.rows;
+        rows.extend(extra);
+        LintOut::from_rows(rows)
     }
 }
 

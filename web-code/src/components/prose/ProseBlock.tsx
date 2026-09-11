@@ -6,8 +6,7 @@
 // (the SPA's only Markdown path). Refs come from the wire — this file
 // never parses the closed grammar.
 //
-// Fences: V76-C1's `useHighlight` hook is not on this base, so a fence is
-// a plain `<pre>` with a TODO naming C1. Do not invent a second highlighter.
+// Fences share C1's HighlightedSnippet painter and kbc-theme/1 classes.
 import type { MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import type { MarkdownLiteOptions } from "../../lib/markdownLite";
@@ -19,7 +18,10 @@ import {
   type ProseRef,
   type ProseTreeBlock,
 } from "../../lib/proseRefs";
+import HighlightedSnippet from "../HighlightedSnippet";
 import "../../styles/prose.css";
+
+const FENCED_MARKDOWN: MarkdownLiteOptions = { fences: true };
 
 export interface ProseBlockProps {
   text: string;
@@ -27,8 +29,10 @@ export interface ProseBlockProps {
   repo: string;
   reviewId?: number;
   className?: string;
-  /** Default: report-summary subset (no headings/fences). Documents opt in. */
+  /** Fences default on; headings remain opt-in. */
   markdown?: MarkdownLiteOptions;
+  /** Language used when a fence has no info string. */
+  fallbackLang?: string | null;
   /** Skip block wrappers — title lines, compact rows. */
   inline?: boolean;
   /** Paint refs without nested `<a>` (a parent row is already a link). */
@@ -111,15 +115,25 @@ export function ProseNodes({ nodes, nolink }: { nodes: OverlayNode[]; nolink?: b
   );
 }
 
-function BlockView({ block, nolink }: { block: ProseTreeBlock; nolink?: boolean }) {
+function BlockView({
+  block,
+  nolink,
+  fallbackLang,
+}: {
+  block: ProseTreeBlock;
+  nolink?: boolean;
+  fallbackLang?: string | null;
+}) {
   if (block.kind === "code") {
-    // TODO(V76-C1): paint this fence via useHighlight / highlight::extract_highlights
-    // (kbc-theme/1 `.kbc-hl-*`, never a second `.tok-*` highlighter). C1 is
-    // not on this base — a plain <pre> is the honest degrade.
     return (
-      <pre className="kbc-prose__fence" data-kbc-prose-fence={block.lang ?? undefined}>
-        <code>{block.text}</code>
-      </pre>
+      <div data-kbc-prose-fence={block.lang ?? undefined}>
+        <HighlightedSnippet
+          text={block.text}
+          lang={block.lang}
+          fallbackLang={fallbackLang}
+          className="kbc-prose__fence kbc-doc__fence"
+        />
+      </div>
     );
   }
   if (block.kind === "list") {
@@ -156,11 +170,12 @@ export default function ProseBlock({
   reviewId,
   className,
   markdown,
+  fallbackLang,
   inline,
   nolink,
 }: ProseBlockProps) {
   if (!text) return null;
-  const tree = buildProseTree(text, refs, { repo, reviewId }, markdown);
+  const tree = buildProseTree(text, refs, { repo, reviewId }, markdown ?? FENCED_MARKDOWN);
   if (inline) {
     const nodes = tree.blocks.flatMap((b) => {
       if (b.kind === "paragraph" || b.kind === "heading") return b.nodes;
@@ -179,9 +194,9 @@ export default function ProseBlock({
     );
   }
   return (
-    <div className={["kbc-prose", className].filter(Boolean).join(" ")} data-kbc-prose>
+    <div className={["kbc-prose", className].filter(Boolean).join(" ")} data-kbc-prose data-kbc-safe-md>
       {tree.blocks.map((b, i) => (
-        <BlockView key={i} block={b} nolink={nolink} />
+        <BlockView key={i} block={b} nolink={nolink} fallbackLang={fallbackLang} />
       ))}
       {tree.truncated && (
         <p className="kbc-prose__truncated" data-kbc-prose-truncated>

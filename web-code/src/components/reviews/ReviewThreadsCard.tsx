@@ -70,6 +70,12 @@ export interface ReviewThreadsCardProps {
   /// permanently empty (the hook itself never fires — `useGithubThreads`'s
   /// own `enabled` gate).
   prNumber?: number;
+  /// V76-R2a — optionally CONTROLLED severity filter: the Report hero's
+  /// count chips filter this rail, so the state lives in `ReviewDetail.tsx`
+  /// when threaded. Absent ⇒ the internal `useState` below, byte-identical
+  /// to before.
+  sevFilter?: FindingSeverityFilter;
+  onSevFilter?: (f: FindingSeverityFilter) => void;
 }
 
 const FILTERS: { key: ThreadFilter; label: string }[] = [
@@ -106,6 +112,8 @@ export default function ReviewThreadsCard({
   onOpenFile,
   onRamp,
   prNumber,
+  sevFilter: sevFilterProp,
+  onSevFilter,
 }: ReviewThreadsCardProps) {
   const q = useReviewComments(repo, reviewId, ps, true);
   const [filter, setFilter] = useState<ThreadFilter>("all");
@@ -118,7 +126,11 @@ export default function ReviewThreadsCard({
   const githubThreads = githubQ.data?.threads ?? [];
 
   const findingsQ = useReviewFindings(repo, reviewId, { ps });
-  const [sevFilter, setSevFilter] = useState<FindingSeverityFilter>("all");
+  const [sevFilterLocal, setSevFilterLocal] = useState<FindingSeverityFilter>("all");
+  // V76-R2a — controlled-when-threaded (the hero's count chips own it),
+  // internal otherwise. One filter either way.
+  const sevFilter = sevFilterProp ?? sevFilterLocal;
+  const setSevFilter = onSevFilter ?? setSevFilterLocal;
   const [dispoFilter, setDispoFilter] = useState<FindingDispositionFilter>("all");
   const findings = useMemo(
     () => (findingsQ.data?.findings ?? []).filter((f) => matchesFindingFilters(f, sevFilter, dispoFilter)),

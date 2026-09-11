@@ -210,12 +210,33 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// List branches and tags. Direct library call against `--repo` — no
-    /// daemon involved.
+    /// List branches and tags, or `refs typeahead` for the ranked picker.
+    ///
+    /// Bare `kb-code refs --repo PATH` is the original offline listing
+    /// (in-process, no daemon). `kb-code refs typeahead <q> --repo NAME`
+    /// is daemon-only (`GET /api/refs/typeahead`).
     Refs {
-        /// Path to (or inside) the git repository.
+        /// Path to (or inside) the git repository. Required for the
+        /// offline listing; unused when a subcommand is given.
         #[arg(long)]
-        repo: PathBuf,
+        repo: Option<PathBuf>,
+        #[command(subcommand)]
+        cmd: Option<RefsCmd>,
+    },
+    /// `kb-code compare-file <PATH> --a REF --b REF --repo NAME --json`
+    /// — two blobs plus a hunk list (`GET /api/compare/file`). Daemon-only.
+    CompareFile {
+        path: String,
+        #[arg(long)]
+        a: String,
+        #[arg(long)]
+        b: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
     },
     /// List a directory at a ref (default: repo root at HEAD).
     ///
@@ -359,6 +380,31 @@ enum Cmd {
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         /// Print the raw `reextract-bill/1` JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Paint a snippet with the daemon's tree-sitter spans
+    /// (`POST /api/highlight`, `highlight/1`). Same colours as the reader;
+    /// nothing is persisted. `--lang` is a `syntax/1` id or a fence alias
+    /// (`rb`); omit it and the daemon infers from `--path` or `--file`'s
+    /// name. `--json` is the machine form; without it a short summary
+    /// prints. Daemon-only.
+    Highlight {
+        /// syntax/1 language id or fence alias (`ruby`, `rb`, `rust`, …).
+        #[arg(long)]
+        lang: Option<String>,
+        /// Read the snippet from this path (`-` = stdin).
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Path used only to infer `lang` via syntax/1 detection.
+        #[arg(long)]
+        path: Option<String>,
+        /// Echo the current `highlight_salt` on the response.
+        #[arg(long)]
+        salt: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        /// Print the raw `highlight/1` JSON.
         #[arg(long)]
         json: bool,
     },
@@ -3632,6 +3678,34 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Reopen a closed review (`PATCH /api/reviews/{id}` `state=open`).
+    Reopen {
+        id: i64,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a review (`DELETE /api/reviews/{id}`). LOOPBACK-ONLY.
+    /// Refuses without `--yes`. A published verdict 409s unless `--force`.
+    Delete {
+        id: i64,
+        /// Required. There is no prompt — missing `--yes` is a usage error.
+        #[arg(long)]
+        yes: bool,
+        /// Required when the review's verdict has been published.
+        #[arg(long)]
+        force: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List or GC `refs/kbc/pr/*` and `refs/kbc/review/*` in a repo's mirror.
+    Refs {
+        #[command(subcommand)]
+        cmd: ReviewRefsCmd,
+    },
     /// GC oldest patchsets down to `[review] max_patchsets`.
     Gc {
         #[arg(long = "review")]
@@ -3734,11 +3808,15 @@ enum ReviewCmd {
         json: bool,
     },
     /// `kb-code review start-pr --repo R --pr N [--base][--title]
-    /// [--session]` — PRR-R2: `POST /api/reviews/pr` (design doc §2 row 1).
-    /// LOOPBACK-ONLY. Fetches `refs/pull/N/head` into `refs/kbc/pr/N`
-    /// (load-bearing — 400 on failure), creates the review + captures ps1,
-    /// and best-effort-enriches with GitHub PR metadata (degrades honestly
-    /// on any GitHub-side failure — the review is created either way).
+    /// [--session] [--reopen|--new] [--gh-token-from-cli] [--dry-run]` —
+    /// PRR-R2 + V76-R1b/R1c: `POST /api/reviews/pr`. LOOPBACK-ONLY. Fetches
+    /// `refs/pull/N/head` into `refs/kbc/pr/N` (load-bearing — 400 on
+    /// failure), creates the review + captures ps1, and best-effort-enriches
+    /// with GitHub PR metadata (degrades honestly on any GitHub-side failure
+    /// — the review is created either way). An OPEN existing (repo, PR)
+    /// review is reused; a CLOSED one 409s unless `--reopen` or `--new`.
+    /// `--gh-token-from-cli` runs `gh auth token` and sends the value in the
+    /// request body (never persisted, never printed; refused off loopback).
     StartPr {
         #[arg(long)]
         repo: String,
@@ -3750,6 +3828,20 @@ enum ReviewCmd {
         title: Option<String>,
         #[arg(long = "session")]
         session: Option<String>,
+        /// Reopen a closed review for this PR and add a patchset if the
+        /// head moved (`?on_closed=reopen`). Conflicts with `--new`.
+        #[arg(long, conflicts_with = "new")]
+        reopen: bool,
+        /// Mint a new review id; leave the closed one closed
+        /// (`?on_closed=new`). Conflicts with `--reopen`.
+        #[arg(long, conflicts_with = "reopen")]
+        new: bool,
+        /// Run `gh auth token` and send it as `gh_token` (loopback-only).
+        #[arg(long = "gh-token-from-cli")]
+        gh_token_from_cli: bool,
+        /// Print the payload with the token redacted; do not POST.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4195,6 +4287,33 @@ pub struct ReviewComposeArgs {
     pub json: bool,
 }
 
+/// V76-R1b — `kb-code review refs list|gc`.
+#[derive(Subcommand, Debug)]
+enum ReviewRefsCmd {
+    /// `list --repo R` — `GET /api/reviews/refs?repo=`.
+    List {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `gc --repo R [--apply]` — `POST /api/reviews/refs/gc`. LOOPBACK-ONLY.
+    /// Dry-run by default; `--apply` sets `dry_run=0`.
+    Gc {
+        #[arg(long)]
+        repo: String,
+        /// Actually delete orphan refs. Default is dry-run.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// PRR-R3 — `kb-code review findings <SUBCOMMAND> ID …`.
 #[derive(Subcommand, Debug)]
 enum ReviewFindingsCmd {
@@ -4529,6 +4648,24 @@ enum ScipCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum RefsCmd {
+    /// Ranked ref typeahead (`GET /api/refs/typeahead`). Daemon-only.
+    Typeahead {
+        /// Fuzzy needle. Empty string = recency listing.
+        #[arg(default_value = "")]
+        q: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum SearchCmd {
     /// Fuzzy-match file paths, blended with open-history frecency. An
     /// empty QUERY returns the most recently opened files instead.
@@ -4630,7 +4767,31 @@ async fn run(cli: Cli) -> Result<()> {
             daemon,
             json,
         } => audit_cmd(&daemon, since.as_deref(), limit, json).await,
-        Cmd::Refs { repo } => refs(&repo),
+        Cmd::Refs { repo, cmd } => {
+            match cmd {
+                Some(RefsCmd::Typeahead {
+                    q,
+                    repo,
+                    daemon,
+                    json,
+                    limit,
+                }) => refs_typeahead_cmd(&daemon, &repo, &q, limit, json).await,
+                None => {
+                    let repo = repo.ok_or_else(|| {
+                    anyhow::anyhow!("kb-code refs --repo PATH  (or: kb-code refs typeahead <q> --repo NAME)")
+                })?;
+                    refs(&repo)
+                }
+            }
+        }
+        Cmd::CompareFile {
+            path,
+            a,
+            b,
+            repo,
+            daemon,
+            json,
+        } => compare_file_cmd(&daemon, &repo, &path, &a, &b, json).await,
         Cmd::Tree {
             path,
             repo,
@@ -4707,6 +4868,24 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Repos { daemon, json } => repos_cmd(&daemon, json).await,
         Cmd::Syntax { daemon, json } => syntax_cmd(&daemon, json).await,
         Cmd::Parity { daemon, json } => parity_cmd(&daemon, json).await,
+        Cmd::Highlight {
+            lang,
+            file,
+            path,
+            salt,
+            daemon,
+            json,
+        } => {
+            highlight_cmd(
+                &daemon,
+                lang.as_deref(),
+                file.as_deref(),
+                path.as_deref(),
+                salt,
+                json,
+            )
+            .await
+        }
         Cmd::Reextract {
             bill,
             repo,
@@ -5556,6 +5735,25 @@ async fn run(cli: Cli) -> Result<()> {
                 json,
             } => review_viewed_cmd(&daemon, id, &path, unset, blob_sha.as_deref(), json).await,
             ReviewCmd::Close { id, daemon, json } => review_close_cmd(&daemon, id, json).await,
+            ReviewCmd::Reopen { id, daemon, json } => review_reopen_cmd(&daemon, id, json).await,
+            ReviewCmd::Delete {
+                id,
+                yes,
+                force,
+                daemon,
+                json,
+            } => review_delete_cmd(&daemon, id, yes, force, json).await,
+            ReviewCmd::Refs { cmd } => match cmd {
+                ReviewRefsCmd::List { repo, daemon, json } => {
+                    review_refs_list_cmd(&daemon, &repo, json).await
+                }
+                ReviewRefsCmd::Gc {
+                    repo,
+                    apply,
+                    daemon,
+                    json,
+                } => review_refs_gc_cmd(&daemon, &repo, apply, json).await,
+            },
             ReviewCmd::Gc {
                 review,
                 daemon,
@@ -5595,6 +5793,10 @@ async fn run(cli: Cli) -> Result<()> {
                 base,
                 title,
                 session,
+                reopen,
+                new,
+                gh_token_from_cli,
+                dry_run,
                 daemon,
                 json,
             } => {
@@ -5605,6 +5807,10 @@ async fn run(cli: Cli) -> Result<()> {
                     base.as_deref(),
                     title.as_deref(),
                     session.as_deref(),
+                    reopen,
+                    new,
+                    gh_token_from_cli,
+                    dry_run,
                     json,
                 )
                 .await
@@ -7476,6 +7682,22 @@ fn syntax_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::SYNTAX_ROUTE.path, Vec::new())
 }
 
+/// `POST /api/highlight` — JSON body, no query params.
+fn highlight_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::highlight::HIGHLIGHT_ROUTE.path, Vec::new())
+}
+
+/// `POST /api/highlight/batch` — JSON body, no query params.
+/// The SPA is the batch caller; the CLI paints one snippet. This helper
+/// exists so the dead-surface walk still sees a request for the path.
+#[cfg(test)]
+fn highlight_batch_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::highlight::HIGHLIGHT_BATCH_ROUTE.path,
+        Vec::new(),
+    )
+}
+
 /// The `GET /api/parity` request: `(path, query)`.
 fn parity_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::syntax::PARITY_ROUTE.path, Vec::new())
@@ -8134,6 +8356,83 @@ fn syntax_keys(row: &serde_json::Value) -> String {
     } else {
         keys.join(" ")
     }
+}
+
+/// `kb-code highlight` — `POST /api/highlight`.
+async fn highlight_cmd(
+    daemon: &str,
+    lang: Option<&str>,
+    file: Option<&Path>,
+    path: Option<&str>,
+    salt: bool,
+    json: bool,
+) -> Result<()> {
+    let text = match file {
+        Some(p) if p.as_os_str() == "-" => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("read snippet from stdin")?;
+            buf
+        }
+        Some(p) => std::fs::read_to_string(p)
+            .with_context(|| format!("read snippet from {}", p.display()))?,
+        None => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("read snippet from stdin (pass --file PATH to read a file)")?;
+            buf
+        }
+    };
+    let infer_path = path.map(str::to_string).or_else(|| {
+        file.and_then(|p| {
+            if p.as_os_str() == "-" {
+                None
+            } else {
+                p.file_name().and_then(|n| n.to_str()).map(str::to_string)
+            }
+        })
+    });
+    let mut body = serde_json::json!({ "text": text, "salt": salt });
+    if let Some(l) = lang {
+        body["lang"] = serde_json::Value::String(l.to_string());
+    } else {
+        body["lang"] = serde_json::Value::Null;
+    }
+    if let Some(p) = infer_path {
+        body["path"] = serde_json::Value::String(p);
+    }
+    let client = http_client()?;
+    let (route, _) = highlight_request();
+    let (status, resp) = post_json_raw(&client, daemon, route, &body).await?;
+    if !status.is_success() {
+        let err = resp
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("highlight failed");
+        anyhow::bail!("POST {route}: HTTP {status}: {err}");
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+    let lang_s = resp["lang"].as_str().unwrap_or("—");
+    let tier = resp["tier"].as_str().unwrap_or("?");
+    let n = resp["spans"].as_array().map(|a| a.len()).unwrap_or(0);
+    let derived = resp["honesty"]["derived_from"].as_str().unwrap_or("?");
+    let engine = resp["honesty"]["engine"].as_str().unwrap_or("?");
+    println!("lang:    {lang_s}");
+    println!("tier:    {tier}");
+    println!("spans:   {n}");
+    println!("honesty: {derived} via {engine}");
+    if let Some(reason) = resp["honesty"]["reason"].as_str() {
+        println!("reason:  {reason}");
+    }
+    if let Some(salt) = resp["salt"].as_str() {
+        println!("salt:    {salt}");
+    }
+    Ok(())
 }
 
 /// `kb-code syntax` — `GET /api/syntax`.
@@ -14529,14 +14828,196 @@ async fn review_close_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
         &serde_json::json!({ "state": "closed" }),
     )
     .await?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&body)?);
-    }
     if !status.is_success() {
+        if json {
+            envelope::print_err(
+                "error",
+                body["error"].as_str().unwrap_or("close failed"),
+                None,
+            );
+        }
         return Err(annotation_api_error("close review", status, &body));
     }
-    if !json {
+    if json {
+        envelope::print_ok("reviews/1", &body, Vec::new(), false, None);
+    } else {
         println!("✓ closed review #{id}");
+    }
+    Ok(())
+}
+
+async fn review_reopen_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (status, body) = patch_json_path(
+        &client,
+        daemon,
+        &format!("/api/reviews/{id}"),
+        &serde_json::json!({ "state": "open" }),
+    )
+    .await?;
+    if !status.is_success() {
+        if json {
+            envelope::print_err(
+                "error",
+                body["error"].as_str().unwrap_or("reopen failed"),
+                None,
+            );
+        }
+        return Err(annotation_api_error("reopen review", status, &body));
+    }
+    if json {
+        envelope::print_ok("reviews/1", &body, Vec::new(), false, None);
+    } else {
+        println!("✓ reopened review #{id}");
+    }
+    Ok(())
+}
+
+/// Missing `--yes` is a usage error (no prompt).
+fn review_delete_requires_yes(yes: bool) -> Result<()> {
+    if !yes {
+        anyhow::bail!(
+            "review delete refuses without --yes (this removes the review row and its \
+             refs/kbc/review/<id>/* refs). Pass --yes. A published verdict also needs --force."
+        );
+    }
+    Ok(())
+}
+
+async fn review_delete_cmd(
+    daemon: &str,
+    id: i64,
+    yes: bool,
+    force: bool,
+    json: bool,
+) -> Result<()> {
+    if let Err(e) = review_delete_requires_yes(yes) {
+        if json {
+            envelope::print_err(
+                "usage",
+                &e.to_string(),
+                Some("pass --yes (and --force if the verdict is published)"),
+            );
+        }
+        std::process::exit(envelope::EXIT_USAGE);
+    }
+    let client = http_client()?;
+    let mut query: Vec<(&str, &str)> = Vec::new();
+    if force {
+        query.push(("force", "1"));
+    }
+    let (status, body) =
+        delete_json_raw(&client, daemon, &format!("/api/reviews/{id}"), &query).await?;
+    if status == reqwest::StatusCode::NO_CONTENT {
+        if json {
+            envelope::print_ok(
+                "reviews/1",
+                serde_json::json!({ "id": id, "deleted": true }),
+                Vec::new(),
+                false,
+                None,
+            );
+        } else {
+            println!("✓ deleted review #{id}");
+        }
+        return Ok(());
+    }
+    if json {
+        envelope::print_err(
+            body["type"].as_str().unwrap_or("error"),
+            body["error"].as_str().unwrap_or("delete failed"),
+            body["type"].as_str().and_then(|t| {
+                if t.contains("review-verdict-published") {
+                    Some("pass --force with --yes")
+                } else {
+                    None
+                }
+            }),
+        );
+    }
+    if status == reqwest::StatusCode::CONFLICT {
+        if !json {
+            eprintln!(
+                "review delete failed (409): {} — existing review id {}",
+                body["error"].as_str().unwrap_or("conflict"),
+                body["existing_review_id"]
+            );
+        }
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    Err(loopback_or_api_error(
+        "review delete",
+        daemon,
+        status,
+        &body,
+    ))
+}
+
+async fn review_refs_list_cmd(daemon: &str, repo: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = review_refs_list_request(repo);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        envelope::print_ok("review-refs/1", &body, Vec::new(), false, None);
+        return Ok(());
+    }
+    let refs = body["refs"].as_array().cloned().unwrap_or_default();
+    if refs.is_empty() {
+        println!("no refs/kbc/{{pr,review}}/* in {repo}");
+        return Ok(());
+    }
+    println!("{:<36} {:<10} {:>8} STATUS", "REF", "KIND", "REVIEW");
+    for r in &refs {
+        println!(
+            "{:<36} {:<10} {:>8} {}",
+            r["ref"].as_str().unwrap_or("?"),
+            r["kind"].as_str().unwrap_or("?"),
+            r["review_id"]
+                .as_i64()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "-".into()),
+            r["status"].as_str().unwrap_or("?"),
+        );
+    }
+    Ok(())
+}
+
+async fn review_refs_gc_cmd(daemon: &str, repo: &str, apply: bool, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let dry = if apply { "0" } else { "1" };
+    let (status, body) = post_json_query_raw(
+        &client,
+        daemon,
+        "/api/reviews/refs/gc",
+        &[("repo", repo), ("dry_run", dry)],
+        &serde_json::json!({}),
+    )
+    .await?;
+    if json {
+        envelope::print_ok("review-refs/1", &body, Vec::new(), false, None);
+    }
+    if !status.is_success() {
+        return Err(loopback_or_api_error(
+            "review refs gc",
+            daemon,
+            status,
+            &body,
+        ));
+    }
+    if !json {
+        let n = body["deleted_count"].as_u64().unwrap_or(0);
+        if body["dry_run"].as_bool().unwrap_or(true) {
+            println!("dry-run: would delete {n} orphan ref(s) in {repo} (pass --apply)");
+        } else {
+            println!("✓ deleted {n} orphan ref(s) in {repo}");
+        }
+        if let Some(arr) = body["deleted"].as_array() {
+            for r in arr {
+                if let Some(s) = r.as_str() {
+                    println!("  {s}");
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -15428,7 +15909,21 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 // comments,fetch} -----------------------------------------------------------
 
 /// `kb-code review start-pr --repo R --pr N [--base][--title][--session]
-/// [--json]` — `POST /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY.
+/// [--reopen|--new] [--gh-token-from-cli] [--dry-run] [--json]` — `POST
+/// /api/reviews/pr` (design doc §2 row 1). LOOPBACK-ONLY.
+///
+/// V76-R1a — this verb ALWAYS runs the daemon-side job (`?async=1`) and
+/// polls `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
+/// up to [`START_PR_POLL_BUDGET`], because the first fetch against a cold
+/// mirror outlived this client's old 10 s timeout every single time: the
+/// fetch completed server-side while the CLI had already given up, and a
+/// confusing second call "succeeded". The final envelope printed is the
+/// SAME one the synchronous route returns (the job carries it verbatim
+/// under `result`); the stale-mirror refusal
+/// (`urn:kb:errors:stale-mirror`) is printed verbatim, hint included.
+///
+/// V76-R1b — `--reopen`/`--new` become `?on_closed=reopen|new` (an OPEN
+/// existing (repo, PR) review is reused; a CLOSED one 409s without a flag).
 #[allow(clippy::too_many_arguments)]
 async fn review_start_pr_cmd(
     daemon: &str,
@@ -15437,6 +15932,10 @@ async fn review_start_pr_cmd(
     base: Option<&str>,
     title: Option<&str>,
     session: Option<&str>,
+    reopen: bool,
+    new: bool,
+    gh_token_from_cli: bool,
+    dry_run: bool,
     json: bool,
 ) -> Result<()> {
     let mut payload = serde_json::json!({ "repo": repo, "pr_number": pr_number });
@@ -15449,41 +15948,314 @@ async fn review_start_pr_cmd(
     if let Some(s) = session {
         payload["session_id"] = serde_json::json!(s);
     }
-    let client = http_client()?;
-    let (status, body) = post_json_raw(&client, daemon, "/api/reviews/pr", &payload).await?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&body)?);
+    let mut query: Vec<(&str, &str)> = vec![("async", "1")];
+    if reopen {
+        query.push(("on_closed", "reopen"));
+    } else if new {
+        query.push(("on_closed", "new"));
     }
-    if !status.is_success() {
-        if status == reqwest::StatusCode::CONFLICT {
-            return Err(anyhow::anyhow!(
-                "review start-pr failed (409): {} — existing review id {}",
-                body["error"].as_str().unwrap_or("already bound"),
-                body["existing_review_id"]
-            ));
+    let mut gh_token: Option<String> = None;
+    if gh_token_from_cli {
+        let out = std::process::Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .context("run `gh auth token` for --gh-token-from-cli")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "gh auth token failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
         }
-        return Err(loopback_or_api_error(
-            "review start-pr",
-            daemon,
-            status,
-            &body,
-        ));
+        let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if token.is_empty() {
+            anyhow::bail!("gh auth token returned an empty token");
+        }
+        payload["gh_token"] = serde_json::json!(token);
+        gh_token = Some(token);
     }
-    if !json {
-        let meta_note = if body["pr_meta"].is_null() {
-            format!(
-                " (metadata unavailable: {})",
-                body["pr_meta_unavailable_reason"].as_str().unwrap_or("?")
-            )
+    if dry_run {
+        let mut shown = payload.clone();
+        if shown.get("gh_token").is_some() {
+            shown["gh_token"] = serde_json::json!("[redacted]");
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&shown)?);
         } else {
-            String::new()
+            println!(
+                "· dry-run — would POST /api/reviews/pr?async=1 with gh_token={}",
+                if gh_token.is_some() {
+                    "[redacted]"
+                } else {
+                    "(none)"
+                }
+            );
+        }
+        if let Some(t) = &gh_token {
+            let printed = serde_json::to_string(&shown)?;
+            anyhow::ensure!(
+                !printed.contains(t),
+                "internal error: dry-run leaked the GitHub token"
+            );
+        }
+        return Ok(());
+    }
+    // V76-R1a — 600 s for THIS verb (the daemon-side fetch outlives
+    // `http_client`'s 10 s on a cold mirror); every other verb keeps its
+    // own timeout. `recipe_client`'s precedent, second instance.
+    let client = client_builder()
+        .timeout(START_PR_CLIENT_TIMEOUT)
+        .build()
+        .context("build start-pr http client")?;
+    let (status, body) =
+        post_json_query_raw(&client, daemon, "/api/reviews/pr", &query, &payload).await?;
+    if status == reqwest::StatusCode::ACCEPTED {
+        let job_id = body["job_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("start-pr: 202 response without a job_id: {body}"))?;
+        if body["attached"].as_bool().unwrap_or(false) && !json {
+            eprintln!("start-pr: attached to already-running job {job_id}");
+        }
+        let terminal = poll_start_pr_job(&client, daemon, job_id, json).await?;
+        return match classify_start_pr_job(&terminal) {
+            StartPrJob::Done(result) => print_start_pr_envelope(&result, json),
+            StartPrJob::Failed { error, error_type } => {
+                start_pr_failed(&error, error_type.as_deref(), &terminal, json)
+            }
+            StartPrJob::Running(_) => unreachable!("poll_start_pr_job returns on a terminal state"),
         };
-        println!(
-            "✓ review {} bound to {}#{} (ps{}){meta_note}",
-            body["id"], body["pr_repo_slug"], body["pr_number"], body["latest_ps"],
+    }
+    // A pre-V76 daemon has no job mode and answers the POST synchronously
+    // (202 never happens) — keep the legacy handling, including R1b's
+    // closed-binding 409 (`--reopen`/`--new`).
+    if !status.is_success() {
+        return start_pr_http_failure(daemon, status, &body, json);
+    }
+    print_start_pr_envelope(&body, json)
+}
+
+fn start_pr_closed_hint() -> &'static str {
+    "pass --reopen to reopen and add a patchset, or --new to mint a new review id"
+}
+
+fn start_pr_is_closed_error(error_type: Option<&str>, body: &serde_json::Value) -> bool {
+    error_type == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+        || body["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+        || body["result"]["type"].as_str() == Some(kb_code_server::reviews::ERR_REVIEW_CLOSED)
+}
+
+fn start_pr_failed(
+    error: &str,
+    error_type: Option<&str>,
+    terminal: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    if start_pr_is_closed_error(error_type, terminal) {
+        if json {
+            envelope::print_err(
+                kb_code_server::reviews::ERR_REVIEW_CLOSED,
+                error,
+                Some(start_pr_closed_hint()),
+            );
+        } else {
+            let existing = terminal["result"]["existing_review_id"]
+                .as_i64()
+                .map(|id| format!(" — existing review id {id}"))
+                .unwrap_or_default();
+            eprintln!("review start-pr failed (409): {error}{existing} (pass --reopen or --new)");
+        }
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    // The refusal verbatim — the stale-mirror message's retry command is
+    // IN the text, so nothing is re-worded here.
+    let urn = error_type.map(|t| format!(" [{t}]")).unwrap_or_default();
+    Err(anyhow::anyhow!("review start-pr failed{urn}: {error}"))
+}
+
+fn start_pr_http_failure(
+    daemon: &str,
+    status: reqwest::StatusCode,
+    body: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    let closed = start_pr_is_closed_error(body["type"].as_str(), body);
+    if json {
+        envelope::print_err(
+            body["type"].as_str().unwrap_or("error"),
+            body["error"].as_str().unwrap_or("start-pr failed"),
+            if closed {
+                Some(start_pr_closed_hint())
+            } else {
+                None
+            },
         );
     }
+    if status == reqwest::StatusCode::CONFLICT {
+        if !json {
+            eprintln!(
+                "review start-pr failed (409): {} — existing review id {} \
+                 (pass --reopen or --new)",
+                body["error"].as_str().unwrap_or("already bound"),
+                body["existing_review_id"]
+            );
+        }
+        std::process::exit(envelope::EXIT_CONFLICT);
+    }
+    Err(loopback_or_api_error(
+        "review start-pr",
+        daemon,
+        status,
+        body,
+    ))
+}
+
+/// V76-R1a — the start-pr client timeout, 600 s: the daemon-side
+/// fetch + patchset creation on a cold mirror, with margin. Both the POST
+/// and each poll GET share it.
+const START_PR_CLIENT_TIMEOUT: Duration = Duration::from_secs(600);
+/// V76-R1a — poll cadence for `GET /api/reviews/jobs/{id}`.
+const START_PR_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// V76-R1a — the whole poll budget. Matches the client timeout: a job
+/// still running after ten minutes is reported as still-running (with the
+/// job id to poll by hand), never silently abandoned.
+const START_PR_POLL_BUDGET: Duration = Duration::from_secs(600);
+
+/// One poll observation of `GET /api/reviews/jobs/{id}`'s body, classified.
+enum StartPrJob {
+    Running(String),
+    Done(serde_json::Value),
+    Failed {
+        error: String,
+        error_type: Option<String>,
+    },
+}
+
+/// Classify a job body into running / done / failed — pure, so the poll
+/// loop's three exits are unit-tested without a daemon.
+fn classify_start_pr_job(body: &serde_json::Value) -> StartPrJob {
+    match body["status"].as_str() {
+        Some("done") => StartPrJob::Done(body["result"].clone()),
+        Some("failed") => StartPrJob::Failed {
+            error: body["error"]
+                .as_str()
+                .unwrap_or("start-pr failed (no error message)")
+                .to_string(),
+            error_type: body["error_type"].as_str().map(str::to_string),
+        },
+        other => StartPrJob::Running(
+            body["progress"]["stage"]
+                .as_str()
+                .or(other)
+                .unwrap_or("running")
+                .to_string(),
+        ),
+    }
+}
+
+/// The success envelope printer, shared by the job's `done` result and
+/// (pre-V76 daemon fallback) the synchronous 201 body. `--json` gets the
+/// envelope pretty-printed, nothing else; the human line is the pre-V76
+/// one verbatim.
+fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(body)?);
+    } else {
+        print_start_pr_human(body);
+    }
     Ok(())
+}
+
+/// The pre-V76 human success line, one place for both paths above.
+fn print_start_pr_human(body: &serde_json::Value) {
+    let meta_note = if body["pr_meta"].is_null() {
+        // V76-R1c — the typed `{code, hint}` reason, with the pre-R1c
+        // plain-string shape still accepted from an older daemon.
+        let reason = &body["pr_meta_unavailable_reason"];
+        let shown = reason
+            .get("code")
+            .and_then(|c| c.as_str())
+            .map(|code| {
+                let hint = reason["hint"].as_str().unwrap_or("");
+                if hint.is_empty() {
+                    code.to_string()
+                } else {
+                    format!("{code}: {hint}")
+                }
+            })
+            .or_else(|| reason.as_str().map(str::to_string))
+            .unwrap_or_else(|| "?".to_string());
+        format!(" (metadata unavailable: {shown})")
+    } else {
+        String::new()
+    };
+    let reused = if body["reused"].as_bool().unwrap_or(false) {
+        " reused"
+    } else {
+        ""
+    };
+    println!(
+        "✓ review {}{reused} bound to {}#{} (ps{}){meta_note}",
+        body["id"], body["pr_repo_slug"], body["pr_number"], body["latest_ps"],
+    );
+}
+
+/// `GET /api/reviews/jobs/{id}` — the declared path carries the `{id}`
+/// placeholder; [`poll_start_pr_job`] substitutes the real one. The route
+/// takes no query params, so the pair is empty — the builder exists so the
+/// CLI half of invariant 15's dead-surface walk covers the route, and the
+/// poll loop below builds its path from the SAME declaration rather than
+/// a second hand-typed copy that could drift.
+fn review_job_request() -> (&'static str, Vec<(&'static str, String)>) {
+    (kb_code_server::review_jobs::REVIEW_JOB_ROUTE.path, vec![])
+}
+
+/// Poll `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
+/// until the job settles or [`START_PR_POLL_BUDGET`] is spent. Progress
+/// goes to STDERR (never stdout — `--json` output must stay parseable,
+/// and even the human path keeps stdout to the one final line), and only
+/// when the stage CHANGES, so a long fetch prints one line, not 300.
+async fn poll_start_pr_job(
+    client: &reqwest::Client,
+    daemon: &str,
+    job_id: &str,
+    json: bool,
+) -> Result<serde_json::Value> {
+    let deadline = std::time::Instant::now() + START_PR_POLL_BUDGET;
+    let mut last_stage = String::new();
+    loop {
+        tokio::time::sleep(START_PR_POLL_INTERVAL).await;
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "review start-pr: job {job_id} still running after {} s — the daemon is \
+                 still working; poll it by hand with GET /api/reviews/jobs/{job_id}",
+                START_PR_POLL_BUDGET.as_secs()
+            );
+        }
+        let (declared_path, _) = review_job_request();
+        let path = declared_path.replace("{id}", job_id);
+        let (status, body) = get_json_raw(client, daemon, &path, &[]).await?;
+        if status == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "review start-pr: job {job_id} vanished (unknown or swept past its 1 h TTL)"
+            );
+        }
+        if !status.is_success() {
+            return Err(loopback_or_api_error(
+                "review start-pr (job poll)",
+                daemon,
+                status,
+                &body,
+            ));
+        }
+        match classify_start_pr_job(&body) {
+            StartPrJob::Running(stage) => {
+                if !json && stage != last_stage {
+                    eprintln!("start-pr: {stage}…");
+                    last_stage = stage;
+                }
+            }
+            _ => return Ok(body),
+        }
+    }
 }
 
 /// `kb-code review report ID [--json]` — `GET /api/reviews/{id}/report`
@@ -15687,8 +16459,12 @@ async fn review_findings_import_cmd(
 /// revision, sets the report and any verdict — ONE sqlite transaction, ONE
 /// SSE event. `--dry-run` stops after the lint and writes nothing.
 ///
-/// **The V0 form** (V70-R) — `--from-file`/`--stdin`: the `kbc-compose/1`
-/// JSON body (summary + a `kbc-findings/1` block). Unchanged.
+/// **The V0 form** (V70-R, folded V76-R1c) — `--from-file`/`--stdin`: the
+/// `kbc-compose/1` JSON body (summary + a `kbc-findings/1` block). The
+/// daemon maps free-text categories onto the closed 8-value set, refuses
+/// invalid slugs with the `f-[a-z0-9-]+` regex, and synthesises a
+/// `minimal` `kbc-review/1` document so `doc`/`lint`/`render` work
+/// afterwards.
 ///
 /// Exit code 3 (`EXIT_CONFLICT`) when a lint reports any ERROR — the request
 /// was well-formed and the state refused it, which is what that slot means.
@@ -21529,6 +22305,13 @@ fn prose_resolve_request(repo: &str, text: &str) -> (&'static str, Vec<(&'static
     )
 }
 
+fn review_refs_list_request(repo: &str) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::reviews::REVIEW_REFS_ROUTE.path,
+        vec![("repo", repo.to_string())],
+    )
+}
+
 fn review_doc_request(
     ps: Option<&str>,
     resolve: bool,
@@ -23108,6 +23891,108 @@ fn frames_request() -> (&'static str, Vec<(&'static str, String)>) {
     (kb_code_server::frames::FRAMES_ROUTE.path, Vec::new())
 }
 
+/// The `GET /api/refs/typeahead` request.
+fn refs_typeahead_request(
+    repo: &str,
+    q: &str,
+    limit: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut query = vec![("repo", repo.to_string()), ("q", q.to_string())];
+    if let Some(n) = limit {
+        query.push(("limit", n.to_string()));
+    }
+    (kb_code_server::refs_typeahead::TYPEAHEAD_ROUTE.path, query)
+}
+
+/// The `GET /api/compare/file` request.
+fn compare_file_request(
+    repo: &str,
+    path: &str,
+    a: &str,
+    b: &str,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    (
+        kb_code_server::compare_file::COMPARE_FILE_ROUTE.path,
+        vec![
+            ("repo", repo.to_string()),
+            ("path", path.to_string()),
+            ("a", a.to_string()),
+            ("b", b.to_string()),
+        ],
+    )
+}
+
+async fn refs_typeahead_cmd(
+    daemon: &str,
+    repo: &str,
+    q: &str,
+    limit: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (path, query) = refs_typeahead_request(repo, q, limit);
+    let body = get_json(&client, daemon, path, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let hits = body["hits"].as_array().cloned().unwrap_or_default();
+    let total = body["total"].as_u64().unwrap_or(hits.len() as u64);
+    let returned = body["returned"].as_u64().unwrap_or(hits.len() as u64);
+    println!(
+        "refs typeahead {q:?} · {returned} of {total}{}",
+        if body["truncated"].as_bool().unwrap_or(false) {
+            " (truncated)"
+        } else {
+            ""
+        }
+    );
+    for h in &hits {
+        println!(
+            "{:<10} {:<24} {}",
+            h["kind"].as_str().unwrap_or("?"),
+            h["name"].as_str().unwrap_or("?"),
+            h["insert"].as_str().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+async fn compare_file_cmd(
+    daemon: &str,
+    repo: &str,
+    path: &str,
+    a: &str,
+    b: &str,
+    json: bool,
+) -> Result<()> {
+    let client = http_client()?;
+    let (route, query) = compare_file_request(repo, path, a, b);
+    let body = get_json(&client, daemon, route, &as_query_pairs(&query)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!(
+        "compare-file {path}  {} → {}",
+        body["a"]["ref"].as_str().unwrap_or(a),
+        body["b"]["ref"].as_str().unwrap_or(b),
+    );
+    let empty: Vec<serde_json::Value> = Vec::new();
+    for h in body["hunks"].as_array().unwrap_or(&empty) {
+        println!("{}", h["header"].as_str().unwrap_or("@@"));
+    }
+    if let Some(diff) = body["diff"].as_str() {
+        if !diff.is_empty() {
+            print!("{diff}");
+            if !diff.ends_with('\n') {
+                println!();
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn workspaces_cmd(daemon: &str, id: Option<&str>, json: bool) -> Result<()> {
     let client = http_client()?;
     let body = match id {
@@ -24468,6 +25353,78 @@ mod tests {
         }
     }
 
+    #[test]
+    fn v76_r1b_review_lifecycle_verbs_parse() {
+        match parse_cli(&["review", "delete", "12", "--yes"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Delete { id, yes, force, .. },
+            } => {
+                assert_eq!(id, 12);
+                assert!(yes);
+                assert!(!force);
+            }
+            other => panic!("expected review delete, got {other:?}"),
+        }
+        match parse_cli(&["review", "delete", "12", "--yes", "--force"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Delete { force, .. },
+            } => assert!(force),
+            other => panic!("expected review delete --force, got {other:?}"),
+        }
+        match parse_cli(&["review", "reopen", "12", "--json"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::Reopen { id, json, .. },
+            } => {
+                assert_eq!(id, 12);
+                assert!(json);
+            }
+            other => panic!("expected review reopen, got {other:?}"),
+        }
+        match parse_cli(&["review", "refs", "list", "--repo", "r"]).unwrap() {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Refs {
+                        cmd: ReviewRefsCmd::List { repo, .. },
+                    },
+            } => assert_eq!(repo, "r"),
+            other => panic!("expected review refs list, got {other:?}"),
+        }
+        match parse_cli(&["review", "refs", "gc", "--repo", "r", "--apply"]).unwrap() {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Refs {
+                        cmd: ReviewRefsCmd::Gc { apply, .. },
+                    },
+            } => assert!(apply),
+            other => panic!("expected review refs gc --apply, got {other:?}"),
+        }
+        match parse_cli(&["review", "start-pr", "--repo", "r", "--pr", "7", "--reopen"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::StartPr { reopen, new, .. },
+            } => {
+                assert!(reopen);
+                assert!(!new);
+            }
+            other => panic!("expected start-pr --reopen, got {other:?}"),
+        }
+        match parse_cli(&["review", "start-pr", "--repo", "r", "--pr", "7", "--new"]).unwrap() {
+            Cmd::Review {
+                cmd: ReviewCmd::StartPr { new, reopen, .. },
+            } => {
+                assert!(new);
+                assert!(!reopen);
+            }
+            other => panic!("expected start-pr --new, got {other:?}"),
+        }
+        assert!(
+            parse_cli(&["review", "start-pr", "--repo", "r", "--pr", "7", "--reopen", "--new"])
+                .is_err(),
+            "--reopen and --new conflict"
+        );
+        assert!(review_delete_requires_yes(false).is_err());
+        assert!(review_delete_requires_yes(true).is_ok());
+    }
+
     // --- reading sets (Phase E3) --------------------------------------------
 
     #[test]
@@ -25583,6 +26540,73 @@ mod tests {
         }
     }
 
+    // --- V76-R1a: the start-pr job poll loop -------------------------------
+
+    #[test]
+    fn start_pr_job_classify_running_reports_the_stage() {
+        let body = serde_json::json!({
+            "job_id": "job_abc", "status": "running",
+            "progress": {"stage": "fetch"},
+        });
+        match classify_start_pr_job(&body) {
+            StartPrJob::Running(stage) => assert_eq!(stage, "fetch"),
+            _ => panic!("a running job must classify as Running"),
+        }
+    }
+
+    #[test]
+    fn start_pr_job_classify_done_carries_the_result_envelope() {
+        let body = serde_json::json!({
+            "job_id": "job_abc", "status": "done", "review_id": 7,
+            "result": {"id": 7, "base_source": "merge-base", "latest_ps": 1},
+        });
+        match classify_start_pr_job(&body) {
+            StartPrJob::Done(result) => {
+                assert_eq!(result["id"], 7);
+                assert_eq!(result["base_source"], "merge-base");
+            }
+            _ => panic!("a done job must classify as Done"),
+        }
+    }
+
+    #[test]
+    fn start_pr_job_classify_failed_keeps_the_refusal_verbatim() {
+        let hint = "stale mirror: the local default branch \"main\" is 214 commits behind \
+                    the fetched origin/main (0 ahead, 214 behind; refusal limit 50). \
+                    ps1 would be based on its merge-base with the PR head; to proceed \
+                    against that base explicitly, run:\n  \
+                    kb-code review start-pr --repo widget --pr 42 --base deadbeef";
+        let body = serde_json::json!({
+            "job_id": "job_abc", "status": "failed",
+            "error": hint,
+            "error_type": "urn:kb:errors:stale-mirror",
+        });
+        match classify_start_pr_job(&body) {
+            StartPrJob::Failed { error, error_type } => {
+                // Verbatim, hint included — the CLI adds nothing and
+                // re-words nothing.
+                assert_eq!(error, hint);
+                assert!(
+                    error.contains("kb-code review start-pr --repo widget --pr 42 --base deadbeef")
+                );
+                assert_eq!(error_type.as_deref(), Some("urn:kb:errors:stale-mirror"));
+            }
+            _ => panic!("a failed job must classify as Failed"),
+        }
+    }
+
+    #[test]
+    fn start_pr_job_classify_failed_without_an_error_message_is_still_honest() {
+        let body = serde_json::json!({"job_id": "job_abc", "status": "failed"});
+        match classify_start_pr_job(&body) {
+            StartPrJob::Failed { error, error_type } => {
+                assert_eq!(error, "start-pr failed (no error message)");
+                assert!(error_type.is_none());
+            }
+            _ => panic!("a failed job must classify as Failed"),
+        }
+    }
+
     #[test]
     fn review_github_threads_parses_id_and_json_flag() {
         match parse_cli(&["review", "github-threads", "12", "--json"]).unwrap() {
@@ -26149,6 +27173,8 @@ mod tests {
             }),
             syntax_request(),
             parity_request(),
+            highlight_request(),
+            highlight_batch_request(),
             // V72-H2b — the re-extract bill joins the SAME walk.
             reextract_bill_request("repo", Some(50)),
             // V72-G1.1 — the entity DOSSIER, on its own sibling path
@@ -26227,6 +27253,13 @@ mod tests {
             // V75-M3 — `branch-facts/1`'s three READS join the SAME walk.
             branch_favourites_request("repo"),
             branch_conflicts_request("repo", "main", Some(5), Some("branch:x")),
+            // V76-R1b — `GET /api/reviews/refs`.
+            review_refs_list_request("repo"),
+            // V76-R1a — the start-pr job read joins the SAME walk.
+            review_job_request(),
+            // V76-R3c — typeahead + compare-file.
+            refs_typeahead_request("repo", "main", Some(25)),
+            compare_file_request("repo", "src/lib.rs", "HEAD~1", "HEAD"),
             // V76-B3 — `POST /api/prose/resolve`. Body fields ride as the
             // walk's pairs so a required key the CLI omits fails HERE.
             prose_resolve_request("repo", "hello"),
@@ -26311,6 +27344,15 @@ mod tests {
             .chain(kb_code_server::workspace::V75_M1_ROUTES.iter())
             // V75-M3 — `branch-facts/1`'s three reads, the same way.
             .chain(kb_code_server::branches::V75_M3_ROUTES.iter())
+            // V76-R1b — `GET /api/reviews/refs`.
+            .chain(kb_code_server::reviews::V76_R1B_ROUTES.iter())
+            // V76-R1a — the start-pr job read, the same way.
+            .chain(kb_code_server::review_jobs::V76_R1A_ROUTES.iter())
+            // V76-R3c — typeahead + compare-file, the same way.
+            .chain(kb_code_server::refs_typeahead::V76_R3C_ROUTES.iter())
+            // V76-C1 — `highlight/1`. No query params (JSON body); this
+            // half of the walk proves a verb builds a request for each path.
+            .chain(kb_code_server::highlight::V76_C1_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`, same walk.
             .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter());
         for c in declared {
@@ -26326,6 +27368,30 @@ mod tests {
                     c.path
                 );
             }
+        }
+    }
+
+    #[test]
+    fn highlight_verb_parses_lang_and_file() {
+        let cli = Cli::try_parse_from([
+            "kb-code",
+            "highlight",
+            "--lang",
+            "ruby",
+            "--file",
+            "snippet.rb",
+            "--json",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Highlight {
+                lang, file, json, ..
+            } => {
+                assert_eq!(lang.as_deref(), Some("ruby"));
+                assert_eq!(file.as_deref(), Some(std::path::Path::new("snippet.rb")));
+                assert!(json);
+            }
+            other => panic!("expected Cmd::Highlight, got {other:?}"),
         }
     }
 

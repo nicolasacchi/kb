@@ -355,6 +355,7 @@ pub mod fanout;
 // as a routes-adjacent sibling of `frameworks` (the pure extraction lane),
 // not nested inside it — mirrors `resolve.rs`/`usages.rs`/`hierarchy.rs`'s
 // own top-level placement next to the tables/extractors they read.
+pub mod compare_file;
 pub mod frames;
 pub mod framework_edges;
 pub mod frameworks;
@@ -408,6 +409,7 @@ pub mod recipes;
 /// V72-H2b (D7) — `reextract-bill/1`: what a salt bump would cost,
 /// measured rather than estimated.
 pub mod reextract;
+pub mod refs_typeahead;
 pub mod rekey;
 pub mod repo_state;
 pub mod resolve;
@@ -424,6 +426,7 @@ pub mod review_github_threads;
 pub mod review_hunks;
 pub mod review_impact;
 pub mod review_inbox;
+pub mod review_jobs;
 pub mod review_legacy;
 pub mod review_map;
 pub mod review_pseudo;
@@ -1187,6 +1190,7 @@ pub async fn bind_and_spawn(
         scratch_root,
         // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
         branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
+        review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
     });
 
     // DCB W3.A — the doc_refs reverse-index sync. Spawned UNCONDITIONALLY,
@@ -1460,6 +1464,7 @@ pub(crate) async fn build_state_for_test(
         scratch_root: paths.state.join(history::scratch::SCRATCH_DIR_NAME),
         // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
         branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
+        review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
     }))
 }
 

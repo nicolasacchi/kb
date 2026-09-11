@@ -86,6 +86,13 @@ export const Icon = {
       <path d="M2 4.5a1 1 0 0 1 1-1h3l1.4 1.6H13a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" />
     </svg>
   ),
+  // V76-R2b — generic file-kind fallback when syntax/1 has no lang for the path.
+  File: (p: P) => (
+    <svg {...base(14)} {...p}>
+      <path d="M4 2.5h5.5L12 5.5V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z" />
+      <path d="M9.5 2.5V5.5H12" />
+    </svg>
+  ),
   // F6 — the Branches page's single-branch EmptyState — a small git-fork
   // glyph (two tips merging into one base).
   Branch: (p: P) => (
@@ -168,6 +175,12 @@ export const Icon = {
   Comment: (p: P) => (
     <svg {...base(14)} {...p} strokeLinecap="round" strokeLinejoin="round">
       <path d="M2 3.5h10a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H6l-3 2.5v-2.5H2a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z" />
+    </svg>
+  ),
+  // V76-R3a — Facts tab: three bars, a histogram of claims about a file.
+  Facts: (p: P) => (
+    <svg {...base(14)} {...p} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12V8M7 12V4M11 12V6" />
     </svg>
   ),
   Expand: (p: P) => (

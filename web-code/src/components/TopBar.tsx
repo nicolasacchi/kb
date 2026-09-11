@@ -14,6 +14,7 @@ import {
   matchActiveNavItem,
   navTestAttr,
 } from "../lib/navItems";
+import RefChip from "./RefChip";
 
 // F1 — the ONE chrome bar shared by every route, mounted once at the app
 // root (app.tsx), mirroring kb's own `Header` (also mounted once above
@@ -45,6 +46,7 @@ export default function TopBar() {
   return (
     <header className="kbc-topbar" data-region="topbar">
       <RepoPill />
+      <RefChip />
       {explicitRepo && !isMobile && (
         <>
           {reviewItems.map((item) => {

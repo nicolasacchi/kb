@@ -25,13 +25,18 @@ import type {
   CheckoutDirtyBody,
   CheckoutResponse,
   CommitPageResponse,
+  CompareFileResponse,
   ComparePageResponse,
   DefsOut,
   DiffResponse,
   FileHistoryResponse,
   FileResponse,
+  FramesResponse,
+  HighlightBatchOut,
+  HighlightOut,
   DossierOut,
   IdentityOut,
+  SyntaxOut,
   LineWhyOut,
   MergeCheckResponse,
   OpenAnnotationsResponse,
@@ -42,6 +47,7 @@ import type {
   ReposResponse,
   RefsOut,
   RefsResponse,
+  RefsTypeaheadResponse,
   RepoStateResponse,
   ResolveOut,
   HierarchyCalleesOut,
@@ -75,6 +81,9 @@ import type {
   CommentsFileOut,
   CommentsSummaryOut,
   CommentKeywordsOut,
+  LanesOut,
+  FactsOut,
+  LanesSummaryOut,
   TodosListOut,
   TreeResponse,
   TreeV2Response,
@@ -200,6 +209,12 @@ export function fetchIdentity(): Promise<IdentityOut> {
   return getJson<IdentityOut>("/api/identity", {});
 }
 
+/// `GET /api/syntax` — the syntax/1 file-type registry. Build-time data,
+/// no repo content; cached by `hooks/useSyntax.ts`.
+export function fetchSyntax(): Promise<SyntaxOut> {
+  return getJson<SyntaxOut>("/api/syntax", {});
+}
+
 export function fetchTree(repo: string, path: string, ref?: string): Promise<TreeResponse> {
   return getJson<TreeResponse>("/api/tree", { repo, path, ref });
 }
@@ -238,6 +253,87 @@ export function fetchTreeV2(params: {
 
 export function fetchFile(repo: string, path: string, ref?: string): Promise<FileResponse> {
   return getJson<FileResponse>("/api/file", { repo, path, ref });
+}
+
+export function fetchFrames(): Promise<FramesResponse> {
+  return getJson<FramesResponse>("/api/frames", {});
+}
+
+export function fetchRefsTypeahead(
+  repo: string,
+  q: string,
+  limit?: number,
+): Promise<RefsTypeaheadResponse> {
+  return getJson<RefsTypeaheadResponse>("/api/refs/typeahead", {
+    repo,
+    q,
+    limit: limit !== undefined ? String(limit) : undefined,
+  });
+}
+
+export function fetchCompareFile(
+  repo: string,
+  path: string,
+  a: string,
+  b: string,
+): Promise<CompareFileResponse> {
+  return getJson<CompareFileResponse>("/api/compare/file", { repo, path, a, b });
+}
+
+/// `POST /api/highlight` (`highlight/1`) — paint one snippet. Nothing is
+/// persisted. Caps refuse with the size.
+export async function fetchHighlight(body: {
+  lang: string | null;
+  text: string;
+  path?: string;
+  salt?: boolean;
+}): Promise<HighlightOut> {
+  const res = await fetch("/api/highlight", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...KBC_REQUEST_HEADERS,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const err = (await res.json()) as { error?: string };
+      if (err.error) message = err.error;
+    } catch {
+      // non-JSON
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as HighlightOut;
+}
+
+/// `POST /api/highlight/batch` — a page of snippets (≤ 64, ≤ 1 MiB).
+export async function fetchHighlightBatch(
+  items: Array<{ id: string; lang: string | null; text: string; path?: string }>,
+): Promise<HighlightBatchOut> {
+  const res = await fetch("/api/highlight/batch", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...KBC_REQUEST_HEADERS,
+    },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const err = (await res.json()) as { error?: string };
+      if (err.error) message = err.error;
+    } catch {
+      // non-JSON
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as HighlightBatchOut;
 }
 
 export function fetchRefs(repo: string): Promise<RefsResponse> {
@@ -2553,4 +2649,28 @@ export function fetchReviewPseudoFile(
 /// than an in-handler check.
 export function fetchHunkTurns(id: number, hunk: string, ps?: string): Promise<HunkTurnsOut> {
   return getJson<HunkTurnsOut>(`/api/reviews/${id}/hunks/${encodeURIComponent(hunk)}/turns`, { ps });
+}
+
+/// `GET /api/lanes[?repo=]` — `aug-lane/1` registry + enablement + counts.
+export function fetchLanes(repo?: string): Promise<LanesOut> {
+  return getJson<LanesOut>("/api/lanes", { repo });
+}
+
+/// `GET /api/lanes/facts?repo=&path=[&lane=][&at_blob=]` — per-request classing.
+export function fetchLaneFacts(
+  repo: string,
+  path: string,
+  opts?: { lane?: string; atBlob?: string },
+): Promise<FactsOut> {
+  return getJson<FactsOut>("/api/lanes/facts", {
+    repo,
+    path,
+    lane: opts?.lane,
+    at_blob: opts?.atBlob,
+  });
+}
+
+/// `GET /api/lanes/summary?repo=` — stored-claim counts, no class.
+export function fetchLanesSummary(repo: string): Promise<LanesSummaryOut> {
+  return getJson<LanesSummaryOut>("/api/lanes/summary", { repo });
 }

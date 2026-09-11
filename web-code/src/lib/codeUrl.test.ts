@@ -5,7 +5,9 @@ import {
   buildSym,
   canvasPageUrl,
   codeUrl,
+  isReaderFilePath,
   commentsUrl,
+  lanesUrl,
   commitUrl,
   compareUrl,
   findingUrl,
@@ -50,6 +52,16 @@ import {
 // Golden table: CodeLoc → exact URL string. Mirrors the discipline of kb's
 // own web/src/lib/galleryUrl.test.ts — one table, exact strings, no
 // snapshot fuzziness. ~15+ cases covering every axis of the contract.
+describe("isReaderFilePath", () => {
+  it("is true for a file reader URL and false for ~sentinels", () => {
+    expect(isReaderFilePath("/r/kb/src/lib.rs")).toBe(true);
+    expect(isReaderFilePath("/r/kb")).toBe(true);
+    expect(isReaderFilePath("/r/kb/~branches")).toBe(false);
+    expect(isReaderFilePath("/r/kb/src/lib.rs/~diff")).toBe(false);
+    expect(isReaderFilePath("/~inbox")).toBe(false);
+  });
+});
+
 describe("codeUrl", () => {
   const cases: Array<[string, CodeLoc, string]> = [
     ["plain file, no query", { repo: "kb", path: "src/lib.rs" }, "/r/kb/src/lib.rs"],
@@ -118,6 +130,16 @@ describe("codeUrl", () => {
         pane2: { path: "src/other.rs", ref: "dev", line: 7 },
       },
       "/r/kb/a.rs?ref=main&line=1-3&pane2=src%2Fother.rs%40dev%3A7",
+    ],
+    [
+      "compare pane: same path at ref B is pane2; ref stays first",
+      {
+        repo: "kb",
+        path: "a.rs",
+        ref: "HEAD",
+        pane2: { path: "a.rs", ref: "HEAD~1" },
+      },
+      "/r/kb/a.rs?ref=HEAD&pane2=a.rs%40HEAD~1%3A",
     ],
   ];
 
@@ -365,6 +387,16 @@ describe("commentsUrl", () => {
 
   it("encodes a repo name needing it", () => {
     expect(commentsUrl("my repo")).toBe("/r/my%20repo/~comments");
+  });
+});
+
+describe("lanesUrl", () => {
+  it("builds the repo-scoped aug-lane/1 dock URL", () => {
+    expect(lanesUrl("kb")).toBe("/r/kb/~lanes");
+  });
+
+  it("encodes a repo name needing it", () => {
+    expect(lanesUrl("my repo")).toBe("/r/my%20repo/~lanes");
   });
 });
 

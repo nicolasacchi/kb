@@ -226,12 +226,15 @@ export default function UnifiedHunks({
     : [];
 
   return (
-    <>
+    <div className="kbc-diff__hunks" data-kbc-diff-hunks>
       {parsed.hunks.map((hunk, hi) => {
         const view = hunkViews?.[hi] ?? null;
         // The context dial / expand buttons hand back a WIDER line list;
-        // with no view (the non-review surfaces) it is the wire's own.
-        const lines = view ? view.lines : hunk.lines;
+        // with no view (the non-review surfaces, including the suggestion
+        // preview) it is the wire's own. Empty view.lines must not wipe
+        // the body — suggestions.spec.ts wants `.kbc-diff__hunk-header`
+        // and `.kbc-diff__line--add` on this path.
+        const lines = view && view.lines.length > 0 ? view.lines : hunk.lines;
         return (
         <div
           className={"kbc-diff__hunk" + (view?.collapsed ? " kbc-diff__hunk--collapsed" : "")}
@@ -460,6 +463,6 @@ export default function UnifiedHunks({
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }

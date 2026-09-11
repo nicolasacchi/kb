@@ -888,17 +888,32 @@ async fn render_with(
     // that pays for either.
     let summary_md = doc.summary_md.clone();
     let risk = doc.risk.clone();
-    let (pr_number, report_risk_score, export_findings) = state
+    let (pr_number, report_risk_score, export_findings, pr_labels) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
-            let pr_number = store.get_review_pr_binding(id)?.and_then(|b| b.pr_number);
+            let binding = store.get_review_pr_binding(id)?;
+            let pr_number = binding.as_ref().and_then(|b| b.pr_number);
+            let labels: Vec<String> = binding
+                .as_ref()
+                .and_then(|b| b.pr_meta_json.as_deref())
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .and_then(|v| {
+                    v.get("labels").and_then(|l| l.as_array()).map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
             let risk_score = store
                 .get_review_report(id)?
                 .and_then(|r| crate::reviews::report_risk_score_numeric(r.report_json.as_deref()));
             let findings = store.list_review_findings(id, None, false)?;
-            Ok((pr_number, risk_score, findings))
+            Ok((pr_number, risk_score, findings, labels))
         })
         .await?;
+    let tags = render::kb_tags(&out.repo, pr_number, &pr_labels);
+    let summary_text = render::summary_text(&summary_md);
     let ctx = RenderCtx {
         repo: &out.repo,
         review_id: id,
@@ -910,6 +925,8 @@ async fn render_with(
         omitted: &out.omitted,
         pr_number,
         risk_score: report_risk_score,
+        tags: &tags,
+        summary_text: &summary_text,
     };
     let rendered = render::render(template, &doc, &findings, &cards, &ctx);
     // V73-K5 (gap 4) — every render, including the built-in default

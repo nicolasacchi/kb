@@ -146,6 +146,15 @@
   font-size: var(--fs-xs);
 }
 
+.kbc-hl-no-grammar {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: var(--font-ui, inherit);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
 .kbc-doc__why {
   margin-left: 0.4rem;
   font-size: var(--fs-xs);

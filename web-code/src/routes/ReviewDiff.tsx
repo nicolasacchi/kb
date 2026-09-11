@@ -38,7 +38,7 @@ import {
   type FindingDisposition,
 } from "../lib/diffFindings";
 import { buildTourStops, clampTourStep } from "../lib/reviewTour";
-import { nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
+import { mergeQuery, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
@@ -84,6 +84,8 @@ import ReviewDiffRail from "./reviewDiff/ReviewDiffRail";
 import ReviewDiffToolbar from "./reviewDiff/ReviewDiffToolbar";
 import { cssAttr, msg, orderedRows, splatPath } from "./reviewDiff/helpers";
 import { useReviewDiffState } from "./reviewDiff/useReviewDiffState";
+import type { ReviewFileTreeHandle } from "../components/reviews/ReviewFileTree";
+import type { ReviewMapSplitHandle } from "../components/reviews/ReviewMapSplit";
 
 /// `/r/:repo/~reviews/:id/diff` and `/r/:repo/~reviews/:id/diff/*`.
 /// Query: `ps` `view` `line` `side` `file` `thread` `finding` `overlay`
@@ -107,6 +109,8 @@ export default function ReviewDiff() {
   const id = Number(idParam);
   const idOk = Number.isFinite(id) && id > 0;
   const navigate = useNavigate();
+  const treeHandle = useRef<ReviewFileTreeHandle | null>(null);
+  const splitHandle = useRef<ReviewMapSplitHandle | null>(null);
   // V73-K2b — every `?param=` this route reads or writes lives in ONE hook.
   // A `?ps=a..b` range is the INTERDIFF, which is a different route with a
   // different, thinner file row — see `files` below for the honest degrade
@@ -417,10 +421,22 @@ export default function ReviewDiff() {
     const path = paths[idx];
     if (!path) return;
     if (single) {
-      navigate(withQuery(reviewDiffHref(repo, id, path)));
+      openFileInCenter(path);
       return;
     }
+    // All-files `]f`/`[f` move the cursor only. Writing `?file=` here is the
+    // map-click contract (`openFileInCenter`); doing it on file motion made
+    // the first-hunk scroll effect treat `]f` as a tree landing and broke
+    // review-diff-v2.spec.ts's later hunk-viewed click.
     apply({ type: "gotoFile", fileIdx: idx });
+  }
+
+  /// V76-R2b — click/Enter on a tree file opens THAT file in the center
+  /// (single-file focus) with `?file=` on the URL (Location Contract).
+  function openFileInCenter(path: string) {
+    const idx = paths.indexOf(path);
+    if (idx >= 0) apply({ type: "gotoFile", fileIdx: idx });
+    navigate(mergeQuery(withQuery(reviewDiffHref(repo, id, path)), { file: path }), { replace: true });
   }
 
   /// V73-K2c (kbc-pseudo/1) — "the map column's chapter zero" opener. A
@@ -971,6 +987,10 @@ export default function ReviewDiff() {
       setNoiseMode(noiseMode === "collapsed" ? "shown" : "collapsed"),
     ),
     "diff.map-toggle": gated(() => setMapOpen(!mapParamOpen)),
+    "diff.tree-focus": gated(() => treeHandle.current?.focus()),
+    "diff.tree-toggle-folder": gated(() => treeHandle.current?.toggleFocusedFolder()),
+    "diff.tree-collapse-all": gated(() => treeHandle.current?.collapseAllFolders()),
+    "diff.map-reset": gated(() => splitHandle.current?.resetWidth()),
     "diff.ps-next": gated(() => stepPs(1)),
     "diff.ps-prev": gated(() => stepPs(-1)),
     "diff.drafts": gated(() => setDraftsOpen((v) => !v)),
@@ -1076,6 +1096,30 @@ export default function ReviewDiff() {
     fileScrolled.current = true;
     el.scrollIntoView({ block: "start" });
   }, [fileHint, single, paths]);
+
+  // V76-R2b — after a tree click lands in SINGLE-file focus, put the
+  // FIRST hunk in view. All-files `?file=` keeps the older section-scroll
+  // above — it must not steal the first hunk of file 0, which
+  // review-diff-v2.spec.ts clicks.
+  const hunkScrolledFor = useRef<string | null>(null);
+  useEffect(() => {
+    const path = focusPath;
+    if (!path) return;
+    if (hunkScrolledFor.current === path) return;
+    const root = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
+    if (!root) return;
+    const hunk =
+      root.querySelector("[data-kbc-hunk]") ??
+      root.querySelector("[data-kbc-sdiff-row='hunk']") ??
+      root.querySelector(".kbc-diff__hunk");
+    if (!hunk) return;
+    hunkScrolledFor.current = path;
+    hunk.scrollIntoView({ block: "start" });
+    if (root instanceof HTMLElement) {
+      if (!root.hasAttribute("tabindex")) root.tabIndex = -1;
+      root.focus({ preventScroll: true });
+    }
+  }, [focusPath, hunkCounts, mode, paths]);
 
   if (!idOk) {
     return <div className="kbc-reader__hint kbc-reader__hint--error">Invalid review id.</div>;
@@ -1204,6 +1248,9 @@ export default function ReviewDiff() {
         reviewDiffHref={reviewDiffHref}
         pseudoFiles={pseudoQ.data?.files ?? []}
         onPickPseudo={openPseudo}
+        treeRef={treeHandle}
+        splitRef={splitHandle}
+        onOpenFile={openFileInCenter}
       />
       <ReviewDiffRail
         filesOpen={filesOpen}

@@ -179,7 +179,9 @@ export default function ReviewFileItem({
 }
 
 /// Same `useDiff` data DiffView used; DiffFile now receives review comments.
-function ReviewAwareDiff({
+/// Exported so the Files-tab tree (V76-R2b) can mount the inline diff under
+/// the picked row without re-rendering the whole `ReviewFileItem` chrome.
+export function ReviewAwareDiff({
   repo,
   reviewId,
   ps,
@@ -205,7 +207,7 @@ function ReviewAwareDiff({
     parsed ? repo : undefined,
     parsed ? path : undefined,
     { oldSha: from, newSha: to },
-    { hasRemoves },
+    { hasRemoves, parsed },
   );
   const comments = useReviewDiffComments(repo, reviewId, ps, path);
 

@@ -179,7 +179,48 @@ export interface Span {
   class: HighlightClass;
 }
 
+/// `highlight/1` line-relative span. `line` is 1-based; `start`/`end` are
+/// 0-based UTF-8 byte columns within that line (tree-sitter Point.column).
+export interface HighlightSpan {
+  line: number;
+  start: number;
+  end: number;
+  role: HighlightClass;
+}
+
+export interface HighlightHonesty {
+  tier: string;
+  engine: string;
+  derived_from: string;
+  reason?: string;
+}
+
+export interface HighlightOut {
+  schema: "highlight/1";
+  lang: string | null;
+  tier: string;
+  spans: HighlightSpan[];
+  honesty: HighlightHonesty;
+  salt?: string;
+}
+
+export interface HighlightBatchItemOut extends HighlightOut {
+  id: string;
+}
+
+export interface HighlightBatchOut {
+  schema: "highlight-batch/1";
+  items: HighlightBatchItemOut[];
+}
+
 export type FileEncoding = "utf8" | "base64";
+
+export interface FrameClaim {
+  lane: string;
+  source: string;
+  class_ceiling: string;
+  refused?: string;
+}
 
 export interface FileResponse {
   repo: string;
@@ -192,6 +233,58 @@ export interface FileResponse {
   content: string;
   symbols: Symbol[];
   highlights: Span[] | null;
+  frame?: FrameClaim;
+}
+
+export interface FramesResponse {
+  schema: string;
+  sources: string[];
+  classes: string[];
+  frames: Array<{
+    lane: string;
+    source: string;
+    off_head: string;
+    ref_aware: boolean;
+    why: string;
+  }>;
+  note: string;
+}
+
+export interface RefsTypeaheadHit {
+  name: string;
+  kind: string;
+  insert: string;
+  sha?: string;
+  recent: boolean;
+}
+
+export interface RefsTypeaheadResponse {
+  schema: string;
+  repo: string;
+  q: string;
+  hits: RefsTypeaheadHit[];
+  returned: number;
+  total: number;
+  truncated: boolean;
+  cap: number;
+}
+
+export interface CompareFileHunk {
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  header: string;
+}
+
+export interface CompareFileResponse {
+  schema: string;
+  repo: string;
+  path: string;
+  a: { ref: string; size: number; blob_hash: string; encoding: FileEncoding; content: string; frame?: FrameClaim };
+  b: { ref: string; size: number; blob_hash: string; encoding: FileEncoding; content: string; frame?: FrameClaim };
+  diff: string;
+  hunks: CompareFileHunk[];
 }
 
 export type RefKind = "branch" | "tag";
@@ -3501,7 +3594,20 @@ export interface ReviewPrBinding {
   pr_repo_slug?: string;
   pr_head_sha?: string;
   pr_meta?: PrBindingMeta | null;
-  pr_meta_unavailable_reason?: string | null;
+  pr_meta_unavailable_reason?: PrMetaUnavailableReason | string | null;
+}
+
+/** V76-R1c — typed `pr_meta_unavailable_reason` on the wire. */
+export type PrMetaUnavailableCode =
+  | "no-credentials"
+  | "not-found"
+  | "forbidden"
+  | "rate-limited"
+  | "network";
+
+export interface PrMetaUnavailableReason {
+  code: PrMetaUnavailableCode;
+  hint: string;
 }
 
 /// The `pr_meta_json` snapshot shape (design-server.md §1.2's jsonc block) —
@@ -3702,7 +3808,7 @@ export interface CreateReviewPrOut {
   pr_repo_slug: string;
   pr_head_sha: string;
   pr_meta: PrBindingMeta | null;
-  pr_meta_unavailable_reason: string | null;
+  pr_meta_unavailable_reason: PrMetaUnavailableReason | string | null;
 }
 
 // ── PRR-U56 ── kb v0.39 "The PR Room," combined unit U5+U6 (publish
@@ -5943,4 +6049,132 @@ export interface BranchReviewOut {
   base_source: "explicit" | "stack" | "ladder";
   three_dot: boolean;
   review: { id: number; repo: string; head_ref: string; base_ref: string };
+}
+
+// ── aug-lane/1 (V72-H4a wire, V76-R3a SPA) ────────────────────────────────
+//
+// Hand-mirrored from `crates/kb-code-server/src/lanes/routes.rs`. Several
+// `Vec` fields skip-serialize when empty — they are ABSENT, not `[]`.
+// Optional on the TS side; read via `?? []`.
+
+export type LaneKind = "derived" | "ingested";
+export type LaneSensitivity = "local" | "local_tool";
+export type LaneTrustClass = "exact" | "likely" | "candidate" | "orphan";
+
+export interface LaneEntry {
+  id: string;
+  title: string;
+  kind: LaneKind;
+  fact_schema: string;
+  /// Closed set of kinds this lane may write. Absent when empty.
+  fact_kinds?: string[];
+  sensitivity: LaneSensitivity;
+  trust_ceiling: string;
+  retention_days: number;
+  adapter?: string | null;
+  enabled: boolean;
+  /// `true` for the `sarif.*` TEMPLATE row — a declaration, never addressable.
+  family: boolean;
+  facts?: number | null;
+  runs?: number | null;
+  last_ingest_at?: number | null;
+  note?: string | null;
+}
+
+export interface LanesOut {
+  schema: string;
+  repo?: string | null;
+  lanes: LaneEntry[];
+  /// Ids in `[lanes] enabled` that match no registry row.
+  unknown_enabled?: string[];
+}
+
+export interface LaneRunOut {
+  id: string;
+  tool: string;
+  tool_version?: string | null;
+  origin: string;
+  ingested_at?: number | null;
+}
+
+export interface LaneFactOut {
+  lane: string;
+  kind: string;
+  /// Lane-specific payload (`hits` / `cop`+`message` / churn / partners / …).
+  value: Record<string, unknown>;
+  severity?: string | null;
+  /// Class computed for THIS request — never persisted.
+  class: LaneTrustClass | string;
+  reason: string;
+  line?: number | null;
+  line_end?: number | null;
+  shifted: boolean;
+  age_secs: number;
+  produced_at: number;
+  blob_sha: string;
+  sha_source: string;
+  run: LaneRunOut;
+}
+
+export interface AbsentLane {
+  lane: string;
+  reason: string;
+  refresh?: string | null;
+}
+
+export interface FactsOut {
+  schema: string;
+  repo: string;
+  path: string;
+  blob?: string | null;
+  at_blob?: string | null;
+  facts?: LaneFactOut[];
+  returned: number;
+  truncated: boolean;
+  absent?: AbsentLane[];
+  withheld_disabled: number;
+  notes?: string[];
+}
+
+export interface LaneSummaryBucket {
+  lane: string;
+  kind: string;
+  severity?: string | null;
+  count: number;
+}
+
+export interface LanesSummaryOut {
+  schema: string;
+  repo: string;
+  buckets?: LaneSummaryBucket[];
+  scanned: number;
+  scan_cap: number;
+  capped: boolean;
+  notes?: string[];
+}
+
+/// `syntax/1` — one row of `GET /api/syntax`. Vec fields are optional
+/// because Rust often `skip_serializing_if = "Vec::is_empty"` (absent, not
+/// `[]`); every reader guards.
+export interface SyntaxRowOut {
+  lang: string;
+  tier?: string;
+  grammar?: string | null;
+  scanner?: string | null;
+  symbol_salt?: string | null;
+  highlight_salt?: string | null;
+  injection_host?: boolean;
+  injections?: string[];
+  extensions?: string[];
+  filenames?: string[];
+  interpreters?: string[];
+  note?: string | null;
+}
+
+/// `GET /api/syntax` body.
+export interface SyntaxOut {
+  schema: string;
+  rows: SyntaxRowOut[];
+  total?: number;
+  truncated?: boolean;
 }

@@ -1,0 +1,80 @@
+---
+source: crates/kb-code-server/src/highlight.rs
+expression: "wire(Some(\"yaml\"), YAML_SNIPPET)"
+---
+HighlightOut {
+    schema: "highlight/1",
+    lang: Some(
+        "yaml",
+    ),
+    tier: "full",
+    spans: [
+        LineRoleSpan {
+            line: 1,
+            start: 0,
+            end: 11,
+            role: Comment,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 0,
+            end: 4,
+            role: Property,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 4,
+            end: 5,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 2,
+            start: 6,
+            end: 9,
+            role: String,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 0,
+            end: 8,
+            role: Property,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 8,
+            end: 9,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 3,
+            start: 10,
+            end: 11,
+            role: Number,
+        },
+        LineRoleSpan {
+            line: 4,
+            start: 0,
+            end: 7,
+            role: Property,
+        },
+        LineRoleSpan {
+            line: 4,
+            start: 7,
+            end: 8,
+            role: Punctuation,
+        },
+        LineRoleSpan {
+            line: 4,
+            start: 9,
+            end: 13,
+            role: ConstantBuiltin,
+        },
+    ],
+    honesty: HighlightHonesty {
+        tier: "full",
+        engine: "tree-sitter:tree-sitter-yaml",
+        derived_from: "highlights",
+        reason: None,
+    },
+    salt: None,
+}

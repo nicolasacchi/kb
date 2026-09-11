@@ -16,6 +16,14 @@
 //! - read-only: `diff --name-status/-numstat`, `rev-list --count`,
 //!   `ls-tree`, `range-diff` (via `history::` helpers)
 //!
+//! V76-R1a adds, for the `start-pr` base ladder ONLY
+//! ([`start_pr_base`]): `git fetch origin
+//! +refs/heads/<d>:refs/remotes/origin/<d>` (refresh the remote default
+//! branch before merge-basing against it — the only write outside
+//! `refs/kbc/`, and it is a remote-TRACKING ref, never a local branch) and
+//! `git rev-list --left-right --count <local>...<remote>` (the
+//! stale-mirror refusal's ahead/behind probe).
+//!
 //! `id` and `n` are daemon-generated integers; shas are validated as
 //! full 40-hex after `rev-parse` before any `update-ref`. User-supplied
 //! ref names go through [`reject_user_ref`] (no leading `-`, no
@@ -25,10 +33,17 @@
 //!
 //! **Loopback-only** (beside `/api/checkout` / `/api/prs/fetch`):
 //! `POST /api/reviews`, `POST /api/reviews/{id}/snapshot`,
-//! `PATCH /api/reviews/{id}`, `DELETE /api/reviews/{id}`,
+//! `PATCH /api/reviews/{id}`, `DELETE /api/reviews/{id}`
+//! (`?force=1` required when the review's verdict is published),
+//! `POST /api/reviews/refs/gc` (V76-R1b — orphan `refs/kbc/{pr,review}/*`;
+//! `?dry_run=1` default ON),
 //! `PUT /api/reviews/{id}/viewed`, `DELETE /api/reviews/{id}/viewed/{path}`,
 //! `POST /api/reviews/pr` ([`create_review_pr`], PRR-R2),
 //! `PUT /api/reviews/{id}/report` ([`put_review_report`], PRR-R2).
+//! V76-R1a: `POST /api/reviews/pr` stays synchronous by default and gains
+//! an opt-in `?async=1` daemon-side job mode ([`crate::review_jobs`]) —
+//! same loopback-only gate, one shared implementation
+//! ([`create_review_pr_value`]).
 //!
 //! **Gated** (S2-B, `router.rs`'s `review_remote` sub-router — loopback
 //! unconditionally, else `[review] remote_mutations`-gated bearer, default
@@ -38,7 +53,9 @@
 //! table this route (and four sibling routes in `crate::review_findings` /
 //! `crate::review_github_export`) now shares.
 //!
-//! **Bearer** (reads): `GET /api/reviews`, `GET /api/reviews/{id}`,
+//! **Bearer** (reads): `GET /api/reviews`, `GET /api/reviews/refs` (V76-R1b — every
+//! `refs/kbc/pr/*` and `refs/kbc/review/*` in the mirror, attributed to a
+//! review or `orphan`), `GET /api/reviews/{id}`,
 //! `GET /api/reviews/{id}/files`, `GET /api/reviews/{id}/interdiff`,
 //! `GET /api/reviews/{id}/annotations`, `GET /api/reviews/{id}/comments`
 //! ([`crate::review_comments`]), `GET /api/reviews/{id}/risk`,
@@ -62,6 +79,7 @@
 //! sibling modules, wired on the same bearer router in `router.rs`.
 
 use crate::config::RepoEntry;
+use crate::entities::RouteContract;
 use crate::git::{GitRepo, Revspec};
 use crate::history::{self, HistoryError};
 use crate::routes::{find_repo, safe_rel_path, ApiError};
@@ -75,13 +93,21 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kb_core::events::EventBus;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const SCHEMA: &str = "reviews/1";
+/// V76-R1b — `GET /api/reviews/refs` / `POST /api/reviews/refs/gc`.
+pub const REFS_SCHEMA: &str = "review-refs/1";
+/// Closed `start-pr` without `?on_closed=reopen|new`.
+pub const ERR_REVIEW_CLOSED: &str = "urn:kb:errors:review-closed";
+/// `DELETE /api/reviews/{id}` of a review whose verdict is published, without `force=1`.
+pub const ERR_REVIEW_VERDICT_PUBLISHED: &str = "urn:kb:errors:review-verdict-published";
+/// Cap on `for-each-ref` rows under `refs/kbc/{pr,review}/`. Over = refuse, never truncate.
+pub const MAX_KBC_REFS: usize = 10_000;
 
 /// Auto-capture debounce — a rebase moves the tip many times; capture
 /// once when it settles for at least this long.
@@ -194,6 +220,111 @@ pub fn is_full_sha(s: &str) -> bool {
 /// `refs/kbc/review/<id>/ps<n>` — built only from daemon-generated integers.
 pub fn patchset_ref(review_id: i64, ps_number: i64) -> String {
     format!("refs/kbc/review/{review_id}/ps{ps_number}")
+}
+
+/// `refs/kbc/pr/<n>` — built only from a `u32` PR number (digits-only Display).
+pub fn pr_ref(pr_number: u32) -> String {
+    format!("refs/kbc/pr/{pr_number}")
+}
+
+/// A ref under the daemon-owned `refs/kbc/` namespace. Parsed from
+/// `git for-each-ref` output; reconstructed via [`pr_ref`]/[`patchset_ref`]
+/// before any `update-ref -d` so a hostile ref name never reaches argv.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KbcRef {
+    Pr { number: u32 },
+    Patchset { review_id: i64, ps_number: i64 },
+}
+
+impl KbcRef {
+    pub fn as_refname(self) -> String {
+        match self {
+            KbcRef::Pr { number } => pr_ref(number),
+            KbcRef::Patchset {
+                review_id,
+                ps_number,
+            } => patchset_ref(review_id, ps_number),
+        }
+    }
+
+    pub fn kind(self) -> &'static str {
+        match self {
+            KbcRef::Pr { .. } => "pr",
+            KbcRef::Patchset { .. } => "patchset",
+        }
+    }
+}
+
+/// Strict parse of a `refs/kbc/pr/<n>` or `refs/kbc/review/<id>/ps<n>` name.
+/// Digits-only, no leading zeros, n/id ≥ 1. Anything else is `None` — never
+/// a ref we will delete.
+pub fn parse_kbc_ref(name: &str) -> Option<KbcRef> {
+    if let Some(rest) = name.strip_prefix("refs/kbc/pr/") {
+        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let number: u32 = rest.parse().ok()?;
+        if number < 1 || rest != number.to_string() {
+            return None;
+        }
+        return Some(KbcRef::Pr { number });
+    }
+    let rest = name.strip_prefix("refs/kbc/review/")?;
+    let (id_s, ps_s) = rest.split_once("/ps")?;
+    if id_s.is_empty()
+        || ps_s.is_empty()
+        || !id_s.bytes().all(|b| b.is_ascii_digit())
+        || !ps_s.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let review_id: i64 = id_s.parse().ok()?;
+    let ps_number: i64 = ps_s.parse().ok()?;
+    if review_id < 1 || ps_number < 1 {
+        return None;
+    }
+    if id_s != review_id.to_string() || ps_s != ps_number.to_string() {
+        return None;
+    }
+    Some(KbcRef::Patchset {
+        review_id,
+        ps_number,
+    })
+}
+
+/// `?on_closed=reopen|new` on `POST /api/reviews/pr`. Absent = 409 a closed
+/// existing review. Unknown value = 400 naming the vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnClosed {
+    Reopen,
+    New,
+}
+
+pub fn parse_on_closed(s: Option<&str>) -> Result<Option<OnClosed>, String> {
+    match s {
+        None | Some("") => Ok(None),
+        Some("reopen") => Ok(Some(OnClosed::Reopen)),
+        Some("new") => Ok(Some(OnClosed::New)),
+        Some(other) => Err(format!(
+            "on_closed must be reopen|new, got {other:?} — pass on_closed=reopen to reopen the closed review and add a patchset, or on_closed=new to mint a new review id"
+        )),
+    }
+}
+
+/// A published verdict (`verdict_published_at` set) blocks delete unless
+/// `force` is true.
+pub fn delete_blocked_by_published(verdict_published_at: Option<i64>, force: bool) -> bool {
+    verdict_published_at.is_some() && !force
+}
+
+fn truthy_flag(v: &Option<String>) -> bool {
+    matches!(v.as_deref(), Some("1") | Some("true") | Some("yes"))
+}
+
+/// `?dry_run=` default ON: omitted / `1` / `true` / `yes` → dry run;
+/// `0` / `false` / `no` → apply.
+pub fn dry_run_default_on(v: &Option<String>) -> bool {
+    !matches!(v.as_deref(), Some("0") | Some("false") | Some("no"))
 }
 
 fn run_git(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, ReviewGitError> {
@@ -333,6 +464,84 @@ pub fn delete_patchset_ref(
     Ok(())
 }
 
+/// `git update-ref -d refs/kbc/pr/<n>`. `n` is a `u32` so Display is digits.
+pub fn delete_pr_ref(repo_root: &Path, pr_number: u32) -> Result<(), ReviewGitError> {
+    if pr_number < 1 {
+        return Err(ReviewGitError::BadRef(format!("pr_number={pr_number}")));
+    }
+    let refname = pr_ref(pr_number);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["update-ref", "-d", &refname])
+        .output()
+        .map_err(ReviewGitError::Spawn)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+        if stderr.contains("unable to resolve")
+            || stderr.contains("no such")
+            || stderr.contains("cannot lock ref")
+            || stderr.contains("doesn't exist")
+        {
+            return Ok(());
+        }
+        return Err(ReviewGitError::GitFailed {
+            status: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Delete a reconstructed [`KbcRef`] (never a caller-supplied string).
+pub fn delete_kbc_ref(repo_root: &Path, parsed: KbcRef) -> Result<(), ReviewGitError> {
+    match parsed {
+        KbcRef::Pr { number } => delete_pr_ref(repo_root, number),
+        KbcRef::Patchset {
+            review_id,
+            ps_number,
+        } => delete_patchset_ref(repo_root, review_id, ps_number),
+    }
+}
+
+/// `git for-each-ref` over the two daemon-owned prefixes. Prefixes are
+/// hardcoded — not caller text. Each name is re-parsed via [`parse_kbc_ref`]
+/// before it can be deleted.
+pub fn list_kbc_refs(repo_root: &Path) -> Result<Vec<(KbcRef, String, String)>, ReviewGitError> {
+    let out = run_git(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/kbc/pr/",
+            "refs/kbc/review/",
+        ],
+    )?;
+    let text = String::from_utf8_lossy(&out);
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (name, sha) = line.split_once(' ').unwrap_or((line, ""));
+        let Some(parsed) = parse_kbc_ref(name) else {
+            continue;
+        };
+        rows.push((parsed, parsed.as_refname(), sha.trim().to_string()));
+        if rows.len() > MAX_KBC_REFS {
+            return Err(ReviewGitError::GitFailed {
+                status: -1,
+                stderr: format!(
+                    "refs/kbc/ listing is {0} refs; the cap is {MAX_KBC_REFS} — refused, not truncated",
+                    rows.len()
+                ),
+            });
+        }
+    }
+    Ok(rows)
+}
+
 /// `git rev-list --count <base>..<tip>` — both full shas.
 pub fn commit_count(
     repo_root: &Path,
@@ -398,6 +607,199 @@ pub fn default_base_ref(repo_root: &Path) -> String {
         Ok(git) => crate::git::default_branch(&git).unwrap_or_else(|| "main".to_string()),
         Err(_) => "main".to_string(),
     }
+}
+
+// --- V76-R1a — the start-pr base ladder (explicit > merge-base > local-default) --
+
+/// V76-R1a — the stale-mirror refusal threshold. When `start-pr` is called
+/// WITHOUT `--base` and the mirror's LOCAL default branch is behind the
+/// just-fetched remote default by MORE than this many commits, the route
+/// refuses with [`ERR_STALE_MIRROR`] instead of silently basing ps1 on a
+/// merge-base the operator never saw. 50 is a judgment call, not a
+/// measurement: a mirror a handful of commits behind is the ordinary case
+/// (the merge-base default handles it correctly), a mirror MONTHS behind is
+/// the incident this unit fixes — the operator must say so explicitly.
+pub const STALE_MIRROR_BEHIND_LIMIT: u64 = 50;
+
+/// The RFC 7807 `type` URN of the stale-mirror refusal.
+pub const ERR_STALE_MIRROR: &str = "urn:kb:errors:stale-mirror";
+
+/// What fed ps1's `base_sha` on a `start-pr` review — reported on the
+/// `POST /api/reviews/pr` envelope as `base_source` and merged into the
+/// stored `pr_meta_json` snapshot when that snapshot exists (see
+/// [`create_review_pr_value`]'s doc for why it is not its own column and
+/// what that means when GitHub enrichment is unavailable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseSource {
+    /// `--base` was given (or `base_ref` rode the POST body).
+    Explicit,
+    /// No `--base`: ps1's base is the merge-base of the PR head against
+    /// the freshly-fetched `refs/remotes/origin/<default>`.
+    MergeBase,
+    /// No `--base` and no usable remote default (no `origin` remote, the
+    /// fetch failed, or the remote lacks the branch): the pre-V76
+    /// behaviour, the mirror's LOCAL default branch.
+    LocalDefault,
+}
+
+impl BaseSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BaseSource::Explicit => "explicit",
+            BaseSource::MergeBase => "merge-base",
+            BaseSource::LocalDefault => "local-default",
+        }
+    }
+}
+
+/// `git config --get remote.origin.url` exits 1 when the key is unset, so
+/// this is exactly "the repo has an `origin` remote configured".
+fn has_origin_remote(repo_root: &Path) -> bool {
+    run_git(repo_root, &["config", "--get", "remote.origin.url"]).is_ok()
+}
+
+/// `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>` —
+/// refresh the ONE remote-tracking ref the merge-base default needs. An
+/// explicit refspec (rather than a bare `git fetch origin <branch>`) so the
+/// remote-tracking ref updates regardless of the repo's configured fetch
+/// refspec. `branch` is a validated [`Revspec`]; a `:` can never appear in
+/// a real branch name, so its presence here is refused outright rather than
+/// handed to git's refspec parser.
+fn fetch_remote_default(repo_root: &Path, branch: &Revspec) -> Result<(), ReviewGitError> {
+    let b = branch.as_str();
+    if b.contains(':') {
+        return Err(ReviewGitError::BadRef(b.to_string()));
+    }
+    let refspec = format!("+refs/heads/{b}:refs/remotes/origin/{b}");
+    run_git(repo_root, &["fetch", "origin", &refspec])?;
+    Ok(())
+}
+
+/// `git rev-list --left-right --count <local>...<remote>` → `(ahead,
+/// behind)` of the LOCAL default branch against the fetched remote tip.
+/// Both endpoints are validated full shas, so the interpolated range token
+/// can only ever be `<hex>...<hex>`.
+fn ahead_behind(
+    repo_root: &Path,
+    local_sha: &str,
+    remote_sha: &str,
+) -> Result<(u64, u64), ReviewGitError> {
+    if !is_full_sha(local_sha) || !is_full_sha(remote_sha) {
+        return Err(ReviewGitError::BadSha(format!(
+            "{local_sha}...{remote_sha}"
+        )));
+    }
+    let range = format!("{local_sha}...{remote_sha}");
+    let out = run_git(repo_root, &["rev-list", "--left-right", "--count", &range])?;
+    let text = String::from_utf8_lossy(&out);
+    let mut parts = text.split_whitespace();
+    let ahead = parts
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| ReviewGitError::GitFailed {
+            status: -1,
+            stderr: format!("malformed rev-list --left-right --count output: {text:?}"),
+        })?;
+    let behind = parts
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| ReviewGitError::GitFailed {
+            status: -1,
+            stderr: format!("malformed rev-list --left-right --count output: {text:?}"),
+        })?;
+    Ok((ahead, behind))
+}
+
+/// V76-R1a — the `start-pr` base ladder: **explicit > merge-base >
+/// local-default**. Returns the `base_ref` to store on the review row plus
+/// the [`BaseSource`] for the envelope. Spawns git — call it from the
+/// blocking pool.
+///
+/// - `explicit` (`--base`) wins outright, is validated exactly as before,
+///   and BYPASSES the stale-mirror refusal: an operator who named a base
+///   has already answered the question the refusal asks.
+/// - Otherwise, when the repo has an `origin` remote, the remote default
+///   branch is FETCHED first (`git fetch origin +refs/heads/<d>:refs/
+///   remotes/origin/<d>`) and the stored `base_ref` becomes
+///   `refs/remotes/origin/<d>` — so ps1's `base_sha` (merge-based in
+///   [`capture_patchset`] as always) is the merge-base of the PR head
+///   against the FRESH remote tip, not whatever months-old local `main`
+///   the mirror last saw. Before that answer is accepted, the stale-mirror
+///   check runs: a LOCAL default branch behind the fetched tip by more
+///   than [`STALE_MIRROR_BEHIND_LIMIT`] commits refuses with
+///   [`ERR_STALE_MIRROR`] (409), the message naming the exact retry
+///   command and the ahead/behind numbers.
+/// - A repo without an `origin` remote, a failed default-branch fetch, or
+///   a remote that lacks the branch degrades to the pre-V76 answer (the
+///   mirror's local default branch) with `base_source: local-default` —
+///   the PR fetch itself stays the load-bearing one.
+pub fn start_pr_base(
+    repo_root: &Path,
+    explicit: Option<&str>,
+    pr_head_sha: &str,
+    repo_name: &str,
+    pr_number: u32,
+) -> Result<(String, BaseSource), ApiError> {
+    if let Some(b) = explicit {
+        reject_user_ref(b)?;
+        return Ok((b.to_string(), BaseSource::Explicit));
+    }
+    let local_default = default_base_ref(repo_root);
+    if !has_origin_remote(repo_root) {
+        return Ok((local_default, BaseSource::LocalDefault));
+    }
+    let branch = match parse_user_ref(&local_default) {
+        Ok(b) => b,
+        // A default branch name this crate's own validator cannot carry
+        // never reaches a fetch argv — degrade, naming the source.
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+    };
+    if fetch_remote_default(repo_root, &branch).is_err() {
+        return Ok((local_default, BaseSource::LocalDefault));
+    }
+    let remote_ref = format!("refs/remotes/origin/{}", branch.as_str());
+    let remote_spec = match parse_user_ref(&remote_ref) {
+        Ok(s) => s,
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+    };
+    let remote_sha = match resolve_commit_sha(repo_root, &remote_spec) {
+        Ok(s) => s,
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+    };
+    // The stale-mirror refusal. A LOCAL default branch that cannot be
+    // resolved at all (unborn/missing) has nothing to compare — the
+    // merge-base default against the fresh remote tip is then the only
+    // sane answer and stands.
+    let local_ref = format!("refs/heads/{}", branch.as_str());
+    if let Ok(local_spec) = parse_user_ref(&local_ref) {
+        if let Ok(local_sha) = resolve_commit_sha(repo_root, &local_spec) {
+            if let Ok((ahead, behind)) = ahead_behind(repo_root, &local_sha, &remote_sha) {
+                if behind > STALE_MIRROR_BEHIND_LIMIT {
+                    // The hint's `--base` is the merge-base the refusal is
+                    // about — retrying with it explicit reproduces exactly
+                    // the patchset this base WOULD have produced. With no
+                    // merge-base at all (unrelated histories) the fetched
+                    // remote tip is the most honest suggestion left.
+                    let hint_base = merge_base_sha(repo_root, &remote_sha, pr_head_sha)
+                        .unwrap_or_else(|_| remote_sha.clone());
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        format!(
+                            "stale mirror: the local default branch {branch:?} is {behind} \
+                             commits behind the fetched origin/{branch} ({ahead} ahead, \
+                             {behind} behind; refusal limit {STALE_MIRROR_BEHIND_LIMIT}). \
+                             ps1 would be based on its merge-base with the PR head; to \
+                             proceed against that base explicitly, run:\n  \
+                             kb-code review start-pr --repo {repo_name} --pr {pr_number} \
+                             --base {hint_base}"
+                        ),
+                    )
+                    .with_problem_type(ERR_STALE_MIRROR));
+                }
+            }
+        }
+    }
+    Ok((remote_ref, BaseSource::MergeBase))
 }
 
 fn now_unix() -> i64 {
@@ -518,6 +920,26 @@ pub(crate) fn report_risk_score_numeric(report_json: Option<&str>) -> Option<f64
         .and_then(|v| v.get("risk_score").and_then(serde_json::Value::as_f64))
 }
 
+/// When a PR-bound review has no stored `pr_meta`, surface a typed
+/// `pr_meta_unavailable_reason` so the Room header can say why. Computed
+/// at read time from current credentials — never persisted.
+fn attach_live_pr_meta_reason(body: &mut serde_json::Value, has_credentials: bool) {
+    let pr_bound = body.get("pr_number").map(|v| !v.is_null()).unwrap_or(false);
+    let meta_missing = body.get("pr_meta").map(|v| v.is_null()).unwrap_or(true);
+    if pr_bound && meta_missing {
+        let reason = if has_credentials {
+            crate::github::PrMetaUnavailable::not_found(
+                "PR metadata was not stored at bind time (GitHub returned 404 or the fetch failed)",
+            )
+        } else {
+            crate::github::PrMetaUnavailable::no_credentials()
+        };
+        if let Ok(v) = serde_json::to_value(reason) {
+            body["pr_meta_unavailable_reason"] = v;
+        }
+    }
+}
+
 /// Splice [`pr_binding_and_report_fields`]'s keys into an existing review
 /// JSON object in place — `list_reviews`/`get_review` build their base
 /// shape via the `json!` macro (a `serde_json::Value::Object`), so this
@@ -623,6 +1045,8 @@ pub fn capture_patchset(
 }
 
 /// Delete every patchset ref for a review (best-effort), then the row.
+/// V76-R1b: also drop `refs/kbc/pr/<n>` when no remaining review in this
+/// repo still binds that PR (a `--new` successor keeps the PR ref).
 pub fn delete_review_with_refs(
     store: &Store,
     bus: &EventBus,
@@ -633,12 +1057,25 @@ pub fn delete_review_with_refs(
     for ps in &pss {
         let _ = delete_patchset_ref(repo_root, review.id, ps.ps_number);
     }
+    let pr_number = store
+        .get_review_pr_binding(review.id)
+        .ok()
+        .flatten()
+        .and_then(|b| b.pr_number);
     store
         .delete_review(review.id)
         .map_err(|e| ReviewGitError::GitFailed {
             status: -1,
             stderr: e.to_string(),
         })?;
+    if let Some(n) = pr_number {
+        let remaining = store
+            .count_reviews_by_pr_binding(&review.repo, n)
+            .unwrap_or(0);
+        if remaining == 0 && n > 0 && n <= u32::MAX as i64 {
+            let _ = delete_pr_ref(repo_root, n as u32);
+        }
+    }
     emit_review_changed(bus, review.id, &review.repo, "deleted", true);
     Ok(())
 }
@@ -1195,19 +1632,70 @@ pub async fn delete_verdict(
     ))
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct DeleteReviewParams {
+    /// `1`/`true`/`yes` — required when `verdict_published_at` is set.
+    #[serde(default)]
+    pub force: Option<String>,
+}
+
 /// `DELETE /api/reviews/{id}` — rows + refs. Loopback-only.
+/// A published verdict (`POST …/verdict/published`) 409s
+/// `urn:kb:errors:review-verdict-published` unless `?force=1`.
 pub async fn delete_review(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
-) -> Result<impl IntoResponse, ApiError> {
+    Query(params): Query<DeleteReviewParams>,
+) -> Result<Response, ApiError> {
     let (review, repo, _) = require_review(&state, id).await?;
+    let published = state
+        .store
+        .run_blocking(move |store| store.get_review_verdict_published(id))
+        .await?
+        .and_then(|(at, _url)| at);
+    if delete_blocked_by_published(published, truthy_flag(&params.force)) {
+        return Ok(review_verdict_published_error(id));
+    }
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
     tokio::task::spawn_blocking(move || delete_review_with_refs(&store, &bus, &root, &review))
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+fn review_verdict_published_error(id: i64) -> Response {
+    let body = serde_json::json!({
+        "type": ERR_REVIEW_VERDICT_PUBLISHED,
+        "title": "Conflict",
+        "status": 409,
+        "error": format!(
+            "review {id} has a published verdict; pass force=1 (CLI: --force) to delete anyway"
+        ),
+        "existing_review_id": id,
+    });
+    let mut resp = (StatusCode::CONFLICT, Json(body)).into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    resp
+}
+
+fn review_closed_error_body(id: i64) -> serde_json::Value {
+    serde_json::json!({
+        "type": ERR_REVIEW_CLOSED,
+        "title": "Conflict",
+        "status": 409,
+        "error": format!(
+            "review {id} is closed; pass on_closed=reopen to reopen and add a patchset, or on_closed=new to mint a new review id"
+        ),
+        "existing_review_id": id,
+        "options": ["reopen", "new"],
+    })
 }
 
 /// `PUT /api/reviews/{id}/viewed` — mark a path viewed at blob_sha. Loopback.
@@ -1529,13 +2017,17 @@ pub async fn list_reviews(
     // (store batch fan-out + per-review git diff + CPU-only aggregation)
     // is now ONE blocking-pool trip, down from one initial fetch plus up
     // to three more PER REVIEW.
-    let out = state
+    let has_creds = state.github.has_credentials();
+    let mut out = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let rows = store.list_reviews(&repo_name, state_filter.as_deref())?;
             compose_review_list_rows(store, &root, repo_id, rows)
         })
         .await?;
+    for row in &mut out {
+        attach_live_pr_meta_reason(row, has_creds);
+    }
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -1605,6 +2097,7 @@ pub async fn get_review(
         "verdict_stale": verdict_stale,
     });
     merge_pr_binding_and_report_fields(&mut body, &binding, &report);
+    attach_live_pr_meta_reason(&mut body, state.github.has_credentials());
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
 }
 
@@ -2128,20 +2621,264 @@ pub struct CreateReviewPrBody {
     pub title: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// V76-R1c — the CLI `--gh-token-from-cli` path. The CLI runs
+    /// `gh auth token` itself and sends the value here. Loopback-only,
+    /// never persisted, never logged. Refused off loopback even if this
+    /// route later graduates off the loopback-only sub-router.
+    #[serde(default)]
+    pub gh_token: Option<String>,
+}
+
+/// V76-R1a `?async=` + V76-R1b `?on_closed=reopen|new` on `POST /api/reviews/pr`.
+#[derive(Debug, Deserialize, Default)]
+pub struct StartPrParams {
+    #[serde(default, rename = "async")]
+    pub async_: Option<String>,
+    #[serde(default)]
+    pub on_closed: Option<String>,
+}
+
+impl StartPrParams {
+    /// `?async=1`/`true`/`yes` opt into the daemon-side job
+    /// (`crate::review_jobs`); everything else — absent, `0`, `false` —
+    /// keeps the synchronous behaviour byte-identical to the pre-V76
+    /// route. The server cannot know a fetch's cost ahead of time, so
+    /// "the fetch will take time" is the CALLER's statement: `kb-code
+    /// review start-pr` always sends `?async=1` and polls the job.
+    pub fn wants_async(&self) -> bool {
+        matches!(
+            self.async_.as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        )
+    }
+}
+
+/// Reuse an existing PR-bound review: optionally reopen, fetch the PR ref,
+/// capture a patchset if the head moved (`skip_if_same`), stamp `pr_head_sha`.
+/// Returns 200 with `reused: true`. Lives inside [`create_review_pr_value`]
+/// so the async job path gets the same behaviour.
+async fn reuse_pr_review(
+    state: &SharedState,
+    repo: &RepoEntry,
+    existing: ReviewRow,
+    pr_number: u32,
+    reopen: bool,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let id = existing.id;
+    if reopen && existing.state != "open" {
+        let now = now_unix();
+        let opened = state
+            .store
+            .run_blocking(move |store| -> Result<bool, ApiError> {
+                match store.update_review(id, None, Some("open"), now) {
+                    Ok(v) => Ok(v),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if msg.to_ascii_lowercase().contains("unique") {
+                            Err(ApiError::new(
+                                StatusCode::CONFLICT,
+                                format!(
+                                    "cannot reopen review {id}: another OPEN review is already bound to this PR — close or delete it first, or pass on_closed=new"
+                                ),
+                            )
+                            .with_problem_type(ERR_REVIEW_CLOSED))
+                        } else {
+                            Err(e.into())
+                        }
+                    }
+                }
+            })
+            .await?;
+        if !opened {
+            return Err(ApiError::not_found(format!("no such review: {id}")));
+        }
+        emit_review_changed(&state.bus, id, &existing.repo, "meta", false);
+    }
+
+    let root_for_fetch = repo.path.clone();
+    let (_target_ref, fetched_sha) = tokio::task::spawn_blocking(move || {
+        crate::github::fetch_pr_ref(&root_for_fetch, pr_number)
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("fetch task panicked: {e}"),
+        )
+    })?
+    .map_err(|e| ApiError::bad_request(format!("PR fetch failed: {e}")))?;
+
+    let review = state
+        .store
+        .run_blocking(move |store| {
+            store
+                .get_review(id)?
+                .ok_or_else(|| ApiError::not_found(format!("no such review: {id}")))
+        })
+        .await?;
+
+    let store = state.store.clone();
+    let bus = state.bus.clone();
+    let root = repo.path.clone();
+    let max = state.review.max_patchsets;
+    let review2 = review.clone();
+    let ps = tokio::task::spawn_blocking(move || {
+        capture_patchset(&store, &bus, &root, &review2, max, true)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+
+    let fetched_sha_c = fetched_sha.clone();
+    let now = now_unix();
+    state
+        .store
+        .run_blocking(move |store| {
+            let binding = store.get_review_pr_binding(id)?.unwrap_or_default();
+            store.set_review_pr_meta(
+                id,
+                Some(&fetched_sha_c),
+                binding.pr_meta_json.as_deref(),
+                now,
+            )
+        })
+        .await?;
+
+    let (updated, binding) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let updated = store
+                .get_review(id)?
+                .ok_or_else(|| ApiError::not_found(format!("no such review: {id}")))?;
+            let binding = store.get_review_pr_binding(id)?.unwrap_or_default();
+            Ok((updated, binding))
+        })
+        .await?;
+
+    let pr_meta_value: Option<serde_json::Value> = binding
+        .pr_meta_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+
+    Ok((
+        StatusCode::OK,
+        serde_json::json!({
+            "schema": SCHEMA,
+            "id": updated.id,
+            "repo": updated.repo,
+            "title": updated.title,
+            "base_ref": updated.base_ref,
+            "head_ref": updated.head_ref,
+            "session_id": updated.session_id,
+            "state": updated.state,
+            "created_at": updated.created_at,
+            "updated_at": updated.updated_at,
+            "latest_ps": ps.ps_number,
+            "tip_sha": ps.tip_sha,
+            "base_sha": ps.base_sha,
+            "pr_number": pr_number,
+            "pr_repo_slug": binding.pr_repo_slug,
+            "pr_head_sha": fetched_sha,
+            "pr_meta": pr_meta_value,
+            "pr_meta_unavailable_reason": serde_json::Value::Null,
+            "reused": true,
+        }),
+    ))
 }
 
 /// `POST /api/reviews/pr` — create a review bound to a GitHub PR + capture
 /// ps1 off the fetched ref. LOOPBACK-ONLY (see the module doc + `router.rs`).
 /// See the PRR-R2 section doc above for the git-fetch/github_repo decoupling.
+///
+/// V76-R1a: synchronous by default; `?async=1` runs the same flow as a
+/// daemon-side job (`crate::review_jobs`).
+///
+/// V76-R1b: an OPEN existing (repo, PR) review is reused (200, capture if
+/// the fetched head moved). A CLOSED existing review 409s
+/// [`ERR_REVIEW_CLOSED`] unless `?on_closed=reopen` (reopen + capture) or
+/// `?on_closed=new` (mint a new review id; the closed row keeps its
+/// binding). Both the sync route and the async job share this via
+/// [`create_review_pr_value`].
 pub async fn create_review_pr(
     State(state): State<SharedState>,
-    Json(body): Json<CreateReviewPrBody>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<StartPrParams>,
+    Json(mut body): Json<CreateReviewPrBody>,
 ) -> Result<axum::response::Response, ApiError> {
-    let (repo, _repo_id) = find_repo(&state, &body.repo)?;
+    // V76-R1c — the CLI-supplied GitHub token (`gh_token`, loopback-only)
+    // is admitted ONCE here, ahead of BOTH the synchronous path and the
+    // `?async=1` job path (the job keeps the body in memory only —
+    // `review_jobs` persists nothing — and the token is never echoed).
+    let is_loopback = kb_server::middleware::is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.auth.trusted_proxies,
+    );
+    body.gh_token =
+        match crate::github::admit_cli_github_token(is_loopback, body.gh_token.as_deref()) {
+            Ok(t) => t,
+            Err(msg) => return Err(ApiError::bad_request(msg)),
+        };
+    let on_closed = parse_on_closed(params.on_closed.as_deref()).map_err(ApiError::bad_request)?;
+    if params.wants_async() {
+        return crate::review_jobs::start_or_attach(state, body, on_closed).await;
+    }
+    let (status, value) = create_review_pr_value(&state, body, None, on_closed).await?;
+    Ok(start_pr_value_response(status, value))
+}
+
+/// Render [`create_review_pr_value`]'s `(status, body)` as the HTTP
+/// response. The closed-binding 409 is RFC 7807 problem+json
+/// ([`ERR_REVIEW_CLOSED`]); everything else is ordinary JSON.
+fn start_pr_value_response(status: StatusCode, value: serde_json::Value) -> Response {
+    let problem = value.get("type").and_then(|v| v.as_str()) == Some(ERR_REVIEW_CLOSED);
+    let mut resp = (status, [(header::CACHE_CONTROL, "no-store")], Json(value)).into_response();
+    if problem {
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+    }
+    resp
+}
+
+/// The whole start-pr flow as one value-producing coroutine — the body of
+/// the pre-V76 `create_review_pr` handler, extracted so the synchronous
+/// route and [`crate::review_jobs`]' async runner share ONE implementation
+/// (and therefore one base ladder, one refusal, one envelope shape).
+/// `job`, when `Some`, gets coarse stage updates for
+/// `GET /api/reviews/jobs/{id}`'s `progress.stage`.
+///
+/// V76-R1a — the response envelope carries `base_source`
+/// (`explicit`/`merge-base`/`local-default`, [`start_pr_base`]'s ladder);
+/// the same value is merged into the stored `pr_meta_json` snapshot when
+/// that snapshot exists. `pr_meta_json` is the review row's only JSON blob
+/// (no migration), and it is wholesale-replaced by `review sweep` — which
+/// therefore carries `base_source` FORWARD across refreshes
+/// (`review_sweep.rs`). When GitHub enrichment is unavailable there is no
+/// `pr_meta_json` at all and `base_source` lives ONLY on this envelope —
+/// recorded here rather than silently fabricated into a snapshot the
+/// degraded-metadata contract says is `null`.
+///
+/// V76-R1b — `on_closed` is the parsed `?on_closed=reopen|new` query. An
+/// OPEN existing (repo, PR) review is reused; a CLOSED one 409s
+/// [`ERR_REVIEW_CLOSED`] unless reopen/new. This lives HERE so the async
+/// job cannot diverge from the sync route.
+pub(crate) async fn create_review_pr_value(
+    state: &SharedState,
+    body: CreateReviewPrBody,
+    job: Option<crate::review_jobs::JobHandle>,
+    on_closed: Option<OnClosed>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    // V76-R1c — request-time credential ladder (file > env > the admitted
+    // CLI token > none); the same client serves the sync and the job path.
+    let github = state.github.with_cli_token(body.gh_token.clone());
+    let (repo, _repo_id) = find_repo(state, &body.repo)?;
     let repo_root = repo.path.clone();
 
-    // Duplicate-binding pre-check — 409 pointing at the existing review id
-    // (design doc §2 row 1).
+    // Duplicate-binding pre-check. OPEN → reuse. CLOSED → 409 unless
+    // on_closed=reopen|new. R1a's old "already bound" 409 is replaced by
+    // this R1b ladder so both the sync route and the async job agree.
     let dup_repo = body.repo.clone();
     let dup_pr_number = body.pr_number as i64;
     if let Some(existing) = state
@@ -2149,18 +2886,21 @@ pub async fn create_review_pr(
         .run_blocking(move |store| store.get_review_by_pr_binding(&dup_repo, dup_pr_number))
         .await?
     {
-        return Ok((
-            StatusCode::CONFLICT,
-            [(header::CACHE_CONTROL, "no-store")],
-            Json(serde_json::json!({
-                "error": format!(
-                    "review already bound to {}#{}",
-                    body.repo, body.pr_number
-                ),
-                "existing_review_id": existing.id,
-            })),
-        )
-            .into_response());
+        if existing.state == "open" {
+            return reuse_pr_review(state, repo, existing, body.pr_number, false).await;
+        }
+        match on_closed {
+            None => {
+                return Ok((StatusCode::CONFLICT, review_closed_error_body(existing.id)));
+            }
+            Some(OnClosed::Reopen) => {
+                return reuse_pr_review(state, repo, existing, body.pr_number, true).await;
+            }
+            Some(OnClosed::New) => {
+                // Fall through and mint a new review id. The closed row
+                // keeps its pr_number (V0042 open-only unique).
+            }
+        }
     }
 
     // Resolve owner/repo up front — used for `pr_repo_slug` and to decide
@@ -2203,19 +2943,36 @@ pub async fn create_review_pr(
             })?
             .map_err(|e| ApiError::bad_request(format!("PR fetch failed: {e}")))?;
 
+    crate::review_jobs::set_stage(&job, "base");
+
+    // V76-R1a — the base ladder (explicit > merge-base > local-default),
+    // [`start_pr_base`]. Runs in the blocking pool: it spawns git (the
+    // remote-default fetch, the ahead/behind probe, the refusal hint's
+    // merge-base). The stale-mirror refusal (`urn:kb:errors:stale-mirror`,
+    // 409) surfaces from here; an explicit `--base` bypasses it.
+    let root_for_base = repo.path.clone();
+    let explicit_base = body.base_ref.clone();
+    let head_for_base = fetched_sha.clone();
+    let repo_for_base = body.repo.clone();
+    let pr_for_base = body.pr_number;
+    let (base_ref, base_source) = tokio::task::spawn_blocking(move || {
+        start_pr_base(
+            &root_for_base,
+            explicit_base.as_deref(),
+            &head_for_base,
+            &repo_for_base,
+            pr_for_base,
+        )
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+
     // Pre-resolve base so we fail clean before inserting (mirrors
     // `create_review`'s own precedent).
-    let base_ref = body
-        .base_ref
-        .clone()
-        .unwrap_or_else(|| default_base_ref(&repo.path));
-    if let Some(b) = body.base_ref.as_deref() {
-        reject_user_ref(b)?;
-    }
-    let root_for_base = repo.path.clone();
+    let root_for_resolve = repo.path.clone();
     let base_for_resolve = base_ref.clone();
     tokio::task::spawn_blocking(move || {
-        resolve_commit_sha(&root_for_base, &parse_user_ref(&base_for_resolve)?)
+        resolve_commit_sha(&root_for_resolve, &parse_user_ref(&base_for_resolve)?)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -2245,6 +3002,8 @@ pub async fn create_review_pr(
         })
         .await?;
 
+    crate::review_jobs::set_stage(&job, "patchset");
+
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
@@ -2256,20 +3015,18 @@ pub async fn create_review_pr(
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
 
+    crate::review_jobs::set_stage(&job, "enrich");
+
     // Best-effort GitHub metadata enrichment (design doc §2 row 1 /
     // §1.2's `pr_meta_json` shape). Only attempted when the origin
     // resolved as GitHub; any failure (including "not GitHub") degrades to
     // `pr_meta_json=null` + a reason — the review is already created either
     // way.
+    let had_credentials = github.has_credentials();
     let (pr_meta_json, pr_meta_unavailable_reason) = if let Some(ref gh) = gh_repo {
-        match state
-            .github
-            .get_pull(&gh.owner, &gh.name, number as u64)
-            .await
-        {
+        match github.get_pull(&gh.owner, &gh.name, number as u64).await {
             Ok(pull) => {
-                let checks = match state
-                    .github
+                let checks = match github
                     .list_checks(&gh.owner, &gh.name, &pull.head_sha)
                     .await
                 {
@@ -2297,21 +3054,23 @@ pub async fn create_review_pr(
                     // own `meta` snapshot below.
                     "body": pull.body,
                     "checks": checks,
+                    // V76-R1a — the daemon-recorded base ladder answer
+                    // (NOT GitHub metadata; `review_sweep` carries it
+                    // forward across refreshes for that reason).
+                    "base_source": base_source.as_str(),
                 });
                 let meta_str = serde_json::to_string(&meta)
                     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 (Some(meta_str), None)
             }
-            Err(e) => (None, Some(e.to_string())),
+            Err(e) => (None, Some(e.to_pr_meta_unavailable(had_credentials))),
         }
     } else {
         (
             None,
-            Some(
-                "repo origin is not a recognized GitHub remote; \
-                 metadata enrichment skipped"
-                    .to_string(),
-            ),
+            Some(crate::github::PrMetaUnavailable::not_found(
+                "repo origin is not a recognized GitHub remote; metadata enrichment skipped",
+            )),
         )
     };
 
@@ -2347,8 +3106,7 @@ pub async fn create_review_pr(
 
     Ok((
         StatusCode::CREATED,
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
+        serde_json::json!({
             "schema": SCHEMA,
             "id": review.id,
             "repo": review.repo,
@@ -2362,14 +3120,17 @@ pub async fn create_review_pr(
             "latest_ps": ps.ps_number,
             "tip_sha": ps.tip_sha,
             "base_sha": ps.base_sha,
+            // V76-R1a — which rung of the base ladder produced
+            // `base_ref`/`base_sha` (`explicit` > `merge-base` >
+            // `local-default`).
+            "base_source": base_source.as_str(),
             "pr_number": number,
             "pr_repo_slug": pr_repo_slug,
             "pr_head_sha": fetched_sha,
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": pr_meta_unavailable_reason,
-        })),
-    )
-        .into_response())
+        }),
+    ))
 }
 
 /// `GET /api/reviews/{id}/report` (design doc §2 row 4) — the agent-authored
@@ -2847,6 +3608,187 @@ pub async fn pr_status_route(
     ))
 }
 
+// ── V76-R1b: review refs list + gc ──────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewRefsParams {
+    pub repo: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewRefsGcParams {
+    pub repo: String,
+    /// Default ON. `0`/`false`/`no` applies; anything else (including
+    /// omitted) is a dry run.
+    #[serde(default)]
+    pub dry_run: Option<String>,
+}
+
+pub fn review_refs_params_accept_without(omit: &str) -> bool {
+    let mut map = serde_json::Map::new();
+    if omit != "repo" {
+        map.insert("repo".into(), serde_json::Value::String("r".into()));
+    }
+    serde_json::from_value::<ReviewRefsParams>(serde_json::Value::Object(map)).is_ok()
+}
+
+pub const REVIEW_REFS_ROUTE: RouteContract = RouteContract {
+    path: "/api/reviews/refs",
+    handler: "reviews::list_review_refs",
+    required_params: &["repo"],
+    params_accept_without: review_refs_params_accept_without,
+};
+
+/// GET only — `POST /api/reviews/refs/gc` is a loopback mutation, same
+/// exclusion `boards::V74_L1_ROUTES` records for apply.
+pub const V76_R1B_ROUTES: &[RouteContract] = &[REVIEW_REFS_ROUTE];
+
+struct AttributedRef {
+    parsed: KbcRef,
+    name: String,
+    sha: String,
+    review_id: Option<i64>,
+    status: &'static str,
+}
+
+fn attribute_kbc_refs(
+    listed: Vec<(KbcRef, String, String)>,
+    pr_bound: &[(i64, i64, String)],
+    patchset_keys: &HashSet<(i64, i64)>,
+) -> Vec<AttributedRef> {
+    let mut pr_to_review: HashMap<i64, i64> = HashMap::new();
+    for (id, pr_number, _state) in pr_bound {
+        pr_to_review.entry(*pr_number).or_insert(*id);
+    }
+    let mut out = Vec::with_capacity(listed.len());
+    for (parsed, name, sha) in listed {
+        let (review_id, status) = match parsed {
+            KbcRef::Pr { number } => match pr_to_review.get(&(number as i64)) {
+                Some(id) => (Some(*id), "bound"),
+                None => (None, "orphan"),
+            },
+            KbcRef::Patchset {
+                review_id,
+                ps_number,
+            } => {
+                if patchset_keys.contains(&(review_id, ps_number)) {
+                    (Some(review_id), "bound")
+                } else {
+                    (None, "orphan")
+                }
+            }
+        };
+        out.push(AttributedRef {
+            parsed,
+            name,
+            sha,
+            review_id,
+            status,
+        });
+    }
+    out
+}
+
+/// `GET /api/reviews/refs?repo=` — every `refs/kbc/pr/*` and
+/// `refs/kbc/review/*` in the mirror, attributed to a review or `orphan`.
+/// Bearer.
+pub async fn list_review_refs(
+    State(state): State<SharedState>,
+    Query(params): Query<ReviewRefsParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (repo, _) = find_repo(&state, &params.repo)?;
+    let root = repo.path.clone();
+    let repo_name = params.repo.clone();
+    let listed = tokio::task::spawn_blocking(move || list_kbc_refs(&root))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let (pr_bound, patch_keys) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let pr_bound = store.list_pr_bound_reviews(&repo_name)?;
+            let keys = store.list_patchset_keys_for_repo(&repo_name)?;
+            Ok((pr_bound, keys))
+        })
+        .await?;
+    let patchset_keys: HashSet<(i64, i64)> = patch_keys.into_iter().collect();
+    let attributed = attribute_kbc_refs(listed, &pr_bound, &patchset_keys);
+    let refs: Vec<serde_json::Value> = attributed
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "ref": r.name,
+                "sha": r.sha,
+                "kind": r.parsed.kind(),
+                "review_id": r.review_id,
+                "status": r.status,
+            })
+        })
+        .collect();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "schema": REFS_SCHEMA,
+            "repo": params.repo,
+            "refs": refs,
+        })),
+    ))
+}
+
+/// `POST /api/reviews/refs/gc?repo=&dry_run=` — delete orphan refs and
+/// refs of deleted reviews. LOOPBACK-ONLY. `dry_run` default ON.
+pub async fn gc_review_refs(
+    State(state): State<SharedState>,
+    Query(params): Query<ReviewRefsGcParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (repo, _) = find_repo(&state, &params.repo)?;
+    let dry_run = dry_run_default_on(&params.dry_run);
+    let root = repo.path.clone();
+    let repo_name = params.repo.clone();
+    let listed = {
+        let root2 = root.clone();
+        tokio::task::spawn_blocking(move || list_kbc_refs(&root2))
+            .await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??
+    };
+    let (pr_bound, patch_keys) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let pr_bound = store.list_pr_bound_reviews(&repo_name)?;
+            let keys = store.list_patchset_keys_for_repo(&repo_name)?;
+            Ok((pr_bound, keys))
+        })
+        .await?;
+    let patchset_keys: HashSet<(i64, i64)> = patch_keys.into_iter().collect();
+    let attributed = attribute_kbc_refs(listed, &pr_bound, &patchset_keys);
+    let orphans: Vec<AttributedRef> = attributed
+        .into_iter()
+        .filter(|r| r.status == "orphan")
+        .collect();
+    let would: Vec<String> = orphans.iter().map(|r| r.name.clone()).collect();
+    if !dry_run {
+        let root2 = root.clone();
+        let parsed: Vec<KbcRef> = orphans.iter().map(|r| r.parsed).collect();
+        tokio::task::spawn_blocking(move || {
+            for p in parsed {
+                delete_kbc_ref(&root2, p)?;
+            }
+            Ok::<(), ReviewGitError>(())
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    }
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "schema": REFS_SCHEMA,
+            "repo": params.repo,
+            "dry_run": dry_run,
+            "deleted": would,
+            "deleted_count": would.len(),
+        })),
+    ))
+}
+
 // --- unit tests ------------------------------------------------------------
 
 #[cfg(test)]
@@ -2883,6 +3825,339 @@ mod tests {
     #[test]
     fn patchset_ref_is_digits_only_namespace() {
         assert_eq!(patchset_ref(3, 2), "refs/kbc/review/3/ps2");
+    }
+
+    #[test]
+    fn parse_kbc_ref_accepts_only_the_daemon_owned_shapes() {
+        assert_eq!(
+            parse_kbc_ref("refs/kbc/pr/42"),
+            Some(KbcRef::Pr { number: 42 })
+        );
+        assert_eq!(
+            parse_kbc_ref("refs/kbc/review/3/ps2"),
+            Some(KbcRef::Patchset {
+                review_id: 3,
+                ps_number: 2
+            })
+        );
+        assert_eq!(
+            parse_kbc_ref("refs/kbc/pr/42").unwrap().as_refname(),
+            "refs/kbc/pr/42"
+        );
+        for bad in [
+            "refs/kbc/pr/0",
+            "refs/kbc/pr/042",
+            "refs/kbc/pr/-1",
+            "refs/kbc/pr/42/extra",
+            "refs/heads/main",
+            "refs/kbc/review/3/ps",
+            "refs/kbc/review/3/ps01",
+            "refs/kbc/review/foo/ps1",
+            "refs/kbc/review/3/ps2/x",
+            "--output=/tmp/x",
+            "",
+        ] {
+            assert!(parse_kbc_ref(bad).is_none(), "{bad:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn parse_on_closed_names_the_vocabulary() {
+        assert_eq!(parse_on_closed(None).unwrap(), None);
+        assert_eq!(
+            parse_on_closed(Some("reopen")).unwrap(),
+            Some(OnClosed::Reopen)
+        );
+        assert_eq!(parse_on_closed(Some("new")).unwrap(), Some(OnClosed::New));
+        let err = parse_on_closed(Some("reuse")).unwrap_err();
+        assert!(err.contains("reopen|new"), "{err}");
+    }
+
+    #[test]
+    fn delete_blocked_by_published_only_when_stamped_and_unforced() {
+        assert!(delete_blocked_by_published(Some(1), false));
+        assert!(!delete_blocked_by_published(Some(1), true));
+        assert!(!delete_blocked_by_published(None, false));
+        assert!(!delete_blocked_by_published(None, true));
+    }
+
+    #[test]
+    fn dry_run_default_on_treats_omitted_as_true() {
+        assert!(dry_run_default_on(&None));
+        assert!(dry_run_default_on(&Some("1".into())));
+        assert!(!dry_run_default_on(&Some("0".into())));
+        assert!(!dry_run_default_on(&Some("false".into())));
+    }
+
+    #[test]
+    fn attribute_kbc_refs_marks_unreferenced_as_orphan() {
+        let listed = vec![
+            (
+                KbcRef::Pr { number: 7 },
+                "refs/kbc/pr/7".into(),
+                "a".repeat(40),
+            ),
+            (
+                KbcRef::Patchset {
+                    review_id: 9,
+                    ps_number: 1,
+                },
+                "refs/kbc/review/9/ps1".into(),
+                "b".repeat(40),
+            ),
+            (
+                KbcRef::Patchset {
+                    review_id: 9,
+                    ps_number: 2,
+                },
+                "refs/kbc/review/9/ps2".into(),
+                "c".repeat(40),
+            ),
+        ];
+        let pr_bound = vec![(3, 7, "open".into())];
+        let mut keys = HashSet::new();
+        keys.insert((9, 1));
+        let out = attribute_kbc_refs(listed, &pr_bound, &keys);
+        assert_eq!(out[0].status, "bound");
+        assert_eq!(out[0].review_id, Some(3));
+        assert_eq!(out[1].status, "bound");
+        assert_eq!(out[1].review_id, Some(9));
+        assert_eq!(out[2].status, "orphan");
+        assert_eq!(out[2].review_id, None);
+    }
+
+    // --- V76-R1a: start_pr_base (the base ladder) ---------------------------
+
+    fn lgit(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn lgit_out(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// A (repo, bare `origin`) pair sharing one base commit on `main`,
+    /// where origin's `main` then advances `extra` empty commits past the
+    /// local one (via a second clone), and a PR ref `refs/pull/<n>/head`
+    /// carries one commit on top of the base. Returns the three tempdirs
+    /// (alive for the whole test), the repo dir, the base sha, the PR head
+    /// sha and the advanced remote tip.
+    fn ladder_fixture(
+        pr_number: u32,
+        extra: u32,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        std::path::PathBuf,
+        String,
+        String,
+        String,
+    ) {
+        let bare_tmp = tempfile::tempdir().unwrap();
+        let bare_dir = bare_tmp.path().join("origin.git");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        lgit(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+        let repo_tmp = tempfile::tempdir().unwrap();
+        let repo_dir = repo_tmp.path().to_path_buf();
+        lgit(&repo_dir, &["init", "-q", "-b", "main"]);
+        lgit(&repo_dir, &["config", "user.email", "t@e.com"]);
+        lgit(&repo_dir, &["config", "user.name", "T"]);
+        std::fs::write(repo_dir.join("base.txt"), "base\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "base"]);
+        let base_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        lgit(
+            &repo_dir,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", bare_dir.display()),
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        // Origin gets main at the base commit…
+        lgit(&repo_dir, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+
+        // …then a second clone advances origin's main past the local one.
+        let clone_tmp = tempfile::tempdir().unwrap();
+        let clone_dir = clone_tmp.path().join("clone");
+        lgit(
+            repo_tmp.path(),
+            &[
+                "clone",
+                "-q",
+                bare_dir.to_str().unwrap(),
+                clone_dir.to_str().unwrap(),
+            ],
+        );
+        lgit(&clone_dir, &["config", "user.email", "t@e.com"]);
+        lgit(&clone_dir, &["config", "user.name", "T"]);
+        for i in 0..extra {
+            lgit(
+                &clone_dir,
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    &format!("remote {i}"),
+                ],
+            );
+        }
+        lgit(
+            &clone_dir,
+            &["push", "-q", "origin", "HEAD:refs/heads/main"],
+        );
+        let remote_tip = lgit_out(&clone_dir, &["rev-parse", "HEAD"]);
+
+        // The PR branch forks from the BASE commit (so the merge-base
+        // answer is exactly `base_sha`).
+        lgit(&repo_dir, &["checkout", "-q", "-b", "pr-branch"]);
+        std::fs::write(repo_dir.join("feature.txt"), "feature\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "pr commit"]);
+        let pr_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &[
+                "push",
+                "-q",
+                "origin",
+                &format!("HEAD:refs/pull/{pr_number}/head"),
+            ],
+        );
+        lgit(&repo_dir, &["checkout", "-q", "main"]);
+
+        (
+            repo_tmp, bare_tmp, clone_tmp, repo_dir, base_sha, pr_sha, remote_tip,
+        )
+    }
+
+    #[test]
+    fn start_pr_base_without_a_remote_keeps_the_local_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        lgit(dir, &["init", "-q", "-b", "main"]);
+        lgit(dir, &["config", "user.email", "t@e.com"]);
+        lgit(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c1"]);
+        let head = lgit_out(dir, &["rev-parse", "HEAD"]);
+
+        let (base_ref, source) = start_pr_base(dir, None, &head, "r", 1).unwrap();
+        assert_eq!(base_ref, "main");
+        assert_eq!(source, BaseSource::LocalDefault);
+    }
+
+    #[test]
+    fn start_pr_base_against_a_slightly_ahead_origin_uses_the_merge_base_rung() {
+        let (_r, _b, _c, dir, base_sha, pr_sha, remote_tip) = ladder_fixture(7, 2);
+
+        let (base_ref, source) = start_pr_base(&dir, None, &pr_sha, "widget", 7).unwrap();
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(base_ref, "refs/remotes/origin/main");
+        // The fetch really refreshed the remote-tracking ref…
+        assert_eq!(
+            lgit_out(&dir, &["rev-parse", "refs/remotes/origin/main"]),
+            remote_tip
+        );
+        // …and ps1's base_sha (merge-based in `capture_patchset`) is the
+        // TRUE fork point, not the stale local main's own tip — same sha
+        // here only because the fixture's local main never moved; what
+        // pins the behaviour is that the merge-base ran against
+        // `remote_tip`.
+        assert_eq!(
+            merge_base_sha(&dir, &remote_tip, &pr_sha).unwrap(),
+            base_sha
+        );
+    }
+
+    #[test]
+    fn start_pr_base_refuses_a_stale_mirror_with_the_retry_hint() {
+        let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
+        let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+
+        let err = start_pr_base(&dir, None, &pr_sha, "widget", 7).unwrap_err();
+        assert_eq!(err.problem_type(), Some(ERR_STALE_MIRROR));
+        assert_eq!(err.status_code(), StatusCode::CONFLICT);
+        let msg = err.message().to_string();
+        // The ahead/behind numbers…
+        assert!(msg.contains("0 ahead"), "{msg}");
+        assert!(msg.contains(&format!("{extra} behind")), "{msg}");
+        // …and the exact retry command with the merge-base sha.
+        assert!(
+            msg.contains(&format!(
+                "kb-code review start-pr --repo widget --pr 7 --base {base_sha}"
+            )),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn start_pr_base_explicit_bypasses_the_stale_mirror_refusal() {
+        let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
+        let (_r, _b, _c, dir, _base, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+
+        let (base_ref, source) = start_pr_base(&dir, Some("main"), &pr_sha, "widget", 7).unwrap();
+        assert_eq!(base_ref, "main");
+        assert_eq!(source, BaseSource::Explicit);
+    }
+
+    #[test]
+    fn start_pr_base_degrades_to_local_default_when_the_remote_lacks_the_branch() {
+        // An origin that exists (the PR fetch needs one) but has no
+        // `main` branch at all: the default-branch fetch fails and the
+        // ladder falls to the pre-V76 answer, honestly labelled.
+        let bare_tmp = tempfile::tempdir().unwrap();
+        let bare_dir = bare_tmp.path().join("origin.git");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        lgit(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        lgit(&dir, &["init", "-q", "-b", "main"]);
+        lgit(&dir, &["config", "user.email", "t@e.com"]);
+        lgit(&dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+        lgit(&dir, &["add", "-A"]);
+        lgit(&dir, &["commit", "-q", "-m", "c1"]);
+        let head = lgit_out(&dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &dir,
+            &["remote", "add", "origin", bare_dir.to_str().unwrap()],
+        );
+
+        let (base_ref, source) = start_pr_base(&dir, None, &head, "r", 1).unwrap();
+        assert_eq!(base_ref, "main");
+        assert_eq!(source, BaseSource::LocalDefault);
     }
 
     // --- normalize_report_shape (V70-A3X) -----------------------------

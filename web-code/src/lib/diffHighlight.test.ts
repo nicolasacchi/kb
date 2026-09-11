@@ -3,10 +3,12 @@ import type { ServerSpan } from "./diffHighlight";
 import {
   buildLineSpans,
   paintLine,
+  reconstructSide,
   spansForLine,
   splitContentLines,
   type DiffHighlights,
 } from "./diffHighlight";
+import { parseUnifiedDiff } from "./diff";
 
 function span(byte_start: number, byte_len: number, cls: ServerSpan["class"] = "keyword"): ServerSpan {
   return { byte_start, byte_len, class: cls };
@@ -164,5 +166,24 @@ describe("spansForLine — integrity guard", () => {
     expect(
       spansForLine({ ...highlights, oldLines: null }, "old", 1, "fn"),
     ).toBeUndefined();
+  });
+});
+
+describe("reconstructSide — new-file fallback", () => {
+  it("joins add lines of a new file into a sparse buffer", () => {
+    const parsed = parseUnifiedDiff(
+      [
+        "diff --git a/new.rb b/new.rb",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/new.rb",
+        "@@ -0,0 +1,2 @@",
+        "+def x",
+        "+end",
+        "",
+      ].join("\n"),
+    );
+    expect(reconstructSide(parsed, "new")).toBe("def x\nend");
+    expect(reconstructSide(parsed, "old")).toBeNull();
   });
 });

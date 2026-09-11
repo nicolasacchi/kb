@@ -9422,8 +9422,9 @@ impl Store {
     /// best-effort (the git fetch that creates the binding is load-bearing,
     /// the GitHub metadata enrichment call is not — design doc §2 row 1).
     /// Returns `true` iff `id` existed. A `(repo, pr_number)` collision
-    /// surfaces as `StoreError::Sqlite` (the `idx_reviews_pr_binding`
-    /// UNIQUE index) — a later phase's route decides how to react.
+    /// among OPEN reviews surfaces as `StoreError::Sqlite` (the
+    /// `idx_reviews_pr_binding` UNIQUE index, V0042: open-only). Closed
+    /// rows may share a PR with an open successor (`start-pr --new`).
     #[allow(clippy::too_many_arguments)]
     pub fn set_review_pr_binding(
         &self,
@@ -9506,15 +9507,76 @@ impl Store {
         repo: &str,
         pr_number: i64,
     ) -> Result<Option<ReviewRow>> {
+        // V76-R1b: V0042 lets several CLOSED rows share a PR with at most
+        // one OPEN row. Prefer the open review; else the newest closed.
+        // LIMIT 1 — `query_row` errors on multiple matches.
         self.lock()
             .query_row(
                 "SELECT id, repo, title, base_ref, head_ref, session_id, state,
                         created_at, updated_at, verdict, verdict_note, verdict_at, verdict_ps
-                 FROM reviews WHERE repo = ?1 AND pr_number = ?2",
+                 FROM reviews WHERE repo = ?1 AND pr_number = ?2
+                 ORDER BY CASE WHEN state = 'open' THEN 0 ELSE 1 END,
+                          updated_at DESC, id DESC
+                 LIMIT 1",
                 params![repo, pr_number],
                 review_row_from,
             )
             .optional()
+            .map_err(Into::into)
+    }
+
+    /// Every review in `repo` that still carries a `pr_number` — `(id,
+    /// pr_number, state)`. Used by `GET /api/reviews/refs` to attribute
+    /// `refs/kbc/pr/<n>` (open preferred at the call site).
+    pub fn list_pr_bound_reviews(&self, repo: &str) -> Result<Vec<(i64, i64, String)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, pr_number, state FROM reviews
+             WHERE repo = ?1 AND pr_number IS NOT NULL
+             ORDER BY CASE WHEN state = 'open' THEN 0 ELSE 1 END,
+                      updated_at DESC, id DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![repo], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `(review_id, ps_number)` for every retained patchset of reviews in
+    /// `repo`. A `refs/kbc/review/<id>/ps<n>` whose pair is absent here is
+    /// an orphan (deleted review, or a patchset already GC'd from sqlite).
+    pub fn list_patchset_keys_for_repo(&self, repo: &str) -> Result<Vec<(i64, i64)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT p.review_id, p.ps_number
+             FROM review_patchsets p
+             JOIN reviews r ON r.id = p.review_id
+             WHERE r.repo = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![repo], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// How many reviews in `repo` still bind `pr_number` (any state).
+    /// `delete_review_with_refs` uses this to decide whether `refs/kbc/pr/<n>`
+    /// is still claimed.
+    pub fn count_reviews_by_pr_binding(&self, repo: &str, pr_number: i64) -> Result<i64> {
+        self.lock()
+            .query_row(
+                "SELECT COUNT(*) FROM reviews WHERE repo = ?1 AND pr_number = ?2",
+                params![repo, pr_number],
+                |r| r.get(0),
+            )
             .map_err(Into::into)
     }
 
@@ -15823,6 +15885,46 @@ mod tests {
         assert!(!store
             .set_review_artifact_hint(999, Some("k"), Some("d"))
             .unwrap());
+    }
+
+    #[test]
+    fn pr_binding_unique_is_open_only_and_lookup_prefers_open() {
+        let (_tmp, store) = open_temp();
+        let a = store
+            .create_review("r", None, "main", "feature", None, 1_000)
+            .unwrap();
+        store
+            .set_review_pr_binding(a, 7, "acme-app/app", None, None, None)
+            .unwrap();
+        store.update_review(a, None, Some("closed"), 1_100).unwrap();
+
+        let b = store
+            .create_review("r", None, "main", "feature2", None, 1_200)
+            .unwrap();
+        store
+            .set_review_pr_binding(b, 7, "acme-app/app", None, None, None)
+            .expect("a closed row must not block a new OPEN binding (V0042)");
+
+        let preferred = store.get_review_by_pr_binding("r", 7).unwrap().unwrap();
+        assert_eq!(preferred.id, b, "open review wins over a closed sibling");
+        assert_eq!(preferred.state, "open");
+
+        let c = store
+            .create_review("r", None, "main", "feature3", None, 1_300)
+            .unwrap();
+        let err = store
+            .set_review_pr_binding(c, 7, "acme-app/app", None, None, None)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("UNIQUE") || msg.contains("unique") || msg.contains("constraint"),
+            "two OPEN reviews must not share a PR: {msg}"
+        );
+
+        assert_eq!(store.count_reviews_by_pr_binding("r", 7).unwrap(), 2);
+        let bound = store.list_pr_bound_reviews("r").unwrap();
+        assert_eq!(bound[0].0, b, "open first");
+        assert_eq!(bound[0].1, 7);
     }
 
     #[test]

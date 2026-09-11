@@ -233,6 +233,14 @@ export function commentsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~comments`;
 }
 
+/// `lanesUrl(repo)` → `/r/{repo}/~lanes` — V76-R3a aug-lane/1 registry dock.
+/// Unmodelled in the Location Contract's `PageId` set, same footing as
+/// `~rails`/`~browser`: nothing needs a push/replace ruling about moving
+/// between two `~lanes` views, and a different URL is a different place.
+export function lanesUrl(repo: string): string {
+  return `${codeBasePath(repo, "")}/~lanes`;
+}
+
 /// `railsUrl(repo, noun?)` → `/r/{repo}/~rails[?noun=view]` — V72-I2's
 /// `rails/1` dashboard. `noun` names the section the page opens on and is
 /// the ONLY thing this page puts in the URL: the per-section `q=` filter and
@@ -494,6 +502,21 @@ export function reviewDiffHref(
   if (opts?.file) params.push(`file=${encodeURIComponent(opts.file)}`);
   if (opts?.hunk) params.push(`hunk=${encodeURIComponent(opts.hunk)}`);
   return params.length > 0 ? `${withFile}?${params.join("&")}` : withFile;
+}
+
+/// Overlay extra query keys onto a builder result (which may already carry
+/// a query). Used by the review-diff tree pick so `?file=` can join the
+/// page's live params without the route assembling a URL itself.
+export function mergeQuery(href: string, extra: Record<string, string | null>): string {
+  const qIndex = href.indexOf("?");
+  const path = qIndex >= 0 ? href.slice(0, qIndex) : href;
+  const q = new URLSearchParams(qIndex >= 0 ? href.slice(qIndex + 1) : "");
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === null) q.delete(k);
+    else q.set(k, v);
+  }
+  const s = q.toString();
+  return s ? `${path}?${s}` : path;
 }
 
 /// `findingUrl(repo, id, slug)` → `/r/{repo}/~reviews/{id}/f/{slug}` — the
@@ -893,4 +916,14 @@ export function parseEntParam(v: string | null): string | null {
   if (v === null) return null;
   const t = v.trim();
   return t === "" ? null : t;
+}
+
+/// True for a reader file/tree URL (`/r/:repo/...`) that is not a `~`
+/// sentinel page. Used by the TopBar ref chip so it only renders where
+/// `?ref=` is meaningful.
+export function isReaderFilePath(pathname: string): boolean {
+  const m = pathname.match(/^\/r\/[^/]+(?:\/(.*))?$/);
+  if (!m) return false;
+  const rest = m[1] ?? "";
+  return !rest.split("/").some((s) => s.startsWith("~"));
 }

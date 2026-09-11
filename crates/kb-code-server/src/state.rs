@@ -274,6 +274,12 @@ pub struct AppState {
     /// applies: the guard is taken and released INSIDE one
     /// `spawn_blocking` closure and never crosses an `.await`.
     pub branch_base_cache: Arc<parking_lot::Mutex<crate::history::facts::BaseCache>>,
+    /// V76-R1a — the in-memory `start-pr` job table
+    /// (`review_jobs::ReviewJobs`), per-boot like `file_index`/
+    /// `symbol_index`: a job is a claim about work in flight in THIS
+    /// process, swept 1 h after creation. Same guard discipline as
+    /// `branch_base_cache` above.
+    pub review_jobs: Arc<crate::review_jobs::ReviewJobs>,
 }
 
 pub type SharedState = Arc<AppState>;
