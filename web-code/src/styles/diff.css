@@ -82,7 +82,8 @@
   color: var(--accent-soft);
   background: var(--bg-panel-2);
   min-width: 0;
-  overflow: hidden;
+  /* minmax(0, 1fr) on the grid is the added-file clip fix. overflow:hidden
+   * here clipped HunkStrip's viewed checkbox (review-diff-v2.spec.ts). */
 }
 
 .kbc-sdiff__row {

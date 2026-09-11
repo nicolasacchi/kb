@@ -77,4 +77,33 @@ describe("added-file hunk render path (@@ -0,0 +1,N @@)", () => {
     const css = readFileSync(fileURLToPath(new URL("../styles/diff.css", import.meta.url)), "utf-8");
     expect(css).toContain("minmax(0, 1fr)");
   });
+
+  it("does not overflow:hidden the spanning hunk strip (clips HunkStrip's viewed toggle)", () => {
+    const css = readFileSync(fileURLToPath(new URL("../styles/diff.css", import.meta.url)), "utf-8");
+    const hunkRule = css.match(/\.kbc-sdiff__hunk \{[^}]+\}/);
+    expect(hunkRule?.[0] ?? "").not.toContain("overflow: hidden");
+  });
+
+  it("UnifiedHunks still emits hunk-header + add-line classes on the no-view path (suggestion preview)", () => {
+    const src = readFileSync(fileURLToPath(new URL("../components/diff/UnifiedHunks.tsx", import.meta.url)), "utf-8");
+    expect(src).toContain('className="kbc-diff__hunk-header"');
+    expect(src).toContain("kbc-diff__line kbc-diff__line--add");
+    expect(src).toContain("view && view.lines.length > 0 ? view.lines : hunk.lines");
+  });
+
+  it("SplitHunks empty-view fallback still walks the wire hunk's lines", () => {
+    const src = readFileSync(fileURLToPath(new URL("../components/diff/SplitHunks.tsx", import.meta.url)), "utf-8");
+    expect(src).toContain("view && view.lines.length > 0 ? view.lines : hunk.lines");
+    expect(src).toContain("buildSplitPairs(lines)");
+  });
+
+  it("SuggestionEditor preview is UnifiedHunks without hunkViews", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("../components/diff/SuggestionEditor.tsx", import.meta.url)),
+      "utf-8",
+    );
+    expect(src).toContain("data-kbc-suggestion-preview");
+    expect(src).toMatch(/<UnifiedHunks path=\{thread\.path\} parsed=\{parsed\} \/>/);
+    expect(src).not.toContain("hunkViews");
+  });
 });

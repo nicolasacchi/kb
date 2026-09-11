@@ -424,8 +424,11 @@ export default function ReviewDiff() {
       openFileInCenter(path);
       return;
     }
+    // All-files `]f`/`[f` move the cursor only. Writing `?file=` here is the
+    // map-click contract (`openFileInCenter`); doing it on file motion made
+    // the first-hunk scroll effect treat `]f` as a tree landing and broke
+    // review-diff-v2.spec.ts's later hunk-viewed click.
     apply({ type: "gotoFile", fileIdx: idx });
-    setParam("file", path);
   }
 
   /// V76-R2b — click/Enter on a tree file opens THAT file in the center
@@ -1094,12 +1097,13 @@ export default function ReviewDiff() {
     el.scrollIntoView({ block: "start" });
   }, [fileHint, single, paths]);
 
-  // V76-R2b — after a tree click / `?file=` landing, put the FIRST hunk
-  // of that file in view and focus the section (there is no CM6 buffer
-  // on this page; the section is the thing the operator is reading).
+  // V76-R2b — after a tree click lands in SINGLE-file focus, put the
+  // FIRST hunk in view. All-files `?file=` keeps the older section-scroll
+  // above — it must not steal the first hunk of file 0, which
+  // review-diff-v2.spec.ts clicks.
   const hunkScrolledFor = useRef<string | null>(null);
   useEffect(() => {
-    const path = focusPath || fileHint;
+    const path = focusPath;
     if (!path) return;
     if (hunkScrolledFor.current === path) return;
     const root = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
@@ -1115,7 +1119,7 @@ export default function ReviewDiff() {
       if (!root.hasAttribute("tabindex")) root.tabIndex = -1;
       root.focus({ preventScroll: true });
     }
-  }, [focusPath, fileHint, hunkCounts, mode, paths]);
+  }, [focusPath, hunkCounts, mode, paths]);
 
   if (!idOk) {
     return <div className="kbc-reader__hint kbc-reader__hint--error">Invalid review id.</div>;

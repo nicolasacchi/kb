@@ -103,7 +103,7 @@ export default function ReviewMapSplit({
           collapsedSize={0}
           minSize="160px"
           defaultSize={`${REVIEW_MAP_WIDTH_DEFAULT}%`}
-          style={{ overflow: "hidden" }}
+          style={{ overflow: "visible" }}
         >
           {map}
         </Panel>
@@ -113,7 +113,7 @@ export default function ReviewMapSplit({
           data-kbc-rdiff-map-sep
           onPointerDown={() => setDragging(true)}
         />
-        <Panel id="stream" className="kbc-rdiff__stream-panel" minSize="40%" style={{ overflow: "hidden" }}>
+        <Panel id="stream" className="kbc-rdiff__stream-panel" minSize="40%" style={{ overflow: "visible" }}>
           {stream}
         </Panel>
       </Group>
