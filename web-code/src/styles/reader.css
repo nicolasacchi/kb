@@ -2884,3 +2884,74 @@
 .kbc-inspector__claims .kbc-claims {
   margin: 8px 0;
 }
+
+/* V76-R3d — file-scoped time scrubber. Inside <main>, not a landmark. */
+.kbc-scrub {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: var(--z-float);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  color: var(--ink);
+}
+.kbc-scrub__label {
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42%;
+  font-variant-numeric: tabular-nums;
+}
+.kbc-scrub__ticks {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.kbc-scrub__tick {
+  flex: 1 1 0;
+  min-width: 4px;
+  height: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  background: var(--rule-hi);
+  cursor: pointer;
+}
+.kbc-scrub__tick.is-current {
+  background: var(--accent-soft);
+}
+.kbc-scrub__slider {
+  flex: 1 1 auto;
+  min-width: 80px;
+}
+.kbc-scrub__wt,
+.kbc-scrub__close {
+  flex: 0 0 auto;
+  border: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.kbc-scrub__close {
+  padding: 2px 6px;
+}
+.kbc-scrub__trunc {
+  color: var(--ink-dim);
+  font-size: 11px;
+}

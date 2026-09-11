@@ -4987,6 +4987,168 @@ pub async fn file_history_route(
     ))
 }
 
+// --- GET /api/file/stops, GET /api/file/at (V76-R3d, scrub/1) ------------
+
+impl From<crate::history::scrub::ScrubError> for ApiError {
+    fn from(e: crate::history::scrub::ScrubError) -> Self {
+        use crate::history::scrub::ScrubError::*;
+        match e {
+            History(h) => h.into(),
+            TooMany { cap, seen } => {
+                ApiError::bad_request(format!("this file has at least {seen} stops; cap is {cap}"))
+            }
+            Limit { limit, cap } => ApiError::bad_request(format!(
+                "limit {limit} is outside 1..={cap} — pass a page size in that range"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileStopsResponse {
+    pub schema: &'static str,
+    pub repo: String,
+    pub path: String,
+    pub stops: Vec<crate::history::scrub::Stop>,
+    pub total: usize,
+    pub truncated: bool,
+    pub floor: Option<crate::history::scrub::Floor>,
+}
+
+/// `GET /api/file/stops?repo=&path=&limit=&before=` (V76-R3d) — one file's
+/// `--follow` stops, newest-first, D18 `author_kind`, ± lines, rename
+/// captions, true `total`, and the timeline `floor`. Caps refuse with
+/// numbers (`limit` above `MAX_LIMIT`, a file over `HARD_CAP`).
+pub async fn file_stops_route(
+    State(state): State<SharedState>,
+    Query(params): Query<crate::history::scrub::StopsParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (repo, _repo_id) = find_repo(&state, &params.repo)?;
+    let path = safe_rel_path(&params.path)?.to_string();
+    state.secret_policy.check(&path)?;
+    let limit = crate::history::scrub::clamp_limit(params.limit)?;
+    let repo_root = repo.path.clone();
+    let path_for_task = path.clone();
+    let before = params.before;
+    let agent_emails = state.branches.resolved_agent_emails();
+    let page = tokio::task::spawn_blocking(move || {
+        crate::history::scrub::file_stops(&repo_root, &path_for_task, limit, before, &agent_emails)
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("file-stops task panicked: {e}"),
+        )
+    })??;
+
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(FileStopsResponse {
+            schema: crate::history::scrub::SCHEMA,
+            repo: params.repo,
+            path,
+            stops: page.stops,
+            total: page.total,
+            truncated: page.truncated,
+            floor: page.floor,
+        }),
+    ))
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileAtResponse {
+    pub schema: &'static str,
+    pub repo: String,
+    pub path: String,
+    pub at: i64,
+    pub resolution: crate::history::scrub::Resolution,
+    pub stop: crate::history::scrub::Stop,
+    pub floor: Option<crate::history::scrub::Floor>,
+    #[serde(rename = "ref")]
+    pub rev: String,
+    pub size: u64,
+    pub blob_hash: String,
+    pub encoding: &'static str,
+    pub content: String,
+    pub frame: crate::frames::FrameClaim,
+}
+
+/// `GET /api/file/at?repo=&path=&at=<unix>` (V76-R3d) — nearest-prior stop
+/// (`exact` on a same-second hit) and the blob at that stop via the R3c
+/// file-at-ref path. An instant older than the floor is 404
+/// `urn:kb:errors:before-floor` naming the floor.
+pub async fn file_at_route(
+    State(state): State<SharedState>,
+    Query(params): Query<crate::history::scrub::AtParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (repo, _repo_id) = find_repo(&state, &params.repo)?;
+    let path = safe_rel_path(&params.path)?.to_string();
+    state.secret_policy.check(&path)?;
+    let repo_root = repo.path.clone();
+    let path_for_task = path.clone();
+    let at = params.at;
+    let agent_emails = state.branches.resolved_agent_emails();
+    let hit = tokio::task::spawn_blocking(move || {
+        crate::history::scrub::file_at(&repo_root, &path_for_task, at, &agent_emails)
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("file-at task panicked: {e}"),
+        )
+    })??;
+
+    let (stop, resolution, floor) = match hit {
+        crate::history::scrub::AtHit::Hit {
+            stop,
+            resolution,
+            floor,
+        } => (stop, resolution, floor),
+        crate::history::scrub::AtHit::BeforeFloor { floor } => {
+            return Err(
+                ApiError::not_found(crate::history::scrub::before_floor_message(
+                    &path,
+                    floor.as_ref(),
+                ))
+                .with_problem_type(crate::history::scrub::ERR_BEFORE_FLOOR),
+            );
+        }
+    };
+
+    if stop.path != path {
+        state.secret_policy.check(&stop.path)?;
+    }
+    let read = read_repo_file(repo, &stop.path, Some(&stop.sha))?;
+    let (encoding, content) = match String::from_utf8(read.bytes.clone()) {
+        Ok(s) => ("utf8", s),
+        Err(_) => (
+            "base64",
+            base64::engine::general_purpose::STANDARD.encode(&read.bytes),
+        ),
+    };
+    let size = read.bytes.len() as u64;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(FileAtResponse {
+            schema: crate::history::scrub::SCHEMA,
+            repo: params.repo,
+            path,
+            at: params.at,
+            resolution,
+            rev: stop.sha.clone(),
+            stop,
+            floor,
+            size,
+            blob_hash: read.blob_hash,
+            encoding,
+            content,
+            frame: crate::frames::claim("file_at_ref", false),
+        }),
+    ))
+}
+
 // --- GET /api/stacks, GET /api/stacks/layer-diff (V3.3-S2) --------------
 
 #[derive(Debug, Deserialize)]

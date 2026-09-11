@@ -866,6 +866,8 @@ mod tests {
             // V76-R3b — the worktree list. Path-param reads and the
             // loopback mutations are absent (same reason as boards').
             .chain(crate::worktrees::V76_R3B_ROUTES.iter())
+            // V76-R3d — scrub/1 stops + at.
+            .chain(crate::history::scrub::V76_R3D_ROUTES.iter())
         {
             let nested = c
                 .path

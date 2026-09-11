@@ -760,6 +760,12 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             get(crate::branches::list_favourites).post(crate::branches::set_favourite),
         )
         .route("/file-history", get(routes::file_history_route))
+        // V76-R3d — `scrub/1`: file-scoped time stops and nearest-prior
+        // `?at=`. Ordinary `auth_bearer` reads; `history::scrub::V76_R3D_ROUTES`
+        // declares both for invariant 15's contract walk. The blob at a
+        // resolved stop rides the R3c file-at-ref path (`read_repo_file`).
+        .route("/file/stops", get(routes::file_stops_route))
+        .route("/file/at", get(routes::file_at_route))
         // V3.3-S2 — stack awareness (dependent-branch detection +
         // per-layer incremental diff). Ordinary auth_bearer reads, same
         // gate as `/branches`/`/compare`; pure derivation over existing
