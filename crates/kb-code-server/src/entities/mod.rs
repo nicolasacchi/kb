@@ -433,9 +433,7 @@ fn worktree_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
 
 /// The `entity_defs.worktree` key for a checkout: `""` for a main worktree
 /// (and for anything git cannot open), the LINKED WORKTREE NAME otherwise —
-/// the last component of gix's private `git_dir`
-/// (`<main>/.git/worktrees/<name>`), which is exactly what `git worktree
-/// add` names it.
+/// [`crate::worktrees::classify`]'s admin-dir name (V76-R3b).
 ///
 /// Cached for the process lifetime keyed on the root: a checkout does not
 /// become a different worktree while the daemon runs, and the ingest path
@@ -454,16 +452,7 @@ pub fn worktree_key_for(repo_root: &Path) -> String {
     {
         return hit.clone();
     }
-    let key = crate::git::GitRepo::open(repo_root)
-        .ok()
-        .filter(|g| g.is_worktree())
-        .and_then(|g| {
-            g.git_dir()
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_default();
+    let key = crate::worktrees::linked_admin_name(repo_root);
     worktree_cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -877,6 +866,9 @@ mod tests {
             // query params); the walk still proves the path is registered
             // and the handler is named.
             .chain(crate::highlight::V76_C1_ROUTES.iter())
+            // V76-R3b — the worktree list. Path-param reads and the
+            // loopback mutations are absent (same reason as boards').
+            .chain(crate::worktrees::V76_R3B_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`. The JSON body IS the
             // contract; `params_accept_without` deserialises it so a
             // required field the CLI omits still fails HERE, by name.

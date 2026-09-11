@@ -216,6 +216,7 @@ pub fn fetch_pr_ref(repo_root: &Path, number: u32) -> Result<(String, String)> {
 
 // --- the GitHub REST API client --------------------------------------------
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrOut {
     pub number: u64,
@@ -227,6 +228,7 @@ pub struct PrOut {
     pub draft: bool,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrCommentOut {
     /// PRR addendum-2 §A — the comment's own GitHub id. Every prior
@@ -234,12 +236,15 @@ pub struct PrCommentOut {
     /// read it; `GET /api/reviews/{id}/github-threads` needs it to nest
     /// replies (`in_reply_to`) and key its position cache.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub id: Option<u64>,
     pub author: String,
     pub body: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line: Option<u64>,
     /// PRR addendum-2 §A — GitHub's own `original_line`, kept SEPARATE
     /// from `line` (which already falls back to this below when `line`
@@ -247,23 +252,28 @@ pub struct PrCommentOut {
     /// to tell the two apart (`github-threads`' position mapper, which
     /// prefers `line` but falls back to this same value) still can.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub original_line: Option<u64>,
     /// PRR addendum-2 §A — `"LEFT"` (old file) | `"RIGHT"` (new file,
     /// GitHub's own default when the field is absent), verbatim.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub side: Option<String>,
     /// PRR addendum-2 §A — the unified-diff hunk GitHub anchors this
     /// comment to. `github-threads`' position mapper derives the anchored
     /// line's text from this hunk's LAST line.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub diff_hunk: Option<String>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub in_reply_to: Option<u64>,
     /// PRR addendum-2 §A — the comment's GitHub web URL. A GitHub-origin
     /// thread's "Reply" action deep-links here — the SPA never writes to
     /// GitHub.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub html_url: Option<String>,
 }
 
@@ -278,6 +288,7 @@ pub struct PrCommentOut {
 /// endpoint can never fill. Works for open, closed, AND merged PRs (unlike
 /// `list_pulls`, which is `state=open`-only by design) — GitHub's single-PR
 /// endpoint answers regardless of state.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrDetailOut {
     pub number: u64,
@@ -325,6 +336,7 @@ pub struct PrDetailOut {
 // derive_ci` reads that shape BACK out of the stored snapshot to build the
 // `ci:` block's derived entries, rather than re-parsing it into a THIRD,
 // hand-rolled shape that could drift from this one.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckRunOut {
     pub name: String,
@@ -337,11 +349,13 @@ pub struct CheckRunOut {
     /// (e.g. distinguishing `skipped` from `neutral`, both normalized to
     /// `warn`) still can.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub note: Option<String>,
     /// Seconds between `started_at` and `completed_at`, when GitHub
     /// reported both as parseable RFC3339 timestamps; `None` on a
     /// still-running check or an unparseable timestamp — never a guessed 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub duration: Option<i64>,
 }
 
@@ -349,6 +363,7 @@ pub struct CheckRunOut {
 /// /api/prs/{n}/reviews`'s per-reviewer summary row (raw read; the
 /// `/github-threads` composition route that anchors these into the diff is
 /// a LATER unit).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReviewerStateOut {
     pub reviewer: String,
@@ -359,6 +374,7 @@ pub struct ReviewerStateOut {
 }
 
 /// PRR addendum-2 §A — `GET /api/prs/{n}/reviews`'s response body.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrReviewsOut {
     /// One row per reviewer who has SUBMITTED at least one review, folded
@@ -588,12 +604,14 @@ pub enum GithubApiError {
 /// Typed `pr_meta_unavailable_reason` on the wire (V76-R1c). Always an
 /// object `{code, hint}` so the Room header can show both a stable enum
 /// and a sentence that names the fix.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrMetaUnavailable {
     pub code: PrMetaUnavailableCode,
     pub hint: String,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PrMetaUnavailableCode {

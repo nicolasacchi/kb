@@ -170,6 +170,7 @@ pub const ROLES: &[&str] = &[
 /// (`the_fifteen_legacy_roles_serialize_byte_identically` pins that), and
 /// the three new members read better as `constant-builtin` than
 /// `constant_builtin` in a CSS class and a custom property.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HighlightClass {
@@ -205,6 +206,7 @@ pub enum HighlightClass {
     Other,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Span {
     pub byte_start: u32,
@@ -787,8 +789,7 @@ mod tests {
     const RUBY_SNIPPET: &str = "def greet(name)\n  # say hi\n  \"hi #{name}\"\nend\n";
     const TYPESCRIPT_SNIPPET: &str =
         "function add(a: number, b: number): number {\n    // sum\n    return a + b;\n}\n";
-    const TSX_SNIPPET: &str =
-        "function Hello(props: { name: string }) {\n    // a component\n    return <div>{props.name}</div>;\n}\n";
+    const TSX_SNIPPET: &str = "function Hello(props: { name: string }) {\n    // a component\n    return <div>{props.name}</div>;\n}\n";
     const JAVASCRIPT_SNIPPET: &str = "function add(a, b) {\n    // sum\n    return a + b;\n}\n";
     const BASH_SNIPPET: &str = "greet() {\n  # say hi\n  echo \"hi $1\"\n}\n";
     const YAML_SNIPPET: &str = "# a comment\nname: web\nreplicas: 3\nenabled: true\n";

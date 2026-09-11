@@ -138,6 +138,11 @@ impl GitRepo {
     /// i.e. the private per-worktree gitdir differs from the shared common
     /// gitdir. `false` for the main worktree of a normal repo (where the
     /// two coincide) and for a bare repository.
+    ///
+    /// V76-R3b — this remains the gix primitive. The daemon oracle is
+    /// [`crate::worktrees::classify`]; `routes::repo_is_worktree` and
+    /// [`crate::entities::worktree_key_for`] call it, and a fixture test
+    /// pins that this predicate agrees with `classify.kind == Linked`.
     pub fn is_worktree(&self) -> bool {
         self.repo.git_dir() != self.repo.common_dir()
     }

@@ -1700,6 +1700,21 @@ chords.
 
 
 
+## Wire types (V76-R4a)
+
+`web-code/src/api/generated/` is produced by `just gen-ts-code` from
+kb-code-server's `#[derive(TS)] #[ts(export)]` structs (ts-rs, feature
+`ts-export`). Those files are committed; the `code-drift` CI job
+regenerates them and fails on diff. **Never hand-write a type the
+generator already emits** — delete the copy in `src/api/types.ts` and
+re-export the generated name from there so import paths do not churn.
+Optionality comes from serde: a `#[serde(skip_serializing_if)]` field is
+`field?: T` (absent on the wire), never `field: T | null`. Readers of a
+skipped `Vec` guard with `?? []`. `#[serde(default)]` without skip is
+not the same thing. The rest of `types.ts` stays hand-written until a
+later unit switches it, one module at a time, only where the shapes
+match.
+
 Add an invariant here when it lives entirely inside the SPA (`web-code/`)
 and a contributor could break it without touching kb-code-server or kb
 proper. The keyboard section above is the one every future bare-key or
