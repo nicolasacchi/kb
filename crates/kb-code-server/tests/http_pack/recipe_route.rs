@@ -164,13 +164,38 @@ fn tomorrow() -> String {
         .to_string()
 }
 
-async fn file_count(base: &str, repo: &str) -> usize {
-    let (_, body) = get(base, "/api/repos").await;
-    body["repos"]
-        .as_array()
-        .and_then(|r| r.iter().find(|r| r["name"] == repo))
-        .and_then(|r| r["file_count"].as_u64())
-        .unwrap_or(0) as usize
+/// Poll `complexity-climbers` until `path` is among `items`.
+///
+/// `wait_for_indexed` only watches `GET /api/repos` `file_count` (a
+/// `COUNT(*)` on `files`). `boot()` stops at 15 of this fixture's 21
+/// files, so `before + 1` can be a remaining *original* path, not the
+/// one just committed. The recipe walks `list_files` and reports a
+/// missing baseline with `score: null` the moment that path is listed
+/// (it does not wait on symbols / an extraction table — option (a) in
+/// V76-R4b does not apply). Wait on the recipe's own items.
+async fn wait_for_climber_path(
+    base: &str,
+    repo: &str,
+    since: &str,
+    path: &str,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let url = format!("/api/recipes/complexity-climbers?repo={repo}&since={since}&limit=500");
+    loop {
+        let (status, body) = get(base, &url).await;
+        if status == reqwest::StatusCode::OK
+            && body["items"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|i| i["path"] == path))
+        {
+            return body;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timeout waiting for {path} on complexity-climbers (last status={status} body={body})"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn get(base: &str, path: &str) -> (reqwest::StatusCode, serde_json::Value) {
@@ -639,7 +664,6 @@ async fn repair_missing_blob_is_not_a_zero_baseline() {
     .unwrap()
     .trim()
     .to_string();
-    let before = file_count(&b.base, REPO).await;
     write(
         b.repo.path(),
         "app/models/brand_new.rb",
@@ -647,16 +671,9 @@ async fn repair_missing_blob_is_not_a_zero_baseline() {
     );
     git(b.repo.path(), &["add", "-A"]);
     git(b.repo.path(), &["commit", "-q", "-m", "add a new model"]);
-    // `complexity-climbers` walks `list_files`, so the live mirror has to
-    // have SEEN the new commit before the assertion means anything.
-    wait_for_indexed(&b.base, REPO, before + 1).await;
-
-    let (status, body) = get(
-        &b.base,
-        &format!("/api/recipes/complexity-climbers?repo={REPO}&since={head}&limit=500"),
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
+    // Do not wait on file_count: boot() only required 15 of 21 fixture
+    // files, so a COUNT bump is not "brand_new.rb is in list_files".
+    let body = wait_for_climber_path(&b.base, REPO, &head, "app/models/brand_new.rb").await;
     let items = body["items"].as_array().unwrap();
     let new = items
         .iter()
