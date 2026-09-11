@@ -11520,6 +11520,27 @@ pub struct WorkspaceRow {
     pub created_at: i64,
 }
 
+fn worktree_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<crate::workspace::WorktreeRow> {
+    Ok(crate::workspace::WorktreeRow {
+        workspace_id: r.get(0)?,
+        id: r.get(1)?,
+        path: r.get(2)?,
+        branch: r.get(3)?,
+        head_sha: r.get(4)?,
+        is_main: r.get::<_, i64>(5)? != 0,
+        bare: r.get::<_, i64>(6)? != 0,
+        detached: r.get::<_, i64>(7)? != 0,
+        locked: r.get::<_, i64>(8)? != 0,
+        lock_reason: r.get(9)?,
+        prunable: r.get::<_, i64>(10)? != 0,
+        prunable_reason: r.get(11)?,
+        mounted: r.get::<_, i64>(12)? != 0,
+        path_resolution: r.get(13)?,
+        repo: r.get(14)?,
+        created_by_daemon: r.get::<_, i64>(15)? != 0,
+    })
+}
+
 impl Store {
     /// Idempotent: the id is a pure function of (common dir, root commit),
     /// so a second boot rewrites the same row and only moves `seen_at`.
@@ -11599,6 +11620,20 @@ impl Store {
     ) -> Result<()> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        // Preserve `created_by_daemon` across re-enumeration: the path is
+        // a mutable attribute, the "we created this" bit is not.
+        let mut flags: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+        {
+            let mut stmt =
+                tx.prepare("SELECT id, created_by_daemon FROM worktrees WHERE workspace_id = ?1")?;
+            let existing = stmt.query_map(params![workspace_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+            })?;
+            for row in existing {
+                let (id, flag) = row?;
+                flags.insert(id, flag);
+            }
+        }
         tx.execute(
             "DELETE FROM worktrees WHERE workspace_id = ?1",
             params![workspace_id],
@@ -11608,11 +11643,12 @@ impl Store {
                 "INSERT INTO worktrees (
                      workspace_id, id, path, branch, head_sha, is_main, bare, detached,
                      locked, lock_reason, prunable, prunable_reason, mounted,
-                     path_resolution, repo_id, seen_at)
+                     path_resolution, repo_id, seen_at, created_by_daemon)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                         (SELECT id FROM repos WHERE name = ?15), ?16)",
+                         (SELECT id FROM repos WHERE name = ?15), ?16, ?17)",
             )?;
             for w in rows {
+                let created = flags.get(&w.id).copied().unwrap_or(w.created_by_daemon);
                 stmt.execute(params![
                     workspace_id,
                     w.id,
@@ -11630,6 +11666,7 @@ impl Store {
                     w.path_resolution,
                     w.repo,
                     now,
+                    created as i64,
                 ])?;
             }
         }
@@ -11645,33 +11682,76 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT w.workspace_id, w.id, w.path, w.branch, w.head_sha, w.is_main, w.bare,
                     w.detached, w.locked, w.lock_reason, w.prunable, w.prunable_reason,
-                    w.mounted, w.path_resolution, r.name
+                    w.mounted, w.path_resolution, r.name, w.created_by_daemon
              FROM worktrees w LEFT JOIN repos r ON r.id = w.repo_id
              WHERE w.workspace_id = ?1
              ORDER BY w.is_main DESC, w.id",
         )?;
         let rows = stmt
-            .query_map(params![workspace_id], |r| {
-                Ok(crate::workspace::WorktreeRow {
-                    workspace_id: r.get(0)?,
-                    id: r.get(1)?,
-                    path: r.get(2)?,
-                    branch: r.get(3)?,
-                    head_sha: r.get(4)?,
-                    is_main: r.get::<_, i64>(5)? != 0,
-                    bare: r.get::<_, i64>(6)? != 0,
-                    detached: r.get::<_, i64>(7)? != 0,
-                    locked: r.get::<_, i64>(8)? != 0,
-                    lock_reason: r.get(9)?,
-                    prunable: r.get::<_, i64>(10)? != 0,
-                    prunable_reason: r.get(11)?,
-                    mounted: r.get::<_, i64>(12)? != 0,
-                    path_resolution: r.get(13)?,
-                    repo: r.get(14)?,
-                })
-            })?
+            .query_map(params![workspace_id], worktree_row_from)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    pub fn list_all_worktrees(&self) -> Result<Vec<crate::workspace::WorktreeRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT w.workspace_id, w.id, w.path, w.branch, w.head_sha, w.is_main, w.bare,
+                    w.detached, w.locked, w.lock_reason, w.prunable, w.prunable_reason,
+                    w.mounted, w.path_resolution, r.name, w.created_by_daemon
+             FROM worktrees w LEFT JOIN repos r ON r.id = w.repo_id
+             ORDER BY w.workspace_id, w.is_main DESC, w.id",
+        )?;
+        let rows = stmt
+            .query_map([], worktree_row_from)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn worktree_by_pk(
+        &self,
+        workspace_id: &str,
+        id: &str,
+    ) -> Result<Option<crate::workspace::WorktreeRow>> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT w.workspace_id, w.id, w.path, w.branch, w.head_sha, w.is_main, w.bare,
+                        w.detached, w.locked, w.lock_reason, w.prunable, w.prunable_reason,
+                        w.mounted, w.path_resolution, r.name, w.created_by_daemon
+                 FROM worktrees w LEFT JOIN repos r ON r.id = w.repo_id
+                 WHERE w.workspace_id = ?1 AND w.id = ?2",
+                params![workspace_id, id],
+                worktree_row_from,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn worktrees_with_id(&self, id: &str) -> Result<Vec<crate::workspace::WorktreeRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT w.workspace_id, w.id, w.path, w.branch, w.head_sha, w.is_main, w.bare,
+                    w.detached, w.locked, w.lock_reason, w.prunable, w.prunable_reason,
+                    w.mounted, w.path_resolution, r.name, w.created_by_daemon
+             FROM worktrees w LEFT JOIN repos r ON r.id = w.repo_id
+             WHERE w.id = ?1
+             ORDER BY w.workspace_id",
+        )?;
+        let rows = stmt
+            .query_map(params![id], worktree_row_from)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn mark_worktree_created_by_daemon(&self, workspace_id: &str, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE worktrees SET created_by_daemon = 1
+             WHERE workspace_id = ?1 AND id = ?2",
+            params![workspace_id, id],
+        )?;
+        Ok(())
     }
 
     /// Stamp `repos.workspace_id`/`worktree_id`. THE canonical write of

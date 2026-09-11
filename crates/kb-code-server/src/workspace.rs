@@ -369,9 +369,8 @@ pub struct WorktreeRow {
     pub bare: bool,
     pub detached: bool,
     pub locked: bool,
-    /// The lock reason VERBATIM. D13's owner oracle is parsed defensively
-    /// by a later unit (M2) and can only ever mint `likely`; this unit
-    /// stores the bytes and interprets none of them.
+    /// The lock reason VERBATIM. D13's owner oracle (`worktrees::
+    /// parse_lock_owner`) is `likely` at best and never rewrites this.
     pub lock_reason: Option<String>,
     pub prunable: bool,
     pub prunable_reason: Option<String>,
@@ -380,6 +379,10 @@ pub struct WorktreeRow {
     /// The `[[repos]]` entry this worktree is reachable through, when it is
     /// mounted. `None` for "known, not mounted".
     pub repo: Option<String>,
+    /// V76-R3b — the daemon may DELETE this worktree only when it recorded
+    /// creating it. Preserved across [`Store::replace_worktrees`].
+    #[serde(default)]
+    pub created_by_daemon: bool,
 }
 
 /// Enumerate every worktree of the workspace `repo_root` belongs to.
@@ -412,7 +415,18 @@ pub fn enumerate(
             let name = e
                 .path
                 .as_deref()
-                .and_then(|p| admin_name_for(&admin, p))
+                .and_then(|p| {
+                    // V76-R3b — the M1 table is fed from the one oracle.
+                    let ident = crate::worktrees::classify(Path::new(p));
+                    if ident.kind == crate::worktrees::WorktreeKind::Linked
+                        && !ident.worktree_id.is_empty()
+                    {
+                        Some(ident.worktree_id)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| e.path.as_deref().and_then(|p| admin_name_for(&admin, p)))
                 // A linked worktree git listed but whose admin `gitdir`
                 // file is unreadable: fall back to the path basename,
                 // which is what git itself derived the admin name from.
@@ -444,6 +458,7 @@ pub fn enumerate(
             mounted: res != PathResolution::Absent,
             path_resolution: res.as_str().to_string(),
             repo,
+            created_by_daemon: false,
         });
     }
     Ok(rows)

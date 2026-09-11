@@ -143,6 +143,14 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "sessiondiff/session_diff_tests.rs",
     "sink.rs",
     "agentview/impact.rs",
+    // V76-R3b — worktree lifecycle (create/lock/unlock/repair/prune/
+    // remove). Audited when added: every caller-supplied PATH is passed
+    // after an explicit `--` via `run_git_path`; every caller-supplied
+    // branch is a `Revspec`; lock `--reason=` is a single argv entry so a
+    // reason cannot be option-parsed. Fixture helpers under `#[cfg(test)]`
+    // also spawn `git`. Classify itself shells only through
+    // `workspace::common_dir`/`root_commit` (`history::run_git_raw`).
+    "worktrees.rs",
 ];
 
 #[test]
@@ -287,5 +295,17 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
         tl.contains("{line},{line}:{path}"),
         "blame/timeline still embeds its path in `-L`; revisit the `--` \
          exception recorded in this test if that changed"
+    );
+
+    // V76-R3b — every caller-supplied worktree PATH is preceded by `--`
+    // inside `run_git_path` (create/lock/unlock/repair/remove).
+    let wt: String = std::fs::read_to_string(src_root().join("worktrees.rs"))
+        .unwrap()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        wt.contains("args.push(\"--\");args.push(path_s.as_ref());"),
+        "worktrees::run_git_path must push `--` immediately before its caller-supplied path"
     );
 }
