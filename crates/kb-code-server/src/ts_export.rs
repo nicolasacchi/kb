@@ -52,6 +52,10 @@ mod tests {
             let src = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             let mut struct_exported = false;
+            // Set by the `ts(export)` derive line, consumed by the NEXT
+            // struct/enum header — so an unexported struct that follows an
+            // exported one is never scanned as exported.
+            let mut pending_export = false;
             let mut field_has_skip = false;
             let mut field_has_optional = false;
             let mut pending_skip_line: Option<usize> = None;
@@ -63,6 +67,8 @@ mod tests {
                     || trimmed.starts_with("struct ")
                     || trimmed.starts_with("enum ")
                 {
+                    struct_exported = pending_export;
+                    pending_export = false;
                     field_has_skip = false;
                     field_has_optional = false;
                     pending_skip_line = None;
@@ -76,10 +82,17 @@ mod tests {
                     continue;
                 }
                 if trimmed.contains("ts(export)") && trimmed.contains("derive") {
-                    struct_exported = true;
+                    pending_export = true;
+                }
+                if line == "}" {
+                    // End of a top-level item: nothing after it is exported
+                    // until another `ts(export)` derive says so.
+                    struct_exported = false;
                 }
                 if trimmed.contains("skip_serializing_if") {
-                    if field_has_skip && !field_has_optional {
+                    // Only an EXPORTED struct's fields are held to the rule;
+                    // a stray skip attr elsewhere is not a binding defect.
+                    if struct_exported && field_has_skip && !field_has_optional {
                         if let Some(ln) = pending_skip_line {
                             failures.push(format!(
                                 "{rel}:{ln}: skip_serializing_if without ts(optional)"
