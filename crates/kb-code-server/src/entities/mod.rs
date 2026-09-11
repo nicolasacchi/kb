@@ -861,6 +861,10 @@ mod tests {
             // route takes a JSON body (its own deserialization is the
             // contract, enforced by axum's `Json` extractor).
             .chain(crate::branches::V75_M3_ROUTES.iter())
+            // V76-R1b — `GET /api/reviews/refs`. POST gc is a mutation and
+            // is absent from the list for the same reason
+            // `boards::V74_L1_ROUTES` omits apply.
+            .chain(crate::reviews::V76_R1B_ROUTES.iter())
         {
             let nested = c
                 .path

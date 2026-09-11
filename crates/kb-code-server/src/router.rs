@@ -848,6 +848,10 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/actions", get(crate::actions::actions_route))
         // V3.R1 — local review sessions (reads; mutations on loopback-only).
         .route("/reviews", get(reviews::list_reviews))
+        // V76-R1b — every `refs/kbc/pr/*` and `refs/kbc/review/*` in the
+        // mirror, attributed to a review or `orphan`. Literal `/reviews/refs`
+        // ahead of `/reviews/{id}` (same inbox/analytics precedent). Bearer.
+        .route("/reviews/refs", get(reviews::list_review_refs))
         // PRR-R4 — the cross-repo attention inbox (design doc §2 row 13,
         // `crate::review_inbox`). Literal `/reviews/inbox` ahead of
         // `/reviews/{id}` — documentation, not a functional requirement
@@ -1183,6 +1187,10 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // the param route (axum prioritizes literals regardless, but list
         // it first for readability — same pattern as `/annotations/open`).
         .route("/reviews/gc", post(reviews::gc_reviews))
+        // V76-R1b — GC orphan `refs/kbc/{pr,review}/*` (and refs of deleted
+        // reviews). Literal `/reviews/refs/gc` beside `/reviews/gc`. WRITE,
+        // loopback-only, `?dry_run=1` default ON. Not on `review_remote`.
+        .route("/reviews/refs/gc", post(reviews::gc_review_refs))
         // PRR-R2 (design doc §2 row 1) — bind a NEW review to a GitHub PR
         // (git-fetch into `refs/kbc/pr/<n>` + ps1 capture + best-effort
         // metadata enrichment). A literal `/reviews/pr` segment, so it
