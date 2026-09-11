@@ -1642,6 +1642,7 @@ mod tests {
                 line: 1,
             }),
             framework: None,
+            frame: None,
         };
 
         overlay_hover(&state, &repo, "a.rb", None, 1, 4, &mut out).await;
@@ -1699,6 +1700,7 @@ mod tests {
             }),
             defsite: None,
             framework: None,
+            frame: None,
         };
 
         overlay_hover(&state, &repo, "a.rb", None, 1, 4, &mut out).await;

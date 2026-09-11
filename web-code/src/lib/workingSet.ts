@@ -27,6 +27,10 @@ export interface WorkingSetEntry {
   /// unused (presence is what matters), but stamping it (rather than a bare
   /// boolean) keeps the type shape uniform with `touchedAt`.
   pinnedAt: number | null;
+  /// V76-R3c — the `?ref=` this path was last opened at. Absent = working
+  /// tree. Identity stays path-only (one chip per file); the ref rides
+  /// along so a reload round-trips the address.
+  ref?: string;
 }
 
 export interface WorkingSetState {
@@ -58,13 +62,13 @@ function evictIfNeeded(state: WorkingSetState): WorkingSetState {
 /// Called on EVERY file open (either pane) per the milestone brief. May
 /// evict the least-recently-touched unpinned entry if this pushes the
 /// unpinned count past `MAX_UNPINNED`.
-export function touch(state: WorkingSetState, path: string): WorkingSetState {
+export function touch(state: WorkingSetState, path: string, ref?: string): WorkingSetState {
   const seq = state.seq + 1;
   const idx = state.entries.findIndex((e) => e.path === path);
   const entries =
     idx === -1
-      ? [...state.entries, { path, touchedAt: seq, pinnedAt: null }]
-      : state.entries.map((e, i) => (i === idx ? { ...e, touchedAt: seq } : e));
+      ? [...state.entries, { path, touchedAt: seq, pinnedAt: null, ref }]
+      : state.entries.map((e, i) => (i === idx ? { ...e, touchedAt: seq, ref } : e));
   return evictIfNeeded({ entries, seq });
 }
 

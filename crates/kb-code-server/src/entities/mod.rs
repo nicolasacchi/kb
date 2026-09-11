@@ -868,6 +868,8 @@ mod tests {
             // V76-R1a — the start-pr job read joins the SAME walk, one
             // milestone later.
             .chain(crate::review_jobs::V76_R1A_ROUTES.iter())
+            // V76-R3c — typeahead + compare-file.
+            .chain(crate::refs_typeahead::V76_R3C_ROUTES.iter())
         {
             let nested = c
                 .path
