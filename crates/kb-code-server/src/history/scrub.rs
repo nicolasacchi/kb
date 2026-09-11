@@ -16,6 +16,7 @@
 
 use super::{run_git_raw, HistoryError};
 use crate::entities::RouteContract;
+use crate::git::Revspec;
 use crate::history::facts::{agent_class_for, AgentClass};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -153,18 +154,22 @@ pub fn clamp_limit(limit: Option<usize>) -> ScrubResult<usize> {
     }
 }
 
-/// One file's `--follow` history, newest-first, optionally bounded by
-/// `before` (unix seconds, git `--before=@<unix>`). `limit` is the already
-/// validated page size. `agent_emails` is the D18 likely-rung set.
+/// One file's `--follow` history from `rev` (default HEAD), newest-first.
+/// `before` includes stops at or before that unix second; the floor is
+/// always from the full history. `limit` is the validated page size.
 pub fn file_stops(
     repo_root: &Path,
     path: &str,
+    rev: Option<&Revspec>,
     limit: usize,
     before_unix: Option<i64>,
     agent_emails: &[String],
 ) -> ScrubResult<StopsPageInner> {
-    let all = collect_stops(repo_root, path, HARD_CAP, before_unix, agent_emails)?;
-    let floor = file_floor(repo_root, path)?;
+    let mut all = collect_stops(repo_root, path, rev, HARD_CAP, agent_emails)?;
+    let floor = file_floor(&all);
+    if let Some(before) = before_unix {
+        all.retain(|stop| stop.when <= before);
+    }
     let total = all.len();
     let truncated = total > limit;
     let mut stops = all;
@@ -200,11 +205,12 @@ pub enum AtHit {
 pub fn file_at(
     repo_root: &Path,
     path: &str,
+    rev: Option<&Revspec>,
     at: i64,
     agent_emails: &[String],
 ) -> ScrubResult<AtHit> {
-    let all = collect_stops(repo_root, path, HARD_CAP, None, agent_emails)?;
-    let floor = file_floor(repo_root, path)?;
+    let all = collect_stops(repo_root, path, rev, HARD_CAP, agent_emails)?;
+    let floor = file_floor(&all);
     match resolve_as_of(&all, at).cloned() {
         Some(stop) => {
             let resolution = resolution_of(&stop, at);
@@ -232,13 +238,12 @@ pub fn before_floor_message(path: &str, floor: Option<&Floor>) -> String {
 fn collect_stops(
     repo_root: &Path,
     path: &str,
+    rev: Option<&Revspec>,
     cap: usize,
-    before_unix: Option<i64>,
     agent_emails: &[String],
 ) -> ScrubResult<Vec<Stop>> {
     let fmt_arg = format!("--format={STOP_FMT}");
     let n = (cap + 1).to_string();
-    let before_arg = before_unix.map(|t| format!("--before=@{t}"));
     let mut args: Vec<&str> = vec![
         "log",
         "--follow",
@@ -248,8 +253,8 @@ fn collect_stops(
         "-n",
         &n,
     ];
-    if let Some(b) = before_arg.as_deref() {
-        args.push(b);
+    if let Some(rev) = rev {
+        args.push(rev.as_str());
     }
     args.push("--");
     args.push(path);
@@ -265,32 +270,11 @@ fn collect_stops(
     Ok(stops)
 }
 
-fn file_floor(repo_root: &Path, path: &str) -> ScrubResult<Option<Floor>> {
-    let out = run_git_raw(
-        repo_root,
-        &[
-            "log",
-            "--follow",
-            "--reverse",
-            "--format=%H%x1f%at",
-            "-n",
-            "1",
-            "--",
-            path,
-        ],
-    )?;
-    let text = String::from_utf8_lossy(&out);
-    let line = text.lines().next().unwrap_or("").trim();
-    if line.is_empty() {
-        return Ok(None);
-    }
-    let mut f = line.splitn(2, '\u{1f}');
-    let sha = f.next().unwrap_or("").to_string();
-    let when: i64 = f.next().unwrap_or("").parse().unwrap_or(0);
-    if sha.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(Floor { sha, when }))
+fn file_floor(stops: &[Stop]) -> Option<Floor> {
+    stops.last().map(|stop| Floor {
+        sha: stop.sha.clone(),
+        when: stop.when,
+    })
 }
 
 fn split_trailers(raw: &str) -> Vec<String> {
@@ -491,7 +475,7 @@ A\told.txt\n\
             .unwrap();
         assert!(status.success());
 
-        let page = file_stops(dir, "renamed.txt", 100, None, &emails()).unwrap();
+        let page = file_stops(dir, "renamed.txt", None, 100, None, &emails()).unwrap();
         assert!(!page.truncated);
         assert_eq!(page.total, 3);
         let subjects: Vec<&str> = page.stops.iter().map(|s| s.subject.as_str()).collect();
@@ -500,6 +484,28 @@ A\told.txt\n\
         let floor = page.floor.expect("floor");
         assert_eq!(floor.sha, page.stops[2].sha);
         assert_eq!(floor.when, 1_700_000_000);
+
+        let before_rename =
+            file_stops(dir, "renamed.txt", None, 1, Some(1_700_001_000), &emails()).unwrap();
+        assert_eq!(before_rename.stops[0].subject, "c2");
+        assert_eq!(before_rename.stops[0].path, "a.txt");
+        assert_eq!(before_rename.total, 2);
+        assert!(before_rename.truncated);
+        assert_eq!(before_rename.floor.as_ref(), Some(&floor));
+
+        let before_floor = file_stops(
+            dir,
+            "renamed.txt",
+            None,
+            100,
+            Some(1_699_999_999),
+            &emails(),
+        )
+        .unwrap();
+        assert!(before_floor.stops.is_empty());
+        assert_eq!(before_floor.total, 0);
+        assert!(!before_floor.truncated);
+        assert_eq!(before_floor.floor, Some(floor));
     }
 
     #[test]
@@ -509,7 +515,7 @@ A\told.txt\n\
         commit_at(dir, "a.txt", "1\n", "c1", 1_700_000_000);
         commit_at(dir, "a.txt", "2\n", "c2", 1_700_001_000);
         commit_at(dir, "a.txt", "3\n", "c3", 1_700_002_000);
-        let page = file_stops(dir, "a.txt", 2, None, &emails()).unwrap();
+        let page = file_stops(dir, "a.txt", None, 2, None, &emails()).unwrap();
         assert_eq!(page.stops.len(), 2);
         assert!(page.truncated);
         assert_eq!(page.total, 3);
@@ -524,7 +530,7 @@ A\told.txt\n\
         commit_at(dir, "a.txt", "1\n", "c1", 1_700_000_000);
         commit_at(dir, "a.txt", "2\n", "c2", 1_700_001_000);
 
-        match file_at(dir, "a.txt", 1_700_001_000, &emails()).unwrap() {
+        match file_at(dir, "a.txt", None, 1_700_001_000, &emails()).unwrap() {
             AtHit::Hit {
                 stop, resolution, ..
             } => {
@@ -533,7 +539,7 @@ A\told.txt\n\
             }
             AtHit::BeforeFloor { .. } => panic!("expected hit"),
         }
-        match file_at(dir, "a.txt", 1_700_000_500, &emails()).unwrap() {
+        match file_at(dir, "a.txt", None, 1_700_000_500, &emails()).unwrap() {
             AtHit::Hit {
                 stop, resolution, ..
             } => {
@@ -542,7 +548,7 @@ A\told.txt\n\
             }
             AtHit::BeforeFloor { .. } => panic!("expected hit"),
         }
-        match file_at(dir, "a.txt", 1_699_999_999, &emails()).unwrap() {
+        match file_at(dir, "a.txt", None, 1_699_999_999, &emails()).unwrap() {
             AtHit::BeforeFloor { floor } => {
                 assert_eq!(floor.unwrap().when, 1_700_000_000);
             }
@@ -566,12 +572,37 @@ A\told.txt\n\
             .unwrap();
         assert!(status.success());
 
-        match file_at(dir, "renamed.txt", 1_700_000_000, &emails()).unwrap() {
+        match file_at(dir, "renamed.txt", None, 1_700_000_000, &emails()).unwrap() {
             AtHit::Hit { stop, .. } => {
                 assert_eq!(stop.subject, "c1");
                 assert_eq!(stop.path, "a.txt");
             }
             AtHit::BeforeFloor { .. } => panic!("expected hit at the pre-rename path"),
+        }
+    }
+
+    #[test]
+    fn option_like_path_is_not_a_git_argument() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        commit_at(dir, "--all", "one\n", "file stop", 1_700_000_000);
+        commit_at(dir, "other.txt", "other\n", "unrelated", 1_700_001_000);
+
+        let page = file_stops(dir, "--all", None, 100, None, &[]).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.stops[0].subject, "file stop");
+        assert_eq!(page.floor.as_ref().unwrap().sha, page.stops[0].sha);
+        match file_at(dir, "--all", None, 1_700_001_000, &[]).unwrap() {
+            AtHit::Hit {
+                stop,
+                resolution,
+                floor,
+            } => {
+                assert_eq!(stop.sha, page.stops[0].sha);
+                assert_eq!(resolution, Resolution::NearestPrior);
+                assert_eq!(floor, page.floor);
+            }
+            AtHit::BeforeFloor { .. } => panic!("expected the option-like file's stop"),
         }
     }
 

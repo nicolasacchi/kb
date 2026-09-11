@@ -1179,6 +1179,7 @@ async fn file_stops_follows_rename_reports_floor_and_true_total() {
     assert_eq!(limited["stops"].as_array().unwrap().len(), 2);
     assert_eq!(limited["truncated"], true);
     assert_eq!(limited["total"], 3);
+    assert_eq!(limited["floor"], body["floor"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1232,8 +1233,7 @@ async fn file_at_exact_nearest_prior_and_before_floor() {
     let body: serde_json::Value = miss.json().await.unwrap();
     assert_eq!(body["type"], "urn:kb:errors:before-floor");
     let err = body["error"].as_str().unwrap();
-    assert!(err.contains("floor"), "{err}");
-    assert!(err.contains("1700000000") || err.contains("unix"), "{err}");
+    assert!(err.contains("1700000000"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1257,4 +1257,80 @@ async fn file_stops_refuses_an_over_cap_limit() {
     let err = body["error"].as_str().unwrap();
     assert!(err.contains("9999"), "{err}");
     assert!(err.contains("500"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_scrub_reads_side_branch_and_rejects_option_refs() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&dir);
+    commit_dated(&dir, "main.txt", "main\n", "main", 1_699_999_000);
+    git(&dir, &["checkout", "-q", "-b", "scrub-hist"]);
+    commit_dated(&dir, "scrub.txt", "scrub-v1\n", "v1", 1_700_000_000);
+    commit_dated(&dir, "scrub.txt", "scrub-v2\n", "v2", 1_700_001_000);
+    commit_dated(&dir, "scrub.txt", "scrub-v3\n", "v3", 1_700_002_000);
+    git(&dir, &["checkout", "-q", "main"]);
+
+    let (_tmp, base) = boot_with_repo("fixture", &dir).await;
+    let client = reqwest::Client::new();
+    let page: serde_json::Value = client
+        .get(format!("{base}/api/file/stops"))
+        .query(&[
+            ("repo", "fixture"),
+            ("path", "scrub.txt"),
+            ("ref", "scrub-hist"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let subjects: Vec<_> = page["stops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stop| stop["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, ["v3", "v2", "v1"]);
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["floor"]["when"], 1_700_000_000);
+
+    let prior: serde_json::Value = client
+        .get(format!("{base}/api/file/at"))
+        .query(&[
+            ("repo", "fixture"),
+            ("path", "scrub.txt"),
+            ("ref", "scrub-hist"),
+            ("at", "1700001999"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prior["content"], "scrub-v2\n");
+    assert_eq!(prior["resolution"], "nearest-prior");
+    assert_eq!(prior["floor"], page["floor"]);
+
+    for endpoint in ["stops", "at"] {
+        let invalid = client
+            .get(format!("{base}/api/file/{endpoint}"))
+            .query(&[
+                ("repo", "fixture"),
+                ("path", "scrub.txt"),
+                ("ref", "--all"),
+                ("at", "1700001999"),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), 400);
+    }
 }

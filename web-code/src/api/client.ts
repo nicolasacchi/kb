@@ -815,10 +815,12 @@ export function fetchFileStops(
   path: string,
   limit?: number,
   before?: number,
+  ref?: string,
 ): Promise<FileStopsResponse> {
   return getJson<FileStopsResponse>("/api/file/stops", {
     repo,
     path,
+    ref,
     limit: limit !== undefined ? String(limit) : undefined,
     before: before !== undefined ? String(before) : undefined,
   });

@@ -5027,12 +5027,20 @@ pub async fn file_stops_route(
     let path = safe_rel_path(&params.path)?.to_string();
     state.secret_policy.check(&path)?;
     let limit = crate::history::scrub::clamp_limit(params.limit)?;
+    let rev = params.rev.as_deref().map(parse_revspec).transpose()?;
     let repo_root = repo.path.clone();
     let path_for_task = path.clone();
     let before = params.before;
     let agent_emails = state.branches.resolved_agent_emails();
     let page = tokio::task::spawn_blocking(move || {
-        crate::history::scrub::file_stops(&repo_root, &path_for_task, limit, before, &agent_emails)
+        crate::history::scrub::file_stops(
+            &repo_root,
+            &path_for_task,
+            rev.as_ref(),
+            limit,
+            before,
+            &agent_emails,
+        )
     })
     .await
     .map_err(|e| {
@@ -5085,12 +5093,13 @@ pub async fn file_at_route(
     let (repo, _repo_id) = find_repo(&state, &params.repo)?;
     let path = safe_rel_path(&params.path)?.to_string();
     state.secret_policy.check(&path)?;
+    let rev = params.rev.as_deref().map(parse_revspec).transpose()?;
     let repo_root = repo.path.clone();
     let path_for_task = path.clone();
     let at = params.at;
     let agent_emails = state.branches.resolved_agent_emails();
     let hit = tokio::task::spawn_blocking(move || {
-        crate::history::scrub::file_at(&repo_root, &path_for_task, at, &agent_emails)
+        crate::history::scrub::file_at(&repo_root, &path_for_task, rev.as_ref(), at, &agent_emails)
     })
     .await
     .map_err(|e| {
