@@ -470,6 +470,9 @@ pub mod unified_inbox;
 pub mod usages;
 pub mod usages2;
 pub mod workspace;
+/// V76-R3b (D13 M2) — one worktree oracle, loopback lifecycle verbs,
+/// readiness, and the worktrees inbox lane.
+pub mod worktrees;
 pub mod yaml;
 
 use anyhow::{Context, Result};

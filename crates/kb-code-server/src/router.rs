@@ -507,6 +507,19 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/workspaces/{id}/worktrees",
             get(crate::workspace::workspace_worktrees_route),
         )
+        // V76-R3b — worktree list + readiness + loss-preview are ordinary
+        // bearer reads (the same information class `/api/workspaces`
+        // already serves). Mutations ride the loopback-only sub-router
+        // next to `/checkout`.
+        .route("/worktrees", get(crate::worktrees::list_route))
+        .route(
+            "/worktrees/{id}/readiness",
+            get(crate::worktrees::readiness_route),
+        )
+        .route(
+            "/worktrees/{id}/loss-preview",
+            get(crate::worktrees::loss_preview_route),
+        )
         .route("/frames", get(crate::frames::frames_route))
         // V70-A7 — `GET /api/themes` (`routes::themes`) serves the
         // kbc-theme/1 registry verbatim from `include_str!`, on the same
@@ -1158,6 +1171,20 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // module doc above for why this rides loopback-only rather than
         // auth_bearer. V4.S1's apply route (below) is the second.
         .route("/checkout", post(routes::checkout_route))
+        // V76-R3b — worktree lifecycle verbs JOIN checkout's loopback-only
+        // working-tree lane. Removal is only for daemon-created worktrees.
+        .route("/worktrees", post(crate::worktrees::create_route))
+        .route("/worktrees/prune", post(crate::worktrees::prune_route))
+        .route("/worktrees/{id}/lock", post(crate::worktrees::lock_route))
+        .route(
+            "/worktrees/{id}/unlock",
+            post(crate::worktrees::unlock_route),
+        )
+        .route(
+            "/worktrees/{id}/repair",
+            post(crate::worktrees::repair_route),
+        )
+        .route("/worktrees/{id}", delete(crate::worktrees::delete_route))
         // V72-H4a — `aug-lane/1` claim ingest. Third member of the
         // loopback-only mutation family, and for the design's own reason
         // (§P8 security posture #2): the OPERATOR ran the tool on their
