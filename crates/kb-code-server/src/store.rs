@@ -386,6 +386,10 @@ impl Store {
         }
         let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // refinery 0.9 widened Target::Version to i32 (int8-versions prep);
+        // kb's epochs are small positives, so the conversion cannot fail.
+        let version = i32::try_from(version)
+            .map_err(|e| StoreError::Migration(format!("epoch {version} out of range: {e}")))?;
         embedded::migrations::runner()
             .set_target(refinery::Target::Version(version))
             .run(&mut conn)
@@ -12003,10 +12007,12 @@ mod tests {
         use super::*;
 
         /// The JSON shape of `tests/fixtures/migrations.checksums.json` —
-        /// one row per migration EMBEDDED in this binary.
+        /// one row per migration EMBEDDED in this binary. `version` is i32
+        /// to match refinery 0.9's widened `Migration::version()` (the JSON
+        /// numbers are unchanged — kb's epochs are all small positives).
         #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
         struct MigrationChecksumRow {
-            version: u32,
+            version: i32,
             name: String,
             checksum: String,
         }
@@ -12061,7 +12067,7 @@ mod tests {
         ///
         /// This list may SHRINK (never), and must never GROW: adding to it
         /// means a slot was reserved again.
-        const PERMANENTLY_SKIPPED_VERSIONS: &[u32] = &[33];
+        const PERMANENTLY_SKIPPED_VERSIONS: &[i32] = &[33];
 
         /// V72-H2b — no embedded migration may be numbered below the
         /// highest one, except for the permanently-skipped versions above.
@@ -12087,11 +12093,11 @@ mod tests {
         /// the migration.
         #[test]
         fn embedded_migration_versions_are_contiguous() {
-            let versions: Vec<u32> = embedded_checksums().iter().map(|r| r.version).collect();
+            let versions: Vec<i32> = embedded_checksums().iter().map(|r| r.version).collect();
             assert!(!versions.is_empty(), "no embedded migrations at all");
             // `embedded_checksums` already sorts by version.
             let (lo, hi) = (versions[0], *versions.last().unwrap());
-            let missing: Vec<u32> = (lo..=hi)
+            let missing: Vec<i32> = (lo..=hi)
                 .filter(|v| !versions.contains(v))
                 .filter(|v| !PERMANENTLY_SKIPPED_VERSIONS.contains(v))
                 .collect();

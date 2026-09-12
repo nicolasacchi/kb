@@ -690,33 +690,36 @@ fn decode_skips_check(stats_body: &serde_json::Value) -> Check {
 /// (any kind, not just metrics.tick) arrived within 3s. Returns a
 /// Check labeled "event-bus".
 async fn poke_event_bus(base: &str, bearer: Option<&str>) -> Check {
-    use futures::StreamExt;
-    use reqwest_eventsource::{Event, RequestBuilderExt};
-    let url = format!("{base}/api/events");
-    // Thread the bearer so the probe doesn't 401 against an auth-on daemon
-    // reached over a non-loopback hop (matches the other doctor checks +
-    // the `kb events --follow` tail loop).
-    let mut req = reqwest::Client::new().get(&url);
-    if let Some(token) = bearer {
-        req = req.bearer_auth(token);
-    }
-    let mut es = match req.eventsource() {
-        Ok(es) => es,
-        Err(e) => return Check::fail("event-bus", format!("could not build request: {e}")),
+    // V76-R4e — this probe was the last `reqwest-eventsource` 0.6 call site
+    // (which pinned reqwest to ^0.12). It now reuses the in-house SSE
+    // reader (`crate::sse`) over reqwest's byte stream — the same parser
+    // `kb events --follow` / `kb push` already run. The bearer is threaded
+    // inside `open_events_stream`, matching the other doctor checks.
+    let resp = match crate::sse::open_events_stream(base, bearer, None, "").await {
+        Ok(resp) => resp,
+        Err(e) => return Check::fail("event-bus", format!("could not open event stream: {e}")),
     };
+    let mut reader = crate::sse::FrameReader::from_response(resp);
     // Race the stream against a 3s timeout.
     let race = tokio::time::timeout(Duration::from_secs(3), async {
-        while let Some(ev) = es.next().await {
-            match ev {
-                Ok(Event::Open) => continue,
-                Ok(Event::Message(m)) => return Some(m.event),
-                Err(_) => return None,
+        // The first substantive frame counts as alive. Comment-only
+        // keep-alive frames (no id/event/data) are skipped, matching the
+        // old reqwest-eventsource loop's `Event::Open => continue`.
+        loop {
+            match reader.next_frame().await {
+                Ok(Some(frame)) => {
+                    if let Some(kind) = frame.event {
+                        return Some(kind);
+                    }
+                    if frame.id.is_some() || frame.data.is_some() {
+                        return Some("message".to_string());
+                    }
+                }
+                Ok(None) | Err(_) => return None,
             }
         }
-        None
     })
     .await;
-    es.close();
     match race {
         Ok(Some(kind)) => Check::ok("event-bus", format!("alive ({kind} received)")),
         Ok(None) => Check::warn(

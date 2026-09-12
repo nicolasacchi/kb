@@ -80,7 +80,11 @@ pub fn binary_epoch(runner: &refinery::Runner) -> u32 {
     runner
         .get_migrations()
         .iter()
-        .map(|m| m.version())
+        // refinery 0.9 widened `version()` to i32 (the int8-versions prep);
+        // kb's embedded migrations are V<prefix>__ named and always
+        // positive, so a negative can only be a bug — clamp it to 0, which
+        // compares safely low against any volume epoch.
+        .map(|m| u32::try_from(m.version()).unwrap_or(0))
         .max()
         .unwrap_or(0)
 }
