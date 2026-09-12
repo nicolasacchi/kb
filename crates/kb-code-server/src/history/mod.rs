@@ -43,6 +43,8 @@ pub mod range_diff;
 /// V70-A2 (SEC-15) — the per-request scratch object directory `merge-tree
 /// --write-tree` writes into, plus its boot-time orphan sweep.
 pub mod scratch;
+/// V76-R3d — `scrub/1`: file-scoped time stops and nearest-prior `?at=`.
+pub mod scrub;
 pub mod stacks;
 
 use crate::numstat::FileChange;

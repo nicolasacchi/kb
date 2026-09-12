@@ -74,6 +74,15 @@ export const STORY_FILE = "story.rs";
 export const STORY_COMMIT_1_SUBJECT = "add story.rs";
 export const STORY_COMMIT_2_SUBJECT = "expand story.rs";
 
+// V76-R3d — file-scoped time scrubber. THREE commits on a SIDE branch so
+// main's HEAD, file_count, and feature-x behind-counts stay still. The
+// spec opens `?ref=scrub-hist` and steps back through unique literals.
+export const SCRUB_BRANCH = "scrub-hist";
+export const SCRUB_FILE = "scrub.rs";
+export const SCRUB_V1 = "scrub-v1";
+export const SCRUB_V2 = "scrub-v2";
+export const SCRUB_V3 = "scrub-v3";
+
 // V3.N2 — a dedicated file with TODO/FIXME/HACK markers for `todos.spec.ts`.
 // Kept SEPARATE from KNOWN_FILE so existing line-number pins (clickable/
 // resolve/reader-vim) stay byte-stable. Written into the initial commit
@@ -525,5 +534,19 @@ export function createFixtureRepo(dir: string): void {
   );
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", FEATURE_X2_COMMIT_SUBJECT]);
+  git(dir, ["checkout", "-q", "main"]);
+
+  // V76-R3d — three commits on `scrub-hist` adding `scrub.rs`. HEAD returns
+  // to main; the file is absent from the working tree.
+  git(dir, ["checkout", "-q", "-b", SCRUB_BRANCH]);
+  writeFileSync(join(dir, SCRUB_FILE), [`fn ${SCRUB_V1}() -> i32 { 1 }`, ""].join("\n"));
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "scrub v1"]);
+  writeFileSync(join(dir, SCRUB_FILE), [`fn ${SCRUB_V2}() -> i32 { 2 }`, ""].join("\n"));
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "scrub v2"]);
+  writeFileSync(join(dir, SCRUB_FILE), [`fn ${SCRUB_V3}() -> i32 { 3 }`, ""].join("\n"));
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "scrub v3"]);
   git(dir, ["checkout", "-q", "main"]);
 }

@@ -133,7 +133,7 @@ export const KBC_RESERVED_CHORDS = {
   passthrough: ["F11","Ctrl-p","Ctrl-s"] as readonly string[],
 };
 
-export const KBC_CONTEXT_KEYS: readonly string[] = ["mode","pane","buffer","board","help.open","palette.open","palette.popover","overlay.open","sheet.open","mode.active","diff.menu","diff.tour","review.open","tree.focused","mobile","peek.inline","trail.linked","ramp.row","pane.provisional","center","walkthrough"];
+export const KBC_CONTEXT_KEYS: readonly string[] = ["mode","pane","buffer","board","help.open","palette.open","palette.popover","overlay.open","sheet.open","mode.active","diff.menu","diff.tour","review.open","tree.focused","mobile","peek.inline","trail.linked","ramp.row","pane.provisional","center","walkthrough","reader.scrub"];
 
 export const KBC_SCOPES: readonly KbcScopeDef[] = [
   { id: "global", title: "Everywhere", depth: 0, covers: "app-wide chrome: the palette, help, the Space leader, go-to-page, theme", coactiveWith: ["reader","tree","diff","review","branches","board","rail","drawer","palette","search","recipe"] },
@@ -2175,6 +2175,51 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "central",
+  },
+  {
+    id: "reader.scrub-toggle",
+    title: "Toggle the file time scrubber",
+    aka: ["scrubber","time scrubber","file history scrub"],
+    group: "Ref",
+    keys: { vim: ["Space H"], plain: ["Space H"], helix: ["Space H"] },
+    scope: "global",
+    when: "center == reader",
+    cli: "kb-code stops",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "central",
+    note: "V76-R3d. Space t is view.theme-cycle (vim/helix), so Space t s is a shadowed prefix — tours.test.ts's own rule. Space H is a free complete binding. The strip lives in the reader <main>, not a new landmark.",
+  },
+  {
+    id: "reader.scrub-prev",
+    title: "Previous file stop (older)",
+    aka: ["scrub back","older stop"],
+    group: "Ref",
+    keys: { vim: ["[ H"], plain: ["[ H"], helix: ["[ H"] },
+    scope: "reader",
+    when: "reader.scrub",
+    cli: "none:steps the in-browser file scrubber; the daemon has no cursor",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "central",
+    note: "V76-R3d. Bare [ would shadow the mixed-prefix family ([ d, [ c, [ f, …]). Lowercase h is move.left (vim-owned), so the step is capital H — same letter as the Space H toggle, not a vim motion. Gated on reader.scrub so the prefix is inert while the strip is closed. No vim_kind — the mixed-prefix precedent.",
+  },
+  {
+    id: "reader.scrub-next",
+    title: "Next file stop (newer)",
+    aka: ["scrub forward","newer stop"],
+    group: "Ref",
+    keys: { vim: ["] H"], plain: ["] H"], helix: ["] H"] },
+    scope: "reader",
+    when: "reader.scrub",
+    cli: "none:steps the in-browser file scrubber; the daemon has no cursor",
+    mutation: "none",
+    sideEffect: "none",
+    lifecycle: "shipped",
+    dispatch: "central",
+    note: "V76-R3d. Mirror of reader.scrub-prev. Esc is not bound (D2); the strip's working-tree button runs reader.ref-clear.",
   },
   {
     id: "diff.hunk-next",

@@ -30,6 +30,7 @@ import type {
   DefsOut,
   DiffResponse,
   FileHistoryResponse,
+  FileStopsResponse,
   FileResponse,
   FramesResponse,
   HighlightBatchOut,
@@ -803,6 +804,23 @@ export function fetchFileHistory(
   return getJson<FileHistoryResponse>("/api/file-history", {
     repo,
     path,
+    limit: limit !== undefined ? String(limit) : undefined,
+    before: before !== undefined ? String(before) : undefined,
+  });
+}
+
+/// `GET /api/file/stops?repo=&path=` — `scrub/1` (V76-R3d).
+export function fetchFileStops(
+  repo: string,
+  path: string,
+  limit?: number,
+  before?: number,
+  ref?: string,
+): Promise<FileStopsResponse> {
+  return getJson<FileStopsResponse>("/api/file/stops", {
+    repo,
+    path,
+    ref,
     limit: limit !== undefined ? String(limit) : undefined,
     before: before !== undefined ? String(before) : undefined,
   });
