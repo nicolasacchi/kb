@@ -210,7 +210,7 @@ async fn boot(repo: &Path, kb_addr: SocketAddr) -> Boot {
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,
-            url: format!("http://{kb_addr}"),
+            url: Some(format!("http://{kb_addr}")),
             token_file: None,
             public_url: Some("https://kb.example.com".to_string()),
         },

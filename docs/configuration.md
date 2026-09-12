@@ -762,6 +762,51 @@ full section list (`[server]`, `[[repos]]`, `[watcher]`, `[semantic]`,
 `[transcripts]`, `[doclens]`, `[github]`, `[review]`, `[behavioral]`, …) is
 enumerated in that file's own module doc.
 
+### `[kb_daemon]`
+
+Where the Search-Everywhere box's sessions lane, the join ladder's
+session↔commit federation, and the unified inbox's kb lane all federate to
+`kb` — the OTHER daemon in this workspace, a separate process/binary. **V76-R4f:
+DISABLED unless `url` is configured.** A minimal, `[[repos]]`-only
+`kb-code.toml` must never federate against a live kb it was never pointed
+at — a throwaway/local install used to inherit kb's own documented default
+bind (`127.0.0.1:4000`) and quietly reach for whatever happened to be
+listening there.
+
+`enabled` therefore has no static default — it resolves from what the
+operator actually wrote:
+
+| `enabled` in toml | `url` in toml | resolved `enabled` |
+|---|---|---|
+| absent | absent | `false` |
+| absent | set | `true` |
+| `true` | absent | **boot error**, names `kb_daemon.url` |
+| `true` | set | `true` |
+| `false` | absent or set | `false` |
+
+i.e. `enabled` defaults to `url.is_some()`; writing `enabled = true` with no
+`url` refuses to boot rather than silently defaulting to `127.0.0.1:4000`.
+Every kb-federated lane already degrades honestly when the section is off —
+an additive `disabled` reason beside the existing `unreachable` one, never a
+silent empty and never a `500` — so a daemon with no `[kb_daemon]` at all
+still boots and answers every route, just without a sibling kb to ask.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `enabled` | bool | `url.is_some()` | Master switch — see the table above. |
+| `url` | string | none | kb's federation base URL (e.g. `http://127.0.0.1:4000` for a native side-by-side install, `http://kb:4000` for a container deployment). |
+| `token_file` | string (path) | none | File holding kb's bearer token — needed whenever kb's `auth_bearer` doesn't see this daemon as loopback (e.g. the docker-published shape, where the container's peer is the bridge gateway IP). The FILE path lives in config, never the secret itself. |
+| `public_url` | string | none | The browser-facing base URL for links kb-code's UI builds into kb's own SPA. Falls back to `url` when unset — correct for the native side-by-side install, wrong for a hosted/container deployment where `url` is a container hostname a browser can't resolve. |
+
+```toml
+[kb_daemon]
+url = "http://127.0.0.1:4000"
+```
+
+An existing deployment that already sets `url` explicitly is unaffected by
+this amendment — it only changes the behaviour of a `kb-code.toml` that
+never configured the section at all.
+
 ### `[scip]`
 
 PRR-N12 (N1)'s per-repo SCIP-indexer config — array-of-tables, one

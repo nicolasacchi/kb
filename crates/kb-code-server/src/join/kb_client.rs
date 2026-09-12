@@ -511,7 +511,7 @@ impl KbClient {
     /// federation until a restart.
     async fn probe_sibling(&self) -> std::result::Result<Handshake, ()> {
         let client = self.client().map_err(|_| ())?;
-        let url = format!("{}/api/identity", self.cfg.url.trim_end_matches('/'));
+        let url = format!("{}/api/identity", self.cfg.url_str().trim_end_matches('/'));
         let resp = self.get(client, &url).send().await.map_err(|_| ())?;
         if !resp.status().is_success() {
             return Err(());
@@ -532,7 +532,7 @@ impl KbClient {
         Ok(Handshake::Mismatch(format!(
             "peer at {} reports sibling_protocol={protocol:?} sibling_major={major}; \
              this daemon speaks {:?} major {}",
-            self.cfg.url,
+            self.cfg.url_str(),
             kb_core::sibling::SIBLING_PROTOCOL,
             kb_core::sibling::SIBLING_MAJOR,
         )))
@@ -552,17 +552,17 @@ impl KbClient {
                 // calls ride behind it.
                 match &outcome {
                     Handshake::Ok => tracing::info!(
-                        kb_url = %self.cfg.url,
+                        kb_url = %self.cfg.url_str(),
                         protocol = kb_core::sibling::SIBLING_PROTOCOL,
                         "kb-code: kb-sibling handshake ok"
                     ),
                     Handshake::LegacyPeer => tracing::warn!(
-                        kb_url = %self.cfg.url,
+                        kb_url = %self.cfg.url_str(),
                         "kb-code: kb daemon carries no kb-sibling Hello (a binary older than \
                          kb-sibling/1) — proceeding under the legacy-peer grandfather rule"
                     ),
                     Handshake::Mismatch(reason) => tracing::error!(
-                        kb_url = %self.cfg.url,
+                        kb_url = %self.cfg.url_str(),
                         %reason,
                         "kb-code: kb-sibling handshake MISMATCH — federation with kb is now \
                          failing closed until this daemon restarts against a matching peer"
@@ -602,7 +602,7 @@ impl KbClient {
         let client = self.client()?;
         let url = format!(
             "{}/api/sessions/by-commit",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -642,7 +642,7 @@ impl KbClient {
         let client = self.client()?;
         let url = format!(
             "{}/api/sessions/{session_id}/commits",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -674,7 +674,7 @@ impl KbClient {
         let client = self.client()?;
         let url = format!(
             "{}/api/sessions/{session_id}",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -705,7 +705,7 @@ impl KbClient {
     ) -> Result<CommitMapResponse> {
         let url = format!(
             "{}/api/sessions/commit-map",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -839,7 +839,7 @@ impl KbClient {
         }
         self.ensure_sibling().await?;
         let client = self.client()?;
-        let url = format!("{}/api/why", self.cfg.url.trim_end_matches('/'));
+        let url = format!("{}/api/why", self.cfg.url_str().trim_end_matches('/'));
         let resp = self
             .get(client, &url)
             .query(&[("path", path)])
@@ -880,7 +880,7 @@ impl KbClient {
         let client = self.client()?;
         let url = format!(
             "{}/api/kb/{kb}/docs/{doc}/code-refs",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -933,7 +933,7 @@ impl KbClient {
         let client = self.client()?;
         let url = format!(
             "{}/api/kb/{kb}/code-refs",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let limit_s = limit.to_string();
         let mut query: Vec<(&str, &str)> = vec![("limit", limit_s.as_str())];
@@ -1002,7 +1002,7 @@ impl KbClient {
             .join("/");
         let url = format!(
             "{}/api/kb/{kb}/docs/by-path/{encoded_path}",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -1055,7 +1055,7 @@ impl KbClient {
         let client = self.client()?;
         let url = format!(
             "{}/api/kb/{kb}/docs/{id}",
-            self.cfg.url.trim_end_matches('/')
+            self.cfg.url_str().trim_end_matches('/')
         );
         let resp = self
             .get(client, &url)
@@ -1092,7 +1092,7 @@ impl KbClient {
         }
         self.ensure_sibling().await?;
         let client = self.client()?;
-        let url = format!("{}/api/desk", self.cfg.url.trim_end_matches('/'));
+        let url = format!("{}/api/desk", self.cfg.url_str().trim_end_matches('/'));
         let resp = self
             .get(client, &url)
             .send()
@@ -1122,7 +1122,7 @@ impl KbClient {
         }
         self.ensure_sibling().await?;
         let client = self.client()?;
-        let url = format!("{}/api/inbox", self.cfg.url.trim_end_matches('/'));
+        let url = format!("{}/api/inbox", self.cfg.url_str().trim_end_matches('/'));
         let resp = self
             .get(client, &url)
             .query(&[("limit", limit.to_string())])
@@ -1216,7 +1216,7 @@ pub(crate) mod test_support {
     pub fn daemon_cfg(url: String) -> super::KbDaemonSection {
         super::KbDaemonSection {
             enabled: true,
-            url,
+            url: Some(url),
             token_file: None,
             public_url: None,
         }
@@ -1441,7 +1441,7 @@ mod tests {
     async fn by_commit_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -1505,7 +1505,7 @@ mod tests {
     async fn session_commits_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -1774,7 +1774,7 @@ mod tests {
     async fn commit_map_snapshot_disabled_short_circuits() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -1866,7 +1866,7 @@ mod tests {
     async fn why_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -1948,7 +1948,7 @@ mod tests {
     async fn desk_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -2012,7 +2012,7 @@ mod tests {
     async fn open_comments_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -2137,7 +2137,7 @@ mod tests {
     async fn code_refs_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -2368,7 +2368,7 @@ mod tests {
     async fn resolve_doc_by_path_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });
@@ -2498,7 +2498,7 @@ mod tests {
     async fn doc_meta_disabled_short_circuits_without_a_network_call() {
         let client = KbClient::new(KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         });

@@ -58,6 +58,12 @@ invariant #2 records).
    why there is no separate CSRF token (the header already IS the
    unguessable-to-a-cross-origin-page credential, and a token would add
    state without closing a gap the header leaves open).
+   *V76-R4f amendment:* the same posture applies to the daemon's OUTBOUND
+   half — a daemon never assumes a sibling; `[kb_daemon]`
+   (`config::KbDaemonSection`) is DISABLED unless the operator configures
+   `url`, so a throwaway install with a minimal `[[repos]]`-only toml
+   never federates read-only lookups against whatever happens to answer on
+   kb's well-known port.
 
 2. **Read `security::full_path`, never `req.uri().path()`, inside any
    `/api`-nested guard.** `Router::nest` strips the matched prefix before

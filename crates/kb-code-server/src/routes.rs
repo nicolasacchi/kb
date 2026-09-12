@@ -85,8 +85,19 @@ pub struct IdentityResponse {
     /// public_url` if the operator set one, else the federation `url`). The
     /// SPA reads this once at boot (`GET /api/identity`) and rewrites its
     /// hardcoded local-dev default before rendering any such link — see
-    /// `web-code/src/lib/searchLanes.ts::setKbSessionBase`.
+    /// `web-code/src/lib/searchLanes.ts::setKbSessionBase`. `""` when
+    /// [`Self::kb_daemon_enabled`] is `false` and no `public_url`/`url` is
+    /// configured either — never a guessed address (V76-R4f).
     pub kb_public_url: String,
+    /// V76-R4f — additive: whether `[kb_daemon]` is enabled at all (see
+    /// `crate::config::KbDaemonSection`'s doc for the default-resolution
+    /// rule). `false` on a fresh/throwaway install that never configured a
+    /// sibling kb; every kb-federated lane (sessions search, `why`/`story`
+    /// provenance, the unified inbox's kb lane, doc-lens) already degrades
+    /// honestly per its own reason string when this is `false` — this
+    /// field just lets a client render the capability up front, the same
+    /// spirit as `remote_mutations` below.
+    pub kb_daemon_enabled: bool,
     /// kb-sibling/1 Hello — the commit this binary was built from.
     /// kb-code-server has no `build.rs` of its own (kb-server bakes
     /// `KB_GIT_SHA` in one), so this reads the deploy-time
@@ -175,6 +186,7 @@ pub async fn identity(State(state): State<SharedState>) -> impl IntoResponse {
         name: "kb-code",
         version: state.version,
         kb_public_url: state.kb_daemon.public_base().to_string(),
+        kb_daemon_enabled: state.kb_daemon.enabled,
         build_sha: option_env!("KB_BUILD_SHA").unwrap_or("dev"),
         sibling_protocol: kb_core::sibling::SIBLING_PROTOCOL,
         sibling_major: kb_core::sibling::SIBLING_MAJOR,

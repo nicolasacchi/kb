@@ -84,7 +84,7 @@ fn base_config(repo_dir: &Path) -> KbCodeConfig {
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,
-            url: DEAD_KB_DAEMON.to_string(),
+            url: Some(DEAD_KB_DAEMON.to_string()),
             token_file: None,
             public_url: None,
         },

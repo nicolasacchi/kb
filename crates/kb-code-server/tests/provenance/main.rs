@@ -7,4 +7,5 @@
 mod common;
 
 mod blame_routes;
+mod kb_daemon_default;
 mod provenance_routes;

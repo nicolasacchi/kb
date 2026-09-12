@@ -7,9 +7,12 @@
 //! is the ONLY lane in the box that leaves the process.
 //!
 //! Config: [`crate::config::KbDaemonSection`] (`[kb_daemon]` in
-//! `kb-code.toml`) — `enabled` (default `true`) and `url` (default
-//! `http://127.0.0.1:4000`, kb's own documented default bind). A SHORT,
-//! fixed timeout ([`TIMEOUT`], 1.5s) — this lane must never be the reason
+//! `kb-code.toml`) — V76-R4f: DISABLED unless the operator configures
+//! `url` (see that struct's doc for the resolution table); `search`
+//! returns [`SessionsSearchError::Disabled`] without ever touching the
+//! network when it is off, same shape as an unreachable daemon but its own
+//! distinct reason. A SHORT, fixed timeout ([`TIMEOUT`], 1.5s) — this lane
+//! must never be the reason
 //! the whole box misses its ~2s soft budget; an unreachable/slow kb daemon
 //! degrades to [`SessionsSearchError::Unreachable`] (→ that section's
 //! `unavailable_reason`), never a hung or failed box.
@@ -79,7 +82,10 @@ pub async fn search(cfg: &KbDaemonSection, q: &str, limit: usize) -> Result<Vec<
         .timeout(TIMEOUT)
         .build()
         .map_err(|e| SessionsSearchError::ClientBuild(e.to_string()))?;
-    let url = format!("{}/api/sessions/recollect", cfg.url.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/sessions/recollect",
+        cfg.url_str().trim_end_matches('/')
+    );
     // `[kb_daemon] token_file` — needed when kb's `auth_bearer` doesn't see
     // this daemon as loopback (docker-published prod); see
     // `KbDaemonSection::bearer_token`'s doc.
@@ -195,7 +201,7 @@ mod tests {
     async fn disabled_config_short_circuits_without_a_network_call() {
         let cfg = KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         };
@@ -207,7 +213,7 @@ mod tests {
     async fn empty_query_is_rejected_without_a_network_call() {
         let cfg = KbDaemonSection {
             enabled: true,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         };
@@ -221,7 +227,7 @@ mod tests {
         // "unreachable" without depending on any live daemon.
         let cfg = KbDaemonSection {
             enabled: true,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         };
