@@ -1280,7 +1280,7 @@ pub fn new_attachment_id() -> String {
 /// same shape (`l_` / `le_` beside the review file's `c_` / `r_` / `a_`).
 pub(crate) fn short_random_hex() -> String {
     let mut buf = [0u8; 6];
-    if getrandom::getrandom(&mut buf).is_err() {
+    if getrandom::fill(&mut buf).is_err() {
         let n = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())

@@ -174,14 +174,11 @@ pub fn inject_script(html: &str, script_src: &str) -> Result<String> {
         let body_seen_ref = &mut body_seen;
         let injection_ref = &injection;
         let mut rewriter = HtmlRewriter::new(
-            Settings {
-                element_content_handlers: vec![element!("body", move |el| {
-                    *body_seen_ref = true;
-                    el.append(injection_ref, ContentType::Html);
-                    Ok(())
-                })],
-                ..Settings::default()
-            },
+            Settings::new().append_element_content_handler(element!("body", move |el| {
+                *body_seen_ref = true;
+                el.append(injection_ref, ContentType::Html);
+                Ok(())
+            })),
             |c: &[u8]| output.extend_from_slice(c),
         );
         rewriter
@@ -247,14 +244,11 @@ pub fn inject_annotator(
         let body_seen_ref = &mut body_seen;
         let injection_ref = &injection;
         let mut rewriter = HtmlRewriter::new(
-            Settings {
-                element_content_handlers: vec![element!("body", move |el| {
-                    *body_seen_ref = true;
-                    el.append(injection_ref, ContentType::Html);
-                    Ok(())
-                })],
-                ..Settings::default()
-            },
+            Settings::new().append_element_content_handler(element!("body", move |el| {
+                *body_seen_ref = true;
+                el.append(injection_ref, ContentType::Html);
+                Ok(())
+            })),
             |c: &[u8]| output.extend_from_slice(c),
         );
         rewriter
@@ -295,14 +289,11 @@ pub fn inject_inline_head_script(html: &str, js: &str) -> Result<String> {
         let head_seen_ref = &mut head_seen;
         let injection_ref = &injection;
         let mut rewriter = HtmlRewriter::new(
-            Settings {
-                element_content_handlers: vec![element!("head", move |el| {
-                    *head_seen_ref = true;
-                    el.prepend(injection_ref, ContentType::Html);
-                    Ok(())
-                })],
-                ..Settings::default()
-            },
+            Settings::new().append_element_content_handler(element!("head", move |el| {
+                *head_seen_ref = true;
+                el.prepend(injection_ref, ContentType::Html);
+                Ok(())
+            })),
             |c: &[u8]| output.extend_from_slice(c),
         );
         rewriter

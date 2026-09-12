@@ -40,11 +40,24 @@ mime = "0.3"
 # Storage (exact pins — arrow MUST match lance's transitive version per
 # spike-lance findings, otherwise RecordBatch types don't unify in the dep
 # graph; CI invariant: cargo metadata shows exactly one arrow version).
-lancedb = { version = "=0.27.2", default-features = false }
-lance-index = "=4.0.0"
-arrow = "=57.3.1"
-arrow-array = "=57.3.1"
-arrow-schema = "=57.3.1"
+# V76-R4c (DEP-LOCKSTEP): lancedb 0.38 ⇒ lance 11.0.0 + arrow 58.x +
+# datafusion 54.x (datafusion/parquet are transitive — not pinned here).
+# The `remote` feature is enabled ONLY to work around an upstream cfg-gate
+# bug: lancedb 0.38.0's src/job.rs references `Error::Http` (gated behind
+# `feature = "remote"` in error.rs) WITHOUT the gate, so
+# `default-features = false` alone does not compile. kb still never opens a
+# remote connection — every `connect()` call passes a local path. Drop
+# `remote` once an upstream release fixes the gate.
+lancedb = { version = "=0.38.0", default-features = false, features = ["remote"] }
+lance-index = "=11.0.0"
+# V76-R4c: kb-core's orphan-index GC drives `Dataset::load_indices` via
+# `lance::index::DatasetIndexExt` (the trait moved from `lance_index` to
+# `lance::index` in lance 11). Direct exact pin inside the same lockstep
+# set — one lance family, one arrow family.
+lance = "=11.0.0"
+arrow = "=58.4.0"
+arrow-array = "=58.4.0"
+arrow-schema = "=58.4.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 refinery = { version = "0.8", features = ["rusqlite"] }
 
@@ -66,7 +79,7 @@ fastembed = { version = "5", default-features = false, features = [
 
 # HTML parsing
 scraper = "0.27"
-lol_html = "2"
+lol_html = "3"
 # U1 (v0.25 quick capture) — opt-in HTML sanitize at capture time (Html
 # pipeline only; the stored source IS the sanitized output). Whitelist-based,
 # strips <script>/on*= by construction rather than a denylist.
@@ -87,7 +100,7 @@ notify = "8"
 notify-debouncer-full = "0.7"
 
 # XDG paths
-directories = "5"
+directories = "6"
 
 # Proptest for property-based tests (path-traversal, KbName validator, etc.)
 proptest = "1"
@@ -119,7 +132,7 @@ tracing-appender = "0.2"
 
 # Time + hashing + config formats
 chrono = { version = "0.4", features = ["serde"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 # Cloudflare Pages asset hash (wrangler-compatible): blake3(base64(bytes)‖ext).
 # Both already in the graph (base64 via reqwest/datafusion, blake3 via lance).
@@ -131,7 +144,7 @@ toml = "0.8"
 # Matches the version toml 0.8 already pulls into the lock (0.22.x).
 toml_edit = "0.22"
 regex = "1"
-getrandom = "0.2"
+getrandom = "0.4"
 mdns-sd = "0.13"
 
 # Text diffing for the artifact version timeline (Track V) — line-level

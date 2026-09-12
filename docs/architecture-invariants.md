@@ -34,8 +34,11 @@ failures, not compile errors.
 
 ### 1. Arrow version pinning
 
-lance + arrow MUST share one version (`=57.3.1`). `cargo metadata` showing two
-arrow versions = the dep graph won't unify RecordBatch types. See
+lance + arrow MUST share one version — V76-R4c pinned set: lancedb `=0.38.0`
+⇒ lance `=11.0.0` + arrow `=58.4.0` + datafusion 54.x (transitive).
+`cargo metadata` showing two arrow versions = the dep graph won't unify
+RecordBatch types. The check is `cargo tree -d -i arrow-array` (and
+`-i arrow-schema`): both must show a single version. See
 `Cargo.toml [workspace.dependencies]`.
 
 ### 2. The doc↔code bridge: kb extracts hints, kb-code mints classes, nothing is cached (DCB v1)

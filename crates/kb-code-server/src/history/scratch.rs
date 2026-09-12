@@ -167,7 +167,7 @@ pub fn sweep_orphans(scratch_root: &Path) -> usize {
 /// (`annotations::new_annotation_id`), no uuid dependency.
 fn random_id() -> String {
     let mut bytes = [0u8; 6];
-    if getrandom::getrandom(&mut bytes).is_err() {
+    if getrandom::fill(&mut bytes).is_err() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
