@@ -20,9 +20,10 @@
 //   `?view=`, never the other way round, so a URL always wins over a
 //   remembered preference and a copied link reproduces the sender's view.
 import { useCallback, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import {
   formatDiffPs,
+  mergeCurrentSearch,
   parseDiffCtx,
   parseDiffMap,
   parseDiffPs,
@@ -79,7 +80,8 @@ export interface ReviewDiffUrlState {
 }
 
 export function useReviewDiffState(): ReviewDiffUrlState {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   // V73-K2a — `?ps=` is now WRITTEN as well as read (the full-page diff was
   // permanently pinned to "latest" before this unit). A bare number picks
@@ -113,24 +115,35 @@ export function useReviewDiffState(): ReviewDiffUrlState {
   function setView(next: DiffMode) {
     saveDiffMode(next);
     setPrefMode(next);
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("view", next);
-    setSearchParams(nextParams, { replace: true });
+    navigate(
+      { search: mergeCurrentSearch((p) => p.set("view", next)) },
+      { replace: true },
+    );
   }
 
   function setOverlay(next: OverlayMode) {
-    const nextParams = new URLSearchParams(searchParams);
     const v = overlayParamValue(next);
-    if (v) nextParams.set("overlay", v);
-    else nextParams.delete("overlay");
-    setSearchParams(nextParams, { replace: true });
+    navigate(
+      {
+        search: mergeCurrentSearch((p) => {
+          if (v) p.set("overlay", v);
+          else p.delete("overlay");
+        }),
+      },
+      { replace: true },
+    );
   }
 
   function setTourParam(on: boolean) {
-    const nextParams = new URLSearchParams(searchParams);
-    if (on) nextParams.set("tour", "1");
-    else nextParams.delete("tour");
-    setSearchParams(nextParams, { replace: true });
+    navigate(
+      {
+        search: mergeCurrentSearch((p) => {
+          if (on) p.set("tour", "1");
+          else p.delete("tour");
+        }),
+      },
+      { replace: true },
+    );
   }
 
   // --- V73-K2a — the five URL writers -----------------------------------
@@ -140,14 +153,26 @@ export function useReviewDiffState(): ReviewDiffUrlState {
   // this control". `replace: true` matches every pre-existing writer on
   // this route (view/overlay/tour): a view knob is not a navigation step,
   // and Back must still leave the diff rather than undo a dial click.
+  //
+  // V76-R4d.3 — every write merges onto `window.location.search` AT CALL
+  // TIME (`mergeCurrentSearch`), never onto the render-time `searchParams`
+  // snapshot: under react-router 7 the navigation commit is deferred, and a
+  // snapshot-based write issued before an earlier write commits re-emits the
+  // OLD params and silently drops the earlier write (the lost `?ps=1` of
+  // review-diff-v2.spec.ts:235).
   const setParam = useCallback(
     (key: string, value: string | null) => {
-      const next = new URLSearchParams(searchParams);
-      if (value === null) next.delete(key);
-      else next.set(key, value);
-      setSearchParams(next, { replace: true });
+      navigate(
+        {
+          search: mergeCurrentSearch((next) => {
+            if (value === null) next.delete(key);
+            else next.set(key, value);
+          }),
+        },
+        { replace: true },
+      );
     },
-    [searchParams, setSearchParams],
+    [navigate],
   );
 
   const setPs = useCallback(
@@ -169,16 +194,21 @@ export function useReviewDiffState(): ReviewDiffUrlState {
 
   const setExpanded = useCallback(
     (files: readonly string[], hunks: readonly string[]) => {
-      const next = new URLSearchParams(searchParams);
       const f = formatExpandedParam(files);
       const h = formatExpandedParam(hunks);
-      if (f) next.set("expanded", f);
-      else next.delete("expanded");
-      if (h) next.set("hexpanded", h);
-      else next.delete("hexpanded");
-      setSearchParams(next, { replace: true });
+      navigate(
+        {
+          search: mergeCurrentSearch((next) => {
+            if (f) next.set("expanded", f);
+            else next.delete("expanded");
+            if (h) next.set("hexpanded", h);
+            else next.delete("hexpanded");
+          }),
+        },
+        { replace: true },
+      );
     },
-    [searchParams, setSearchParams],
+    [navigate],
   );
 
   return {

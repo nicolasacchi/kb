@@ -529,6 +529,31 @@ export function mergeQuery(href: string, extra: Record<string, string | null>): 
   return s ? `${path}?${s}` : path;
 }
 
+/// V76-R4d.3 — THE one way a component mutates the CURRENT page's query
+/// string: read `window.location.search` AT CALL TIME, apply `mutate`, hand
+/// back the new `search` (`""` when empty) for `navigate({ search }, …)`.
+///
+/// Why this and not react-router 7's functional `setSearchParams(prev => …)`:
+/// in the installed 7.x that `prev` is the LAST COMMITTED RENDER's snapshot
+/// (`useSearchParams` resolves the updater against its memoized
+/// `searchParams`, see the `setSearchParams` useCallback in the router's own
+/// source), and under v7 every navigation's state commit is deferred inside
+/// `React.startTransition`. Two writes in quick succession — e.g. the
+/// patchset switcher's `?ps=1` followed by the hunk cursor's `?hunk=` echo —
+/// would each build on the SAME stale snapshot, and the second re-emits the
+/// old params: the first write vanishes (review-diff-v2.spec.ts:235 saw
+/// exactly `…/diff?hunk=<id>` with `ps` gone). `window.location.search`, by
+/// contrast, is updated SYNCHRONOUSLY by the router's history layer the
+/// instant `navigate` runs, so it always reflects every write that has been
+/// ISSUED, committed or not. A writer that merges never drops keys it does
+/// not own; a writer that rebuilds from a render snapshot can.
+export function mergeCurrentSearch(mutate: (params: URLSearchParams) => void): string {
+  const params = new URLSearchParams(window.location.search);
+  mutate(params);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
 /// `findingUrl(repo, id, slug)` → `/r/{repo}/~reviews/{id}/f/{slug}` — the
 /// short, share/CLI-printable form (design-ui.md §5). `routes/
 /// FindingEntry.tsx` (V70-A3S) registers the redirect route for this

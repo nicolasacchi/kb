@@ -44,7 +44,7 @@ import {
   parseBoardFlag,
   parseStep,
 } from "../lib/boardsUrl";
-import { codeUrl } from "../lib/codeUrl";
+import { codeUrl, mergeCurrentSearch } from "../lib/codeUrl";
 import { toast } from "../lib/toast";
 import "../styles/boards.css";
 
@@ -62,7 +62,7 @@ function refusalMessage(err: unknown): string {
 
 export default function BoardDetail() {
   const { repo = "", slug = "" } = useParams<{ repo: string; slug: string }>();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const navigate = useNavigate();
 
   const live = parseBoardFlag(params.get(BOARD_LIVE_PARAM));
@@ -71,6 +71,25 @@ export default function BoardDetail() {
   const apply = useApplyBoard(repo);
   const accept = useAcceptBoard(repo);
   const loopback = useLoopback();
+
+  // V76-R4d.2 — react-router 7 wraps every navigation state update in
+  // React.startTransition (no opt-out), so a controlled checkbox bound
+  // DIRECTLY to a search param stays at the last committed render's value
+  // until the transition lands: React's restoreControlledState snaps the
+  // DOM node back right after the change event. The house pattern (the
+  // Stacks `all` toggle, V76-R4d round 2) is LOCAL OPTIMISTIC state: each
+  // box flips on the same tick as the change and reconciles with the URL
+  // when the navigation commits (the effects below). The board QUERY
+  // keeps reading the URL — the URL stays the source of truth for data;
+  // only each checkbox's own checked rendering is optimistic.
+  const [liveOptimistic, setLiveOptimistic] = useState(live);
+  const [ctxOptimistic, setCtxOptimistic] = useState(ctx);
+  useEffect(() => {
+    setLiveOptimistic(live);
+  }, [live]);
+  useEffect(() => {
+    setCtxOptimistic(ctx);
+  }, [ctx]);
 
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -100,14 +119,23 @@ export default function BoardDetail() {
 
   const order = useMemo(() => (data ? readingOrder(data) : []), [data]);
 
+  // V76-R4d.3 — merges onto `window.location.search` AT CALL TIME
+  // (`mergeCurrentSearch`), never the render-time `params` snapshot: under
+  // react-router 7's deferred commits a snapshot-based second write re-emits
+  // the OLD params and silently drops a first write still in flight.
   const setParam = useCallback(
     (key: string, value: string | null) => {
-      const next = new URLSearchParams(params);
-      if (value === null) next.delete(key);
-      else next.set(key, value);
-      setParams(next, { replace: true });
+      navigate(
+        {
+          search: mergeCurrentSearch((next) => {
+            if (value === null) next.delete(key);
+            else next.set(key, value);
+          }),
+        },
+        { replace: true },
+      );
     },
-    [params, setParams],
+    [navigate],
   );
 
   const goToStep = useCallback(
@@ -384,8 +412,11 @@ export default function BoardDetail() {
           <label>
             <input
               type="checkbox"
-              checked={live}
-              onChange={(e) => setParam(BOARD_LIVE_PARAM, e.target.checked ? "1" : null)}
+              checked={liveOptimistic}
+              onChange={(e) => {
+                setLiveOptimistic(e.target.checked);
+                setParam(BOARD_LIVE_PARAM, e.target.checked ? "1" : null);
+              }}
               data-kbc-board-live
             />
             Live query counts
@@ -396,8 +427,11 @@ export default function BoardDetail() {
           <label>
             <input
               type="checkbox"
-              checked={ctx}
-              onChange={(e) => setParam(BOARD_CTX_PARAM, e.target.checked ? "1" : null)}
+              checked={ctxOptimistic}
+              onChange={(e) => {
+                setCtxOptimistic(e.target.checked);
+                setParam(BOARD_CTX_PARAM, e.target.checked ? "1" : null);
+              }}
               data-kbc-board-ctx
             />
             Fetch ± context

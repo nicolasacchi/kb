@@ -181,7 +181,10 @@ describe("shipped e2e hooks the tree / map must keep", () => {
     expect(goFile).toContain('apply({ type: "gotoFile"');
     expect(goFile).not.toContain('setParam("file"');
     const open = src.slice(src.indexOf("function openFileInCenter"), src.indexOf("function openPseudo"));
-    expect(open).toContain("file:");
+    // Either the object-literal merge (`{ file: path }`) or the V76-R4d.3
+    // shared current-location updater (`p.set("file", path)`) — both WRITE
+    // ?file= on a map click; goFile above must not.
+    expect(open).toMatch(/file:|set\("file"/);
   });
 
   it("first-hunk scroll after a tree click keys off focusPath, not all-files ?file=", () => {

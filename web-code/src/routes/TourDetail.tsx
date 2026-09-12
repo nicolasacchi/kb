@@ -25,14 +25,14 @@
 // orphan step is a card on the surface like any other.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import BoardCard from "../components/boards/BoardCard";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { useTour } from "../hooks/useTours";
 import { useLoopback } from "../hooks/useLoopback";
-import { appendTrail, codeUrl } from "../lib/codeUrl";
+import { appendTrail, codeUrl, mergeCurrentSearch } from "../lib/codeUrl";
 import { cameraCaption, tourCensus } from "../lib/tourDoc";
 import {
   TOUR_CTX_PARAM,
@@ -49,12 +49,28 @@ const AUTOPLAY_MS = 6000;
 
 export default function TourDetail() {
   const { repo = "", slug = "" } = useParams<{ repo: string; slug: string }>();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const ctx = parseTourFlag(params.get(TOUR_CTX_PARAM));
   const tour = useTour(repo, slug, { ctx });
   const loopback = useLoopback();
   const [playing, setPlaying] = useState(false);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+
+  // V76-R4d.2 — react-router 7 wraps every navigation state update in
+  // React.startTransition (no opt-out), so a controlled checkbox bound
+  // DIRECTLY to a search param stays at the last committed render's value
+  // until the transition lands: React's restoreControlledState snaps the
+  // DOM node back right after the change event. The house pattern (the
+  // Stacks `all` toggle, V76-R4d round 2) is LOCAL OPTIMISTIC state: the
+  // box flips on the same tick as the change and reconciles with the URL
+  // when the navigation commits (the effect below). The tour QUERY keeps
+  // reading the URL — the URL stays the source of truth for data; only
+  // the checkbox's own checked rendering is optimistic.
+  const [ctxOptimistic, setCtxOptimistic] = useState(ctx);
+  useEffect(() => {
+    setCtxOptimistic(ctx);
+  }, [ctx]);
 
   const data = tour.data;
   const steps = useMemo(() => data?.steps ?? [], [data]);
@@ -65,15 +81,24 @@ export default function TourDetail() {
   const stepIndex = parsed ?? (steps.length > 0 ? 0 : null);
   const step = stepIndex !== null ? steps[stepIndex] : null;
 
+  // V76-R4d.3 — merges onto `window.location.search` AT CALL TIME
+  // (`mergeCurrentSearch`), never the render-time `params` snapshot: under
+  // react-router 7's deferred commits a snapshot-based second write re-emits
+  // the OLD params and silently drops a first write still in flight.
   const setParam = useCallback(
     (key: string, value: string | null) => {
-      const next = new URLSearchParams(params);
-      if (value === null) next.delete(key);
-      else next.set(key, value);
-      // A view knob is not a navigation step.
-      setParams(next, { replace: true });
+      navigate(
+        {
+          search: mergeCurrentSearch((next) => {
+            if (value === null) next.delete(key);
+            else next.set(key, value);
+          }),
+        },
+        // A view knob is not a navigation step.
+        { replace: true },
+      );
     },
-    [params, setParams],
+    [navigate],
   );
 
   const goToStep = useCallback(
@@ -243,8 +268,11 @@ export default function TourDetail() {
             <label className="kbc-tour__ctx">
               <input
                 type="checkbox"
-                checked={ctx}
-                onChange={(e) => setParam(TOUR_CTX_PARAM, e.target.checked ? "1" : null)}
+                checked={ctxOptimistic}
+                onChange={(e) => {
+                  setCtxOptimistic(e.target.checked);
+                  setParam(TOUR_CTX_PARAM, e.target.checked ? "1" : null);
+                }}
                 data-kbc-tour-ctx
               />
               Fetch ± context
