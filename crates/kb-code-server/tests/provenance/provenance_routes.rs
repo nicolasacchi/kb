@@ -128,7 +128,7 @@ async fn boot(
 fn disabled_kb_daemon() -> KbDaemonSection {
     KbDaemonSection {
         enabled: false,
-        url: "http://127.0.0.1:0".to_string(),
+        url: Some("http://127.0.0.1:0".to_string()),
         token_file: None,
         public_url: None,
     }
@@ -319,7 +319,7 @@ async fn why_line_on_a_trailer_stamped_commit_resolves_and_enriches_kb_context()
         dir,
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{addr}"),
+            url: Some(format!("http://{addr}")),
             token_file: None,
             public_url: None,
         },
@@ -468,7 +468,7 @@ async fn why_line_on_a_trailer_stamped_commit_surfaces_session_memory_ids() {
         dir,
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{addr}"),
+            url: Some(format!("http://{addr}")),
             token_file: None,
             public_url: None,
         },
@@ -582,7 +582,7 @@ async fn why_line_non_loopback_caller_gets_attribution_but_never_kb_context() {
         dir,
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{addr}"),
+            url: Some(format!("http://{addr}")),
             token_file: None,
             public_url: None,
         },
@@ -1006,7 +1006,7 @@ async fn story_mixed_coverage_interleaves_gap_beats_with_covered_ones() {
         dir,
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{addr}"),
+            url: Some(format!("http://{addr}")),
             token_file: None,
             public_url: None,
         },
@@ -1210,7 +1210,7 @@ async fn provenance_report_counts_match_a_hand_built_fixture_history() {
         dir,
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{addr}"),
+            url: Some(format!("http://{addr}")),
             token_file: None,
             public_url: None,
         },

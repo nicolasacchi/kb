@@ -65,12 +65,10 @@ async fn boot_serves_identity_and_healthz() {
     assert!(body["version"].as_str().is_some());
     assert!(body["started_at"].as_str().is_some());
     assert_eq!(body["repos"].as_array().map(|a| a.len()), Some(0));
-    // No `[kb_daemon] public_url` configured — `kb_public_url` falls back
-    // to the federation `url`'s own default (`KbDaemonSection::DEFAULT_URL`).
-    assert_eq!(
-        body["kb_public_url"].as_str(),
-        Some("http://127.0.0.1:4000")
-    );
+    // V76-R4f — no `[kb_daemon]` section ⇒ the sibling is DISABLED and
+    // `kb_public_url` is empty: a daemon never assumes a sibling address.
+    assert_eq!(body["kb_public_url"].as_str(), Some(""));
+    assert_eq!(body["kb_daemon_enabled"].as_bool(), Some(false));
     // invariant:2 kb-sibling/1 Hello — kb-code mirrors kb's identity
     // fields so the contract is checkable in BOTH directions.
     assert_eq!(body["sibling_protocol"].as_str(), Some("kb-sibling/1"));
@@ -148,7 +146,7 @@ async fn identity_reports_configured_kb_public_url() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = KbCodeConfig {
         kb_daemon: kb_code_server::config::KbDaemonSection {
-            url: "http://kb:4000".to_string(),
+            url: Some("http://kb:4000".to_string()),
             public_url: Some("https://kb.example.com".to_string()),
             ..kb_code_server::config::KbDaemonSection::default()
         },

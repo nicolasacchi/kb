@@ -408,9 +408,7 @@ async fn boot_at(
             .collect(),
         kb_daemon: KbDaemonSection {
             enabled: kb_addr.is_some(),
-            url: kb_addr
-                .map(|a| format!("http://{a}"))
-                .unwrap_or_else(|| "http://127.0.0.1:0".to_string()),
+            url: kb_addr.map(|a| format!("http://{a}")),
             token_file: None,
             // Pinned so `doc_href` is deterministic in the wire assertions.
             public_url: Some("https://kb.example.com".to_string()),

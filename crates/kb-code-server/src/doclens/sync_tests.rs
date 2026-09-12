@@ -391,7 +391,7 @@ async fn fixture(docs: Vec<Value>, page_size: usize, kbs: &[&str], batch_cap: us
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,
-            url: format!("http://{addr}"),
+            url: Some(format!("http://{addr}")),
             token_file: None,
             // Pinned so `doc_public_href` is deterministic.
             public_url: Some("https://kb.example.com".to_string()),
