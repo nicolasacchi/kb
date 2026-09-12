@@ -109,12 +109,13 @@ exceptions = [
 [bans]
 # Multiple-version policy — V76-R4c (DEP-LOCKSTEP): flipped warn → deny.
 # Every remaining duplicate is transitive-only (no kb Cargo.toml edge can
-# collapse it) and carries a one-line root cause below. The two kb-side
-# majors that COULD collapse a cluster but are real migrations, not bumps,
-# are deferred with their own units named: toml 0.8→1.x (toml_edit
-# 0.22→0.25 + winnow + toml_datetime follow) and mdns-sd 0.13→0.21
-# (socket2 0.5 follows); reqwest 0.12→0.13 is BLOCKED by
-# reqwest-eventsource 0.6 (requires reqwest ^0.12).
+# collapse it) and carries a one-line root cause below. V76-R4e collapsed
+# the three deferred kb-side majors: toml 0.8→1.1 (toml_edit 0.22→0.25 +
+# refinery 0.8→0.9; winnow/toml_datetime/serde_spanned followed out of the
+# graph), mdns-sd 0.13→0.21 (socket2 0.5 left the graph), and reqwest
+# 0.12→0.13 on kb's direct edge (the last reqwest-eventsource 0.6 call
+# site moved to kb-cli's in-house SSE parser; 0.12 stays transitive-only
+# via goosefs-sdk, see below).
 multiple-versions = "deny"
 wildcards = "allow"
 deny = []
@@ -165,7 +166,7 @@ skip = [
     { crate = "itertools", version = "0.10.5", reason = "criterion (dev-only)" },
     { crate = "itertools", version = "0.11.0", reason = "earcutr (geo chain)" },
     { crate = "ndarray", version = "0.16.1", reason = "lance-index 11 (fastembed/ort use 0.17)" },
-    { crate = "nom", version = "7.1.3", reason = "eventsource-stream / spm_precompiled" },
+    { crate = "nom", version = "7.1.3", reason = "spm_precompiled (tokenizer chain)" },
     { crate = "phf", version = "0.12.1", reason = "chrono-tz 0.10" },
     { crate = "phf_shared", version = "0.12.1", reason = "via phf 0.12" },
     { crate = "quick-xml", version = "0.39.4", reason = "object_store 0.13" },
@@ -177,23 +178,18 @@ skip = [
     { crate = "rand_chacha", version = "0.3.1", reason = "via rand 0.8" },
     { crate = "rand_core", version = "0.6.4", reason = "via rand 0.8" },
     { crate = "rand_core", version = "0.9.5", reason = "getrandom 0.3 / tokenizers" },
-    # reqwest: kb pins 0.12 — reqwest-eventsource 0.6 requires ^0.12, so the
-    # bump to 0.13 waits for an eventsource release; 0.13.5 enters via
-    # opendal-http-transport-reqwest / xet-client regardless.
-    { crate = "reqwest", version = "0.13.5", reason = "opendal 0.58 / xet (kb is on 0.12)" },
-    { crate = "wasm-streams", version = "0.5.0", reason = "follows reqwest 0.13" },
+    # reqwest: kb's direct edge is on 0.13 (V76-R4e; reqwest-eventsource 0.6
+    # dropped for kb-cli's in-house SSE parser). 0.12.28 stays transitive-only
+    # via goosefs-sdk → opendal-service-goosefs → opendal 0.58 (lance-io) —
+    # unmovable without moving the lance set.
+    { crate = "reqwest", version = "0.12.28", reason = "goosefs-sdk via opendal 0.58 (lance-io)" },
+    { crate = "wasm-streams", version = "0.4.2", reason = "follows reqwest 0.12 (goosefs-sdk)" },
     { crate = "snafu", version = "0.8.9", reason = "lancedb 0.38 (lance uses 0.9)" },
     { crate = "snafu-derive", version = "0.8.9", reason = "via snafu 0.8" },
-    { crate = "socket2", version = "0.5.10", reason = "mdns-sd 0.13 (0.13→0.21 is its own unit)" },
     { crate = "spin", version = "0.9.9", reason = "flume / lazy_static / multer" },
     { crate = "syn", version = "2.0.117", reason = "proc-macro ecosystem split (3.0 via bytemuck/clap_derive)" },
     { crate = "thiserror", version = "1.0.69", reason = "geoarrow-schema / protobuf" },
     { crate = "thiserror-impl", version = "1.0.69", reason = "via thiserror 1" },
-    # toml: kb pins toml 0.8 / toml_edit 0.22; 0.25 enters via
-    # proc-macro-crate 3.5 (build-time). toml 1.x migration is its own unit.
-    { crate = "toml_datetime", version = "1.1.1+spec-1.1.0", reason = "via toml_edit 0.25 (proc-macro-crate)" },
-    { crate = "toml_edit", version = "0.25.15+spec-1.1.0", reason = "proc-macro-crate 3.5" },
-    { crate = "winnow", version = "1.0.4", reason = "via toml_edit 0.25" },
     { crate = "wasi", version = "0.11.1+wasi-snapshot-preview1", reason = "getrandom 0.2 / mio" },
     # windows platform crates: 0.52.6 family via tokio/mio-era consumers,
     # 0.53.x via windows-sys 0.60/0.61.

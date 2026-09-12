@@ -48,7 +48,6 @@ ts-rs = { workspace = true, optional = true }
 ts-export = ["dep:ts-rs", "kb-core/ts-export"]
 
 [dev-dependencies]
-reqwest-eventsource = { workspace = true }
 tempfile = { workspace = true }
 # kb-sibling/1 — the boot-guard test fabricates a `refinery_schema_history`
 # row a NEWER binary would have left (migrations are immutable, so the

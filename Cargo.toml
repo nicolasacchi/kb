@@ -59,7 +59,11 @@ arrow = "=58.4.0"
 arrow-array = "=58.4.0"
 arrow-schema = "=58.4.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
-refinery = { version = "0.8", features = ["rusqlite"] }
+# refinery 0.9 (V76-R4e): refinery-core 0.9.2 moved to toml 1.1, collapsing
+# the old toml 0.8/toml_edit 0.22/winnow 0.7 chain refinery 0.8 dragged in.
+# kb's surface (embed_migrations!, Runner, refinery_schema_history,
+# rusqlite 0.32 ≤ its 0.39 ceiling) is untouched by the 0.9 breaking set.
+refinery = { version = "0.9", features = ["rusqlite"] }
 
 # Embeddings — fastembed with a statically-bundled ONNX Runtime (per topic 02
 # §Decisions + spike-fastembed findings: fp32 default, model cache set
@@ -106,8 +110,13 @@ directories = "6"
 proptest = "1"
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "multipart"] }
-reqwest-eventsource = "0.6"
+# reqwest 0.13 (V76-R4e): reqwest-eventsource 0.6 pinned us to ^0.12; the
+# one call site (`kb doctor`'s event-bus probe) now uses kb-cli's in-house
+# SSE parser (crates/kb-cli/src/sse.rs) over reqwest's byte stream.
+# 0.13 renamed `rustls-tls` → `rustls` (aws-lc-rs provider +
+# rustls-platform-verifier / OS trust store instead of 0.12's ring +
+# bundled webpki-roots — both already in the graph via opendal/xet).
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "multipart", "query", "form"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -138,14 +147,18 @@ hex = "0.4"
 # Both already in the graph (base64 via reqwest/datafusion, blake3 via lance).
 base64 = "0.22"
 blake3 = "1"
-toml = "0.8"
+toml = "1"
 # Format-preserving TOML editor — kb-server's PATCH /api/config splices
 # individual fields without clobbering the operator's comments/ordering.
-# Matches the version toml 0.8 already pulls into the lock (0.22.x).
-toml_edit = "0.22"
+# toml 1.x no longer re-exports toml_edit; 0.25 matches the version
+# proc-macro-crate 3.5 already pulls into the lock (V76-R4e). The `serde`
+# feature (for `toml_edit::ser::to_document`) used to ride in on toml
+# 0.8's own toml_edit edge — now that toml 1.x dropped that dependency,
+# we enable it directly.
+toml_edit = { version = "0.25", features = ["serde"] }
 regex = "1"
 getrandom = "0.4"
-mdns-sd = "0.13"
+mdns-sd = "0.21"
 
 # Text diffing for the artifact version timeline (Track V) — line-level
 # grouping over extracted prose / raw source.
