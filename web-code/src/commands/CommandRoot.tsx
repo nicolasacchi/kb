@@ -487,6 +487,24 @@ export default function CommandRoot({ children }: { children: React.ReactNode })
             if (map[command.id]) handler = map[command.id];
           }
           if (!handler) return; // nothing owns it here — leave the key alone
+          // V76-R4d.4 — stand down when a layer that runs BEFORE this window
+          // listener already consumed the keystroke. The CM6 vim keymap
+          // (`vimReader.ts`, `Prec.highest`) marks what it ate with
+          // `preventDefault()` but — unlike every other layer — does NOT
+          // `stopPropagation()`, so the event still reaches this listener:
+          // the `c` of vim's `gc` (`hierarchy.callers`, vim_kind) ALSO
+          // resolved here to `reader.compare` (bare `c`, reader scope, no
+          // vim_kind, so guard 2 lets it through) and fired twice — one
+          // keystroke, two owners (`hierarchy.spec.ts`). A blanket
+          // `stopPropagation()` in the vim layer was considered and rejected:
+          // `[`/`]` are prefixed by BOTH layers (vim's `[c`/`[f`, central's
+          // `[d`/`]d` `drawer.tab-prev/next`) and killing propagation at the
+          // first token would strand central's half of the shared prefix.
+          // Honouring `defaultPrevented` is safe for those chords: vim's
+          // `chordWillConsume` stand-down deliberately leaves a central
+          // chord's continuation keystroke UN-prevented, so `[d` still
+          // reaches the handler below exactly once.
+          if (e.defaultPrevented) return; // the vim layer already ate this key
           e.preventDefault();
           handler({ command, count });
           return;
