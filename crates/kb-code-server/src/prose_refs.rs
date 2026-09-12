@@ -128,7 +128,9 @@ pub const STATE_ORPHAN: &str = "orphan";
 
 /// A `[start, end)` span into the field text, in UTF-16 code units (see the
 /// module doc for why not bytes).
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+// Exported as `ProseSpan`: `highlight::Span` already owns `Span.ts` in the
+// generated dir and ts-rs writes one file per exported NAME.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export, rename = "ProseSpan"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,
