@@ -128,6 +128,7 @@ pub const STATE_ORPHAN: &str = "orphan";
 
 /// A `[start, end)` span into the field text, in UTF-16 code units (see the
 /// module doc for why not bytes).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,
@@ -138,6 +139,7 @@ pub struct Span {
 /// (`path`/`line_*`/`lines`/`container`/`member`/`slug`) are set only where
 /// the kind uses them; `resolution` is absent for kinds that never resolve
 /// (`code`) and for a `call` with no candidate at all.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProseRef {
     /// `path` | `symbol` | `finding` | `code` | `call`.
@@ -146,21 +148,29 @@ pub struct ProseRef {
     /// The span's text, verbatim.
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line_start: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line_end: Option<u32>,
     /// The normalized comma list for a `:a,b-c,…` suffix (`"57,60-66"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub lines: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub container: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub member: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub slug: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub resolution: Option<RefResolution>,
 }
 
@@ -168,20 +178,26 @@ pub struct ProseRef {
 /// target when one is known; `ent` is the entity FQN a const hint resolved
 /// through (the SPA links those to the entity dossier); `caption` is the
 /// honest reason for any non-`exact` state.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefResolution {
     /// `exact` | `likely` | `candidate` | `orphan`.
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub path: Option<String>,
     /// Pinned commit for a review path; omitted for current-mirror refs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub r#ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub ent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub caption: Option<String>,
 }
 
@@ -210,6 +226,7 @@ impl RefResolution {
 }
 
 /// One prose field's refs, exactly as served beside the field on the wire.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FieldRefs {
     pub refs: Vec<ProseRef>,

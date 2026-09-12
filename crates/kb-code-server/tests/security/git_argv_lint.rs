@@ -101,6 +101,10 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "history/commit.rs",
     "history/compare.rs",
     "history/file_history.rs",
+    // V76-R3d — production code spawns nothing (`run_git_raw`); the only
+    // `Command::new("git")` is the `#[cfg(test)]` fixture helper aliased
+    // as `StdCommand` (the `file_history.rs` case). Pathspecs go after `--`.
+    "history/scrub.rs",
     "history/merge_check.rs",
     "history/mod.rs",
     // V75-M3's conflict radar. It spawns `git` directly for the same
@@ -307,5 +311,25 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
     assert!(
         wt.contains("args.push(\"--\");args.push(path_s.as_ref());"),
         "worktrees::run_git_path must push `--` immediately before its caller-supplied path"
+    );
+
+    // V76-R3d — `history/scrub.rs` takes a caller-supplied PATH into
+    // `git log --follow … -- <path>` (one walk, `collect_stops`). The
+    // floor is derived from that walk (`file_floor(stops: &[Stop])`), so
+    // there is no second git invocation to lint — pin that it stays pure.
+    let scrub = std::fs::read_to_string(src_root().join("history/scrub.rs")).unwrap();
+    let sep = scrub
+        .find("args.push(\"--\");")
+        .expect("collect_stops separates its pathspec with `--`");
+    let path_push = scrub
+        .find("args.push(path);")
+        .expect("collect_stops pushes the pathspec");
+    assert!(
+        sep < path_push,
+        "collect_stops must push `--` BEFORE the pathspec"
+    );
+    assert!(
+        scrub.contains("fn file_floor(stops: &[Stop])"),
+        "file_floor must derive the floor from the followed walk, never a second git call"
     );
 }

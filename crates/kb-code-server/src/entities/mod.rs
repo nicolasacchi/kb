@@ -869,6 +869,8 @@ mod tests {
             // V76-R3b — the worktree list. Path-param reads and the
             // loopback mutations are absent (same reason as boards').
             .chain(crate::worktrees::V76_R3B_ROUTES.iter())
+            // V76-R3d — scrub/1 stops + at.
+            .chain(crate::history::scrub::V76_R3D_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`. The JSON body IS the
             // contract; `params_accept_without` deserialises it so a
             // required field the CLI omits still fails HERE, by name.

@@ -3230,6 +3230,35 @@ rather than silently substitute. V76-R3c (M4) **consumes** the table:
   never hand-written. Compare `c` opens pane 2 on the same path at the
   other ref and reuses `DiffView`.
 
+### Time scrubber (`scrub/1`, V76-R3d)
+
+File-scoped v1. Stops are the commits that touched the file (`git log
+--follow` through the argv discipline: `--` before the pathspec). The
+label is always **nearest-prior** (`exact` only on a same-second hit). An
+instant older than the oldest stop is a **miss naming the floor** — never
+a silent degrade to the oldest (the same `resolve_as_of` posture as
+kb invariant #14).
+
+* `GET /api/file/stops?repo=&path=&limit=&before=` → `{schema:"scrub/1",
+  stops:[{sha, when, author_kind, subject, insertions, deletions, path,
+  renamed_from?}], total, truncated, floor:{sha, when}}`. `author_kind`
+  is D18 provenance (`exact` / `likely` / `none`). `--follow` renames are
+  captioned on the stop that performed them (`renamed_from`). `limit`
+  defaults to 100, cap 500 — over-cap **refuses with the numbers** rather
+  than clamping. A file with more than 2000 stops is refused the same
+  way. `total` is the true filtered count; `floor` is the oldest stop of
+  the file (unfiltered). CLI: `kb-code stops PATH --repo NAME`.
+* `GET /api/file/at?repo=&path=&at=<unix>` resolves the nearest-prior
+  stop (`resolution: nearest-prior|exact`) and returns the blob via the
+  R3c file-at-ref path (`encoding`/`content`/`frame` from
+  `file_at_ref`). A miss is `404` `urn:kb:errors:before-floor` naming the
+  floor. After a rename, the blob is read at the **historical path**
+  (`stop.path`). CLI: `kb-code cat PATH --repo NAME --at UNIX`.
+* SPA: a non-landmark strip in the reader (`Space H` toggles; `[ H` /
+  `] H` step; drag ticks/slider). Scrubbing re-reads through `?ref=` so
+  line/scroll hold. The chip shows the scrubbed ref. Esc does not
+  navigate (D2) — a "working tree" action clears `?ref=`.
+
 ### The migration treatment: backup, epoch, rehearsal
 
 A schema epoch is a **one-way door** for a volume: `kb_core::sibling::

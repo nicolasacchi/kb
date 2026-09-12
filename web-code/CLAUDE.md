@@ -278,6 +278,39 @@ is a hard-reserved browser chord and must not be claimed. Bare `c`
 (`reader.compare`) toggles pane 2 onto the same path at the other ref;
 it is ratified against `diff.compose-new`.
 
+## Time scrubber (V76-R3d, `scrub/1`)
+
+File-scoped: stops are the commits that touched the open file (`GET
+/api/file/stops`). The pick is always nearest-prior (`exact` only on a
+same-second hit). An instant older than the oldest stop is a miss naming
+the floor — never a silent degrade to the oldest. Pure pick/label/step
+live in `lib/scrub.ts` (golden-pinned); the strip is
+`components/scrub/ScrubberStrip.tsx`.
+
+**It re-reads through `@ref`.** Stepping to a stop calls the same
+`applyRef(sha)` `Space @` uses, so `?line=` / scroll / the CodeView
+instance hold. The TopBar chip shows the scrubbed ref because the URL
+carries `?ref=`. A miss does not change the URL (the buffer stays on the
+oldest stop); the strip's label says `before the floor (<oldest>)`.
+
+**The strip is not a landmark.** It is a `div` inside `<main>` (absolute
+footer of `.kbc-reader__main`). Do not promote it to `<nav>`/`<footer>`
+— `e2e/regions.spec.ts` pins the reader-file landmark shell.
+
+**Keys.** `Space t` is `view.theme-cycle` (vim/helix), so `Space t s` is a
+shadowed prefix — the class `commands doctor` cannot see. The toggle is
+`Space H` (`reader.scrub-toggle`, global, `when: center == reader`).
+Bare `[`/`]` would shadow the mixed-prefix family (`[ d`, `[ c`, …);
+lowercase `h` is `move.left`, so step is `[ H` / `] H` (same letter as
+the toggle, not a vim motion), gated on `reader.scrub` so the prefix is
+inert while the strip is closed. No `vim_kind` (mixed-prefix precedent).
+**Esc never
+navigates (D2)** — the strip's "working tree" button runs
+`reader.ref-clear`. `commands/scrub.test.ts` is the prefix scan.
+
+**Drag** is the range slider (or a tick click). Density is one tick per
+stop; above 48 stops a slider replaces the ticks.
+
 `nav/history.ts` provides the two router adapters (Navigation API where
 present — Chrome/Edge 102+, Firefox 145+ — falling back to the History API)
 behind one interface: **in-app Back IS the browser's Back.** There is no
