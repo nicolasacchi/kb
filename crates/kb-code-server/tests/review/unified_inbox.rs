@@ -32,7 +32,7 @@ async fn boot(repos: Vec<RepoEntry>, kb_daemon: KbDaemonSection) -> (tempfile::T
 fn disabled_kb_daemon() -> KbDaemonSection {
     KbDaemonSection {
         enabled: false,
-        url: "http://127.0.0.1:0".to_string(),
+        url: Some("http://127.0.0.1:0".to_string()),
         token_file: None,
         public_url: None,
     }
@@ -336,7 +336,7 @@ async fn unified_inbox_kb_lane_reports_unreachable_when_the_kb_daemon_is_down() 
         }],
         KbDaemonSection {
             enabled: true,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         },
@@ -388,7 +388,7 @@ async fn unified_inbox_kb_lane_reports_sibling_mismatch() {
         }],
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{mock_addr}"),
+            url: Some(format!("http://{mock_addr}")),
             token_file: None,
             public_url: None,
         },
@@ -479,7 +479,7 @@ async fn unified_inbox_kb_lane_relays_and_truncates_at_fifty() {
         }],
         KbDaemonSection {
             enabled: true,
-            url: format!("http://{mock_addr}"),
+            url: Some(format!("http://{mock_addr}")),
             token_file: None,
             public_url: None,
         },

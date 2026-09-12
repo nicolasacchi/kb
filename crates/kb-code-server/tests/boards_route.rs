@@ -62,7 +62,7 @@ async fn boot_with_review(name: &str, path: &Path, review: ReviewSection) -> Boo
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,
-            url: "http://127.0.0.1:0".to_string(),
+            url: Some("http://127.0.0.1:0".to_string()),
             token_file: None,
             public_url: None,
         },

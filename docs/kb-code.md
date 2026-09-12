@@ -445,6 +445,19 @@ by design. SPA: `/~inbox` (kb items aren't repo-scoped, so it's a SIBLING
 of Home, not nested under `/r/:repo/~…`), badge = reviews.length +
 annotations.length (+ kb attention when available).
 
+**`[kb_daemon]` is DISABLED unless configured (V76-R4f).** `enabled`
+defaults to `url.is_some()` — a fresh or throwaway `kb-code.toml` with no
+`[kb_daemon]` section (or an empty one) never federates against a kb
+daemon at all, closing the footgun where a bare `[[repos]]`-only install
+used to inherit kb's own default bind (`127.0.0.1:4000`) and quietly reach
+for whatever was listening there. Writing `enabled = true` with no `url`
+refuses to boot, naming `kb_daemon.url`. See
+[configuration.md's `[kb_daemon]`](configuration.md#kb_daemon) for the full
+resolution table — every kb-federated lane above (sessions search, `why`/
+`story` provenance, this inbox's kb lane) already answers the `disabled`
+reason honestly, so it is simply reached far more often now that it is the
+default rather than an explicit opt-out.
+
 **LSP quick fixes.** `kb-code code-actions PATH:LINE[:COL] [--end
 LINE[:COL]] --repo NAME [--kinds a,b] [--suggest N] [--json]` (`POST
 /api/code-actions`, `code-actions/1`, ordinary `auth_bearer` read) lists

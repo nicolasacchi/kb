@@ -50,7 +50,7 @@ fn fixture_repo() -> tempfile::TempDir {
 fn disabled_kb_daemon() -> KbDaemonSection {
     KbDaemonSection {
         enabled: false,
-        url: "http://127.0.0.1:0".to_string(),
+        url: Some("http://127.0.0.1:0".to_string()),
         token_file: None,
         public_url: None,
     }
@@ -106,7 +106,7 @@ async fn boot_from_doc(repo_name: &str, repo_path: &Path, kb_addr: SocketAddr) -
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,
-            url: format!("http://{kb_addr}"),
+            url: Some(format!("http://{kb_addr}")),
             token_file: None,
             public_url: None,
         },

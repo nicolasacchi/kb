@@ -939,16 +939,57 @@ impl Default for TranscriptsSection {
 /// workspace, `crates/kb-server`) owns the session digests kb-code has no
 /// copy of and never will (R1's "sessions are episodic memory, PULL-only" —
 /// kb-code borrows the surface over HTTP rather than re-indexing anything).
-/// On by default, pointed at kb's OWN documented default bind
-/// (`kb_server::state`'s `127.0.0.1:4000`) — a fresh kb-code install next to
-/// a fresh kb install federates with zero config, exactly like
-/// `[transcripts]`'s zero-config default.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// **V76-R4f amendment (2026-09, E6 finding):** DISABLED unless the operator
+/// configures `url`. This section used to be on by default, pointed at kb's
+/// OWN documented default bind (`127.0.0.1:4000`) — convenient for the
+/// native side-by-side install this section was designed for, but a
+/// footgun for anything else: a throwaway/local kb-code daemon started with
+/// a minimal `[[repos]]`-only toml had no way to say "there is no kb here"
+/// and would quietly federate against whatever happened to be listening on
+/// port 4000 on that box — in the E6 measurement, the operator's own
+/// PRODUCTION kb, hit by ~1,500 read-only sibling lookups from one `kb-code
+/// why` run (harmless only by luck of auth). `enabled` therefore has no
+/// static default of its own — it resolves from what the operator actually
+/// wrote, via [`RawKbDaemonSection`]'s `TryFrom`:
+///
+/// | `enabled` in toml | `url` in toml | resolved `enabled` |
+/// |---|---|---|
+/// | absent            | absent        | `false` |
+/// | absent            | set           | `true` |
+/// | `true`            | absent        | **boot error**, names `kb_daemon.url` |
+/// | `true`            | set           | `true` |
+/// | `false`           | absent/set    | `false` |
+///
+/// i.e. `enabled` defaults to `url.is_some()`, and an operator who writes
+/// `enabled = true` with no `url` gets a loud parse-time error rather than a
+/// daemon that silently reaches for `127.0.0.1:4000` — the exact footgun
+/// this amendment closes. A PRODUCTION deployment's `kb-code.toml` already
+/// sets `url` explicitly (it always has, to name its own kb's address), so
+/// this amendment changes nothing there — only a fresh or throwaway install
+/// that never configured the section at all.
+///
+/// Every consumer of [`crate::join::kb_client::KbClient`] (and
+/// `search::sessions::search`, which takes a `&KbDaemonSection` directly)
+/// already treats `enabled = false` as a first-class state — that predates
+/// this amendment, from the days an operator could opt out by hand — so
+/// every method short-circuits on its own "disabled" error variant BEFORE
+/// ever touching `url`, and degrades the caller's response honestly (an
+/// additive reason beside the existing "unreachable" shape) rather than
+/// 500ing or silently returning empty.
+// `Default` = disabled, no url — the four-case table's "operator wrote
+// nothing" row (V76-R4f).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RawKbDaemonSection")]
 pub struct KbDaemonSection {
-    #[serde(default = "KbDaemonSection::default_enabled")]
     pub enabled: bool,
-    #[serde(default = "KbDaemonSection::default_url")]
-    pub url: String,
+    /// The federation target. `None` unless the operator configured one.
+    /// Every real call site reads this ONLY after checking `enabled` is
+    /// `true`, which the `TryFrom` below guarantees means `url` came from
+    /// the operator's own toml (`url_str` exists for that reason — see its
+    /// doc for the one case, a hand-built literal, that guarantee doesn't
+    /// reach).
+    pub url: Option<String>,
     /// Path to a file holding kb's bearer token (e.g.
     /// `~/.config/kb/token`) — the FILE path lives in config, never the
     /// secret itself (same convention as kb's own deploy tooling). Needed
@@ -958,7 +999,6 @@ pub struct KbDaemonSection {
     /// federation call 401s. `None` (the default) sends no Authorization
     /// header — correct for the native side-by-side install where both
     /// daemons share the host loopback.
-    #[serde(default)]
     pub token_file: Option<PathBuf>,
     /// The BROWSER-facing base URL for links kb-code's UI builds into kb's
     /// OWN SPA (e.g. session digest permalinks — `web-code/src/lib/
@@ -971,20 +1011,61 @@ pub struct KbDaemonSection {
     /// federation call resolves fine but a browser never can, so the link
     /// base has to be a distinct, publicly-routable URL (e.g.
     /// `https://kb.example.com`).
-    #[serde(default)]
     pub public_url: Option<String>,
 }
 
+/// Raw TOML shape for `[kb_daemon]`, deserialized BEFORE default
+/// resolution — see [`KbDaemonSection`]'s struct doc for the table
+/// [`TryFrom`] below implements. `enabled: Option<bool>` (rather than
+/// `KbDaemonSection`'s plain `bool`) is the whole point: it is what lets
+/// "the operator wrote nothing" (`None`) and "the operator wrote `enabled =
+/// false`" (`Some(false)`) stay distinguishable, which a plain `bool` field
+/// structurally cannot do and which the V76-R4f default rule needs.
+#[derive(Debug, Deserialize)]
+struct RawKbDaemonSection {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    token_file: Option<PathBuf>,
+    #[serde(default)]
+    public_url: Option<String>,
+}
+
+impl TryFrom<RawKbDaemonSection> for KbDaemonSection {
+    type Error = String;
+
+    fn try_from(raw: RawKbDaemonSection) -> std::result::Result<Self, Self::Error> {
+        let enabled = match raw.enabled {
+            Some(true) if raw.url.is_none() => {
+                return Err(
+                    "[kb_daemon] enabled = true requires kb_daemon.url to be set — a \
+                     kb-code daemon never federates against a kb daemon unless the \
+                     operator names one explicitly (see docs/configuration.md's \
+                     [kb_daemon] section)"
+                        .to_string(),
+                );
+            }
+            Some(explicit) => explicit,
+            None => raw.url.is_some(),
+        };
+        Ok(Self {
+            enabled,
+            url: raw.url,
+            token_file: raw.token_file,
+            public_url: raw.public_url,
+        })
+    }
+}
+
 impl KbDaemonSection {
+    /// The conventional value a native side-by-side install's `url` takes
+    /// (kb's own documented default bind) — a worked example for docs/
+    /// tests, NOT a value this struct ever falls back to on its own (see
+    /// the struct doc's V76-R4f amendment: an unconfigured `url` means
+    /// `enabled = false`, never a guessed address).
     pub const DEFAULT_URL: &'static str = "http://127.0.0.1:4000";
-
-    fn default_enabled() -> bool {
-        true
-    }
-
-    fn default_url() -> String {
-        Self::DEFAULT_URL.to_string()
-    }
 
     /// Read + trim the bearer token from `token_file`. `None` when unset,
     /// unreadable, or empty — every failure degrades to the token-less
@@ -1002,23 +1083,28 @@ impl KbDaemonSection {
         }
     }
 
-    /// Resolve the browser-facing base URL for links into kb's SPA:
-    /// `public_url` if the operator set one, else `url` (see
-    /// `public_url`'s doc for why the fallback is correct for the native
-    /// install but wrong for a hosted/container deployment).
-    pub fn public_base(&self) -> &str {
-        self.public_url.as_deref().unwrap_or(&self.url)
+    /// The configured federation target, or `""` when none is set. Every
+    /// real caller reads this only once `enabled` is known `true`, which —
+    /// reached through the parse path above — guarantees `url` is `Some`;
+    /// the empty-string fallback exists only so a hand-built `enabled:
+    /// true, url: None` test literal (not reachable through `TryFrom`)
+    /// degrades to an honest `Unreachable`/`BadStatus` request rather than
+    /// panicking.
+    pub fn url_str(&self) -> &str {
+        self.url.as_deref().unwrap_or("")
     }
-}
 
-impl Default for KbDaemonSection {
-    fn default() -> Self {
-        Self {
-            enabled: Self::default_enabled(),
-            url: Self::default_url(),
-            token_file: None,
-            public_url: None,
-        }
+    /// Resolve the browser-facing base URL for links into kb's SPA:
+    /// `public_url` if the operator set one, else `url` if configured, else
+    /// `""` (nothing to link to — the section is disabled and
+    /// unconfigured). See `public_url`'s doc for why the fallback to `url`
+    /// is correct for the native install but wrong for a hosted/container
+    /// deployment.
+    pub fn public_base(&self) -> &str {
+        self.public_url
+            .as_deref()
+            .or(self.url.as_deref())
+            .unwrap_or("")
     }
 }
 
@@ -1096,8 +1182,9 @@ impl Default for BackfillSection {
 /// `refs/kbc/pr/<n>` ref-fetch. Every field optional/defaulted — a fresh
 /// kb-code install with no `[github]` section at all still works
 /// unauthenticated against the real API for a public repo (a lower rate
-/// limit, same shape), same "zero-config default" posture as
-/// `[transcripts]`/`[kb_daemon]`.
+/// limit, same shape), same "an absent section still resolves to a sane,
+/// fully-defaulted value" posture as `[transcripts]` (on by default) and
+/// `[kb_daemon]` (off by default, see that struct's V76-R4f doc).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GithubSection {
     /// Path to a file holding a GitHub personal access token — same
@@ -1593,8 +1680,11 @@ mod tests {
         assert!(cfg.transcripts.index_thinking);
         assert!(cfg.occurrences.enabled);
         assert!(cfg.occurrences.disabled_repos.is_empty());
-        assert!(cfg.kb_daemon.enabled);
-        assert_eq!(cfg.kb_daemon.url, KbDaemonSection::DEFAULT_URL);
+        // V76-R4f — DISABLED unless the operator configures a url (a
+        // minimal `[[repos]]`-only toml must never federate against a live
+        // kb it was never pointed at).
+        assert!(!cfg.kb_daemon.enabled);
+        assert!(cfg.kb_daemon.url.is_none());
         assert_eq!(cfg.backfill.depth, BackfillSection::DEFAULT_DEPTH);
         assert!(!cfg.backfill.on_boot);
         assert!(cfg.github.token_file.is_none());
@@ -1810,8 +1900,67 @@ mod tests {
         }
     }
 
+    // V76-R4f — `[kb_daemon]` is DISABLED unless the operator configures a
+    // `url`; the four resolution cases from the struct doc's table, each
+    // pinned as its own test so a future regression names the exact case.
+
+    /// (a) No section at all ⇒ disabled, no url. Covered again (with a
+    /// couple of sibling fields) by `minimal_config_uses_defaults` above;
+    /// this is the dedicated, `[kb_daemon]`-focused pin.
     #[test]
-    fn kb_daemon_section_parses_and_defaults() {
+    fn kb_daemon_absent_section_is_disabled_with_no_url() {
+        let cfg = KbCodeConfig::from_toml_str("").unwrap();
+        assert!(!cfg.kb_daemon.enabled);
+        assert!(cfg.kb_daemon.url.is_none());
+    }
+
+    /// (a′) An explicitly-present-but-EMPTY `[kb_daemon]` table resolves
+    /// identically to an absent section — the raw shape's `enabled: None`
+    /// path is reached either way.
+    #[test]
+    fn kb_daemon_empty_section_is_disabled_with_no_url() {
+        let cfg = KbCodeConfig::from_toml_str("[kb_daemon]\n").unwrap();
+        assert!(!cfg.kb_daemon.enabled);
+        assert!(cfg.kb_daemon.url.is_none());
+    }
+
+    /// (b) `url` only, no `enabled` ⇒ `enabled` defaults to `url.is_some()`.
+    #[test]
+    fn kb_daemon_url_only_defaults_enabled_to_true() {
+        let cfg = KbCodeConfig::from_toml_str(
+            r#"
+            [kb_daemon]
+            url = "http://127.0.0.1:5999"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.kb_daemon.enabled);
+        assert_eq!(cfg.kb_daemon.url.as_deref(), Some("http://127.0.0.1:5999"));
+    }
+
+    /// (c) `enabled = true` with no `url` ⇒ a boot error naming
+    /// `kb_daemon.url`, never a silent fall-back to the old
+    /// `127.0.0.1:4000` default.
+    #[test]
+    fn kb_daemon_enabled_true_without_url_is_a_boot_error_naming_the_key() {
+        let err = KbCodeConfig::from_toml_str(
+            r#"
+            [kb_daemon]
+            enabled = true
+            "#,
+        )
+        .expect_err("enabled=true with no url must refuse to parse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("kb_daemon.url"),
+            "error must name kb_daemon.url, got: {msg}"
+        );
+    }
+
+    /// (d) `enabled = false` with a `url` still configured ⇒ stays off —
+    /// an explicit opt-out is never overridden by the url's presence.
+    #[test]
+    fn kb_daemon_enabled_false_with_url_stays_disabled() {
         let cfg = KbCodeConfig::from_toml_str(
             r#"
             [kb_daemon]
@@ -1821,11 +1970,7 @@ mod tests {
         )
         .unwrap();
         assert!(!cfg.kb_daemon.enabled);
-        assert_eq!(cfg.kb_daemon.url, "http://127.0.0.1:5999");
-
-        let default = KbCodeConfig::from_toml_str("").unwrap();
-        assert!(default.kb_daemon.enabled);
-        assert_eq!(default.kb_daemon.url, "http://127.0.0.1:4000");
+        assert_eq!(cfg.kb_daemon.url.as_deref(), Some("http://127.0.0.1:5999"));
     }
 
     #[test]
@@ -2077,21 +2222,31 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.kb_daemon.url, "http://kb:4000");
+        assert_eq!(cfg.kb_daemon.url.as_deref(), Some("http://kb:4000"));
         assert_eq!(
             cfg.kb_daemon.public_url.as_deref(),
             Some("https://kb.example.com")
         );
         assert_eq!(cfg.kb_daemon.public_base(), "https://kb.example.com");
 
-        // Default: no public_url set, public_base falls back to url — the
-        // native side-by-side install shape.
+        // `url` set, no `public_url` — falls back to `url` (the native
+        // side-by-side install shape).
+        let url_only = KbCodeConfig::from_toml_str(
+            r#"
+            [kb_daemon]
+            url = "http://kb:4000"
+            "#,
+        )
+        .unwrap();
+        assert!(url_only.kb_daemon.public_url.is_none());
+        assert_eq!(url_only.kb_daemon.public_base(), "http://kb:4000");
+
+        // V76-R4f — a totally unconfigured section has nothing to link to;
+        // `public_base` is an honest empty string, never a guessed address.
         let default = KbCodeConfig::from_toml_str("").unwrap();
         assert!(default.kb_daemon.public_url.is_none());
-        assert_eq!(
-            default.kb_daemon.public_base(),
-            KbDaemonSection::DEFAULT_URL
-        );
+        assert!(default.kb_daemon.url.is_none());
+        assert_eq!(default.kb_daemon.public_base(), "");
     }
 
     fn git_init(dir: &Path) {
