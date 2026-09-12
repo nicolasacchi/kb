@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { usePrComments } from "../../hooks/usePrs";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { relativeTime } from "../../lib/format";

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useFrameworkEdges } from "../../hooks/useFrameworkEdges";
 import { codeUrl } from "../../lib/codeUrl";
 import { groupFrameworkEdges, frameworkEdgeGroupsAreEmpty, type FrameworkEdgeRow } from "../../lib/frameworkEdges";

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRamp } from "../nav/ramp";
-import { useMatch, useNavigate } from "react-router-dom";
+import { useMatch, useNavigate } from "react-router";
 import type { TranscriptHit } from "../api/types";
 import { readerUrl } from "../lib/breadcrumbs";
 import { recordJump } from "../lib/navHistory";

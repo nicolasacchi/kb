@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import CheckoutDialog from "./CheckoutDialog";
 import { useRefs } from "../hooks/useRefs";
 import { codeUrl, type PaneLoc } from "../lib/codeUrl";

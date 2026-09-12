@@ -19,7 +19,7 @@
 // is `cardHref`'s own recorded ruling for `gh:`/`kb:`.
 
 import { useMemo, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { BoardNode } from "../../api/types";
 import { Icon } from "../icons";
 import { LiveRefCard } from "../reviews/RefCard";

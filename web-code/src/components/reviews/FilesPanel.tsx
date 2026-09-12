@@ -12,7 +12,7 @@ import { toast } from "../../lib/toast";
 import { isLoopbackRefusal, LOOPBACK_HINT, msg } from "./ReviewHeader";
 import { speedFilterItems } from "../../lib/speedSearch";
 import { codeUrl } from "../../lib/codeUrl";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import type { MapRowState } from "../../lib/reviewMapColumn";
 
 export type FileSort = "diff" | "risk" | "path";

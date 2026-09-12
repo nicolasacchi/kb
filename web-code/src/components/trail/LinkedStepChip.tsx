@@ -20,7 +20,7 @@
 //     browser cannot read (the human reads are loopback-only), renders
 //     NOTHING. A chip that cannot go back is worse than no chip.
 
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import type { TrailLink } from "../../lib/codeUrl";
 import { Icon } from "../icons";
 import { useTour } from "../../hooks/useTours";

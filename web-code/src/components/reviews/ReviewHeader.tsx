@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { ApiError } from "../../api/client";
 import type { ReviewDetail, ReviewDetailPr, ReviewFileRow, ReviewPatchset, ReviewReport } from "../../api/types";
 import { useConfirm } from "../ConfirmProvider";

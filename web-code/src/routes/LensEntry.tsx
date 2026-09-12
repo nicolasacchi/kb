@@ -8,7 +8,7 @@
 // `pinned_repo`-correction effect does the rest (Decision 1's "last pick
 // per doc pre-selects the switcher next time").
 
-import { Navigate, useLocation, useParams } from "react-router-dom";
+import { Navigate, useLocation, useParams } from "react-router";
 import { useActiveRepo } from "../hooks/useActiveRepo";
 import { useRepos } from "../hooks/useRepos";
 import { lensUrl } from "../lib/docLensUrl";

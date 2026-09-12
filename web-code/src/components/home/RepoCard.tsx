@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { HeadInfo, RepoListEntry } from "../../api/types";
 import { useBranches } from "../../hooks/useBranches";
 import { useRecentFiles } from "../../hooks/useRecentFiles";

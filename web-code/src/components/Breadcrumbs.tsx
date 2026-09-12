@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { Symbol } from "../api/types";
 import { buildBreadcrumbs, crumbHref } from "../lib/breadcrumbs";
 import type { PaneLoc } from "../lib/codeUrl";

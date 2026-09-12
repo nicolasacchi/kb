@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import type { BranchOut } from "../../api/types";
 import { useBranches } from "../../hooks/useBranches";
 import { usePrs } from "../../hooks/usePrs";

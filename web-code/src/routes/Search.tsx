@@ -25,7 +25,7 @@
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRamp } from "../nav/ramp";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router";
 import type { TranscriptHit } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";

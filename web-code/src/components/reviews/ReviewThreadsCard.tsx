@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { FindingDispositionState, FindingSeverity, ReviewComment, ReviewFinding } from "../../api/types";
 import { useReviewComments } from "../../hooks/useReviewComments";
 import { useGithubThreads, useReviewFindings } from "../../hooks/useReviews";

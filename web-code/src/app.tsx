@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigate } from "react-router";
 import ConfirmProvider from "./components/ConfirmProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Omnibox from "./components/Omnibox";

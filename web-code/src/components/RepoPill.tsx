@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useActiveRepo, useExplicitRepo } from "../hooks/useActiveRepo";
 import { useRepos } from "../hooks/useRepos";
 import { readerUrl } from "../lib/breadcrumbs";

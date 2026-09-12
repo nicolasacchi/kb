@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
 import type { FindingSeverity, ReviewDetailPr, ReviewPatchset } from "../api/types";
 import { Icon } from "../components/icons";
