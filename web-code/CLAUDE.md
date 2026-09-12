@@ -213,6 +213,10 @@ once) and `PeekPanel`'s own `onKeyDown`.
   Escape, and `nav/ramp.ts`'s own rung table). If you add a keydown handler
   to anything that takes focus, filter it the same way.
 
+**V76-R4d.4 — the stand-down runs BOTH ways: CommandRoot's `matched` branch honours `e.defaultPrevented` and stands down.**
+The vim layer consumes a key with `preventDefault()` but never `stopPropagation()`, so a vim-consumed continuation (the `c` of `gc`) still bubbled to the window listener and fired `reader.compare` too — one keystroke, two owners (`hierarchy.spec.ts`).
+Safe for `[d`/`]d` because vim's `chordWillConsume` stand-down deliberately leaves a central chord's continuation UN-prevented — which is also why a blanket `stopPropagation()` in the vim layer stays rejected (it would strand central's half of the shared `[`/`]` prefix).
+
 A bare key that must fire from INSIDE the buffer needs its own vim-layer
 forwarding arm — a registry row alone is not enough, structurally, because
 `vimReader.ts` (`Prec.highest`) sees the keystroke first. The pattern (see

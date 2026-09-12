@@ -1,9 +1,18 @@
 // @vitest-environment jsdom
-// SCRATCH repro (V76-R4d round 3b) — hierarchy.spec.ts:22-51's EXACT gesture,
-// through the real CodeView/vim keymap, the real cursorUrlSync debounce, the
-// real HierarchyPanel + hierarchyReducer, and Reader.tsx's handleHierClose
-// idiom. Keys are dispatched at document.activeElement (what Playwright's
-// keyboard.press does), never at the panel directly.
+// V76-R4d.4 — the PIN for hierarchy.spec.ts:22-51's gesture: `gc` on a call
+// site, panel keys, then the close. Runs through the real CodeView/vim
+// keymap, the real cursorUrlSync debounce, the real HierarchyPanel +
+// hierarchyReducer, Reader.tsx's handleHierClose idiom — AND the real
+// CommandRoot with a registered `reader.compare` handler, which is what the
+// round-3b repro lacked: the double-fire is CommandRoot ALSO firing
+// `reader.compare` on the `c` that the vim layer already consumed as the
+// `gc` continuation (vim preventDefaults but never stopPropagations). Keys
+// are dispatched at document.activeElement (what Playwright's keyboard.press
+// does), never at the panel directly.
+//
+// Pre-fix this pin FAILS on the `compareCalls` assertion below (the `c` of
+// `gc` fired reader.compare once — the double-fire's signature). Post-fix,
+// CommandRoot honours `e.defaultPrevented` and stands down.
 import { describe, expect, it } from "vitest";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -12,6 +21,7 @@ import { flushSync } from "react-dom";
 import { BrowserRouter, useNavigate } from "react-router";
 import CodeView, { type CodeViewHandle } from "../CodeView";
 import HierarchyPanel from "./HierarchyPanel";
+import CommandRoot, { useCommandHandlers, useCommandScope } from "../../commands/CommandRoot";
 import { createCursorUrlSync, type CursorUrlSync } from "../../lib/cursorUrlSync";
 import {
   buildCallersTree,
@@ -41,18 +51,28 @@ const CALLERS: HierarchyCallersOut = {
 
 const CONTENT = Array.from({ length: 40 }, (_, i) => `line ${i + 1} target_fn`).join("\n");
 
-const focusLog: string[] = [];
-function tag(el: Element | null): string {
-  if (!el) return "null";
-  const he = el as HTMLElement;
-  return `${el.tagName}.${he.className?.toString().slice(0, 40)}${he.dataset?.kbcHierarchy ? "[HIER]" : ""}`;
+interface HarnessProps {
+  /// Counts every central dispatch of `reader.compare` — the double-fire's
+  /// signature. The vim layer consumes the `c` of `gc`; if CommandRoot ALSO
+  /// fires, this increments.
+  compareCalls: { n: number };
 }
 
-function Harness() {
+function Harness({ compareCalls }: HarnessProps) {
   const navigate = useNavigate();
   const [hier, dispatchHier] = React.useReducer(hierarchyReducer, initialHierarchyState);
   const viewRef = React.useRef<CodeViewHandle | null>(null);
   const syncRef = React.useRef<CursorUrlSync | null>(null);
+
+  // The Reader route's own wiring: reader scope while the buffer is focused
+  // (it is, for this whole gesture), and a central `reader.compare` handler —
+  // Reader.tsx registers one for the bare `c` row.
+  useCommandScope("reader", {});
+  useCommandHandlers({
+    "reader.compare": () => {
+      compareCalls.n += 1;
+    },
+  });
 
   React.useEffect(() => {
     const sync = createCursorUrlSync({
@@ -125,13 +145,20 @@ function key(target: Element, k: string) {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-describe("hierarchy close — the spec's gesture (round 3b repro)", () => {
-  it("gc, j, l, Escape — panel unmounts synchronously at Escape", async () => {
+describe("hierarchy close — the spec's gesture (V76-R4d.4 pin)", () => {
+  it("gc, j, l, Escape — panel closes, and the c of gc never fires reader.compare", async () => {
+    const compareCalls = { n: 0 };
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root: Root = createRoot(container);
     await act(async () => {
-      root.render(React.createElement(BrowserRouter, null, React.createElement(Harness)));
+      root.render(
+        React.createElement(
+          CommandRoot,
+          null,
+          React.createElement(BrowserRouter, null, React.createElement(Harness, { compareCalls })),
+        ),
+      );
       await tick();
     });
 
@@ -150,7 +177,8 @@ describe("hierarchy close — the spec's gesture (round 3b repro)", () => {
       await tick();
     });
 
-    // gc — opens the hierarchy panel (async, two hops).
+    // gc — the vim layer consumes BOTH keys (`g` prefixes, `c` completes
+    // cb-hierarchy-callers) and opens the hierarchy panel (async, two hops).
     key(cm, "g");
     key(cm, "c");
     let panel: Element | null = null;
@@ -161,7 +189,12 @@ describe("hierarchy close — the spec's gesture (round 3b repro)", () => {
       panel = container.querySelector("[data-kbc-hierarchy]");
     }
     expect(panel).toBeTruthy();
-    focusLog.push(`after open: ${tag(document.activeElement)}`);
+
+    // THE PIN: the `c` of `gc` was already consumed by the vim layer, so
+    // CommandRoot must NOT have fired `reader.compare` on it too. Pre-fix
+    // this is 1 — the double-fire that re-fires/re-mounts the panel and
+    // keeps hierarchy.spec.ts:51's toHaveCount(0) from ever reaching 0.
+    expect(compareCalls.n).toBe(0);
 
     // Spec: j, l (panel keys).
     key(document.activeElement as Element, "j");
@@ -169,19 +202,22 @@ describe("hierarchy close — the spec's gesture (round 3b repro)", () => {
     await act(async () => {
       await tick();
     });
-    focusLog.push(`after j/l: ${tag(document.activeElement)}`);
 
     // Let the debounced cursor→?line= navigate fire (transition pending).
     await act(async () => {
       await new Promise((r) => setTimeout(r, 600));
     });
-    focusLog.push(`after debounce: ${tag(document.activeElement)} search=${window.location.search}`);
 
     // The spec's close gesture: Escape at the focused element, then an
     // immediate toHaveCount(0) — no waitFor.
     key(document.activeElement as Element, "Escape");
-    focusLog.push(`at Escape target was: ${tag(document.activeElement)}`);
-    console.log("FOCUS TRACE:\n" + focusLog.join("\n"));
     expect(container.querySelector("[data-kbc-hierarchy]")).toBeNull();
+    expect(compareCalls.n).toBe(0);
+
+    // And a REAL bare `c` still works, exactly once: focus is back in the
+    // buffer (handleHierClose's viewRef focus), bare `c` is inert in the
+    // read-only vim layer (vimKeys.test.ts), so CommandRoot owns it.
+    key(document.activeElement as Element, "c");
+    expect(compareCalls.n).toBe(1);
   });
 });
