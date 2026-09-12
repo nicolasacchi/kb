@@ -38,7 +38,7 @@ import {
   type FindingDisposition,
 } from "../lib/diffFindings";
 import { buildTourStops, clampTourStep } from "../lib/reviewTour";
-import { mergeQuery, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
+import { mergeCurrentSearch, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
@@ -485,10 +485,16 @@ export default function ReviewDiff() {
 
   /// V76-R2b — click/Enter on a tree file opens THAT file in the center
   /// (single-file focus) with `?file=` on the URL (Location Contract).
+  /// V76-R4d.3 — the query is merged onto `window.location.search` AT CALL
+  /// TIME (`mergeCurrentSearch`), never the render-time snapshot: a write
+  /// issued while an earlier one is still in the router's deferred commit
+  /// must not re-emit the old params and drop it.
   function openFileInCenter(path: string) {
     const idx = paths.indexOf(path);
     if (idx >= 0) apply({ type: "gotoFile", fileIdx: idx });
-    navigate(mergeQuery(withQuery(reviewDiffHref(repo, id, path)), { file: path }), { replace: true });
+    navigate(reviewDiffHref(repo, id, path) + mergeCurrentSearch((p) => p.set("file", path)), {
+      replace: true,
+    });
   }
 
   /// V73-K2c (kbc-pseudo/1) — "the map column's chapter zero" opener. A
@@ -498,7 +504,7 @@ export default function ReviewDiff() {
   /// `single = focusPath.length > 0` above) rather than reusing `goFile`'s
   /// index-based lookup.
   function openPseudo(name: string) {
-    navigate(withQuery(reviewDiffHref(repo, id, pseudoPath(name))));
+    navigate(reviewDiffHref(repo, id, pseudoPath(name)) + mergeCurrentSearch(() => undefined));
   }
 
   /// `] p` / `[ p` — step the HEAD patchset. A range keeps its base and

@@ -353,6 +353,19 @@ per-file `// @vitest-environment jsdom` pragma — the recorded exception to
 the suite's node-only default; the pins assert the DOM state IMMEDIATELY
 after a native event, never behind `waitFor`.
 
+**V76-R4d.2 closed the remaining URL-bound controls the round-2 audit had
+flagged latent** — the SAME optimistic pattern, one jsdom DOM-commit pin
+each: `Compare.tsx`'s `dots` checkbox (`Compare.dotsToggle.test.ts`),
+`BoardDetail.tsx`'s `live`/`ctx` checkboxes (`BoardDetail.flagsToggle.test.ts`),
+`TourDetail.tsx`'s `ctx` checkbox (`TourDetail.ctxToggle.test.ts`), and the
+`Tours.tsx`/`Boards.tsx` `status` <select>s (`Tours.statusSelect.test.ts`,
+`Boards.statusSelect.test.ts`). `ReaderLegacy.tsx`'s `handleHierClose` got
+`Reader.tsx`'s flushSync same-tick close so both readers behave alike. The
+rest of the audit stays deliberately UNCHANGED: params seeded into
+`useState` at mount, buttons, read-only display params, local-state and
+server-viewed-state checkboxes, and the review-diff params asserted behind
+polling were all classified SAFE and were not touched.
+
 ## Themes (`kbc-theme/1`, `V70-A7`)
 
 **The role list IS the theme contract.** `SYNTAX_ROLES` in

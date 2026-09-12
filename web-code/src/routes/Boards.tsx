@@ -15,25 +15,40 @@
 // is fetched only when asked (`useBoardSweep`'s `enabled`), because a sweep
 // executes every query card on every board.
 
-import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
 import { useBoardSweep, useBoards } from "../hooks/useBoards";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { boardHref, parseBoardsStatus } from "../lib/boardsUrl";
-import { canvasPageUrl } from "../lib/codeUrl";
+import { canvasPageUrl, mergeCurrentSearch } from "../lib/codeUrl";
 import { relativeTime } from "../lib/format";
 import "../styles/boards.css";
 
 export default function Boards() {
   useListScrollRestoration();
   const { repo = "" } = useParams<{ repo: string }>();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
   const boards = useBoards(repo);
   const statuses = boards.data?.statuses_available ?? [];
   const status = parseBoardsStatus(params.get("status"), statuses);
   const filtered = useBoards(repo, status);
+
+  // V76-R4d.2 — the select flavour of the round-2 checkbox fix: react-router
+  // 7 wraps every navigation state update in React.startTransition (no
+  // opt-out), so a controlled `value=` bound DIRECTLY to a search param
+  // stays at the last committed render's value until the transition lands
+  // (React's restoreControlledState snaps the DOM node back right after the
+  // change event). LOCAL OPTIMISTIC state flips the select on the same tick
+  // and reconciles with the URL in the effect below. The list QUERY keeps
+  // reading the URL — the URL stays the source of truth for data; only the
+  // select's own value rendering is optimistic.
+  const [statusOptimistic, setStatusOptimistic] = useState(status);
+  useEffect(() => {
+    setStatusOptimistic(status);
+  }, [status]);
   const [sweeping, setSweeping] = useState(false);
   const sweep = useBoardSweep(repo, undefined, sweeping);
 
@@ -53,12 +68,21 @@ export default function Boards() {
           <label>
             <span>Status</span>
             <select
-              value={status ?? ""}
+              value={statusOptimistic ?? ""}
               onChange={(e) => {
-                const next = new URLSearchParams(params);
-                if (e.target.value) next.set("status", e.target.value);
-                else next.delete("status");
-                setParams(next, { replace: true });
+                setStatusOptimistic(e.target.value || null);
+                // V76-R4d.3 — merge onto the CURRENT location at call time,
+                // never the render-time snapshot (deferred v7 commits).
+                const value = e.target.value;
+                navigate(
+                  {
+                    search: mergeCurrentSearch((next) => {
+                      if (value) next.set("status", value);
+                      else next.delete("status");
+                    }),
+                  },
+                  { replace: true },
+                );
               }}
               aria-label="filter by status"
               data-kbc-boards-status

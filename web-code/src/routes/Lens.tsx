@@ -17,6 +17,11 @@ import { useFile } from "../hooks/useFile";
 import { useDocLens, useDocLensRepos, useSetDocLensPin } from "../hooks/useDocLens";
 import { useLensKeys } from "../hooks/useLensKeys";
 import { lensUrl, pinCorrection, refsForGroup, truncationCaption } from "../lib/docLensUrl";
+// V76-R4d.3 — the current query is carried across the repo swap via
+// `mergeCurrentSearch` (read from `window.location.search` AT CALL TIME), so
+// a write still in the router's deferred commit is carried too, never dropped
+// by a render-time `location.search` snapshot.
+import { mergeCurrentSearch } from "../lib/codeUrl";
 import type { CodeLensRef } from "../api/types";
 import "../styles/doclens.css";
 
@@ -87,7 +92,7 @@ export default function Lens() {
     const target = pinCorrection(scorecard.data?.pinned_repo, repo, seeded);
     if (target) {
       seededDocIdRef.current = docId;
-      navigate(lensUrl(target, kb, docId) + location.search, { replace: true });
+      navigate(lensUrl(target, kb, docId) + mergeCurrentSearch(() => undefined), { replace: true });
     } else if (scorecard.data) {
       seededDocIdRef.current = docId; // resolved (with or without a correction) for this doc
     }
@@ -111,7 +116,7 @@ export default function Lens() {
 
   function pickRepo(nextRepo: string) {
     setPin.mutate({ repo: nextRepo, docHash: lens.data?.doc_hash ?? scorecard.data?.doc_hash ?? null });
-    navigate(lensUrl(nextRepo, kb, docId) + location.search);
+    navigate(lensUrl(nextRepo, kb, docId) + mergeCurrentSearch(() => undefined));
   }
 
   const refs = lens.data?.refs ?? [];

@@ -26,6 +26,7 @@
 // in `app.tsx`, and `e2e/desk-legacy.spec.ts`.
 //
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -98,6 +99,7 @@ import {
   codeUrl,
   commitUrl,
   formatLineParam,
+  mergeCurrentSearch,
   parseLineParam,
   parsePane2,
   permalinkFor,
@@ -613,10 +615,10 @@ export default function ReaderLegacy() {
     symResolvedRef.current = symParam;
     let cancelled = false;
     function stripSym() {
-      const next = new URLSearchParams(window.location.search);
-      next.delete("sym");
-      const qs = next.toString();
-      navigate({ search: qs ? `?${qs}` : "" }, { replace: true });
+      // V76-R4d.3 — the ONE search-write idiom: merge onto the CURRENT
+      // location at call time (this hand-rolled the same read before
+      // `mergeCurrentSearch` existed; now it names it).
+      navigate({ search: mergeCurrentSearch((p) => p.delete("sym")) }, { replace: true });
     }
     (async () => {
       try {
@@ -1435,7 +1437,16 @@ export default function ReaderLegacy() {
   }
 
   function handleHierClose() {
-    dispatchHier({ type: "CLOSE" });
+    // V76-R4d.2 — the same fix Reader.tsx's handleHierClose got in round 2:
+    // react-router 7 wraps every navigation state update in
+    // React.startTransition (no opt-out), and a local dispatch made while
+    // such a transition is pending is entangled with it — the close commit
+    // is deferred until the transition settles. flushSync forces THIS local
+    // update to commit on the same tick as the keydown; the panel's
+    // open/closed state is already local (`hierarchyReducer`), it is only
+    // the commit timing that changed under v7. Both readers keep the same
+    // shape so they behave alike.
+    flushSync(() => dispatchHier({ type: "CLOSE" }));
     paneRepoPath(hierOwnerPaneRef.current).viewRef.current?.focus();
   }
 

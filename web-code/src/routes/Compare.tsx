@@ -47,6 +47,21 @@ export default function Compare() {
   const toParam = searchParams.get("to") ?? "";
   const threeDot = searchParams.get("dots") === "3";
 
+  // V76-R4d.2 — react-router 7 wraps every navigation state update in
+  // React.startTransition (no opt-out), so a controlled checkbox bound
+  // DIRECTLY to a search param stays at the last committed render's value
+  // until the transition lands: React's restoreControlledState snaps the
+  // DOM node back right after the change event. The house pattern (the
+  // Stacks `all` toggle, V76-R4d round 2) is LOCAL OPTIMISTIC state: the
+  // box flips on the same tick as the change and reconciles with the URL
+  // when the navigation commits (the effect below). The compare QUERY
+  // keeps reading the URL — the URL stays the source of truth for data;
+  // only the checkbox's own checked rendering is optimistic.
+  const [threeDotOptimistic, setThreeDotOptimistic] = useState(threeDot);
+  useEffect(() => {
+    setThreeDotOptimistic(threeDot);
+  }, [threeDot]);
+
   const [fromInput, setFromInput] = useState(fromParam);
   const [toInput, setToInput] = useState(toParam);
   const { data: refsData } = useRefs(repo);
@@ -153,8 +168,11 @@ export default function Compare() {
         <label className="kbc-compare__dots-toggle">
           <input
             type="checkbox"
-            checked={threeDot}
-            onChange={(e) => go({ threeDot: e.target.checked })}
+            checked={threeDotOptimistic}
+            onChange={(e) => {
+              setThreeDotOptimistic(e.target.checked);
+              go({ threeDot: e.target.checked });
+            }}
             data-kbc-compare-threedot
           />
           three-dot

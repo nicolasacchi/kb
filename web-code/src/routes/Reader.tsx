@@ -154,6 +154,7 @@ import {
   commitUrl,
   entityUrl,
   formatLineParam,
+  mergeCurrentSearch,
   parseEntParam,
   parseLineParam,
   parsePane2,
@@ -1086,10 +1087,10 @@ export default function Reader() {
     symResolvedRef.current = symParam;
     let cancelled = false;
     function stripSym() {
-      const next = new URLSearchParams(window.location.search);
-      next.delete("sym");
-      const qs = next.toString();
-      navigate({ search: qs ? `?${qs}` : "" }, { replace: true });
+      // V76-R4d.3 — the ONE search-write idiom: merge onto the CURRENT
+      // location at call time (this hand-rolled the same read before
+      // `mergeCurrentSearch` existed; now it names it).
+      navigate({ search: mergeCurrentSearch((p) => p.delete("sym")) }, { replace: true });
     }
     (async () => {
       try {

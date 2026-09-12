@@ -31,7 +31,7 @@ import TrailOriginChip from "./components/nav/TrailOriginChip";
 import { useTrailLink } from "./hooks/useTrailLink";
 import LinkedStepChip from "./components/trail/LinkedStepChip";
 import TourRecorder from "./components/tours/TourRecorder";
-import { codeUrl } from "./lib/codeUrl";
+import { codeUrl, mergeCurrentSearch } from "./lib/codeUrl";
 import { enterRing, goForward } from "./lib/navHistory";
 import { parseDeskParam } from "./lib/deskParam";
 import CommandRoot, { useCommandHandlers, useCommands } from "./commands/CommandRoot";
@@ -233,9 +233,10 @@ function AppShell() {
     if (!cmdParam || cmdRunRef.current === cmdParam) return;
     cmdRunRef.current = cmdParam;
     const d = deepLinkDisposition(cmdParam);
-    const params = new URLSearchParams(loc.search);
-    params.delete("cmd");
-    const stripped = loc.pathname + (params.toString() ? `?${params}` : "") + loc.hash;
+    // V76-R4d.3 — strip `cmd` off the CURRENT location at call time, never
+    // the render-time snapshot: a write still in the router's deferred
+    // commit must not be re-emitted and lost.
+    const stripped = loc.pathname + mergeCurrentSearch((p) => p.delete("cmd")) + loc.hash;
     if (!d) {
       toast.warn(`No command named "${cmdParam}"`);
       navigate(stripped, { replace: true });

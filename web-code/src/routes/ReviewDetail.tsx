@@ -34,7 +34,7 @@ import {
   useReviewTimeline,
 } from "../hooks/useReviews";
 import { readerUrl } from "../lib/breadcrumbs";
-import { parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
+import { mergeCurrentSearch, parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
 import { cardList } from "../lib/reviewDoc";
 import { indexThreads } from "../lib/reviewComments";
 // ── V76-R2a — the Room's rail geometry + density. The rail's truth is the
@@ -90,29 +90,26 @@ export default function ReviewDetail() {
   // state only — subsequent opens/closes are plain component state, mirrored
   // back onto the URL with `replace: true` so it never grows the history
   // stack (same posture `?thread=`/`?finding=` deep-links use elsewhere).
-  const [searchParams, setSearchParams] = useSearchParams();
+  // V76-R4d.3 — every write goes through `mergeCurrentSearch` (merges onto
+  // window.location.search AT CALL TIME): react-router 7's functional
+  // `setSearchParams(prev => …)` still resolves `prev` against the last
+  // COMMITTED render, so it is not the functional update the invariant
+  // requires — two quick writes would clobber.
+  const [searchParams] = useSearchParams();
   const [publishPreviewOpen, setPublishPreviewOpen] = useState(
     () => searchParams.get("publish") === "1",
   );
   function openPublishPreview() {
     setPublishPreviewOpen(true);
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.set("publish", "1");
-        return next;
-      },
+    navigate(
+      { search: mergeCurrentSearch((next) => next.set("publish", "1")) },
       { replace: true },
     );
   }
   function closePublishPreview() {
     setPublishPreviewOpen(false);
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete("publish");
-        return next;
-      },
+    navigate(
+      { search: mergeCurrentSearch((next) => next.delete("publish")) },
       { replace: true },
     );
   }
@@ -128,12 +125,12 @@ export default function ReviewDetail() {
   // takes in Reader.tsx) — `psSel` itself carries no independent state.
   const psSel: number | "latest" = parseReviewPs(searchParams.get("ps")) ?? "latest";
   function setPsSel(n: number | "latest") {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (n === "latest") next.delete("ps");
-        else next.set("ps", String(n));
-        return next;
+    navigate(
+      {
+        search: mergeCurrentSearch((next) => {
+          if (n === "latest") next.delete("ps");
+          else next.set("ps", String(n));
+        }),
       },
       // View state, not navigation — replace, same rule `tab` below follows
       // (root CLAUDE.md's #23 posture: URL-as-cache, not a history entry
@@ -171,12 +168,12 @@ export default function ReviewDetail() {
   // as `psSel` above — no independent state, `?tab=` IS the state.
   const cockpitView: CockpitView = parseReviewTab(searchParams.get("tab")) ?? "files";
   function setCockpitView(view: CockpitView) {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (view === "files") next.delete("tab");
-        else next.set("tab", view);
-        return next;
+    navigate(
+      {
+        search: mergeCurrentSearch((next) => {
+          if (view === "files") next.delete("tab");
+          else next.set("tab", view);
+        }),
       },
       // View state, not navigation — replace (see `setPsSel`'s own note).
       { replace: true },
@@ -206,12 +203,12 @@ export default function ReviewDetail() {
   // there is no parallel store to drift.
   const cardsFolded = parseDocCardsMode(searchParams.get("cards")) === "folded";
   function setCardsFolded(folded: boolean) {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (folded) next.set("cards", "folded");
-        else next.delete("cards");
-        return next;
+    navigate(
+      {
+        search: mergeCurrentSearch((next) => {
+          if (folded) next.set("cards", "folded");
+          else next.delete("cards");
+        }),
       },
       { replace: true },
     );
@@ -345,12 +342,12 @@ export default function ReviewDetail() {
     } catch {
       // private-mode refusal — the toggle still works for this session.
     }
-    setSearchParams(
-      (prev) => {
-        const p = new URLSearchParams(prev);
-        if (next === "compact") p.set("density", "compact");
-        else p.delete("density");
-        return p;
+    navigate(
+      {
+        search: mergeCurrentSearch((p) => {
+          if (next === "compact") p.set("density", "compact");
+          else p.delete("density");
+        }),
       },
       { replace: true },
     );
