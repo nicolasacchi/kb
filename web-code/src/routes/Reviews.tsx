@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router";
 import type { ReviewSummary, ReviewSummaryPr } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";

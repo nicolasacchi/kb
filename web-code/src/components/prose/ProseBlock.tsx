@@ -8,7 +8,7 @@
 //
 // Fences share C1's HighlightedSnippet painter and kbc-theme/1 classes.
 import type { MouseEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { MarkdownLiteOptions } from "../../lib/markdownLite";
 import {
   buildProseTree,

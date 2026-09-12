@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { dismissToast, useToasts } from "../lib/toast";
 import { Icon } from "./icons";
 

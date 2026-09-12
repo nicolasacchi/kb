@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { CommitSummary } from "../../api/types";
 import EmptyState from "../EmptyState";
 import { Icon } from "../icons";

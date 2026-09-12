@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { RailsOrphansOut } from "../../api/types";
 import TrustBadge from "../TrustBadge";
 import { codeUrl } from "../../lib/codeUrl";

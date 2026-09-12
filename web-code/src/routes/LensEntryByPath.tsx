@@ -14,7 +14,7 @@
 // via `resolveDocByPath` has no CORS concern.
 
 import { useEffect, useState } from "react";
-import { Navigate, useLocation, useParams } from "react-router-dom";
+import { Navigate, useLocation, useParams } from "react-router";
 import { ApiError, resolveDocByPath } from "../api/client";
 import { lensEntryUrl } from "../lib/docLensUrl";
 

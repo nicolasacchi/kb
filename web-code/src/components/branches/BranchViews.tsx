@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router";
 import type { BranchFactRow as Row, BranchView } from "../../api/types";
 import { useCommandScope } from "../../commands/CommandRoot";
 import { resolve as resolveCommand, tokenOf } from "../../commands/dispatch";

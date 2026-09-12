@@ -4,7 +4,7 @@
 // `api/types.ts`'s `UnifiedInboxOut` doc). Finite staleTime + manual
 // Refresh (`hooks/useUnifiedInbox.ts`'s own doc has the full no-SSE-tie
 // rationale) rather than a loading spinner on every mount.
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { UnifiedInboxAnnotationRow } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";

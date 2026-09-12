@@ -6,7 +6,7 @@
 // split — diff v2's rule is "the URL is the only state" (web-code/CLAUDE.md
 // § Review diff v2), and a header that could hold a knob of its own is
 // exactly how a parallel store starts.
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { GithubThreadsOut, ReviewPatchset } from "../../api/types";
 import { Icon } from "../../components/icons";
 import PatchsetSwitcher from "../../components/reviews/PatchsetSwitcher";

@@ -1,4 +1,4 @@
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router";
 import SaveAsSetButton from "../components/sets/SaveAsSetButton";
 import { useSessionDiff } from "../hooks/useSessionDiff";
 import { formatUnixMillis } from "../lib/format";

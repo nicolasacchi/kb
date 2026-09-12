@@ -10,7 +10,7 @@
 // same machinery `?thread=` uses), not a second renderer for the same
 // content.
 
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router";
 import { reviewDiffHref } from "../lib/codeUrl";
 
 export default function FindingEntry() {

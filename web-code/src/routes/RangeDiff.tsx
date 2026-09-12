@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
 import RangeDiffTable from "../components/reviews/RangeDiffTable";

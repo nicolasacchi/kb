@@ -25,7 +25,7 @@
 // orphan step is a card on the surface like any other.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router";
 import BoardCard from "../components/boards/BoardCard";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";

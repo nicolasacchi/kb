@@ -16,7 +16,7 @@
 // executes every query card on every board.
 
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
 import { useBoardSweep, useBoards } from "../hooks/useBoards";

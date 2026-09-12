@@ -21,7 +21,7 @@
 // daemon side; on this side it is never a bare button.
 
 import { useCallback, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { TrailStepOut, TrailSummary } from "../../api/types";
 import { Icon } from "../icons";
 import { useConfirm } from "../ConfirmProvider";

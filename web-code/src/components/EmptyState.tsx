@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 // F6 — kb-code's own on-brand empty-state pattern, mirroring kb's own
 // `web/src/components/EmptyState.tsx` shape (icon + title + hint + optional

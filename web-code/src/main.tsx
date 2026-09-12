@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./app";
 import { applyTheme, loadTheme } from "./lib/prefs";
@@ -73,6 +73,13 @@ if (!root) throw new Error("#root missing");
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
+    {/* V76-R4d — react-router 7. The two v6→v7 flags that applied to this
+        app (`v7_startTransition`, `v7_relativeSplatPath`) were enabled on
+        v6 first, the suite went green, and both are now the DEFAULTS — the
+        `future` prop is gone in v7. The four remaining `v7_*` flags are
+        data-router (`createBrowserRouter`) only and N/A here: this app uses
+        declarative `<Routes>` — no loaders, actions, fetchers or `<Form>`
+        anywhere (audited: grep finds none). */}
     <BrowserRouter>
       <QueryClientProvider client={queryClient}>
         <App />

@@ -8,7 +8,7 @@
 // no per-row live GitHub call, no re-derived verdict enum); the risk-score
 // bucket (`inboxDotTone`) and the row's own named terms (reason chips) are
 // what's honestly available without an N-request storm on one page load.
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { InboxViewRow } from "../../lib/reviewInbox";
 import { reviewUrl } from "../../lib/codeUrl";
 import { relativeTime } from "../../lib/format";

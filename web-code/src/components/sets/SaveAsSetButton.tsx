@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { ApiError } from "../../api/client";
 import { useFromSessionSet } from "../../hooks/useSets";
 import { setUrl } from "../../lib/setsUrl";

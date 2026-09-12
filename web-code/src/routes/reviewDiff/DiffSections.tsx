@@ -8,7 +8,7 @@
 // which is built once at the route level precisely so a per-file component
 // never re-derives a page-wide number.
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import type { GithubThread, ReviewFileRow } from "../../api/types";
 import DiffFile from "../../components/diff/DiffFile";
 import { Icon } from "../../components/icons";

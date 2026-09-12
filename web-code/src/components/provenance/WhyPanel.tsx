@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Icon } from "../icons";
 import { UNCOMMITTED_SHA, type BlameRegion, type LineWhyOut } from "../../api/types";
 import { useBlameTimeline } from "../../hooks/useBlameTimeline";

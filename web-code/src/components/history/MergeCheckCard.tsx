@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useMergeCheck } from "../../hooks/useMergeCheck";
 import { Icon } from "../icons";
 import { readerUrl } from "../../lib/breadcrumbs";

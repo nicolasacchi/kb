@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import RepoPill from "./RepoPill";
 import NavMenu from "./NavMenu";
 import NavSheet from "./NavSheet";

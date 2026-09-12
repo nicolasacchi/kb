@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useLaneFacts, useLanes } from "../../hooks/useLanes";
 import {
   buildFactsView,

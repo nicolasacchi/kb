@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import BranchesHero from "../components/branches/BranchesHero";
 import BranchViews from "../components/branches/BranchViews";
 import BrowseAllBranches from "../components/branches/BrowseAllBranches";
