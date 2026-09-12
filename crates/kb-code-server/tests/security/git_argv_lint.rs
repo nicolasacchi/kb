@@ -155,6 +155,10 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // also spawn `git`. Classify itself shells only through
     // `workspace::common_dir`/`root_commit` (`history::run_git_raw`).
     "worktrees.rs",
+    // V76-B3 — `#[cfg(test)]` fixture helpers only (a throwaway repo for the
+    // patchset-tree resolution tests); production resolution reads blobs
+    // through gix (`git/blob.rs`), spawning nothing.
+    "prose_refs/tests.rs",
 ];
 
 #[test]
