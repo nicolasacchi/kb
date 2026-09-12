@@ -10,7 +10,7 @@
 // `claims.test.ts`'s pin), the ladder state gets its OWN small badge (never
 // `TrustBadge`'s fact channel), and `confidence` renders as agent-declared
 // TEXT, never a bar.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { ClaimOut } from "../../api/types";
 import {
   claimKindLabel,
@@ -19,56 +19,23 @@ import {
   evidenceRefView,
   ladderLabel,
 } from "../../lib/claims";
-import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
 import { Icon } from "../icons";
-import { FenceBlock } from "../SafeMarkdown";
+import ProseBlock from "../prose/ProseBlock";
 
-function InlineRuns({ runs }: { runs: InlineRun[] }) {
-  return (
-    <>
-      {runs.map((r, i) => {
-        if (r.kind === "bold") return <strong key={i}>{r.text}</strong>;
-        if (r.kind === "code") return <code key={i}>{r.text}</code>;
-        return <span key={i}>{r.text}</span>;
-      })}
-    </>
-  );
-}
-
-/// The claim's own prose, via the SAME options-off `markdownLite` path
-/// `ReportPanel.tsx`'s summary uses — a claim body is agent-written prose
-/// with no fences/headings of its own, so neither of the K2b-added block
-/// kinds is reachable here (each renderer here hand-rolls its own mapping,
-/// the established pattern this crate already carries for `DocPanel`/
-/// `ReportPanel`).
-function ClaimBody({ text }: { text: string }) {
-  const blocks: MarkdownBlock[] = useMemo(
-    () => parseMarkdownLite(text, { fences: true }),
-    [text],
-  );
+function ClaimBody({
+  text,
+  refs,
+  repo,
+  reviewId,
+}: {
+  text: string;
+  refs?: ClaimOut["refs"];
+  repo: string;
+  reviewId: number | undefined;
+}) {
   return (
     <div className="kbc-claim__body">
-      {blocks.map((b, i) => {
-        if (b.kind === "list") {
-          return (
-            <ul key={i}>
-              {b.items.map((item, j) => (
-                <li key={j}>
-                  <InlineRuns runs={item} />
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        if (b.kind === "paragraph" || b.kind === "heading") {
-          return (
-            <p key={i}>
-              <InlineRuns runs={b.runs} />
-            </p>
-          );
-        }
-        return <FenceBlock key={i} text={b.text} lang={b.lang} />;
-      })}
+      <ProseBlock text={text} refs={refs} repo={repo} reviewId={reviewId} />
     </div>
   );
 }
@@ -139,7 +106,7 @@ function ClaimRow({
       </button>
       {open && (
         <div className="kbc-claim__detail">
-          <ClaimBody text={claim.body_md} />
+          <ClaimBody text={claim.body_md} refs={claim.refs} repo={repo} reviewId={reviewId} />
           {claim.state === "drifted" && (
             <p className="kbc-claim__drift" data-kbc-claim-drift>
               {claim.caption}

@@ -326,7 +326,7 @@ pub async fn review_comments(
     AxumPath(id): AxumPath<i64>,
     Query(params): Query<ReviewCommentsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (review, repo, _repo_id) = require_review(&state, id).await?;
+    let (review, repo, repo_id) = require_review(&state, id).await?;
     // 2026-08-31 incident (store.rs module doc): ps-resolve + annotations
     // list + the per-comment suggestion lookups inside `build_comment_
     // groups` are all synchronous store work — one blocking-pool trip.
@@ -338,7 +338,12 @@ pub async fn review_comments(
         .run_blocking(move |store| -> Result<_, ApiError> {
             let target_ps = resolve_ps(store, id, ps_param.as_deref())?;
             let rows = store.list_review_annotations(id, all)?;
-            let groups_out = build_comment_groups(store, &repo_root, &target_ps, rows)?;
+            let ctx = crate::prose_refs::RefCtx {
+                repo_id,
+                review_id: Some(id),
+                ps_number: Some(target_ps.ps_number),
+            };
+            let groups_out = build_comment_groups(store, &repo_root, &target_ps, rows, &ctx)?;
             Ok((target_ps, groups_out))
         })
         .await?;
@@ -363,11 +368,16 @@ pub async fn review_comments(
 /// Shared by [`review_comments`] and (CT-E7) `crate::review_distill` —
 /// the two callers stay identical by construction rather than by two
 /// queries agreeing after the fact.
+///
+/// `ctx` (V76-B3, kbc-prose/1) scopes the additive `body_refs` each comment
+/// and reply carries: the repo for path/symbol resolution, the review for
+/// `f-<slug>` mentions.
 pub(crate) fn build_comment_groups(
     store: &Store,
     repo_root: &Path,
     target_ps: &ReviewPatchsetRow,
     rows: Vec<AnnotationRow>,
+    ctx: &crate::prose_refs::RefCtx,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
     let mut replies: HashMap<String, Vec<AnnotationRow>> = HashMap::new();
     let mut parents: Vec<AnnotationRow> = Vec::new();
@@ -413,8 +423,8 @@ pub(crate) fn build_comment_groups(
             .remove(&parent.id)
             .unwrap_or_default()
             .into_iter()
-            .map(reply_json)
-            .collect();
+            .map(|r| reply_json(store, ctx, r))
+            .collect::<Result<_, ApiError>>()?;
 
         groups
             .entry(parent.path.clone())
@@ -424,6 +434,7 @@ pub(crate) fn build_comment_groups(
                 "path": parent.path,
                 "intent": parent.intent,
                 "body": parent.body,
+                "body_refs": crate::prose_refs::field_refs(store, ctx, &parent.body)?,
                 "author": parent.author,
                 "created_at": parent.created_at,
                 "updated_at": parent.updated_at,
@@ -443,16 +454,21 @@ pub(crate) fn build_comment_groups(
         .collect())
 }
 
-fn reply_json(row: AnnotationRow) -> serde_json::Value {
-    serde_json::json!({
+fn reply_json(
+    store: &Store,
+    ctx: &crate::prose_refs::RefCtx,
+    row: AnnotationRow,
+) -> Result<serde_json::Value, ApiError> {
+    Ok(serde_json::json!({
         "id": row.id,
         "parent_id": row.parent_id,
         "path": row.path,
         "intent": row.intent,
         "body": row.body,
+        "body_refs": crate::prose_refs::field_refs(store, ctx, &row.body)?,
         "author": row.author,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "resolved": row.resolved,
-    })
+    }))
 }

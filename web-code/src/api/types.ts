@@ -2087,6 +2087,8 @@ export interface ReviewCommentReply {
   path: string;
   intent: string;
   body: string;
+  /** V76-B3 — per-request prose refs for `body`. */
+  body_refs?: FieldRefs;
   author: string;
   created_at: number;
   updated_at: number;
@@ -2099,6 +2101,8 @@ export interface ReviewComment {
   path: string;
   intent: string;
   body: string;
+  /** V76-B3 — per-request prose refs for `body`. */
+  body_refs?: FieldRefs;
   author: string;
   created_at: number;
   updated_at: number;
@@ -2884,6 +2888,8 @@ export interface ReviewDocOut {
   /** The lossless record: front matter + body, byte-for-byte as composed. */
   doc_md: string;
   summary_md: string;
+  /** V76-B3 — per-request prose refs for `summary_md`. */
+  summary_refs?: FieldRefs;
   risk?: ReviewDocRisk | null;
   reading_order: ReviewDocReadingOrder;
   blocks: Record<string, string>;
@@ -3434,6 +3440,39 @@ export interface FindingResolution {
   confidence: FindingResolutionConfidence;
 }
 
+/// kbc-prose/1 (V76-B3) — one extracted (and optionally resolved) prose
+/// reference. Spans are UTF-16 code units into the field text. Additive:
+/// an older daemon omits the whole `*_refs` object.
+export interface ProseSpan {
+  start: number;
+  end: number;
+}
+export interface ProseRefResolution {
+  state: string;
+  path?: string;
+  ref?: string;
+  line?: number;
+  ent?: string;
+  caption?: string;
+}
+export interface ProseRef {
+  kind: string;
+  span: ProseSpan;
+  text: string;
+  path?: string;
+  line_start?: number;
+  line_end?: number;
+  lines?: string;
+  container?: string;
+  member?: string;
+  slug?: string;
+  resolution?: ProseRefResolution;
+}
+export interface FieldRefs {
+  refs: ProseRef[];
+  truncated: boolean;
+}
+
 /// The ONE finding wire shape (`review_findings::finding_json`) — shared,
 /// byte-identical, by `GET .../findings`'s list rows, `POST .../findings`
 /// (manual create), and both disposition routes' single-finding response.
@@ -3469,6 +3508,12 @@ export interface ReviewFinding {
   title: string;
   rationale: string;
   recommendation: string | null;
+  /** V76-B3 — per-request prose refs for `title`. Absent on an older daemon. */
+  title_refs?: FieldRefs;
+  /** V76-B3 — per-request prose refs for `rationale`. */
+  rationale_refs?: FieldRefs;
+  /** V76-B3 — per-request prose refs for `recommendation`. */
+  recommendation_refs?: FieldRefs;
   evidence: FindingEvidence | null;
   origin: FindingOrigin;
   author: string;
@@ -3534,12 +3579,18 @@ export interface ReviewReport {
   schema?: string;
   /// One-line synopsis rendered under the header (mock's `.deck`).
   deck?: string;
+  /** Per-request prose refs for the hero's deck. */
+  deck_refs?: FieldRefs;
   /// Section 01 markdown body — rendered via `lib/markdownLite.ts`.
   summary?: string;
+  /** V76-B3 — per-request prose refs for `summary`. */
+  summary_refs?: FieldRefs;
   risk_score?: number;
   verdict?: FindingSeverity;
   verdict_headline?: string;
   verdict_body?: string;
+  /** V76-B3 — per-request prose refs for `verdict_body`. */
+  verdict_body_refs?: FieldRefs;
   stats?: ReviewReportStats;
   authored_by?: string;
   session_id?: string;
@@ -3910,6 +3961,8 @@ export interface ReviewTimelineEvent {
   /// Absent, never fabricated, when it does not.
   ref?: string;
   body_md?: string;
+  /** V76-B3 — per-request prose refs for `body_md`. */
+  body_refs?: FieldRefs;
   drift?: ReviewTimelineDrift;
   [key: string]: unknown;
 }
@@ -3986,6 +4039,8 @@ export interface ClaimOut {
   review_id?: number;
   kind: ClaimKind;
   body_md: string;
+  /** V76-B3 — per-request prose refs for `body_md`. */
+  refs?: FieldRefs;
   /// The AGENT'S OWN declaration, 0..=1, surfaced verbatim — nothing
   /// multiplies it into anything.
   confidence?: number;

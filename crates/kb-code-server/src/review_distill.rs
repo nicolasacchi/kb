@@ -129,7 +129,19 @@ fn compose_distill(
         .filter(|r| r.parent_id.is_none() && !r.resolved)
         .count();
 
-    let comments = build_comment_groups(&state.store, repo_root, latest_ps, rows)?;
+    let comments = build_comment_groups(&state.store, repo_root, latest_ps, rows, &{
+        // V76-B3 (kbc-prose/1) — the refs ctx every comment body resolves
+        // against: this review's repo + slug space.
+        let repo_id = state
+            .store
+            .repo_id(&review.repo)?
+            .ok_or_else(|| ApiError::not_found(format!("no such repo: {:?}", review.repo)))?;
+        crate::prose_refs::RefCtx {
+            repo_id,
+            review_id: Some(review.id),
+            ps_number: Some(latest_ps.ps_number),
+        }
+    })?;
 
     // Flat suggestion list with the FULL applied-audit trail
     // (`applied_head_sha`) — the per-comment `suggestion` block above is

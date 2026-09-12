@@ -36,7 +36,7 @@ import { formatUnixSeconds, relativeTime } from "../../lib/format";
 import { timelineRows, type TimelineIconKind } from "../../lib/reviewTimeline";
 import { cycleLaneStep, laneLabel, TIMELINE_LANES, toggleLane } from "../../lib/timelineLanes";
 import { Icon } from "../icons";
-import SafeMarkdown from "../SafeMarkdown";
+import ProseBlock from "../prose/ProseBlock";
 
 const ICONS: Record<TimelineIconKind, (p: SVGProps<SVGSVGElement>) => JSX.Element> = {
   created: Icon.Note,
@@ -320,7 +320,12 @@ export default function TimelinePanel({ repo, reviewId, prBound }: TimelinePanel
                   )}
                   {row.detail && (
                     <div className="kbc-timeline__detail">
-                      <SafeMarkdown text={row.detail} fences />
+                      <ProseBlock text={row.detail} repo={repo} reviewId={reviewId} />
+                    </div>
+                  )}
+                  {row.bodyMd && (
+                    <div className="kbc-timeline__prose" data-kbc-timeline-body>
+                      <ProseBlock text={row.bodyMd} refs={row.bodyRefs} repo={repo} reviewId={reviewId} />
                     </div>
                   )}
                   {row.driftNote && (

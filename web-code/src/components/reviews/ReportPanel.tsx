@@ -3,7 +3,6 @@
 // Summary (markdown-lite), Section 02 findings, Section 03 files (rows link
 // into the Files tab), Section 04 CI checks, and (v1, this unit's placement
 // call — see this unit's own report) Section 05 GitHub conversation.
-import { useMemo } from "react";
 import type {
   ClaimOut,
   FindingSeverity,
@@ -13,8 +12,7 @@ import type {
   ReviewReportOut,
 } from "../../api/types";
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
-import { parseMarkdownLite, type InlineRun, type MarkdownBlock } from "../../lib/markdownLite";
-import { FenceBlock } from "../SafeMarkdown";
+import ProseBlock from "../prose/ProseBlock";
 import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
 // V76-R2a — the live-counts derivation's home moved to `lib/reviewRoom.ts`
 // (the hero needs it without a component↔lib cycle); re-exported here so
@@ -73,57 +71,6 @@ export function importCliCommands(reviewId: number): string[] {
     `kb-code review findings import ${reviewId} --stdin --json`,
     `kb-code review report ${reviewId} --set --from-file report.json --json`,
   ];
-}
-
-function InlineRuns({ runs }: { runs: InlineRun[] }) {
-  return (
-    <>
-      {runs.map((r, i) =>
-        r.kind === "bold" ? <b key={i}>{r.text}</b> : r.kind === "code" ? <code key={i}>{r.text}</code> : <span key={i}>{r.text}</span>,
-      )}
-    </>
-  );
-}
-
-function MarkdownLite({ text }: { text: string }) {
-  const blocks: MarkdownBlock[] = useMemo(
-    () => parseMarkdownLite(text, { fences: true }),
-    [text],
-  );
-  return (
-    <div className="kbc-report__summary">
-      {blocks.map((b, i) => {
-        if (b.kind === "paragraph") {
-          return (
-            <p key={i}>
-              <InlineRuns runs={b.runs} />
-            </p>
-          );
-        }
-        if (b.kind === "list") {
-          return (
-            <ul key={i}>
-              {b.items.map((item, j) => (
-                <li key={j}>
-                  <InlineRuns runs={item} />
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        // V76-C1 opts fences ON so a report summary that cites a snippet
-        // paints through highlight/1. Headings stay rendered as prose.
-        if (b.kind === "heading") {
-          return (
-            <p key={i}>
-              <InlineRuns runs={b.runs} />
-            </p>
-          );
-        }
-        return <FenceBlock key={i} text={b.text} lang={b.lang} />;
-      })}
-    </div>
-  );
 }
 
 export interface ReportPanelProps {
@@ -205,7 +152,7 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims, 
       />
 
       <div className="kbc-verdicts" data-kbc-room-section="verdict">
-        <AgentVerdictCard report={report} />
+        <AgentVerdictCard report={report} repo={repo} reviewId={review.id} />
       </div>
 
       {drift && (
@@ -217,7 +164,13 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims, 
       {report.summary && (
         <>
           <SectionDecor kind="summary" />
-          <MarkdownLite text={report.summary} />
+          <ProseBlock
+            className="kbc-report__summary"
+            text={report.summary}
+            refs={report.summary_refs}
+            repo={repo}
+            reviewId={review.id}
+          />
         </>
       )}
 

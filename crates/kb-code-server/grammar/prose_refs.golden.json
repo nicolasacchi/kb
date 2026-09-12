@@ -1,0 +1,326 @@
+{
+  "schema": "kbc-prose-refs-golden/1",
+  "unit": "V76-B3",
+  "about": "Golden corpus for crates/kb-code-server/src/prose_refs.rs (kbc-prose/1). De-identified sentences shaped like a real review run's finding texts. Spans are UTF-16 code-unit offsets into `text` (the consumer is the SPA, which slices JS strings). Refs are listed in span order, exactly as `extract` emits them on the wire (resolution fields are per-request and NOT pinned here). The SPA has NO mirror of this grammar — it consumes the server's refs — so this fixture is walked by the Rust golden test only.",
+  "cases": [
+    {
+      "name": "backticked-status-literal",
+      "text": "`status: 'in_queue'` is never set before the enqueue runs.",
+      "refs": [
+        {
+          "kind": "code",
+          "span": {
+            "start": 0,
+            "end": 20
+          },
+          "text": "status: 'in_queue'"
+        }
+      ]
+    },
+    {
+      "name": "path-with-range",
+      "text": "The guard in app/controllers/api/internal/ops_controller.rb:57-59 never authorizes the actor.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 13,
+            "end": 65
+          },
+          "text": "app/controllers/api/internal/ops_controller.rb:57-59",
+          "path": "app/controllers/api/internal/ops_controller.rb",
+          "line_start": 57,
+          "line_end": 59
+        }
+      ]
+    },
+    {
+      "name": "class-hash-method",
+      "text": "`OpsController#run` swallows the backend error and returns 200.",
+      "refs": [
+        {
+          "kind": "code",
+          "span": {
+            "start": 0,
+            "end": 19
+          },
+          "text": "OpsController#run"
+        },
+        {
+          "kind": "symbol",
+          "span": {
+            "start": 1,
+            "end": 18
+          },
+          "text": "OpsController#run",
+          "container": "OpsController",
+          "member": "run"
+        }
+      ]
+    },
+    {
+      "name": "namespace-class",
+      "text": "Billing::InvoiceService double-charges when the webhook retries.",
+      "refs": [
+        {
+          "kind": "symbol",
+          "span": {
+            "start": 0,
+            "end": 23
+          },
+          "text": "Billing::InvoiceService",
+          "container": "Billing::InvoiceService"
+        }
+      ]
+    },
+    {
+      "name": "combined-ns-method",
+      "text": "Checkout::UpdateCartService#item_attributes_for drops the locale.",
+      "refs": [
+        {
+          "kind": "symbol",
+          "span": {
+            "start": 0,
+            "end": 47
+          },
+          "text": "Checkout::UpdateCartService#item_attributes_for",
+          "container": "Checkout::UpdateCartService",
+          "member": "item_attributes_for"
+        }
+      ]
+    },
+    {
+      "name": "bang-method",
+      "text": "Order#confirm_payment! races with the webhook.",
+      "refs": [
+        {
+          "kind": "symbol",
+          "span": {
+            "start": 0,
+            "end": 22
+          },
+          "text": "Order#confirm_payment!",
+          "container": "Order",
+          "member": "confirm_payment!"
+        }
+      ]
+    },
+    {
+      "name": "finding-slug",
+      "text": "Same failure as f-double-charge but on the new path.",
+      "refs": [
+        {
+          "kind": "finding",
+          "span": {
+            "start": 16,
+            "end": 31
+          },
+          "text": "f-double-charge",
+          "slug": "f-double-charge"
+        }
+      ]
+    },
+    {
+      "name": "bare-capword-no-match",
+      "text": "The Product record is loaded twice.",
+      "refs": []
+    },
+    {
+      "name": "url-no-match",
+      "text": "Introduced by https://github.com/acme/shopfront/pull/77 last week.",
+      "refs": []
+    },
+    {
+      "name": "call-in-backticks",
+      "text": "`enqueue_order(` is called without an idempotency key.",
+      "refs": [
+        {
+          "kind": "code",
+          "span": {
+            "start": 0,
+            "end": 16
+          },
+          "text": "enqueue_order("
+        },
+        {
+          "kind": "call",
+          "span": {
+            "start": 1,
+            "end": 14
+          },
+          "text": "enqueue_order"
+        }
+      ]
+    },
+    {
+      "name": "path-list",
+      "text": "See config/routes.rb:12,18,44-47 for the three mounts.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 4,
+            "end": 32
+          },
+          "text": "config/routes.rb:12,18,44-47",
+          "path": "config/routes.rb",
+          "line_start": 12,
+          "lines": "12,18,44-47"
+        }
+      ]
+    },
+    {
+      "name": "path-member",
+      "text": "The total lives in app/models/order.rb#total now.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 19,
+            "end": 44
+          },
+          "text": "app/models/order.rb#total",
+          "path": "app/models/order.rb",
+          "member": "total"
+        }
+      ]
+    },
+    {
+      "name": "fence-not-scanned",
+      "text": "Try this:\n\n```ruby\napp/models/order.rb:12\nOrder#total\n```\n\nDone.",
+      "refs": []
+    },
+    {
+      "name": "markdown-link-not-double-linked",
+      "text": "[the controller](app/controllers/ops_controller.rb:9) already links it.",
+      "refs": []
+    },
+    {
+      "name": "dot-method",
+      "text": "Order.new is invoked from two places.",
+      "refs": [
+        {
+          "kind": "symbol",
+          "span": {
+            "start": 0,
+            "end": 9
+          },
+          "text": "Order.new",
+          "container": "Order",
+          "member": "new"
+        }
+      ]
+    },
+    {
+      "name": "non-bmp-utf16-spans",
+      "text": "💥 app/models/order.rb:4 fails.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 3,
+            "end": 24
+          },
+          "text": "app/models/order.rb:4",
+          "path": "app/models/order.rb",
+          "line_start": 4
+        }
+      ]
+    },
+    {
+      "name": "overflow-line-keeps-path",
+      "text": "app/models/order.rb:99999999999 is not a real line.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 0,
+            "end": 31
+          },
+          "text": "app/models/order.rb:99999999999",
+          "path": "app/models/order.rb"
+        }
+      ]
+    },
+    {
+      "name": "zero-line-keeps-path",
+      "text": "foo.rb:0 is not a line.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 0,
+            "end": 8
+          },
+          "text": "foo.rb:0",
+          "path": "foo.rb"
+        }
+      ]
+    },
+    {
+      "name": "code-and-symbol-interplay",
+      "text": "Call `Billing::InvoiceService#charge` from the worker.",
+      "refs": [
+        {
+          "kind": "code",
+          "span": {
+            "start": 5,
+            "end": 37
+          },
+          "text": "Billing::InvoiceService#charge"
+        },
+        {
+          "kind": "symbol",
+          "span": {
+            "start": 6,
+            "end": 36
+          },
+          "text": "Billing::InvoiceService#charge",
+          "container": "Billing::InvoiceService",
+          "member": "charge"
+        }
+      ]
+    },
+    {
+      "name": "star-trim",
+      "text": "**app/models/order.rb:7** is the line.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 2,
+            "end": 23
+          },
+          "text": "app/models/order.rb:7",
+          "path": "app/models/order.rb",
+          "line_start": 7
+        }
+      ]
+    },
+    {
+      "name": "slug-case-sensitivity",
+      "text": "F-7 is not a slug and f- is not either.",
+      "refs": []
+    },
+    {
+      "name": "call-outside-backticks-not-extracted",
+      "text": "enqueue_order( is called from plain prose.",
+      "refs": []
+    },
+    {
+      "name": "doc-ext-registry-verbatim",
+      "text": "notes/design.md describes the plan.",
+      "refs": [
+        {
+          "kind": "path",
+          "span": {
+            "start": 0,
+            "end": 15
+          },
+          "text": "notes/design.md",
+          "path": "notes/design.md"
+        }
+      ]
+    }
+  ]
+}

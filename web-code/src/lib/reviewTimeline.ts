@@ -7,7 +7,7 @@
 // itself, so an unrecognized future kind can never crash the panel: it
 // degrades to a plain label via the `default` branch below (§8 "the room
 // never lies" — an honest generic row, not a blank gap or a thrown error).
-import type { ReviewTimelineAuthor, ReviewTimelineEvent } from "../api/types";
+import type { FieldRefs, ReviewTimelineAuthor, ReviewTimelineEvent } from "../api/types";
 import { readerUrl } from "./breadcrumbs";
 import { reviewDiffHref } from "./codeUrl";
 import { sessionUrl } from "./searchLanes";
@@ -55,6 +55,11 @@ export interface TimelineRow {
   /// V73-K2c — the drift caption, verbatim, when the event's own ref moved
   /// (e.g. a PR description snapshotted against a since-superseded head).
   driftNote?: string;
+  /// V76-B3 — the event's own `body_md` when the wire sent one, plus its
+  /// per-request prose refs. Absent (not empty) when the event has no body,
+  /// so `toEqual` on pre-B3 rows stays byte-identical.
+  bodyMd?: string;
+  bodyRefs?: FieldRefs;
 }
 
 function str(v: unknown): string | undefined {
@@ -326,10 +331,16 @@ function coreRow(e: ReviewTimelineEvent, repo: string, reviewId: number): Timeli
 /// keeping every pre-K2c row byte-identical.
 export function timelineRow(e: ReviewTimelineEvent, repo: string, reviewId: number): TimelineRow {
   const core = coreRow(e, repo, reviewId);
+  const bodyMd = typeof e.body_md === "string" ? e.body_md : undefined;
+  const bodyRefs =
+    e.body_refs && typeof e.body_refs === "object" && Array.isArray(e.body_refs.refs)
+      ? e.body_refs
+      : undefined;
   return {
     ...core,
     author: isAuthor(e.author) ? e.author : undefined,
     driftNote: driftNoteOf(e.drift),
+    ...(bodyMd != null ? { bodyMd, bodyRefs } : {}),
   };
 }
 
