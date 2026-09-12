@@ -10,7 +10,7 @@
 // SaveAsSetButton.tsx`'s from-session precedent rather than lifting the
 // mutation up into `Lens.tsx` and prop-drilling a callback down.
 
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import type { ScorecardOut } from "../../api/types";
 import { Icon } from "../icons";
 import { formatUnixSeconds, shortSha } from "../../lib/format";

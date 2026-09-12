@@ -7,7 +7,7 @@
 // ramps (`LensEntry.tsx`/`LensEntryByPath.tsx`) land here once resolved.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router";
 import CodeView, { type GotoSel } from "../components/CodeView";
 import GroupRail from "../components/lens/GroupRail";
 import type { GroupSelection } from "../components/lens/GroupRail";

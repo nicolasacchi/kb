@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";

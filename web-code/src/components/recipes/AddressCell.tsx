@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { KbcAddr } from "../../api/types";
 import { addrHref, addrLabel } from "../../lib/recipeAddr";
 import TrustBadge from "../TrustBadge";

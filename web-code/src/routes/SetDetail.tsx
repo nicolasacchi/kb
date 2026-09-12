@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router";
 import { ApiError, type SetSpanInput } from "../api/client";
 import type { SetSpanOut } from "../api/types";
 import EmptyState from "../components/EmptyState";

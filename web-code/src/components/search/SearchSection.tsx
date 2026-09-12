@@ -1,6 +1,6 @@
 import { fromWire, highlightSegments, sliceRanges, type MatchRange } from "../../lib/matchRanges";
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type {
   ChunkHit,
   FileHit,

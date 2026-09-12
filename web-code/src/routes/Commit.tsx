@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { ApiError } from "../api/client";
 import AttributionCard from "../components/history/AttributionCard";
 import FileChangeRow from "../components/history/FileChangeRow";

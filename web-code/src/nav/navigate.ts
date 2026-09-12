@@ -24,7 +24,7 @@
 // rendering. Two owners, one for each half, with no overlap.
 
 import { useCallback, useMemo, useRef } from "react";
-import { useLocation as useRouterLocation, useNavigate } from "react-router-dom";
+import { useLocation as useRouterLocation, useNavigate } from "react-router";
 import { recordJump, type PaneId } from "../lib/navHistory";
 import type { TrailVia } from "../lib/codeUrl";
 import { historyAdapter } from "./history";

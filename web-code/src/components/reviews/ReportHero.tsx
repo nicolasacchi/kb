@@ -8,7 +8,7 @@
 // Every number comes off the wire through `lib/reviewRoom.ts`'s
 // derivations (`heroCounts` IS `ReportPanel`'s `liveFindingCounts`); this
 // component computes nothing itself.
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { ReviewDetailPr, ReviewFileRow, ReviewFinding, ReviewReport } from "../../api/types";
 import type { FindingSeverity } from "../../api/types";
 import { Icon } from "../icons";

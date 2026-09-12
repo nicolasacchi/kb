@@ -323,6 +323,14 @@ cross-document. Do not put durable per-hop metadata in `navigate(...,
 {info})`: `info` does not survive a back/forward round trip; the `via` edge
 that needs to survive one lives in the URL (`?via=`) and in `lib/trail.ts`.
 
+**Router (V76-R4d):** the SPA is on **react-router 7** (`BrowserRouter` +
+declarative `<Routes>` in `src/main.tsx`/`src/app.tsx`; no data router).
+v7 ships ONE package: import everything from `"react-router"` — there is no
+`react-router-dom` dependency anymore (the old `…/server` deep import for
+`StaticRouter` is also just `"react-router"` now).
+The `v7_*` future flags are v7's DEFAULTS (the `future` prop is gone); the
+four data-router flags were never applicable — no loaders/actions/fetchers.
+
 ## Themes (`kbc-theme/1`, `V70-A7`)
 
 **The role list IS the theme contract.** `SYNTAX_ROLES` in

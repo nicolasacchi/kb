@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { RangeDiffPair } from "../../api/types";
 import { commitUrl } from "../../lib/codeUrl";
 import { shortSha } from "../../lib/format";

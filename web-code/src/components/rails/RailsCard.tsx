@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { RailsRow } from "../../api/types";
 import TrustBadge from "../TrustBadge";
 import { cardOf, flagText } from "../../lib/railsCards";

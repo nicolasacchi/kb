@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { BranchOut } from "../../api/types";
 import { compareUrl } from "../../lib/codeUrl";
 

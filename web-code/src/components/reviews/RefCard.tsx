@@ -22,7 +22,7 @@
 // **Trust is LINE STYLE.** The tier rides the shared `TrustBadge`
 // (kbc-theme/1's Lane Budget) and never a hue this feature picks.
 import { useMemo, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { ReviewDocCard } from "../../api/types";
 import { Icon } from "../icons";
 import TrustBadge from "../TrustBadge";

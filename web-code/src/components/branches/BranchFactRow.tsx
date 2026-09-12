@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { BranchFactRow as Row } from "../../api/types";
 import { compareUrl, reviewUrl } from "../../lib/codeUrl";
 import { shortSha } from "../../lib/format";

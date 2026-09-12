@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { UNCOMMITTED_SHA } from "../../api/types";
 import DiffFile from "../diff/DiffFile";
 import { useDiff } from "../../hooks/useDiff";

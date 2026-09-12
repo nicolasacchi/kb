@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import FileChangeRow from "../components/history/FileChangeRow";
 import MergeCheckCard from "../components/history/MergeCheckCard";
 import PrCommentsStrip from "../components/history/PrCommentsStrip";

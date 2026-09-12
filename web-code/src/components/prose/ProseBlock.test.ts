@@ -1,7 +1,7 @@
 import { createElement as h, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { StaticRouter } from "react-router-dom/server";
-import { Route, Routes } from "react-router-dom";
+import { StaticRouter } from "react-router";
+import { Route, Routes } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { FieldRefs, ReviewComment, ReviewDetailPr, ReviewFinding, ReviewReport } from "../../api/types";

@@ -20,7 +20,7 @@
 //   `?view=`, never the other way round, so a URL always wins over a
 //   remembered preference and a copied link reproduces the sender's view.
 import { useCallback, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import {
   formatDiffPs,
   parseDiffCtx,

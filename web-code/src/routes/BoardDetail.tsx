@@ -22,7 +22,7 @@
 // still decides what to allow, and a refusal renders its own message.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import type { BoardNode } from "../api/types";
 import { ApiError } from "../api/client";
 import BoardCanvas from "../components/boards/BoardCanvas";

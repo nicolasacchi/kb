@@ -1,4 +1,4 @@
-import { matchPath, useLocation, useSearchParams } from "react-router-dom";
+import { matchPath, useLocation, useSearchParams } from "react-router";
 import { useRepos } from "./useRepos";
 
 // F1 — single source of truth for "which repo is the user in?", mirroring

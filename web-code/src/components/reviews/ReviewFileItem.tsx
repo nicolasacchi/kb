@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { codeUrl } from "../../lib/codeUrl";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import type { ReviewFileRow, ReviewRiskFile } from "../../api/types";
 import DiffFile from "../diff/DiffFile";
 import BlastRadiusStrip from "./BlastRadiusStrip";

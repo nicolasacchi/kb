@@ -16,7 +16,7 @@
 // landing-page load would cost every `~reviews` visit a full corpus scan
 // for a number most visits never look at.
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { ReviewAnalyticsOut } from "../../api/types";
 import { useReviewAnalytics } from "../../hooks/useReviews";
 import { reviewUrl } from "../../lib/codeUrl";

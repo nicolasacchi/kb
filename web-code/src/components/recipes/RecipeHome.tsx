@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { KbcCatalogEntry } from "../../api/types";
 import { RECIPE_INTENT_ORDER, recipeIntentLabel } from "../../lib/recipeAddr";
 import { recipeRunUrl } from "../../lib/recipeUrl";

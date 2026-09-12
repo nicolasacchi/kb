@@ -1,4 +1,4 @@
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { useLanes } from "../hooks/useLanes";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";

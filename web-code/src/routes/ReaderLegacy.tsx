@@ -26,7 +26,7 @@
 // in `app.tsx`, and `e2e/desk-legacy.spec.ts`.
 //
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   fetchDefs,

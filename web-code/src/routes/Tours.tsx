@@ -14,7 +14,7 @@
 // this page renders one — two fields that must agree is the drift this
 // codebase keeps designing out.
 
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
 import { useTours } from "../hooks/useTours";

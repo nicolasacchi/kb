@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useAnnotations, usePatchAnnotation } from "../../hooks/useAnnotations";
 import { groupThreads } from "../../lib/annotations";
 import { commitUrl } from "../../lib/codeUrl";

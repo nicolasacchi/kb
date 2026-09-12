@@ -39,7 +39,7 @@
 // a caller never has to know which browser it is in.
 
 import { useEffect, useRef } from "react";
-import { useLocation as useRouterLocation } from "react-router-dom";
+import { useLocation as useRouterLocation } from "react-router";
 import { historyAdapter } from "../nav/history";
 
 const PREFIX = "kbc:scroll:";

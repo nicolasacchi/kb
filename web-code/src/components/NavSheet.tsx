@@ -6,7 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import { Icon } from "./icons";
 import { cycleTheme, loadTheme, loadThemeFamily } from "../lib/prefs";
 import {

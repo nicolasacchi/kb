@@ -8,7 +8,7 @@
 // landing that talks to the GitHub read overlay, so it (and only it)
 // degrades on `unavailable_reason` rather than blocking the room.
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import type { PrOut } from "../../api/types";
 import { ApiError } from "../../api/client";
 import { useCreateReviewPr } from "../../hooks/useReviews";

@@ -23,7 +23,7 @@
 // ABSENT, not disabled).
 
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { useCommandHandlers } from "../../commands/CommandRoot";
 import { useLoopback } from "../../hooks/useLoopback";
 import { currentTrailId, loadTrail, type TrailStep } from "../../lib/trail";

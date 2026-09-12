@@ -16,7 +16,7 @@
 //      and `kbc-trail/1` server trails are v7.4.
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { parseTrailLink, type TrailLink } from "../lib/codeUrl";
 import { joinTabRegistry, requestTrail, setTabTrail } from "../lib/tabRegistry";
 import { loadTrail, type Trail } from "../lib/trail";

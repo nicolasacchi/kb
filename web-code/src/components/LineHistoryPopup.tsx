@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { Icon } from "./icons";
 import { UNCOMMITTED_SHA } from "../api/types";
 import { useBlameTimeline } from "../hooks/useBlameTimeline";

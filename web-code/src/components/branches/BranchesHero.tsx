@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { BranchOut } from "../../api/types";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { codeBasePath, commitUrl, reviewsUrl } from "../../lib/codeUrl";

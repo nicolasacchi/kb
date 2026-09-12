@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 // F3a — route-level error boundary, ported from kb's own
 // `web/src/components/ErrorBoundary.tsx` (root CLAUDE.md invariant #32). A

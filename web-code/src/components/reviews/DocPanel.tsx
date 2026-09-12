@@ -21,7 +21,7 @@
 // **Authoring is not here.** Composing is loopback-only (D22); the header
 // offers the `kb-code review compose` line to copy, and nothing else.
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { ClaimOut, ReviewDocLintOut, ReviewDocOut } from "../../api/types";
 import { Icon } from "../icons";
 import ClaimRegister from "./ClaimRegister";
