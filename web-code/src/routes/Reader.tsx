@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -2641,7 +2642,18 @@ export default function Reader() {
   }
 
   function handleHierClose() {
-    dispatchHier({ type: "CLOSE" });
+    // V76-R4d round 2 — react-router 7 wraps every navigation state update
+    // in React.startTransition (no opt-out), and a local dispatch made
+    // while such a transition is pending is entangled with it: the commit
+    // is deferred until the transition settles, so Esc left
+    // `[data-kbc-hierarchy]` mounted past the spec's assertion window.
+    // flushSync forces THIS local update to commit on the same tick as the
+    // keydown — the panel's open/closed state is already local
+    // (`hierarchyReducer`), it is only the commit timing that changed under
+    // v7. (flushSync is NOT a usable answer for URL-bound controls — the
+    // router's own setState stays transition-wrapped inside it; see
+    // Stacks.tsx's optimistic toggle.)
+    flushSync(() => dispatchHier({ type: "CLOSE" }));
     paneRepoPath(hierOwnerPaneRef.current).viewRef.current?.focus();
   }
 

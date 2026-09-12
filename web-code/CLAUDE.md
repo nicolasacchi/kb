@@ -331,6 +331,28 @@ v7 ships ONE package: import everything from `"react-router"` — there is no
 The `v7_*` future flags are v7's DEFAULTS (the `future` prop is gone); the
 four data-router flags were never applicable — no loaders/actions/fetchers.
 
+**v7 wraps every navigation in `React.startTransition` — URL-bound
+controls need optimistic state (V76-R4d round 2).** A controlled checkbox
+bound DIRECTLY to `useSearchParams()` (onChange → `setSearchParams`/
+`navigate`) no longer flips on the same tick as the change event: React's
+`restoreControlledState` snaps the DOM node back to the last committed
+render until the transition commits, and Playwright's `check()` reads
+exactly that window. The rule: a controlled form element bound to a search
+param keeps LOCAL OPTIMISTIC state that flips synchronously and reconciles
+with the URL in an effect (`routes/Stacks.tsx`'s `all` toggle is the
+reference shape; `flushSync` around `navigate` does NOT work — the router's
+own setState stays transition-wrapped inside it). Symmetrically, a LOCAL
+state update (panel open/close) dispatched while a navigation transition
+is pending is entangled and deferred; where a spec asserts the flip
+synchronously, wrap the local dispatch in `flushSync`
+(`Reader.tsx`'s `handleHierClose`). Both defects live only in the DOM
+commit path, so their unit pins
+(`routes/Stacks.allToggle.test.ts`,
+`components/hierarchy/HierarchyPanel.close.test.ts`) opt into jsdom with a
+per-file `// @vitest-environment jsdom` pragma — the recorded exception to
+the suite's node-only default; the pins assert the DOM state IMMEDIATELY
+after a native event, never behind `waitFor`.
+
 ## Themes (`kbc-theme/1`, `V70-A7`)
 
 **The role list IS the theme contract.** `SYNTAX_ROLES` in

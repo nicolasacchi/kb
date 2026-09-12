@@ -34,10 +34,27 @@ export default function Stacks() {
     setSelectedBranch(branchParam);
   }, [branchParam]);
 
+  // V76-R4d round 2 — react-router 7 wraps every navigation state update in
+  // React.startTransition (no opt-out), so a controlled checkbox bound
+  // DIRECTLY to a search param stays at the last committed render's value
+  // until the transition lands: React's restoreControlledState snaps the
+  // DOM node back right after the change event, and Playwright's check()
+  // reads exactly that moment ("Clicking the checkbox did not change its
+  // state"). The standard v7 answer is LOCAL OPTIMISTIC state: the box
+  // flips on the same tick as the change, and reconciles with the URL when
+  // the navigation commits (the effect below). The stacks QUERY keeps
+  // reading the URL — the URL stays the source of truth for data; only the
+  // checkbox's own checked rendering is optimistic.
+  const [allOptimistic, setAllOptimistic] = useState(all);
+  useEffect(() => {
+    setAllOptimistic(all);
+  }, [all]);
+
   const stacksQ = useStacks({ repo, all });
   const layerDiffQ = useStacksLayerDiff(repo, selectedBranch || undefined, !!selectedBranch);
 
   function setAll(next: boolean) {
+    setAllOptimistic(next);
     navigate(stacksUrl(repo, { all: next, branch: selectedBranch || undefined }), {
       replace: true,
     });
@@ -65,7 +82,7 @@ export default function Stacks() {
         <label className="kbc-stacks__all-lab">
           <input
             type="checkbox"
-            checked={all}
+            checked={allOptimistic}
             onChange={(e) => setAll(e.target.checked)}
             data-kbc-stacks-all
           />
