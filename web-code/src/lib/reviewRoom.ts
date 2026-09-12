@@ -201,10 +201,12 @@ export function heroAgentOf(
 /// summary's FIRST paragraph (never the whole body — Section 01 renders
 /// that). `null` when the report carries neither.
 export function heroLedeOf(report: Pick<ReviewReport, "deck" | "summary">): string | null {
-  const deck = report.deck?.trim();
-  if (deck) return deck;
-  const first = report.summary?.split(/\n\s*\n/)[0]?.trim();
-  return first || null;
+  // Keep source offsets intact for the server's prose refs. Trim only to
+  // decide whether the field is empty, never the text being rendered.
+  const deck = report.deck;
+  if (deck?.trim()) return deck;
+  const first = report.summary?.split(/\n\s*\n/)[0];
+  return first?.trim() ? first : null;
 }
 
 /// `base_source` rides NO review wire today (`ReviewDetail` has no such

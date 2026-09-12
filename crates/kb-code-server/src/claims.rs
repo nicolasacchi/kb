@@ -223,6 +223,10 @@ pub struct ClaimOut {
     pub current_blob: Option<String>,
     pub state: &'static str,
     pub caption: String,
+    /// V76-B3 (kbc-prose/1) — the `body_md` prose refs, computed per
+    /// request by the ROUTES (`claim_out` itself stays pure and leaves this
+    /// empty); additive, never persisted, never a ranking input (rule (a)).
+    pub refs: crate::prose_refs::FieldRefs,
     pub created_at: i64,
 }
 
@@ -249,8 +253,36 @@ pub fn claim_out(row: &store::ClaimRow, repo: &str, current_blob: Option<&str>) 
         current_blob: current_blob.map(str::to_string),
         state,
         caption,
+        refs: crate::prose_refs::FieldRefs::default(),
         created_at: row.created_at,
     }
+}
+
+/// V76-B3 (kbc-prose/1) — resolve a claim's `body_md` refs on the blocking
+/// pool and attach them. The ONE place routes fill the field `claim_out`
+/// leaves empty.
+async fn with_refs(
+    state: &SharedState,
+    repo_id: i64,
+    mut out: ClaimOut,
+) -> Result<ClaimOut, ApiError> {
+    let body = out.body_md.clone();
+    let review_id = out.review_id;
+    out.refs = state
+        .store
+        .run_blocking(move |store| {
+            crate::prose_refs::field_refs(
+                store,
+                &crate::prose_refs::RefCtx {
+                    repo_id,
+                    review_id,
+                    ps_number: None,
+                },
+                &body,
+            )
+        })
+        .await?;
+    Ok(out)
 }
 
 /// Stored evidence is a JSON array of ref STRINGS. A row whose JSON does
@@ -375,10 +407,16 @@ pub async fn create_claim(
         .run_blocking(move |store| store.insert_claim(&insert))
         .await?;
     let current = current_blob_for(&state, repo_id, &row).await;
+    let out = with_refs(
+        &state,
+        repo_id,
+        claim_out(&row, &repo_name, current.as_deref()),
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
-        Json(claim_out(&row, &repo_name, current.as_deref())),
+        Json(out),
     ))
 }
 
@@ -456,7 +494,7 @@ pub async fn list_claims(
         review_id: params.review,
         kind: params.kind.clone(),
     };
-    let (rows, total, blobs) = state
+    let (rows, total, blobs, refs) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let total = store.count_claims(&filter)?;
@@ -472,14 +510,33 @@ pub async fn list_claims(
                     }
                 }
             }
-            Ok((rows, total, blobs))
+            // V76-B3 (kbc-prose/1) — one refs pass over the page, inside the
+            // SAME store trip as the reads it resolves against.
+            let refs = rows
+                .iter()
+                .map(|r| {
+                    crate::prose_refs::field_refs(
+                        store,
+                        &crate::prose_refs::RefCtx {
+                            repo_id,
+                            review_id: r.review_id,
+                            ps_number: None,
+                        },
+                        &r.body_md,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((rows, total, blobs, refs))
         })
         .await?;
     let claims: Vec<ClaimOut> = rows
         .iter()
-        .map(|r| {
+        .zip(refs)
+        .map(|(r, refs)| {
             let current = r.subject_path.as_deref().and_then(|p| blobs.get(p));
-            claim_out(r, &repo_name, current.map(String::as_str))
+            let mut out = claim_out(r, &repo_name, current.map(String::as_str));
+            out.refs = refs;
+            out
         })
         .collect();
     Ok((
@@ -510,10 +567,13 @@ pub async fn get_claim(
     let repo = crate::routes::find_repo_by_id(&state, row.repo_id)?;
     let repo_name = repo.name.clone();
     let current = current_blob_for(&state, row.repo_id, &row).await;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(claim_out(&row, &repo_name, current.as_deref())),
-    ))
+    let out = with_refs(
+        &state,
+        row.repo_id,
+        claim_out(&row, &repo_name, current.as_deref()),
+    )
+    .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
 }
 
 // --- route contracts (invariant 15) ---------------------------------------

@@ -7,6 +7,7 @@ import { findingsByAnnotationId } from "../../lib/diffFindings";
 import { matchesQuestionFilter, questionStateForThread, type QuestionFilterKey } from "../../lib/questionState";
 import { commentSide, indexThreads } from "../../lib/reviewComments";
 import { FindingRow } from "./FindingCard";
+import ProseBlock from "../prose/ProseBlock";
 import GithubDiffCard from "./GithubDiffCard";
 import { reviewDiffHref } from "./ReviewHeader";
 import { rungForMouse, type RampRung, type RampTarget } from "../../nav/ramp";
@@ -314,7 +315,15 @@ export default function ReviewThreadsCard({
                     : c.resolution.line != null
                       ? ` · L${c.resolution.line}`
                       : ""}{" "}
-                  · {c.author}: {c.body}
+                  · {c.author}:{" "}
+                  <ProseBlock
+                    text={c.body}
+                    refs={c.body_refs}
+                    repo={repo}
+                    reviewId={reviewId}
+                    inline
+                    nolink
+                  />
                 </Link>
               );
             })}

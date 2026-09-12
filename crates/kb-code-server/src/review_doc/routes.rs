@@ -246,6 +246,9 @@ pub struct DocOut {
     /// The lossless record: front matter + body, byte-for-byte as composed.
     pub doc_md: String,
     pub summary_md: String,
+    /// V76-B3 (kbc-prose/1) — `summary_md`'s prose refs, per request, never
+    /// persisted. Always present (empty when the summary carries none).
+    pub summary_refs: crate::prose_refs::FieldRefs,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub risk: Option<review_doc::Risk>,
@@ -383,8 +386,11 @@ async fn build_doc_out(
 
     let doc_ci = doc.ci.clone();
     let question_count = doc.questions.len();
+    // V76-B3 (kbc-prose/1) — the summary lede's prose refs, computed in the
+    // SAME store trip as the rest (additive `summary_refs` on DocOut).
+    let summary_for_refs = doc_c.summary_md.clone();
 
-    let (findings, reading_order, ci, cards) = state
+    let (findings, reading_order, ci, cards, summary_refs) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let findings: Vec<FindingBrief> = store
@@ -450,7 +456,16 @@ async fn build_doc_out(
             } else {
                 None
             };
-            Ok((findings, reading_order, ci, cards))
+            let summary_refs = crate::prose_refs::field_refs(
+                store,
+                &crate::prose_refs::RefCtx {
+                    repo_id,
+                    review_id: Some(id),
+                    ps_number: Some(ps_c.ps_number),
+                },
+                &summary_for_refs,
+            )?;
+            Ok((findings, reading_order, ci, cards, summary_refs))
         })
         .await?;
 
@@ -465,6 +480,7 @@ async fn build_doc_out(
         created_at: row.created_at,
         doc_md: row.doc_md.clone(),
         summary_md: doc_c.summary_md,
+        summary_refs,
         risk: doc_c.risk,
         reading_order,
         ci,

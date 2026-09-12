@@ -661,7 +661,32 @@ pub(crate) fn compose_finding_view(
         None => orphaned_resolution(target_ps),
     };
     let unresolved = replies.iter().filter(|r| !r.resolved).count();
-    Ok(finding_json(row, &resolution, replies.len(), unresolved))
+    let mut view = finding_json(row, &resolution, replies.len(), unresolved);
+    // V76-B3 (kbc-prose/1) — additive per-field refs, the SAME helper
+    // `list_findings_route`'s batch pass uses, so the single-finding routes
+    // and the list can never disagree about the key names.
+    if let Some(review) = store.get_review(row.review_id)? {
+        if let Some(repo_id) = store.repo_id(&review.repo)? {
+            let ctx = crate::prose_refs::RefCtx {
+                repo_id,
+                review_id: Some(row.review_id),
+                ps_number: Some(target_ps.ps_number),
+            };
+            if let (Some(obj), serde_json::Value::Object(m)) = (
+                view.as_object_mut(),
+                crate::prose_refs::finding_field_refs(
+                    store,
+                    &ctx,
+                    &row.title,
+                    &row.rationale,
+                    row.recommendation.as_deref(),
+                )?,
+            ) {
+                obj.extend(m);
+            }
+        }
+    }
+    Ok(view)
 }
 
 // --- routes --------------------------------------------------------------
@@ -1519,7 +1544,7 @@ pub async fn list_findings_route(
     AxumPath(id): AxumPath<i64>,
     Query(params): Query<ListFindingsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (review, repo, _repo_id) = require_review(&state, id).await?;
+    let (review, repo, repo_id) = require_review(&state, id).await?;
     if let Some(d) = params.disposition.as_deref() {
         if !store::is_valid_disposition(d) {
             return Err(ApiError::bad_request(format!(
@@ -1584,6 +1609,43 @@ pub async fn list_findings_route(
         };
         let unresolved = replies.iter().filter(|r| !r.resolved).count();
         out.push(finding_json(f, &resolution, replies.len(), unresolved));
+    }
+
+    // V76-B3 (kbc-prose/1) — every prose field carries its refs, computed
+    // per request through `prose_refs`'s store/ODB ladders (never
+    // persisted, capped at `prose_refs::MAX_REFS_PER_FIELD` with an honest
+    // `truncated`). ONE blocking-pool trip for the whole batch — the same
+    // store-mutex discipline as the three reads above.
+    let ref_inputs: Vec<(String, String, Option<String>)> = findings
+        .iter()
+        .map(|f| {
+            (
+                f.title.clone(),
+                f.rationale.clone(),
+                f.recommendation.clone(),
+            )
+        })
+        .collect();
+    let refs_list = state
+        .store
+        .run_blocking(move |store| -> Result<Vec<serde_json::Value>, ApiError> {
+            let ctx = crate::prose_refs::RefCtx {
+                repo_id,
+                review_id: Some(id),
+                ps_number: Some(target_ps.ps_number),
+            };
+            ref_inputs
+                .iter()
+                .map(|(t, r, rec)| {
+                    crate::prose_refs::finding_field_refs(store, &ctx, t, r, rec.as_deref())
+                })
+                .collect()
+        })
+        .await?;
+    for (v, refs) in out.iter_mut().zip(refs_list) {
+        if let (Some(obj), serde_json::Value::Object(m)) = (v.as_object_mut(), refs) {
+            obj.extend(m);
+        }
     }
 
     Ok((

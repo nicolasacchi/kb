@@ -19,6 +19,7 @@ import { ActChip, CategoryChip, SeverityChip } from "./RoomChips";
 // without threading a new prop through `ReportPanel`/`ReviewThreadsCard`.
 import { eligibleForPublishMark, toggleMark, useIsMarked } from "../../lib/publishMarks";
 import RecurrenceChip from "./RecurrenceChip";
+import ProseBlock from "../prose/ProseBlock";
 import HighlightedSnippet from "../HighlightedSnippet";
 
 /// Section 02's severity ordering (blockers first, then concerns, then
@@ -142,10 +143,10 @@ function SeverityMeta({ finding, showAgentMark = true }: { finding: ReviewFindin
           line at the same severity are different things to a reader. The
           `data-kbc-finding-act`/`data-kbc-finding-severity` hooks ride the
           chips so existing selectors keep working. */}
-      <span data-kbc-finding-severity={finding.severity} className="kbc-finding__chipslot">
+      <span data-kbc-finding-severity={finding.severity} className="kbc-finding__chipslot kbc-finding__sev">
         <SeverityChip severity={finding.severity} />
       </span>
-      <span data-kbc-finding-act={findingAct(finding)} className="kbc-finding__chipslot">
+      <span data-kbc-finding-act={findingAct(finding)} className={`kbc-finding__chipslot ${findingActClass(finding)}`}>
         <ActChip act={finding.act} />
       </span>
       <CategoryChip category={finding.category} />
@@ -233,11 +234,17 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
       </header>
       <div className="kbc-finding__body">
         <h3 className="kbc-finding__ti" data-kbc-finding-title>
-          {finding.title}
+          <ProseBlock text={finding.title} refs={finding.title_refs} repo={repo} reviewId={reviewId} inline />
         </h3>
-        <p className="kbc-finding__ra" data-kbc-finding-rationale>
-          {finding.rationale}
-        </p>
+        <div className="kbc-finding__ra" data-kbc-finding-rationale>
+          <ProseBlock
+            text={finding.rationale}
+            refs={finding.rationale_refs}
+            repo={repo}
+            reviewId={reviewId}
+            fallbackLang={finding.evidence?.lang}
+          />
+        </div>
         {finding.evidence && (finding.evidence.source || finding.evidence.lang) && (
           <div className="kbc-codewrap" data-kbc-finding-evidence>
             <div className="head">
@@ -254,7 +261,12 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
       </div>
       {finding.recommendation && (
         <div className="kbc-finding__rc" data-kbc-finding-recommendation>
-          {finding.recommendation}
+          <ProseBlock
+            text={finding.recommendation}
+            refs={finding.recommendation_refs}
+            repo={repo}
+            reviewId={reviewId}
+          />
         </div>
       )}
       {/* SECONDARY refs (findings v2). They never compete with the PRIMARY

@@ -24,6 +24,7 @@ import { severityToken } from "./AgentVerdictCard";
 import { prExternalUrl } from "./PrChip";
 import RiskDial from "./RiskDial";
 import { SectionDecor } from "./RoomChips";
+import ProseBlock from "../prose/ProseBlock";
 
 export interface ReportHeroProps {
   repo: string;
@@ -37,6 +38,7 @@ export interface ReportHeroProps {
 }
 
 export default function ReportHero({
+  repo,
   review,
   report,
   findings,
@@ -107,7 +109,7 @@ export default function ReportHero({
         )}
       </div>
 
-      <div className="kbc-room-hero__counts" data-kbc-room-hero-counts>
+      <div className="kbc-room-hero__counts kbc-stats" data-kbc-room-hero-counts data-kbc-report-stats>
         <button
           type="button"
           className="kbc-room-chip kbc-room-chip--btn"
@@ -116,7 +118,11 @@ export default function ReportHero({
           title="filter the findings rail to blockers"
           data-kbc-room-hero-count="blocker"
         >
-          <Icon.Warn /> {counts.blockers} blocker{counts.blockers === 1 ? "" : "s"}
+          <Icon.Warn />
+          <span className="cell b">
+            <span className="v">{counts.blockers}</span>{" "}
+            <span className="l">blocker{counts.blockers === 1 ? "" : "s"}</span>
+          </span>
         </button>
         <button
           type="button"
@@ -126,7 +132,11 @@ export default function ReportHero({
           title="filter the findings rail to concerns"
           data-kbc-room-hero-count="concern"
         >
-          <Icon.Warn /> {counts.concerns} concern{counts.concerns === 1 ? "" : "s"}
+          <Icon.Warn />
+          <span className="cell c">
+            <span className="v">{counts.concerns}</span>{" "}
+            <span className="l">concern{counts.concerns === 1 ? "" : "s"}</span>
+          </span>
         </button>
         <button
           type="button"
@@ -136,7 +146,10 @@ export default function ReportHero({
           title="filter the findings rail to verified-ok findings"
           data-kbc-room-hero-count="ok"
         >
-          <Icon.Check /> {counts.verified} verified
+          <Icon.Check />
+          <span className="cell o">
+            <span className="v">{counts.verified}</span> <span className="l">verified</span>
+          </span>
         </button>
         <span
           className="kbc-room-chip"
@@ -148,8 +161,18 @@ export default function ReportHero({
       </div>
 
       {lede && (
-        <p className="kbc-room-hero__lede" data-kbc-room-hero-lede>
-          {lede}
+        <p
+          className={`kbc-room-hero__lede${report.deck?.trim() ? " kbc-report__deck" : ""}`}
+          data-kbc-room-hero-lede
+          data-kbc-report-deck={report.deck?.trim() ? "" : undefined}
+        >
+          <ProseBlock
+            text={lede}
+            refs={report.deck?.trim() ? report.deck_refs : report.summary_refs}
+            repo={repo}
+            reviewId={review.id}
+            inline
+          />
         </p>
       )}
 

@@ -2,6 +2,7 @@
 import type { Author } from "./Author";
 import type { Card } from "./Card";
 import type { CiOut } from "./CiOut";
+import type { FieldRefs } from "./FieldRefs";
 import type { FindingBrief } from "./FindingBrief";
 import type { Flow } from "./Flow";
 import type { Question } from "./Question";
@@ -20,7 +21,12 @@ revisions: number, tier: string, created_at: number,
 /**
  * The lossless record: front matter + body, byte-for-byte as composed.
  */
-doc_md: string, summary_md: string, risk?: Risk, reading_order: ReadingOrderOut, 
+doc_md: string, summary_md: string, 
+/**
+ * V76-B3 (kbc-prose/1) — `summary_md`'s prose refs, per request, never
+ * persisted. Always present (empty when the summary carries none).
+ */
+summary_refs: FieldRefs, risk?: Risk, reading_order: ReadingOrderOut, 
 /**
  * V73-K5 — the `ci:` block, authored-or-derived (same dual-source
  * pattern as `reading_order`).

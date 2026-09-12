@@ -22,7 +22,7 @@ import {
 } from "../../lib/suggestions";
 import { toast } from "../../lib/toast";
 import SuggestionEditor from "./SuggestionEditor";
-import SafeMarkdown from "../SafeMarkdown";
+import ProseBlock from "../prose/ProseBlock";
 import HighlightedSnippet from "../HighlightedSnippet";
 import { ApplySuggestionPreview, SuggestionDiffPanel } from "./SuggestionDiff";
 
@@ -268,9 +268,17 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       </div>
       {finding ? (
         <div className="kbc-rthread__finding-body" data-kbc-finding-body={finding.slug}>
-          <p className="kbc-rthread__finding-title">{finding.title}</p>
+          <p className="kbc-rthread__finding-title">
+            <ProseBlock text={finding.title} refs={finding.title_refs} repo={repo} reviewId={comments.reviewId} inline />
+          </p>
           <div className="kbc-rthread__body">
-            <SafeMarkdown text={finding.rationale} fences fallbackLang={finding.evidence?.lang} />
+            <ProseBlock
+              text={finding.rationale}
+              refs={finding.rationale_refs}
+              repo={repo}
+              reviewId={comments.reviewId}
+              fallbackLang={finding.evidence?.lang}
+            />
           </div>
           {finding.evidence?.source && (
             <div className="kbc-rthread__finding-evidence" data-kbc-finding-evidence>
@@ -284,13 +292,19 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
           {finding.recommendation && (
             <p className="kbc-rthread__finding-recommendation">
               <span aria-hidden="true">→ </span>
-              {finding.recommendation}
+              <ProseBlock
+                text={finding.recommendation}
+                refs={finding.recommendation_refs}
+                repo={repo}
+                reviewId={comments.reviewId}
+                inline
+              />
             </p>
           )}
         </div>
       ) : (
         <div className="kbc-rthread__body">
-          <SafeMarkdown text={thread.body} fences fallbackLang={null} />
+          <ProseBlock text={thread.body} refs={thread.body_refs} repo={repo} reviewId={comments.reviewId} />
         </div>
       )}
       {thread.suggestion && !editing && (
@@ -316,7 +330,9 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       )}
       {thread.replies.map((r) => (
         <div key={r.id} className="kbc-rthread__reply" data-kbc-review-thread-reply={r.id}>
-          <p className="kbc-rthread__body">{r.body}</p>
+          <div className="kbc-rthread__body">
+            <ProseBlock text={r.body} refs={r.body_refs} repo={repo} reviewId={comments.reviewId} />
+          </div>
           <span className="kbc-rthread__meta">
             {r.author} · {relativeTime(r.created_at)}
           </span>

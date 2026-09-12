@@ -227,6 +227,11 @@ pub struct TimelineEvent {
     /// The event's own prose, when it has any. Markdown, verbatim.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_md: Option<String>,
+    /// V76-B3 (kbc-prose/1) — `body_md`'s prose refs, attached by the route
+    /// for the returned page only (never computed for filtered-out events,
+    /// never persisted). Absent when the event has no body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_refs: Option<crate::prose_refs::FieldRefs>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drift: Option<Drift>,
     #[serde(flatten)]
@@ -243,6 +248,7 @@ impl TimelineEvent {
             author,
             r#ref: None,
             body_md: None,
+            body_refs: None,
             drift: None,
             detail: serde_json::Map::new(),
         }
@@ -1187,12 +1193,38 @@ pub async fn review_timeline_route(
     events.sort_by_key(|e| e.ts);
     let kept: Vec<&TimelineEvent> = events.iter().filter(|e| filters.keeps(e)).collect();
     let total = kept.len();
-    let page: Vec<serde_json::Value> = kept
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .map(TimelineEvent::to_value)
-        .collect();
+    let mut page_events: Vec<TimelineEvent> =
+        kept.into_iter().skip(offset).take(limit).cloned().collect();
+
+    // V76-B3 (kbc-prose/1) — `body_md` refs for the PAGE's events only (a
+    // filtered-out event never pays for resolution), one blocking-pool trip,
+    // computed per request and persisted nowhere.
+    {
+        let bodies: Vec<Option<String>> = page_events.iter().map(|e| e.body_md.clone()).collect();
+        let refs = state
+            .store
+            .run_blocking(
+                move |store| -> Result<Vec<Option<crate::prose_refs::FieldRefs>>, ApiError> {
+                    let ctx = crate::prose_refs::RefCtx {
+                        repo_id,
+                        review_id: Some(id),
+                        ps_number: ps.as_ref().map(|p| p.ps_number),
+                    };
+                    bodies
+                        .iter()
+                        .map(|b| match b {
+                            Some(b) => crate::prose_refs::field_refs(store, &ctx, b).map(Some),
+                            None => Ok(None),
+                        })
+                        .collect()
+                },
+            )
+            .await?;
+        for (e, r) in page_events.iter_mut().zip(refs) {
+            e.body_refs = r;
+        }
+    }
+    let page: Vec<serde_json::Value> = page_events.iter().map(TimelineEvent::to_value).collect();
 
     Ok((
         [(header::CACHE_CONTROL, "no-store")],

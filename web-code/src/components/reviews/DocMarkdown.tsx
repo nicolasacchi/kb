@@ -7,7 +7,9 @@
 // Safety is structural, as everywhere else in this SPA: nothing here builds
 // an HTML string and there is no `dangerouslySetInnerHTML` in `web-code/` at
 // all. Every run becomes a React text child, which React escapes.
+import type { FieldRefs } from "../../api/types";
 import type { DocBlock, DocRun } from "../../lib/reviewDoc";
+import { ProseRun } from "../prose/ProseBlock";
 import { FenceBlock } from "../SafeMarkdown";
 import RefCard from "./RefCard";
 
@@ -20,6 +22,8 @@ export interface DocMarkdownProps {
   cardsFolded: boolean;
   focusedRef: string | null;
   onToggleFold: (ref: string) => void;
+  /** V76-B3 — overlay kbc-prose/1 refs on non-card runs. */
+  proseRefs?: FieldRefs | null;
 }
 
 function Runs({
@@ -30,6 +34,7 @@ function Runs({
   cardsFolded,
   focusedRef,
   onToggleFold,
+  proseRefs,
 }: { runs: DocRun[] } & Omit<DocMarkdownProps, "blocks">) {
   return (
     <>
@@ -48,9 +53,25 @@ function Runs({
             />
           );
         }
-        if (r.kind === "bold") return <b key={i}>{r.text}</b>;
-        if (r.kind === "code") return <code key={i}>{r.text}</code>;
-        return <span key={i}>{r.text}</span>;
+        if (r.kind === "bold") {
+          return (
+            <b key={i}>
+              <ProseRun text={r.text} refs={proseRefs} repo={repo} reviewId={reviewId} base={-1} />
+            </b>
+          );
+        }
+        if (r.kind === "code") {
+          return (
+            <code key={i}>
+              <ProseRun text={r.text} refs={proseRefs} repo={repo} reviewId={reviewId} base={-1} />
+            </code>
+          );
+        }
+        return (
+          <span key={i}>
+            <ProseRun text={r.text} refs={proseRefs} repo={repo} reviewId={reviewId} base={-1} />
+          </span>
+        );
       })}
     </>
   );

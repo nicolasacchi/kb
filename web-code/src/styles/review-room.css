@@ -260,7 +260,9 @@
   border-radius: var(--radius-sm);
   font-size: 0.88em;
 }
-.kbc-stats {
+/* The hero retains the stats selectors, but its counts use chip layout.
+   Tile styling remains shared by the review analytics surface. */
+.kbc-stats:where(:not(.kbc-room-hero__counts)) {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   border: 1px solid var(--rule);
@@ -269,33 +271,33 @@
   background: var(--bg-card);
   margin: 12px 0 4px;
 }
-.kbc-stats .cell {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .cell {
   padding: 12px 16px;
   border-right: 1px solid var(--rule);
 }
-.kbc-stats .cell:last-child {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .cell:last-child {
   border-right: 0;
 }
-.kbc-stats .l {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .l {
   font-size: var(--fs-xs);
   color: var(--ink-dim);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 600;
 }
-.kbc-stats .v {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .v {
   font-size: 22px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   margin-top: 3px;
 }
-.kbc-stats .cell.b .v {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .cell.b .v {
   color: var(--red);
 }
-.kbc-stats .cell.c .v {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .cell.c .v {
   color: var(--warn);
 }
-.kbc-stats .cell.o .v {
+.kbc-stats:where(:not(.kbc-room-hero__counts)) .cell.o .v {
   color: var(--green);
 }
 .kbc-report__drift-caption {
