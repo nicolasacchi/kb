@@ -34,7 +34,20 @@ unmaintained = "workspace"
 # reports 0 yanked crates today (verified), so this only catches NEW yanks.
 yanked = "deny"
 ignore = [
-    # { id = "RUSTSEC-XXXX-NNNN", reason = "transitive via lance; no fix; not on an exploitable path" },
+    # quick-xml 0.39.4 is pinned by object_store 0.13 (`quick-xml ^0.39`),
+    # which datafusion 54 (= the ratified lockstep set) requires; the fixed
+    # 0.41 line needs object_store 0.14 / datafusion 55 — a future lockstep
+    # unit. The vulnerable XML parsing only runs on object_store's cloud
+    # (S3/GCS/azure) response paths; kb's build is local-only
+    # (`lancedb default-features = false`), so no kb code path parses
+    # untrusted XML through it.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39 capped by object_store 0.13 (datafusion 54 lockstep); cloud-only XML path, not in kb's local-only build" },
+    { id = "RUSTSEC-2026-0195", reason = "same as RUSTSEC-2026-0194 (quick-xml 0.39 via object_store 0.13; cloud-only path)" },
+    # rsa Marvin timing sidechannel: "no safe upgrade is available". rsa
+    # enters via opendal's reqsign cloud-signing stack (lance-io aws/azure/
+    # gcs features) — compiled only in the all-features deny graph, never in
+    # kb's local-only build; no kb key material is ever handled by it.
+    { id = "RUSTSEC-2023-0071", reason = "no fix exists; rsa via opendal reqsign (cloud signing), unreachable in kb's local-only build" },
 ]
 
 [licenses]
@@ -62,8 +75,6 @@ allow = [
     "BSL-1.0",                         # xxhash-rust (BSL-only); ryu (as OR alt)
     "Unlicense",                       # several crates as `Unlicense OR MIT`
     "MIT-0",                           # constant_time_eq (as OR alt)
-    "WTFPL",                           # terminfo 0.9 (single-license)
-    "zlib-acknowledgement",            # fastdivide (as OR alt; tantivy/lance path)
 
     # Public-domain-equivalent.
     "CC0-1.0",                         # notify, tiny-keccak, ...
@@ -96,15 +107,102 @@ exceptions = [
 ]
 
 [bans]
-# Multiple-version policy. The graph LEGITIMATELY carries duplicate majors
-# (rustix 0.38 + 1.x, linux-raw-sys 0.4 + 0.12, wit-bindgen, cssparser/selectors
-# from the scraper-vs-lol_html html stacks). `deny` would red CI on day one for
-# dupes we don't control — keep `warn` (visible, non-blocking) and tighten later
-# if a dedup effort lands.
-multiple-versions = "warn"
+# Multiple-version policy — V76-R4c (DEP-LOCKSTEP): flipped warn → deny.
+# Every remaining duplicate is transitive-only (no kb Cargo.toml edge can
+# collapse it) and carries a one-line root cause below. The two kb-side
+# majors that COULD collapse a cluster but are real migrations, not bumps,
+# are deferred with their own units named: toml 0.8→1.x (toml_edit
+# 0.22→0.25 + winnow + toml_datetime follow) and mdns-sd 0.13→0.21
+# (socket2 0.5 follows); reqwest 0.12→0.13 is BLOCKED by
+# reqwest-eventsource 0.6 (requires reqwest ^0.12).
+multiple-versions = "deny"
 wildcards = "allow"
 deny = []
-skip = []
+skip = [
+    # lance-namespace-impls 11's REST namespace server stack still on axum 0.7
+    # (ours is 0.8); axum-core/matchit/tower-http old lines follow axum 0.7.
+    { crate = "axum", version = "0.7.9", reason = "lance-namespace-impls 11 REST stack" },
+    { crate = "axum-core", version = "0.4.5", reason = "via axum 0.7" },
+    { crate = "matchit", version = "0.7.3", reason = "via axum 0.7" },
+    { crate = "tower-http", version = "0.5.2", reason = "via lance-namespace-impls 11" },
+    # base64: kb pins 0.22; 0.13 via spm_precompiled (tokenizers), 0.23 via opendal 0.58.
+    { crate = "base64", version = "0.13.1", reason = "spm_precompiled (tokenizer chain)" },
+    { crate = "base64", version = "0.23.1", reason = "opendal 0.58 (lance-io)" },
+    { crate = "bitflags", version = "1.3.2", reason = "kanaria (unicode chain)" },
+    # RustCrypto 0.10 chain: sha1-checked (gix-hash), rsa/pkcs5/scrypt
+    # (opendal reqsign), aws-config. kb's direct sha1/sha2 edge is on 0.11.
+    { crate = "block-buffer", version = "0.10.4", reason = "digest 0.10 chain" },
+    { crate = "const-oid", version = "0.9.6", reason = "der/rsa chain" },
+    { crate = "cpufeatures", version = "0.2.17", reason = "sha1/sha2 0.10, aes 0.8" },
+    { crate = "crypto-common", version = "0.1.7", reason = "digest 0.10 chain" },
+    { crate = "digest", version = "0.10.7", reason = "sha1-checked (gix) + rsa chain" },
+    { crate = "hmac", version = "0.12.1", reason = "pbkdf2 0.12 (rsa chain)" },
+    { crate = "md-5", version = "0.10.6", reason = "object_store 0.13" },
+    { crate = "sha1", version = "0.10.7", reason = "sha1-checked 0.10 (gix-hash)" },
+    { crate = "sha2", version = "0.10.9", reason = "pkcs5/rsa/scrypt (opendal reqsign)" },
+    { crate = "core-foundation", version = "0.9.4", reason = "rustls-platform-verifier/security-framework (macOS)" },
+    # lol_html 3.0 pins the older servo stack than scraper 0.27.
+    { crate = "cssparser", version = "0.36.0", reason = "lol_html 3 (scraper 0.27 uses 0.37)" },
+    { crate = "cssparser-macros", version = "0.6.1", reason = "via cssparser 0.36" },
+    { crate = "selectors", version = "0.37.0", reason = "lol_html 3 (scraper 0.27 uses 0.38)" },
+    { crate = "darling", version = "0.20.11", reason = "derive_builder 0.20 (transitive)" },
+    { crate = "darling_core", version = "0.20.11", reason = "via darling 0.20" },
+    { crate = "darling_macro", version = "0.20.11", reason = "via darling 0.20" },
+    { crate = "foldhash", version = "0.1.5", reason = "hashbrown 0.15" },
+    # getrandom: kb pins 0.4; 0.2 via lance-arrow 11/ring/rand_core 0.6,
+    # 0.3 via ahash/jobserver/quinn-proto/tokenizers.
+    { crate = "getrandom", version = "0.2.17", reason = "lance-arrow 11, ring" },
+    { crate = "getrandom", version = "0.3.4", reason = "ahash, jobserver, quinn-proto" },
+    # hashbrown: one version per consumer ecosystem (dashmap 6, petgraph
+    # 0.8, clru/quick_cache/safetensors).
+    { crate = "hashbrown", version = "0.14.5", reason = "dashmap 6 / hashlink" },
+    { crate = "hashbrown", version = "0.15.5", reason = "petgraph 0.8" },
+    { crate = "hashbrown", version = "0.16.1", reason = "clru / quick_cache / safetensors" },
+    # http 0.2 / http-body 0.4: aws-smithy stack (lance-io aws feature in the
+    # all-features deny graph).
+    { crate = "http", version = "0.2.12", reason = "aws-sdk smithy stack" },
+    { crate = "http-body", version = "0.4.6", reason = "aws-smithy-runtime" },
+    { crate = "itertools", version = "0.10.5", reason = "criterion (dev-only)" },
+    { crate = "itertools", version = "0.11.0", reason = "earcutr (geo chain)" },
+    { crate = "ndarray", version = "0.16.1", reason = "lance-index 11 (fastembed/ort use 0.17)" },
+    { crate = "nom", version = "7.1.3", reason = "eventsource-stream / spm_precompiled" },
+    { crate = "phf", version = "0.12.1", reason = "chrono-tz 0.10" },
+    { crate = "phf_shared", version = "0.12.1", reason = "via phf 0.12" },
+    { crate = "quick-xml", version = "0.39.4", reason = "object_store 0.13" },
+    { crate = "r-efi", version = "5.3.0", reason = "getrandom 0.3 (uefi target)" },
+    # rand: 0.8 via num-bigint-dig (rsa), 0.9 via tokenizers-era consumers;
+    # rand_chacha 0.3 / rand_core 0.6 follow rand 0.8.
+    { crate = "rand", version = "0.8.8", reason = "num-bigint-dig (rsa chain)" },
+    { crate = "rand", version = "0.9.4", reason = "tokenizers/getrandom-0.3 chain" },
+    { crate = "rand_chacha", version = "0.3.1", reason = "via rand 0.8" },
+    { crate = "rand_core", version = "0.6.4", reason = "via rand 0.8" },
+    { crate = "rand_core", version = "0.9.5", reason = "getrandom 0.3 / tokenizers" },
+    # reqwest: kb pins 0.12 — reqwest-eventsource 0.6 requires ^0.12, so the
+    # bump to 0.13 waits for an eventsource release; 0.13.5 enters via
+    # opendal-http-transport-reqwest / xet-client regardless.
+    { crate = "reqwest", version = "0.13.5", reason = "opendal 0.58 / xet (kb is on 0.12)" },
+    { crate = "wasm-streams", version = "0.5.0", reason = "follows reqwest 0.13" },
+    { crate = "snafu", version = "0.8.9", reason = "lancedb 0.38 (lance uses 0.9)" },
+    { crate = "snafu-derive", version = "0.8.9", reason = "via snafu 0.8" },
+    { crate = "socket2", version = "0.5.10", reason = "mdns-sd 0.13 (0.13→0.21 is its own unit)" },
+    { crate = "spin", version = "0.9.9", reason = "flume / lazy_static / multer" },
+    { crate = "syn", version = "2.0.117", reason = "proc-macro ecosystem split (3.0 via bytemuck/clap_derive)" },
+    { crate = "thiserror", version = "1.0.69", reason = "geoarrow-schema / protobuf" },
+    { crate = "thiserror-impl", version = "1.0.69", reason = "via thiserror 1" },
+    # toml: kb pins toml 0.8 / toml_edit 0.22; 0.25 enters via
+    # proc-macro-crate 3.5 (build-time). toml 1.x migration is its own unit.
+    { crate = "toml_datetime", version = "1.1.1+spec-1.1.0", reason = "via toml_edit 0.25 (proc-macro-crate)" },
+    { crate = "toml_edit", version = "0.25.15+spec-1.1.0", reason = "proc-macro-crate 3.5" },
+    { crate = "winnow", version = "1.0.4", reason = "via toml_edit 0.25" },
+    { crate = "wasi", version = "0.11.1+wasi-snapshot-preview1", reason = "getrandom 0.2 / mio" },
+    # windows platform crates: 0.52.6 family via tokio/mio-era consumers,
+    # 0.53.x via windows-sys 0.60/0.61.
+    { crate = "windows-sys", version = "0.52.0", reason = "mio / older tokio chain" },
+    { crate = "windows-sys", version = "0.59.0", reason = "windows 0.58-era consumers" },
+    { crate = "windows-sys", version = "0.60.2", reason = "windows 0.60 consumers" },
+    { crate = "windows-targets", version = "0.52.6", reason = "via windows-sys 0.52" },
+    { crate = "windows_aarch64_gnullvm", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_aarch64_msvc", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_i686_gnu", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_i686_gnullvm", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_i686_msvc", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_x86_64_gnu", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_x86_64_gnullvm", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_x86_64_msvc", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "wit-bindgen", version = "0.51.0", reason = "wasip3 (wasi 0.3 toolchain)" },
+]
 skip-tree = []
 
 [sources]

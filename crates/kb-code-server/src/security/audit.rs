@@ -94,7 +94,7 @@ fn is_review_gate_path(path: &str) -> bool {
 /// already uses, which is the crate's established id shape.
 fn new_request_id() -> String {
     let mut bytes = [0u8; 6];
-    if getrandom::getrandom(&mut bytes).is_err() {
+    if getrandom::fill(&mut bytes).is_err() {
         // getrandom failing is a broken host, not a reason to drop the
         // audit row — fall back to a monotonic-ish stamp so the row still
         // correlates within a boot.

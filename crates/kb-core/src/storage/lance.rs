@@ -61,10 +61,10 @@ pub type EmbeddingPair = (String, Vec<f32>);
 /// knobs share one opt-out convention: `0` restores the pre-knob lance
 /// behavior (uncapped caches / rebuild-on-every-dirty).
 ///
-/// Why the cache caps exist: lance 4.0.0's `Session` defaults are
-/// byte-weighted moka caches of 6 GiB (index) + 1 GiB (metadata) PER
+/// Why the cache caps exist: lance 11.0.0's `Session` defaults are
+/// byte-weighted caches of 6 GiB (index) + 1 GiB (metadata) PER
 /// connection (`lance::dataset::DEFAULT_INDEX_CACHE_SIZE` /
-/// `DEFAULT_METADATA_CACHE_SIZE`), held for the table's lifetime — on a
+/// `DEFAULT_METADATA_CACHE_SIZE`, dataset.rs:179/183), held for the table's lifetime — on a
 /// multi-kb daemon with a churny corpus this alone grew the resident heap to
 /// ~10 GB. The shipped defaults (256 / 64 MiB) cap that per kb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -555,7 +555,7 @@ impl Storage {
                 .map_err(|e| crate::Error::Storage(format!("lance connect: {e}")))?
         } else {
             const MIB: u64 = 1024 * 1024;
-            // lance 4.0.0 `dataset.rs:141/145` — mirrored here because the
+            // lance 11.0.0 `dataset.rs:179/183` — mirrored here because the
             // consts aren't re-exported through lancedb.
             const LANCE_DEFAULT_INDEX_CACHE_BYTES: u64 = 6 * 1024 * MIB;
             const LANCE_DEFAULT_METADATA_CACHE_BYTES: u64 = 1024 * MIB;
@@ -1312,7 +1312,7 @@ impl Storage {
         indices_dir: &Path,
         grace_secs: u64,
     ) -> OrphanGcStats {
-        use lance_index::DatasetIndexExt;
+        use lance::index::DatasetIndexExt;
 
         let mut stats = OrphanGcStats::default();
         let live: std::collections::HashSet<String> = 'live: {
@@ -2390,13 +2390,12 @@ impl Storage {
     #[allow(dead_code)]
     pub async fn add_nullable_string_column(&self, name: &str) -> Result<()> {
         self.table
-            .add_columns(
-                NewColumnTransform::SqlExpressions(vec![(
-                    name.to_string(),
-                    "CAST(NULL AS STRING)".to_string(),
-                )]),
-                None,
-            )
+            .add_columns()
+            .transform(NewColumnTransform::SqlExpressions(vec![(
+                name.to_string(),
+                "CAST(NULL AS STRING)".to_string(),
+            )]))
+            .execute()
             .await
             .map_err(|e| crate::Error::Storage(format!("lance add_columns: {e}")))?;
         Ok(())
@@ -3829,7 +3828,9 @@ async fn ensure_atlas_columns(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance atlas migration: {e}")))?;
     Ok(())
@@ -3872,7 +3873,9 @@ async fn ensure_v6_columns(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v6 migration: {e}")))?;
     Ok(())
@@ -3902,7 +3905,9 @@ async fn ensure_v7_kb_meta_columns(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v7 kb-meta migration: {e}")))?;
     Ok(())
@@ -3935,7 +3940,9 @@ async fn ensure_v9_memory_columns(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v9 memory migration: {e}")))?;
     Ok(())
@@ -3959,13 +3966,12 @@ async fn ensure_v14_session_column(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(
-            NewColumnTransform::SqlExpressions(vec![(
-                "kb_session".into(),
-                "CAST(NULL AS STRING)".into(),
-            )]),
-            None,
-        )
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(vec![(
+            "kb_session".into(),
+            "CAST(NULL AS STRING)".into(),
+        )]))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v14 session migration: {e}")))?;
     Ok(())
@@ -3990,13 +3996,12 @@ async fn ensure_v16_content_hash_column(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(
-            NewColumnTransform::SqlExpressions(vec![(
-                "content_hash".into(),
-                "CAST(NULL AS STRING)".into(),
-            )]),
-            None,
-        )
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(vec![(
+            "content_hash".into(),
+            "CAST(NULL AS STRING)".into(),
+        )]))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v16 content_hash migration: {e}")))?;
     Ok(())
@@ -4020,13 +4025,12 @@ async fn ensure_v15_created_column(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(
-            NewColumnTransform::SqlExpressions(vec![(
-                "created_unix".into(),
-                "CAST(NULL AS BIGINT)".into(),
-            )]),
-            None,
-        )
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(vec![(
+            "created_unix".into(),
+            "CAST(NULL AS BIGINT)".into(),
+        )]))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v15 created migration: {e}")))?;
     Ok(())
@@ -4057,7 +4061,9 @@ async fn ensure_v17_task_columns(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v17 task migration: {e}")))?;
     Ok(())
@@ -4081,13 +4087,12 @@ async fn ensure_v18_summary_column(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(
-            NewColumnTransform::SqlExpressions(vec![(
-                "kb_summary".into(),
-                "CAST(NULL AS STRING)".into(),
-            )]),
-            None,
-        )
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(vec![(
+            "kb_summary".into(),
+            "CAST(NULL AS STRING)".into(),
+        )]))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance v18 summary migration: {e}")))?;
     Ok(())
@@ -4120,7 +4125,9 @@ async fn ensure_mi_w3_memory_type_and_source_columns(table: &LanceTable) -> Resu
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance memory-type/source migration: {e}")))?;
     Ok(())
@@ -4161,7 +4168,9 @@ async fn ensure_u3_provenance_columns(table: &LanceTable) -> Result<()> {
         return Ok(());
     }
     table
-        .add_columns(NewColumnTransform::SqlExpressions(to_add), None)
+        .add_columns()
+        .transform(NewColumnTransform::SqlExpressions(to_add))
+        .execute()
         .await
         .map_err(|e| crate::Error::Storage(format!("lance U3 provenance migration: {e}")))?;
     Ok(())

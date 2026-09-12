@@ -254,7 +254,7 @@ fn read_registry_body(path: &Path) -> Result<String> {
 
 fn random_token() -> Result<String> {
     let mut buf = [0u8; TOKEN_BYTES];
-    getrandom::getrandom(&mut buf).context("getrandom")?;
+    getrandom::fill(&mut buf).context("getrandom")?;
     Ok(hex::encode(buf))
 }
 

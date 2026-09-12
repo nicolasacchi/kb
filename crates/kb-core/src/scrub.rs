@@ -80,13 +80,13 @@ pub fn scrub(html: &str, cache: &OutboundCache) -> String {
 fn strip_kb_prompt_template(html: &str) -> String {
     let mut output: Vec<u8> = Vec::with_capacity(html.len());
     let mut rewriter = HtmlRewriter::new(
-        Settings {
-            element_content_handlers: vec![element!(r#"template[id="kb-prompt"]"#, |el| {
+        Settings::new().append_element_content_handler(element!(
+            r#"template[id="kb-prompt"]"#,
+            |el| {
                 el.replace("", ContentType::Html);
                 Ok(())
-            })],
-            ..Settings::default()
-        },
+            }
+        )),
         |c: &[u8]| output.extend_from_slice(c),
     );
     if rewriter.write(html.as_bytes()).is_err() {

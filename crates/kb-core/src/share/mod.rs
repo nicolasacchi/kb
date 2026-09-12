@@ -1185,17 +1185,14 @@ fn rewrite_md_links(html: &str) -> String {
     use lol_html::{element, HtmlRewriter, Settings};
     let mut out: Vec<u8> = Vec::with_capacity(html.len());
     let mut rewriter = HtmlRewriter::new(
-        Settings {
-            element_content_handlers: vec![element!("a[href]", |el| {
-                if let Some(href) = el.get_attribute("href") {
-                    if let Some(rewritten) = md_href_to_html(&href) {
-                        let _ = el.set_attribute("href", &rewritten);
-                    }
+        Settings::new().append_element_content_handler(element!("a[href]", |el| {
+            if let Some(href) = el.get_attribute("href") {
+                if let Some(rewritten) = md_href_to_html(&href) {
+                    let _ = el.set_attribute("href", &rewritten);
                 }
-                Ok(())
-            })],
-            ..Settings::default()
-        },
+            }
+            Ok(())
+        })),
         |c: &[u8]| out.extend_from_slice(c),
     );
     if rewriter.write(html.as_bytes()).is_err() || rewriter.end().is_err() {
@@ -1234,8 +1231,7 @@ fn derive_share_name(target: &str) -> Result<String> {
         slug
     };
     let mut buf = [0u8; 3];
-    getrandom::getrandom(&mut buf)
-        .map_err(|e| Error::Share(format!("share-name RNG failed: {e}")))?;
+    getrandom::fill(&mut buf).map_err(|e| Error::Share(format!("share-name RNG failed: {e}")))?;
     Ok(format!("kb-share-{slug}-{}", hex::encode(buf)))
 }
 
@@ -1286,17 +1282,14 @@ fn prefix_permalinks(html: &str, origin: &str) -> String {
     let origin = origin.trim_end_matches('/').to_string();
     let mut out: Vec<u8> = Vec::with_capacity(html.len());
     let mut rewriter = HtmlRewriter::new(
-        Settings {
-            element_content_handlers: vec![element!("a[href]", |el| {
-                if let Some(href) = el.get_attribute("href") {
-                    if href.starts_with("/a/") {
-                        let _ = el.set_attribute("href", &format!("{origin}{href}"));
-                    }
+        Settings::new().append_element_content_handler(element!("a[href]", |el| {
+            if let Some(href) = el.get_attribute("href") {
+                if href.starts_with("/a/") {
+                    let _ = el.set_attribute("href", &format!("{origin}{href}"));
                 }
-                Ok(())
-            })],
-            ..Settings::default()
-        },
+            }
+            Ok(())
+        })),
         |c: &[u8]| out.extend_from_slice(c),
     );
     if rewriter.write(html.as_bytes()).is_err() || rewriter.end().is_err() {
@@ -1490,25 +1483,22 @@ fn relativize_links(
     let mut danglers: Vec<String> = Vec::new();
     let mut out: Vec<u8> = Vec::with_capacity(html.len());
     let mut rewriter = HtmlRewriter::new(
-        Settings {
-            element_content_handlers: vec![element!("a[href]", |el| {
-                if let Some(href) = el.get_attribute("href") {
-                    if let Some(link) = classify_cross_link(&href, suffix) {
-                        match resolve_cross_link(&link, id_to_deploy, path_to_deploy, deploy_set) {
-                            Some((to_deploy, tail)) => {
-                                let _ = el.set_attribute(
-                                    "href",
-                                    &deploy_relative_href(from_deploy, &to_deploy, &tail),
-                                );
-                            }
-                            None => danglers.push(dangler_id(&link)),
+        Settings::new().append_element_content_handler(element!("a[href]", |el| {
+            if let Some(href) = el.get_attribute("href") {
+                if let Some(link) = classify_cross_link(&href, suffix) {
+                    match resolve_cross_link(&link, id_to_deploy, path_to_deploy, deploy_set) {
+                        Some((to_deploy, tail)) => {
+                            let _ = el.set_attribute(
+                                "href",
+                                &deploy_relative_href(from_deploy, &to_deploy, &tail),
+                            );
                         }
+                        None => danglers.push(dangler_id(&link)),
                     }
                 }
-                Ok(())
-            })],
-            ..Settings::default()
-        },
+            }
+            Ok(())
+        })),
         |c: &[u8]| out.extend_from_slice(c),
     );
     if rewriter.write(html.as_bytes()).is_err() || rewriter.end().is_err() {
@@ -2174,7 +2164,7 @@ mod tests {
 
     fn rand_suffix() -> String {
         let mut b = [0u8; 4];
-        let _ = getrandom::getrandom(&mut b);
+        let _ = getrandom::fill(&mut b);
         hex::encode(b)
     }
 
