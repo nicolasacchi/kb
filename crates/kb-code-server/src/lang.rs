@@ -843,7 +843,9 @@ mod tests {
         let lock_path = workspace_cargo_lock();
         let lock_text = std::fs::read_to_string(&lock_path)
             .unwrap_or_else(|e| panic!("read {}: {e}", lock_path.display()));
-        let lock: toml::Value = lock_text
+        // toml 1.x: `Value::from_str` parses a single VALUE; a document is a
+        // `Table` (V76-R4e).
+        let lock: toml::Table = lock_text
             .parse()
             .unwrap_or_else(|e| panic!("parse {}: {e}", lock_path.display()));
         let packages = lock
