@@ -50,6 +50,9 @@ refinery = { workspace = true }
 # Per-kb lance (FTS-indexed Doc rows; embedding column reserved nullable).
 lancedb = { workspace = true }
 lance-index = { workspace = true }
+# Direct edge for `lance::index::DatasetIndexExt` (orphan `_indices` GC);
+# same exact pin as lancedb's transitive lance (lockstep invariant #1).
+lance = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }

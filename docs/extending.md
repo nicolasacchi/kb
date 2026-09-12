@@ -230,7 +230,8 @@ as a subtle runtime failure, not a compile error:
   slow-to-link arrow/lance graph. Subprocess IPC gives ~90% of the isolation
   for ~5% of the complexity, and kb already runs it.
 - **Dynamic native `.so` (libloading)** — *rejected*. Rust has no stable ABI,
-  and the exact `arrow = 57.3.1` pin means a plugin built against a different
+  and the exact arrow pin (`=58.4.0` as of V76-R4c) means a plugin built
+  against a different
   arrow is undefined behaviour, not a load error — while keeping the
   in-process crash blast radius. Both reasons are disqualifying.
 

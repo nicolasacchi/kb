@@ -6557,7 +6557,9 @@ pub fn atlas_frame_coord_hash(points: &[AtlasFramePoint]) -> String {
         h.update(p.y.to_bits().to_le_bytes());
         h.update(p.cluster.to_le_bytes());
     }
-    format!("{:x}", h.finalize())
+    // sha2 0.11's Output (hybrid-array) no longer implements LowerHex —
+    // hex::encode is the same lowercase-hex rendering.
+    hex::encode(h.finalize())
 }
 
 /// Shared prune body for [`Db::atlas_frame_insert`] (in-transaction) and
