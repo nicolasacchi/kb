@@ -1606,20 +1606,27 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SchemaCmd,
     },
-    /// `kb-code doctor [--agent] [--json]` — daemon-reachability +
-    /// protocol/schema-epoch skew report (compares this binary's own
-    /// `kb_core::sibling` constants + `kb_code_server::store::schema_epoch`
-    /// against what `GET /api/identity` reports), token-resolution status
-    /// (never the token itself), and whether the CURRENT working directory
-    /// falls inside one of the daemon's configured repos (the ONE cwd→repo
-    /// resolution this unit ships — see `resolve_repo_for_path`'s doc for
-    /// why the three pre-existing shell/TS reimplementations of this exact
-    /// algorithm are NOT replatformed onto it in this unit). `--agent`
-    /// requests the terser, script-friendly rendering D20 names
-    /// (`doctor --agent`); plain `doctor` prints the same checks at
-    /// human-readable length. Never refuses a mutating verb on skew (D20's
-    /// fuller "refusal only for mutating verbs" ask is cut — see this
-    /// unit's handoff note) — it is a diagnostic, not a gate.
+    /// `kb-code doctor [--agent] [--json] [--verify-fingerprints N
+    /// [--repo R]]` — daemon-reachability + protocol/schema-epoch skew
+    /// report (compares this binary's own `kb_core::sibling` constants +
+    /// `kb_code_server::store::schema_epoch` against what `GET
+    /// /api/identity` reports), token-resolution status (never the token
+    /// itself), and whether the CURRENT working directory falls inside one
+    /// of the daemon's configured repos (the ONE cwd→repo resolution this
+    /// unit ships — see `resolve_repo_for_path`'s doc for why the three
+    /// pre-existing shell/TS reimplementations of this exact algorithm are
+    /// NOT replatformed onto it in this unit). `--agent` requests the
+    /// terser, script-friendly rendering D20 names (`doctor --agent`);
+    /// plain `doctor` prints the same checks at human-readable length.
+    /// Never refuses a mutating verb on skew (D20's fuller "refusal only
+    /// for mutating verbs" ask is cut — see this unit's handoff note) — it
+    /// is a diagnostic, not a gate. V77-P1 — `--verify-fingerprints N`
+    /// additionally calls `fingerprint-verify/1` (`GET
+    /// /api/fingerprints/verify`), re-hashing a sample of `--repo`'s files
+    /// (or the daemon's ONE repo when it mirrors exactly one, same rule
+    /// `resolve_repo_arg` already uses for `reextract --bill`) against
+    /// their stored fingerprint — the documented safety net for an editor
+    /// that preserves mtime and could fool `sink.rs`'s fast path.
     Doctor {
         #[arg(long)]
         agent: bool,
@@ -1627,6 +1634,10 @@ enum Cmd {
         daemon: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        verify_fingerprints: Option<usize>,
+        #[arg(long)]
+        repo: Option<String>,
     },
     // ── V70-A8 (D20) — nine verb-less routes named in recon
     // `cli-agent-surface.md` open question 7 (all nine wired in this unit):
@@ -6949,7 +6960,9 @@ async fn run(cli: Cli) -> Result<()> {
             agent,
             daemon,
             json,
-        } => doctor_cmd(&daemon, agent, json).await,
+            verify_fingerprints,
+            repo,
+        } => doctor_cmd(&daemon, agent, json, verify_fingerprints, repo.as_deref()).await,
         Cmd::Diff {
             repo,
             path,
@@ -7910,6 +7923,28 @@ fn reextract_bill_request(
         q.push(("sample", n.to_string()));
     }
     (kb_code_server::reextract::BILL_ROUTE.path, q)
+}
+
+// ── V77-P1 — `kb-code doctor --verify-fingerprints` ─────────────────────
+//
+// Same discipline as `reextract_bill_request` above (whose PATH-from-the-
+// server-crate's-own-contract shape this mirrors exactly): the path comes
+// from `fingerprint_verify::FINGERPRINT_VERIFY_ROUTE`, so a rename there is
+// a compile error here rather than a silently-stale literal.
+
+/// The `GET /api/fingerprints/verify` request: `(path, query)`.
+fn fingerprint_verify_request(
+    repo: &str,
+    sample: Option<usize>,
+) -> (&'static str, Vec<(&'static str, String)>) {
+    let mut q = vec![("repo", repo.to_string())];
+    if let Some(n) = sample {
+        q.push(("sample", n.to_string()));
+    }
+    (
+        kb_code_server::fingerprint_verify::FINGERPRINT_VERIFY_ROUTE.path,
+        q,
+    )
 }
 
 /// `--repo`, or the daemon's ONE repo when it mirrors exactly one. Never
@@ -8954,8 +8989,15 @@ mod resolve_repo_for_path_tests {
     }
 }
 
-/// `kb-code doctor [--agent] [--json]` — see `Cmd::Doctor`'s doc.
-async fn doctor_cmd(daemon: &str, agent: bool, json: bool) -> Result<()> {
+/// `kb-code doctor [--agent] [--json] [--verify-fingerprints N [--repo R]]`
+/// — see `Cmd::Doctor`'s doc.
+async fn doctor_cmd(
+    daemon: &str,
+    agent: bool,
+    json: bool,
+    verify_fingerprints: Option<usize>,
+    repo: Option<&str>,
+) -> Result<()> {
     let client = http_client()?;
     let identity_result = get_json(&client, daemon, "/api/identity", &[]).await;
 
@@ -8980,6 +9022,13 @@ async fn doctor_cmd(daemon: &str, agent: bool, json: bool) -> Result<()> {
 
     let mut checks = Vec::new();
     let mut ok_overall = true;
+    // V77-P1 — the `cwd_in_configured_repo` check's own resolution,
+    // reusable as `--verify-fingerprints`'s repo fallback below (never a
+    // silent guess when there's more than one candidate; see that check's
+    // comment for why a `--repo` MISS still falls through to
+    // `resolve_repo_arg`'s own "ambiguous ⇒ error naming the candidates"
+    // ladder rather than defaulting to the cwd match anyway).
+    let mut cwd_matched_repo: Option<String> = None;
 
     match &identity_result {
         Ok(body) => {
@@ -9014,6 +9063,7 @@ async fn doctor_cmd(daemon: &str, agent: bool, json: bool) -> Result<()> {
             let matched = cwd_str
                 .as_deref()
                 .and_then(|c| resolve_repo_for_path(&repos, c));
+            cwd_matched_repo = matched.map(str::to_string);
             checks.push(serde_json::json!({
                 "check": "cwd_in_configured_repo",
                 "ok": matched.is_some(),
@@ -9051,6 +9101,56 @@ async fn doctor_cmd(daemon: &str, agent: bool, json: bool) -> Result<()> {
         "source": token_source,
         "token_file": token_file_path,
     }));
+
+    // V77-P1 — `--verify-fingerprints N`: only attempted when the daemon
+    // is actually reachable (an unreachable daemon already failed
+    // `daemon_reachable` above; a second, redundant network error here
+    // would just be noise on the same root cause).
+    if let Some(n) = verify_fingerprints {
+        if identity_result.is_ok() {
+            let repo_arg = repo
+                .map(str::to_string)
+                .or_else(|| cwd_matched_repo.clone());
+            match repo_arg {
+                None => {
+                    ok_overall = false;
+                    checks.push(serde_json::json!({
+                        "check": "fingerprint_verify",
+                        "ok": false,
+                        "error": "no --repo given and cwd did not match a configured repo",
+                    }));
+                }
+                Some(repo_name) => {
+                    let (path, query) = fingerprint_verify_request(&repo_name, Some(n));
+                    match get_json(&client, daemon, path, &as_query_pairs(&query)).await {
+                        Ok(body) => {
+                            let mismatches =
+                                body["mismatches"].as_array().cloned().unwrap_or_default();
+                            let clean = mismatches.is_empty();
+                            ok_overall &= clean;
+                            checks.push(serde_json::json!({
+                                "check": "fingerprint_verify",
+                                "ok": clean,
+                                "repo": repo_name,
+                                "total_files": body["total_files"],
+                                "sampled": body["sampled"],
+                                "mismatches": mismatches,
+                                "unreadable": body["unreadable"],
+                            }));
+                        }
+                        Err(e) => {
+                            ok_overall = false;
+                            checks.push(serde_json::json!({
+                                "check": "fingerprint_verify",
+                                "ok": false,
+                                "error": format!("{e:#}"),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if json || agent {
         // A totally-unreachable daemon gets the ERROR envelope shape
@@ -27811,6 +27911,8 @@ mod tests {
             highlight_batch_request(),
             // V72-H2b — the re-extract bill joins the SAME walk.
             reextract_bill_request("repo", Some(50)),
+            // V77-P1 — `doctor --verify-fingerprints`'s route, the same way.
+            fingerprint_verify_request("repo", Some(20)),
             // V72-G1.1 — the entity DOSSIER, on its own sibling path
             // beside the frozen `entities/1` index above. A route added
             // to `entities::dossier::V72_G1_ROUTES` with no verb building
@@ -28011,6 +28113,51 @@ mod tests {
                     c.path
                 );
             }
+        }
+    }
+
+    /// V77-P1 — `doctor --verify-fingerprints N --repo R` parses onto the
+    /// two new `Cmd::Doctor` fields; the other tests/functions above prove
+    /// the request `doctor_cmd` builds from them.
+    #[test]
+    fn doctor_verb_parses_verify_fingerprints_and_repo() {
+        let cli = Cli::try_parse_from([
+            "kb-code",
+            "doctor",
+            "--verify-fingerprints",
+            "50",
+            "--repo",
+            "acme-app",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Doctor {
+                verify_fingerprints,
+                repo,
+                ..
+            } => {
+                assert_eq!(verify_fingerprints, Some(50));
+                assert_eq!(repo.as_deref(), Some("acme-app"));
+            }
+            other => panic!("expected Cmd::Doctor, got {other:?}"),
+        }
+    }
+
+    /// Plain `doctor` (no `--verify-fingerprints`) still parses — the new
+    /// fields must be genuinely optional, not silently required.
+    #[test]
+    fn doctor_verb_without_verify_fingerprints_still_parses() {
+        let cli = Cli::try_parse_from(["kb-code", "doctor"]).unwrap();
+        match cli.cmd {
+            Cmd::Doctor {
+                verify_fingerprints,
+                repo,
+                ..
+            } => {
+                assert!(verify_fingerprints.is_none());
+                assert!(repo.is_none());
+            }
+            other => panic!("expected Cmd::Doctor, got {other:?}"),
         }
     }
 

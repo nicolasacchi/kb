@@ -211,6 +211,13 @@ pub struct FileRow {
     pub blob_hash: String,
     pub lang: String,
     pub size: u64,
+    /// V77-P1 — filesystem mtime (unix seconds) as last observed by one of
+    /// the `std::fs`-reading sink paths (`sink::handle_upsert`/
+    /// `handle_full_reconcile`), via `Store::upsert_file_with_mtime`. `0`
+    /// means "unknown" (every ODB tree-walk write goes through the plain
+    /// `Store::upsert_file`, which never sets this) and must never be
+    /// treated as a match by a fingerprint comparison — see that fn's doc.
+    pub mtime: u64,
 }
 
 pub struct Store {
@@ -478,6 +485,14 @@ impl Store {
     /// content was parsed (an unsupported/oversized/binary file still gets
     /// a `files` row so `file_count` reflects the whole tree; only
     /// `symbols`/`highlights` are conditional on a supported language).
+    ///
+    /// V77-P1: a thin wrapper over [`Store::upsert_file_with_mtime`] with
+    /// `mtime = 0` ("unknown") — every ODB tree-walk caller (`ingest.rs`)
+    /// has no filesystem mtime to offer (a git blob has none), and every
+    /// existing test fixture calling this fn keeps writing the same
+    /// "unknown" fingerprint it always implicitly did. Kept as the ONE
+    /// unchanged 5-arg signature so the ~100 existing call sites across
+    /// this crate need no edit.
     pub fn upsert_file(
         &self,
         repo_id: i64,
@@ -486,13 +501,35 @@ impl Store {
         lang: &str,
         size: u64,
     ) -> Result<()> {
+        self.upsert_file_with_mtime(repo_id, path, blob_hash, lang, size, 0)
+    }
+
+    /// Same as [`Store::upsert_file`], but also records the filesystem
+    /// `mtime` (unix seconds; `0` = unknown) — for the two `sink.rs`
+    /// `std::fs`-reading paths only. `mtime` rides the SAME `ON CONFLICT`
+    /// upsert as `blob_hash`/`size`, in the SAME statement, never a
+    /// follow-up `UPDATE`: a reader must never be able to observe a row
+    /// whose `mtime` fingerprint matches what it just stat'd while
+    /// `blob_hash` is still from a stale write (or vice versa) — see
+    /// `V0044__files_mtime.sql`'s header.
+    pub fn upsert_file_with_mtime(
+        &self,
+        repo_id: i64,
+        path: &str,
+        blob_hash: &str,
+        lang: &str,
+        size: u64,
+        mtime: u64,
+    ) -> Result<()> {
         self.lock().execute(
-            "INSERT INTO files (repo_id, path, blob_hash, lang, size) VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO files (repo_id, path, blob_hash, lang, size, mtime) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(repo_id, path) DO UPDATE SET
                 blob_hash = excluded.blob_hash,
                 lang = excluded.lang,
-                size = excluded.size",
-            params![repo_id, path, blob_hash, lang, size as i64],
+                size = excluded.size,
+                mtime = excluded.mtime",
+            params![repo_id, path, blob_hash, lang, size as i64, mtime as i64],
         )?;
         self.bump_generation();
         Ok(())
@@ -502,11 +539,14 @@ impl Store {
     /// search lane's (`search::files::FileIndex`) cache source, and the
     /// text lane's (`search::text::search_text`) working-tree walk list
     /// (see that module's doc: it reuses this table rather than a fresh
-    /// filesystem walk).
+    /// filesystem walk). Also the boot ODB walk's fingerprint preload
+    /// (`ingest::index_repo_working_tree`) — ONE query for the whole repo
+    /// rather than a per-file lookup.
     pub fn list_files(&self, repo_id: i64) -> Result<Vec<FileRow>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT path, blob_hash, lang, size FROM files WHERE repo_id = ?1 ORDER BY path",
+            "SELECT path, blob_hash, lang, size, mtime FROM files WHERE repo_id = ?1 \
+             ORDER BY path",
         )?;
         let rows = stmt
             .query_map(params![repo_id], |r| {
@@ -515,6 +555,7 @@ impl Store {
                     blob_hash: r.get(1)?,
                     lang: r.get(2)?,
                     size: r.get::<_, i64>(3)? as u64,
+                    mtime: r.get::<_, i64>(4)? as u64,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -524,7 +565,8 @@ impl Store {
     pub fn get_file(&self, repo_id: i64, path: &str) -> Result<Option<FileRow>> {
         self.lock()
             .query_row(
-                "SELECT path, blob_hash, lang, size FROM files WHERE repo_id = ?1 AND path = ?2",
+                "SELECT path, blob_hash, lang, size, mtime FROM files \
+                 WHERE repo_id = ?1 AND path = ?2",
                 params![repo_id, path],
                 |r| {
                     Ok(FileRow {
@@ -532,6 +574,7 @@ impl Store {
                         blob_hash: r.get(1)?,
                         lang: r.get(2)?,
                         size: r.get::<_, i64>(3)? as u64,
+                        mtime: r.get::<_, i64>(4)? as u64,
                     })
                 },
             )
@@ -857,6 +900,50 @@ impl Store {
             |r| r.get(0),
         )?;
         Ok(n > 0)
+    }
+
+    /// `true` iff BOTH `(blob_hash, Symbol, symbol_salt)` and
+    /// `(blob_hash, Highlight, highlight_salt)` are derived — one lock
+    /// acquisition for both `SELECT COUNT` queries, so the two checks the
+    /// V77-P1 boot/live-edit fast paths make before skipping a read cannot
+    /// observe two different instants of the store between them (the
+    /// residual TOCTOU is narrower, not gone: a concurrent writer could
+    /// still invalidate one marker in the gap between this fn returning
+    /// `true` and the caller acting on it — see `ingest::walk_dir`'s and
+    /// `sink::handle_upsert`'s own doc comments on the skip decision for
+    /// why that residual window is accepted rather than closed with a
+    /// second lock spanning the caller's own `continue`/`return`).
+    pub fn is_derived_pair(
+        &self,
+        blob_hash: &str,
+        symbol_salt: &str,
+        highlight_salt: &str,
+    ) -> Result<bool> {
+        let conn = self.lock();
+        let symbol_n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM derived_status \
+             WHERE blob_hash = ?1 AND family = ?2 AND salt = ?3",
+            params![
+                blob_hash,
+                crate::lang::SaltFamily::Symbol.as_str(),
+                symbol_salt
+            ],
+            |r| r.get(0),
+        )?;
+        if symbol_n == 0 {
+            return Ok(false);
+        }
+        let highlight_n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM derived_status \
+             WHERE blob_hash = ?1 AND family = ?2 AND salt = ?3",
+            params![
+                blob_hash,
+                crate::lang::SaltFamily::Highlight.as_str(),
+                highlight_salt
+            ],
+            |r| r.get(0),
+        )?;
+        Ok(highlight_n > 0)
     }
 
     /// The recorded row count for a derivation, or `None` when there is no
