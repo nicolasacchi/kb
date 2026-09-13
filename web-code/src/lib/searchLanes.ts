@@ -7,6 +7,7 @@
 
 import type { LaneSection, SearchLane, TranscriptHit } from "../api/types";
 import { parse as parseKbcq } from "./kbcq";
+import { kbLaneState, type KbLaneState } from "./unifiedInbox";
 
 export const LANE_ORDER: SearchLane[] = [
   "files",
@@ -57,16 +58,55 @@ export function orderSections<T extends { lane: string }>(sections: T[]): T[] {
 const DEFAULT_KB_SESSION_BASE = "http://127.0.0.1:4000";
 let kbSessionBase = DEFAULT_KB_SESSION_BASE;
 
+/// V76-R4f — whether the last `setKbSessionBase` call resolved to a usable
+/// base. Starts `true` (the pre-V76-R4f assumption: a native side-by-side
+/// install, or the brief window before the boot identity fetch lands) and
+/// flips to `false` the instant an EXPLICIT empty string arrives — the
+/// daemon's own "`[kb_daemon]` is disabled and nothing is configured"
+/// signal (`IdentityResponse::kb_public_url`'s doc,
+/// `crates/kb-code-server/src/routes.rs`). It never flips back to `true`
+/// off a missing/`undefined` value — see `setKbSessionBase`'s own doc for
+/// why "absent" and "empty" must stay distinguishable here.
+let kbSessionAvailable = true;
+
 /// Set by `hooks/useIdentity.ts` from the boot `GET /api/identity` response
 /// - trims a trailing slash so `sessionUrl`'s own `/sessions/...` join
 /// never double-slashes regardless of how the operator wrote `public_url`/
 /// `url` in `kb-code.toml`.
 export function setKbSessionBase(u: string | null | undefined): void {
-  // Total: a missing/empty value (an older daemon's identity payload has
-  // no `kb_public_url` field at all) keeps the current base — the caller
-  // guards too, but a boot-path setter must not be crashable.
-  if (!u) return;
+  // `null`/`undefined`: the field is ABSENT from the response entirely (an
+  // older daemon, or the boot fetch hasn't resolved yet) — keep whatever
+  // state already holds rather than crashing the boot path.
+  if (u == null) return;
+  if (u === "") {
+    // V76-R4f: an EXPLICIT empty string is meaningfully different from
+    // "absent" — it is the daemon's own honest "no kb configured" answer.
+    // Falling back to the local-dev default here would silently point
+    // every "open in kb"/session link at a daemon that, on a hosted
+    // install with `[kb_daemon]` disabled, is not the one actually
+    // running — and building a request off "" directly would resolve to a
+    // same-origin relative path. Neither happens: the base is left
+    // untouched (irrelevant once `kbSessionAvailable` is `false`) and
+    // `sessionUrl` refuses to build a link at all.
+    kbSessionAvailable = false;
+    return;
+  }
+  kbSessionAvailable = true;
   kbSessionBase = u.replace(/\/$/, "");
+}
+
+/// The kb-session lane's own degrade state — the SAME shape
+/// `lib/unifiedInbox.ts`'s `kbLaneState` already gives the Inbox "From kb"
+/// lane (and the shape `LaneSection.unavailable_reason` gives every search
+/// lane), reused rather than re-invented. `sessionUrl` consults this
+/// itself (never a same-origin-relative or stale-default href once this
+/// reports `"unavailable"`); a caller that wants to render an honest
+/// reason alongside a hidden link reads it directly.
+export function kbSessionState(): KbLaneState {
+  return kbLaneState({
+    available: kbSessionAvailable,
+    reason: kbSessionAvailable ? null : "disabled",
+  });
 }
 
 /// `kb` (optional) scopes the deep link with `?kb=<corpus>` — kb's own
@@ -74,7 +114,13 @@ export function setKbSessionBase(u: string | null | undefined): void {
 /// active, which need not be the one the session actually lives in
 /// (`provenance::why::AttributionOut.kb` / `WhySession.kb`, when resolved).
 /// Absent stays the pre-existing unscoped link, byte-identical.
-export function sessionUrl(sessionId: string, kb?: string): string {
+///
+/// `null` (V76-R4f) means the kb-session lane is unavailable
+/// (`kbSessionState()`) — every caller must treat that as "no link", never
+/// build an href off it (a stray `${sessionUrl(...)}` in a template literal
+/// would otherwise silently interpolate the string `"null"`).
+export function sessionUrl(sessionId: string, kb?: string): string | null {
+  if (!kbSessionAvailable) return null;
   const base = `${kbSessionBase}/sessions/${encodeURIComponent(sessionId)}`;
   return kb ? `${base}?kb=${encodeURIComponent(kb)}` : base;
 }

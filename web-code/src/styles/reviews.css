@@ -2090,6 +2090,13 @@ span.kbc-diff__impact-chip {
   color: var(--accent-soft);
   text-decoration: none;
 }
+/* V76-R4f — the kb-session lane is unavailable ([kb_daemon]
+   disabled/unconfigured): honest muted text, never a clickable-looking
+   link with no destination. */
+.kbc-hunkturns__link--unavailable {
+  color: var(--ink-dim);
+  font-style: italic;
+}
 .kbc-hunkturns__link:hover {
   text-decoration: underline;
 }

@@ -20,6 +20,11 @@ export interface AttributionCardProps {
 export default function AttributionCard({ attribution, compact }: AttributionCardProps) {
   const who = attribution.display_name ?? attribution.session_id;
   const honestNone = attribution.confidence === "none";
+  // `sessionUrl` returns `null` once the kb-session lane is unavailable
+  // (V76-R4f, `[kb_daemon]` disabled/unconfigured) — degrade to the SAME
+  // plain-text rendering already used when there is no session id at all,
+  // rather than a dead/misleading link.
+  const sessionHref = attribution.session_id ? sessionUrl(attribution.session_id) : null;
 
   const badge = (
     <span
@@ -30,10 +35,10 @@ export default function AttributionCard({ attribution, compact }: AttributionCar
     </span>
   );
 
-  const sessionLink = attribution.session_id ? (
+  const sessionLink = sessionHref ? (
     <a
       className="kbc-attrib__who"
-      href={sessionUrl(attribution.session_id)}
+      href={sessionHref}
       target="_blank"
       rel="noreferrer"
       data-kbc-attrib-session-link
@@ -68,10 +73,10 @@ export default function AttributionCard({ attribution, compact }: AttributionCar
           no recorded session
         </p>
       )}
-      {attribution.session_id && (
+      {sessionHref && (
         <a
           className="kbc-attrib-card__open-session"
-          href={sessionUrl(attribution.session_id)}
+          href={sessionHref}
           target="_blank"
           rel="noreferrer"
         >
