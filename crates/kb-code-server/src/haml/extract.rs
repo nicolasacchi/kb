@@ -74,6 +74,49 @@ pub struct Fragment {
     pub line: u32,
 }
 
+/// A precomputed table of physical-line START offsets, for O(log lines)
+/// line lookups (V77-P4). [`line_at`] alone recounts `\n` bytes from the
+/// start of `src` on every call, which is fine for the rare, one-off
+/// caller (a diagnostic, a test) but was quietly quadratic inside
+/// [`ProgramBuilder`]: one lookup per Ruby fragment (a script line, every
+/// `#{…}`, every attribute hash), each rescanning the whole file prefix —
+/// O(bytes) per fragment times O(fragments) fragments, both of which scale
+/// with the file. Built ONCE per document walk; every fragment after that
+/// pays O(log lines) instead.
+struct LineIndex {
+    /// `starts[i]` is the byte offset where physical line `i + 1` begins;
+    /// `starts[0] == 0` always. Ascending by construction (one entry per
+    /// `\n`, in source order), which is what makes the binary search below
+    /// agree with [`line_at`]'s own "count the newlines before `offset`"
+    /// definition.
+    starts: Vec<u32>,
+    len: u32,
+}
+
+impl LineIndex {
+    fn new(src: &str) -> Self {
+        let mut starts = Vec::with_capacity(src.len() / 40 + 1);
+        starts.push(0u32);
+        starts.extend(
+            src.bytes()
+                .enumerate()
+                .filter(|&(_, b)| b == b'\n')
+                .map(|(i, _)| (i + 1) as u32),
+        );
+        LineIndex {
+            starts,
+            len: src.len() as u32,
+        }
+    }
+
+    /// Identical contract to [`line_at`], computed in O(log lines) rather
+    /// than O(offset).
+    fn line_at(&self, offset: usize) -> u32 {
+        let offset = (offset as u32).min(self.len);
+        self.starts.partition_point(|&s| s <= offset) as u32
+    }
+}
+
 /// Every Ruby fragment in `doc`, in document order.
 pub fn ruby_fragments(doc: &Document, src: &str) -> Vec<Fragment> {
     let mut out = Vec::new();
@@ -112,6 +155,11 @@ pub fn ruby_program(doc: &Document, src: &str) -> RubyProgram {
 
 struct ProgramBuilder<'a> {
     src: &'a str,
+    /// Built once in [`ProgramBuilder::new`] and reused for every
+    /// fragment's line lookup — see [`LineIndex`]'s own doc for why a
+    /// per-fragment call to the free [`line_at`] function was the
+    /// quadratic half of V77-P4's fix.
+    lines: LineIndex,
     emit: bool,
     out: String,
     map: Vec<Option<u32>>,
@@ -121,6 +169,7 @@ impl<'a> ProgramBuilder<'a> {
     fn new(src: &'a str, emit: bool) -> Self {
         ProgramBuilder {
             src,
+            lines: LineIndex::new(src),
             emit,
             out: String::new(),
             map: Vec::new(),
@@ -200,7 +249,7 @@ impl<'a> ProgramBuilder<'a> {
             let Some(text) = s.slice(self.src) else {
                 continue;
             };
-            let line = line_at(self.src, s.start as usize);
+            let line = self.lines.line_at(s.start as usize);
             self.frag(
                 out,
                 FragmentKind::Interpolation,
@@ -291,7 +340,7 @@ impl<'a> ProgramBuilder<'a> {
             let Some(text) = group.inner.slice(self.src) else {
                 continue;
             };
-            let line = line_at(self.src, group.inner.start as usize);
+            let line = self.lines.line_at(group.inner.start as usize);
             match group.form {
                 AttrForm::RubyHash => self.frag(
                     out,
@@ -319,7 +368,7 @@ impl<'a> ProgramBuilder<'a> {
         }
         match &tag.inline {
             Some(Inline::Script(s)) => {
-                let line = line_at(self.src, s.span.start as usize);
+                let line = self.lines.line_at(s.span.start as usize);
                 self.script(out, s, line);
             }
             Some(Inline::Text(t)) => {
@@ -331,7 +380,12 @@ impl<'a> ProgramBuilder<'a> {
     }
 }
 
-/// The 1-based line containing byte `offset`.
+/// The 1-based line containing byte `offset`, by counting `\n` bytes from
+/// the START of `src` every call — O(offset), fine for a one-off caller
+/// (a diagnostic, `outline`'s per-node `subtree_last_line`, a test) but NOT
+/// for a loop that calls it once per fragment/token; that caller wants
+/// [`LineIndex`] instead (built once, O(log lines) per lookup — see its
+/// own doc for the V77-P4 regression this distinction fixes).
 pub fn line_at(src: &str, offset: usize) -> u32 {
     let upto = offset.min(src.len());
     1 + src.as_bytes()[..upto]

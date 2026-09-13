@@ -433,6 +433,49 @@ fn highlight_spans_are_sorted_non_overlapping_and_in_bounds() {
         .any(|s| s.class == crate::highlight::HighlightClass::String));
 }
 
+/// A small but feature-dense fixture — nested tags with classes/ids and a
+/// Ruby attribute hash, `=`/`-`/`==` script lines, a `:javascript` filter,
+/// an HTML comment, a swallowed HAML comment, and a `|` multiline block —
+/// golden-pinned BEFORE V77-P4's perf fix (the quadratic `line_index_at`/
+/// `line_at` rescans this scanner used to redo per tag/fragment). Byte
+/// identity here across the fix is the proof invariant 18(d) demands of
+/// any change to this scanner: the spans a caller sees must not move.
+const PERF_FIX_FIXTURE: &str = "\
+!!! 5
+%html
+  %head
+    %title= t('.page_title')
+  %body.app{class: \"theme-#{current_theme}\", data: {controller: \"app\"}}
+    #main.container.fluid
+      - if user.signed_in?
+        %p.welcome Hello, #{user.name}!
+      - else
+        %p
+          Please
+          %a{href: login_path} sign in
+      .row
+        - items.each do |item|
+          .col-4{id: \"item-#{item.id}\"}
+            %h3= item.title
+            %p== #{item.description}
+    :javascript
+      console.log(\"loaded\");
+    :ruby
+      logger.info \"rendered #{Time.now}\"
+    / an html comment
+    -# a haml comment, swallowed
+      still swallowed
+    %pre
+      one long line that keeps going |
+      and joins with the next line |
+";
+
+#[test]
+fn highlight_spans_golden_before_perf_fix_v77_p4() {
+    let spans = super::highlights(PERF_FIX_FIXTURE.as_bytes());
+    insta::assert_debug_snapshot!(spans);
+}
+
 // ── the corpus projection's own transforms ────────────────────────────────
 
 #[test]
