@@ -881,11 +881,8 @@ fn find_interpolations(ctx: &mut Ctx, start: usize, end: usize) -> Vec<Span> {
 }
 
 fn line_of(ctx: &Ctx, offset: usize) -> u32 {
-    ctx.lines
-        .iter()
-        .rev()
-        .find(|l| (l.start as usize) <= offset)
-        .map(|l| l.line_no)
+    line_index_for_offset(&ctx.lines, offset)
+        .map(|i| ctx.lines[i].line_no)
         .unwrap_or(1)
 }
 
@@ -1095,8 +1092,24 @@ fn continuation_cap(ctx: &Ctx, i: usize) -> usize {
         .unwrap_or(ctx.src.len())
 }
 
+/// The index of the LAST physical line whose `start` is `<= offset`, over a
+/// slice already sorted ascending by `start` ([`lexer::split_lines`]'s own
+/// output order). A binary search rather than the linear
+/// `.iter().rposition(...)` this replaced (V77-P4): `parse_tag` calls this
+/// once per TAG line, and a HAML template is mostly tag lines, so an O(n)
+/// scan here made the whole parse O(lines²) — the quadratic half of the
+/// scanner's ~46x-per-byte regression against tree-sitter.
+fn line_index_for_offset(lines: &[PhysLine], offset: usize) -> Option<usize> {
+    // `partition_point`'s predicate must be true for a PREFIX and false
+    // after — true here because `start` is monotonically non-decreasing,
+    // which is exactly what makes the old rightmost-match linear scan and
+    // this binary search agree on every input.
+    let idx = lines.partition_point(|l| (l.start as usize) <= offset);
+    idx.checked_sub(1)
+}
+
 fn line_index_at(ctx: &Ctx, offset: usize) -> Option<usize> {
-    ctx.lines.iter().rposition(|l| (l.start as usize) <= offset)
+    line_index_for_offset(&ctx.lines, offset)
 }
 
 /// `name="value"` / `name='value'` pairs inside an HTML-style group.
