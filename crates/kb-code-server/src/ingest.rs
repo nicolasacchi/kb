@@ -44,6 +44,8 @@
 //! skip markers in `files.lang`) from `syntax::Tier` (the file type's
 //! extraction tier); see `syntax`'s module doc.
 
+use std::collections::HashMap;
+
 use crate::extract;
 use crate::git::{EntryKind, GitError, GitRepo};
 use crate::highlight;
@@ -84,6 +86,20 @@ pub fn git_blob_hash(bytes: &[u8]) -> String {
     hasher.update(b"\0");
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+/// `meta`'s modification time as unix seconds, for `files.mtime`
+/// (V77-P1) — the fs-read sink paths' (`sink::handle_upsert`/
+/// `handle_full_reconcile`) fingerprint. `None` on a platform/filesystem
+/// that cannot report an mtime, or a clock set before the epoch; either
+/// way the caller falls back to `0` ("unknown"), which the fingerprint
+/// comparison can never treat as a match — see `V0044__files_mtime.sql`.
+pub fn mtime_unix_secs(meta: &std::fs::Metadata) -> Option<u64> {
+    meta.modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 const LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs";
@@ -169,10 +185,67 @@ pub fn index_file(
     is_rails: bool,
     comment_keywords: &crate::comments::KeywordSet,
 ) -> Result<IngestOutcome> {
+    index_file_inner(
+        store,
+        repo_id,
+        path,
+        bytes,
+        blob_hash,
+        0,
+        occurrences_enabled,
+        is_rails,
+        comment_keywords,
+    )
+}
+
+/// Same as [`index_file`], but for the two `sink.rs` `std::fs`-reading
+/// paths (`handle_upsert`/`handle_full_reconcile`), which have a real
+/// filesystem `mtime` (unix seconds) in hand from the `fs::metadata` call
+/// they already made to decide whether to skip the read at all — see that
+/// module's doc. `index_file`'s ODB tree-walk callers have no mtime (a git
+/// blob carries none) and keep calling the plain fn, which passes `0`
+/// ("unknown") through.
+#[allow(clippy::too_many_arguments)]
+pub fn index_file_with_mtime(
+    store: &Store,
+    repo_id: i64,
+    path: &str,
+    bytes: &[u8],
+    blob_hash: &str,
+    mtime: u64,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
+) -> Result<IngestOutcome> {
+    index_file_inner(
+        store,
+        repo_id,
+        path,
+        bytes,
+        blob_hash,
+        mtime,
+        occurrences_enabled,
+        is_rails,
+        comment_keywords,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn index_file_inner(
+    store: &Store,
+    repo_id: i64,
+    path: &str,
+    bytes: &[u8],
+    blob_hash: &str,
+    mtime: u64,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
+) -> Result<IngestOutcome> {
     let size = bytes.len() as u64;
 
     if size > MAX_PARSE_BYTES {
-        store.upsert_file(repo_id, path, blob_hash, TIER_TOO_LARGE, size)?;
+        store.upsert_file_with_mtime(repo_id, path, blob_hash, TIER_TOO_LARGE, size, mtime)?;
         return Ok(IngestOutcome {
             cache_hit: false,
             tier: TIER_TOO_LARGE,
@@ -181,7 +254,7 @@ pub fn index_file(
         });
     }
     if bytes.starts_with(LFS_POINTER_PREFIX) {
-        store.upsert_file(repo_id, path, blob_hash, TIER_LFS, size)?;
+        store.upsert_file_with_mtime(repo_id, path, blob_hash, TIER_LFS, size, mtime)?;
         return Ok(IngestOutcome {
             cache_hit: false,
             tier: TIER_LFS,
@@ -190,7 +263,7 @@ pub fn index_file(
         });
     }
     if std::str::from_utf8(bytes).is_err() {
-        store.upsert_file(repo_id, path, blob_hash, TIER_BINARY, size)?;
+        store.upsert_file_with_mtime(repo_id, path, blob_hash, TIER_BINARY, size, mtime)?;
         return Ok(IngestOutcome {
             cache_hit: false,
             tier: TIER_BINARY,
@@ -199,7 +272,7 @@ pub fn index_file(
         });
     }
     let Some(lang_info) = lang::detect(path, Some(bytes)) else {
-        store.upsert_file(repo_id, path, blob_hash, TIER_UNKNOWN, size)?;
+        store.upsert_file_with_mtime(repo_id, path, blob_hash, TIER_UNKNOWN, size, mtime)?;
         return Ok(IngestOutcome {
             cache_hit: false,
             tier: TIER_UNKNOWN,
@@ -211,7 +284,7 @@ pub fn index_file(
     // The `files` pointer row is written unconditionally, even on a cache
     // hit: a DIFFERENT path sharing this blob_hash still needs its own
     // (repo_id, path) row pointing at the shared derived data.
-    store.upsert_file(repo_id, path, blob_hash, lang_info.id, size)?;
+    store.upsert_file_with_mtime(repo_id, path, blob_hash, lang_info.id, size, mtime)?;
 
     // V72-H1 (D7) — the syntax/1 extraction TIER, as ONE short-circuit at
     // the top of the derivation. A `HighlightOnly` row writes spans and
@@ -501,11 +574,23 @@ pub struct WalkStats {
     pub cache_hits: usize,
     /// Content-capped: too-large / binary / lfs / unknown-extension.
     pub skipped_tier: usize,
+    /// V77-P1 — the boot fast path: `entry.oid` matched the stored
+    /// `files.blob_hash` for this path AND (for a real language) both
+    /// derived-status families were already marked, so the read+hash+
+    /// `index_file` call was skipped entirely. Counted toward `files` but
+    /// deliberately NOT folded into `parsed`/`cache_hits`/`skipped_tier`
+    /// or the `highlight_*` trio below — those describe what
+    /// [`index_file`] itself did, and this file never reached it. See
+    /// `walk_dir`'s fast-path comment for the skip decision.
+    pub skipped_unchanged: usize,
     /// Sum of `IngestOutcome::symbol_count` across every file visited.
     pub symbols: usize,
     /// V72-H2b — the independent HIGHLIGHT gate's own tally. These three
-    /// sum to `files`, and they are what makes a `highlight_salt` bump's
-    /// cost visible in the boot log rather than inferred from wall clock.
+    /// plus `skipped_unchanged` sum to `files` (V77-P1: a skipped-unchanged
+    /// file never reaches the highlight gate at all, so it is not folded
+    /// into any of the three), and they are what makes a `highlight_salt`
+    /// bump's cost visible in the boot log rather than inferred from wall
+    /// clock.
     pub highlight_hits: usize,
     pub highlight_misses: usize,
     pub highlight_skipped: usize,
@@ -537,6 +622,17 @@ pub fn index_repo_working_tree(
     comment_keywords: &crate::comments::KeywordSet,
 ) -> Result<WalkStats> {
     let mut stats = WalkStats::default();
+    // V77-P1 (E6) — ONE query for the whole repo's `(path -> (blob_hash,
+    // lang))` fingerprint map, rather than a per-file lookup: `walk_dir`
+    // consults this to decide, for every tracked file, whether `entry.oid`
+    // (free from `list_tree`) already matches what is stored before ever
+    // calling `repo.read_blob`. See `walk_dir`'s own doc for the skip
+    // decision this map feeds.
+    let fingerprints: HashMap<String, (String, String)> = store
+        .list_files(repo_id)?
+        .into_iter()
+        .map(|f| (f.path, (f.blob_hash, f.lang)))
+        .collect();
     walk_dir(
         store,
         repo,
@@ -547,6 +643,7 @@ pub fn index_repo_working_tree(
         is_rails,
         &mut stats,
         comment_keywords,
+        &fingerprints,
     )?;
     // V3.G2 — second pass: rebuild import edges now that every files row
     // exists. Per-file edge resolution during the walk can miss targets
@@ -595,6 +692,24 @@ pub fn rebuild_import_edges_for_repo(store: &Store, repo_id: i64) -> Result<()> 
     Ok(())
 }
 
+/// `true` iff `blob_hash` needs no (re-)derivation under `lang_id`'s
+/// CURRENT salts — the boot fast path's eligibility check (V77-P1). A
+/// `lang_id` that is not a registered language (one of the `TIER_*`
+/// content-skip markers) has no salts and therefore nothing to derive: the
+/// files row itself is already correct (same oid, same tier), so that case
+/// is vacuously eligible. This is the ONE gate that decides whether
+/// `walk_dir` may skip `repo.read_blob` + `index_file` for an unchanged
+/// path — see the call site for the oid comparison that gates entry into
+/// it, and `Store::is_derived_pair`'s doc for the residual TOCTOU note.
+fn unchanged_and_fully_derived(store: &Store, lang_id: &str, blob_hash: &str) -> Result<bool> {
+    match lang::for_id(lang_id) {
+        Some(info) => {
+            Ok(store.is_derived_pair(blob_hash, info.symbol_salt, info.highlight_salt)?)
+        }
+        None => Ok(true),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_dir(
     store: &Store,
@@ -606,6 +721,7 @@ fn walk_dir(
     is_rails: bool,
     stats: &mut WalkStats,
     comment_keywords: &crate::comments::KeywordSet,
+    fingerprints: &HashMap<String, (String, String)>,
 ) -> Result<()> {
     for entry in repo.list_tree(rev, dir_path)? {
         let full_path = if dir_path.is_empty() {
@@ -624,43 +740,84 @@ fn walk_dir(
                 is_rails,
                 stats,
                 comment_keywords,
+                fingerprints,
             )?,
-            EntryKind::File => match repo.read_blob(rev, &full_path, MAX_PARSE_BYTES) {
-                Ok(bytes) => {
-                    let outcome = index_file(
-                        store,
-                        repo_id,
-                        &full_path,
-                        &bytes,
-                        &entry.oid,
-                        occurrences_enabled,
-                        is_rails,
-                        comment_keywords,
-                    )?;
-                    stats.files += 1;
-                    stats.symbols += outcome.symbol_count;
-                    stats.record_highlight(outcome.highlight_cache);
-                    if outcome.cache_hit {
-                        stats.cache_hits += 1;
-                    } else if lang::for_id(outcome.tier).is_some() {
-                        stats.parsed += 1;
-                    } else {
-                        stats.skipped_tier += 1;
+            EntryKind::File => {
+                // V77-P1 (E6) — the boot fast path. `entry.oid` is the
+                // blob id `list_tree` already read off the tree object —
+                // free, no content read. If it matches what is stored for
+                // this exact path AND (for a real language) both derived
+                // families are already marked, the file's content, tier
+                // and derived rows are ALL provably unchanged since the
+                // last successful walk: skip `repo.read_blob` and
+                // `index_file` entirely, the whole cost this unit exists
+                // to cut. Any mismatch, any never-seen path, or a missing
+                // derived family falls through to the existing read path
+                // below, byte-identical to pre-V77-P1 behaviour.
+                //
+                // Known limitation (not a torn-read risk, a classification
+                // one): the language used for the `is_derived_pair` lookup
+                // is the STORED `files.lang` from the previous successful
+                // visit, not a fresh `lang::detect` — cheaper (no bytes to
+                // detect from) and correct as long as this binary's
+                // language registry hasn't changed what this path's
+                // extension/filename maps to since that visit. A registry
+                // upgrade that reclassifies an unchanged, previously
+                // `unknown`/wrongly-typed file will not be picked up by
+                // this fast path (it will keep being skipped under its old
+                // classification) until the file's content or path next
+                // changes, or an operator forces a re-visit (`kb-code
+                // reextract --bill` prices a salt bump; there is no
+                // "force re-extract" verb by design, invariant 11(b)). The
+                // slow path this fast path shortcuts always re-detects
+                // from fresh bytes, so this gap is new to the unchanged
+                // case only.
+                if let Some((prev_hash, prev_lang)) = fingerprints.get(&full_path) {
+                    if prev_hash == &entry.oid
+                        && unchanged_and_fully_derived(store, prev_lang, &entry.oid)?
+                    {
+                        stats.files += 1;
+                        stats.skipped_unchanged += 1;
+                        continue;
                     }
                 }
-                // The git layer's own cap tripped first (its default is
-                // 10 MiB vs our 5 MiB parse cap, but we pass MAX_PARSE_BYTES
-                // explicitly so this is really the same boundary) — the
-                // error still carries the real size, so the files row is
-                // just as accurate as the in-process size check's branch.
-                Err(GitError::TooLarge { size, .. }) => {
-                    store.upsert_file(repo_id, &full_path, &entry.oid, TIER_TOO_LARGE, size)?;
-                    stats.files += 1;
-                    stats.skipped_tier += 1;
-                    stats.record_highlight(HighlightCache::SkippedTier);
+                match repo.read_blob(rev, &full_path, MAX_PARSE_BYTES) {
+                    Ok(bytes) => {
+                        let outcome = index_file(
+                            store,
+                            repo_id,
+                            &full_path,
+                            &bytes,
+                            &entry.oid,
+                            occurrences_enabled,
+                            is_rails,
+                            comment_keywords,
+                        )?;
+                        stats.files += 1;
+                        stats.symbols += outcome.symbol_count;
+                        stats.record_highlight(outcome.highlight_cache);
+                        if outcome.cache_hit {
+                            stats.cache_hits += 1;
+                        } else if lang::for_id(outcome.tier).is_some() {
+                            stats.parsed += 1;
+                        } else {
+                            stats.skipped_tier += 1;
+                        }
+                    }
+                    // The git layer's own cap tripped first (its default is
+                    // 10 MiB vs our 5 MiB parse cap, but we pass MAX_PARSE_BYTES
+                    // explicitly so this is really the same boundary) — the
+                    // error still carries the real size, so the files row is
+                    // just as accurate as the in-process size check's branch.
+                    Err(GitError::TooLarge { size, .. }) => {
+                        store.upsert_file(repo_id, &full_path, &entry.oid, TIER_TOO_LARGE, size)?;
+                        stats.files += 1;
+                        stats.skipped_tier += 1;
+                        stats.record_highlight(HighlightCache::SkippedTier);
+                    }
+                    Err(e) => return Err(e.into()),
                 }
-                Err(e) => return Err(e.into()),
-            },
+            }
             // Wave-1 scope is regular file content — symlinks and
             // submodule pins are not indexed as files at all.
             EntryKind::Symlink | EntryKind::Submodule => {}
@@ -1686,11 +1843,172 @@ mod tests {
         assert!(stats.symbols >= 1);
         assert_eq!(store.file_count(repo_id).unwrap(), 5);
 
-        // Re-running the walk on the SAME rev is all cache hits (branch
-        // switch that changes nothing re-derives nothing — ADR-2).
+        // Re-running the walk on the SAME rev: EVERY file's oid still
+        // matches the stored fingerprint (V77-P1), so all 5 are now
+        // `skipped_unchanged` — `repo.read_blob` never runs a second time
+        // for any of them, not just the two real languages. This replaces
+        // the pre-V77-P1 expectation (`cache_hits == 2`): those two files
+        // used to still be READ and re-hashed on every walk, only their
+        // derivation was cached — this unit's whole point is to stop that
+        // read.
         let stats2 =
             index_repo_working_tree(&store, &repo, repo_id, "HEAD", true, false, &kw()).unwrap();
+        assert_eq!(stats2.files, 5);
         assert_eq!(stats2.parsed, 0);
-        assert_eq!(stats2.cache_hits, 2);
+        assert_eq!(stats2.cache_hits, 0);
+        assert_eq!(stats2.skipped_tier, 0);
+        assert_eq!(stats2.skipped_unchanged, 5);
+        // Readiness stays honest either way (task 4): identical counts.
+        assert_eq!(store.file_count(repo_id).unwrap(), 5);
+    }
+
+    /// V77-P1 (task 6) — unchanged oid + both derived families present ⇒
+    /// skipped, with the SAME symbol rows still addressable afterward
+    /// (nothing was deleted or re-derived).
+    #[test]
+    fn unchanged_oid_and_derived_both_families_is_skipped() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let hash = real_git_hash_object(RUST_SRC);
+        let before =
+            index_file(&store, repo_id, "a.rs", RUST_SRC, &hash, true, false, &kw()).unwrap();
+        assert!(!before.cache_hit);
+        let symbols_before = store
+            .symbols_for_blob(&hash, lang::RUST.symbol_salt)
+            .unwrap();
+        assert!(!symbols_before.is_empty());
+
+        assert!(unchanged_and_fully_derived(&store, "rust", &hash).unwrap());
+
+        let fingerprints: HashMap<String, (String, String)> =
+            [("a.rs".to_string(), (hash.clone(), "rust".to_string()))].into();
+        let mut stats = WalkStats::default();
+        // A bare re-run through the real ODB walk on a fixture whose only
+        // committed file is this one, confirming the fast path fires
+        // end-to-end (not just the eligibility helper in isolation).
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), RUST_SRC).unwrap();
+        Command::new("git")
+            .current_dir(tmp.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(tmp.path())
+            .args(["config", "user.email", "test@example.com"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(tmp.path())
+            .args(["config", "user.name", "Test"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(tmp.path())
+            .args(["add", "-A"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(tmp.path())
+            .args(["commit", "-q", "-m", "c1"])
+            .output()
+            .unwrap();
+        let repo2 = GitRepo::open(tmp.path()).unwrap();
+        walk_dir(
+            &store,
+            &repo2,
+            repo_id,
+            "HEAD",
+            "",
+            true,
+            false,
+            &mut stats,
+            &kw(),
+            &fingerprints,
+        )
+        .unwrap();
+        assert_eq!(stats.skipped_unchanged, 1);
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.parsed, 0);
+
+        // The symbol rows are untouched — nothing was deleted or re-derived.
+        let symbols_after = store
+            .symbols_for_blob(&hash, lang::RUST.symbol_salt)
+            .unwrap();
+        assert_eq!(symbols_before, symbols_after);
+    }
+
+    /// V77-P1 (task 6) — a changed oid (the fingerprint map still holds the
+    /// OLD hash) always falls through to the existing read path, regardless
+    /// of derived-status state.
+    #[test]
+    fn changed_oid_is_never_skipped() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let old_hash = real_git_hash_object(RUST_SRC);
+        index_file(
+            &store,
+            repo_id,
+            "a.rs",
+            RUST_SRC,
+            &old_hash,
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+
+        // The stored fingerprint is `old_hash`; the tree now reports a
+        // DIFFERENT oid for the same path — `unchanged_and_fully_derived`
+        // is never even reached because the oid comparison happens first,
+        // but exercise the fn directly too: a fresh oid has no
+        // derived_status row of its own.
+        let new_src = b"fn add(a: i32, b: i32) -> i32 {\n    a + b + 1\n}\n";
+        let new_hash = real_git_hash_object(new_src);
+        assert_ne!(old_hash, new_hash);
+        assert!(!unchanged_and_fully_derived(&store, "rust", &new_hash).unwrap());
+    }
+
+    /// V77-P1 (task 6) — same oid, but ONE derived family is missing (a
+    /// torn/never-finished derivation, or a salt bump that invalidated only
+    /// one family) ⇒ must NOT be treated as skip-eligible.
+    #[test]
+    fn same_oid_missing_one_derived_family_is_not_skipped() {
+        let (_tmp, store) = open_store();
+        let hash = "deadbeefcafe";
+        // Only the SYMBOL family is marked derived; highlights never were.
+        store
+            .mark_derived(hash, lang::SaltFamily::Symbol, lang::RUST.symbol_salt, 3)
+            .unwrap();
+        assert!(!unchanged_and_fully_derived(&store, "rust", hash).unwrap());
+
+        // ... and the reverse: only highlights marked.
+        let hash2 = "cafedeadbeef";
+        store
+            .mark_derived(
+                hash2,
+                lang::SaltFamily::Highlight,
+                lang::RUST.highlight_salt,
+                0,
+            )
+            .unwrap();
+        assert!(!unchanged_and_fully_derived(&store, "rust", hash2).unwrap());
+
+        // Both marked ⇒ eligible.
+        store
+            .mark_derived(hash2, lang::SaltFamily::Symbol, lang::RUST.symbol_salt, 1)
+            .unwrap();
+        assert!(unchanged_and_fully_derived(&store, "rust", hash2).unwrap());
+    }
+
+    /// V77-P1 (task 6) — a TIER_* marker (no registered language) has
+    /// nothing to derive, so an unchanged oid is vacuously skip-eligible.
+    #[test]
+    fn tier_marker_with_unchanged_oid_is_vacuously_eligible() {
+        let (_tmp, store) = open_store();
+        assert!(unchanged_and_fully_derived(&store, TIER_UNKNOWN, "anyhash").unwrap());
+        assert!(unchanged_and_fully_derived(&store, TIER_BINARY, "anyhash").unwrap());
+        assert!(unchanged_and_fully_derived(&store, TIER_TOO_LARGE, "anyhash").unwrap());
+        assert!(unchanged_and_fully_derived(&store, TIER_LFS, "anyhash").unwrap());
     }
 }

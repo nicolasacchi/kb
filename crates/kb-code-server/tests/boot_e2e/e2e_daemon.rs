@@ -673,3 +673,94 @@ async fn ingest_e2e_mixed_language_repo_indexes_all_six_languages() {
         "expected the YAML key path spec: {yaml_matches:?}"
     );
 }
+
+/// V77-P1 (E6) — the boot fast path, at the real HTTP surface. A fixture
+/// covering every content-cap tier (a real language, a `.gitignore`d file,
+/// an unknown extension, a binary file) settles to EXACT `file_count` and
+/// an honest minimum `symbol_count` on its FIRST boot — proving the new
+/// oid-fingerprint short-circuit in `ingest::walk_dir` is byte-identical
+/// for a `never-seen` corpus, since every file here (nothing is in the
+/// store yet) takes the pre-existing read path exactly once.
+///
+/// The complementary "a SECOND, warm boot skips every unchanged file and
+/// leaves `file_count`/`symbol_count` unmoved" claim is proven at the
+/// `ingest` unit level instead
+/// (`ingest::tests::walks_a_repo_and_classifies_every_tracked_file`,
+/// asserting `stats2.skipped_unchanged == stats2.files` on a same-rev
+/// re-walk of the SAME `Store`) rather than via a second HTTP boot here:
+/// this crate's daemon has no graceful-shutdown API for the live watcher
+/// (`sink.rs`'s own module doc — "the dropped `JoinHandle` is a decision,
+/// not an oversight... no graceful-drain-on-shutdown design" — and the
+/// watcher itself runs a plain background OS THREAD with no cancellation
+/// hook of its own). Aborting this test's `JoinHandle` would not
+/// necessarily stop that thread while it still holds this SAME `index.db`
+/// open, so booting a SECOND `serve_on_random_port_with_paths` against the
+/// identical store path from inside one test process risks a flaky
+/// `SQLITE_BUSY` race against a daemon this test cannot prove is fully
+/// torn down — a real second daemon PROCESS (P6's gitlabhq-mirror harness)
+/// does not share that risk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn warm_boot_fixture_settles_to_exact_counts_via_api_repos() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&dir);
+    std::fs::write(
+        dir.join("lib.rs"),
+        b"fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("app.py"), b"def hi():\n    pass\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), b"ignored.rs\n").unwrap();
+    std::fs::write(dir.join("ignored.rs"), b"fn ignored() {}\n").unwrap();
+    std::fs::write(dir.join("photo.bin"), vec![0xff, 0xd8, 0xff, 0xe0]).unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "c1"]);
+
+    let (_tmp, base, _task) = boot_with_repo(&dir, "fixture").await;
+    let client = reqwest::Client::new();
+
+    // 4 tracked files: lib.rs, app.py, .gitignore (tier "unknown"), photo.bin
+    // (tier "binary"). `ignored.rs` is excluded by `.gitignore` and never
+    // reaches `git ls-tree` at all, so it must never be counted.
+    let ok = wait_until_async(Duration::from_secs(15), || {
+        let client = client.clone();
+        let base = base.clone();
+        async move {
+            let body: serde_json::Value = client
+                .get(format!("{base}/api/repos"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            body["repos"][0]["file_count"].as_u64().unwrap_or(0) == 4
+        }
+    })
+    .await;
+    assert!(ok, "expected the boot walk to settle at exactly 4 files");
+
+    // `file_count`/`symbol_count` are independent `COUNT(*)` reads over
+    // `files`/`symbols` — give the second a moment past the files-row
+    // write before asserting on it too.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let body: serde_json::Value = client
+        .get(format!("{base}/api/repos"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repo = &body["repos"][0];
+    assert_eq!(
+        repo["file_count"].as_u64(),
+        Some(4),
+        "file_count must count every tier, changed or not: {repo:?}"
+    );
+    assert!(
+        repo["symbol_count"].as_u64().unwrap_or(0) >= 2,
+        "expected at least the two functions (lib.rs, app.py): {repo:?}"
+    );
+}
