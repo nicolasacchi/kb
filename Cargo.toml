@@ -145,7 +145,7 @@ sha2 = "0.11"
 hex = "0.4"
 # Cloudflare Pages asset hash (wrangler-compatible): blake3(base64(bytes)‖ext).
 # Both already in the graph (base64 via reqwest/datafusion, blake3 via lance).
-base64 = "0.22"
+base64 = "0.23"
 blake3 = "1"
 toml = "1"
 # Format-preserving TOML editor — kb-server's PATCH /api/config splices
