@@ -82,7 +82,9 @@ pub struct Fragment {
 /// `#{…}`, every attribute hash), each rescanning the whole file prefix —
 /// O(bytes) per fragment times O(fragments) fragments, both of which scale
 /// with the file. Built ONCE per document walk; every fragment after that
-/// pays O(log lines) instead.
+/// pays O(log lines) instead. *V77-P4b:* [`outline`]'s [`compute_last_lines`]
+/// reuses the SAME structure for the same reason, one caller lower — see
+/// that function's own doc.
 struct LineIndex {
     /// `starts[i]` is the byte offset where physical line `i + 1` begins;
     /// `starts[0] == 0` always. Ascending by construction (one entry per
@@ -382,10 +384,11 @@ impl<'a> ProgramBuilder<'a> {
 
 /// The 1-based line containing byte `offset`, by counting `\n` bytes from
 /// the START of `src` every call — O(offset), fine for a one-off caller
-/// (a diagnostic, `outline`'s per-node `subtree_last_line`, a test) but NOT
-/// for a loop that calls it once per fragment/token; that caller wants
-/// [`LineIndex`] instead (built once, O(log lines) per lookup — see its
-/// own doc for the V77-P4 regression this distinction fixes).
+/// (a diagnostic, a test) but NOT for a loop that calls it once per
+/// node/fragment/token; that caller wants [`LineIndex`] instead (built
+/// once, O(log lines) per lookup — see its own doc for the V77-P4
+/// regression this distinction fixes, and [`compute_last_lines`]'s doc for
+/// the V77-P4b one).
 pub fn line_at(src: &str, offset: usize) -> u32 {
     let upto = offset.min(src.len());
     1 + src.as_bytes()[..upto]
@@ -409,6 +412,8 @@ pub const KIND_FILTER: &str = "filter";
 /// crate's oracle bar, applied to a lane that would otherwise be tempted
 /// to call `- items.each do |i|` a definition).
 pub fn outline(doc: &Document, src: &str) -> Vec<Symbol> {
+    let lines = LineIndex::new(src);
+    let last_lines = compute_last_lines(doc, &lines);
     let mut out = Vec::new();
     for id in doc.preorder() {
         let node = doc.node(id);
@@ -418,7 +423,7 @@ pub fn outline(doc: &Document, src: &str) -> Vec<Symbol> {
             _ => continue,
         };
         let container = container_of(doc, id);
-        let line_end = subtree_last_line(doc, id, src);
+        let line_end = last_lines[id];
         out.push(Symbol {
             ordinal: out.len() as u32,
             name,
@@ -466,15 +471,50 @@ fn container_of(doc: &Document, id: usize) -> Option<String> {
     None
 }
 
-fn subtree_last_line(doc: &Document, id: usize, src: &str) -> u32 {
-    let node = doc.node(id);
-    let mut last = node
-        .line
-        .max(line_at(src, node.span.end.saturating_sub(1) as usize));
-    for c in &node.children {
-        last = last.max(subtree_last_line(doc, *c, src));
+/// Every node's LAST line, computed bottom-up in ONE pass over the whole
+/// document (V77-P4b). The function this replaced, `subtree_last_line`,
+/// walked a node's entire subtree FROM SCRATCH on every call, and `outline`
+/// called it once per ELEMENT/FILTER node encountered in `doc.preorder()`
+/// — so a node sitting under `k` enclosing tags/filters had its own
+/// descendants re-walked by all `k` of THEIR calls. On a deep or long
+/// linear nesting chain that is O(n²): quadrupling the nesting depth
+/// quadruples both the node count AND the per-node work.
+///
+/// This instead computes every id's answer EXACTLY ONCE, children before
+/// parents, so folding a parent is an O(1) max over its own children's
+/// already-final answers — O(n) node visits total, plus one [`LineIndex`]
+/// lookup per node (O(log lines), never the O(offset) rescan [`line_at`]
+/// alone does — see that fn's own doc), which is why [`outline`] builds
+/// the index once and passes it in rather than calling `line_at` itself.
+fn compute_last_lines(doc: &Document, lines: &LineIndex) -> Vec<u32> {
+    let n = doc.nodes.len();
+    let mut last_line = vec![0u32; n];
+    if n == 0 {
+        return last_line;
     }
-    last
+    // A stack walk that visits every node BEFORE its children (children
+    // pushed in their own left-to-right order, so a LIFO pop visits them
+    // right-to-left) — reversed, that visitation order is a valid
+    // POSTORDER (every child appears before its parent), which is exactly
+    // the property the fold below needs: by the time a node is folded,
+    // every one of its children's `last_line` entries is already final.
+    let mut stack: Vec<usize> = doc.roots.clone();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    while let Some(id) = stack.pop() {
+        order.push(id);
+        stack.extend(doc.nodes[id].children.iter().copied());
+    }
+    for &id in order.iter().rev() {
+        let node = &doc.nodes[id];
+        let mut last = node
+            .line
+            .max(lines.line_at(node.span.end.saturating_sub(1) as usize));
+        for c in &node.children {
+            last = last.max(last_line[*c]);
+        }
+        last_line[id] = last;
+    }
+    last_line
 }
 
 // ── highlight spans ───────────────────────────────────────────────────────
