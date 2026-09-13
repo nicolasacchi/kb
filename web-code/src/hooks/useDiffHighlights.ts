@@ -16,6 +16,7 @@ import type { FileResponse, HighlightOut } from "../api/types";
 import {
   buildLineSpans,
   reconstructSide,
+  shouldFallbackToSnippet,
   splitContentLines,
   type DiffHighlights,
   type LineSpan,
@@ -103,7 +104,8 @@ export function useDiffHighlights(
     if (!prefOn || !path) return [];
     const items: HighlightItem[] = [];
     const tipNeeds =
-      tipEnabled && !tip.isLoading && !sideUsable(tip.data);
+      tipEnabled &&
+      shouldFallbackToSnippet({ isLoading: tip.isLoading, isError: tip.isError }, sideUsable(tip.data));
     if (tipNeeds) {
       const text =
         tip.data?.encoding === "utf8" && tip.data.content
@@ -121,7 +123,8 @@ export function useDiffHighlights(
       }
     }
     const baseNeeds =
-      baseEnabled && !base.isLoading && !sideUsable(base.data);
+      baseEnabled &&
+      shouldFallbackToSnippet({ isLoading: base.isLoading, isError: base.isError }, sideUsable(base.data));
     if (baseNeeds) {
       const text =
         base.data?.encoding === "utf8" && base.data.content
@@ -145,7 +148,9 @@ export function useDiffHighlights(
     tipEnabled,
     baseEnabled,
     tip.isLoading,
+    tip.isError,
     base.isLoading,
+    base.isError,
     tip.data,
     base.data,
     parsed,

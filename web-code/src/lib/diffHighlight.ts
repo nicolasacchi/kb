@@ -203,3 +203,33 @@ export function spansForLine(
   const map = side === "old" ? highlights.oldLineSpans : highlights.newLineSpans;
   return map.get(n);
 }
+
+/// The settled/usable shape of one `GET /api/file` `useQuery` — just the
+/// two TanStack flags [`shouldFallbackToSnippet`] needs, so the predicate
+/// stays pure and testable without constructing a real query object.
+export interface FileFetchState {
+  isLoading: boolean;
+  isError: boolean;
+}
+
+/// V77-P4.1 — the fix for the diff-syntax-highlight race P4's process-wide
+/// tree-sitter query cache exposed: `useDiffHighlights`'s V76-C1 fallback
+/// (`POST /api/highlight`(`/batch`) over reconstructed text) must fire
+/// ONLY when `GET /api/file` SUCCEEDED but came back with no stored
+/// highlights yet (a new file, an unindexed blob, an oversize/non-utf8
+/// side — `sideUsable`'s job) — never while the read is still in flight,
+/// and never when it FAILED (404/5xx/network). The old call site checked
+/// only `!isLoading && !usable`, which is also true on a settled error
+/// (`data` stays `undefined`, `usable` is false), so a 404 painted a
+/// fallback snippet exactly like a genuine "not derived yet" file. Before
+/// P4's cache, the per-request query recompile was slow enough that the
+/// fallback usually lost the race against `diff-syntax.spec.ts`'s
+/// one-shot DOM assertion; P4 made the recompile fast enough to win it,
+/// which is what surfaced this as a visible regression rather than a
+/// latent bug. `isError` distinguishes the two settled states; on a
+/// failed read the diff must render plain with no fallback fetch (and,
+/// unchanged, no error toast).
+export function shouldFallbackToSnippet(state: FileFetchState, usable: boolean): boolean {
+  if (state.isLoading || state.isError) return false;
+  return !usable;
+}
