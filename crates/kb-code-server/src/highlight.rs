@@ -120,10 +120,56 @@
 use crate::lang::{self, LangError};
 use crate::syntax::{self, SyntaxRow};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use tree_sitter::StreamingIterator;
 
 pub type Result<T> = std::result::Result<T, LangError>;
+
+/// Compiled `highlights.scm` queries, cached per language id (V77-P4).
+/// `extract_highlights_host_only` used to call `lang::compile_query` fresh
+/// on every invocation — this module's own doc says that "happens once per
+/// file ingest, not in a hot loop" (see `lang::highlights_query`'s doc),
+/// true for every OTHER language but broken by HAML's own scanner: its
+/// injection painting (`crate::injection::paint_regions`) calls this
+/// function once per Ruby FRAGMENT — a script line, every `#{…}`, every
+/// attribute hash — which can be hundreds to thousands of calls for one
+/// template. Recompiling a many-pattern tree-sitter query from source text
+/// on every one of those was the second half of the scanner's ~46x-per-byte
+/// regression against a plain Ruby file (the first half, the quadratic
+/// `line_at`/`line_index_at` rescans, is `haml::extract::LineIndex`'s doc).
+/// `tree_sitter::Query` is immutable once built and `Send + Sync`, so a
+/// process-wide cache behind a `RwLock` is sound: every OTHER caller (one
+/// call per file) pays a single uncontended read-lock lookup instead of a
+/// write, and the query text itself is a fixed, closed set
+/// (`lang::highlights_query`'s own match arms) so the map can never grow
+/// unboundedly.
+static QUERY_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Arc<tree_sitter::Query>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// The compiled query for `id`, from the cache when present. `query_src` is
+/// only used to compile a NEW entry — every caller passes
+/// `lang::highlights_query(id)`'s own return value, which is a pure
+/// function of `id`, so a cache hit and a fresh compile are guaranteed to
+/// have compiled the SAME source text.
+fn cached_highlights_query(
+    id: &str,
+    language: &tree_sitter::Language,
+    query_src: &str,
+) -> Result<Arc<tree_sitter::Query>> {
+    if let Some(q) = QUERY_CACHE.read().unwrap().get(id) {
+        return Ok(Arc::clone(q));
+    }
+    let compiled = Arc::new(lang::compile_query(id, language, query_src)?);
+    // Two threads racing to compile the same language both succeed; the
+    // second insert just replaces an equal entry, and the cache is a pure
+    // memoization layer with no correctness dependence on which one wins.
+    QUERY_CACHE
+        .write()
+        .unwrap()
+        .insert(id.to_string(), Arc::clone(&compiled));
+    Ok(compiled)
+}
 
 /// The ROLE TABLE version, embedded in every
 /// `lang::LangInfo::highlight_salt` (pinned by
@@ -265,7 +311,7 @@ pub fn extract_highlights_host_only(lang_id: &str, source: &[u8]) -> Result<Vec<
     let (tree, language) = lang::parse(lang_id, source)?;
     let hl_src = lang::highlights_query(lang_id)
         .ok_or_else(|| LangError::Unsupported(lang_id.to_string()))?;
-    let query = lang::compile_query(lang_id, &language, &hl_src)?;
+    let query = cached_highlights_query(lang_id, &language, &hl_src)?;
     let capture_names = query.capture_names();
 
     let mut cursor = tree_sitter::QueryCursor::new();
