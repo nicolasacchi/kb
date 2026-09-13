@@ -1,0 +1,30 @@
+-- V77-P1 — the fs-read fast path's fingerprint column.
+--
+-- The boot ODB tree-walk (`ingest::walk_dir`) already gets a blob oid for
+-- free from `git ls-tree` and compares it against the stored
+-- `files.blob_hash` to skip a redundant read+hash of an unchanged file — no
+-- schema change needed there. The TWO live-mirror paths that read via
+-- `std::fs::read` instead (`sink.rs`'s `handle_upsert` and
+-- `handle_full_reconcile`, the latter also run once per repo at watcher
+-- startup over the WHOLE tree, `reconcile::committed_delta`'s `old = None`
+-- shape) have no oid in hand — a git-compatible content hash can only be
+-- computed by reading the bytes, which is exactly the cost being avoided.
+-- `mtime` + the existing `size` column give those two paths a cheap
+-- pre-read fingerprint instead: `fs::metadata` first, and a read+hash only
+-- when `mtime`/`size` disagree with what is stored.
+--
+-- `mtime` = 0 means "unknown" and can never match a real fingerprint (unix
+-- time 0 is 1970-01-01T00:00:00Z; nothing this daemon writes as a live
+-- filesystem observation is dated there) — every ODB-walk write
+-- (`Store::upsert_file`, unchanged signature) leaves it at the column
+-- default, so a file only ever reachable through the boot tree-walk
+-- correctly never takes the fs-read fast path. Only the new
+-- `Store::upsert_file_with_mtime` (used by the two `sink.rs` callers) writes
+-- a nonzero value, in the SAME `ON CONFLICT` upsert as `blob_hash`/`size` —
+-- never a follow-up `UPDATE` — so a reader can never observe a row whose
+-- `mtime` fingerprint matches but whose `blob_hash` is from a different
+-- write (or vice versa).
+--
+-- O(1) DDL: ALTER TABLE ADD COLUMN with a constant default. No backfill —
+-- V0043's own precedent (`worktree_created_by_daemon`).
+ALTER TABLE files ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0;

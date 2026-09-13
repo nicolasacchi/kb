@@ -698,7 +698,12 @@ X-ray chips, described above) until a `--path` flag is added.
 reports daemon reachability, sibling-protocol/schema-epoch skew against
 this binary's own `kb_core::sibling` constants, token-resolution SOURCE
 (never the value), and whether cwd falls inside a configured repo —
-diagnostic only, it never refuses a mutating verb on skew. `kb-code token
+diagnostic only, it never refuses a mutating verb on skew. V77-P1 adds
+`--verify-fingerprints N [--repo R]`: re-hashes a sample of `R`'s files (or
+the daemon's one repo, `--repo`'s own ambiguity rule) against their stored
+`files.blob_hash` via `GET /api/fingerprints/verify`, and fails `doctor` if
+any disagree — the safety net for the boot/live-edit fast path's mtime+size
+heuristic (see "Warm boot (V77-P1)" above). `kb-code token
 path` prints the token FILE path only; this CLI's own bearer resolves from
 `KB_CODE_TOKEN` or `token_file` (default `<config>/kb-code-token`,
 override `KB_CODE_TOKEN_FILE`) — there is no `--token` flag (argv leaks to
@@ -1523,6 +1528,29 @@ heading-less Markdown. `GET /api/file` gains an additive
 `highlight_cache: "hit" | "miss" | "skipped_tier"` reporting what the gate
 would say for that blob, and the boot walk logs `highlight_hits` /
 `highlight_misses` / `highlight_skipped` beside its existing counters.
+
+**Warm boot (V77-P1).** The derived-status gate above still means the boot
+walk read and hashed *every tracked file* on every restart, even one where
+nothing changed — the ODB tree-walk (`ingest::index_repo_working_tree`)
+calls `repo.read_blob` unconditionally, and the live mirror's own startup
+reconcile then re-reads the same files a second time off disk. Both paths
+now skip that read+hash entirely for a file proven unchanged since the last
+successful walk: the tree-walk compares `git ls-tree`'s free blob oid
+against the stored `files.blob_hash` (no schema change — a git tree object
+carries no mtime), and the two `std::fs`-reading sink paths compare
+`fs::metadata`'s mtime+size against a new `files.mtime` column (migration
+`V0044`). Either way, a match only skips the read when BOTH the symbol and
+highlight `derived_status` markers are already present for that blob —
+never on the fingerprint alone, so a torn or never-finished derivation is
+never served as a cache hit. The boot walk's stats gain a
+`skipped_unchanged` counter beside `parsed`/`cache_hits`/`skipped_tier`; on
+a fully-unchanged corpus it equals `file_count` and neither symbol nor
+highlight counts move. `kb-code doctor --verify-fingerprints N [--repo R]`
+is the documented safety net for the fs-read heuristic: it re-hashes a
+random sample of `N` files straight off disk against their stored
+`blob_hash` and reports any mismatch (the failure mode is an editor that
+restores a file's original mtime after saving new content) — it changes
+nothing and is not run automatically.
 
 The **role table** widens from fifteen classes to **eighteen** (D16), which
 is what the split makes affordable. The three additions were picked by

@@ -86,7 +86,7 @@
 use crate::git::GitRepo;
 use crate::ingest;
 use crate::mirror::{MirrorSink, RepoRef};
-use crate::store::Store;
+use crate::store::{FileRow, Store};
 use kb_core::events::EventBus;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -387,6 +387,40 @@ fn relativize<'a>(repo: &RepoRef, abs: &'a Path) -> Option<std::borrow::Cow<'a, 
     })
 }
 
+/// V77-P1 (E6) — the fs-read fast path shared by `handle_upsert` and
+/// `handle_full_reconcile`. `row` is the stored fingerprint for this
+/// exact path (from `Store::get_file`/`list_files`, both of which now
+/// carry `mtime`); `meta` is a `fs::metadata` call the caller already made
+/// (never a second stat — see each call site). `true` means "the content
+/// is provably unchanged since the write that produced `row`; skip the
+/// read+hash+`index_file` entirely."
+///
+/// `row.mtime == 0` ("unknown" — see `V0044__files_mtime.sql`) can never
+/// match: every ODB tree-walk write (`Store::upsert_file`) leaves it at
+/// that default, so a file only ever visited through the boot walk before
+/// its first live-mirror touch correctly always takes the slow path here
+/// once. `Store::is_derived_pair`'s own doc covers the residual TOCTOU
+/// between this check succeeding and the caller acting on it.
+fn fs_fingerprint_unchanged(store: &Store, row: &FileRow, meta: &std::fs::Metadata) -> bool {
+    if row.mtime == 0 {
+        return false;
+    }
+    let Some(mtime) = ingest::mtime_unix_secs(meta) else {
+        return false;
+    };
+    if mtime != row.mtime || meta.len() != row.size {
+        return false;
+    }
+    match crate::lang::for_id(&row.lang) {
+        Some(info) => store
+            .is_derived_pair(&row.blob_hash, info.symbol_salt, info.highlight_salt)
+            .unwrap_or(false),
+        // A TIER_* marker (no registered language) has nothing derived to
+        // verify — the stored `files` row is already the honest answer.
+        None => true,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_upsert(
     store: &Store,
@@ -409,15 +443,35 @@ fn handle_upsert(
         );
         return;
     };
+
+    // V77-P1 — stat BEFORE read, once. On a fingerprint match this avoids
+    // the read+hash entirely; on a miss (or no prior row) the SAME
+    // metadata's mtime is reused below when writing the fresh fingerprint,
+    // so this is never a second syscall for one upsert.
+    let meta = std::fs::metadata(abs_path).ok();
+    if let Some(meta) = &meta {
+        if let Ok(Some(row)) = store.get_file(repo_id, &rel) {
+            if fs_fingerprint_unchanged(store, &row, meta) {
+                tracing::debug!(
+                    repo = %repo.name, path = %rel,
+                    "kb-code sink: upsert fingerprint unchanged — skipping read+hash",
+                );
+                return;
+            }
+        }
+    }
+
     match std::fs::read(abs_path) {
         Ok(bytes) => {
             let blob_hash = ingest::git_blob_hash(&bytes);
-            if let Err(e) = ingest::index_file(
+            let mtime = meta.as_ref().and_then(ingest::mtime_unix_secs).unwrap_or(0);
+            if let Err(e) = ingest::index_file_with_mtime(
                 store,
                 repo_id,
                 &rel,
                 &bytes,
                 &blob_hash,
+                mtime,
                 occurrences_enabled,
                 is_rails,
                 comment_keywords,
@@ -502,6 +556,19 @@ fn handle_full_reconcile(
     };
     let mut touched: Vec<String> = Vec::with_capacity(changed.len() + removed.len());
 
+    // V77-P1 (E6) — ONE query for the whole repo's fingerprints rather
+    // than a per-file `get_file` lookup: `startup_reconcile` calls this fn
+    // with `changed` = the WHOLE tracked tree (`committed_delta`'s
+    // `old = None` shape), which before this unit meant every file in the
+    // mirror was read and re-hashed a SECOND time at boot — the boot walk
+    // (`ingest::index_repo_working_tree`, an ODB read) had just done so
+    // once already. A failed lookup degrades to an empty map (every path
+    // takes the existing read path, unchanged behaviour).
+    let fingerprints: HashMap<String, FileRow> = store
+        .list_files(repo_id)
+        .map(|rows| rows.into_iter().map(|f| (f.path.clone(), f)).collect())
+        .unwrap_or_default();
+
     // `changed`/`removed` are already repo-relative (see `reconcile::
     // committed_delta`/`dirty_check`'s doc) — read straight off the
     // working tree at `repo.root.join(rel)`, matching the mirror module's
@@ -511,15 +578,27 @@ fn handle_full_reconcile(
     for rel in &changed {
         let rel_str = rel.to_string_lossy().to_string();
         let abs = repo.root.join(rel);
+
+        // Stat BEFORE read, once — reused below for the write's mtime on
+        // a miss, exactly as `handle_upsert` does.
+        let meta = std::fs::metadata(&abs).ok();
+        if let (Some(row), Some(meta)) = (fingerprints.get(&rel_str), meta.as_ref()) {
+            if fs_fingerprint_unchanged(store, row, meta) {
+                continue;
+            }
+        }
+
         match std::fs::read(&abs) {
             Ok(bytes) => {
                 let blob_hash = ingest::git_blob_hash(&bytes);
-                if let Err(e) = ingest::index_file(
+                let mtime = meta.as_ref().and_then(ingest::mtime_unix_secs).unwrap_or(0);
+                if let Err(e) = ingest::index_file_with_mtime(
                     store,
                     repo_id,
                     &rel_str,
                     &bytes,
                     &blob_hash,
+                    mtime,
                     occurrences_enabled,
                     is_rails,
                     comment_keywords,
@@ -901,5 +980,195 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
+    }
+
+    // --- V77-P1: `fs_fingerprint_unchanged` (task 6) ------------------------
+
+    fn open_bare_store() -> (tempfile::TempDir, Store) {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&tmp.path().join("index.db")).unwrap();
+        (tmp, store)
+    }
+
+    fn tmp_file_row(dir: &Path, name: &str, contents: &[u8]) -> (std::path::PathBuf, FileRow) {
+        let path = dir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let row = FileRow {
+            path: name.to_string(),
+            blob_hash: ingest::git_blob_hash(contents),
+            lang: "rust".to_string(),
+            size: meta.len(),
+            mtime: ingest::mtime_unix_secs(&meta).unwrap(),
+        };
+        (path, row)
+    }
+
+    #[test]
+    fn fs_fingerprint_same_mtime_size_and_derived_matches() {
+        let (_store_tmp, store) = open_bare_store();
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, row) = tmp_file_row(tmp.path(), "a.rs", b"fn a() {}\n");
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Symbol,
+                crate::lang::RUST.symbol_salt,
+                1,
+            )
+            .unwrap();
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Highlight,
+                crate::lang::RUST.highlight_salt,
+                0,
+            )
+            .unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert!(fs_fingerprint_unchanged(&store, &row, &meta));
+    }
+
+    #[test]
+    fn fs_fingerprint_changed_mtime_forces_reread() {
+        let (_store_tmp, store) = open_bare_store();
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, mut row) = tmp_file_row(tmp.path(), "a.rs", b"fn a() {}\n");
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Symbol,
+                crate::lang::RUST.symbol_salt,
+                1,
+            )
+            .unwrap();
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Highlight,
+                crate::lang::RUST.highlight_salt,
+                0,
+            )
+            .unwrap();
+        row.mtime = row.mtime.saturating_add(12345);
+        let meta = std::fs::metadata(&path).unwrap();
+        assert!(!fs_fingerprint_unchanged(&store, &row, &meta));
+    }
+
+    #[test]
+    fn fs_fingerprint_mtime_zero_never_matches() {
+        let (_store_tmp, store) = open_bare_store();
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, mut row) = tmp_file_row(tmp.path(), "a.rs", b"fn a() {}\n");
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Symbol,
+                crate::lang::RUST.symbol_salt,
+                1,
+            )
+            .unwrap();
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Highlight,
+                crate::lang::RUST.highlight_salt,
+                0,
+            )
+            .unwrap();
+        row.mtime = 0;
+        let meta = std::fs::metadata(&path).unwrap();
+        assert!(
+            !fs_fingerprint_unchanged(&store, &row, &meta),
+            "mtime=0 (\"unknown\") must never be treated as a match"
+        );
+    }
+
+    #[test]
+    fn fs_fingerprint_missing_one_derived_family_forces_reread() {
+        let (_store_tmp, store) = open_bare_store();
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, row) = tmp_file_row(tmp.path(), "a.rs", b"fn a() {}\n");
+        // Only the symbol family is marked — highlights never derived.
+        store
+            .mark_derived(
+                &row.blob_hash,
+                crate::lang::SaltFamily::Symbol,
+                crate::lang::RUST.symbol_salt,
+                1,
+            )
+            .unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert!(!fs_fingerprint_unchanged(&store, &row, &meta));
+    }
+
+    /// V77-P1 (task 6), end to end: a second `upsert_path` call for a
+    /// completely unchanged file must not re-emit `mirror.updated` (proof
+    /// that `handle_upsert` actually took the fast path and returned before
+    /// ever writing the store or the bus) — proven via a sentinel write
+    /// processed strictly AFTER it, since the sink worker is a single
+    /// consumer draining its queue in order (module doc).
+    #[tokio::test]
+    async fn upsert_path_skips_reread_when_fingerprint_is_unchanged() {
+        let (_repo_tmp, store, repo_ids, repo_dir) = setup();
+        let bus = Arc::new(EventBus::default());
+        let mut rx = bus.subscribe();
+        let (sink, _handle) = spawn(
+            store.clone(),
+            repo_ids.clone(),
+            bus.clone(),
+            crate::config::OccurrencesSection::default(),
+            std::collections::HashMap::new(),
+            crate::comments::KeywordSet::defaults(),
+        );
+        let repo_ref = RepoRef {
+            name: "fixture".to_string(),
+            root: repo_dir.clone(),
+        };
+        let repo_id = *repo_ids.get("fixture").unwrap();
+
+        std::fs::write(repo_dir.join("b.rs"), b"fn b() {}\n").unwrap();
+        let (sink2, repo_ref2, path) = (sink.clone(), repo_ref.clone(), repo_dir.join("b.rs"));
+        call_blocking(move || sink2.upsert_path(&repo_ref2, &path)).await;
+        assert!(wait_for(|| store.get_file(repo_id, "b.rs").unwrap().is_some()).await);
+        let row1 = store.get_file(repo_id, "b.rs").unwrap().unwrap();
+        assert_ne!(row1.mtime, 0, "the fs-read path must record a real mtime");
+        // Drain the first upsert's own event before the assertion window.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+
+        // Second upsert of the SAME unchanged file — should be a no-op.
+        let (sink3, repo_ref3, path3) = (sink.clone(), repo_ref.clone(), repo_dir.join("b.rs"));
+        call_blocking(move || sink3.upsert_path(&repo_ref3, &path3)).await;
+
+        // A sentinel write, strictly ordered AFTER the call above by the
+        // worker's single-consumer queue — once its event lands, the
+        // second b.rs upsert has already been fully processed.
+        std::fs::write(repo_dir.join("sentinel.rs"), b"fn s() {}\n").unwrap();
+        let (sink4, repo_ref4, path4) =
+            (sink.clone(), repo_ref.clone(), repo_dir.join("sentinel.rs"));
+        call_blocking(move || sink4.upsert_path(&repo_ref4, &path4)).await;
+
+        let mut seen_paths: Vec<String> = Vec::new();
+        loop {
+            let env = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("sentinel event never arrived")
+                .unwrap();
+            if env.type_ != "mirror.updated" {
+                continue;
+            }
+            let p = env.payload["paths"][0].as_str().unwrap().to_string();
+            seen_paths.push(p.clone());
+            if p == "sentinel.rs" {
+                break;
+            }
+        }
+        assert!(
+            !seen_paths.contains(&"b.rs".to_string()),
+            "an unchanged fingerprint must not re-emit mirror.updated for b.rs; saw {seen_paths:?}"
+        );
+
+        let row2 = store.get_file(repo_id, "b.rs").unwrap().unwrap();
+        assert_eq!(row1, row2, "the unchanged file's row must be untouched");
     }
 }

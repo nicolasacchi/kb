@@ -376,6 +376,19 @@ invariant #2 records).
     volume-ahead guard (kb invariant 2) — the same rollback trap that cost
     13.5 h once already, and the reason the operator could not simply roll
     back to the previous image when this hang hit.
+    *V77-P1 amendment (boot fast path):* a fingerprint (the ODB walk's free
+    `entry.oid` vs stored `files.blob_hash`; the fs-read sink paths'
+    `files.mtime`+`size`, V0044) is a SKIP HEURISTIC layered ABOVE
+    `blob_hash`, never a substitute for it — `blob_hash` stays the sole key
+    every derived row is addressed by, and a fingerprint match only ever
+    decides whether `ingest::index_file` is called at all, gated on
+    `Store::is_derived_pair` for BOTH salt families so a torn/never-finished
+    derivation can never be served as a hit. `Store::upsert_file_with_mtime`
+    writes `blob_hash`/`size`/`mtime` in ONE `ON CONFLICT` upsert, never a
+    follow-up `UPDATE` — the transactional pair a fingerprint's own write
+    must never be split across, or a reader could observe a fingerprint
+    match against a `blob_hash` from a different write than the one that
+    produced it.
 
 12. **The Rails lens's three read/write contracts, fixed together as one
     unit and easy to regress independently** (V70-A1, R1–R3,

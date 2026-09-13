@@ -13,6 +13,7 @@ fn row(path: &str) -> FileRow {
         blob_hash: "0".repeat(40),
         lang: "ruby".to_string(),
         size: 512,
+        mtime: 0,
     }
 }
 

@@ -356,6 +356,12 @@ pub mod fanout;
 // not nested inside it — mirrors `resolve.rs`/`usages.rs`/`hierarchy.rs`'s
 // own top-level placement next to the tables/extractors they read.
 pub mod compare_file;
+/// V77-P1 — `kb-code doctor --verify-fingerprints N`'s safety net: re-hash
+/// a sample of a repo's files against their stored `files.blob_hash`, for
+/// the class of editor that preserves mtime (and thus can fool the
+/// `sink.rs` mtime+size fast path). A read-only diagnostic, same shape as
+/// `reextract`'s bill (its own sibling module, not nested inside `ingest`).
+pub mod fingerprint_verify;
 pub mod frames;
 pub mod framework_edges;
 pub mod frameworks;

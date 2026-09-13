@@ -970,6 +970,7 @@ mod tests {
             blob_hash: "h".to_string(),
             lang: "rust".to_string(),
             size: 0,
+            mtime: 0,
         }
     }
 

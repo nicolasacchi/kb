@@ -573,6 +573,13 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // V72-H2b (D7) — `reextract-bill/1`. An ordinary read: it times
         // the extractors over a bounded sample and writes nothing.
         .route("/reextract/bill", get(crate::reextract::bill_route))
+        // V77-P1 — `fingerprint-verify/1`, `kb-code doctor
+        // --verify-fingerprints`'s safety net. An ordinary read: re-hashes
+        // a sample straight off the working tree and writes nothing.
+        .route(
+            "/fingerprints/verify",
+            get(crate::fingerprint_verify::fingerprint_verify_route),
+        )
         .route("/refs", get(routes::refs))
         // V76-R3c — ranked ref typeahead (branches/tags/PRs/patchsets/
         // HEAD~n/SHA/worktrees) and the two-blob compare. Ordinary
