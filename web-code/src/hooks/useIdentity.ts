@@ -25,10 +25,14 @@ export function useIdentity() {
   });
 
   useEffect(() => {
-    // `kb_public_url` is optional on the wire (an older daemon omits it) —
-    // missing/empty keeps `searchLanes`' local-dev default rather than
-    // crashing the whole app at boot on `undefined.replace`.
-    if (query.data?.kb_public_url) setKbSessionBase(query.data.kb_public_url);
+    // `kb_public_url` is optional on the wire (an older daemon omits the
+    // field entirely) — but a daemon new enough to send it sends it EVERY
+    // time, and an explicit `""` is itself meaningful (V76-R4f: `[kb_daemon]`
+    // disabled, nothing configured). So the guard here checks PRESENCE
+    // (`!== undefined`), not truthiness — `""` must still reach
+    // `setKbSessionBase`, which is what tells `kbSessionState()`/`sessionUrl`
+    // to degrade honestly instead of silently keeping the local-dev default.
+    if (query.data?.kb_public_url !== undefined) setKbSessionBase(query.data.kb_public_url);
   }, [query.data]);
 
   return query;

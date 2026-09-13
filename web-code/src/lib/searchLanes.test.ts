@@ -4,6 +4,7 @@ import {
   LANE_ORDER,
   extractRepoFilter,
   fullSearchUrl,
+  kbSessionState,
   laneRowCount,
   orderSections,
   sessionUrl,
@@ -71,6 +72,53 @@ describe("sessionUrl", () => {
 
   it("omits ?kb= when the corpus is absent, byte-identical to the pre-existing link", () => {
     expect(sessionUrl("abc123", undefined)).toBe("http://127.0.0.1:4000/sessions/abc123");
+  });
+
+  // V76-R4f — `[kb_daemon]` disabled + unconfigured: `IdentityResponse
+  // .kb_public_url` is an EXPLICIT `""`, distinct from the field being
+  // absent (which keeps whatever base already held, see `setKbSessionBase`'s
+  // own doc). `sessionUrl` must never fall back to the local-dev default,
+  // and never build a same-origin-relative link off the empty string.
+  it("returns null once an empty base marks the kb-session lane unavailable", () => {
+    setKbSessionBase("");
+    expect(sessionUrl("abc123")).toBeNull();
+  });
+
+  it("resumes building links once a real base arrives after an empty one", () => {
+    setKbSessionBase("");
+    expect(sessionUrl("abc123")).toBeNull();
+    setKbSessionBase("http://x");
+    expect(sessionUrl("abc123")).toBe("http://x/sessions/abc123");
+  });
+
+  it("a missing/undefined base (an older daemon's payload) leaves the prior state untouched", () => {
+    setKbSessionBase("http://x");
+    setKbSessionBase(undefined);
+    expect(sessionUrl("abc123")).toBe("http://x/sessions/abc123");
+  });
+});
+
+describe("kbSessionState", () => {
+  it('base "" ⇒ the kb-session lane is unavailable, with an honest reason', () => {
+    setKbSessionBase("");
+    const state = kbSessionState();
+    expect(state.kind).toBe("unavailable");
+    if (state.kind === "unavailable") {
+      expect(state.reason).toBe("disabled");
+      expect(state.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('base "http://x" ⇒ the kb-session lane is enabled', () => {
+    setKbSessionBase("http://x");
+    expect(kbSessionState()).toEqual({ kind: "available" });
+  });
+
+  it("is available by default (before boot identity resolves, or against an older daemon)", () => {
+    // No `setKbSessionBase` call at all in this test — the module's own
+    // initial state, restated explicitly since the shared-state `afterEach`
+    // below cannot reset what was never mutated.
+    expect(kbSessionState()).toEqual({ kind: "available" });
   });
 });
 

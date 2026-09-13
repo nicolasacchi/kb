@@ -255,57 +255,72 @@ export default function Compare() {
                     </ul>
                   ) : (
                     <ul className="kbc-compare__group-list" data-kbc-compare-groups>
-                      {groups.map((g) => (
-                        <li
-                          key={g.sessionId ?? "__none__"}
-                          className={"kbc-compare__group" + (g.sessionId === null ? " kbc-compare__group--none" : "")}
-                          data-kbc-compare-group={g.sessionId ?? "none"}
-                        >
-                          <div className="kbc-compare__group-head">
-                            {g.sessionId ? (
-                              <a
-                                className="kbc-compare__group-name"
-                                href={sessionUrl(g.sessionId)}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {g.displayName ?? g.sessionId}
-                              </a>
-                            ) : (
-                              <span
-                                className="kbc-compare__group-name kbc-compare__group-name--none"
-                                data-kbc-compare-group-none
-                              >
-                                no recorded session
-                              </span>
-                            )}
-                            {g.confidence && (
-                              <span
-                                className={`kbc-attrib__confidence kbc-attrib__confidence--${g.confidence}`}
-                                data-kbc-attrib-confidence={g.confidence}
-                              >
-                                {g.confidence}
-                              </span>
-                            )}
-                            <span className="kbc-compare__group-count" data-kbc-compare-group-count>
-                              {g.commits.length} commit{g.commits.length === 1 ? "" : "s"}
-                            </span>
-                          </div>
-                          <ul className="kbc-compare__commit-list">
-                            {g.commits.map((c) => (
-                              <li key={c.sha} className="kbc-compare__commit">
-                                <Link to={commitUrl(repo, c.sha)} className="kbc-compare__commit-sha">
-                                  {shortSha(c.sha)}
-                                </Link>
-                                <span className="kbc-compare__commit-subject">{c.subject}</span>
-                                <span className="kbc-compare__commit-meta">
-                                  {c.author} · {formatUnixSeconds(c.author_time)}
+                      {groups.map((g) => {
+                        // `sessionUrl` returns `null` once the kb-session
+                        // lane is unavailable (V76-R4f) — a recorded
+                        // session with no link degrades to plain text,
+                        // kept DISTINCT from "no recorded session" below
+                        // (that case has never had a session id at all).
+                        const sessionHref = g.sessionId ? sessionUrl(g.sessionId) : null;
+                        return (
+                          <li
+                            key={g.sessionId ?? "__none__"}
+                            className={"kbc-compare__group" + (g.sessionId === null ? " kbc-compare__group--none" : "")}
+                            data-kbc-compare-group={g.sessionId ?? "none"}
+                          >
+                            <div className="kbc-compare__group-head">
+                              {sessionHref ? (
+                                <a
+                                  className="kbc-compare__group-name"
+                                  href={sessionHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {g.displayName ?? g.sessionId}
+                                </a>
+                              ) : g.sessionId ? (
+                                <span
+                                  className="kbc-compare__group-name kbc-compare__group-name--unavailable"
+                                  data-kbc-compare-group-unavailable
+                                >
+                                  {g.displayName ?? g.sessionId}
                                 </span>
-                              </li>
-                            ))}
-                          </ul>
-                        </li>
-                      ))}
+                              ) : (
+                                <span
+                                  className="kbc-compare__group-name kbc-compare__group-name--none"
+                                  data-kbc-compare-group-none
+                                >
+                                  no recorded session
+                                </span>
+                              )}
+                              {g.confidence && (
+                                <span
+                                  className={`kbc-attrib__confidence kbc-attrib__confidence--${g.confidence}`}
+                                  data-kbc-attrib-confidence={g.confidence}
+                                >
+                                  {g.confidence}
+                                </span>
+                              )}
+                              <span className="kbc-compare__group-count" data-kbc-compare-group-count>
+                                {g.commits.length} commit{g.commits.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            <ul className="kbc-compare__commit-list">
+                              {g.commits.map((c) => (
+                                <li key={c.sha} className="kbc-compare__commit">
+                                  <Link to={commitUrl(repo, c.sha)} className="kbc-compare__commit-sha">
+                                    {shortSha(c.sha)}
+                                  </Link>
+                                  <span className="kbc-compare__commit-subject">{c.subject}</span>
+                                  <span className="kbc-compare__commit-meta">
+                                    {c.author} · {formatUnixSeconds(c.author_time)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </section>

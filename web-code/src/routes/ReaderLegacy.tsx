@@ -2010,7 +2010,13 @@ export default function ReaderLegacy() {
         if (pane === 1) navigate(buildReaderUrl({ pane1: { path: linkedPath, ref: paneRef } }));
         else navigate(buildReaderUrl({ pane2: { path: linkedPath, ref: paneRef } }));
       },
-      onOpenSession: (id) => window.open(sessionUrl(id), "_blank", "noopener,noreferrer"),
+      // `sessionUrl` returns `null` once the kb-session lane is
+      // unavailable (V76-R4f) — do nothing rather than opening a bogus
+      // `about:blank`/`null` tab.
+      onOpenSession: (id) => {
+        const url = sessionUrl(id);
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
+      },
       // Wave C — a bare commit sha in a comment/string now has a real
       // destination (the commit page hub) — always a full navigation away
       // from the reader entirely, so this intentionally does NOT preserve

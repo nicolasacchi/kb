@@ -65,7 +65,12 @@ export function resolveSearchTarget(
     }
     case "sessions": {
       const hit = (results as SessionHit[])[cursor.row];
-      return hit ? { kind: "external", href: sessionUrl(hit.session_id) } : null;
+      if (!hit) return null;
+      // `sessionUrl` returns `null` once the kb-session lane is
+      // unavailable (V76-R4f) — no target rather than an `external` row
+      // whose `href` isn't actually a string.
+      const href = sessionUrl(hit.session_id);
+      return href ? { kind: "external", href } : null;
     }
     case "transcripts": {
       const hit = (results as TranscriptHit[])[cursor.row];

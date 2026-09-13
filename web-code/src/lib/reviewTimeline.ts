@@ -307,6 +307,10 @@ function coreRow(e: ReviewTimelineEvent, repo: string, reviewId: number): Timeli
       const tier = str(e.tier);
       const sessionId = str(e.session_id);
       const turnId = str(e.turn_id);
+      // `sessionUrl` returns `null` once the kb-session lane is
+      // unavailable (V76-R4f) — no `external` link rather than the
+      // literal string `"null#<turn>"`.
+      const sessionHref = sessionId ? sessionUrl(sessionId) : null;
       return {
         at,
         kind,
@@ -314,7 +318,7 @@ function coreRow(e: ReviewTimelineEvent, repo: string, reviewId: number): Timeli
         label: `${tool ?? "edit"} touched ${path ?? "?"}`,
         detail: tier,
         href: path ? readerUrl(repo, path) : undefined,
-        external: sessionId && turnId ? `${sessionUrl(sessionId)}#${turnId}` : undefined,
+        external: sessionHref && turnId ? `${sessionHref}#${turnId}` : undefined,
       };
     }
 

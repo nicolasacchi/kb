@@ -51,6 +51,11 @@ export default function WhyPanel({ repo, repoRoot, path, line, region, why }: Wh
 
   const attribution = why?.attribution;
   const sessionId = attribution?.session_id;
+  // `sessionUrl` returns `null` once the kb-session lane is unavailable
+  // (V76-R4f, `[kb_daemon]` disabled/unconfigured) — the "open session in
+  // kb" affordance below degrades to absent, same as when there is no
+  // recorded session at all, rather than a dead link.
+  const sessionHref = sessionId ? sessionUrl(sessionId, attribution?.kb) : null;
   // Loopback-only server-side (`sessiondiff`'s module doc); `isError`
   // degrades this section to absent rather than a hard failure — see
   // `useSessionDiff`'s own doc.
@@ -202,10 +207,10 @@ export default function WhyPanel({ repo, repoRoot, path, line, region, why }: Wh
         </div>
       )}
 
-      {sessionId && (
+      {sessionHref && (
         <a
           className="kbc-why__open-session"
-          href={sessionUrl(sessionId, attribution.kb)}
+          href={sessionHref}
           target="_blank"
           rel="noreferrer"
           data-kbc-why-open-session
