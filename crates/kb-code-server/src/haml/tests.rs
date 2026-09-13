@@ -476,6 +476,20 @@ fn highlight_spans_golden_before_perf_fix_v77_p4() {
     insta::assert_debug_snapshot!(spans);
 }
 
+/// The OUTLINE half of the same golden, over the SAME fragment-dense
+/// fixture (deep-ish nesting, siblings, filters, an attribute hash) —
+/// golden-pinned BEFORE V77-P4b's `subtree_last_line` → `compute_last_lines`
+/// rewrite (the per-ancestor subtree revisit this fixes). `line_end` is the
+/// field the rewrite touches (it is what `subtree_last_line` computed);
+/// byte identity here across the change is the same proof invariant 18(d)
+/// demands of any change to this scanner, applied to the OUTLINE rather
+/// than the highlighter P4 already pinned.
+#[test]
+fn outline_golden_before_perf_fix_v77_p4b() {
+    let rows = super::outline(PERF_FIX_FIXTURE.as_bytes());
+    insta::assert_debug_snapshot!(rows);
+}
+
 // ── the corpus projection's own transforms ────────────────────────────────
 
 #[test]

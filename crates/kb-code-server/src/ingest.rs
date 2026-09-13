@@ -230,6 +230,36 @@ pub fn index_file_with_mtime(
     )
 }
 
+/// HAML's outline extraction over an ALREADY-PARSED tree — the shared-parse
+/// path `index_file_inner` takes below (V77-P4b) when outline AND highlight
+/// extraction are BOTH a cache miss on the same call. `haml::extract::
+/// outline` is total by design (`haml/mod.rs`'s own "Nothing here mints...
+/// never a panic" posture) and should never unwind, but sharing one parsed
+/// tree between two consumers means a hypothetical bug walking it here must
+/// not also cost the highlight pass — computed from the SAME tree, right
+/// below — its own, independently derivable answer. A caught panic
+/// therefore degrades to the same "empty is the honest answer" shape this
+/// module's own doc already claims for a tier with nothing to report (and
+/// the `LangError::Unsupported` degrade a few lines down uses for
+/// comments), rather than losing the highlight pass along with it — this is
+/// the "catch per consumer" isolation the shared parse must preserve: the
+/// two-independent-parses path could never let one consumer's failure take
+/// the other down, and sharing a tree must not change that.
+fn haml_outline_isolated(doc: &crate::haml::Document, src: &str) -> Vec<extract::Symbol> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::haml::extract::outline(doc, src)
+    }))
+    .unwrap_or_default()
+}
+
+/// The highlight half of the same isolation — see [`haml_outline_isolated`].
+fn haml_highlights_isolated(doc: &crate::haml::Document, src: &str) -> Vec<highlight::Span> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::haml::extract::highlight_spans(doc, src)
+    }))
+    .unwrap_or_default()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn index_file_inner(
     store: &Store,
@@ -320,7 +350,58 @@ fn index_file_inner(
     let symbol_salt = lang_info.symbol_salt;
     let highlight_salt = lang_info.highlight_salt;
 
-    let outcome = if store.is_derived(blob_hash, lang::SaltFamily::Symbol, symbol_salt)? {
+    // Each family's own marker, read ONCE and reused below — the ORIGINAL
+    // shape asked `is_derived` once per branch too (the `!plan.highlight`
+    // arm and the `else if` arm below are mutually exclusive on
+    // `plan.highlight`, so exactly one of them ran the highlight check),
+    // just inline at each call site. Hoisting them is what lets the
+    // shared-parse gate below ask "are BOTH families a miss on this call"
+    // without a third, redundant pair of store reads.
+    let symbol_is_derived = store.is_derived(blob_hash, lang::SaltFamily::Symbol, symbol_salt)?;
+    let highlight_is_derived =
+        store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)?;
+
+    // V77-P4b — HAML is the ONE language whose outline and highlights each
+    // run their own from-scratch parse (`haml::parser::parse_str`; HAML has
+    // no tree-sitter grammar at all — this crate's CLAUDE.md invariant
+    // 18(d)). Every other language shares nothing here because there is
+    // nothing TO share: a symbols cache hit still calls
+    // `highlight::extract_highlights` on its own and vice versa, and
+    // `lang::parse`'s tree is never threaded between the two calls today —
+    // the `if let Some(..) = &haml_shared_doc { .. } else { <original call>
+    // }` arms below fall to the ORIGINAL, independent call for every
+    // non-HAML language unconditionally, so that path stays byte-identical.
+    // HAML differs only on the ONE shape where a from-scratch parse
+    // actually duplicates work — BOTH families a cache MISS on the SAME
+    // call — so the shared-parse path is gated on exactly that, rather than
+    // a general knob that would touch the non-HAML dispatch for a saving no
+    // other language has.
+    // `bytes` is valid UTF-8 by construction whenever `lang_info.id ==
+    // "haml"` is reached at all — the TIER_BINARY branch above already
+    // returned for anything that isn't. Computed unconditionally (empty
+    // otherwise) so the two consumer branches below can borrow ONE `&str`
+    // with `haml_shared_doc`'s own lifetime, rather than each destructuring
+    // a `(src, doc)` pair out of the `Option` (which would need matching
+    // through a shared reference to the tuple and re-borrowing `src` a
+    // level too deep for no benefit — this is a plain function-scoped
+    // local, not part of what needs to travel with the parsed tree).
+    let haml_src: &str = if lang_info.id == "haml" {
+        std::str::from_utf8(bytes).unwrap_or_default()
+    } else {
+        ""
+    };
+    let haml_shared_doc = if lang_info.id == "haml"
+        && plan.symbols
+        && !symbol_is_derived
+        && plan.highlight
+        && !highlight_is_derived
+    {
+        Some(crate::haml::parser::parse_str(haml_src))
+    } else {
+        None
+    };
+
+    let outcome = if symbol_is_derived {
         let symbol_count = store.symbols_for_blob(blob_hash, symbol_salt)?.len();
         IngestOutcome {
             cache_hit: true,
@@ -331,10 +412,12 @@ fn index_file_inner(
             highlight_cache: HighlightCache::SkippedTier,
         }
     } else {
-        let symbols = if plan.symbols {
-            extract::extract_symbols(lang_info.id, bytes)?
-        } else {
+        let symbols = if !plan.symbols {
             Vec::new()
+        } else if let Some(doc) = &haml_shared_doc {
+            haml_outline_isolated(doc, haml_src)
+        } else {
+            extract::extract_symbols(lang_info.id, bytes)?
         };
         let symbol_count = symbols.len();
         store.replace_symbols(blob_hash, symbol_salt, &symbols)?;
@@ -353,14 +436,18 @@ fn index_file_inner(
     // answering `Some([])` (rather than `null`) for a parse-only grammar,
     // exactly as it did before this unit.
     let highlight_cache = if !plan.highlight {
-        if !store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)? {
+        if !highlight_is_derived {
             store.put_highlights(blob_hash, highlight_salt, &[])?;
         }
         HighlightCache::SkippedTier
-    } else if store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)? {
+    } else if highlight_is_derived {
         HighlightCache::Hit
     } else {
-        let spans = highlight::extract_highlights(lang_info.id, bytes)?;
+        let spans = if let Some(doc) = &haml_shared_doc {
+            haml_highlights_isolated(doc, haml_src)
+        } else {
+            highlight::extract_highlights(lang_info.id, bytes)?
+        };
         store.put_highlights(blob_hash, highlight_salt, &spans)?;
         HighlightCache::Miss
     };
@@ -1351,6 +1438,96 @@ mod tests {
         )
         .expect("a grammar-less language must ingest, not error");
         assert_eq!(outcome.tier, "haml");
+    }
+
+    // --- V77-P4b: HAML shares ONE parse between outline and highlights -----
+
+    /// The shared-parse path's whole point: on a FRESH blob (both salt
+    /// families a cache miss, HAML's usual first-ingest shape since it is
+    /// `Tier::Full` — `plan.symbols` and `plan.highlight` both `true`),
+    /// `index_file` must call `haml::parser::parse_str` exactly ONCE, not
+    /// once for the outline and once again for highlights. The counter is
+    /// `haml::parser`'s own test-only, per-thread one (see its doc for why
+    /// a thread-local rather than the process-global `AtomicUsize` this
+    /// crate already learned not to use for exactly this shape of
+    /// assertion, in `frameworks::rails::i18n`) — reset it immediately
+    /// before the call under test so any parse this SAME thread ran
+    /// earlier in the test binary's lifetime can't be mistaken for one
+    /// this call made.
+    #[test]
+    fn index_file_parses_a_fresh_haml_blob_exactly_once() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let haml = b"%section.container\n  %h1= title\n  - if user\n    \
+                     %p Hi, #{user.name}\n  :javascript\n    console.log(1);\n";
+
+        crate::haml::parser::test_reset_parse_count();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "app/views/x.html.haml",
+            haml,
+            "hashHamlOnce",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(outcome.tier, "haml");
+        assert!(
+            outcome.symbol_count > 0,
+            "the outline should find the section/h1/p rows"
+        );
+        assert_eq!(
+            crate::haml::parser::test_parse_count(),
+            1,
+            "outline and highlights are both a cache miss on this first visit — \
+             they must share ONE parser::parse_str call (V77-P4b), not one each"
+        );
+    }
+
+    /// The flip side: a full cache hit (both families already derived by a
+    /// prior call) must not parse AT ALL — the shared-parse path must not
+    /// regress the existing zero-reparse cache-hit guarantee
+    /// (`identical_bytes_indexed_twice_is_a_cache_hit_with_zero_reparse`,
+    /// above, pins the same property for Rust's tree-sitter parse).
+    #[test]
+    fn index_file_does_not_reparse_a_fully_cached_haml_blob() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let haml = b"%section\n  %p Hi\n";
+
+        let first = index_file(
+            &store,
+            repo_id,
+            "views/x.haml",
+            haml,
+            "hashHamlCache",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert!(!first.cache_hit);
+
+        crate::haml::parser::test_reset_parse_count();
+        let second = index_file(
+            &store,
+            repo_id,
+            "views/x.haml",
+            haml,
+            "hashHamlCache",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(
+            crate::haml::parser::test_parse_count(),
+            0,
+            "a full cache hit (both salt families already derived) must not reparse at all"
+        );
     }
 
     #[test]

@@ -731,7 +731,14 @@ invariant #2 records).
     oracle only**: `tests/fixtures/haml/`'s expectations were generated
     once by hand and checked in, `ci-code` is pure Rust, and invariant 10
     is untouched — `tests/haml_corpus.rs` greps its own source for
-    `Command::new` to keep that true.
+    `Command::new` to keep that true. *V77-P4b amendment:* `haml::extract::
+    outline`'s per-node last-line lookup is now one bottom-up postorder
+    pass (`compute_last_lines`, O(n log n) via the highlighter's own
+    `LineIndex`) rather than a per-ancestor subtree revisit, and
+    `ingest::index_file_inner` parses a `.haml` blob ONCE — not once per
+    consumer — whenever outline AND highlights are BOTH a cache miss on the
+    same call, each consumer's extraction still isolated behind its own
+    `catch_unwind` so neither can take the other's down.
     (e) **A host's guest regions are located in ONE place, and every
     re-anchoring goes through ONE offset map** (V72-H2a, D7,
     `src/injection.rs`). `injection::regions` is the only walk that finds

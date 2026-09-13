@@ -407,9 +407,46 @@ impl Ctx<'_> {
     }
 }
 
+// V77-P4b — test-only, per-THREAD count of how many times `parse_str` has
+// run. A `thread_local`, not a process-global `AtomicUsize`, for the same
+// reason `frameworks::rails::i18n`'s own test-only build counter stopped
+// being one (see that module's `CachedLocaleIndex::builds` doc): under
+// parallel test execution a global counter would be bumped by every OTHER
+// test that happens to parse HAML concurrently (this module's own tests,
+// `ingest.rs`, `tests/haml_corpus.rs`), and a shared-parse assertion like
+// "exactly one call for this ONE `index_file` invocation" would flake on
+// foreign activity it has no way to exclude. i18n's fix was to key its
+// counter by the cache's own key (`repo_root`); `parse_str` has no such key
+// to scope by — it is a plain function, not a cache lookup — so this
+// reaches for the OTHER standard fix instead: libtest gives every `#[test]`
+// fn its own OS thread by default, so a thread-local counter is already
+// isolated from concurrent siblings with no key needed. (A doc comment
+// can't attach to this `thread_local!` invocation itself — rustdoc doesn't
+// document macro calls — hence a plain `//` block instead of `///`.)
+#[cfg(test)]
+thread_local! {
+    static PARSE_STR_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Test-only: zero this thread's [`PARSE_STR_CALLS`] counter before the
+/// call sequence under test.
+#[cfg(test)]
+pub fn test_reset_parse_count() {
+    PARSE_STR_CALLS.with(|c| c.set(0));
+}
+
+/// Test-only: how many times [`parse_str`] has run on THIS thread since the
+/// last [`test_reset_parse_count`] (or since thread start).
+#[cfg(test)]
+pub fn test_parse_count() -> usize {
+    PARSE_STR_CALLS.with(|c| c.get())
+}
+
 /// Parse `src` (already known-valid UTF-8; [`super::scan`] owns the
 /// bytes→str step and its own diagnostic).
 pub fn parse_str(src: &str) -> Document {
+    #[cfg(test)]
+    PARSE_STR_CALLS.with(|c| c.set(c.get() + 1));
     let lines = lexer::split_lines(src);
     let mut ctx = Ctx {
         src,
