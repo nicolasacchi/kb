@@ -61,26 +61,41 @@ export default function HunkTurnsPanel({ repo, reviewId, hunkId, ps }: HunkTurns
         </p>
       ) : (
         <ul className="kbc-hunkturns__list" data-kbc-hunk-turns-list>
-          {data.turns.map((t) => (
-            <li key={t.turn_id} className="kbc-hunkturns__row" data-kbc-hunk-turns-row={t.turn_id}>
-              <TurnTierBadge tier={t.tier as TurnTier} />
-              <span className="kbc-hunkturns__tool">{t.tool}</span>
-              <span className="kbc-hunkturns__path">{t.path}</span>
-              {t.commit && <span className="kbc-hunkturns__commit">{t.commit.slice(0, 10)}</span>}
-              <a
-                className="kbc-hunkturns__link"
-                href={`${sessionUrl(t.session_id)}#${t.turn_id}`}
-                target="_blank"
-                rel="noreferrer"
-                data-kbc-hunk-turns-link={t.turn_id}
-              >
-                open turn
-              </a>
-              <span className="kbc-hunkturns__why" title={t.why}>
-                {t.why}
-              </span>
-            </li>
-          ))}
+          {data.turns.map((t) => {
+            // `sessionUrl` returns `null` once the kb-session lane is
+            // unavailable (V76-R4f) — degrade to plain, honest text rather
+            // than a dead link (never interpolate a `null` into the href).
+            const sessionHref = sessionUrl(t.session_id);
+            return (
+              <li key={t.turn_id} className="kbc-hunkturns__row" data-kbc-hunk-turns-row={t.turn_id}>
+                <TurnTierBadge tier={t.tier as TurnTier} />
+                <span className="kbc-hunkturns__tool">{t.tool}</span>
+                <span className="kbc-hunkturns__path">{t.path}</span>
+                {t.commit && <span className="kbc-hunkturns__commit">{t.commit.slice(0, 10)}</span>}
+                {sessionHref ? (
+                  <a
+                    className="kbc-hunkturns__link"
+                    href={`${sessionHref}#${t.turn_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-kbc-hunk-turns-link={t.turn_id}
+                  >
+                    open turn
+                  </a>
+                ) : (
+                  <span
+                    className="kbc-hunkturns__link kbc-hunkturns__link--unavailable"
+                    data-kbc-hunk-turns-link={t.turn_id}
+                  >
+                    kb unavailable
+                  </span>
+                )}
+                <span className="kbc-hunkturns__why" title={t.why}>
+                  {t.why}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
       {data.notes.length > 0 && (

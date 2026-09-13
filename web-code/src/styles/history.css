@@ -671,6 +671,13 @@
   font-style: italic;
   font-weight: 400;
 }
+/* V76-R4f — a recorded session with no kb link (the kb-session lane is
+   unavailable, [kb_daemon] disabled/unconfigured) — kept DISTINCT from
+   --none above, which never had a session id at all. */
+.kbc-compare__group-name--unavailable {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
 .kbc-compare__group-count {
   margin-left: auto;
   color: var(--ink-dim);

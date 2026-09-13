@@ -146,8 +146,15 @@ function KbSection({
   // local-dev default rather than emitting `href="undefined/a/..."`
   // (`lib/searchLanes.ts`'s `DEFAULT_KB_SESSION_BASE` precedent, kept as a
   // local literal here since that module's own base is private state, not
-  // an export).
-  const base = kbBase ?? "http://127.0.0.1:4000";
+  // an export). `||`, not `??`: V76-R4f can send an EXPLICIT empty string
+  // (`[kb_daemon]` disabled/unconfigured) — falling back only on
+  // `null`/`undefined` would build `href="/a/..."`, a same-origin request
+  // against kb-code's own origin rather than kb's. This branch only
+  // renders once `kbLaneState(kb)` above already reports "available"
+  // (a server-confirmed kb), so an empty `kbBase` here means identity and
+  // the inbox response disagree — the documented local-dev default is the
+  // same honest fallback `lib/searchLanes.ts` uses for that same case.
+  const base = kbBase || "http://127.0.0.1:4000";
 
   return (
     <section className="kbc-inbox" data-kbc-inbox-kb>

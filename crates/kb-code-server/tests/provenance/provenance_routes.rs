@@ -631,8 +631,16 @@ async fn why_line_non_loopback_caller_gets_attribution_but_never_kb_context() {
     );
 }
 
+/// `[kb_daemon] enabled = false` (`disabled_kb_daemon()`) — arm 2 of the
+/// join ladder (`join::ladder::compute_ladder`) short-circuits on
+/// `KbClientError::Disabled` without ever attempting a round trip, so
+/// `via` is `"kb-disabled"`. V77-P5: this test used to be misnamed
+/// "kb_unreachable" (it exercises the DISABLED path, not a live daemon
+/// that fails to answer) — renamed to match what it actually boots; see
+/// `why_line_on_a_plain_commit_with_kb_unreachable_resolves_none` below
+/// for the genuinely-unreachable sibling (`enabled = true`, a dead port).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn why_line_on_a_plain_commit_with_kb_unreachable_resolves_none() {
+async fn why_line_on_a_plain_commit_with_kb_disabled_resolves_none() {
     let _guard = SERIAL.lock().await;
     let repo_tmp = tempfile::tempdir().unwrap();
     let dir = repo_tmp.path();
@@ -661,6 +669,62 @@ async fn why_line_on_a_plain_commit_with_kb_unreachable_resolves_none() {
 
     assert_eq!(body["attribution"]["confidence"], "none");
     assert_eq!(body["attribution"]["via"], "kb-disabled");
+    assert!(body["attribution"]["session_id"].is_null());
+    assert!(body["kb_context"].is_null());
+}
+
+/// V77-P5 — the genuinely UNREACHABLE sibling of the `kb-disabled` test
+/// above: `[kb_daemon] enabled = true` with a `url` nothing listens on
+/// (`127.0.0.1:9`, the discard port — connection-refused, not a slow
+/// timeout, so this test stays fast). `by_commit`'s `.send().await` fails
+/// with `KbClientError::Unreachable`, which `via_for_kb_error` maps to
+/// anything-but-`Disabled` (`join::ladder::VIA_KB_UNREACHABLE`) — the route
+/// must still answer 200 with an honest `via: "kb-unreachable"`, never a
+/// 500, and never confuse this case with the daemon being off entirely.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn why_line_on_a_plain_commit_with_kb_unreachable_resolves_none() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = repo_tmp.path();
+    init_repo(dir);
+    commit(
+        dir,
+        "f.rs",
+        "fn a() {}\n",
+        "an unremarkable commit",
+        1_700_000_000,
+    );
+
+    let boot = boot(
+        "fixture",
+        dir,
+        KbDaemonSection {
+            enabled: true,
+            url: Some("http://127.0.0.1:9".to_string()),
+            token_file: None,
+            public_url: None,
+        },
+        None,
+    )
+    .await;
+    wait_for_indexed(&boot.base, "fixture", "f.rs").await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/why", boot.base))
+        .query(&[("repo", "fixture"), ("path", "f.rs"), ("line", "1")])
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "expected 200, got {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    assert_eq!(body["attribution"]["confidence"], "none");
+    assert_eq!(body["attribution"]["via"], "kb-unreachable");
     assert!(body["attribution"]["session_id"].is_null());
     assert!(body["kb_context"].is_null());
 }

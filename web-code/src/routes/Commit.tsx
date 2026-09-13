@@ -92,18 +92,25 @@ export default function Commit() {
 
       {data.trailers.length > 0 && (
         <ul className="kbc-commit__trailers" data-kbc-commit-trailers>
-          {data.trailers.map((t, i) => (
-            <li key={i}>
-              <span className="kbc-commit__trailer-key">{t.key}</span>:{" "}
-              {t.key.toLowerCase() === "kb-session" ? (
-                <a href={sessionUrl(t.value)} target="_blank" rel="noreferrer">
-                  {t.value}
-                </a>
-              ) : (
-                <span>{t.value}</span>
-              )}
-            </li>
-          ))}
+          {data.trailers.map((t, i) => {
+            // `sessionUrl` returns `null` once the kb-session lane is
+            // unavailable (V76-R4f, `[kb_daemon]` disabled/unconfigured) —
+            // fall back to the same plain-text rendering every other
+            // trailer already gets, rather than a dead/misleading link.
+            const href = t.key.toLowerCase() === "kb-session" ? sessionUrl(t.value) : null;
+            return (
+              <li key={i}>
+                <span className="kbc-commit__trailer-key">{t.key}</span>:{" "}
+                {href ? (
+                  <a href={href} target="_blank" rel="noreferrer">
+                    {t.value}
+                  </a>
+                ) : (
+                  <span>{t.value}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 

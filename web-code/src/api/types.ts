@@ -328,8 +328,21 @@ export interface IdentityOut {
   /// Optional on the wire: daemons built before 0f111aec (config-aware kb
   /// link base) don't send it at all — the SPA must degrade to its default
   /// session base, never crash at boot (a3 regression fix; the e2e harness
-  /// caught the unguarded read white-screening the whole app).
+  /// caught the unguarded read white-screening the whole app). V76-R4f: on
+  /// a daemon new enough to send this field at all, `""` is itself
+  /// meaningful (`[kb_daemon]` disabled, nothing configured) and is
+  /// DISTINCT from the field being absent — see `setKbSessionBase`'s own
+  /// doc (`lib/searchLanes.ts`) for how the two are told apart.
   kb_public_url?: string;
+  /// V76-R4f — additive: mirrors `IdentityResponse::kb_daemon_enabled`
+  /// (`crates/kb-code-server/src/routes.rs`). Optional here for the SAME
+  /// reason `kb_public_url` is: an older daemon never sends it. The SPA
+  /// does not gate on this directly — `kb_public_url === ""` is already
+  /// the sufficient, honest "no kb configured" signal (a `kb_daemon_enabled:
+  /// true` with an empty url cannot happen, per that struct's own boot
+  /// guard) — it is carried here only so a future caller can render the
+  /// capability without re-deriving it from the url string.
+  kb_daemon_enabled?: boolean;
 }
 
 // --- Search-Everywhere (W4.3) ---------------------------------------------
