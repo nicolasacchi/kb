@@ -1602,6 +1602,26 @@ printed. There is deliberately no verb that PERFORMS a re-extract: bumping
 a salt is an edit to `lang.rs` plus a deploy, and the mirror re-derives
 itself through the ordinary two gates on the next visit to each file.
 
+**The budget rule (V77-P3, the E6 finding).** Every language is timed
+against a SHARED 20-second ceiling (`SAMPLE_BUDGET`), but the ceiling is now
+split into one ALLOTMENT per language rather than one clock every language
+races against in `files_by_lang` order. A large-repo re-measure found this
+list walked ALPHABETICALLY, so a small-but-early language (HAML) could burn
+the whole budget before a repo's actual DOMINANT language (Ruby,
+alphabetically later) was ever reached — every language after it reported
+"not timed" for no reason a reader could see from the bill alone. Two
+changes close it: `files_by_lang` now orders BY BYTES DESCENDING (tie-broken
+by language name), so the repo's biggest language is sampled first
+regardless of the alphabet; and each language's allotment is computed ONCE,
+up front, as a floor (10% of the budget, split evenly across every
+billable language — so nothing is ever silently skipped) plus a share of
+the rest proportional to that language's bytes. The per-language allotment
+is surfaced on every row as `sample_allotment_ms`, so a "not timed" row's
+honesty is checkable against a real number, not just the total budget — a
+language that genuinely exceeds ITS OWN slice still stops honestly (a
+partial sample, the same wording as before), but no longer at the cost of
+whatever language happens to come after it in the list.
+
 **`haml/1` (V72-H3, D7) — the first-party HAML scanner.** HAML is the one
 file type kb-code parses with code it owns rather than a tree-sitter
 grammar: no viable grammar exists (the best available is a 13-star

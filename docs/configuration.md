@@ -757,10 +757,11 @@ override with `--config`; schema source of truth:
 `crates/kb-code-server/src/config.rs`). It is a **completely separate file**
 from `kb.toml` above — the two daemons share nothing but the config-dir
 layout convention. This section covers only the sections v0.39 ("The PR
-Room" / lip track) and S2-B ("Mobile mutations," kb-code v6.0) added; the
-full section list (`[server]`, `[[repos]]`, `[watcher]`, `[semantic]`,
-`[transcripts]`, `[doclens]`, `[github]`, `[review]`, `[behavioral]`, …) is
-enumerated in that file's own module doc.
+Room" / lip track), S2-B ("Mobile mutations," kb-code v6.0) and V77-P3
+(the bounded parallel boot walk) added; the full section list (`[server]`,
+`[indexer]`, `[[repos]]`, `[watcher]`, `[semantic]`, `[transcripts]`,
+`[doclens]`, `[github]`, `[review]`, `[behavioral]`, …) is enumerated in
+that file's own module doc.
 
 ### `[kb_daemon]`
 
@@ -1070,6 +1071,31 @@ frecency = true
 demote_generated = false
 lexical_rarity = true
 ```
+
+### `[indexer]`
+
+V77-P3's bounded PARALLEL boot-walk knob — a large-repo re-measure (a
+GitLab CE mirror, ~75k tracked files) found the boot HEAD-tree walk running
+at ~99% of ONE core with the rest of the box idle: `sink::step_boot_job`'s
+per-chunk pure per-blob work (read the blob, run the tree-sitter symbol +
+highlight passes, `ingest::extract_pure`) was entirely sequential. This
+section's one key bounds how many of those blocking tasks run at once per
+chunk; the Store side stays single-writer regardless (`crates/
+kb-code-server/CLAUDE.md`'s invariant 11 amendment).
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `walk_workers` | usize | `min(available cores, 4)` | Bounded concurrency for the boot walk's parallel extraction fan-out. `0` is coerced to `1` — never zero concurrency. The default mirrors kb-core's own embedder CPU cap (`crates/kb-core/src/embed_ipc.rs`): this host class is documented as IO-bound (HDD RAID5 — root `CLAUDE.local.md`'s build rules), so saturating every core buys little and risks disk-seek contention against sibling processes on a shared box. |
+
+```toml
+[indexer]
+walk_workers = 4
+```
+
+Not this daemon's own `[indexer]` in the kb-only sense — kb.toml's
+`[indexer]` section (above) governs a completely different daemon's
+periodic-reconciliation cadence; this is kb-code's OWN `[indexer]`,
+scoped to the single boot-walk fan-out knob described here.
 
 ## daemons.toml (fleet discovery)
 
