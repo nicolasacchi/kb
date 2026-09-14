@@ -610,6 +610,20 @@ pub struct RepoListEntry {
     /// when they are absent, the same way it already does for `writable`.
     pub workspace_id: Option<String>,
     pub worktree_id: Option<String>,
+    /// V77-P2 (E6) — whether the sink worker still has slow-lane work (a
+    /// `FullReconcile` or the boot HEAD-tree walk, chunked — see
+    /// `sink`'s module doc) outstanding for this repo. Scoped to the SLOW
+    /// lane only: an ordinary live edit completing in a couple of seconds
+    /// never flips this on, by design — this field answers E6's "queued
+    /// behind a 20-minute walk, or broken?" question, not "is anything at
+    /// all happening right now".
+    pub catching_up: bool,
+    /// Unix timestamp of the last time `catching_up` went from `true` to
+    /// `false` for this repo. `null` while still catching up, and also
+    /// `null` for a repo this daemon has never run slow-lane work for at
+    /// all — an honest "nothing to catch up on", not a missing value
+    /// standing in for "settled" (see `sink::RepoActivity`'s doc).
+    pub settled_at: Option<i64>,
 }
 
 /// PRR-L2 — one repo's lip/1 provider status
@@ -956,6 +970,9 @@ fn repos_entry_for(store: &Store, state: &SharedState, r: &RepoEntry) -> RepoLis
         })
         .collect();
     let identity = store.repo_identity(&r.name).ok().flatten();
+    // V77-P2 (E6) — see `sink::RepoActivity`'s doc; scoped to the slow lane
+    // only (a `FullReconcile`/boot-walk job), never the fast per-edit path.
+    let (catching_up, settled_at) = state.repo_activity.snapshot(&r.name);
     RepoListEntry {
         name: r.name.clone(),
         path: r.path.display().to_string(),
@@ -974,6 +991,8 @@ fn repos_entry_for(store: &Store, state: &SharedState, r: &RepoEntry) -> RepoLis
         // disagree about what a repo's identity is.
         workspace_id: identity.as_ref().map(|(w, _)| w.clone()),
         worktree_id: identity.as_ref().map(|(_, t)| t.clone()),
+        catching_up,
+        settled_at,
     }
 }
 

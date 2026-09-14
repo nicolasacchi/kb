@@ -106,6 +106,11 @@ pub struct RepoEntrySchema {
     // background re-key resolves them.
     pub workspace_id: Option<String>,
     pub worktree_id: Option<String>,
+    // V77-P2 — the E6 honesty signal `RepoListEntry` gained: whether the
+    // sink worker still has slow-lane (`FullReconcile`/boot-walk) work
+    // outstanding for this repo, and when it last finished.
+    pub catching_up: bool,
+    pub settled_at: Option<i64>,
 }
 
 /// The registry's name set — `GET /api/schemas`' `names` field and
@@ -162,6 +167,8 @@ fn example_json(name: &str) -> Option<serde_json::Value> {
             "is_worktree": false,
             "workspace_id": "ws_4f2a19c0b3de",
             "worktree_id": "(main)",
+            "catching_up": false,
+            "settled_at": 1757000000,
         })),
         _ => None,
     }
