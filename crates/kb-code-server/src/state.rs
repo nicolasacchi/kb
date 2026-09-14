@@ -79,6 +79,14 @@ pub struct AppState {
     /// without requiring `MirrorWatcher: Clone`.
     #[allow(dead_code)]
     pub watcher: Arc<MirrorWatcher>,
+    /// V77-P2 — the sink worker's in-memory per-repo `catching_up`/
+    /// `settled_at` registry (`sink::RepoActivity`), the answer to E6's
+    /// "queued behind a 20-minute walk, or broken?" question. Mirrors the
+    /// unpersisted `rekey` field above's own "an honesty flag, never a
+    /// capability" posture — nothing here is written by a route, only read
+    /// (`routes::repos`); see `sink`'s module doc for who writes it and
+    /// when.
+    pub repo_activity: Arc<crate::sink::RepoActivity>,
     /// W2.1 — the files/symbols search lanes' per-boot in-memory caches
     /// (`search`'s module doc). `Arc`-wrapped for the same reason `store`
     /// is: cheap to clone into `AppState`'s own `Clone` impl, shared

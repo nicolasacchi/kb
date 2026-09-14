@@ -25,21 +25,23 @@
 //! **W1.6 wires it all into a browsable daemon**: `sink::IndexSink` is the
 //! real `MirrorSink` (store + `ingest`, off the watcher's thread via a
 //! bounded queue — see that module's doc); `bind_and_spawn` now (a) opens
-//! the store and registers every configured repo, (b) spawns a background
-//! `HEAD`-tree index of each repo (`sink::initial_index_one`, W1.5's own
-//! walk — git-tracked files only, not a full filesystem walk; see that
-//! function's call site below for why that's sufficient), (c) starts the
-//! W1.4 watcher wired to the real sink (its OWN startup reconcile also
-//! walks `HEAD`, redundantly but cheaply thanks to ADR-2's blob-hash
-//! cache — from then on, live edits are what keep the store current), and
-//! (d) builds the daemon-wide `EventBus` the sink publishes
-//! `mirror.updated`/`repo.head_moved` onto (`GET /api/events`,
-//! `router`/`routes`). `git`/`store`/`ingest` are also now reachable over
-//! HTTP (`GET /api/{repos,tree,file,symbols}`) — `kb-code-cli` gained a
-//! `--daemon` mode alongside its existing in-process `--repo <PATH>`
-//! fallback. `serve_on_random_port_with_paths` is the test entrypoint
-//! (takes an explicit `KbPaths` for isolation, mirroring `kb_server::lib`'s
-//! own split).
+//! the store and registers every configured repo, (b) enqueues a background
+//! `HEAD`-tree index of each repo onto that SAME sink queue
+//! (`IndexSink::enqueue_boot_walk`, W1.5's own walk — git-tracked files
+//! only, not a full filesystem walk; see that method's call site below for
+//! why that's sufficient — V77-P2 retired the earlier direct, unqueued
+//! `spawn_blocking` call this used to be, see `sink`'s module doc's
+//! "Fairness" section), (c) starts the W1.4 watcher wired to the real sink
+//! (its OWN startup reconcile also walks `HEAD`, redundantly but cheaply
+//! thanks to ADR-2's blob-hash cache — from then on, live edits are what
+//! keep the store current), and (d) builds the daemon-wide `EventBus` the
+//! sink publishes `mirror.updated`/`repo.head_moved` onto (`GET
+//! /api/events`, `router`/`routes`). `git`/`store`/`ingest` are also now
+//! reachable over HTTP (`GET /api/{repos,tree,file,symbols}`) —
+//! `kb-code-cli` gained a `--daemon` mode alongside its existing in-process
+//! `--repo <PATH>` fallback. `serve_on_random_port_with_paths` is the test
+//! entrypoint (takes an explicit `KbPaths` for isolation, mirroring
+//! `kb_server::lib`'s own split).
 //!
 //! **W2.1 adds the INSTANT search lanes** (`search` module: `files`/
 //! `symbols`/`text`, each independently-callable and wired to its own
@@ -704,27 +706,13 @@ pub async fn bind_and_spawn(
     ));
     rekey::spawn_rekey(store.clone(), config.repos.clone(), rekey_state.clone());
 
-    // W1.6 (a) — initial background index: a HEAD-tree walk per repo
-    // (W1.5's `ingest::index_repo_working_tree`), spawned so it never delays
-    // this fn's return. Deliberately HEAD-tree only, not a full filesystem
-    // walk — `index_repo_working_tree` (like `git ls-tree`) only ever sees
-    // git-TRACKED paths, so an untracked-but-present file is invisible to
-    // it. That's an accepted Wave-1 scope limit, not a gap the watcher's own
-    // startup reconcile closes either: its `committed_delta` is the SAME
-    // HEAD-tree walk (see `mirror::startup_reconcile`) — a deliberate,
-    // cheap redundancy thanks to ADR-2's blob-hash cache (the second walk is
-    // pure cache hits), not a second source of untracked-file coverage.
-    // From the moment the watcher below is armed, LIVE `notify` events are
-    // what pick up new files going forward — an untracked file already on
-    // disk before boot stays unindexed until it's next touched or `git
-    // add`ed.
     // PRR-N3 — Rails-lens detection: a filesystem scan (`config/routes.rb`
     // existence + a `Gemfile` grep, `frameworks::rails::detect_is_rails`)
     // resolved ONCE PER REPO here at boot, never re-run per file or per
     // live-watcher event — see that fn's doc + `ingest::index_file`'s doc
     // for why. `[rails_lens]` lets an operator override auto-detection per
     // repo (`config::RailsLensSection::repo_enabled`). Threaded through
-    // BOTH the initial-index walk below and the live sink's per-repo map
+    // BOTH the boot-walk enqueue loop below and the live sink's per-repo map
     // (`sink::spawn`).
     let is_rails_by_repo: std::collections::HashMap<String, bool> = config
         .repos
@@ -739,72 +727,88 @@ pub async fn bind_and_spawn(
         })
         .collect();
 
-    // V71-D1b — hoisted so the boot walk below can warm THIS instance's
-    // cache (not a throwaway one) — `AppState` reuses the SAME `Arc` further
-    // down rather than constructing a second, cold `SymbolIndex`.
+    // V71-D1b — hoisted so the boot walk can warm THIS instance's cache
+    // (not a throwaway one) — `AppState` reuses the SAME `Arc` further down
+    // rather than constructing a second, cold `SymbolIndex`.
     let symbol_index = Arc::new(search::SymbolIndex::new());
 
+    // W1.6 (d) — the daemon-wide SSE event bus (`GET /api/events`), then the
+    // real store-backed sink (`sink::spawn`). V77-P2: hoisted to BEFORE the
+    // boot-walk enqueue loop below (it used to sit after a direct,
+    // unqueued boot task and just before the watcher) — the sink worker is
+    // now the ONE walker every repo's initial index goes through, so the
+    // `IndexSink` handle must exist before anything can be enqueued onto
+    // it. `repo_activity` is `sink::RepoActivity` — the in-memory
+    // `catching_up`/`settled_at` registry `routes::repos` reads (see that
+    // module's doc).
+    let bus = Arc::new(kb_core::events::EventBus::from_env());
+    let (index_sink, repo_activity, _sink_worker) = sink::spawn(
+        store.clone(),
+        repo_ids.clone(),
+        bus.clone(),
+        config.occurrences.clone(),
+        is_rails_by_repo.clone(),
+        comments::KeywordSet::from_config(&config.comments.keywords),
+        symbol_index.clone(),
+    );
+
+    // W1.6 (a) — initial background index: a HEAD-tree walk per repo
+    // (W1.5's `ingest::index_repo_working_tree`, now driven from inside the
+    // sink worker itself — see `sink::worker`'s "Fairness" doc), spawned so
+    // it never delays this fn's return. Deliberately HEAD-tree only, not a
+    // full filesystem walk — the walk (like `git ls-tree`) only ever sees
+    // git-TRACKED paths, so an untracked-but-present file is invisible to
+    // it. That's an accepted Wave-1 scope limit, not a gap the watcher's own
+    // startup reconcile closes either: its `committed_delta` is the SAME
+    // HEAD-tree walk (see `mirror::startup_reconcile`) — a deliberate,
+    // cheap redundancy thanks to ADR-2's blob-hash cache (the second walk is
+    // pure cache hits), not a second source of untracked-file coverage.
+    // From the moment the watcher below is armed, LIVE `notify` events are
+    // what pick up new files going forward — an untracked file already on
+    // disk before boot stays unindexed until it's next touched or `git
+    // add`ed.
+    //
+    // V77-P2 — this used to be a direct `spawn_blocking` call straight into
+    // `ingest`/`Store`, bypassing the sink queue entirely and racing the
+    // sink worker for `Store`'s mutex with no fairness relationship between
+    // the two (the E6 finding: a live edit made during that boot walk could
+    // sit behind the ENTIRE walk — ~9 minutes, measured, on a large mirror —
+    // with `GET /api/repos` reporting nothing to explain why). It is now
+    // just an ENQUEUE loop: cheap channel sends (`IndexSink::
+    // enqueue_boot_walk`) onto the SAME slow lane `full_reconcile` uses, so
+    // the actual walk work runs inside the ONE sink worker, chunked and
+    // fairly interleaved with any live edit — see `sink`'s module doc.
     {
-        let store_for_walk = store.clone();
+        let index_sink_for_walk = index_sink.clone();
         let repo_ids_for_walk = repo_ids.clone();
         let repos_for_walk = config.repos.clone();
         let occurrences_for_walk = config.occurrences.clone();
         let is_rails_for_walk = is_rails_by_repo.clone();
-        // V72-J1 — the same boot-resolved keyword set the sink worker gets,
-        // so the boot walk and every later watcher event classify
-        // annotations with one vocabulary.
-        let comment_keywords_for_walk =
-            comments::KeywordSet::from_config(&config.comments.keywords);
-        let symbol_index_for_walk = symbol_index.clone();
-        tokio::task::spawn_blocking(move || {
+        tokio::spawn(async move {
             for repo in &repos_for_walk {
                 let Some(&repo_id) = repo_ids_for_walk.get(&repo.name) else {
                     continue;
                 };
                 let occurrences_enabled = occurrences_for_walk.repo_enabled(&repo.name);
                 let is_rails = is_rails_for_walk.get(&repo.name).copied().unwrap_or(false);
-                sink::initial_index_one(
-                    &store_for_walk,
-                    repo_id,
-                    &repo.name,
-                    &repo.path,
-                    occurrences_enabled,
-                    is_rails,
-                    &comment_keywords_for_walk,
-                );
-                // V71-D1b — warm `search::symbols::SymbolIndex`'s cache for
-                // this repo at the END of its own boot-walk entry, still
-                // inside this SAME `spawn_blocking` task (off the request
-                // path — the daemon has already bound its listener and is
-                // serving by the time this runs). `store::symbols_for_repo`
-                // materialising the whole current-salt symbol set (26,820
-                // rows with signature/doc strings, on the client-repo
-                // fixture) is what D1's bench measured as a 29.6s FIRST
-                // unified-search cliff — longer than kb-code-cli's default
-                // HTTP timeout, so the first `kb-code search` after a
-                // restart failed with a misleading "is kb-code-server
-                // running?" rather than a true "still warming". Paying that
-                // cost here, once, before any real request needs it, is
-                // strictly better than paying it inline on whichever
-                // request happens to be first; a failure is logged and
-                // never fatal to boot, same posture as `initial_index_one`
-                // itself.
-                if let Err(e) = symbol_index_for_walk.warm(&store_for_walk, repo_id) {
-                    tracing::warn!(
-                        repo = %repo.name, error = %e,
-                        "kb-code: boot-time symbol cache warm failed",
-                    );
-                }
+                index_sink_for_walk
+                    .enqueue_boot_walk(
+                        repo_id,
+                        repo.name.clone(),
+                        repo.path.clone(),
+                        occurrences_enabled,
+                        is_rails,
+                    )
+                    .await;
             }
         });
     }
 
-    // W1.6 (d) — the daemon-wide SSE event bus (`GET /api/events`), then the
-    // real store-backed sink (`sink::spawn`), then (b) the W1.4 watcher
-    // wired to it. `[watcher] mode` comes from `kb-code.toml` (`crate::
-    // mirror::parse_watch_mode`); a repo that fails to open is skipped by
-    // `MirrorWatcher::start` itself (logged, not fatal — mirrors kb-core's
-    // own tolerate-and-continue boot posture), so `bind_and_spawn` doesn't
+    // (b) the W1.4 watcher wired to the sink. `[watcher] mode` comes from
+    // `kb-code.toml` (`crate::mirror::parse_watch_mode`); a repo that fails
+    // to open is skipped by `MirrorWatcher::start` itself (logged, not
+    // fatal — mirrors kb-core's own tolerate-and-continue boot posture), so
+    // `bind_and_spawn` doesn't
     // duplicate that check. Unlike a per-repo open failure, a failure to
     // arm the watcher AT ALL (a `notify` debouncer init error — e.g. the
     // host's inotify watch-limit is exhausted) IS treated as a fatal boot
@@ -889,15 +893,6 @@ pub async fn bind_and_spawn(
         });
     }
 
-    let bus = Arc::new(kb_core::events::EventBus::from_env());
-    let (index_sink, _sink_worker) = sink::spawn(
-        store.clone(),
-        repo_ids.clone(),
-        bus.clone(),
-        config.occurrences.clone(),
-        is_rails_by_repo,
-        comments::KeywordSet::from_config(&config.comments.keywords),
-    );
     let watch_mode = mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == mirror::WatchMode::Poll {
         "polling"
@@ -1129,6 +1124,10 @@ pub async fn bind_and_spawn(
         bus,
         watch_mode: watch_mode_label,
         watcher: Arc::new(watcher),
+        // V77-P2 — the sink worker's in-memory `catching_up`/`settled_at`
+        // registry (see `sink`'s module doc); `routes::repos` is the only
+        // reader.
+        repo_activity,
         // W2.1 — per-boot singletons for the files/symbols search lanes'
         // in-memory caches (see `search`'s module doc). `file_index` starts
         // empty; its first `search`/`recent` call lazily populates it from
@@ -1352,14 +1351,21 @@ pub(crate) async fn build_state_for_test(
         })
         .collect();
 
+    // V77-P2 — same `sink::spawn` shape `bind_and_spawn` uses, including the
+    // `symbol_index` param; this fixture never enqueues a boot walk at all
+    // (see this fn's own doc — no background work is worth waiting on
+    // here), so `symbol_index` is never warmed, but `spawn`'s signature
+    // still requires one.
+    let symbol_index_for_sink = Arc::new(search::SymbolIndex::new());
     let bus = Arc::new(kb_core::events::EventBus::from_env());
-    let (index_sink, _sink_worker) = sink::spawn(
+    let (index_sink, repo_activity, _sink_worker) = sink::spawn(
         store.clone(),
         repo_ids.clone(),
         bus.clone(),
         config.occurrences.clone(),
         is_rails_by_repo,
         comments::KeywordSet::from_config(&config.comments.keywords),
+        symbol_index_for_sink,
     );
     let watch_mode = mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == mirror::WatchMode::Poll {
@@ -1435,6 +1441,7 @@ pub(crate) async fn build_state_for_test(
         bus,
         watch_mode: watch_mode_label,
         watcher: Arc::new(watcher),
+        repo_activity,
         file_index: Arc::new(search::FileIndex::new()),
         symbol_index: Arc::new(search::SymbolIndex::new()),
         search_factors: config.search.factors(),

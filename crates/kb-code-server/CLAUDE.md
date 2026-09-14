@@ -389,6 +389,19 @@ invariant #2 records).
     must never be split across, or a reader could observe a fingerprint
     match against a `blob_hash` from a different write than the one that
     produced it.
+    *V77-P2 amendment (fair live-first ingest, E6):* there is now exactly
+    ONE walker and ONE queue (`sink::worker`) — the boot HEAD-tree walk
+    used to bypass the sink queue entirely via a direct `spawn_blocking`
+    call, racing the sink worker for `Store`'s mutex with no fairness
+    relationship between the two; it is now just another slow-lane
+    producer (`IndexSink::enqueue_boot_walk`). A FAST lane (live-edit
+    upsert/remove/head-moved) and a SLOW lane (full reconcile, boot walk —
+    each chunked into bounded sub-batches) are fairly interleaved: the
+    worker always drains up to `FAST_BURST_LIMIT` fast messages before
+    giving the active slow job its next chunk, every iteration, so a
+    live-edit storm cannot starve the slow job forever. `sink::
+    RepoActivity` surfaces the result on `GET /api/repos` as `catching_up`/
+    `settled_at` — see `sink.rs`'s own module doc for the full contract.
 
 12. **The Rails lens's three read/write contracts, fixed together as one
     unit and easy to regress independently** (V70-A1, R1–R3,

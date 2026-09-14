@@ -148,6 +148,22 @@ a.kbc-home-card__head:hover {
   white-space: nowrap;
 }
 
+/* V77-P2 (E6) — the "catching up" chip beside the watcher badge in the
+ * card header. kbc-theme/1: a DASHED border carries the "in progress, not
+ * yet settled" meaning (the same line-style the Rails lens's `likely`
+ * trust class uses, web-code/CLAUDE.md) rather than relying on the
+ * `--warn` hue alone. */
+.kbc-home-card__catching-up {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 /* S2-D (design-s2.md §S2-D) — lip/1 provider status chips, one per entry
  * in `intel_providers` (falling back to the legacy single `intel`,
  * `lib/diagnostics.ts`'s `effectiveIntelProviders`). */
