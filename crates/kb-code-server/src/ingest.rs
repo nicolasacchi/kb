@@ -691,6 +691,24 @@ impl WalkStats {
             HighlightCache::SkippedTier => self.highlight_skipped += 1,
         }
     }
+
+    /// V77-P2 — fold another walk's counts into this one. The sink worker's
+    /// chunked boot-walk job (`sink::worker`) accumulates one `WalkStats`
+    /// across many bounded chunks (each its own `spawn_blocking` call, so
+    /// each chunk produces its OWN fresh `WalkStats`) rather than one
+    /// unbroken pass — this is how the final per-repo log line stays
+    /// byte-identical in shape to the pre-V77-P2 single-pass total.
+    pub(crate) fn merge(&mut self, other: WalkStats) {
+        self.files += other.files;
+        self.parsed += other.parsed;
+        self.cache_hits += other.cache_hits;
+        self.skipped_tier += other.skipped_tier;
+        self.skipped_unchanged += other.skipped_unchanged;
+        self.symbols += other.symbols;
+        self.highlight_hits += other.highlight_hits;
+        self.highlight_misses += other.highlight_misses;
+        self.highlight_skipped += other.highlight_skipped;
+    }
 }
 
 /// Walk `repo`'s git tree at `rev` (default caller passes `"HEAD"`) and
@@ -797,6 +815,140 @@ fn unchanged_and_fully_derived(store: &Store, lang_id: &str, blob_hash: &str) ->
     }
 }
 
+/// Index (or, via V77-P1's oid short-circuit, skip) exactly one tracked
+/// file found by an ODB tree walk — the per-file body shared by
+/// [`walk_dir`] (the non-chunked `index_repo_working_tree` walk) and the
+/// sink worker's chunked boot-walk job (V77-P2, `sink::worker`), so there
+/// is exactly ONE implementation of the fast-path decision regardless of
+/// which loop shape is driving it. Returns `Ok(true)` when this file was
+/// actually read/written (a real `files`/derived-rows mutation happened —
+/// what the caller uses to decide whether a path counts as "touched" for a
+/// `mirror.updated` event) and `Ok(false)` when the V77-P1 fingerprint
+/// match let it skip `repo.read_blob`/`index_file` entirely.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn index_one_tree_file(
+    store: &Store,
+    repo: &GitRepo,
+    repo_id: i64,
+    rev: &str,
+    path: &str,
+    oid: &str,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    stats: &mut WalkStats,
+    comment_keywords: &crate::comments::KeywordSet,
+    fingerprints: &HashMap<String, (String, String)>,
+) -> Result<bool> {
+    // V77-P1 (E6) — the boot fast path. `oid` is the blob id `list_tree`
+    // already read off the tree object — free, no content read. If it
+    // matches what is stored for this exact path AND (for a real language)
+    // both derived families are already marked, the file's content, tier
+    // and derived rows are ALL provably unchanged since the last successful
+    // walk: skip `repo.read_blob` and `index_file` entirely, the whole cost
+    // this unit exists to cut. Any mismatch, any never-seen path, or a
+    // missing derived family falls through to the existing read path below,
+    // byte-identical to pre-V77-P1 behaviour.
+    //
+    // Known limitation (not a torn-read risk, a classification one): the
+    // language used for the `is_derived_pair` lookup is the STORED
+    // `files.lang` from the previous successful visit, not a fresh
+    // `lang::detect` — cheaper (no bytes to detect from) and correct as
+    // long as this binary's language registry hasn't changed what this
+    // path's extension/filename maps to since that visit. A registry
+    // upgrade that reclassifies an unchanged, previously `unknown`/
+    // wrongly-typed file will not be picked up by this fast path (it will
+    // keep being skipped under its old classification) until the file's
+    // content or path next changes, or an operator forces a re-visit
+    // (`kb-code reextract --bill` prices a salt bump; there is no "force
+    // re-extract" verb by design, invariant 11(b)). The slow path this fast
+    // path shortcuts always re-detects from fresh bytes, so this gap is new
+    // to the unchanged case only.
+    if let Some((prev_hash, prev_lang)) = fingerprints.get(path) {
+        if prev_hash == oid && unchanged_and_fully_derived(store, prev_lang, oid)? {
+            stats.files += 1;
+            stats.skipped_unchanged += 1;
+            return Ok(false);
+        }
+    }
+    match repo.read_blob(rev, path, MAX_PARSE_BYTES) {
+        Ok(bytes) => {
+            let outcome = index_file(
+                store,
+                repo_id,
+                path,
+                &bytes,
+                oid,
+                occurrences_enabled,
+                is_rails,
+                comment_keywords,
+            )?;
+            stats.files += 1;
+            stats.symbols += outcome.symbol_count;
+            stats.record_highlight(outcome.highlight_cache);
+            if outcome.cache_hit {
+                stats.cache_hits += 1;
+            } else if lang::for_id(outcome.tier).is_some() {
+                stats.parsed += 1;
+            } else {
+                stats.skipped_tier += 1;
+            }
+            Ok(true)
+        }
+        // The git layer's own cap tripped first (its default is 10 MiB vs
+        // our 5 MiB parse cap, but we pass MAX_PARSE_BYTES explicitly so
+        // this is really the same boundary) — the error still carries the
+        // real size, so the files row is just as accurate as the
+        // in-process size check's branch.
+        Err(GitError::TooLarge { size, .. }) => {
+            store.upsert_file(repo_id, path, oid, TIER_TOO_LARGE, size)?;
+            stats.files += 1;
+            stats.skipped_tier += 1;
+            stats.record_highlight(HighlightCache::SkippedTier);
+            Ok(true)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Recursively enumerate every regular-file entry under `dir_path` (`""` =
+/// repo root) in `rev` as `(path, oid)` pairs — tree-object reads only, no
+/// blob content (the same cheap read [`walk_dir`] always did before ever
+/// deciding whether to read a blob). V77-P2: separates "which files exist"
+/// from "index them", so the sink worker's boot-walk job (`sink::worker`)
+/// can hold the result as resumable state and process it a bounded chunk
+/// at a time between live-edit fast-lane drains, instead of one unbroken
+/// recursive pass with no yield points.
+pub(crate) fn list_tree_files(
+    repo: &GitRepo,
+    rev: &str,
+    dir_path: &str,
+) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    list_tree_files_into(repo, rev, dir_path, &mut out)?;
+    Ok(out)
+}
+
+fn list_tree_files_into(
+    repo: &GitRepo,
+    rev: &str,
+    dir_path: &str,
+    out: &mut Vec<(String, String)>,
+) -> Result<()> {
+    for entry in repo.list_tree(rev, dir_path)? {
+        let full_path = if dir_path.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{dir_path}/{}", entry.name)
+        };
+        match entry.kind {
+            EntryKind::Dir => list_tree_files_into(repo, rev, &full_path, out)?,
+            EntryKind::File => out.push((full_path, entry.oid)),
+            EntryKind::Symlink | EntryKind::Submodule => {}
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_dir(
     store: &Store,
@@ -830,80 +982,19 @@ fn walk_dir(
                 fingerprints,
             )?,
             EntryKind::File => {
-                // V77-P1 (E6) — the boot fast path. `entry.oid` is the
-                // blob id `list_tree` already read off the tree object —
-                // free, no content read. If it matches what is stored for
-                // this exact path AND (for a real language) both derived
-                // families are already marked, the file's content, tier
-                // and derived rows are ALL provably unchanged since the
-                // last successful walk: skip `repo.read_blob` and
-                // `index_file` entirely, the whole cost this unit exists
-                // to cut. Any mismatch, any never-seen path, or a missing
-                // derived family falls through to the existing read path
-                // below, byte-identical to pre-V77-P1 behaviour.
-                //
-                // Known limitation (not a torn-read risk, a classification
-                // one): the language used for the `is_derived_pair` lookup
-                // is the STORED `files.lang` from the previous successful
-                // visit, not a fresh `lang::detect` — cheaper (no bytes to
-                // detect from) and correct as long as this binary's
-                // language registry hasn't changed what this path's
-                // extension/filename maps to since that visit. A registry
-                // upgrade that reclassifies an unchanged, previously
-                // `unknown`/wrongly-typed file will not be picked up by
-                // this fast path (it will keep being skipped under its old
-                // classification) until the file's content or path next
-                // changes, or an operator forces a re-visit (`kb-code
-                // reextract --bill` prices a salt bump; there is no
-                // "force re-extract" verb by design, invariant 11(b)). The
-                // slow path this fast path shortcuts always re-detects
-                // from fresh bytes, so this gap is new to the unchanged
-                // case only.
-                if let Some((prev_hash, prev_lang)) = fingerprints.get(&full_path) {
-                    if prev_hash == &entry.oid
-                        && unchanged_and_fully_derived(store, prev_lang, &entry.oid)?
-                    {
-                        stats.files += 1;
-                        stats.skipped_unchanged += 1;
-                        continue;
-                    }
-                }
-                match repo.read_blob(rev, &full_path, MAX_PARSE_BYTES) {
-                    Ok(bytes) => {
-                        let outcome = index_file(
-                            store,
-                            repo_id,
-                            &full_path,
-                            &bytes,
-                            &entry.oid,
-                            occurrences_enabled,
-                            is_rails,
-                            comment_keywords,
-                        )?;
-                        stats.files += 1;
-                        stats.symbols += outcome.symbol_count;
-                        stats.record_highlight(outcome.highlight_cache);
-                        if outcome.cache_hit {
-                            stats.cache_hits += 1;
-                        } else if lang::for_id(outcome.tier).is_some() {
-                            stats.parsed += 1;
-                        } else {
-                            stats.skipped_tier += 1;
-                        }
-                    }
-                    // The git layer's own cap tripped first (its default is
-                    // 10 MiB vs our 5 MiB parse cap, but we pass MAX_PARSE_BYTES
-                    // explicitly so this is really the same boundary) — the
-                    // error still carries the real size, so the files row is
-                    // just as accurate as the in-process size check's branch.
-                    Err(GitError::TooLarge { size, .. }) => {
-                        store.upsert_file(repo_id, &full_path, &entry.oid, TIER_TOO_LARGE, size)?;
-                        stats.files += 1;
-                        stats.skipped_tier += 1;
-                        stats.record_highlight(HighlightCache::SkippedTier);
-                    }
-                    Err(e) => return Err(e.into()),
-                }
+                index_one_tree_file(
+                    store,
+                    repo,
+                    repo_id,
+                    rev,
+                    &full_path,
+                    &entry.oid,
+                    occurrences_enabled,
+                    is_rails,
+                    stats,
+                    comment_keywords,
+                    fingerprints,
+                )?;
             }
             // Wave-1 scope is regular file content — symlinks and
             // submodule pins are not indexed as files at all.

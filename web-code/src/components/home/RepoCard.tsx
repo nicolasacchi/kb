@@ -104,6 +104,15 @@ export default function RepoCard({ repo }: RepoCardProps) {
         >
           {repo.watcher}
         </span>
+        {repo.catching_up && (
+          <span
+            className="kbc-home-card__catching-up"
+            data-kbc-catching-up
+            title="Still walking this repo's HEAD tree or reconciling a recent git operation — some search results may be incomplete until it settles."
+          >
+            catching up…
+          </span>
+        )}
       </header>
       <div className="kbc-home-card__subhead">
         <HeadChip repoName={repo.name} head={repo.head} />

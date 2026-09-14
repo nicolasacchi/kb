@@ -1396,6 +1396,21 @@ a.kbc-inspector__citedby-title:hover {
   color: var(--warn);
 }
 
+/* V77-P2 (E6) — the "catching up" chip beside the watcher badge, same
+ * DASHED line-style as `.kbc-home-card__catching-up` (home.css) so the
+ * meaning survives without color (kbc-theme/1). */
+.kbc-repopopover__catching-up {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 /* --- Ref picker "Switch" action + checkout dialog (W4.7) ---------------- */
 
 .kbc-refpicker__row {

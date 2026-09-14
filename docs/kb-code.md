@@ -3229,6 +3229,39 @@ different subject.
 read off `repos` rather than recomputed, so the two surfaces cannot
 disagree. Both are `null` until resolution has run.
 
+### Live-first ingest and the `catching_up` signal (V77-P2)
+
+E6's finding: a single-file edit was searchable in ~2.7s when the daemon
+was idle, but could sit behind an ENTIRE boot walk (~9 minutes, measured,
+on a large mirror) with `GET /api/repos` reporting nothing to explain
+why — a live edit made during boot used to bypass the sink's own queue
+entirely (a second, un-fair walker racing the sink worker for `Store`'s
+mutex). There is now exactly ONE walker and ONE queue: a FAST lane
+(individual live-edit upserts/removes/HEAD moves) and a SLOW lane (a full
+reconcile, and the boot HEAD-tree walk itself), the slow lane chunked into
+bounded sub-batches and fairly interleaved with the fast lane — a live-edit
+storm is serviced promptly but can never starve the slow job forever. See
+`crates/kb-code-server/src/sink.rs`'s module doc for the exact scheduling
+contract.
+
+`GET /api/repos` gains two more additive fields, in-memory only (never
+persisted — a restart re-derives the same state from a fresh boot walk):
+
+- `catching_up` (`bool`) — this repo's sink worker still has slow-lane
+  work outstanding (a queued/in-progress `FullReconcile` or boot walk).
+  Scoped to the SLOW lane only: an ordinary live edit completing in a
+  couple of seconds never flips this on — it answers "queued behind a
+  long walk", not "is anything at all happening right now".
+- `settled_at` (unix timestamp, or `null`) — when this repo last finished
+  catching up. `null` while `catching_up` is `true`, and also `null` for a
+  repo the daemon has never run slow-lane work for at all (an honest
+  "nothing to catch up on", never a missing value standing in for
+  "settled").
+
+The web UI shows a "catching up…" chip beside the existing watcher badge
+(`RepoCard`/`RepoPill`, `data-kbc-catching-up`) whenever `catching_up` is
+`true`; it disappears once the repo settles.
+
 ### `@ref` frames (D14)
 
 `GET /api/frames` → `kbc-frames/1`, and `kb-code frames [--json]`. A Rust

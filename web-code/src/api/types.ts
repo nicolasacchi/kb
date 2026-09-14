@@ -4641,6 +4641,22 @@ export interface RepoListEntry {
   intel_providers?: RepoIntelStatus[];
 }
 
+/// V77-P2 (E6) — declaration-merged onto `RepoListEntry` (declared above),
+/// same additive-field precedent as `intel_providers` just above. Whether
+/// the sink worker still has slow-lane work (a `FullReconcile` or the boot
+/// HEAD-tree walk, chunked) outstanding for this repo, and when it last
+/// settled — see `crates/kb-code-server/src/sink.rs`'s `RepoActivity` doc.
+/// Both fields are ALWAYS present on the wire (no `skip_serializing_if`
+/// server-side): `catching_up` scoped to the slow lane only (an ordinary
+/// live edit finishing in a couple of seconds never flips it on), and
+/// `settled_at` `null` while still catching up OR for a repo the daemon
+/// has never run slow-lane work for at all (an honest "nothing to catch up
+/// on", never a missing-value stand-in for "settled").
+export interface RepoListEntry {
+  catching_up: boolean;
+  settled_at: number | null;
+}
+
 // --- V71-E2 — `usages/2` (D4) + `kbc-actions/1` (D5) ----------------------
 //
 // Mirrors `crates/kb-code-server/src/usages2.rs` and `src/actions.rs`. Both
