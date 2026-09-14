@@ -750,6 +750,7 @@ pub async fn bind_and_spawn(
         is_rails_by_repo.clone(),
         comments::KeywordSet::from_config(&config.comments.keywords),
         symbol_index.clone(),
+        config.indexer.resolved_walk_workers(),
     );
 
     // W1.6 (a) — initial background index: a HEAD-tree walk per repo
@@ -1366,6 +1367,7 @@ pub(crate) async fn build_state_for_test(
         is_rails_by_repo,
         comments::KeywordSet::from_config(&config.comments.keywords),
         symbol_index_for_sink,
+        config.indexer.resolved_walk_workers(),
     );
     let watch_mode = mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == mirror::WatchMode::Poll {

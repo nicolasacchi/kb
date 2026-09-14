@@ -402,6 +402,26 @@ invariant #2 records).
     live-edit storm cannot starve the slow job forever. `sink::
     RepoActivity` surfaces the result on `GET /api/repos` as `catching_up`/
     `settled_at` — see `sink.rs`'s own module doc for the full contract.
+    *V77-P3 amendment (bounded parallel boot walk, E6):* `step_boot_job`'s
+    chunk splits `ingest::index_file`'s PURE half (read blob + parse
+    symbols/highlights, `ingest::extract_pure`) across `[indexer]
+    walk_workers` bounded blocking tasks (`crate::fanout::buffered_join`);
+    the STORE side stays single-writer regardless — one final
+    `spawn_blocking` applies every parallel result (`ingest::
+    apply_precomputed_file`), in submission order, before the chunk's
+    fingerprint-unchanged/within-chunk-duplicate bucket runs through the
+    ordinary sequential `index_one_tree_file`. A within-chunk duplicate
+    blob is claimed by its FIRST occurrence (`sink::plan_boot_chunk`'s
+    in-memory set, no store access) rather than independently re-checked by
+    every worker, closing the `is_derived` TOCTOU concurrency would
+    otherwise reopen; a duplicate spanning two DIFFERENT chunks needs no
+    claim at all, since chunks are strictly sequential and the earlier
+    chunk's write has already landed by the time the later one's own live
+    `Store::is_derived` read runs. Task 0 of the same unit preloads BOTH
+    salt families' derived-status markers once per boot walk
+    (`Store::derived_status_for_current_salts`, `ingest::DerivedPreload`),
+    so the common "unchanged since a prior successful boot" case costs zero
+    additional store reads instead of two.
 
 12. **The Rails lens's three read/write contracts, fixed together as one
     unit and easy to regress independently** (V70-A1, R1–R3,

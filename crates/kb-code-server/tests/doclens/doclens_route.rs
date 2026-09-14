@@ -2371,6 +2371,9 @@ async fn doc_refs_and_sync_route_posture() {
 
     // The reverse lookup: a known repo with nothing cited answers an empty,
     // LIVE-flagged response rather than a 404.
+    // `live` is "the files row exists" — wait for the boot walk to land it
+    // (the chunked walk applies a whole chunk at once; siblings wait the same way).
+    wait_for_indexed(&boot.base, "alpha", 1).await;
     let (status, body) = http_get(&boot.base, "/api/doc-refs?repo=alpha&path=a.rb").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["schema"], "doc-refs/1");
@@ -2405,6 +2408,10 @@ async fn unpinning_a_doc_drops_its_doc_refs_claims() {
         doclens_cfg(&["platform"], &[]),
     )
     .await;
+    // The sync below expects "alpha" resolved, and doclens refuses a repo that
+    // is still indexing — every sibling sync test waits the same way (the
+    // chunked boot walk lands a whole chunk at once, so this race is real).
+    wait_for_indexed(&boot.base, "alpha", ALPHA_FILES).await;
     let client = reqwest::Client::new();
 
     let put = client

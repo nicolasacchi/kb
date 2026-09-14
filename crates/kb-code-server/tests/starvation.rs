@@ -122,6 +122,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         is_rails_by_repo,
         (*comment_keywords).clone(),
         symbol_index.clone(),
+        config.indexer.resolved_walk_workers(),
     );
     let watch_mode = kb_code_server::mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == kb_code_server::mirror::WatchMode::Poll {
