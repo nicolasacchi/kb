@@ -152,10 +152,11 @@
 
 use crate::git::GitRepo;
 use crate::ingest;
+use crate::lang;
 use crate::mirror::{MirrorSink, RepoRef};
 use crate::store::{FileRow, Store};
 use kb_core::events::EventBus;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -453,6 +454,7 @@ impl IndexSink {
 /// `AppState` shares — the worker warms it for a repo right after that
 /// repo's boot-walk job finishes, mirroring what `lib.rs`'s old direct
 /// boot task used to do inline (see [`finish_boot_job`]).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     store: Arc<Store>,
     repo_ids: HashMap<String, i64>,
@@ -461,6 +463,10 @@ pub fn spawn(
     is_rails: HashMap<String, bool>,
     comment_keywords: crate::comments::KeywordSet,
     symbol_index: Arc<crate::search::SymbolIndex>,
+    // V77-P3 (Task 1) — `[indexer] walk_workers` (already `.max(1)`-coerced
+    // by `config::IndexerSection::resolved_walk_workers`), bounding the
+    // boot walk's per-chunk parallel extraction fan-out.
+    walk_workers: usize,
 ) -> (IndexSink, Arc<RepoActivity>, tokio::task::JoinHandle<()>) {
     let (fast_tx, fast_rx) = mpsc::channel(QUEUE_CAPACITY);
     let (slow_tx, slow_rx) = mpsc::channel(SLOW_QUEUE_CAPACITY);
@@ -481,6 +487,7 @@ pub fn spawn(
         Arc::new(comment_keywords),
         symbol_index,
         activity.clone(),
+        walk_workers,
     ));
     (sink, activity, handle)
 }
@@ -516,6 +523,11 @@ struct ReconcileJob {
 /// whether to read a blob. `stats` accumulates across chunks
 /// (`WalkStats::merge`) so the final "kb-code initial index complete" log
 /// line stays byte-identical in shape to the old single-pass total.
+/// `derived_preload` (V77-P3, Task 0) is the same "one query, not one per
+/// file" preload `fingerprints` already is, for the derived-status half of
+/// the fast-path check — see `ingest::DerivedPreload`'s doc. `walk_workers`
+/// (V77-P3, Task 1) bounds `step_boot_job`'s per-chunk parallel extraction
+/// fan-out.
 struct BootJob {
     repo_id: i64,
     repo_name: String,
@@ -523,8 +535,10 @@ struct BootJob {
     occurrences_enabled: bool,
     is_rails: bool,
     fingerprints: Arc<HashMap<String, (String, String)>>,
+    derived_preload: Arc<ingest::DerivedPreload>,
     entries: VecDeque<(String, String)>,
     stats: ingest::WalkStats,
+    walk_workers: usize,
 }
 
 /// One slow-lane job in progress — see [`ReconcileJob`]/[`BootJob`].
@@ -567,6 +581,10 @@ async fn worker(
     comment_keywords: Arc<crate::comments::KeywordSet>,
     symbol_index: Arc<crate::search::SymbolIndex>,
     activity: Arc<RepoActivity>,
+    // V77-P3 (Task 1) — `[indexer] walk_workers`, resolved ONCE at boot
+    // (same no-live-reload posture as `comment_keywords`/`occurrences`) and
+    // threaded to every `BootJob` this worker starts.
+    walk_workers: usize,
 ) {
     let mut processed_total: u64 = 0;
     let mut window = ProgressWindow::new();
@@ -641,6 +659,7 @@ async fn worker(
                         repo_root,
                         occurrences_enabled,
                         is_rails_flag,
+                        walk_workers,
                     )
                     .await
                     {
@@ -702,7 +721,7 @@ async fn worker(
                         ));
                     }
                     Some(SlowMsg::BootWalk { repo_id, repo_name, repo_root, occurrences_enabled, is_rails: is_rails_flag }) => {
-                        match start_boot_job(&store, repo_id, repo_name.clone(), repo_root, occurrences_enabled, is_rails_flag).await {
+                        match start_boot_job(&store, repo_id, repo_name.clone(), repo_root, occurrences_enabled, is_rails_flag, walk_workers).await {
                             Some(job) => current_job = Some(SlowJob::Boot(job)),
                             None => activity.mark_drained(&repo_name),
                         }
@@ -949,6 +968,7 @@ async fn start_boot_job(
     repo_root: PathBuf,
     occurrences_enabled: bool,
     is_rails: bool,
+    walk_workers: usize,
 ) -> Option<BootJob> {
     let store2 = store.clone();
     let repo_root2 = repo_root.clone();
@@ -959,21 +979,28 @@ async fn start_boot_job(
             .into_iter()
             .map(|f| (f.path, (f.blob_hash, f.lang)))
             .collect();
+        // V77-P3 (Task 0) — the derived-status preload alongside the
+        // fingerprint map: one MORE query, not one per file. See
+        // `ingest::DerivedPreload`'s doc.
+        let derived_preload =
+            ingest::DerivedPreload::from_rows(store2.derived_status_for_current_salts()?);
         let entries = ingest::list_tree_files(&git_repo, "HEAD", "")?;
-        Ok((fingerprints, entries))
+        Ok((fingerprints, derived_preload, entries))
     })
     .await;
 
     match outcome {
-        Ok(Ok((fingerprints, entries))) => Some(BootJob {
+        Ok(Ok((fingerprints, derived_preload, entries))) => Some(BootJob {
             repo_id,
             repo_name,
             repo_root,
             occurrences_enabled,
             is_rails,
             fingerprints: Arc::new(fingerprints),
+            derived_preload: Arc::new(derived_preload),
             entries: entries.into(),
             stats: ingest::WalkStats::default(),
+            walk_workers,
         }),
         Ok(Err(e)) => {
             tracing::warn!(
@@ -992,7 +1019,76 @@ async fn start_boot_job(
     }
 }
 
+/// V77-P3 (Task 1) — sequential, store-free triage of one [`step_boot_job`]
+/// chunk's `(path, oid)` list into two buckets. No I/O: only the
+/// whole-repo fingerprint map (already resident on `BootJob`) and a fresh,
+/// CHUNK-scoped claim set — the claim only needs to live for one chunk
+/// because a chunk's single writer always finishes applying it (primaries
+/// THEN the fast bucket, see below) before the next chunk's plan is built;
+/// a duplicate blob spanning two DIFFERENT chunks is instead caught by the
+/// ordinary LIVE `Store::is_derived` read inside `index_one_tree_file`/
+/// `extract_pure`, since by then the earlier chunk's write has already
+/// landed.
+///
+/// - `fast` — every file whose oid still matches its stored fingerprint (a
+///   CANDIDATE for the Task-0 skip; [`index_one_tree_file`] makes the final
+///   call once it actually runs, since only it — with the store in hand —
+///   knows whether both derived families are still marked) PLUS every file
+///   whose blob_hash duplicates an EARLIER `primary` entry within this same
+///   chunk. Both cases are handled by the ordinary sequential
+///   `index_one_tree_file`, applied AFTER every primary in `step_boot_job`,
+///   so a duplicate's own `is_derived` check always observes its primary's
+///   write already landed — this is what closes the is_derived TOCTOU a
+///   naive "just run every file in `walk_workers` parallel tasks" scheme
+///   would reopen.
+/// - `primary` — the first, not-yet-claimed occurrence of a blob that
+///   actually changed (or is new) in this chunk — dispatched to
+///   `ingest::extract_pure` in parallel by the caller.
+fn plan_boot_chunk(
+    chunk: &[(String, String)],
+    fingerprints: &HashMap<String, (String, String)>,
+) -> BootChunkPlan {
+    let mut claimed: HashSet<String> = HashSet::new();
+    let mut fast = Vec::new();
+    let mut primary = Vec::new();
+    for (path, oid) in chunk {
+        let unchanged = fingerprints
+            .get(path)
+            .is_some_and(|(prev_hash, _)| prev_hash == oid);
+        // A fingerprint-unchanged file AND a within-chunk duplicate blob
+        // both land in `fast` (for different reasons, spelled out in this
+        // fn's own doc) — `claimed.insert` must not run at all for an
+        // `unchanged` file (it never touches the claim set), which is
+        // exactly what short-circuiting `||` gives for free.
+        if unchanged || !claimed.insert(oid.clone()) {
+            fast.push((path.clone(), oid.clone()));
+        } else {
+            primary.push((path.clone(), oid.clone()));
+        }
+    }
+    (fast, primary)
+}
+
+/// `(fast, primary)` — see [`plan_boot_chunk`]'s own doc.
+type BootChunkPlan = (Vec<(String, String)>, Vec<(String, String)>);
+
+/// One parallel-extraction group's result: `(path, oid, extraction)`, with
+/// `extraction` `None` on a per-file failure (logged at the call site,
+/// dropped rather than failing the whole chunk).
+type ExtractGroupResult = Vec<(String, String, Option<ingest::PureExtraction>)>;
+
 /// One chunk of a [`BootJob`]. Returns `true` once `entries` is empty.
+///
+/// V77-P3 (Task 1) — the chunk's PURE per-blob work (read + parse/extract +
+/// highlight, `ingest::extract_pure`) is fanned out across `walk_workers`
+/// bounded blocking tasks (`crate::fanout::buffered_join`, invariant #28's
+/// submission-order-preserving ethos — though order doesn't matter for
+/// correctness here, only boundedness does); the Store WRITES for the
+/// whole chunk still happen from ONE final blocking call, applying every
+/// `primary` result FIRST and the `fast` bucket (see
+/// [`plan_boot_chunk`]'s doc) second, so `Store`'s single connection never
+/// sees two writers and a within-chunk duplicate blob is never parsed
+/// twice.
 async fn step_boot_job(
     job: &mut BootJob,
     store: &Arc<Store>,
@@ -1004,20 +1100,120 @@ async fn step_boot_job(
     if chunk.is_empty() {
         return true;
     }
+    let (fast, primary) = plan_boot_chunk(&chunk, &job.fingerprints);
+
     let repo_root = job.repo_root.clone();
     let repo_id = job.repo_id;
     let occurrences_enabled = job.occurrences_enabled;
     let is_rails = job.is_rails;
+    let repo_name = job.repo_name.clone();
+
+    // V77-P3 (Task 1) — the parallel extraction fan-out: split `primary`
+    // into `walk_workers` roughly-equal groups (one `GitRepo::open` per
+    // GROUP, not per file — "cheap to reopen", `GitRepo::open`'s own doc)
+    // and run each group's `extract_pure` calls sequentially WITHIN the
+    // group, concurrently ACROSS groups. A per-file failure is logged and
+    // dropped (matching the pre-P3 per-file `Err` handling below) rather
+    // than failing the whole chunk.
+    let n_workers = job.walk_workers.max(1).min(primary.len().max(1));
+    let group_size = primary.len().div_ceil(n_workers).max(1);
+    let futs: Vec<futures::future::BoxFuture<'_, ExtractGroupResult>> = primary
+        .chunks(group_size)
+        .map(|group| {
+            let store = store.clone();
+            let repo_root = repo_root.clone();
+            let repo_name = repo_name.clone();
+            let group: Vec<(String, String)> = group.to_vec();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut out = Vec::with_capacity(group.len());
+                    match GitRepo::open(&repo_root) {
+                        Ok(repo) => {
+                            for (path, oid) in group {
+                                match ingest::extract_pure(&store, &repo, "HEAD", &path, &oid) {
+                                    Ok(extraction) => out.push((path, oid, Some(extraction))),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            repo = %repo_name, path = %path, error = %e,
+                                            "kb-code sink: boot walk parallel extract failed",
+                                        );
+                                        out.push((path, oid, None));
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                repo = %repo_name, error = %e,
+                                "kb-code sink: boot walk parallel extract failed to open repo",
+                            );
+                            for (path, oid) in group {
+                                out.push((path, oid, None));
+                            }
+                        }
+                    }
+                    out
+                })
+                .await
+                .unwrap_or_default()
+            }) as futures::future::BoxFuture<'_, _>
+        })
+        .collect();
+    let extracted: Vec<(String, String, ingest::PureExtraction)> =
+        crate::fanout::buffered_join(futs, n_workers)
+            .await
+            .into_iter()
+            .flatten()
+            .filter_map(|(path, oid, extraction)| extraction.map(|e| (path, oid, e)))
+            .collect();
+
+    // Single writer: apply every primary's ALREADY-COMPUTED extraction
+    // first, then the fast/reuse bucket via the ordinary sequential path —
+    // see `plan_boot_chunk`'s doc for why this ordering is what closes the
+    // is_derived TOCTOU.
     let fingerprints = job.fingerprints.clone();
+    let derived_preload = job.derived_preload.clone();
     let store2 = store.clone();
     let comment_keywords2 = comment_keywords.clone();
-    let repo_name = job.repo_name.clone();
+    let repo_name2 = job.repo_name.clone();
     let (touched, delta) = tokio::task::spawn_blocking(move || {
         let mut stats = ingest::WalkStats::default();
         let mut touched = Vec::new();
+
+        for (path, oid, extraction) in extracted {
+            match ingest::apply_precomputed_file(
+                &store2,
+                repo_id,
+                &path,
+                &oid,
+                extraction,
+                occurrences_enabled,
+                is_rails,
+                &comment_keywords2,
+            ) {
+                Ok(outcome) => {
+                    stats.files += 1;
+                    stats.symbols += outcome.symbol_count;
+                    stats.record_highlight(outcome.highlight_cache);
+                    if outcome.cache_hit {
+                        stats.cache_hits += 1;
+                    } else if lang::for_id(outcome.tier).is_some() {
+                        stats.parsed += 1;
+                    } else {
+                        stats.skipped_tier += 1;
+                    }
+                    touched.push(path);
+                }
+                Err(e) => tracing::warn!(
+                    repo = %repo_name2, path = %path, error = %e,
+                    "kb-code sink: boot walk primary apply failed",
+                ),
+            }
+        }
+
         match GitRepo::open(&repo_root) {
             Ok(repo) => {
-                for (path, oid) in &chunk {
+                for (path, oid) in &fast {
                     match ingest::index_one_tree_file(
                         &store2,
                         &repo,
@@ -1030,18 +1226,19 @@ async fn step_boot_job(
                         &mut stats,
                         &comment_keywords2,
                         &fingerprints,
+                        &derived_preload,
                     ) {
                         Ok(true) => touched.push(path.clone()),
                         Ok(false) => {}
                         Err(e) => tracing::warn!(
-                            repo = %repo_name, path = %path, error = %e,
+                            repo = %repo_name2, path = %path, error = %e,
                             "kb-code sink: boot walk file failed",
                         ),
                     }
                 }
             }
             Err(e) => tracing::warn!(
-                repo = %repo_name, error = %e,
+                repo = %repo_name2, error = %e,
                 "kb-code sink: boot walk chunk failed to reopen the repo",
             ),
         }
@@ -1092,6 +1289,10 @@ async fn finish_boot_job(
         files = job.stats.files,
         parsed = job.stats.parsed,
         cache_hits = job.stats.cache_hits,
+        // V77-P3 (Task 0) — the boot fast path's own tally, previously
+        // computed but never emitted here despite this module's doc
+        // documenting it as part of this log line.
+        skipped_unchanged = job.stats.skipped_unchanged,
         symbols = job.stats.symbols,
         // V72-H2b — the INDEPENDENT highlight gate's own tally, so the cost
         // of a `highlight_salt` bump is a number in the boot log rather
@@ -1511,6 +1712,12 @@ mod tests {
             HashMap::new(),
             crate::comments::KeywordSet::defaults(),
             Arc::new(crate::search::SymbolIndex::new()),
+            // V77-P3 — a small, deterministic fixed worker count for tests
+            // (never `IndexerSection::default_walk_workers`'s host-core-
+            // dependent value): every boot-walk test here uses a handful of
+            // files, so 2 is enough to exercise the parallel fan-out
+            // without making the tests themselves core-count-sensitive.
+            2,
         )
     }
 
@@ -2004,5 +2211,204 @@ mod tests {
             "a slow-lane chunk should still complete during a 10k-message fast-lane flood",
         );
         flood.await.unwrap();
+    }
+
+    // --- V77-P3: `plan_boot_chunk` (Task 1's claim/dedup pre-pass) ----------
+
+    #[test]
+    fn plan_boot_chunk_routes_a_within_chunk_duplicate_blob_to_the_fast_bucket() {
+        let mut fingerprints = HashMap::new();
+        fingerprints.insert(
+            "unchanged.rs".to_string(),
+            ("sameoid".to_string(), "rust".to_string()),
+        );
+        let chunk = vec![
+            ("unchanged.rs".to_string(), "sameoid".to_string()),
+            ("first.rs".to_string(), "dupoid".to_string()),
+            ("second.rs".to_string(), "dupoid".to_string()),
+            ("other.rs".to_string(), "distinctoid".to_string()),
+        ];
+        let (fast, primary) = plan_boot_chunk(&chunk, &fingerprints);
+
+        assert_eq!(
+            primary,
+            vec![
+                ("first.rs".to_string(), "dupoid".to_string()),
+                ("other.rs".to_string(), "distinctoid".to_string()),
+            ],
+            "only the FIRST occurrence of a not-yet-claimed changed blob is a primary",
+        );
+        assert_eq!(
+            fast,
+            vec![
+                ("unchanged.rs".to_string(), "sameoid".to_string()),
+                ("second.rs".to_string(), "dupoid".to_string()),
+            ],
+            "the fingerprint-unchanged file AND the later duplicate both land in `fast`",
+        );
+    }
+
+    #[test]
+    fn plan_boot_chunk_treats_a_never_seen_path_as_primary() {
+        let fingerprints = HashMap::new();
+        let chunk = vec![("new.rs".to_string(), "oid1".to_string())];
+        let (fast, primary) = plan_boot_chunk(&chunk, &fingerprints);
+        assert!(fast.is_empty());
+        assert_eq!(primary, vec![("new.rs".to_string(), "oid1".to_string())]);
+    }
+
+    #[test]
+    fn plan_boot_chunk_treats_a_changed_oid_at_a_known_path_as_primary() {
+        let mut fingerprints = HashMap::new();
+        fingerprints.insert(
+            "edited.rs".to_string(),
+            ("old_oid".to_string(), "rust".to_string()),
+        );
+        let chunk = vec![("edited.rs".to_string(), "new_oid".to_string())];
+        let (fast, primary) = plan_boot_chunk(&chunk, &fingerprints);
+        assert!(fast.is_empty());
+        assert_eq!(
+            primary,
+            vec![("edited.rs".to_string(), "new_oid".to_string())]
+        );
+    }
+
+    // --- V77-P3: the parallel boot walk vs the sequential walk --------------
+
+    /// The parallel boot-walk job (`start_boot_job` + `step_boot_job`, real
+    /// `walk_workers > 1`) must produce the SAME `files`/`symbols`/
+    /// `highlights` rows as the plain sequential `ingest::
+    /// index_repo_working_tree` walk over the identical repo — order
+    /// independence: this asserts SET equality, never an exact processing
+    /// order, since the two walks are free to visit files in different
+    /// sequences internally. The fixture deliberately includes two files
+    /// with IDENTICAL content (`a_dup1.rs`/`b_dup2.rs`) to exercise
+    /// `plan_boot_chunk`'s within-chunk claim/dedup path.
+    #[tokio::test]
+    async fn parallel_boot_walk_matches_the_sequential_walk() {
+        let repo_tmp = tempfile::tempdir().unwrap();
+        let repo_dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+        init_repo(&repo_dir);
+        let dup_body: &[u8] = b"pub fn shared() -> i32 { 42 }\n";
+        std::fs::write(repo_dir.join("a_dup1.rs"), dup_body).unwrap();
+        std::fs::write(repo_dir.join("b_dup2.rs"), dup_body).unwrap();
+        std::fs::write(
+            repo_dir.join("c.py"),
+            b"def greet(name):\n    return f\"hi {name}\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_dir.join("d.rs"),
+            b"pub struct Widget;\nimpl Widget {\n    pub fn new() -> Self {\n        Self\n    }\n}\n",
+        )
+        .unwrap();
+        git(&repo_dir, &["add", "-A"]);
+        git(&repo_dir, &["commit", "-q", "-m", "c1"]);
+
+        // --- sequential reference ---
+        let seq_tmp = tempfile::tempdir().unwrap();
+        let seq_store = Store::open(&seq_tmp.path().join("index.db")).unwrap();
+        let seq_repo_id = seq_store
+            .upsert_repo("fixture", repo_dir.to_str().unwrap())
+            .unwrap();
+        let git_repo = GitRepo::open(&repo_dir).unwrap();
+        ingest::index_repo_working_tree(
+            &seq_store,
+            &git_repo,
+            seq_repo_id,
+            "HEAD",
+            true,
+            false,
+            &crate::comments::KeywordSet::defaults(),
+        )
+        .unwrap();
+
+        // --- parallel boot-walk path, real fan-out (walk_workers = 3) ---
+        let par_tmp = tempfile::tempdir().unwrap();
+        let par_store = Arc::new(Store::open(&par_tmp.path().join("index.db")).unwrap());
+        let par_repo_id = par_store
+            .upsert_repo("fixture", repo_dir.to_str().unwrap())
+            .unwrap();
+        let mut job = start_boot_job(
+            &par_store,
+            par_repo_id,
+            "fixture".to_string(),
+            repo_dir.clone(),
+            true,
+            false,
+            3,
+        )
+        .await
+        .expect("start_boot_job");
+        let bus = Arc::new(EventBus::default());
+        let comment_keywords = Arc::new(crate::comments::KeywordSet::defaults());
+        loop {
+            let done = step_boot_job(&mut job, &par_store, &bus, &comment_keywords).await;
+            if done {
+                break;
+            }
+        }
+
+        // --- compare: `files` rows (mtime is always 0 on an ODB walk —
+        // excluded from the comparison as a non-signal) ---
+        let mut seq_files: Vec<(String, String, String, u64)> = seq_store
+            .list_files(seq_repo_id)
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.path, f.blob_hash, f.lang, f.size))
+            .collect();
+        let mut par_files: Vec<(String, String, String, u64)> = par_store
+            .list_files(par_repo_id)
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.path, f.blob_hash, f.lang, f.size))
+            .collect();
+        seq_files.sort();
+        par_files.sort();
+        assert_eq!(
+            seq_files, par_files,
+            "files rows must match as a SET regardless of walk shape"
+        );
+        assert!(
+            seq_files.len() >= 4,
+            "fixture sanity: expected at least 4 files rows, got {seq_files:?}"
+        );
+
+        // --- compare: symbols + highlights per distinct blob_hash (the
+        // dup pair shares ONE blob_hash, so this also proves the claim/
+        // dedup path never produced two divergent derivations for it) ---
+        let mut blob_hashes: Vec<String> = seq_files.iter().map(|f| f.1.clone()).collect();
+        blob_hashes.sort();
+        blob_hashes.dedup();
+        for blob_hash in blob_hashes {
+            let lang = seq_files
+                .iter()
+                .find(|f| f.1 == blob_hash)
+                .map(|f| f.2.clone())
+                .unwrap();
+            let Some(info) = lang::for_id(&lang) else {
+                continue;
+            };
+            let seq_symbols = seq_store
+                .symbols_for_blob(&blob_hash, info.symbol_salt)
+                .unwrap();
+            let par_symbols = par_store
+                .symbols_for_blob(&blob_hash, info.symbol_salt)
+                .unwrap();
+            assert_eq!(
+                seq_symbols, par_symbols,
+                "symbols must match for blob_hash {blob_hash} ({lang})"
+            );
+            let seq_highlights = seq_store
+                .highlights_for_blob(&blob_hash, info.highlight_salt)
+                .unwrap();
+            let par_highlights = par_store
+                .highlights_for_blob(&blob_hash, info.highlight_salt)
+                .unwrap();
+            assert_eq!(
+                seq_highlights, par_highlights,
+                "highlights must match for blob_hash {blob_hash} ({lang})"
+            );
+        }
     }
 }

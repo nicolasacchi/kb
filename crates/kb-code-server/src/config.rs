@@ -22,7 +22,8 @@
 //! (The enumeration above names the sections a hand-written `kb-code.toml`
 //! is expected to carry; several more — `[kb_daemon]`, `[backfill]`,
 //! `[github]`, `[occurrences]`, `[scopes]`, `[review]`, `[behavioral]`,
-//! `[scip]` — have accreted since and are documented on their own structs
+//! `[scip]`, `[indexer]` (V77-P3 — the boot walk's `walk_workers` fan-out
+//! bound) — have accreted since and are documented on their own structs
 //! below.)
 
 use kb_core::{Error, Result};
@@ -35,6 +36,12 @@ use std::time::Duration;
 pub struct KbCodeConfig {
     #[serde(default)]
     pub server: ServerSection,
+
+    /// `[indexer]` — V77-P3's bounded PARALLEL boot-walk knob
+    /// (`sink::step_boot_job`'s per-chunk fan-out over
+    /// `ingest::extract_pure`). See [`IndexerSection`].
+    #[serde(default)]
+    pub indexer: IndexerSection,
 
     /// `[[repos]]` — the repos kb-code browses. Empty by default (a
     /// freshly-installed kb-code has nothing configured yet); `load`
@@ -281,6 +288,52 @@ impl Default for WatcherSection {
     fn default() -> Self {
         Self {
             mode: Self::default_mode(),
+        }
+    }
+}
+
+/// `[indexer]` — V77-P3's bounded parallel boot-walk knob. The boot
+/// HEAD-tree walk (`sink::step_boot_job`) fans the pure per-blob work
+/// (read + parse/extract + highlight, `ingest::extract_pure`) out across
+/// this many bounded blocking tasks per chunk; the write side stays a
+/// single writer regardless (see `crates/kb-code-server/CLAUDE.md`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexerSection {
+    /// Bounded concurrency for the boot walk's parallel extraction fan-out.
+    /// `0` is coerced to `1` (see [`Self::resolved_walk_workers`]) — never
+    /// zero concurrency.
+    #[serde(default = "IndexerSection::default_walk_workers")]
+    pub walk_workers: usize,
+}
+
+impl IndexerSection {
+    /// `min(available cores, 4)` — mirrors kb-core's own
+    /// `embedder_cpu_cap` default (`crates/kb-core/src/embed_ipc.rs`): the
+    /// root CLAUDE.md's own build rules call this box IO-bound (HDD
+    /// RAID5), so unlike a pure CPU-bound workload there is little to gain
+    /// from saturating every core on the parse pass, and real cost in
+    /// disk-seek contention against sibling processes on a shared box. The
+    /// E6 large-repo re-measure (docs/configuration.md) is what decides
+    /// whether this default should move.
+    fn default_walk_workers() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(4)
+    }
+
+    /// The configured value, coerced to at least 1 — a `walk_workers = 0`
+    /// misconfiguration must never wedge the boot walk with zero
+    /// concurrency (mirrors `ServerSection::resolved_git_fanout`).
+    pub fn resolved_walk_workers(&self) -> usize {
+        self.walk_workers.max(1)
+    }
+}
+
+impl Default for IndexerSection {
+    fn default() -> Self {
+        Self {
+            walk_workers: Self::default_walk_workers(),
         }
     }
 }

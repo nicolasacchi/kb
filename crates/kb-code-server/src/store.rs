@@ -787,11 +787,21 @@ impl Store {
     /// markers (`unknown`/`binary`/`too-large`/`lfs`) come back as their
     /// own rows, which is what makes "how much of this repo the instrument
     /// cannot see" visible beside what a bump would cost.
+    ///
+    /// V77-P3 (Task 2, the E6 finding) — ordered by total bytes DESC (tie-
+    /// broken by `lang` for determinism), not alphabetically: the
+    /// `reextract-bill/1` sample pass (`reextract::build_bill`) walks this
+    /// list to size each language's timed-sample allotment, and the E6
+    /// finding was exactly a small-but-alphabetically-early language (HAML)
+    /// starving a repo's actual DOMINANT language (Ruby) out of a shared
+    /// clock. Iterating biggest-bytes-first means the dominant language's
+    /// allotment no longer depends on where some other language happens to
+    /// sit in the alphabet.
     pub fn files_by_lang(&self, repo_id: i64) -> Result<Vec<(String, u64, u64)>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT lang, COUNT(*), COALESCE(SUM(size), 0) FROM files \
-             WHERE repo_id = ?1 GROUP BY lang ORDER BY lang",
+             WHERE repo_id = ?1 GROUP BY lang ORDER BY COALESCE(SUM(size), 0) DESC, lang ASC",
         )?;
         let rows = stmt
             .query_map(params![repo_id], |r| {
@@ -944,6 +954,53 @@ impl Store {
             |r| r.get(0),
         )?;
         Ok(highlight_n > 0)
+    }
+
+    /// V77-P3 (Task 0) — every LIVE `derived_status` row (i.e. keyed by one
+    /// of TODAY's registered salts, in EITHER family) as
+    /// `(blob_hash, family, salt)`. ONE query, bounded by the number of
+    /// registered languages (`lang::ALL_LANGS.len() * 2` VALUES rows), not
+    /// by corpus size — the boot walk's preload for
+    /// `ingest::DerivedPreload` (see that struct's doc for why the boot
+    /// walk wants this instead of one `is_derived_pair` round trip per
+    /// unchanged file). Not repo-scoped: `derived_status` is
+    /// content-addressed and shared across every configured repo (ADR-2),
+    /// so there is no `repo_id` to filter by — the same tradeoff
+    /// `sweep_stale_salt_page` already accepts for this table, just
+    /// without that fn's paging (this query is bounded by SALT count, not
+    /// row count, so it stays cheap regardless of corpus size).
+    pub fn derived_status_for_current_salts(&self) -> Result<Vec<(String, String, String)>> {
+        let symbol_salts = crate::lang::current_salts(crate::lang::SaltFamily::Symbol);
+        let highlight_salts = crate::lang::current_salts(crate::lang::SaltFamily::Highlight);
+        let symbol_values = symbol_salts
+            .iter()
+            .map(|_| "(?)")
+            .collect::<Vec<_>>()
+            .join(",");
+        let highlight_values = highlight_salts
+            .iter()
+            .map(|_| "(?)")
+            .collect::<Vec<_>>()
+            .join(",");
+        let symbol_family = crate::lang::SaltFamily::Symbol.as_str();
+        let highlight_family = crate::lang::SaltFamily::Highlight.as_str();
+        let sql = format!(
+            "WITH cur_symbol(salt) AS (VALUES {symbol_values}), \
+                  cur_highlight(salt) AS (VALUES {highlight_values}) \
+             SELECT blob_hash, family, salt FROM derived_status \
+             WHERE (family = '{symbol_family}' AND salt IN (SELECT salt FROM cur_symbol)) \
+                OR (family = '{highlight_family}' AND salt IN (SELECT salt FROM cur_highlight))"
+        );
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&sql)?;
+        let mut bind: Vec<&str> = symbol_salts;
+        bind.extend(highlight_salts.iter().copied());
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(bind.iter()), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// The recorded row count for a derivation, or `None` when there is no
@@ -17644,5 +17701,97 @@ mod tests {
             pairs.is_empty(),
             "only one non-superseded review left -> below threshold"
         );
+    }
+
+    // --- V77-P3 (Task 2, the E6 finding): `files_by_lang` bytes-desc order --
+
+    #[test]
+    fn files_by_lang_orders_by_bytes_desc_with_a_lang_asc_tiebreak() {
+        let (_tmp, store) = open_temp();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        // Alphabetically: bash < ruby < yaml. Bytes-desc must reorder them
+        // entirely — the E6 finding was exactly a small-but-early language
+        // starving a repo's dominant (biggest-bytes) one out of a shared
+        // clock, so the fix must not merely tie-break alphabetically.
+        store
+            .upsert_file(repo_id, "a.sh", "h1", "bash", 10)
+            .unwrap();
+        store
+            .upsert_file(repo_id, "b.rb", "h2", "ruby", 1_000)
+            .unwrap();
+        store
+            .upsert_file(repo_id, "c.yml", "h3", "yaml", 100)
+            .unwrap();
+        // A tie: two langs with the SAME total bytes must fall back to
+        // `lang` ascending, deterministically.
+        store.upsert_file(repo_id, "d.go", "h4", "go", 100).unwrap();
+
+        let rows = store.files_by_lang(repo_id).unwrap();
+        let langs: Vec<&str> = rows.iter().map(|(l, _, _)| l.as_str()).collect();
+        assert_eq!(
+            langs,
+            vec!["ruby", "go", "yaml", "bash"],
+            "expected bytes DESC (1000, 100, 100, 10), tie broken by lang ASC (go < yaml): {rows:?}"
+        );
+    }
+
+    // --- V77-P3 (Task 0): `derived_status_for_current_salts` ----------------
+
+    #[test]
+    fn derived_status_for_current_salts_includes_both_families_and_excludes_stale_salts() {
+        let (_tmp, store) = open_temp();
+        store
+            .mark_derived(
+                "hash1",
+                crate::lang::SaltFamily::Symbol,
+                crate::lang::RUST.symbol_salt,
+                1,
+            )
+            .unwrap();
+        store
+            .mark_derived(
+                "hash1",
+                crate::lang::SaltFamily::Highlight,
+                crate::lang::RUST.highlight_salt,
+                1,
+            )
+            .unwrap();
+        // A STALE salt (not any current language's) must never appear.
+        store
+            .mark_derived(
+                "hash2",
+                crate::lang::SaltFamily::Symbol,
+                "rust@0.0.0+stale",
+                1,
+            )
+            .unwrap();
+
+        let rows = store.derived_status_for_current_salts().unwrap();
+        assert!(
+            rows.contains(&(
+                "hash1".to_string(),
+                crate::lang::SaltFamily::Symbol.as_str().to_string(),
+                crate::lang::RUST.symbol_salt.to_string(),
+            )),
+            "expected the current symbol salt row: {rows:?}"
+        );
+        assert!(
+            rows.contains(&(
+                "hash1".to_string(),
+                crate::lang::SaltFamily::Highlight.as_str().to_string(),
+                crate::lang::RUST.highlight_salt.to_string(),
+            )),
+            "expected the current highlight salt row: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|(h, _, _)| h == "hash2"),
+            "a stale salt must never appear in the preload: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn derived_status_for_current_salts_is_empty_on_a_fresh_store() {
+        let (_tmp, store) = open_temp();
+        assert!(store.derived_status_for_current_salts().unwrap().is_empty());
     }
 }
