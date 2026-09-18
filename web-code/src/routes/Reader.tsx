@@ -237,21 +237,21 @@ import {
 } from "../lib/provisionalPane";
 import { loadProvisionalPanes } from "../lib/prefs";
 import {
+  CODE_FONT_SIZE_MAX,
+  CODE_FONT_SIZE_MIN,
+  loadCodeFontSize,
   loadCodeLenses,
   loadCommentGutterMode,
   loadCoverageBand,
   loadParamHints,
-  loadReaderFontSize,
   loadStickyContext,
   loadSchemaFold,
   loadWrap,
-  READER_FONT_SIZE_MAX,
-  READER_FONT_SIZE_MIN,
+  saveCodeFontSize,
   saveCodeLenses,
   saveCommentGutterMode,
   saveCoverageBand,
   saveParamHints,
-  saveReaderFontSize,
   saveSchemaFold,
   saveStickyContext,
   saveWrap,
@@ -621,7 +621,7 @@ export default function Reader() {
   // SH.C3 — reading-mode prefs (line wrap + CM6 font size), same
   // useState-lazy-init + prefs.ts round-trip pattern as the three above.
   const [wrapEnabled, setWrapEnabled] = useState(() => loadWrap());
-  const [readerFontSize, setReaderFontSize] = useState(() => loadReaderFontSize());
+  const [codeFontSize, setCodeFontSize] = useState(() => loadCodeFontSize());
   const [cursorLineUi, setCursorLineUi] = useState(1);
   const [copiedTick, setCopiedTick] = useState(0);
   /// Suppress the next file-open `recordJump` when the navigation was
@@ -4016,160 +4016,176 @@ export default function Reader() {
         {/* F1 — the search launcher moved to the global TopBar (app.tsx),
             mounted once above every route; this header no longer duplicates
             it. */}
-        {isFile && !diffMode && !storyMode && (
-          <button
-            type="button"
-            className={"kbc-sticky-toggle" + (stickyEnabled ? " is-on" : "")}
-            aria-pressed={stickyEnabled}
-            title="Sticky context lines"
-            data-kbc-sticky-toggle
-            onClick={() => {
-              setStickyEnabled((v) => {
-                const next = !v;
-                saveStickyContext(next);
-                return next;
-              });
-            }}
-          >
-            Sticky
-          </button>
-        )}
-        {isFile && !diffMode && !storyMode && (
-          <button
-            type="button"
-            className={"kbc-sticky-toggle" + (paramHintsEnabled ? " is-on" : "")}
-            aria-pressed={paramHintsEnabled}
-            title="Param-name inlay hints at call sites"
-            data-kbc-param-hints-toggle
-            onClick={() => {
-              setParamHintsEnabled((v) => {
-                const next = !v;
-                saveParamHints(next);
-                return next;
-              });
-            }}
-          >
-            Params
-          </button>
-        )}
-        {isFile && !diffMode && !storyMode && (
-          <button
-            type="button"
-            className={"kbc-sticky-toggle" + (codeLensesEnabled ? " is-on" : "")}
-            aria-pressed={codeLensesEnabled}
-            title="Code Vision lens chips above declarations"
-            data-kbc-lenses-toggle
-            onClick={() => {
-              setCodeLensesEnabled((v) => {
-                const next = !v;
-                saveCodeLenses(next);
-                return next;
-              });
-            }}
-          >
-            Lenses
-          </button>
-        )}
-        {isFile && !diffMode && !storyMode && (
-          <button
-            type="button"
-            className={"kbc-sticky-toggle" + (wrapEnabled ? " is-on" : "")}
-            aria-pressed={wrapEnabled}
-            title="Wrap long lines"
-            data-kbc-wrap-toggle
-            onClick={() => {
-              setWrapEnabled((v) => {
-                const next = !v;
-                saveWrap(next);
-                return next;
-              });
-            }}
-          >
-            Wrap
-          </button>
-        )}
-        {isFile && !diffMode && !storyMode && (
-          <div className="kbc-fontsize-stepper" role="group" aria-label="Reader font size" data-kbc-fontsize-stepper>
-            <button
-              type="button"
-              className="kbc-fontsize-stepper__btn"
-              aria-label="Decrease reader font size"
-              title="Smaller text"
-              data-kbc-fontsize-dec
-              disabled={readerFontSize <= READER_FONT_SIZE_MIN}
-              onClick={() => setReaderFontSize((cur) => saveReaderFontSize(cur - 1))}
+        {/* V80-R2 — the flat 12-chip strip (Sticky Params Lenses Wrap A−
+            A+ Off Dots Age Comments Working-tree +Set) read as one
+            undifferentiated row at a glance; grouped into named, separated
+            clusters (`.kbc-toolbar-group`, CSS adjacent-sibling border) so
+            "which four things does Wrap belong with" is visible without
+            reading every label. Each group keeps its OWN `role="group"
+            aria-label`, so this is a rendering change only — every
+            `data-kbc-*` hook the e2e suite drives stays exactly where it
+            was. */}
+        <div className="kbc-reader-toolbar" data-kbc-reader-toolbar>
+          {isFile && !diffMode && !storyMode && (
+            <div className="kbc-toolbar-group" role="group" aria-label="View">
+              <button
+                type="button"
+                className={"kbc-sticky-toggle" + (stickyEnabled ? " is-on" : "")}
+                aria-pressed={stickyEnabled}
+                title="Sticky context lines"
+                data-kbc-sticky-toggle
+                onClick={() => {
+                  setStickyEnabled((v) => {
+                    const next = !v;
+                    saveStickyContext(next);
+                    return next;
+                  });
+                }}
+              >
+                Sticky
+              </button>
+              <button
+                type="button"
+                className={"kbc-sticky-toggle" + (paramHintsEnabled ? " is-on" : "")}
+                aria-pressed={paramHintsEnabled}
+                title="Param-name inlay hints at call sites"
+                data-kbc-param-hints-toggle
+                onClick={() => {
+                  setParamHintsEnabled((v) => {
+                    const next = !v;
+                    saveParamHints(next);
+                    return next;
+                  });
+                }}
+              >
+                Params
+              </button>
+              <button
+                type="button"
+                className={"kbc-sticky-toggle" + (codeLensesEnabled ? " is-on" : "")}
+                aria-pressed={codeLensesEnabled}
+                title="Code Vision lens chips above declarations"
+                data-kbc-lenses-toggle
+                onClick={() => {
+                  setCodeLensesEnabled((v) => {
+                    const next = !v;
+                    saveCodeLenses(next);
+                    return next;
+                  });
+                }}
+              >
+                Lenses
+              </button>
+              <button
+                type="button"
+                className={"kbc-sticky-toggle" + (wrapEnabled ? " is-on" : "")}
+                aria-pressed={wrapEnabled}
+                title="Wrap long lines"
+                data-kbc-wrap-toggle
+                onClick={() => {
+                  setWrapEnabled((v) => {
+                    const next = !v;
+                    saveWrap(next);
+                    return next;
+                  });
+                }}
+              >
+                Wrap
+              </button>
+            </div>
+          )}
+          {isFile && !diffMode && !storyMode && (
+            <div
+              className="kbc-toolbar-group kbc-fontsize-stepper"
+              role="group"
+              aria-label="Text size"
+              data-kbc-fontsize-stepper
             >
-              A−
-            </button>
-            <button
-              type="button"
-              className="kbc-fontsize-stepper__btn"
-              aria-label="Increase reader font size"
-              title="Larger text"
-              data-kbc-fontsize-inc
-              disabled={readerFontSize >= READER_FONT_SIZE_MAX}
-              onClick={() => setReaderFontSize((cur) => saveReaderFontSize(cur + 1))}
-            >
-              A+
-            </button>
+              <button
+                type="button"
+                className="kbc-fontsize-stepper__btn"
+                aria-label="Decrease code font size"
+                title="Smaller text"
+                data-kbc-fontsize-dec
+                disabled={codeFontSize <= CODE_FONT_SIZE_MIN}
+                onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur - 1))}
+              >
+                A−
+              </button>
+              <button
+                type="button"
+                className="kbc-fontsize-stepper__btn"
+                aria-label="Increase code font size"
+                title="Larger text"
+                data-kbc-fontsize-inc
+                disabled={codeFontSize >= CODE_FONT_SIZE_MAX}
+                onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur + 1))}
+              >
+                A+
+              </button>
+            </div>
+          )}
+          {isFile && !diffMode && !storyMode && (
+            <div className="kbc-toolbar-group kbc-provenance-toggle" role="group" aria-label="Blame">
+              <button
+                type="button"
+                className={"kbc-provenance-toggle__opt" + (provenanceMode === "off" ? " is-active" : "")}
+                aria-pressed={provenanceMode === "off"}
+                onClick={() => setProvenanceMode("off")}
+                data-kbc-provenance-mode="off"
+              >
+                Off
+              </button>
+              <button
+                type="button"
+                className={"kbc-provenance-toggle__opt" + (provenanceMode === "dots" ? " is-active" : "")}
+                aria-pressed={provenanceMode === "dots"}
+                onClick={() => setProvenanceMode((m) => (m === "dots" ? "off" : "dots"))}
+                data-kbc-provenance-toggle
+                data-kbc-provenance-mode="dots"
+                title="Show blame provenance dots in the gutter"
+              >
+                Dots
+              </button>
+              <button
+                type="button"
+                className={"kbc-provenance-toggle__opt" + (provenanceMode === "age" ? " is-active" : "")}
+                aria-pressed={provenanceMode === "age"}
+                onClick={() => setProvenanceMode((m) => (m === "age" ? "off" : "age"))}
+                data-kbc-provenance-mode="age"
+                title="Tint lines by author age"
+              >
+                Age
+              </button>
+            </div>
+          )}
+          {/* V72-J2 (D8) — the comments/1 gutter's mode chip (`Space C c`
+              cycles it). A mode NEVER hides a comment class silently — this
+              chip is the on-screen indicator naming which of the three
+              filters is currently active, always visible whenever a file is
+              open (same gate as the toggles above it). */}
+          {isFile && !diffMode && !storyMode && (
+            <div className="kbc-toolbar-group" role="group" aria-label="Comments">
+              <button
+                type="button"
+                className="kbc-sticky-toggle"
+                title="Comment gutter mode (all / quiet / doc-only) — Space C c cycles it"
+                data-kbc-comment-gutter-mode={commentGutterMode}
+                onClick={cycleCommentGutterMode}
+              >
+                Comments: {commentGutterMode}
+              </button>
+            </div>
+          )}
+          <div className="kbc-toolbar-group" role="group" aria-label="Ref">
+            <RefPicker repo={repo} path={path} activeRef={gitRef} pane2={pane2Loc ?? undefined} />
+            {/* Phase E4 — capture the FOCUSED pane's open file (or its
+                current selection, when one exists) into a reading set. */}
+            {focusedPath !== undefined && !diffMode && !storyMode && (
+              <AddToSetMenu repo={repo} path={focusedPath} getSelection={currentPaneSelection} />
+            )}
           </div>
-        )}
-        {isFile && !diffMode && !storyMode && (
-          <div className="kbc-provenance-toggle" role="group" aria-label="Provenance overlay">
-            <button
-              type="button"
-              className={"kbc-provenance-toggle__opt" + (provenanceMode === "off" ? " is-active" : "")}
-              aria-pressed={provenanceMode === "off"}
-              onClick={() => setProvenanceMode("off")}
-              data-kbc-provenance-mode="off"
-            >
-              Off
-            </button>
-            <button
-              type="button"
-              className={"kbc-provenance-toggle__opt" + (provenanceMode === "dots" ? " is-active" : "")}
-              aria-pressed={provenanceMode === "dots"}
-              onClick={() => setProvenanceMode((m) => (m === "dots" ? "off" : "dots"))}
-              data-kbc-provenance-toggle
-              data-kbc-provenance-mode="dots"
-              title="Show blame provenance dots in the gutter"
-            >
-              Dots
-            </button>
-            <button
-              type="button"
-              className={"kbc-provenance-toggle__opt" + (provenanceMode === "age" ? " is-active" : "")}
-              aria-pressed={provenanceMode === "age"}
-              onClick={() => setProvenanceMode((m) => (m === "age" ? "off" : "age"))}
-              data-kbc-provenance-mode="age"
-              title="Tint lines by author age"
-            >
-              Age
-            </button>
-          </div>
-        )}
-        {/* V72-J2 (D8) — the comments/1 gutter's mode chip (`Space C c`
-            cycles it). A mode NEVER hides a comment class silently — this
-            chip is the on-screen indicator naming which of the three
-            filters is currently active, always visible whenever a file is
-            open (same gate as the toggles above it). */}
-        {isFile && !diffMode && !storyMode && (
-          <button
-            type="button"
-            className="kbc-sticky-toggle"
-            title="Comment gutter mode (all / quiet / doc-only) — Space C c cycles it"
-            data-kbc-comment-gutter-mode={commentGutterMode}
-            onClick={cycleCommentGutterMode}
-          >
-            Comments: {commentGutterMode}
-          </button>
-        )}
-        <RefPicker repo={repo} path={path} activeRef={gitRef} pane2={pane2Loc ?? undefined} />
-        {/* Phase E4 — capture the FOCUSED pane's open file (or its current
-            selection, when one exists) into a reading set. */}
-        {focusedPath !== undefined && !diffMode && !storyMode && (
-          <AddToSetMenu repo={repo} path={focusedPath} getSelection={currentPaneSelection} />
-        )}
+        </div>
         {/* F5 — mobile-only "reader tools" sheet entry button (CSS-hidden
             ≥861px). Badged with the unresolved-annotation count so an
             operator knows there's something to look at before opening it. */}
@@ -4374,7 +4390,7 @@ export default function Reader() {
                       conflictActive={!!activeFile && conflictedPaths.has(activeFile)}
                       wrap={wrapEnabled}
                       schemaFold={focusedPane === 1 ? schemaFoldSpec : null}
-                      fontSize={readerFontSize}
+                      fontSize={codeFontSize}
                       inlinePeek={inlinePeekHandlers}
                       hoverRepo={repo}
                       hoverPath={activeFile ?? null}
@@ -4489,7 +4505,7 @@ export default function Reader() {
                           conflictActive={!!pane2Loc?.path && conflictedPaths.has(pane2Loc.path)}
                           wrap={wrapEnabled}
                           schemaFold={focusedPane === 2 ? schemaFoldSpec : null}
-                          fontSize={readerFontSize}
+                          fontSize={codeFontSize}
                           inlinePeek={inlinePeekHandlers}
                           hoverRepo={repo}
                           hoverPath={pane2Loc?.path ?? null}
