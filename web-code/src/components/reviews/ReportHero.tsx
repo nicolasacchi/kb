@@ -46,6 +46,12 @@ export interface ReportHeroProps {
   /// `ProseBlock.test.ts` renders) simply shows no segment pressed, same as
   /// today's behaviour.
   activeSeverity?: FindingSeverityFilter;
+  /// V80-M4 — "human threads counted in the derived totals": every OPEN
+  /// review thread whose opener is human (`lib/reviewRoom.ts`'s
+  /// `humanOpenThreads`, the SAME derivation the rail's counts and the
+  /// guided tour share). Defaults to `0` — a standalone render (no
+  /// comments fetched yet) reads as "none open," never "unknown."
+  humanOpenCount?: number;
 }
 
 /// The identity line's "ps" chip: the ACTIVE patchset when the review names
@@ -64,6 +70,7 @@ export default function ReportHero({
   files,
   onFilterFindings,
   activeSeverity,
+  humanOpenCount = 0,
 }: ReportHeroProps) {
   const counts = heroCounts(findings);
   const viewed = filesViewedOf(files);
@@ -236,6 +243,16 @@ export default function ReportHero({
           data-kbc-room-hero-viewed={`${viewed.viewed}/${viewed.total}`}
         >
           <Icon.Eye /> {viewed.viewed} of {viewed.total} files viewed
+        </span>
+        {/* V80-M4 — "the Room reads human threads first-class": a peer count
+            beside the agent's own findings/viewed chips, never hidden even
+            at zero (the room never lies by omission). */}
+        <span
+          className="kbc-room-chip"
+          style={{ ["--kbc-room-chip-color" as string]: "var(--blue)" }}
+          data-kbc-room-hero-human-open={humanOpenCount}
+        >
+          <Icon.Comment /> {humanOpenCount} open question{humanOpenCount === 1 ? "" : "s"} from you
         </span>
       </div>
 

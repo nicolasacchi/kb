@@ -168,7 +168,7 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
         <Link
           to={`${reviewDiffHref(repo, id)}?tour=1`}
           className="kbc-review__action"
-          title="Guided tour — walk reading-order files interleaved with severity-ordered findings"
+          title="Guided tour — walk reading-order files interleaved with severity-ordered findings and your own open threads"
           data-kbc-review-tour-start
         >
           Guided tour

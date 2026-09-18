@@ -11,13 +11,14 @@ import type {
   ReviewReport,
   ReviewReportOut,
 } from "../../api/types";
+import { useReviewComments } from "../../hooks/useReviewComments";
 import { useReviewFiles, useReviewFindings, useReviewReport } from "../../hooks/useReviews";
 import ProseBlock from "../prose/ProseBlock";
 import { findingFacetText, findingFacets } from "../../lib/reviewDoc";
 // V76-R2a — the live-counts derivation's home moved to `lib/reviewRoom.ts`
 // (the hero needs it without a component↔lib cycle); re-exported here so
 // existing importers (`ReportPanel.test.ts`) keep working.
-import { liveFindingCounts, type LiveCounts } from "../../lib/reviewRoom";
+import { humanOpenThreads, liveFindingCounts, type LiveCounts } from "../../lib/reviewRoom";
 export { liveFindingCounts, type LiveCounts };
 import AgentVerdictCard from "./AgentVerdictCard";
 import CiChecksCard from "./CiChecksCard";
@@ -115,6 +116,12 @@ export default function ReportPanel({
   const reportQ = useReviewReport(repo, review.id);
   const findingsQ = useReviewFindings(repo, review.id, { ps });
   const filesQ = useReviewFiles(repo, review.id, ps);
+  // V80-M4 — the SAME query key `ReviewThreadsCard`'s rail already
+  // subscribes to (`useReviewComments(repo, id, ps, true)`); TanStack Query
+  // dedupes by key, so this is a cache hit whenever the rail is mounted
+  // beside this panel (the desktop Room's normal layout), never a second
+  // network round trip.
+  const commentsQ = useReviewComments(repo, review.id, ps, true);
 
   if (reportQ.isLoading) {
     return (
@@ -151,12 +158,14 @@ export default function ReportPanel({
   const live = liveFindingCounts(findings);
   const drift = statDriftCaption(report.stats, live);
   const files = filesQ.data?.files ?? [];
+  const humanOpenCount = humanOpenThreads(commentsQ.data).length;
 
   return (
     <div data-kbc-report-panel={review.id}>
       {/* V76-R2a — the hero: title, PR/base/head chips, risk dial, the
           three live counts as rail-filtering chips, lede, files-viewed.
-          The agent block inside is HIDDEN when unset. */}
+          The agent block inside is HIDDEN when unset. V80-M4 adds the
+          human-threads count, same "never re-derive, only render" rule. */}
       <ReportHero
         repo={repo}
         review={review}
@@ -165,6 +174,7 @@ export default function ReportPanel({
         files={files}
         onFilterFindings={(sev) => onFilterFindings?.(sev)}
         activeSeverity={activeSeverityFilter}
+        humanOpenCount={humanOpenCount}
       />
 
       <div className="kbc-verdicts" data-kbc-room-section="verdict">
