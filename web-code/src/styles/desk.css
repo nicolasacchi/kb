@@ -396,7 +396,16 @@
 
 .kbc-desk__preset-chip {
   position: absolute;
-  right: calc(var(--desk-stripe-w) + 8px);
+  /* V80-R0 — `--desk-rail-pct` (set inline on `.kbc-desk`, Desk.tsx) is
+   * this render's live rail width as a percent of `.kbc-desk`'s own
+   * width (this chip's `position:absolute` containing block) — 0 when
+   * the rail is collapsed, matching the ORIGINAL `--desk-stripe-w`-only
+   * offset exactly for that case. The rail sits BETWEEN the main pane
+   * and the always-present `--desk-stripe-w` icon stripe, so clearing
+   * only the stripe (as before) parked this chip — and the Save-
+   * workspace button inside it — on top of an OPEN rail's own rows
+   * instead of beside them (bookmarks.spec.ts). */
+  right: calc(var(--desk-rail-pct, 0) * 1% + var(--desk-stripe-w) + 8px);
   bottom: 8px;
   z-index: var(--z-popover);
   display: flex;

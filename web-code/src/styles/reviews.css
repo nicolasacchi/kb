@@ -712,6 +712,23 @@
   display: flex;
   flex-direction: column;
   min-height: 100%;
+  /* V80-R0 — the toolbar below is `flex-wrap: wrap`: at narrower widths (or
+   * with the bigger V80-R0 type ramp — every chip/button/select in it grew
+   * ~15-20%) its controls no longer fit one line at 1280px and it wraps to
+   * two. `--topbar-h` (44px) is the GLOBAL app TopBar's height (outside
+   * `.kbc-approute` entirely) — three descendants below used to reuse that
+   * SAME constant, by coincidence, as a stand-in for "this toolbar's own
+   * height" back when the toolbar was reliably single-line. Now that the
+   * toolbar can wrap, that coincidence breaks: the sticky map header and
+   * the hunk `scroll-margin-top` under-clear it by however tall the second
+   * line is, so a scrollIntoView (or Playwright's fixed drag-point-from-
+   * boundingBox math, review-file-tree.spec.ts) lands under the still-
+   * sticky, now-taller toolbar instead of on the content below it. This
+   * variable is its own budget — twice the single-line height plus a
+   * little breathing room — sized for "the toolbar wraps to at most two
+   * lines", not tied to the unrelated global constant.
+   */
+  --rdiff-toolbar-h: calc(2 * var(--topbar-h) + var(--pad-2));
 }
 .kbc-rdiff__toolbar {
   position: sticky;
@@ -920,11 +937,36 @@
    * never the hunk strips (V76-R2b.2). --z-bar here painted the file-level
    * viewed checkbox over data-kbc-hunk-viewed-toggle. */
   isolation: isolate;
+  /* V80-R0 — the "all-files `file` query hint" effect (ReviewDiff.tsx)
+   * scrolls this section into view (start-aligned) once it exists, same
+   * as `pickFile()`'s own fallback branch in ReviewDiffCenter.tsx when no
+   * `onOpenFile` is supplied. With no scroll-margin, start-alignment aims
+   * for scrollTop equal to this section's flow offset exactly (flush to
+   * the scroller's own top) — parking it directly under the still-sticky
+   * `.kbc-rdiff__toolbar` (see `--rdiff-toolbar-h`'s own comment on
+   * `.kbc-rdiff`). On a diff barely taller than the viewport the scroller's
+   * max scrollTop can be SMALLER than the toolbar's real, now-possibly-
+   * two-line height, so the browser clamps short and the toolbar visibly
+   * covers the section's top strip — no amount of scrolling can uncover
+   * it, it's just painted over. Reserving `--rdiff-toolbar-h` of
+   * clearance here makes that start-alignment stop short (or not move at
+   * all, clamped to zero) so the section's top always clears the
+   * toolbar's worst-case wrapped height. */
+  scroll-margin-top: var(--rdiff-toolbar-h);
 }
 .kbc-rdiff__section-head {
   position: sticky;
   /* Map closed: sticky ancestor is `.kbc-approute`; sit below the rdiff
-   * toolbar (min-height --topbar-h). Mapped override is below. */
+   * toolbar (min-height --topbar-h). Mapped override is below.
+   * V80-R0 note: this DOES share the same single-line-toolbar assumption
+   * `.kbc-rdiff__section`'s `scroll-margin-top` fix targets (see
+   * `--rdiff-toolbar-h`'s comment on `.kbc-rdiff`) — but map-closed mode
+   * isn't exercised by either failing spec, and swapping this `top` to
+   * the wrap-aware budget would over-reserve (and visibly gap) on any
+   * viewport wide enough for the toolbar to stay single-line, which
+   * neither of those specs runs at to catch. Left as-is; a map-closed
+   * repro would need its own real fix (or a live-measured height), not a
+   * guess ported over from the mapped-mode case. */
   top: var(--topbar-h);
   z-index: 1;
   display: flex;
@@ -1821,10 +1863,22 @@ span.kbc-diff__impact-chip {
   min-width: 0;
   position: relative;
   z-index: 2;
-  /* Map-closed: sticky ancestor is `.kbc-approute`. Leave room for the
-   * toolbar + section-head so scrollIntoView / Playwright do not park the
-   * first strip under the file-level viewed checkbox. */
-  scroll-margin-top: calc(var(--topbar-h) + var(--pad-2) * 2 + 1.75em);
+  /* Leave room for the toolbar + section-head so scrollIntoView /
+   * Playwright do not park the first strip under the file-level viewed
+   * checkbox. This rule is UNCONDITIONAL (map-open and map-closed alike)
+   * — it's what ReviewDiff.tsx's "first hunk in view" effect actually
+   * scrolls to (via `scrollIntoView`, block start) after a map-row click
+   * (`.kbc-rdiff__section` itself is a DIFFERENT effect's target, the
+   * all-files `file` query-param hint, single-mode-only guarded off).
+   * V80-R0: the `--topbar-h` term stood in for the review toolbar's own
+   * height (a single-line-toolbar assumption — see `--rdiff-toolbar-h`'s
+   * comment on `.kbc-rdiff`); swapped for that wrap-aware budget, since
+   * the toolbar is ALSO sticky (and equally tall) in map-open mode —
+   * review-file-tree.spec.ts's drag-the-separator failure is this exact
+   * strip landing under the still-sticky, now-two-line toolbar. The rest
+   * (`--pad-2 * 2 + 1.75em`) approximates the section-head's own height
+   * stacked on top of it, unaffected by this fix. */
+  scroll-margin-top: calc(var(--rdiff-toolbar-h) + var(--pad-2) * 2 + 1.75em);
 }
 .kbc-hunkstrip--current {
   border-left-color: var(--accent);

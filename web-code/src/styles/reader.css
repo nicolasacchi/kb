@@ -151,6 +151,16 @@
   flex-direction: column;
   gap: 8px;
   max-width: min(360px, calc(100vw - 32px));
+  /* V80-R0 — this fixed-position host floats over whatever the page put
+   * at the bottom-right corner (e.g. the inspector rail's last row —
+   * bookmarks.spec.ts, where a taller ramp pushed that row further down
+   * than the toast's own static inset accounted for). Nothing in a toast
+   * needs to be clickable except its own dismiss ✕ (and an optional
+   * link) — see `.kbc-toast`/`.kbc-toast__x`/`.kbc-toast__link` below —
+   * so neither this container nor a toast's own message/background
+   * should ever swallow a click meant for the content underneath, gap
+   * between stacked toasts included. */
+  pointer-events: none;
 }
 .kbc-toast {
   display: flex;
@@ -162,6 +172,10 @@
   background: var(--bg-panel);
   box-shadow: var(--shadow);
   font-size: 12px;
+  /* V80-R0 — see `.kbc-toasts` above: re-enabled only on the interactive
+   * children (`.kbc-toast__x`, `.kbc-toast__link`), never the card
+   * itself — its background and `.kbc-toast__msg` carry no handler. */
+  pointer-events: none;
 }
 .kbc-toast--ok {
   border-color: color-mix(in srgb, var(--green) 45%, var(--rule-hi));
@@ -185,6 +199,9 @@
   padding: 2px;
   display: grid;
   place-items: center;
+  /* V80-R0 — the only clickable bit of a toast; see `.kbc-toast`'s own
+   * `pointer-events: none` above. */
+  pointer-events: auto;
 }
 .kbc-toast__x:hover {
   color: var(--ink);
