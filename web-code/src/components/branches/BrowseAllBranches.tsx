@@ -29,7 +29,12 @@ export default function BrowseAllBranches({
   rows,
   workspaceCountsByRef = {},
 }: BrowseAllBranchesProps) {
-  const [open, setOpen] = useState(rows.length <= 5);
+  // V80-R5 — this table is the DEMOTED raw view now that the ranked list
+  // (reason chips, ahead/behind, start-review CTA) is always visible above
+  // it: closed by default regardless of row count, never auto-opened by a
+  // small fixture. `branches-landing.spec.ts`'s own toggle handling opens
+  // it explicitly when it needs to, so this is safe either way.
+  const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const names = useMemo(() => rows.map((b) => b.name), [rows]);
   const visible = useMemo(() => {
@@ -46,7 +51,11 @@ export default function BrowseAllBranches({
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
     >
       <summary className="kbc-browse__summary" data-kbc-browse-toggle>
-        All branches ({rows.length})
+        {/* V80-R5 — "(table)" names what this demoted fold actually is (the
+            raw v4 landing table), while keeping the literal "All branches
+            (N)" substring `branches-landing.spec.ts` parses the row count
+            out of. */}
+        All branches ({rows.length}) · table
       </summary>
       <div className="kbc-browse__filter">
         <RefTypeahead
