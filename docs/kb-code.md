@@ -74,6 +74,35 @@ Review tab lists the current review's threads for the open file (same
 same `in_diff` caption this section documents, and a "Comment here" door
 into the same composer.
 
+**The Room reads human threads first-class (V80-M4).** `ReviewThreadsCard`
+(the Room's rail) sections its Threads list into **In the diff** / **Outside
+the diff** / **General**, from M0's own `in_diff` caption — a section
+renders only when it has rows, but the header line above always names all
+three counts (e.g. "8 in the diff · 2 outside · 1 general"), never hiding a
+class of thread by omission. Every thread keeps its existing "open in diff"
+link (into the review diff, M1's any-file diff so an out-of-diff file still
+opens) and gains **"open in reader"** — the SAME thread in the plain code
+reader at the active patchset's tip sha, with `?review=<id>` (M3) so the
+reader picks the review up as current; a review-level "General" thread has
+no file and so has no reader link. The Report hero's counts row gains an
+"N open questions from you" chip, and the guided tour (`?tour=1`) adds one
+stop per open human thread on a file (alongside its existing one-stop-per-
+finding walk) — both derive from `lib/reviewRoom.ts`'s `humanOpenThreads`,
+ONE client-side definition ("every unresolved top-level thread whose opener
+is not an agent name") shared by both renderers, computed over the SAME
+`GET /reviews/{id}/comments` fetch the rail already made (no second
+request). `GET /api/reviews/inbox` and the federated `GET /api/inbox`
+mirror the same concept SERVER-side as an additive `human_open` field on
+each review row (`review_inbox.rs`) — cheaper than a per-review comment
+fetch on an inbox load, computed from the SAME batched annotation rows
+`unanswered_questions` already reads, classifying "agent" via
+`review_timeline::AGENT_AUTHOR_NAMES` (the closed harness vocabulary, so it
+can never disagree with the timeline). Unlike `unanswered_questions`
+(intent-scoped to `question`, and about "whose turn is it"), `human_open`
+covers every intent and only asks "did a human raise something here that is
+still open" — a resolved question or an agent-opened question both excluded,
+a still-open plain note included.
+
 **`kb-code review distill <ID> [--json]`** (CT-E7, `GET
 /api/reviews/{id}/distill`, `review-distill/1`) composes one completed
 review's full local record — meta, every patchset, files touched at the
