@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { GithubThread, ReviewFileRow } from "../../api/types";
 import DiffFile from "../../components/diff/DiffFile";
+import FileHeaderLegend from "../../components/diff/FileHeaderLegend";
 import { Icon } from "../../components/icons";
 // S2-C — the shared Diagnostics inspector card (Reader mounts it via
 // `InspectorRail`'s `diagnosticsCard` slot; here it's the diagnostics
@@ -535,23 +536,34 @@ export function LazyDiffSection({
         >
           {collapsed ? <Icon.Expand /> : <Icon.Collapse />}
         </button>
+        {/* V80-R4 — cues grouped instead of one flat run: STATUS+± (this
+            file's own change) | VIEWED (the reviewer's own progress).
+            `trust`/diagnostics/impact chips live one level down, in the
+            expanded body's own `DiffFileHeader` — `FileHeaderLegend`
+            below explains both groups together, since they read as one
+            composite row. */}
         <span className="kbc-rdiff__section-path">{file.path}</span>
-        <span className="kbc-review__file-stats">
-          <span className="kbc-review__file-add">+{file.additions}</span>{" "}
-          <span className="kbc-review__file-del">−{file.deletions}</span>
+        <span className="kbc-rdiff__file-cues kbc-rdiff__file-cues--status">
+          <span className="kbc-review__file-stats">
+            <span className="kbc-review__file-add">+{file.additions}</span>{" "}
+            <span className="kbc-review__file-del">−{file.deletions}</span>
+          </span>
         </span>
-        <label className="kbc-review__file-viewed" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
-            checked={checked}
-            onChange={() => onToggleViewed(file)}
-            aria-label={checked ? "mark unviewed" : "mark viewed"}
-            data-kbc-review-viewed={file.path}
-          />
-        </label>
-        <Link to={focusHref} className="kbc-rdiff__focus" data-kbc-rdiff-focus={file.path}>
-          focus
-        </Link>
+        <span className="kbc-rdiff__file-cues kbc-rdiff__file-cues--viewed">
+          <label className="kbc-review__file-viewed" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={() => onToggleViewed(file)}
+              aria-label={checked ? "mark unviewed" : "mark viewed"}
+              data-kbc-review-viewed={file.path}
+            />
+          </label>
+          <Link to={focusHref} className="kbc-rdiff__focus" data-kbc-rdiff-focus={file.path}>
+            focus
+          </Link>
+        </span>
+        <FileHeaderLegend />
       </header>
       {!collapsed && (
         <div className="kbc-rdiff__section-body">
