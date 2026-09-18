@@ -45,14 +45,23 @@ test.describe("highlight/1 snippet paint (V76-C1)", () => {
 
     await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
     await expect(page.locator("[data-kbc-review-title]")).toContainText("e2e highlight fence");
+    // V80-F1 — the Files-tab row click NAVIGATES to the full-page diff now
+    // (the inline cockpit expansion is retired from this interaction).
     await page.locator(`[data-kbc-review-file-row="${FEATURE_FILE}"]`).click();
-    const featDiff = page.locator(`[data-kbc-review-file-diff="${FEATURE_FILE}"]`);
+    await expect(page).toHaveURL(new RegExp(`/diff/${FEATURE_FILE}(\\?|$)`));
+    const featDiff = page.locator(`[data-kbc-rdiff-file="${FEATURE_FILE}"]`);
     await expect(featDiff).toBeVisible({ timeout: 10_000 });
     await featDiff.locator("[data-kbc-review-compose-new]").first().click();
     const composer = page.locator("[data-kbc-review-composer]");
     await expect(composer).toBeVisible();
     await composer.locator("[data-kbc-review-composer-body]").fill(FENCE_BODY);
     await composer.locator("[data-kbc-review-composer-submit]").click();
+    // V80-F1 — this is the REAL full-page diff now, not the old inline
+    // preview: composing here drafts (V73-K2a, `web-code/CLAUDE.md`'s
+    // "Drafts are browser state; publish is one transaction") and
+    // auto-opens the tray, so the comment needs an explicit publish
+    // before it's a live thread.
+    await page.locator("[data-kbc-rdiff-drafts-publish]").click();
     const thread = featDiff.locator("[data-kbc-review-thread]").first();
     await expect(thread).toBeVisible({ timeout: 10_000 });
     await hl.catch(() => undefined);
@@ -76,8 +85,11 @@ test.describe("highlight/1 snippet paint (V76-C1)", () => {
     const created = (await createRes.json()) as { id: number };
 
     await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${created.id}`);
+    // V80-F1 — the Files-tab row click NAVIGATES to the full-page diff now
+    // (the inline cockpit expansion is retired from this interaction).
     await page.locator(`[data-kbc-review-file-row="${FEATURE_FILE}"]`).click();
-    const featDiff = page.locator(`[data-kbc-review-file-diff="${FEATURE_FILE}"]`);
+    await expect(page).toHaveURL(new RegExp(`/diff/${FEATURE_FILE}(\\?|$)`));
+    const featDiff = page.locator(`[data-kbc-rdiff-file="${FEATURE_FILE}"]`);
     await expect(featDiff).toBeVisible({ timeout: 10_000 });
     await expect(featDiff.locator(".kbc-diff__line--add [data-kbc-hl]").first()).toBeVisible({
       timeout: 15_000,
