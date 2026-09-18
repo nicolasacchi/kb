@@ -111,7 +111,7 @@ describe("openQuestions", () => {
       review_id: 1,
       repo: "r",
       ps: 1,
-      groups: [{ path: "a.rb", comments: [comment(), comment({ id: "c-2", intent: "note" })] }],
+      groups: [{ path: "a.rb", in_diff: true, comments: [comment(), comment({ id: "c-2", intent: "note" })] }],
     };
     const out = openQuestions("r", 1, data, new Map());
     expect(out.map((q) => q.id)).toEqual(["c-1"]);
@@ -138,7 +138,7 @@ describe("openQuestions", () => {
       review_id: 1,
       repo: "r",
       ps: 1,
-      groups: [{ path: "a.rb", comments: [answered] }],
+      groups: [{ path: "a.rb", in_diff: true, comments: [answered] }],
     };
     expect(openQuestions("r", 1, data, new Map())).toHaveLength(0);
   });
@@ -152,7 +152,7 @@ describe("buildWorkOrder", () => {
       review_id: 1,
       repo: "r",
       ps: 1,
-      groups: [{ path: "a.rb", comments: [comment()] }],
+      groups: [{ path: "a.rb", in_diff: true, comments: [comment()] }],
     }, new Map());
     const text = buildWorkOrder("https://kb.example", disputed, questions);
     expect(text).toContain("Disputed findings (1)");
