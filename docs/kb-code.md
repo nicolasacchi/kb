@@ -101,7 +101,11 @@ can never disagree with the timeline). Unlike `unanswered_questions`
 (intent-scoped to `question`, and about "whose turn is it"), `human_open`
 covers every intent and only asks "did a human raise something here that is
 still open" — a resolved question or an agent-opened question both excluded,
-a still-open plain note included.
+a still-open plain note included. The `~reviews`/`~inbox` landing pages'
+"Reviews awaiting you" rows surface it as a "🙋 N from you" chip
+(`lib/reviewInbox.ts`'s `inboxReasonChips`), deliberately placed LAST among
+that row's chips since — unlike the others — it plays no part in
+`inbox_score` at all (surfaced-never-scored).
 
 **`kb-code review distill <ID> [--json]`** (CT-E7, `GET
 /api/reviews/{id}/distill`, `review-distill/1`) composes one completed
