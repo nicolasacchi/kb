@@ -1338,6 +1338,52 @@ a.kbc-review__action {
   opacity: 0.7;
 }
 
+/* V80-M4 — "the Room reads human threads first-class": the section
+   count line above the filters, the In-the-diff/Outside-the-diff/General
+   section headings, and the per-thread wrapper that lets "open in diff"
+   and the new "open in reader" sit as SIBLING links (never nested
+   anchors). */
+.kbc-rthreads__section-counts {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  margin: 0 0 8px;
+}
+
+.kbc-rthreads__section + .kbc-rthreads__section {
+  margin-top: 10px;
+}
+
+.kbc-rthreads__section-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 4px;
+}
+
+.kbc-rthreads__thread {
+  margin: 0 0 4px;
+}
+
+.kbc-rthreads__thread .kbc-rthreads__row {
+  margin: 0;
+}
+
+.kbc-rthreads__reader-link {
+  display: inline-block;
+  margin: 2px 0 0 8px;
+  padding-left: 8px;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+
+.kbc-rthreads__reader-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* ── PRR-U4 (§4 — "the question/answer loop") ──────────────────────────── */
 
 .kbc-review__ann-path--general {
