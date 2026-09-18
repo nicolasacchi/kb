@@ -10,6 +10,7 @@ import { commentSide, indexThreads } from "../../lib/reviewComments";
 import { FindingRow } from "./FindingCard";
 import ProseBlock from "../prose/ProseBlock";
 import GithubDiffCard from "./GithubDiffCard";
+import PromoteToFinding from "./PromoteToFinding";
 import { reviewDiffHref } from "./ReviewHeader";
 import { rungForMouse, type RampRung, type RampTarget } from "../../nav/ramp";
 
@@ -253,7 +254,20 @@ export default function ReviewThreadsCard({
           </button>
         )}
         {g.comments.map((c) => {
-          const qstate = questionStateForThread(c, findingsByAnnId.get(c.id) ?? null);
+          const linkedFinding = findingsByAnnId.get(c.id) ?? null;
+          // V80-M5 — "success re-renders the thread as a finding card": a
+          // thread whose annotation now backs a HUMAN-authored
+          // (`origin: "manual"`) finding — whether promoted just now or
+          // authored earlier via the diff composer's own Finding mode —
+          // renders as the SAME compact `FindingRow` the top "Findings"
+          // roll-up uses, rather than a plain thread row a human would
+          // then have to cross-reference. Agent-imported findings keep
+          // their pre-M5 plain-row rendering here (unchanged) — only this
+          // unit's own manual-authorship class gets the swap.
+          if (linkedFinding && linkedFinding.origin === "manual") {
+            return <FindingRow key={c.id} repo={repo} reviewId={reviewId} finding={linkedFinding} ps={ps} />;
+          }
+          const qstate = questionStateForThread(c, linkedFinding);
           // V80-M4 — "open in reader": a SIBLING link, never nested inside
           // the "open in diff" row's own `<Link>` (HTML forbids nested
           // anchors) — `data-kbc-review-threads-row` keeps naming the
@@ -311,6 +325,7 @@ export default function ReviewThreadsCard({
                   open in reader
                 </Link>
               )}
+              <PromoteToFinding repo={repo} reviewId={reviewId} thread={c} />
             </div>
           );
         })}

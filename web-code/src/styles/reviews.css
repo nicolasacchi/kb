@@ -1698,6 +1698,78 @@ a.kbc-review__action {
   text-decoration: underline;
 }
 
+/* ── V80-M5 (D6) — "Promote to finding": a small toggle/form sibling of
+   the thread row, never nested inside its `<Link>` (same "sibling, not
+   nested" rule the reader link above follows). ──────────────────────── */
+
+.kbc-promote-finding__toggle {
+  display: inline-block;
+  margin: 2px 0 0 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+
+.kbc-promote-finding__toggle:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kbc-promote-finding__toggle:disabled {
+  color: var(--ink-dim);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.kbc-promote-finding {
+  margin: 6px 0 0 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kbc-promote-finding__hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-promote-finding__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.kbc-promote-finding__row label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-promote-finding__blocking {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 4px !important;
+}
+
+.kbc-promote-finding__title {
+  width: 100%;
+}
+
+.kbc-promote-finding__actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ── PRR-U4 (§4 — "the question/answer loop") ──────────────────────────── */
 
 .kbc-review__ann-path--general {

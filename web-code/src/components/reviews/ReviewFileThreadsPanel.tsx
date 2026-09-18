@@ -1,7 +1,12 @@
+import { useMemo } from "react";
 import { Link } from "react-router";
 import { useReviewComments } from "../../hooks/useReviewComments";
+import { useReviewFindings } from "../../hooks/useReviews";
+import { findingsByAnnotationId } from "../../lib/diffFindings";
 import { formatUnixSeconds } from "../../lib/format";
 import EmptyState from "../EmptyState";
+import { FindingRow } from "./FindingCard";
+import PromoteToFinding from "./PromoteToFinding";
 import { threadHref } from "./ReviewThreadsCard";
 
 export interface ReviewFileThreadsPanelProps {
@@ -35,6 +40,16 @@ export default function ReviewFileThreadsPanel({
   const group = path ? q.data?.groups.find((g) => g.path === path) : undefined;
   const threads = group?.comments ?? [];
   const ps = q.data?.ps;
+  // V80-M5 — the SAME `findingsByAnnotationId` join `ReviewThreadsCard`
+  // uses, so a promoted (or composer-authored) manual finding renders
+  // identically in the reader rail as it does in the Room.
+  const findingsQ = useReviewFindings(repo, reviewId, {
+    ps: ps !== undefined ? String(ps) : undefined,
+  });
+  const findingsByAnnId = useMemo(
+    () => findingsByAnnotationId(findingsQ.data?.findings ?? []),
+    [findingsQ.data],
+  );
 
   const caption = q.isLoading
     ? "Loading…"
@@ -65,37 +80,51 @@ export default function ReviewFileThreadsPanel({
         />
       ) : (
         <ul className="kbc-review-rail__threads" data-kbc-review-rail-threads>
-          {threads.map((t) => (
-            <li
-              key={t.id}
-              className={"kbc-review-rail__thread" + (t.resolved ? " is-resolved" : "")}
-              data-kbc-review-rail-thread={t.id}
-            >
-              <p className="kbc-review-rail__body">{t.body}</p>
-              <div className="kbc-review-rail__meta">
-                <span>
-                  {t.author} · {formatUnixSeconds(t.updated_at)}
-                </span>
-                {t.resolution.orphaned && (
-                  <span
-                    className="kbc-review-rail__badge kbc-review-rail__badge--orphan"
-                    data-kbc-review-rail-orphan
-                  >
-                    orphaned
-                  </span>
-                )}
-                {t.resolved && (
-                  <span className="kbc-review-rail__badge kbc-review-rail__badge--resolved">resolved</span>
-                )}
-              </div>
-              <Link
-                to={threadHref(repo, reviewId, t, ps !== undefined ? String(ps) : undefined)}
-                data-kbc-review-rail-open-diff
+          {threads.map((t) => {
+            // V80-M5 — same swap `ReviewThreadsCard` makes: a
+            // human-promoted (or composer-authored) manual finding renders
+            // as a compact `FindingRow` instead of the plain thread <li>.
+            const linkedFinding = findingsByAnnId.get(t.id) ?? null;
+            if (linkedFinding && linkedFinding.origin === "manual") {
+              return (
+                <li key={t.id} data-kbc-review-rail-thread={t.id}>
+                  <FindingRow repo={repo} reviewId={reviewId} finding={linkedFinding} ps={ps !== undefined ? String(ps) : undefined} />
+                </li>
+              );
+            }
+            return (
+              <li
+                key={t.id}
+                className={"kbc-review-rail__thread" + (t.resolved ? " is-resolved" : "")}
+                data-kbc-review-rail-thread={t.id}
               >
-                Open in diff
-              </Link>
-            </li>
-          ))}
+                <p className="kbc-review-rail__body">{t.body}</p>
+                <div className="kbc-review-rail__meta">
+                  <span>
+                    {t.author} · {formatUnixSeconds(t.updated_at)}
+                  </span>
+                  {t.resolution.orphaned && (
+                    <span
+                      className="kbc-review-rail__badge kbc-review-rail__badge--orphan"
+                      data-kbc-review-rail-orphan
+                    >
+                      orphaned
+                    </span>
+                  )}
+                  {t.resolved && (
+                    <span className="kbc-review-rail__badge kbc-review-rail__badge--resolved">resolved</span>
+                  )}
+                </div>
+                <Link
+                  to={threadHref(repo, reviewId, t, ps !== undefined ? String(ps) : undefined)}
+                  data-kbc-review-rail-open-diff
+                >
+                  Open in diff
+                </Link>
+                <PromoteToFinding repo={repo} reviewId={reviewId} thread={t} />
+              </li>
+            );
+          })}
         </ul>
       )}
       {/* ONE "Comment here" door regardless of empty/non-empty — always

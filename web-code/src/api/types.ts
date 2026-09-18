@@ -3775,15 +3775,32 @@ export type ReviewFindingResolution = FindingResolution;
 /// `POST /api/reviews/{id}/findings` body (addendum §E, LOOPBACK-ONLY) — one
 /// human-authored finding, code-anchored (no path-less/general finding —
 /// enforced client-side by the composer's copy, not a server 400).
+///
+/// V80-M5 (D6) — `category`/`location`/`title`/`rationale` are now optional
+/// on the WIRE (the server still requires them unless `from_annotation_id`
+/// is set — see `review_findings.rs`'s "Adoption" doc); `act`/`blocking`
+/// (findings v2's axes, previously hardcoded server-side) and
+/// `from_annotation_id` (ADOPT an existing top-level, review-bound comment
+/// as this finding's thread) are new. The pre-M5 composer
+/// (`DiffLineComposerV2`'s finding mode) is unaffected — it still sends
+/// every field it always did.
 export interface CreateManualFindingInput {
   slug?: string;
   severity: FindingSeverity;
-  category: string;
-  location: FindingLocation;
-  title: string;
-  rationale: string;
+  category?: string;
+  location?: FindingLocation;
+  title?: string;
+  rationale?: string;
   recommendation?: string;
   author?: string;
+  /** findings v2's speech-act axis. Defaults to `"issue"` server-side. */
+  act?: string;
+  /** The reviewer's own call — never derived from `severity`. */
+  blocking?: boolean;
+  /** V80-M5 (D6) — adopt this existing top-level, review-bound comment's
+   * annotation id as the finding's thread instead of anchoring a fresh
+   * one; `location` above is ignored when this is set. */
+  from_annotation_id?: string;
 }
 
 // ── PRR-U1 ── kb v0.39 "The PR Room," unit U1 (Review Room landing) ────────
