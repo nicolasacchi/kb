@@ -346,38 +346,13 @@
     flex: 0 0 36px;
   }
 
-  .kbc-rdiff__file-row {
-    display: flex;
-    align-items: center;
-    gap: var(--pad-2);
-    width: 100%;
-    min-height: 40px;
-    padding: 0 var(--pad-3);
-    border: none;
-    background: transparent;
-    color: var(--ink);
-    font: inherit;
-    font-size: var(--fs-sm);
-    text-align: left;
-    cursor: pointer;
-  }
-  .kbc-rdiff__file-row:hover,
-  .kbc-rdiff__file-row.is-current {
-    background: var(--bg-card-hi);
-  }
-  .kbc-rdiff__file-check {
-    flex: 0 0 20px;
-    display: grid;
-    place-items: center;
-    color: var(--accent);
-  }
-  .kbc-rdiff__file-row-path {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--font-mono);
+  /* V80-F1 — the review-diff mobile Files drawer dropped its own flat
+   * `.kbc-rdiff__file-row` list for the SAME `ReviewFileTree` the Files
+   * tab and the desktop map column render (`rowAttr="drawer"`); it only
+   * ever mounts inside `.kbc-drawer` (never the dense desktop tree), so
+   * scoping the touch-target bump there never affects the other homes. */
+  .kbc-drawer .kbc-ftree__row {
+    min-height: 44px;
   }
 
   /* ── SH.C2 — shared horizontal-scroll toolbar recipe ────────────────────
@@ -649,8 +624,7 @@
   }
   /* Tree rows + working-set chips. */
   .kbc-tree__row,
-  .kbc-ws-chip,
-  .kbc-rdiff__file-row {
+  .kbc-ws-chip {
     min-height: 40px;
   }
   /* Inspector rail's icon tabs + comments/annotations action buttons. */
