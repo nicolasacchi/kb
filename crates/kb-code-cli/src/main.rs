@@ -4542,12 +4542,22 @@ enum ReviewFindingsCmd {
     /// `add ID --severity S --category C --path P
     /// {--line N|--lines A-B|--whole-file} -m TITLE --rationale R
     /// [--recommendation ...][--slug ...][--evidence FILE
-    /// [--evidence-lang LANG]] [--json]` — `POST /api/reviews/{id}/findings`.
-    /// LOOPBACK-ONLY. `--evidence` reads FILE's bytes as the finding's
-    /// `evidence.source` (the same `FindingEvidenceBody{lang, source}`
-    /// shape `findings import` already sends); `--evidence-lang` tags it
-    /// (e.g. `ruby`) and requires `--evidence` (rejected standalone —
-    /// nothing to tag).
+    /// [--evidence-lang LANG]][--act A][--blocking] [--json]` — `POST
+    /// /api/reviews/{id}/findings`. LOOPBACK-ONLY. `--evidence` reads
+    /// FILE's bytes as the finding's `evidence.source` (the same
+    /// `FindingEvidenceBody{lang, source}` shape `findings import` already
+    /// sends); `--evidence-lang` tags it (e.g. `ruby`) and requires
+    /// `--evidence` (rejected standalone — nothing to tag). V80-M5 adds
+    /// `--from-comment ANNOTATION_ID` (D6): ADOPTS an existing top-level,
+    /// review-bound human comment (`kb-code review comments`'s own thread
+    /// ids) as this finding's thread instead of anchoring a fresh one —
+    /// when set, `--category`/`--path`/`-m`/`--rationale` are all OPTIONAL
+    /// (the server derives category `"other"`, title from the comment's
+    /// first line, rationale from its whole body, and the location from
+    /// its own anchor; see `review_findings.rs`'s "Adoption" doc). `--act`
+    /// (`issue`|`question`|`suggestion`|`nitpick`|`praise`|`note`|`todo`|
+    /// `chore`, default `issue`) and `--blocking` are findings v2's axes,
+    /// available on EITHER form.
     // V70-H1 — boxed (`Box<ReviewFindingsAddArgs>`): this variant's ~15
     // fields (id/severity/category/path/line/lines/whole_file/removed/
     // title/rationale/recommendation/slug/evidence/evidence_lang/daemon/
@@ -4573,18 +4583,22 @@ enum ReviewFindingsCmd {
 /// `kb-code review findings add ID --severity S --category C --path P
 /// {--line N|--lines A-B|--whole-file} -m TITLE --rationale R
 /// [--recommendation ...][--slug ...][--evidence FILE
-/// [--evidence-lang LANG]] [--json]` — `POST /api/reviews/{id}/findings`.
-/// LOOPBACK-ONLY. Boxed out of [`ReviewFindingsCmd::Add`] to fix
-/// clippy::large_enum_variant (V70-H1) — see that variant's doc.
+/// [--evidence-lang LANG]][--act A][--blocking] [--json]` — `POST
+/// /api/reviews/{id}/findings`. LOOPBACK-ONLY. Boxed out of
+/// [`ReviewFindingsCmd::Add`] to fix clippy::large_enum_variant (V70-H1) —
+/// see that variant's doc. V80-M5 (D6) adds `--from-comment`: when set,
+/// `--category`/`--path`/`-m`/`--rationale` are OPTIONAL
+/// (`required_unless_present = "from_comment"`) — the server derives them
+/// from the adopted comment (see [`ReviewFindingsCmd::Add`]'s own doc).
 #[derive(Args, Debug)]
 pub(crate) struct ReviewFindingsAddArgs {
     pub id: i64,
     #[arg(long)]
     pub severity: String,
-    #[arg(long)]
-    pub category: String,
-    #[arg(long)]
-    pub path: String,
+    #[arg(long, required_unless_present = "from_comment")]
+    pub category: Option<String>,
+    #[arg(long, required_unless_present = "from_comment")]
+    pub path: Option<String>,
     #[arg(long)]
     pub line: Option<i64>,
     /// `A-B` (inclusive).
@@ -4596,10 +4610,14 @@ pub(crate) struct ReviewFindingsAddArgs {
     /// the `old` side).
     #[arg(long)]
     pub removed: bool,
-    #[arg(short = 'm', long = "message")]
-    pub title: String,
-    #[arg(long)]
-    pub rationale: String,
+    #[arg(
+        short = 'm',
+        long = "message",
+        required_unless_present = "from_comment"
+    )]
+    pub title: Option<String>,
+    #[arg(long, required_unless_present = "from_comment")]
+    pub rationale: Option<String>,
     #[arg(long)]
     pub recommendation: Option<String>,
     #[arg(long)]
@@ -4612,6 +4630,22 @@ pub(crate) struct ReviewFindingsAddArgs {
     /// Requires `--evidence`.
     #[arg(long = "evidence-lang", requires = "evidence")]
     pub evidence_lang: Option<String>,
+    /// V80-M5 (D6) — ADOPT this existing top-level, review-bound human
+    /// comment's annotation id as the finding's thread, instead of
+    /// anchoring a fresh one at `--path`/`--line`. Mutually exclusive in
+    /// practice with `--path`/`--line`/`--lines`/`--whole-file` (given
+    /// alongside `--from-comment`, those are simply ignored — the server
+    /// derives the location from the comment's own anchor).
+    #[arg(long = "from-comment")]
+    pub from_comment: Option<String>,
+    /// findings v2's SPEECH-ACT axis
+    /// (`issue`|`question`|`suggestion`|`nitpick`|`praise`|`note`|`todo`|
+    /// `chore`). Defaults to `"issue"` server-side.
+    #[arg(long)]
+    pub act: Option<String>,
+    /// The reviewer's own call — never derived from `severity`.
+    #[arg(long)]
+    pub blocking: bool,
     #[arg(long, default_value = "http://127.0.0.1:4747")]
     pub daemon: String,
     #[arg(long)]
@@ -6101,6 +6135,9 @@ async fn run(cli: Cli) -> Result<()> {
                         slug,
                         evidence,
                         evidence_lang,
+                        from_comment,
+                        act,
+                        blocking,
                         daemon,
                         json,
                     } = *args;
@@ -6108,18 +6145,21 @@ async fn run(cli: Cli) -> Result<()> {
                         &daemon,
                         id,
                         &severity,
-                        &category,
-                        &path,
+                        category.as_deref(),
+                        path.as_deref(),
                         line,
                         lines.as_deref(),
                         whole_file,
                         removed,
-                        &title,
-                        &rationale,
+                        title.as_deref(),
+                        rationale.as_deref(),
                         recommendation.as_deref(),
                         slug.as_deref(),
                         evidence.as_deref(),
                         evidence_lang.as_deref(),
+                        from_comment.as_deref(),
+                        act.as_deref(),
+                        blocking,
                         json,
                     )
                     .await
@@ -17531,81 +17571,107 @@ fn format_finding_line(f: &serde_json::Value) -> String {
 /// `kb-code review findings add ID --severity S --category C --path P
 /// {--line N|--lines A-B|--whole-file} -m TITLE --rationale R
 /// [--recommendation ...] [--slug ...] [--evidence FILE
-/// [--evidence-lang LANG]] [--json]` — `POST /api/reviews/{id}/findings`
-/// (addendum §E — a single human-authored finding). LOOPBACK-ONLY.
-/// `rationale` is REQUIRED here (not bracketed optional, despite the
-/// milestone plan's own CLI sketch) because addendum §E's wire body lists
-/// `rationale` with no `?` — the same field `recommendation` DOES carry
-/// one; this CLI verb follows the stricter, authoritative route contract
-/// rather than the plan's shorthand. `--evidence` (V70-A3X) reads FILE as
-/// UTF-8 text and sends it as `evidence.source` — the SAME
-/// `FindingEvidenceBody{lang, source}` shape `findings import` already
-/// wires per-finding, now reachable for a manual `add` too.
+/// [--evidence-lang LANG]] [--act A] [--blocking] [--json]` — `POST
+/// /api/reviews/{id}/findings` (addendum §E — a single human-authored
+/// finding). LOOPBACK-ONLY. `rationale` is REQUIRED here (not bracketed
+/// optional, despite the milestone plan's own CLI sketch) because addendum
+/// §E's wire body lists `rationale` with no `?` — the same field
+/// `recommendation` DOES carry one; this CLI verb follows the stricter,
+/// authoritative route contract rather than the plan's shorthand.
+/// `--evidence` (V70-A3X) reads FILE as UTF-8 text and sends it as
+/// `evidence.source` — the SAME `FindingEvidenceBody{lang, source}` shape
+/// `findings import` already wires per-finding, now reachable for a manual
+/// `add` too.
+///
+/// V80-M5 (D6) — `from_comment` ADOPTS an existing top-level, review-bound
+/// comment as the finding's thread: when set, `category`/`path`/`title`/
+/// `rationale` are all optional (clap's own `required_unless_present`
+/// already enforces this at parse time — see [`ReviewFindingsAddArgs`]),
+/// the `--line`/`--lines`/`--whole-file` "pick exactly one" check is
+/// SKIPPED entirely (the server derives the location from the comment's
+/// anchor), and no `location` key is sent at all.
 #[allow(clippy::too_many_arguments)]
 async fn review_findings_add_cmd(
     daemon: &str,
     id: i64,
     severity: &str,
-    category: &str,
-    path: &str,
+    category: Option<&str>,
+    path: Option<&str>,
     line: Option<i64>,
     lines: Option<&str>,
     whole_file: bool,
     removed: bool,
-    title: &str,
-    rationale: &str,
+    title: Option<&str>,
+    rationale: Option<&str>,
     recommendation: Option<&str>,
     slug: Option<&str>,
     evidence: Option<&Path>,
     evidence_lang: Option<&str>,
+    from_comment: Option<&str>,
+    act: Option<&str>,
+    blocking: bool,
     json: bool,
 ) -> Result<()> {
-    let picked = [line.is_some(), lines.is_some(), whole_file]
-        .iter()
-        .filter(|b| **b)
-        .count();
-    if picked != 1 {
-        anyhow::bail!(
-            "review findings add: pass exactly one of --line N, --lines A-B, or --whole-file"
-        );
-    }
-    let (kind, lines_json): (&str, Option<Vec<i64>>) = if whole_file {
-        ("whole_file", None)
-    } else if let Some(n) = line {
-        ("single", Some(vec![n]))
+    let mut payload = serde_json::json!({ "severity": severity });
+    if let Some(from_comment) = from_comment {
+        payload["from_annotation_id"] = serde_json::json!(from_comment);
     } else {
-        let spec = lines.expect("checked above (exactly one of the three is set)");
-        let (a, b) = spec.split_once('-').ok_or_else(|| {
-            anyhow::anyhow!("review findings add: --lines must look like A-B, got {spec:?}")
-        })?;
-        let a: i64 = a
-            .trim()
-            .parse()
-            .with_context(|| format!("--lines start {a:?} is not a number"))?;
-        let b: i64 = b
-            .trim()
-            .parse()
-            .with_context(|| format!("--lines end {b:?} is not a number"))?;
-        ("range", Some(vec![a, b]))
-    };
-
-    let mut payload = serde_json::json!({
-        "severity": severity,
-        "category": category,
-        "location": {
-            "path": path,
+        let picked = [line.is_some(), lines.is_some(), whole_file]
+            .iter()
+            .filter(|b| **b)
+            .count();
+        if picked != 1 {
+            anyhow::bail!(
+                "review findings add: pass exactly one of --line N, --lines A-B, or \
+                 --whole-file (unless --from-comment adopts an existing comment)"
+            );
+        }
+        let (kind, lines_json): (&str, Option<Vec<i64>>) = if whole_file {
+            ("whole_file", None)
+        } else if let Some(n) = line {
+            ("single", Some(vec![n]))
+        } else {
+            let spec = lines.expect("checked above (exactly one of the three is set)");
+            let (a, b) = spec.split_once('-').ok_or_else(|| {
+                anyhow::anyhow!("review findings add: --lines must look like A-B, got {spec:?}")
+            })?;
+            let a: i64 = a
+                .trim()
+                .parse()
+                .with_context(|| format!("--lines start {a:?} is not a number"))?;
+            let b: i64 = b
+                .trim()
+                .parse()
+                .with_context(|| format!("--lines end {b:?} is not a number"))?;
+            ("range", Some(vec![a, b]))
+        };
+        payload["location"] = serde_json::json!({
+            "path": path.ok_or_else(|| anyhow::anyhow!("review findings add: --path is required"))?,
             "kind": kind,
             "lines": lines_json,
             "removed": removed,
-        },
-        "title": title,
-        "rationale": rationale,
-    });
+        });
+    }
+    if let Some(c) = category {
+        payload["category"] = serde_json::json!(c);
+    }
+    if let Some(t) = title {
+        payload["title"] = serde_json::json!(t);
+    }
+    if let Some(r) = rationale {
+        payload["rationale"] = serde_json::json!(r);
+    }
     if let Some(r) = recommendation {
         payload["recommendation"] = serde_json::json!(r);
     }
     if let Some(s) = slug {
         payload["slug"] = serde_json::json!(s);
+    }
+    if let Some(a) = act {
+        payload["act"] = serde_json::json!(a);
+    }
+    if blocking {
+        payload["blocking"] = serde_json::json!(true);
     }
     if let Some(evidence_path) = evidence {
         let source = std::fs::read_to_string(evidence_path).with_context(|| {
@@ -27221,13 +27287,13 @@ mod tests {
                 } = *args;
                 assert_eq!(id, 4);
                 assert_eq!(severity, "concern");
-                assert_eq!(category, "Style");
-                assert_eq!(path, "app/models/order.rb");
+                assert_eq!(category.as_deref(), Some("Style"));
+                assert_eq!(path.as_deref(), Some("app/models/order.rb"));
                 assert_eq!(line, Some(12));
                 assert!(lines.is_none());
                 assert!(!whole_file);
-                assert_eq!(title, "A finding title");
-                assert_eq!(rationale, "Because reasons.");
+                assert_eq!(title.as_deref(), Some("A finding title"));
+                assert_eq!(rationale.as_deref(), Some("Because reasons."));
             }
             other => panic!("expected Review{{Findings{{Add}}}}, got {other:?}"),
         }
@@ -27336,6 +27402,101 @@ mod tests {
         assert!(
             msg.contains("evidence"),
             "expected a clap `requires` error naming --evidence, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn review_findings_add_from_comment_needs_no_category_path_title_or_rationale() {
+        // V80-M5 (D6) — `--from-comment` alone (plus the always-required
+        // `--severity`) is a complete, parseable invocation; clap's
+        // `required_unless_present` is what makes this so.
+        match parse_cli(&[
+            "review",
+            "findings",
+            "add",
+            "4",
+            "--severity",
+            "concern",
+            "--from-comment",
+            "a1b2c3d4e5f6",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Findings {
+                        cmd: ReviewFindingsCmd::Add(args),
+                    },
+            } => {
+                assert_eq!(args.id, 4);
+                assert_eq!(args.severity, "concern");
+                assert_eq!(args.from_comment.as_deref(), Some("a1b2c3d4e5f6"));
+                assert!(args.category.is_none());
+                assert!(args.path.is_none());
+                assert!(args.title.is_none());
+                assert!(args.rationale.is_none());
+                assert!(!args.blocking);
+                assert!(args.act.is_none());
+            }
+            other => panic!("expected Review{{Findings{{Add}}}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn review_findings_add_from_comment_accepts_act_and_blocking() {
+        match parse_cli(&[
+            "review",
+            "findings",
+            "add",
+            "4",
+            "--severity",
+            "blocker",
+            "--from-comment",
+            "a1b2c3d4e5f6",
+            "--act",
+            "question",
+            "--blocking",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Findings {
+                        cmd: ReviewFindingsCmd::Add(args),
+                    },
+            } => {
+                assert_eq!(args.act.as_deref(), Some("question"));
+                assert!(args.blocking);
+            }
+            other => panic!("expected Review{{Findings{{Add}}}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn review_findings_add_without_from_comment_still_requires_category_path_title_rationale() {
+        // The pre-M5 contract is unchanged when `--from-comment` is absent
+        // — clap's `required_unless_present` still enforces every one of
+        // the four.
+        let err = parse_cli(&[
+            "review",
+            "findings",
+            "add",
+            "4",
+            "--severity",
+            "concern",
+            "--path",
+            "app/models/order.rb",
+            "--line",
+            "12",
+            "-m",
+            "A finding title",
+            "--rationale",
+            "Because reasons.",
+        ])
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("category"),
+            "expected a clap `required_unless_present` error naming --category, got: {err}"
         );
     }
 
