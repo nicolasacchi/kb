@@ -621,6 +621,7 @@ export default function ReviewDetail() {
       onOpenFilesTab={() => setCockpitView("files")}
       claims={claims}
       onFilterFindings={filterRailTo}
+      activeSeverityFilter={findingSevFilter}
     />
   ) : !compareMode && cockpitView === "map" ? (
     <ReviewMapPanel

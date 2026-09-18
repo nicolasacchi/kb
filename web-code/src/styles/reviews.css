@@ -97,22 +97,33 @@
 .kbc-reviews__row-title:hover {
   color: var(--accent);
 }
+/* V80-R3 — verdict/refs/progress/ann-badge/time, grouped onto one readable
+   sub-line below the title (was five loose flex children at 12px/11px —
+   the smallest text on the ~reviews list). All at `--fs-sm`, the row's own
+   floor. */
+.kbc-reviews__row-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  flex: 1 1 100%;
+}
 .kbc-reviews__row-refs {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-reviews__row-refs code {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   background: var(--bg);
   padding: 1px 5px;
   border-radius: 3px;
 }
 .kbc-reviews__row-meta,
 .kbc-reviews__row-time {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-reviews__badge {
@@ -217,11 +228,36 @@
   border-color: var(--accent-bor);
   color: var(--accent-soft);
 }
+/* V80-R3 — the Room hero's primary actions read as ONE button group (a
+   bounded, low-chrome toolbar) rather than a loose scatter of individually
+   bordered pills — visually distinct from the verdict row that follows it
+   (`.kbc-verdict`'s own top divider, below). Scoped to THIS container only
+   (`.kbc-review__actions .kbc-review__action`, never the bare
+   `.kbc-review__action` class) — that base class is shared by several
+   OTHER toolbars (`ReviewDiffToolbar`, `DocPanel`, `ReadingOrderPanel`,
+   `DraftsTray`, `TimelinePanel`) that are not wrapped in this container and
+   must keep their own independent-pill look untouched. */
 .kbc-review__actions {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 0;
   margin-top: 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.kbc-review__actions .kbc-review__action {
+  border: none;
+  border-right: 1px solid var(--rule);
+  border-radius: 0;
+}
+.kbc-review__actions .kbc-review__action:last-child {
+  border-right: none;
+}
+.kbc-review__actions .kbc-review__action.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
 }
 .kbc-review__body {
   display: grid;
@@ -1084,13 +1120,19 @@ a.kbc-review__action {
 
 /* --- V4.C4 — verdict bar + threads card -------------------------------- */
 
+/* V80-R3 — a dashed top rule sets the verdict row (`Comment · Approve ·
+   Request changes`, already its own joined segmented control below) apart
+   from the actions button group above it — the two now read as two
+   distinct clusters rather than one undifferentiated scatter of pills. */
 .kbc-verdict {
   position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--pad-2);
-  margin-top: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--rule);
 }
 
 .kbc-verdict__seg {
@@ -1154,7 +1196,7 @@ a.kbc-review__action {
 }
 
 .kbc-verdict-chip__stale {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   opacity: 0.75;
   margin-left: 2px;
 }
@@ -1217,7 +1259,22 @@ a.kbc-review__action {
   cursor: pointer;
 }
 
+/* V80-R3 — the thread filter row used to be ALL SEVEN chips (state +
+   both "awaiting" + GitHub) in one undifferentiated flex-wrap — the "Why"'s
+   third overcrowded chip row. `ReviewThreadsCard.tsx` now renders the
+   mutually-exclusive state segment (All/Open/Resolved/Orphaned, still this
+   class) and the "awaiting"/GitHub toggles (`.kbc-rthreads__awaiting`,
+   below) as two visually separate groups — same shared `filter` state,
+   same `data-kbc-review-threads-filter` hooks on every button, just
+   grouped for scanability. */
 .kbc-rthreads__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.kbc-rthreads__awaiting {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -1249,6 +1306,13 @@ a.kbc-review__action {
   margin: 0 0 4px;
   padding-left: 8px;
   border-left: 2px solid var(--rule);
+}
+
+/* V80-R3 — the thread's own BODY text reads at a step above its
+   author/time meta (which stays at the row's `--fs-sm`) — the "Why"'s
+   complaint that the rail is uniformly the smallest text on the site. */
+.kbc-rthreads__text {
+  font-size: var(--fs-md);
 }
 
 .kbc-rthreads__row:hover {

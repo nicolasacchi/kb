@@ -28,6 +28,9 @@ import GithubConversationCard from "./GithubConversationCard";
 // section kind) replace the bare `kbc-eyebrow` text rows. ──
 import ReportHero from "./ReportHero";
 import { SectionDecor } from "./RoomChips";
+// V80-R3 — type-only: threads the rail's current severity filter through to
+// the hero's segmented control (see `ReportHero.tsx`'s own doc).
+import type { FindingSeverityFilter } from "./ReviewThreadsCard";
 
 /// `GET /api/reviews/{id}/report`'s ONLY structural signal for "no report
 /// exists" is the literal `{report: null}` shape — every OTHER response is
@@ -86,6 +89,10 @@ export interface ReportPanelProps {
   /// so this panel and the rail can never disagree about what "filtered"
   /// means); absent in tests that render the panel standalone.
   onFilterFindings?: (severity: FindingSeverity) => void;
+  /// V80-R3 — the SAME lifted filter's current value, so the hero's
+  /// severity segment can show which one is active. Absent in standalone
+  /// tests, same posture as `onFilterFindings`.
+  activeSeverityFilter?: FindingSeverityFilter;
 }
 
 /// findings v2's `act` splits the list one more way: a `praise` finding is
@@ -96,7 +103,15 @@ export function isPraiseFinding(f: ReviewFinding): boolean {
   return findingAct(f) === "praise";
 }
 
-export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims, onFilterFindings }: ReportPanelProps) {
+export default function ReportPanel({
+  repo,
+  review,
+  ps,
+  onOpenFilesTab,
+  claims,
+  onFilterFindings,
+  activeSeverityFilter,
+}: ReportPanelProps) {
   const reportQ = useReviewReport(repo, review.id);
   const findingsQ = useReviewFindings(repo, review.id, { ps });
   const filesQ = useReviewFiles(repo, review.id, ps);
@@ -149,6 +164,7 @@ export default function ReportPanel({ repo, review, ps, onOpenFilesTab, claims, 
         findings={findings}
         files={files}
         onFilterFindings={(sev) => onFilterFindings?.(sev)}
+        activeSeverity={activeSeverityFilter}
       />
 
       <div className="kbc-verdicts" data-kbc-room-section="verdict">
