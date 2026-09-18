@@ -124,6 +124,24 @@ pub struct IdentityResponse {
     /// themselves; this field only lets a client render the capability
     /// (e.g. a Settings chip) without probing.
     pub remote_mutations: bool,
+    /// V80-F2 — the loopback pre-probe: whether a review-mutation route
+    /// family gated by [`crate::review_gate::review_mutations_gate`] would
+    /// admit *THIS* request, computed from the SAME peer classification
+    /// the gate itself runs (`kb_server::middleware::is_loopback_origin`
+    /// over `ConnectInfo` + `state.auth.trusted_proxies` — the identical
+    /// carve-out [`repos`]/`actions::actions_route`/`search::unified`
+    /// already take, see their docs for why a plain handler may read
+    /// `ConnectInfo` directly). `true` for a loopback caller unconditionally;
+    /// for a non-loopback caller it mirrors `remote_mutations` above
+    /// (`false` by default, `true` once `[review] remote_mutations` is
+    /// set) — the two fields therefore agree for a non-loopback caller and
+    /// `review_mutations_admitted` is strictly the more precise of the two
+    /// (`remote_mutations` alone can't tell a loopback caller from a
+    /// non-loopback one). Computed fresh per request — nothing here is
+    /// cached — so a Settings chip or a disabled-button caption built off
+    /// this field can never disagree with the gate's own 404/200 verdict
+    /// on the very next request from the same caller.
+    pub review_mutations_admitted: bool,
     /// V75-M1 — the Workspace re-key backfill's state: `pending` |
     /// `running` | `done` (`crate::rekey::state_label`).
     ///
@@ -140,7 +158,21 @@ pub struct IdentityResponse {
 
 /// `GET /api/identity` — under the `/api` nest, so it's behind
 /// `auth_bearer` (loopback bypasses per invariant #4).
-pub async fn identity(State(state): State<SharedState>) -> impl IntoResponse {
+///
+/// V80-F2 reads `ConnectInfo` directly (the same carve-out [`repos`]'s own
+/// doc names) purely to compute `review_mutations_admitted` — this route
+/// itself stays on the ordinary `auth_bearer` gate, never
+/// `review_mutations_gate`.
+pub async fn identity(
+    State(state): State<SharedState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let review_mutations_admitted = kb_server::middleware::is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.auth.trusted_proxies,
+    ) || state.review.remote_mutations;
     // Every configured repo was `upsert_repo`'d in `bind_and_spawn`, so
     // `id` is always `Some` in practice; `unwrap_or_default()` (zero
     // counts) is the defensive fallback rather than a panic if that ever
@@ -192,6 +224,7 @@ pub async fn identity(State(state): State<SharedState>) -> impl IntoResponse {
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: crate::store::schema_epoch(),
         remote_mutations: state.review.remote_mutations,
+        review_mutations_admitted,
         rekey: crate::rekey::state_label(&state.rekey),
         repos,
         started_at: state.started_at.to_rfc3339(),
