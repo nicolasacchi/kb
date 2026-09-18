@@ -36,7 +36,7 @@ export function inboxDotTone(hasReport: boolean | undefined, riskScore: number |
 }
 
 export interface InboxReasonChip {
-  key: "awaiting" | "unresolved" | "head_drift" | "verdict_stale";
+  key: "awaiting" | "unresolved" | "head_drift" | "verdict_stale" | "human_open";
   label: string;
 }
 
@@ -47,7 +47,11 @@ export interface InboxReasonChip {
 /// Order mirrors the score's own weighting: the ×2 term (awaiting-you)
 /// first, then unresolved findings, then the two "the room might be lying
 /// to you" staleness flags — see invariant "the room never lies" (design
-/// doc §0).
+/// doc §0). `human_open` (V80-M4) is LAST and separate from that ordering
+/// on purpose: unlike the four chips above it, it plays no part in
+/// `inbox_score` at all (surfaced-never-scored, the SAME posture kb's own
+/// memory-recall provenance fields take) — it names "a human raised
+/// something here that is still open," not a ranking input.
 export function inboxReasonChips(row: ReviewInboxRow): InboxReasonChip[] {
   const chips: InboxReasonChip[] = [];
   if (row.unanswered_questions > 0) {
@@ -67,6 +71,12 @@ export function inboxReasonChips(row: ReviewInboxRow): InboxReasonChip[] {
   }
   if (row.verdict_stale) {
     chips.push({ key: "verdict_stale", label: "verdict stale" });
+  }
+  if (row.human_open > 0) {
+    chips.push({
+      key: "human_open",
+      label: `🙋 ${row.human_open} from you`,
+    });
   }
   return chips;
 }
@@ -89,6 +99,8 @@ export interface InboxViewRow {
   hasReport: boolean;
   unresolvedFindings: number;
   unansweredQuestions: number;
+  /// V80-M4 — see `inboxReasonChips`'s own doc: surfaced-never-scored.
+  humanOpen: number;
   verdict: ReviewInboxRow["verdict"];
   verdictStale: boolean;
   prHeadDrift: boolean | null;
@@ -131,6 +143,7 @@ export function joinInboxRows(
       hasReport,
       unresolvedFindings: row.unresolved_findings,
       unansweredQuestions: row.unanswered_questions,
+      humanOpen: row.human_open,
       verdict: row.verdict,
       verdictStale: row.verdict_stale,
       prHeadDrift: row.pr_head_drift,
