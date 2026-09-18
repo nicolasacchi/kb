@@ -146,7 +146,7 @@
   border-top: 1px solid var(--rule);
 }
 .kbc-why__origin-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-mute);
@@ -163,7 +163,7 @@
   display: none; /* path already known from the why-panel head */
 }
 .kbc-why__origin-more {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   margin: 6px 0 0;
 }
@@ -182,7 +182,7 @@
 .kbc-line-history__note {
   font-weight: 400;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-line-history__list {
   list-style: none;
@@ -203,7 +203,7 @@
   color: var(--ink);
   padding: 8px 12px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-line-history__row:hover,
@@ -293,7 +293,7 @@
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--accent-fg);
-  font-size: 9px;
+  font-size: var(--fs-xs);
   display: grid;
   place-items: center;
 }
@@ -305,7 +305,7 @@
 .kbc-inspector__hint {
   padding: 16px;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 /* --- Cited-by strip (DCB W3.B, CitedBy.tsx) — always visible above the
@@ -326,7 +326,7 @@
   background: none;
   border: none;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   text-align: left;
 }
@@ -356,7 +356,7 @@
 }
 .kbc-inspector__citedby-title {
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   text-decoration: none;
 }
@@ -367,7 +367,7 @@ a.kbc-inspector__citedby-title:hover {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-inspector__citedby-group {
@@ -387,7 +387,7 @@ a.kbc-inspector__citedby-title:hover {
   flex: 0 0 auto;
   padding: 8px 10px;
   border-bottom: 1px solid var(--rule);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-framework__head {
   display: flex;
@@ -396,21 +396,21 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-framework__title {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .kbc-framework__absence {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-framework__group + .kbc-framework__group {
   margin-top: 8px;
 }
 .kbc-framework__group-title {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   margin-bottom: 2px;
 }
 .kbc-framework__list {
@@ -430,14 +430,14 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-framework__kind {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   color: var(--ink-dim);
 }
 .kbc-framework__link {
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   text-decoration: none;
   overflow-wrap: anywhere;
 }
@@ -448,11 +448,11 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-framework__plain {
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-framework__detail {
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 
 /* --- Diagnostics card (PRR-U9, design-addendum-2.md §D, DiagnosticsCard.tsx)
@@ -464,7 +464,7 @@ a.kbc-inspector__citedby-title:hover {
   flex: 0 0 auto;
   padding: 8px 10px;
   border-bottom: 1px solid var(--rule);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-diagnostics__head {
   display: flex;
@@ -475,20 +475,20 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-diagnostics__title {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .kbc-diagnostics__summary {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-diagnostics__hint,
 .kbc-diagnostics__reason,
 .kbc-diagnostics__clean {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-diagnostics__list {
   list-style: none;
@@ -526,18 +526,18 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-diagnostics__loc {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
 .kbc-diagnostics__message {
   flex: 1 1 auto;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 .kbc-diagnostics__meta {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 
@@ -554,7 +554,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-quickfixes__trigger:hover {
@@ -570,7 +570,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-quickfixes__reason {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-quickfixes__list {
   list-style: none;
@@ -602,10 +602,10 @@ a.kbc-inspector__citedby-title:hover {
   opacity: 0.6;
 }
 .kbc-quickfixes__title {
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-quickfixes__meta {
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
 
@@ -613,7 +613,7 @@ a.kbc-inspector__citedby-title:hover {
 
 .kbc-why {
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-why--loading {
   color: var(--ink-mute);
@@ -632,7 +632,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-why__confidence {
   padding: 1px 7px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -669,7 +669,7 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-why__meta {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-why__absence {
   color: var(--ink-mute);
@@ -693,14 +693,14 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-why__decision-kind {
   color: var(--ink-dim);
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .kbc-why__siblings {
   margin-bottom: 8px;
 }
 .kbc-why__siblings-title {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   margin-bottom: 4px;
 }
@@ -708,7 +708,7 @@ a.kbc-inspector__citedby-title:hover {
   margin: 0;
   padding-left: 16px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-why__memories {
@@ -716,7 +716,7 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-why__memories-title {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   margin-bottom: 4px;
 }
@@ -724,7 +724,7 @@ a.kbc-inspector__citedby-title:hover {
   margin: 0;
   padding-left: 16px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-why__timeline-toggle {
@@ -732,14 +732,14 @@ a.kbc-inspector__citedby-title:hover {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 8px;
   cursor: pointer;
 }
 .kbc-why__timeline-list {
   margin: 6px 0 0;
   padding-left: 16px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-why__open-session {
@@ -747,7 +747,7 @@ a.kbc-inspector__citedby-title:hover {
   margin-top: 10px;
   color: var(--accent-soft);
   text-decoration: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-why__open-session:hover {
   text-decoration: underline;
@@ -758,11 +758,11 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-story-timeline {
   padding: 10px 12px;
   border-top: 1px solid var(--rule);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-story-timeline__title {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   margin-bottom: 6px;
 }
@@ -784,7 +784,7 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-story-timeline__when {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
 }
 .kbc-story-timeline__label {
@@ -792,7 +792,7 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-story-timeline__meta {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 /* The attention-gap beat — a MUTED DIVIDER row, not a session row: dashed
    rules either side of the count + date-range label. */
@@ -802,7 +802,7 @@ a.kbc-inspector__citedby-title:hover {
   gap: 8px;
   color: var(--ink-mute);
   font-style: italic;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-story-timeline__gap::before,
 .kbc-story-timeline__gap::after {
@@ -838,7 +838,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 4px 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-annotations__body-input {
   flex: 1 1 auto;
@@ -847,7 +847,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 4px 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-sans);
   resize: vertical;
 }
@@ -857,7 +857,7 @@ a.kbc-inspector__citedby-title:hover {
   border: none;
   border-radius: var(--radius-sm);
   padding: 5px 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-annotations__save:disabled {
@@ -867,7 +867,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-annotations__empty {
   padding: 16px;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-annotations__list {
   list-style: none;
@@ -887,7 +887,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--accent-soft);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
   height: fit-content;
   cursor: pointer;
@@ -899,7 +899,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-annotations__text {
   margin: 0 0 4px;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   word-break: break-word;
 }
 .kbc-annotations__text--resolved {
@@ -911,12 +911,12 @@ a.kbc-inspector__citedby-title:hover {
   gap: 6px;
   align-items: center;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 .kbc-annotations__badge {
   padding: 0 5px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
 }
 .kbc-annotations__badge--stale {
@@ -938,7 +938,7 @@ a.kbc-inspector__citedby-title:hover {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -959,14 +959,14 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--accent-soft);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kbc-annotations__composer-options {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-annotations__symbol-toggle {
@@ -984,7 +984,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 3px 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 
 /* --- Phase D — intent chips (shared: reader panel items + the Commit/
@@ -994,7 +994,7 @@ a.kbc-inspector__citedby-title:hover {
   flex: 0 0 auto;
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   border: 1px solid transparent;
@@ -1042,7 +1042,7 @@ a.kbc-inspector__citedby-title:hover {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 9px;
   cursor: pointer;
 }
@@ -1087,12 +1087,12 @@ a.kbc-inspector__citedby-title:hover {
   padding-left: 8px;
 }
 .kbc-annotations__reply .kbc-annotations__text {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   margin: 0 0 2px;
 }
 .kbc-annotations__reply-meta {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 .kbc-annotations__reply-composer {
   display: flex;
@@ -1106,7 +1106,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 3px 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-annotations__reply-composer button {
   flex: 0 0 auto;
@@ -1115,7 +1115,7 @@ a.kbc-inspector__citedby-title:hover {
   border: none;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-annotations__reply-composer button:disabled {
@@ -1262,7 +1262,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 4px 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-sans);
   resize: vertical;
 }
@@ -1270,7 +1270,7 @@ a.kbc-inspector__citedby-title:hover {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   cursor: pointer;
 }
@@ -1281,7 +1281,7 @@ a.kbc-inspector__citedby-title:hover {
   border: none;
   border-radius: var(--radius-sm);
   padding: 5px 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-ws-notes__save:disabled {
@@ -1291,7 +1291,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-ws-notes__empty {
   padding: 16px;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-ws-notes__section {
   border-bottom: 1px solid var(--rule);
@@ -1299,7 +1299,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-ws-notes__section-head {
   margin: 0;
   padding: 6px 12px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--ink-dim);
@@ -1331,7 +1331,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--accent-soft);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
   height: fit-content;
   cursor: pointer;
@@ -1343,7 +1343,7 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-ws-notes__text {
   margin: 0 0 4px;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   word-break: break-word;
 }
 .kbc-ws-notes__text--resolved {
@@ -1355,12 +1355,12 @@ a.kbc-inspector__citedby-title:hover {
   gap: 6px;
   align-items: center;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 .kbc-ws-notes__badge {
   padding: 0 5px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   background: color-mix(in srgb, var(--green) 20%, transparent);
   color: var(--green);
@@ -1376,7 +1376,7 @@ a.kbc-inspector__citedby-title:hover {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -1397,12 +1397,12 @@ a.kbc-inspector__citedby-title:hover {
   padding-left: 8px;
 }
 .kbc-ws-notes__reply .kbc-ws-notes__text {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   margin: 0 0 2px;
 }
 .kbc-ws-notes__reply-meta {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 .kbc-ws-notes__reply-composer {
   display: flex;
@@ -1416,7 +1416,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 3px 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-ws-notes__reply-composer button {
   flex: 0 0 auto;
@@ -1425,7 +1425,7 @@ a.kbc-inspector__citedby-title:hover {
   border: none;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-ws-notes__reply-composer button:disabled {
