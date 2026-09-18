@@ -4,6 +4,7 @@ import type { StackLayer } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import FileChangeRow from "../components/history/FileChangeRow";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { useStacks, useStacksLayerDiff } from "../hooks/useStacks";
 import { shortSha } from "../lib/format";
 import {
@@ -70,13 +71,15 @@ export default function Stacks() {
 
   return (
     <div className="kbc-stacks" id="main" data-kbc-stacks>
-      <header className="kbc-stacks__head">
-        <h1 className="kbc-stacks__title">Stacks — {repo}</h1>
-        <p className="kbc-stacks__hint" data-kbc-stacks-hint>
-          Dependent-branch stacks detected from local refs. Each layer shows its
-          incremental diff against its own base — not the whole chain vs main.
-        </p>
-      </header>
+      <PageHeader
+        title={`Stacks — ${repo}`}
+        lede={
+          <span data-kbc-stacks-hint>
+            Dependent-branch stacks detected from local refs. Each layer shows its
+            incremental diff against its own base — not the whole chain vs main.
+          </span>
+        }
+      />
 
       <div className="kbc-stacks__filters">
         <label className="kbc-stacks__all-lab">
