@@ -1123,6 +1123,121 @@ a.kbc-inspector__citedby-title:hover {
   cursor: default;
 }
 
+/* --- V80-M2 — the "Review" selector (composer + inline bind/rebind
+ * picker, `ReviewBindSelector.tsx`), the card's binding chip, and the
+ * rail's Review-tab thread list (`ReviewFileThreadsPanel.tsx`) ---------- */
+
+.kbc-annotations__review-select {
+  margin-bottom: 6px;
+}
+.kbc-annotations__review-picker {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  padding: 3px 6px;
+  font-size: 11px;
+}
+.kbc-annotations__review-hint {
+  margin-top: 3px;
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.kbc-annotations__review-chip {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-soft);
+  font-size: 10px;
+  text-decoration: none;
+}
+.kbc-annotations__review-chip:hover {
+  text-decoration: underline;
+}
+.kbc-annotations__review-picker-inline {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--rule);
+}
+.kbc-annotations__review-picker-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.kbc-annotations__review-picker-actions button {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.kbc-annotations__review-picker-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kbc-review-rail__caption {
+  padding: 8px 12px;
+  color: var(--ink-mute);
+  font-size: 11px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-review-rail__threads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kbc-review-rail__thread {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.kbc-review-rail__thread.is-resolved .kbc-review-rail__body {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+}
+.kbc-review-rail__body {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 12px;
+  word-break: break-word;
+}
+.kbc-review-rail__meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-dim);
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+.kbc-review-rail__badge {
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.kbc-review-rail__badge--orphan {
+  background: color-mix(in srgb, var(--warn) 25%, transparent);
+  color: var(--warn);
+}
+.kbc-review-rail__badge--resolved {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--green);
+}
+.kbc-review-rail__compose {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 /* --- V70-A10 ("Workspaces v0") — the rail's "Workspace notes" section ---
  * Deliberately mirrors `.kbc-annotations__*` field-for-field (same
  * composer/thread/reply shape, a note IS an annotation) rather than a

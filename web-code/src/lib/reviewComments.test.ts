@@ -6,6 +6,7 @@ import {
   commentSide,
   findThread,
   indexThreads,
+  reviewBindHintText,
   threadLineKey,
 } from "./reviewComments";
 
@@ -264,5 +265,36 @@ describe("buildAskAgentPayload", () => {
     expect(payload).not.toHaveProperty("line");
     expect(payload).not.toHaveProperty("side");
     expect(payload).not.toHaveProperty("ps");
+  });
+});
+
+// ── V80-M2 — the composer's "Review" selector hint line ──
+describe("reviewBindHintText", () => {
+  it("is null when no review is selected", () => {
+    expect(reviewBindHintText(null, undefined, null, null)).toBeNull();
+    expect(reviewBindHintText(null, "e2e review", true, 1)).toBeNull();
+  });
+
+  it("names the Room by title once a review is selected and in-diff isn't positively false", () => {
+    expect(reviewBindHintText(9, "e2e review", true, 1)).toBe("will appear in the Room of e2e review");
+    // Still loading / not yet known — defaults to the same reassurance
+    // rather than a premature (possibly wrong) "not in the diff" claim.
+    expect(reviewBindHintText(9, "e2e review", null, null)).toBe("will appear in the Room of e2e review");
+  });
+
+  it("falls back to Review #<id> when the title is unknown", () => {
+    expect(reviewBindHintText(9, undefined, true, 1)).toBe("will appear in the Room of Review #9");
+  });
+
+  it("names the anchoring ps once in_diff is positively false", () => {
+    expect(reviewBindHintText(9, "e2e review", false, 3)).toBe(
+      "not in this review's diff — anchors to ps 3's tip",
+    );
+  });
+
+  it("degrades the ps to '?' rather than guessing when it isn't known either", () => {
+    expect(reviewBindHintText(9, "e2e review", false, null)).toBe(
+      "not in this review's diff — anchors to ps ?'s tip",
+    );
   });
 });
