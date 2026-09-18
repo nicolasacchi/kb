@@ -87,16 +87,23 @@ describe("inboxReasonChips", () => {
     expect(inboxReasonChips(inboxRow())).toEqual([]);
   });
 
-  it("orders awaiting-you first, then unresolved findings, then drift, then verdict-stale", () => {
+  it("orders awaiting-you first, then unresolved findings, then drift, then verdict-stale, then human_open LAST", () => {
     const chips = inboxReasonChips(
       inboxRow({
         unanswered_questions: 1,
         unresolved_findings: 2,
         pr_head_drift: true,
         verdict_stale: true,
+        human_open: 1,
       }),
     );
-    expect(chips.map((c) => c.key)).toEqual(["awaiting", "unresolved", "head_drift", "verdict_stale"]);
+    expect(chips.map((c) => c.key)).toEqual([
+      "awaiting",
+      "unresolved",
+      "head_drift",
+      "verdict_stale",
+      "human_open",
+    ]);
   });
 
   it("singularizes 'finding' at exactly 1", () => {
@@ -109,8 +116,16 @@ describe("inboxReasonChips", () => {
   });
 
   it("never emits a chip for a false/zero term", () => {
-    const chips = inboxReasonChips(inboxRow({ pr_head_drift: false, verdict_stale: false }));
-    expect(chips.some((c) => c.key === "head_drift" || c.key === "verdict_stale")).toBe(false);
+    const chips = inboxReasonChips(
+      inboxRow({ pr_head_drift: false, verdict_stale: false, human_open: 0 }),
+    );
+    expect(chips.some((c) => c.key === "head_drift" || c.key === "verdict_stale" || c.key === "human_open")).toBe(
+      false,
+    );
+  });
+
+  it("renders the human_open count verbatim from the row's own term (V80-M4)", () => {
+    expect(inboxReasonChips(inboxRow({ human_open: 2 }))[0]?.label).toBe("🙋 2 from you");
   });
 });
 
@@ -156,6 +171,11 @@ describe("joinInboxRows", () => {
       [],
     );
     expect(rows.map((r) => r.reviewId)).toEqual([3, 1, 2]);
+  });
+
+  it("carries human_open verbatim (V80-M4)", () => {
+    const rows = joinInboxRows([inboxRow({ review_id: 4, human_open: 5 })], []);
+    expect(rows[0]).toMatchObject({ humanOpen: 5 });
   });
 });
 
