@@ -3811,6 +3811,10 @@ export interface ReviewInboxRow {
   title: string | null;
   unresolved_findings: number;
   unanswered_questions: number;
+  /** V80-M4 — open (unresolved) top-level threads opened by a human, any
+   * intent; see `review_inbox.rs`'s module doc for the `human_open` vs.
+   * `unanswered_questions` split. */
+  human_open: number;
   verdict: ReviewVerdict | null;
   verdict_stale: boolean;
   pr_head_drift: boolean | null;
