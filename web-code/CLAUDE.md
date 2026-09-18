@@ -1060,14 +1060,56 @@ Files tab and the review-diff map column render the SAME
 `ReviewFileTree` (status sections of folder trees — added / modified /
 renamed / deleted — because a 38-file review already clustered into
 three status groups; mixing them into one folder walk would hide
-"deleted 15"). Kind icons come from the cached `GET /api/syntax`
-registry. Paths are middle-truncated, never a leading ellipsis. Click /
-Enter on a file writes `?file=` and opens that file's diff in the center
-on its first hunk; `]f`/`[f` stay in sync with the tree cursor. The map
-pane is resized with the Desk's `react-resizable-panels` mechanism (no
-second drag implementation, no `autoSaveId`); `g =` / a separator
-double-click resets the width. Tree keys: `g f` focus, `z f` toggle
-folder, `z m` collapse all.
+"deleted 15"). Kind icons are real icons (`components/icons` via
+`lib/reviewFileTree.ts`'s `fileIconKind`, V80-F1 — a closed `lang` →
+`"doc"|"shell"|"config"|"generic"` mapping over the cached `GET
+/api/syntax` registry's `lang`, never a 2-letter mark). Paths are
+middle-truncated, never a leading ellipsis. On the MAP column (this
+page's own tree), click/Enter writes `?file=` and opens that file's diff
+in the center on its first hunk, staying on this page; `]f`/`[f` stay in
+sync with the tree cursor. The map pane is resized with the Desk's
+`react-resizable-panels` mechanism (no second drag implementation, no
+`autoSaveId`); `g =` / a separator double-click resets the width. Tree
+keys: `g f` focus, `z f` toggle folder, `z m` collapse all. V80-F1 gave
+`ReviewFileTree` a third `rowAttr="drawer"` shape
+(`data-kbc-rdiff-drawer-file`) so this page's own MOBILE files drawer
+(`routes/reviewDiff/ReviewDiffRail.tsx`, ≤860px, replacing a flat list)
+is a THIRD home for the same tree, sharing `OutsideDiffChapter` (factored
+out of `ReviewMapColumn.tsx`, still rendered by the map column too) for
+the "outside the diff" group — a tap on an already-`ordered` row still
+just scrolls+closes (no navigation, mobile.spec.ts's own contract), a tap
+on an All-files-only or outside-the-diff row falls through to the SAME
+single-file-focus navigate the map column's own click uses, since there
+is no rendered section to scroll to. **`?files=all`'s own toggle is
+`FilesModeToggle` (same file, same export)** — V80-R4 (landed after this
+paragraph was first drafted, this unit rebased onto it) moved the
+DESKTOP copy out of the map column entirely, into `ReviewDiffToolbar`'s
+View cluster (reachable with the map closed — it also widens the jump
+palette and the outside-the-diff group); `FilesModeToggle` now has
+exactly one caller, the mobile drawer, since the toolbar's copy is
+unreachable while the drawer is open (`.kbc-drawer-scrim` covers the
+full viewport and closes the drawer on any outside click, so the
+toolbar sits behind it, not beside it).
+
+**The cockpit Files tab's OWN click NAVIGATES (V80-F1) — it does not
+share the map column's in-page `?file=` behavior above.** Click/Enter on
+a `FilesPanel` row now calls `reviewDiffHref(repo, reviewId, path, {ps})`
+and leaves the Room entirely, landing on this page at that file's first
+hunk — the retired alternative was an inline diff expanded UNDER the
+picked row (`ReviewAwareDiff`, `components/reviews/ReviewFileItem.tsx`),
+kept ONLY for the findings rail's per-file-group "open file" quick action
+(`ReviewThreadsCard`'s path buttons, via `ReviewDetail.tsx`'s pre-existing
+`expanded`/`openFile` state — decoupled from `FilesPanel`'s own `onPick`,
+which now builds its navigate locally) — "keep whatever other surface
+still uses it" is that one surface, not a hedge nobody exercises. Two
+real, load-bearing consequences of landing on the real page rather than
+the old bare preview: a compose here DRAFTS (the section above's own
+rule) rather than posting straight to the server, and diff-LINE syntax
+highlighting — which `FileDiffBody` never wired up (`useDiffHighlights`
+was called by the now-retired `ReviewAwareDiff` only) — had to be added
+here too (same hook, additive `highlights` prop `DiffFile` already
+declared but nothing populated), or a Files-tab click would have quietly
+lost a feature the old surface had.
 
 **A file outside the diff renders whole at the tip (V80-M1).** A zero-
 textual-hunk file used to bail with a bare "No textual difference" and
