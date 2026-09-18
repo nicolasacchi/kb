@@ -15,6 +15,7 @@ mod common;
 /// env-mutating test must lock THIS mutex, never a module-local one.
 pub(crate) static ENV_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+mod annotate_bind;
 mod local_review_routes;
 mod remote_mutations_gate;
 mod review_analytics;
