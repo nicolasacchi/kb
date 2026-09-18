@@ -50,6 +50,11 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  /* V80-R0 — this is the app's one shared chip primitive (see the
+   * file-header note above: promote-when-needed). Numeric badges/chips
+   * elsewhere are per-page; this base gets tabular figures so any chip
+   * built on it never jitters when its digits change. */
+  font-variant-numeric: tabular-nums;
 }
 .kbc-chip--draft {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
@@ -1185,15 +1190,20 @@
    findings rail, type scale, section decorators, chips with icons, the
    Report hero. Appended — never edits a rule above. Token discipline:
    colours are EXISTING tokens only (each chip keys off ONE token via
-   `--kbc-room-chip-color`); the Room's prose scale is a small set of local
-   size custom properties, declared once here. ── */
+   `--kbc-room-chip-color`).
+   V80-R0: the Room's prose scale used to be a private set of `--room-fs-*`
+   size custom properties (body 15 / small 13 / title 17 / hero 26),
+   declared once here — retired in favour of the GLOBAL ramp
+   (`--fs-body`/`--fs-sm`/`--fs-title`/`--fs-hero`, tokens.css), which is
+   the SAME size or larger at every step (title 17→20, hero 26→28; body
+   and small are unchanged at 15/13) and now also respects
+   `[data-density="compact"]` app-wide instead of the Room's own separate
+   density store (`lib/reviewRoom.ts`'s retired `ROOM_DENSITY_STORAGE_KEY`,
+   see `routes/ReviewDetail.tsx`). `--room-line` (the Room's own
+   line-height, 1.62 comfortable / 1.45 compact below) is UNCHANGED — it
+   was not one of the four vars this unit's brief named for retirement. ── */
 
 .kbc-review {
-  /* the Room's prose scale (body ≥ 15px — the readability requirement) */
-  --room-fs-body: 15px;
-  --room-fs-small: 13px;
-  --room-fs-title: 17px;
-  --room-fs-hero: 26px;
   --room-line: 1.62;
 }
 
@@ -1312,14 +1322,14 @@
   border: 1px solid color-mix(in srgb, var(--kbc-room-chip-color, var(--ink-dim)) 40%, transparent);
   background: color-mix(in srgb, var(--kbc-room-chip-color, var(--ink-dim)) 13%, transparent);
   color: var(--kbc-room-chip-color, var(--ink-dim));
-  font-size: var(--room-fs-small);
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
   max-width: 100%;
 }
 .kbc-room-chip--btn {
   font: inherit;
-  font-size: var(--room-fs-small);
+  font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
 }
@@ -1341,7 +1351,7 @@
   margin: 30px 0 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--rule);
-  font-size: var(--room-fs-title);
+  font-size: var(--fs-title);
   font-weight: 650;
   color: var(--ink);
 }
@@ -1359,7 +1369,7 @@
 }
 .kbc-room-section__n {
   margin-left: auto;
-  font-size: var(--room-fs-small);
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   font-weight: 600;
 }
@@ -1392,7 +1402,7 @@
 }
 .kbc-room-hero__title {
   margin: 0 0 8px;
-  font-size: var(--room-fs-hero);
+  font-size: var(--fs-hero);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -1418,7 +1428,7 @@
 }
 .kbc-room-hero__lede {
   margin: 14px 0 0;
-  font-size: var(--room-fs-title);
+  font-size: var(--fs-title);
   line-height: 1.5;
   color: var(--ink);
   max-width: 78ch;
@@ -1431,7 +1441,7 @@
   padding-top: 10px;
   border-top: 1px dashed var(--rule);
   color: var(--accent-soft);
-  font-size: var(--room-fs-small);
+  font-size: var(--fs-sm);
 }
 .kbc-room-hero__session {
   color: var(--blue);
@@ -1453,7 +1463,7 @@
 
 /* ── type scale + prose spacing on the Room's body ── */
 .kbc-review__main {
-  font-size: var(--room-fs-body);
+  font-size: var(--fs-body);
   line-height: var(--room-line);
 }
 .kbc-review__main p {
@@ -1481,21 +1491,21 @@
   margin-bottom: 4px;
 }
 .kbc-finding__ti {
-  font-size: var(--room-fs-title);
+  font-size: var(--fs-title);
   font-weight: 650;
   margin: 0 0 6px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 .kbc-finding__ra {
-  font-size: var(--room-fs-body);
+  font-size: var(--fs-body);
 }
 .kbc-finding__rc {
   border-left: 3px solid color-mix(in srgb, var(--accent-soft) 55%, transparent);
   background: color-mix(in srgb, var(--accent-soft) 6%, transparent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 8px 12px;
-  font-size: var(--room-fs-body);
+  font-size: var(--fs-body);
 }
 .kbc-finding__rc::before {
   content: none; /* the callout's own left bar + wash replaces the "→ " glyph */
@@ -1525,7 +1535,7 @@
   gap: 1px;
 }
 .kbc-frow .slug {
-  font-size: var(--room-fs-small);
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 .kbc-frow .loc {
@@ -1542,11 +1552,14 @@
   background: var(--bg-panel);
 }
 
-/* ── density: compact tightens the Room's spacing, never its facts ── */
+/* ── density: compact tightens the Room's spacing, never its facts ──
+   V80-R0: the `--room-fs-*` overrides here are retired — compact type
+   sizing now comes from the GLOBAL `:root[data-density="compact"]` ramp
+   (tokens.css), which this class's presence now always agrees with (both
+   are driven by the same `density` state, `routes/ReviewDetail.tsx`).
+   `--room-line` stays local: it was never one of the four vars named for
+   retirement. ── */
 .kbc-review--compact {
-  --room-fs-body: 14px;
-  --room-fs-title: 15px;
-  --room-fs-hero: 22px;
   --room-line: 1.45;
 }
 .kbc-review--compact .kbc-finding {

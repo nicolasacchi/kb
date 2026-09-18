@@ -12,6 +12,18 @@
  * carried by LINE STYLE (`--kbc-trust-style`, V70-A7's Lane Budget), never by
  * hue, which is why the scent card and the peek widget reuse the shared
  * `.kbc-trust-*` classes instead of inventing tints.
+ *
+ * V80-R0: every `font-size` below was a raw rem literal (0.66rem–0.8rem,
+ * off the OLD caption-scale ramp, predating the ramp rebase) instead of a
+ * `--fs-*` token; now bucketed onto the ramp (`--fs-sm` for the
+ * 0.74–0.8rem tier, `--fs-xs` for 0.66–0.72rem), so this file actually
+ * moves with the ramp like every other page. `--space-*`/`--surface`/
+ * `--border`/`--fg`/`--z-hint` etc. are a SEPARATE pre-existing token
+ * layer this file uses with inline fallbacks (`var(--space-2, 8px)`) —
+ * they resolve to their fallback today since nothing defines them in
+ * `tokens.css`, which is why they read fine visually despite not being
+ * real tokens. Out of this unit's scope (only raw-rem FONT SIZES were
+ * briefed); left untouched.
  */
 
 /* ── the scent card (the Ramp's hover rung) ───────────────────────────── */
@@ -27,7 +39,7 @@
   border-radius: var(--radius-2, 8px);
   box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
   padding: var(--space-2, 8px) var(--space-3, 12px);
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   pointer-events: none;
 }
 
@@ -48,7 +60,7 @@
 
 .kbc-scent__where {
   font-family: var(--font-mono, monospace);
-  font-size: 0.76rem;
+  font-size: var(--fs-sm);
   color: var(--fg-subtle);
   overflow-wrap: anywhere;
 }
@@ -56,7 +68,7 @@
 .kbc-scent__sig {
   display: block;
   font-family: var(--font-mono, monospace);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   white-space: pre-wrap;
   margin-bottom: var(--space-2, 8px);
 }
@@ -73,11 +85,11 @@
 
 .kbc-scent__label {
   color: var(--fg-subtle);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
 }
 
 .kbc-scent__value {
-  font-size: 0.74rem;
+  font-size: var(--fs-sm);
 }
 
 /* An ABSENT field is dimmed and italic — it still says its name, because a
@@ -93,7 +105,7 @@
   padding-top: var(--space-1, 4px);
   border-top: 1px solid var(--border-subtle, var(--border));
   color: var(--fg-subtle);
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
 }
 
 /* ── per-pane history arrows + the pane chrome strip ──────────────────── */
@@ -105,7 +117,7 @@
   padding: 2px var(--space-2, 8px);
   border-bottom: 1px solid var(--border-subtle, var(--border));
   min-height: 22px;
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
 }
 
 /* The provisional pane's LOUD signal: a coloured left edge, not italics.
@@ -168,7 +180,7 @@
 
 .kbc-panehist__count {
   font-variant-numeric: tabular-nums;
-  font-size: 0.66rem;
+  font-size: var(--fs-xs);
 }
 
 /* ── the trail origin chip ────────────────────────────────────────────── */
@@ -186,7 +198,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1, 4px);
-  font-size: 0.74rem;
+  font-size: var(--fs-sm);
 }
 
 .kbc-trailchip__back {
@@ -204,12 +216,12 @@
 
 .kbc-trailchip__key {
   color: var(--fg-subtle);
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
 }
 
 .kbc-trailchip__tabs {
   color: var(--fg-subtle);
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
 }
 
 /* ── the inline peek block widget ─────────────────────────────────────── */
@@ -336,7 +348,7 @@
 .kbc-hovertip {
   max-width: 460px;
   padding: var(--space-2, 8px);
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
 }
 
 .kbc-hovertip__sig {
@@ -352,7 +364,7 @@
   gap: var(--space-2, 8px);
   margin-top: var(--space-1, 4px);
   color: var(--fg-subtle);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
 }
 
 .kbc-hovertip__trust {
@@ -369,7 +381,7 @@
 .kbc-hovertip__empty {
   margin-top: var(--space-1, 4px);
   color: var(--fg-subtle);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
 }
 
 .kbc-hovertip__empty {
@@ -381,7 +393,7 @@
   padding-top: 2px;
   border-top: 1px solid var(--border-subtle, var(--border));
   color: var(--fg-subtle);
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
 }
 
 /* ── Recent Locations: code rows + the `via` filter chips ─────────────── */
@@ -401,7 +413,7 @@
   color: var(--fg-subtle);
   cursor: pointer;
   font: inherit;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0 var(--space-2, 8px);
 }
 
@@ -412,13 +424,13 @@
 
 .kbc-recent-locs__via {
   color: var(--fg-subtle);
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   margin-left: var(--space-2, 8px);
 }
 
 .kbc-recent-locs__snippet {
   font-family: var(--font-mono, monospace);
-  font-size: 0.74rem;
+  font-size: var(--fs-sm);
   color: var(--fg-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
