@@ -702,7 +702,8 @@ enum Cmd {
     /// `LINE`'s CURRENT content (W4.6; D3 adds the kind flags + intent);
     /// OR one of the thread/lifecycle subcommands below, acting on an
     /// EXISTING annotation by id (D3). `POST`/`PATCH`/`DELETE
-    /// /api/annotations[/{id}]`. Daemon-only.
+    /// /api/annotations[/{id}]`; V80-M0 adds `bind`/`unbind`
+    /// (`PUT`/`DELETE /api/annotations/{id}/review`). Daemon-only.
     Annotate {
         /// `PATH:LINE` (1-based), e.g. `src/lib.rs:42`. Required for the
         /// create form; omitted when a lifecycle subcommand (below) is
@@ -2728,6 +2729,38 @@ enum AnnotateCmd {
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code annotate bind <ID> --review N [--ps N] [--side old|new]`
+    /// — V80-M0: `PUT /api/annotations/{id}/review`. Binds (or REBINDS) an
+    /// EXISTING top-level annotation onto a review — lets a plain
+    /// working-tree note, or one you've moved between reviews, show up in
+    /// that review's Room beside the agent's findings. `--ps` defaults to
+    /// the review's latest patchset; `--side` defaults to `new`. A 409
+    /// names a closed review (binding an existing comment onto a settled
+    /// review is refused, unlike create); a reply's own 400 names
+    /// `parent_id` (bind its parent instead).
+    Bind {
+        id: String,
+        #[arg(long)]
+        review: i64,
+        #[arg(long)]
+        ps: Option<i64>,
+        #[arg(long)]
+        side: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// `kb-code annotate unbind <ID>` — V80-M0: `DELETE
+    /// /api/annotations/{id}/review`. Clears the review scope. Idempotent
+    /// — an already-unbound annotation still 200s.
+    Unbind {
+        id: String,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -5329,6 +5362,26 @@ async fn run(cli: Cli) -> Result<()> {
                 daemon,
                 json,
             }) => annotate_delete_cmd(&daemon, &id, yes, json).await,
+            Some(AnnotateCmd::Bind {
+                id,
+                review,
+                ps,
+                side,
+                daemon,
+                json,
+            }) => {
+                if let Some(s) = side.as_deref() {
+                    if s != "new" && s != "old" {
+                        anyhow::bail!(
+                            "kb-code annotate bind: --side must be `new` or `old`, got {s:?}"
+                        );
+                    }
+                }
+                annotate_bind_cmd(&daemon, &id, review, ps, side.as_deref(), json).await
+            }
+            Some(AnnotateCmd::Unbind { id, daemon, json }) => {
+                annotate_unbind_cmd(&daemon, &id, json).await
+            }
             Some(AnnotateCmd::Batch {
                 file,
                 repo,
@@ -5366,7 +5419,7 @@ async fn run(cli: Cli) -> Result<()> {
                 let target = target.ok_or_else(|| {
                     anyhow::anyhow!(
                         "kb-code annotate: pass PATH:LINE, or a lifecycle subcommand \
-                         (reply|resolve|reopen|edit|set-intent|delete|batch|watch)"
+                         (reply|resolve|reopen|edit|set-intent|delete|bind|unbind|batch|watch)"
                     )
                 })?;
                 let message = message
@@ -14477,6 +14530,84 @@ async fn annotate_delete_cmd(daemon: &str, id: &str, yes: bool, json: bool) -> R
     ))
 }
 
+/// `kb-code annotate bind <ID> --review N [--ps N] [--side old|new]` —
+/// V80-M0: `PUT /api/annotations/{id}/review`. `--side` is client-side
+/// vocab-gated (same daemon check, caught before the round trip — the
+/// `annotate <PATH>:<LINE> --side` create form's own convention); the
+/// daemon still validates existence/repo-match/ps/open-state.
+async fn annotate_bind_cmd(
+    daemon: &str,
+    id: &str,
+    review: i64,
+    ps: Option<i64>,
+    side: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let mut payload = serde_json::json!({ "review_id": review });
+    if let Some(n) = ps {
+        payload["ps"] = serde_json::json!(n);
+    }
+    if let Some(s) = side {
+        payload["side"] = serde_json::json!(s);
+    }
+    let client = http_client()?;
+    let (status, body) = put_json_raw(
+        &client,
+        daemon,
+        &format!("/api/annotations/{id}/review"),
+        &payload,
+    )
+    .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    }
+    if !status.is_success() {
+        return Err(annotation_api_error(
+            &format!("bind annotation {id:?} to review {review}"),
+            status,
+            &body,
+        ));
+    }
+    if !json {
+        let ps_out = body["ps_number"]
+            .as_i64()
+            .map_or("?".into(), |n| n.to_string());
+        let side_out = body["side"].as_str().unwrap_or("new");
+        println!("✓ bound {id} to review {review} ps{ps_out} side={side_out}");
+        print_annotation_row(&body, "");
+    }
+    Ok(())
+}
+
+/// `kb-code annotate unbind <ID>` — V80-M0: `DELETE
+/// /api/annotations/{id}/review`. Idempotent — always 200s with the
+/// (possibly already-unscoped) view.
+async fn annotate_unbind_cmd(daemon: &str, id: &str, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let (status, body) = delete_json_raw(
+        &client,
+        daemon,
+        &format!("/api/annotations/{id}/review"),
+        &[],
+    )
+    .await?;
+    if json && !body.is_null() {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    }
+    if !status.is_success() {
+        return Err(annotation_api_error(
+            &format!("unbind annotation {id:?} from its review"),
+            status,
+            &body,
+        ));
+    }
+    if !json {
+        println!("✓ unbound {id}");
+        print_annotation_row(&body, "");
+    }
+    Ok(())
+}
+
 // --- checkout (W4.7) ---------------------------------------------------
 
 /// `kb-code checkout <ref> --repo NAME` — `POST /api/checkout` (W4.7): the
@@ -16129,16 +16260,68 @@ async fn review_comments_cmd(
     Ok(())
 }
 
+/// V80-M0 — pure partition into (general, in_diff, outside) groups —
+/// `general` is the path-less `anchor_kind: "review"` group (if any); the
+/// server's own `in_diff` caption (`review_comments::build_comment_
+/// groups`) partitions every OTHER group, never a client-side re-derive.
+/// Split out from [`print_review_comments_human`] so the derivation is
+/// unit-testable without capturing stdout.
+fn partition_review_comment_groups(
+    groups: &[serde_json::Value],
+) -> (
+    Vec<serde_json::Value>,
+    Vec<serde_json::Value>,
+    Vec<serde_json::Value>,
+) {
+    let mut general = Vec::new();
+    let mut in_diff = Vec::new();
+    let mut outside = Vec::new();
+    for g in groups {
+        if g["path"].as_str().unwrap_or("").is_empty() {
+            general.push(g.clone());
+        } else if g["in_diff"].as_bool().unwrap_or(false) {
+            in_diff.push(g.clone());
+        } else {
+            outside.push(g.clone());
+        }
+    }
+    (general, in_diff, outside)
+}
+
+/// Three headings: `general`, `in the diff`, `outside the diff` (only the
+/// non-empty ones print).
 fn print_review_comments_human(body: &serde_json::Value) {
     let groups = body["groups"].as_array().cloned().unwrap_or_default();
     if groups.is_empty() {
         println!("(no comments)");
         return;
     }
-    for g in &groups {
-        println!("{}", g["path"].as_str().unwrap_or("?"));
+    let (general, in_diff, outside) = partition_review_comment_groups(&groups);
+    let print_group = |g: &serde_json::Value| {
+        println!("  {}", g["path"].as_str().unwrap_or("?"));
         for c in g["comments"].as_array().cloned().unwrap_or_default() {
+            println!("    {}", format_review_comment_line(&c));
+        }
+    };
+    if !general.is_empty() {
+        println!("general");
+        for c in general
+            .into_iter()
+            .flat_map(|g| g["comments"].as_array().cloned().unwrap_or_default())
+        {
             println!("  {}", format_review_comment_line(&c));
+        }
+    }
+    if !in_diff.is_empty() {
+        println!("in the diff");
+        for g in &in_diff {
+            print_group(g);
+        }
+    }
+    if !outside.is_empty() {
+        println!("outside the diff");
+        for g in &outside {
+            print_group(g);
         }
     }
 }
@@ -25867,6 +26050,22 @@ mod tests {
     }
 
     #[test]
+    fn partition_review_comment_groups_splits_general_in_diff_and_outside() {
+        let groups = vec![
+            serde_json::json!({"path": "", "in_diff": false, "comments": [{"id": "g1"}]}),
+            serde_json::json!({"path": "a.rs", "in_diff": true, "comments": [{"id": "a1"}]}),
+            serde_json::json!({"path": "b.rs", "in_diff": false, "comments": [{"id": "b1"}]}),
+        ];
+        let (general, in_diff, outside) = partition_review_comment_groups(&groups);
+        assert_eq!(general.len(), 1);
+        assert_eq!(general[0]["comments"][0]["id"], "g1");
+        assert_eq!(in_diff.len(), 1);
+        assert_eq!(in_diff[0]["path"], "a.rs");
+        assert_eq!(outside.len(), 1);
+        assert_eq!(outside[0]["path"], "b.rs");
+    }
+
+    #[test]
     fn format_review_comment_line_orphaned_and_suggestion() {
         let orphan = serde_json::json!({
             "intent": "note",
@@ -26057,6 +26256,37 @@ mod tests {
                 assert!(file.is_some());
             }
             other => panic!("expected annotate batch, got {other:?}"),
+        }
+        // V80-M0.
+        match parse_cli(&[
+            "annotate", "bind", "ann_x", "--review", "4", "--ps", "2", "--side", "old",
+        ])
+        .unwrap()
+        {
+            Cmd::Annotate {
+                cmd:
+                    Some(AnnotateCmd::Bind {
+                        id,
+                        review,
+                        ps,
+                        side,
+                        ..
+                    }),
+                ..
+            } => {
+                assert_eq!(id, "ann_x");
+                assert_eq!(review, 4);
+                assert_eq!(ps, Some(2));
+                assert_eq!(side.as_deref(), Some("old"));
+            }
+            other => panic!("expected annotate bind, got {other:?}"),
+        }
+        match parse_cli(&["annotate", "unbind", "ann_x"]).unwrap() {
+            Cmd::Annotate {
+                cmd: Some(AnnotateCmd::Unbind { id, .. }),
+                ..
+            } => assert_eq!(id, "ann_x"),
+            other => panic!("expected annotate unbind, got {other:?}"),
         }
         match parse_cli(&[
             "annotate",
