@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import type { ReviewSummary, ReviewSummaryPr } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import AnalyticsSection from "../components/reviews/AnalyticsSection";
 import InboxList from "../components/reviews/InboxList";
 import StartReviewDialog from "../components/reviews/StartReviewDialog";
@@ -80,10 +81,11 @@ export default function Reviews() {
 
   return (
     <div className="kbc-reviews" id="main">
-      <header className="kbc-reviews__head">
-        <div className="kbc-reviews__head-row">
-          <h1 className="kbc-reviews__title">Review Room — {repo}</h1>
-          <div className="kbc-reviews__head-actions">
+      <PageHeader
+        title={`Review Room — ${repo}`}
+        lede="Local Gerrit-lite review sessions — patchset snapshots, viewed-file tracking, annotations."
+        actions={
+          <>
             <Link to={prsUrl(repo)} className="kbc-reviews__all-prs" data-kbc-reviews-all-prs>
               all PRs →
             </Link>
@@ -95,12 +97,9 @@ export default function Reviews() {
             >
               Start review
             </button>
-          </div>
-        </div>
-        <p className="kbc-reviews__hint">
-          Local Gerrit-lite review sessions — patchset snapshots, viewed-file tracking, annotations.
-        </p>
-      </header>
+          </>
+        }
+      />
 
       <section className="kbc-inbox" data-kbc-inbox>
         <h2 className="kbc-inbox__title">Inbox — needs a human</h2>
