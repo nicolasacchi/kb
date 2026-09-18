@@ -172,6 +172,15 @@ export function heroCounts(findings: ReviewFinding[]): LiveCounts {
   return liveFindingCounts(findings);
 }
 
+/// V80-M5 (D6) — "authored by you: N": live findings whose `origin` is
+/// `"manual"` (a human — typed straight into the finding form, or
+/// PROMOTED from a bound comment; both mint the identical `origin`, D6's
+/// whole point). Superseded findings are excluded, matching every other
+/// live count this module derives (`liveFindingCounts`'s own rule).
+export function manualFindingCount(findings: ReviewFinding[]): number {
+  return findings.filter((f) => !f.superseded && f.origin === "manual").length;
+}
+
 /// "N of M files viewed" — K2a's viewed state, the same predicate
 /// `ReviewHeader`'s progress bar already uses (`viewed && !viewed_stale`:
 /// a stale viewed mark is not a viewed file).

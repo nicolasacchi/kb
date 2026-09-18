@@ -18,6 +18,7 @@ import {
   heroBaseSourceOf,
   heroCounts,
   heroLedeOf,
+  manualFindingCount,
   truncateMiddle,
 } from "../../lib/reviewRoom";
 import { severityToken } from "./AgentVerdictCard";
@@ -73,6 +74,7 @@ export default function ReportHero({
   humanOpenCount = 0,
 }: ReportHeroProps) {
   const counts = heroCounts(findings);
+  const manualCount = manualFindingCount(findings);
   const viewed = filesViewedOf(files);
   const lede = heroLedeOf(report);
   const agent = heroAgentOf(report, review.session_id ?? null);
@@ -253,6 +255,19 @@ export default function ReportHero({
           data-kbc-room-hero-human-open={humanOpenCount}
         >
           <Icon.Comment /> {humanOpenCount} open question{humanOpenCount === 1 ? "" : "s"} from you
+        </span>
+        {/* V80-M5 (D6) — "authored by you: N": live MANUAL findings (typed
+            straight into the finding form, or promoted from a bound
+            comment — both mint `origin: "manual"`), a peer count beside the
+            agent's severity chips, never hidden even at zero (the room
+            never lies by omission — same rule the human-open chip above
+            follows). */}
+        <span
+          className="kbc-room-chip"
+          style={{ ["--kbc-room-chip-color" as string]: "var(--ink-mute)" }}
+          data-kbc-room-hero-manual={manualCount}
+        >
+          <Icon.Pen /> authored by you: {manualCount}
         </span>
       </div>
 
