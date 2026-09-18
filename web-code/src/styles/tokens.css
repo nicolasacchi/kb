@@ -511,6 +511,24 @@
    * which nothing defined, so the code-lens chips silently rendered
    * `system-ui` instead of the app font. */
   --font-ui: var(--font-sans);
+  /* V80-R4 — a THIRD and FOURTH dead cascade, the widest of the set:
+   * `--fg`/`--fg-dim` are referenced ~65 times combined across reviews.css/
+   * usages.css/branches.css/commands.css/nav.css (every review-diff
+   * caption/chip/meta line this unit touches — map census, chapter
+   * labels, hunk-strip chips, drafts tray body + captions, the ctx/noise
+   * notes) but neither was ever DEFINED anywhere. `color` is an inherited
+   * property, so a guaranteed-invalid `var()` reference doesn't fall back
+   * to black/transparent — it makes the whole declaration invalid at
+   * computed-value time, which for an inherited property means "inherit
+   * from the parent," i.e. every one of those lines was silently
+   * rendering at whatever colour its container happened to have instead
+   * of the intended full-strength/dimmed ink. Aliased to `--ink`/
+   * `--ink-mute`, the tokens the SAME files already use for the identical
+   * roles (e.g. `.kbc-rthread__body`/`.kbc-rthread__meta`) — never
+   * `--ink-dim`, which is reserved for decorative/disabled-only text
+   * (`--ink-faint`'s own comment above). */
+  --fg: var(--ink);
+  --fg-dim: var(--ink-mute);
 
   /* --- Rosé-Pine highlight levels (selection / occurrence / search) ---- */
   --hl-low: var(--rule);
