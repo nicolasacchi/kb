@@ -90,9 +90,14 @@ export interface Prefs {
   /// standing desktop-reading default, wrap is the "code on a phone" fix).
   wrap?: boolean;
   /// SH.C3 — CM6 reader buffer font-size in px, clamped to
-  /// `[READER_FONT_SIZE_MIN, READER_FONT_SIZE_MAX]` (default `13`, the
-  /// pre-SH.C3 hardcoded value).
-  readerFontSize?: number;
+  /// `[CODE_FONT_SIZE_MIN, CODE_FONT_SIZE_MAX]` (default `13`, the
+  /// pre-SH.C3 hardcoded value). V80-R2 narrowed the range to exactly
+  /// `{13, 14, 15}` — off the same reading-scale ramp `--fs-*` sits on,
+  /// never back below the `--fs-body` floor — and renamed the field from
+  /// `readerFontSize` (the stepper is code-only; "reader" also names the
+  /// whole SPA). An existing `readerFontSize` blob is simply unread under
+  /// the new key, same as any other stale browser-local pref (D16).
+  codeFontSize?: number;
   /// V70-A7 — the kbc-theme/1 family id (default `"kbc"`, the built-in).
   themeFamily?: string;
   /// V70-A7 — contrast slider, clamped to [-2, 2] (default 0 = untouched).
@@ -130,12 +135,19 @@ export interface Prefs {
 
 const PREFS_KEY = "kbc:prefs";
 
-/// SH.C3 — reader font-size stepper bounds. `DEFAULT` matches the historical
+/// SH.C3 — code font-size stepper bounds. `DEFAULT` matches the historical
 /// hardcoded `CodeView` theme size so an unset pref renders byte-identical
-/// to before this unit.
-export const READER_FONT_SIZE_MIN = 11;
-export const READER_FONT_SIZE_MAX = 18;
-export const READER_FONT_SIZE_DEFAULT = 13;
+/// to before this unit. V80-R2 narrowed `MIN`/`MAX` from `[11, 18]` to
+/// `[13, 15]` — three steps, never below the reading-contract's own body
+/// floor (`--fs-body`/`--fs-sm`, root CLAUDE.md's ramp) — so A− now floors
+/// at exactly the same 13px every OTHER "row" text in the reader already
+/// floors at, rather than shrinking the one thing the reader exists to
+/// show below that line. `DEFAULT` staying `13` keeps
+/// `e2e/desk-viewport.spec.ts`'s column/row floor (computed from this same
+/// font) unchanged.
+export const CODE_FONT_SIZE_MIN = 13;
+export const CODE_FONT_SIZE_MAX = 15;
+export const CODE_FONT_SIZE_DEFAULT = 13;
 
 const DEFAULT_PREFS: Prefs = {
   lastRepo: null,
@@ -149,7 +161,7 @@ const DEFAULT_PREFS: Prefs = {
   attentionOverlay: false,
   provisionalPanes: false,
   wrap: false,
-  readerFontSize: READER_FONT_SIZE_DEFAULT,
+  codeFontSize: CODE_FONT_SIZE_DEFAULT,
   themeFamily: BUILTIN_FAMILY,
   contrast: 0,
   density: "comfortable",
@@ -519,25 +531,26 @@ export function saveSearchPreviewOpen(open: boolean): void {
   savePrefs({ ...cur, searchPreviewOpen: open });
 }
 
-/// SH.C3 — clamp to the reader font-size stepper's bounds; a non-finite
-/// input (corrupt localStorage, a stray `NaN` from an empty-string parse)
-/// degrades to the default rather than propagating into CM6's theme.
-export function clampReaderFontSize(px: number): number {
-  if (!Number.isFinite(px)) return READER_FONT_SIZE_DEFAULT;
-  return Math.min(READER_FONT_SIZE_MAX, Math.max(READER_FONT_SIZE_MIN, Math.round(px)));
+/// SH.C3/V80-R2 — clamp to the code font-size stepper's bounds; a
+/// non-finite input (corrupt localStorage, a stray `NaN` from an
+/// empty-string parse) degrades to the default rather than propagating
+/// into CM6's theme.
+export function clampCodeFontSize(px: number): number {
+  if (!Number.isFinite(px)) return CODE_FONT_SIZE_DEFAULT;
+  return Math.min(CODE_FONT_SIZE_MAX, Math.max(CODE_FONT_SIZE_MIN, Math.round(px)));
 }
 
-/// SH.C3 — coerce a stored / missing font size to the clamped range.
-export function loadReaderFontSize(): number {
-  return clampReaderFontSize(loadPrefs().readerFontSize ?? READER_FONT_SIZE_DEFAULT);
+/// SH.C3/V80-R2 — coerce a stored / missing font size to the clamped range.
+export function loadCodeFontSize(): number {
+  return clampCodeFontSize(loadPrefs().codeFontSize ?? CODE_FONT_SIZE_DEFAULT);
 }
 
 /// Returns the clamped value actually persisted, so a caller driving a
 /// stepper can seed its next state from the return rather than re-reading.
-export function saveReaderFontSize(px: number): number {
-  const clamped = clampReaderFontSize(px);
+export function saveCodeFontSize(px: number): number {
+  const clamped = clampCodeFontSize(px);
   const cur = loadPrefs();
-  if (cur.readerFontSize !== clamped) savePrefs({ ...cur, readerFontSize: clamped });
+  if (cur.codeFontSize !== clamped) savePrefs({ ...cur, codeFontSize: clamped });
   return clamped;
 }
 
