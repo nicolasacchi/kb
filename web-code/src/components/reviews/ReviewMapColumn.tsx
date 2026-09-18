@@ -16,6 +16,103 @@ export interface OutsideDiffFile {
   count: number;
 }
 
+/// V80-F1 — the "Changed (N) | All files" toggle, factored out of this
+/// file so the full-page diff's mobile Files drawer (`routes/reviewDiff/
+/// ReviewDiffRail.tsx`) can render it without a second copy of the
+/// markup. V80-R4 (landed after this unit) moved the DESKTOP home of
+/// this control out of the map column entirely, into
+/// `ReviewDiffToolbar`'s View cluster (reachable with the map closed) —
+/// that toolbar copy is its own, independent markup (`ReviewDiffToolbar.
+/// tsx`, `.kbc-rdiff__files-mode`), not this component; this one now has
+/// exactly ONE caller, the mobile drawer, where the toolbar's version is
+/// unreachable (the drawer is a modal-ish overlay — its `.kbc-drawer-
+/// scrim` covers the whole viewport and closes the drawer on any outside
+/// click, so the toolbar sits behind it, not beside it). Pure
+/// presentational either way: the mode itself lives in the URL
+/// (`?files=`), threaded in from `ReviewDiff.tsx`.
+export function FilesModeToggle({
+  filesMode,
+  fileCount,
+  onSetFilesMode,
+}: {
+  filesMode: "changed" | "all";
+  fileCount: number;
+  onSetFilesMode: (mode: "changed" | "all") => void;
+}) {
+  return (
+    <span className="kbc-rmap__files-mode" role="group" aria-label="File list">
+      <button
+        type="button"
+        className={"kbc-rmap__files-mode-btn" + (filesMode === "changed" ? " is-active" : "")}
+        aria-pressed={filesMode === "changed"}
+        onClick={() => onSetFilesMode("changed")}
+        title="List only files_changed"
+        data-kbc-rdiff-files-mode="changed"
+      >
+        Changed ({fileCount})
+      </button>
+      <button
+        type="button"
+        className={"kbc-rmap__files-mode-btn" + (filesMode === "all" ? " is-active" : "")}
+        aria-pressed={filesMode === "all"}
+        onClick={() => onSetFilesMode("all")}
+        title="List the tip sha's whole tree — unchanged files render plain"
+        data-kbc-rdiff-files-mode="all"
+      >
+        All files
+      </button>
+    </span>
+  );
+}
+
+/// V80-F1 — the "Outside the diff" chapter, factored out for the same
+/// reason as `FilesModeToggle` above: the mobile Files drawer needs the
+/// SAME surfaced-thread group the desktop map column already renders, not
+/// a re-implementation. Renders nothing when `files` is empty (the caller
+/// need not guard).
+export function OutsideDiffChapter({
+  files,
+  currentPath,
+  onPick,
+}: {
+  files: readonly OutsideDiffFile[];
+  currentPath: string;
+  onPick: (path: string) => void;
+}) {
+  if (files.length === 0) return null;
+  return (
+    <section className="kbc-rmap__chapter kbc-rmap__chapter--outside" data-kbc-rdiff-map-outside-diff>
+      <h2 className="kbc-rmap__chapter-head">
+        Outside the diff
+        <span className="kbc-rmap__chapter-n">{files.length}</span>
+      </h2>
+      <ul className="kbc-rmap__list">
+        {files.map((f) => (
+          <li key={f.path}>
+            <button
+              type="button"
+              className={"kbc-rmap__row" + (currentPath === f.path ? " is-current" : "")}
+              title={`${f.path} — not in this patchset's diff, ${f.count} thread(s) anchored here`}
+              onClick={() => onPick(f.path)}
+              data-kbc-rdiff-map-outside={f.path}
+            >
+              <span className="kbc-rmap__path">{f.path}</span>
+              <span className="kbc-rmap__chips">
+                <span
+                  className="kbc-rmap__chip kbc-rmap__chip--comments"
+                  data-kbc-rdiff-map-outside-count={f.count}
+                >
+                  {f.count}
+                </span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export interface ReviewMapColumnProps {
   chapters: MapChapter[];
   /// Row state by path — built once by the route from data it already has
@@ -129,40 +226,7 @@ export default function ReviewMapColumn({
           first {ALL_FILES_CAP.toLocaleString()} files shown — narrow with the jump palette
         </p>
       )}
-      {!!outsideDiffFiles && outsideDiffFiles.length > 0 && (
-        <section
-          className="kbc-rmap__chapter kbc-rmap__chapter--outside"
-          data-kbc-rdiff-map-outside-diff
-        >
-          <h2 className="kbc-rmap__chapter-head">
-            Outside the diff
-            <span className="kbc-rmap__chapter-n">{outsideDiffFiles.length}</span>
-          </h2>
-          <ul className="kbc-rmap__list">
-            {outsideDiffFiles.map((f) => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  className={"kbc-rmap__row" + (currentPath === f.path ? " is-current" : "")}
-                  title={`${f.path} — not in this patchset's diff, ${f.count} thread(s) anchored here`}
-                  onClick={() => onPick(f.path)}
-                  data-kbc-rdiff-map-outside={f.path}
-                >
-                  <span className="kbc-rmap__path">{f.path}</span>
-                  <span className="kbc-rmap__chips">
-                    <span
-                      className="kbc-rmap__chip kbc-rmap__chip--comments"
-                      data-kbc-rdiff-map-outside-count={f.count}
-                    >
-                      {f.count}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <OutsideDiffChapter files={outsideDiffFiles ?? []} currentPath={currentPath} onPick={onPick} />
       {pseudoFiles.length > 0 && (
         <section className="kbc-rmap__chapter kbc-rmap__chapter--zero" data-kbc-rdiff-map-chapter-zero>
           <h2 className="kbc-rmap__chapter-head">
