@@ -396,9 +396,12 @@ a.kbc-home-card__head:hover {
 }
 
 /* V80-R1 — the six links are now a `MetaLine` (`components/page.css`'s
- * `.kbc-metaline`, which already supplies `display:flex`/font-size/color);
- * this rule owns only the box model `.kbc-metaline` doesn't: the divider
- * above the row and its own top padding. */
+ * `.kbc-metaline`, which already supplies `display:flex`/font-size/color)
+ * INSIDE this `<footer>` (fix, same unit: a bare `MetaLine` has no landmark
+ * role of its own, so the `<footer>` wrapper — which is what computes to
+ * `contentinfo`, the landmark `e2e/regions.spec.ts`'s "home" template pins
+ * — has to stay). This rule owns only the box model `.kbc-metaline`
+ * doesn't: the divider above the row and its own top padding. */
 .kbc-home-card__footer {
   border-top: 1px solid var(--rule);
   padding-top: 8px;
