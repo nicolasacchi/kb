@@ -61,7 +61,15 @@ test.describe("the current review travels with the reader (V80-M3)", () => {
     await reviewTab.click();
     const reviewPanel = page.locator("[data-kbc-current-review-panel]");
     await expect(reviewPanel).toBeVisible();
-    await expect(reviewPanel).toContainText("Threads for this file arrive with M2.");
+    // V80-M2 — the real panel (`ReviewFileThreadsPanel.tsx`) replaced this
+    // M3 stub's "Threads for this file arrive with M2." placeholder;
+    // `KNOWN_FILE` has no comments on it yet in THIS review, so the
+    // honest "nothing here yet" caption + empty state render — the actual
+    // compose/bind round trip is `reader-review-bind.spec.ts`'s job.
+    await expect(reviewPanel.locator("[data-kbc-review-rail-caption]")).toContainText(
+      "No comments yet on this file",
+    );
+    await expect(reviewPanel.locator("[data-kbc-empty]")).toContainText("No threads on this file yet");
     // Scoped to the panel — the SAME attribute also marks the TopBar chip's
     // own Room link (both are honestly "the room link", just two homes).
     await expect(reviewPanel.locator("[data-kbc-current-review-room-link]")).toBeVisible();
