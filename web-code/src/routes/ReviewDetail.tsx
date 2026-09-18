@@ -35,6 +35,7 @@ import {
 } from "../hooks/useReviews";
 import { readerUrl } from "../lib/breadcrumbs";
 import { mergeCurrentSearch, parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
+import { setCurrentReview } from "../lib/currentReview";
 import { cardList } from "../lib/reviewDoc";
 import { indexThreads } from "../lib/reviewComments";
 // ── V76-R2a — the Room's rail geometry + density. The rail's truth is the
@@ -116,6 +117,16 @@ export default function ReviewDetail() {
 
   const reviewQ = useReview(repo, idOk ? id : undefined);
   const review = reviewQ.data;
+  // V80-M3 — entering a Room auto-sets the browser-only "current review"
+  // marker for this repo (no click needed; `lib/currentReview.ts` — the
+  // daemon has no notion of it). The Room's own "Work this review" action
+  // (`ReviewHeader.tsx`) re-affirms the SAME call explicitly, for the
+  // operator who's read several rooms and wants to pick one back.
+  useEffect(() => {
+    if (!idOk || !review) return;
+    setCurrentReview(repo, { id: String(id), title: review.title?.trim() || review.head_ref });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, id, idOk, review?.title, review?.head_ref]);
   const patchsets = review?.patchsets ?? [];
   const latestPs = patchsets.length > 0 ? patchsets[patchsets.length - 1].ps_number : null;
 
