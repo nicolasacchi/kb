@@ -47,6 +47,8 @@ import {
   type SymGrammarInput,
   entityUrl,
   parseEntParam,
+  appendReviewParam,
+  parseReviewIdParam,
 } from "./codeUrl";
 
 // Golden table: CodeLoc → exact URL string. Mirrors the discipline of kb's
@@ -989,5 +991,48 @@ describe("parseEntParam", () => {
     // a better answer than a client-side guess.
     expect(parseEntParam("not a constant")).toBe("not a constant");
     expect(parseEntParam("  Shop::Order  ")).toBe("Shop::Order");
+  });
+});
+
+// V80-M3 — "the current review travels with the reader".
+describe("appendReviewParam", () => {
+  it("is a no-op when id is absent/empty — byte-identical to before M3", () => {
+    expect(appendReviewParam("/r/kb/a.rs", undefined)).toBe("/r/kb/a.rs");
+    expect(appendReviewParam("/r/kb/a.rs", "")).toBe("/r/kb/a.rs");
+  });
+
+  it("appends `?review=` to a bare URL", () => {
+    expect(appendReviewParam("/r/kb/a.rs", "7")).toBe("/r/kb/a.rs?review=7");
+  });
+
+  it("appends `&review=` when the URL already carries a query", () => {
+    expect(appendReviewParam("/r/kb/a.rs?line=10", "7")).toBe("/r/kb/a.rs?line=10&review=7");
+  });
+
+  it("encodes the id", () => {
+    expect(appendReviewParam("/r/kb/a.rs", "a b")).toBe("/r/kb/a.rs?review=a%20b");
+  });
+
+  it("composes after sym/ent — review is always LAST among the reader's own params", () => {
+    const withSymEnt = "/r/kb/a.rs?line=10&sym=rust%3AFoo&ent=Shop%3A%3AOrder";
+    expect(appendReviewParam(withSymEnt, "7")).toBe(`${withSymEnt}&review=7`);
+  });
+});
+
+describe("parseReviewIdParam", () => {
+  it("round-trips what appendReviewParam emits", () => {
+    const url = appendReviewParam("/r/kb/a.rs", "7");
+    const value = new URLSearchParams(url.slice(url.indexOf("?"))).get("review");
+    expect(parseReviewIdParam(value)).toBe("7");
+  });
+
+  it("is TOTAL: absent, empty and whitespace-only are all `null`", () => {
+    expect(parseReviewIdParam(null)).toBeNull();
+    expect(parseReviewIdParam("")).toBeNull();
+    expect(parseReviewIdParam("   ")).toBeNull();
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseReviewIdParam("  7  ")).toBe("7");
   });
 });
