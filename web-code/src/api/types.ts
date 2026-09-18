@@ -4671,6 +4671,22 @@ export interface RepoListEntry {
   settled_at: number | null;
 }
 
+/// V80-F2 (the loopback pre-probe) — declaration-merged onto `IdentityOut`
+/// (declared above, the same S2-B precedent), own block for the same
+/// "never touch a line a sibling builder might also edit" reason.
+/// Computed PER REQUEST server-side from the exact peer classification
+/// `review_mutations_gate` itself applies — `true` for a loopback caller
+/// unconditionally, else mirrors `remote_mutations` above — so it can
+/// never disagree with the 404/200 a graduated route (verdict PUT/DELETE,
+/// finding disposition PUT/DELETE, manual finding create, publish
+/// recording) would actually return to THIS caller. Absent on a daemon
+/// built before this landed; `hooks/useReviewMutationsAdmitted.ts` treats
+/// "absent" and "false" the same way `IdentityOut.remote_mutations`'s own
+/// doc does.
+export interface IdentityOut {
+  review_mutations_admitted?: boolean;
+}
+
 // --- V71-E2 — `usages/2` (D4) + `kbc-actions/1` (D5) ----------------------
 //
 // Mirrors `crates/kb-code-server/src/usages2.rs` and `src/actions.rs`. Both

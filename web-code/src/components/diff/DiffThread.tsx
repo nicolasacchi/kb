@@ -21,6 +21,10 @@ import {
   threadAcceptsSuggestion,
 } from "../../lib/suggestions";
 import { toast } from "../../lib/toast";
+import {
+  REVIEW_MUTATIONS_ADMITTED_HINT,
+  useReviewMutationsAdmitted,
+} from "../../hooks/useReviewMutationsAdmitted";
 import SuggestionEditor from "./SuggestionEditor";
 import ProseBlock from "../prose/ProseBlock";
 import HighlightedSnippet from "../HighlightedSnippet";
@@ -86,7 +90,9 @@ export interface DiffThreadProps {
 export default function DiffThread({ thread, comments, orphaned = false, className }: DiffThreadProps) {
   const { repo = "" } = useParams<{ repo: string }>();
   const loopback = useApplyLoopbackLatched();
+  const admitted = useReviewMutationsAdmitted();
   const dispositionLoopback = useDispositionLoopbackLatched();
+  const dispositionRefused = !admitted || dispositionLoopback;
   const finding = comments.findingsById.get(thread.id) ?? null;
   const forceOpen = comments.flashThreadId === thread.id;
   const [expanded, setExpanded] = useState(() => !thread.resolved || forceOpen);
@@ -136,9 +142,12 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
 
   /// PRR-U3 — `d`isposition chip toggle: clicking the ACTIVE chip clears
   /// it (undecided), any other chip sets it. Own loopback latch, same
-  /// idiom as `SuggestionBlock`'s apply button below.
+  /// idiom as `SuggestionBlock`'s apply button below. V80-F2: `dispositionRefused`
+  /// (the pre-probe OR the latch) is checked first — the chips render
+  /// disabled once it is true, so this guard is defensive, not the primary
+  /// gate.
   async function onSetDisposition(next: FindingDisposition) {
-    if (!finding) return;
+    if (!finding || dispositionRefused) return;
     const active = finding.disposition?.state === next;
     try {
       if (active) await comments.onClearDisposition(finding.slug);
@@ -382,27 +391,31 @@ export default function DiffThread({ thread, comments, orphaned = false, classNa
       </div>
       {finding && (
         <div className="kbc-rthread__disposition" data-kbc-finding-disposition={finding.slug}>
-          {dispositionLoopback ? (
-            <span className="kbc-rthread__disposition-loopback" data-kbc-disposition-loopback>
-              Disposition requires a loopback session
+          {findingDispositionChips(finding).map((chip) => (
+            <button
+              key={chip.value}
+              type="button"
+              className={
+                "kbc-rthread__disposition-chip" + (chip.active ? " is-active" : "")
+              }
+              title={dispositionRefused ? REVIEW_MUTATIONS_ADMITTED_HINT : dispositionHint(chip.value)}
+              aria-pressed={chip.active}
+              disabled={dispositionRefused}
+              onClick={() => void onSetDisposition(chip.value)}
+              data-kbc-disposition-chip={chip.value}
+              data-kbc-disposition-active={chip.active ? "true" : "false"}
+            >
+              {chip.label}
+            </button>
+          ))}
+          {dispositionRefused && (
+            <span
+              className="kbc-rthread__disposition-loopback"
+              data-kbc-disposition-loopback
+              title={REVIEW_MUTATIONS_ADMITTED_HINT}
+            >
+              {REVIEW_MUTATIONS_ADMITTED_HINT}
             </span>
-          ) : (
-            findingDispositionChips(finding).map((chip) => (
-              <button
-                key={chip.value}
-                type="button"
-                className={
-                  "kbc-rthread__disposition-chip" + (chip.active ? " is-active" : "")
-                }
-                title={dispositionHint(chip.value)}
-                aria-pressed={chip.active}
-                onClick={() => void onSetDisposition(chip.value)}
-                data-kbc-disposition-chip={chip.value}
-                data-kbc-disposition-active={chip.active ? "true" : "false"}
-              >
-                {chip.label}
-              </button>
-            ))
           )}
           <a
             className="kbc-rthread__view-in-report"
