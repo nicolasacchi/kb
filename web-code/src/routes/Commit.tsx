@@ -4,6 +4,8 @@ import AttributionCard from "../components/history/AttributionCard";
 import FileChangeRow from "../components/history/FileChangeRow";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import { useCommit } from "../hooks/useCommit";
 import { branchesUrl, commitUrl } from "../lib/codeUrl";
 import { formatUnixSeconds, shortSha } from "../lib/format";
@@ -52,9 +54,13 @@ export default function Commit() {
 
   return (
     <div className="kbc-commit">
-      <header className="kbc-commit__head">
-        <h1 className="kbc-commit__subject">{data.subject}</h1>
-        <div className="kbc-commit__meta">
+      <PageHeader title={data.subject} titleClassName="kbc-commit__subject" />
+      {/* V80-R5 — the sha/author/committer facts as a shared `MetaLine`
+          (was a hand-rolled `.kbc-commit__meta` flex row at 12px, the
+          smallest text on the page). */}
+      <MetaLine
+        className="kbc-commit__meta"
+        items={[
           <button
             type="button"
             className="kbc-commit__sha"
@@ -63,30 +69,30 @@ export default function Commit() {
             data-kbc-commit-sha
           >
             {shortSha(data.sha)}
-          </button>
+          </button>,
           <span>
             {data.author.name} authored {formatUnixSeconds(data.author.time)}
-          </span>
-          {!sameCommitter && (
+          </span>,
+          !sameCommitter && (
             <span>
               {data.committer.name} committed {formatUnixSeconds(data.committer.time)}
             </span>
-          )}
+          ),
+        ]}
+      />
+      {data.parents.length > 0 && (
+        <div className="kbc-commit__parents" data-kbc-commit-parents>
+          Parent{data.parents.length === 1 ? "" : "s"}:{" "}
+          {data.parents.map((p, i) => (
+            <span key={p}>
+              {i > 0 && ", "}
+              <Link to={commitUrl(repo, p)} className="kbc-commit__parent-link">
+                {shortSha(p)}
+              </Link>
+            </span>
+          ))}
         </div>
-        {data.parents.length > 0 && (
-          <div className="kbc-commit__parents" data-kbc-commit-parents>
-            Parent{data.parents.length === 1 ? "" : "s"}:{" "}
-            {data.parents.map((p, i) => (
-              <span key={p}>
-                {i > 0 && ", "}
-                <Link to={commitUrl(repo, p)} className="kbc-commit__parent-link">
-                  {shortSha(p)}
-                </Link>
-              </span>
-            ))}
-          </div>
-        )}
-      </header>
+      )}
 
       {data.body && <pre className="kbc-commit__body">{data.body}</pre>}
 
@@ -119,10 +125,14 @@ export default function Commit() {
       </section>
 
       <section className="kbc-commit__files">
-        <div className="kbc-commit__files-head">
-          {data.totals.files} file{data.totals.files === 1 ? "" : "s"} changed · +{data.totals.insertions} -
-          {data.totals.deletions}
-        </div>
+        <h2 className="kbc-compare__section-title">Files changed</h2>
+        <MetaLine
+          items={[
+            `${data.totals.files} file${data.totals.files === 1 ? "" : "s"} changed`,
+            <span className="kbc-filechange__additions">+{data.totals.insertions}</span>,
+            <span className="kbc-filechange__deletions">-{data.totals.deletions}</span>,
+          ]}
+        />
         {data.files.map((f) => (
           <FileChangeRow
             key={f.path}

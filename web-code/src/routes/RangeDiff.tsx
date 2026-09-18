@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import RangeDiffTable from "../components/reviews/RangeDiffTable";
 import RefTypeahead from "../components/RefTypeahead";
 import { useRangeDiff } from "../hooks/useRangeDiff";
@@ -56,9 +58,23 @@ export default function RangeDiff() {
   }
 
   const data = rangeDiff.data;
+  // V80-R5 — a per-disposition census as the page's `MetaLine`: the same
+  // "how much changed" summary a numstat line gives Commit/Compare, derived
+  // from the pairs the table already renders rather than a second fetch.
+  const counts = useMemo(() => {
+    const c = { equal: 0, modified: 0, added: 0, removed: 0 };
+    for (const p of data?.pairs ?? []) {
+      if (p.disposition in c) c[p.disposition as keyof typeof c] += 1;
+    }
+    return c;
+  }, [data]);
 
   return (
     <div className="kbc-rangediff">
+      <PageHeader
+        title="Range-diff"
+        lede="Which commits in two overlapping ranges — typically the same topic branch before/after a rebase or amend — are equal, modified, added, or removed relative to each other."
+      />
       <form className="kbc-rangediff__head" onSubmit={onSubmit}>
         <RefTypeahead
           value={oldInput}
@@ -110,7 +126,22 @@ export default function RangeDiff() {
             hint="These two ranges have nothing to compare — double-check the range syntax on each side."
           />
         ) : (
-          <RangeDiffTable repo={repo} pairs={data.pairs} truncated={data.truncated} />
+          <>
+            <MetaLine
+              items={[
+                `${data.pairs.length} pair${data.pairs.length === 1 ? "" : "s"}`,
+                counts.equal > 0 && <span className="kbc-rangediff__glyph--equal">{counts.equal} equal</span>,
+                counts.modified > 0 && (
+                  <span className="kbc-rangediff__glyph--modified">{counts.modified} modified</span>
+                ),
+                counts.added > 0 && <span className="kbc-rangediff__glyph--added">{counts.added} added</span>,
+                counts.removed > 0 && (
+                  <span className="kbc-rangediff__glyph--removed">{counts.removed} removed</span>
+                ),
+              ]}
+            />
+            <RangeDiffTable repo={repo} pairs={data.pairs} truncated={data.truncated} />
+          </>
         )
       ) : null}
     </div>
