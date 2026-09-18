@@ -266,6 +266,7 @@ import {
   TRAIL_FOCUS_EVENT,
   type TrailFocusDetail,
 } from "../components/trail/LinkedStepChip";
+import ReviewFileThreadsPanel from "../components/reviews/ReviewFileThreadsPanel";
 
 const DIFF_SENTINEL = "~diff";
 /// Phase C7 — like `DIFF_SENTINEL` above, a FILE-scoped sentinel trailing an
@@ -4671,11 +4672,18 @@ export default function Reader() {
   // promotion) and hands back the two things only it knows — whether
   // this render is the phone's bottom sheet, and which tab is active.
   //
-  // V80-M3 — a MINIMAL Review tab body: title + link to the Room + link to
-  // this file in the review diff. M2 replaces this with the real thread
-  // panel; for now the tab is only SELECTABLE (`hasReviewContext`) and says
-  // honestly that threads aren't here yet.
-  const reviewPanel = currentReview ? (
+  // V80-M2 — the real Review tab body: title + link to the Room + link to
+  // this file in the review diff (kept from M3's stub) PLUS
+  // `ReviewFileThreadsPanel`'s thread list for `focusedPath` in THIS
+  // review. "Comment here" seeds the composer at the FOCUSED pane's own
+  // caret line (mirrors `focusedPath`'s own pane-aware derivation above —
+  // `"annotate.line"`'s `a`-key handler only ever reads `cursorLineRef1`,
+  // a pane-1-only shortcut that predates the two-pane split; this door
+  // gets it right from the start) and opens the Notes tab, where the
+  // composer preselects this SAME review (`AnnotationsPanel`'s own
+  // `useCurrentReview` read) — no extra plumbing needed for that half.
+  const reviewIdNum = currentReview ? Number(currentReview.id) : NaN;
+  const reviewPanel = currentReview && Number.isFinite(reviewIdNum) ? (
     <div className="kbc-inspector__hint" data-kbc-current-review-panel>
       <p>
         <Link to={reviewUrl(repo, currentReview.id)} data-kbc-current-review-room-link>
@@ -4692,7 +4700,18 @@ export default function Reader() {
           </Link>
         </p>
       )}
-      <p>Threads for this file arrive with M2.</p>
+      <ReviewFileThreadsPanel
+        repo={repo}
+        reviewId={reviewIdNum}
+        reviewTitle={currentReview.title}
+        path={focusedPath ?? ""}
+        onOpenComposer={() => {
+          setAnnotationActiveLine(focusedPane === 1 ? cursorLineRef1.current : cursorLineRef2.current);
+          setAnnotationActiveLineEnd(null);
+          setAnnotationInitialIntent(undefined);
+          inspectorRef.current?.openTab("annotations");
+        }}
+      />
     </div>
   ) : null;
   const railSlot = (ctx: DeskRailSlotCtx) => (
