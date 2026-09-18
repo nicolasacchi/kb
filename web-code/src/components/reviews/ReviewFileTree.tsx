@@ -22,6 +22,7 @@ import RiskBadge from "./RiskBadge";
 import {
   buildStatusSections,
   countsText,
+  fileIconKind,
   flattenTree,
   flattenVisible,
   langIdFromSyntax,
@@ -42,8 +43,10 @@ export interface ReviewFileTreeProps {
   syntaxRows?: readonly SyntaxRowOut[] | null;
   onPick: (path: string) => void;
   /// Files-tab attrs (`data-kbc-review-file-row`) vs map attrs
-  /// (`data-kbc-rdiff-map-row`). Both may be set.
-  rowAttr?: "map" | "files" | "both";
+  /// (`data-kbc-rdiff-map-row`). Both may be set. V80-F1 adds `"drawer"`
+  /// (`data-kbc-rdiff-drawer-file`) for the full-page diff's mobile Files
+  /// drawer — the mobile twin of `"map"`, never combined with it.
+  rowAttr?: "map" | "files" | "both" | "drawer";
   /// Optional body under the currently-open Files-tab row (inline diff).
   expandedPath?: string | null;
   expandedContent?: ReactNode;
@@ -95,20 +98,21 @@ function Chip({
   );
 }
 
+/// V80-F1 — real icons, never a 2-letter mark. `fileIconKind` (lib/
+/// reviewFileTree.ts) is the ONE mapping; this just switches on its
+/// result. Unknown/no-lang rows get the plain file icon.
+const FILE_ICON_BY_KIND = {
+  doc: Icon.Note,
+  shell: Icon.Terminal,
+  config: Icon.Grid,
+  generic: Icon.File,
+} as const;
+
 function FileKindIcon({ lang }: { lang: string | null }) {
-  if (!lang) {
-    return (
-      <span className="kbc-ftree__kind" data-kbc-file-kind="generic" title="unknown type">
-        <Icon.File />
-      </span>
-    );
-  }
-  const abbr = lang.length <= 2 ? lang : lang.slice(0, 2);
+  const IconComp = FILE_ICON_BY_KIND[fileIconKind(lang)];
   return (
-    <span className="kbc-ftree__kind" data-kbc-file-kind={lang} title={lang}>
-      <span className="kbc-ftree__kind-abbr" aria-hidden>
-        {abbr}
-      </span>
+    <span className="kbc-ftree__kind" data-kbc-file-kind={lang ?? "generic"} title={lang ?? "unknown type"}>
+      <IconComp aria-hidden />
     </span>
   );
 }
@@ -269,6 +273,9 @@ export default function ReviewFileTree({
     }
     if (rowAttr === "files" || rowAttr === "both") {
       attrs["data-kbc-review-file-row"] = path;
+    }
+    if (rowAttr === "drawer") {
+      attrs["data-kbc-rdiff-drawer-file"] = path;
     }
     return attrs;
   }

@@ -19,6 +19,7 @@ import {
   useReviewReadingOrder,
 } from "../hooks/useReviews";
 import { useReviewAllFiles } from "../hooks/useReviewAllFiles";
+import { buildAllFilesTree } from "../lib/reviewFileTree";
 import { indexThreads, type DiffSide } from "../lib/reviewComments";
 import type { ParsedDiff } from "../lib/diff";
 import {
@@ -493,6 +494,17 @@ export default function ReviewDiff() {
     () =>
       speedFilterItems(jumpCandidates, jump, (f) => f.path + (f.old_path ? ` ${f.old_path}` : "")),
     [jumpCandidates, jump],
+  );
+  // V80-F1 — the SAME union tree `ReviewMapColumn` builds for the desktop
+  // map column, computed here ONCE and shared with `ReviewDiffRail`'s
+  // mobile drawer so "All files" reads identically in both homes rather
+  // than each recomputing its own copy from the same `allFilesQ` data
+  // (the hook call above is unaffected — TanStack Query dedupes the
+  // identical `["review-all-files", repo, tipSha]` key regardless of how
+  // many components ask for it).
+  const allFilesUnion = useMemo(
+    () => (filesMode === "all" ? buildAllFilesTree(ordered, allFilesQ.data?.paths ?? []) : null),
+    [filesMode, ordered, allFilesQ.data],
   );
 
   async function toggleViewed(file: ReviewFileRow) {
@@ -1662,8 +1674,9 @@ export default function ReviewDiff() {
         onSetFilesOpen={setFilesOpen}
         ordered={ordered}
         cursorPath={cursorPath}
-        fileRollup={fileRollup}
+        stateByPath={mapStateByPath}
         onGoFile={goFile}
+        onOpenFile={openFileInCenter}
         dispositionMenuOpen={dispositionMenuOpen}
         focusThreadId={focusThreadId}
         findingsById={findingsById}
@@ -1679,6 +1692,11 @@ export default function ReviewDiff() {
         onDiscardDrafts={discardDrafts}
         helpOpen={helpOpen}
         onSetHelpOpen={setHelpOpen}
+        filesMode={filesMode}
+        onSetFilesMode={setFilesMode}
+        outsideDiffFiles={outsideDiffFiles}
+        allTree={allFilesUnion?.tree}
+        changedPaths={allFilesUnion?.changedPaths}
       />
     </div>
   );
