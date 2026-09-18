@@ -24,6 +24,7 @@ import { useDiff } from "../../hooks/useDiff";
 import { useFile } from "../../hooks/useFile";
 import { useInViewOnce } from "../../hooks/useInViewOnce";
 import { useReviewDiffComments } from "../../hooks/useReviewComments";
+import { useDiffHighlights } from "../../hooks/useDiffHighlights";
 import { useReviewImpact } from "../../hooks/useReviews";
 import { buildDiagnosticsView, diagnosticGutterMarks, diagnosticsChipText } from "../../lib/diagnostics";
 import { parseUnifiedDiff, type ParsedDiff } from "../../lib/diff";
@@ -173,6 +174,23 @@ export function FileDiffBody({
   const navigate = useNavigate();
   const { data, isLoading, error } = useDiff(repo, path, from, to);
   const parsed = useMemo(() => (data ? parseUnifiedDiff(data.diff) : null), [data]);
+  // V80-F1 — the full-page diff never painted diff-LINE syntax (unlike the
+  // now-retired Files-tab inline preview, `ReviewFileItem.tsx`'s
+  // `ReviewAwareDiff`, which has always called this same hook): a gap this
+  // unit's Files-tab-navigates redesign surfaced rather than introduced,
+  // since the operator can now land here from a surface that used to
+  // paint. Same hook, same shape, additive — `DiffFile`'s `highlights`
+  // prop was simply never passed on this route before.
+  const hasRemoves = useMemo(
+    () => (parsed ? parsed.hunks.some((h) => h.lines.some((l) => l.kind === "remove")) : false),
+    [parsed],
+  );
+  const highlights = useDiffHighlights(
+    parsed ? repo : undefined,
+    parsed ? path : undefined,
+    { oldSha: from, newSha: to },
+    { hasRemoves, parsed },
+  );
   const rawComments = useReviewDiffComments(repo, reviewId, ps, path, { compose, flashThreadId, overlay });
   // V73-K2a — the composer writes a DRAFT; every other callback is
   // untouched, so a landed thread still resolves/replies/deletes against
@@ -425,6 +443,7 @@ export function FileDiffBody({
       parsed={finalParsed}
       mode={mode}
       comments={comments}
+      highlights={highlights}
       hunkViews={hunkViews}
       emptyNote={emptyNote}
       wholeFileNote={wholeFileNote}
