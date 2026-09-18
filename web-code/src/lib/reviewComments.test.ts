@@ -39,7 +39,7 @@ function response(comments: ReviewComment[], path = "src/lib.rs"): ReviewComment
     review_id: 1,
     repo: "fixture",
     ps: 1,
-    groups: [{ path, comments }],
+    groups: [{ path, in_diff: true, comments }],
   };
 }
 
