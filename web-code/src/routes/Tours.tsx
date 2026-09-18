@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { useTours } from "../hooks/useTours";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { boardsPageUrl, mergeCurrentSearch } from "../lib/codeUrl";
@@ -54,46 +55,50 @@ export default function Tours() {
 
   return (
     <div className="kbc-tours" data-kbc-tours>
-      <header className="kbc-tours__head">
-        <h1 className="kbc-tours__title">Tours — {repo}</h1>
-        <p className="kbc-tours__hint">
-          A tour is a walk through references into this repo — prose, a blob and a camera per
-          step. Every step is re-resolved on every read, and a step whose code moved says{" "}
-          <em>carried</em> rather than pretending its line number still means what it meant.
-        </p>
-        <div className="kbc-tours__controls">
-          <label>
-            <span>Status</span>
-            <select
-              value={statusOptimistic ?? ""}
-              onChange={(e) => {
-                setStatusOptimistic(e.target.value || null);
-                // V76-R4d.3 — merge onto the CURRENT location at call time,
-                // never the render-time snapshot (deferred v7 commits).
-                const value = e.target.value;
-                navigate(
-                  {
-                    search: mergeCurrentSearch((next) => {
-                      if (value) next.set("status", value);
-                      else next.delete("status");
-                    }),
-                  },
-                  { replace: true },
-                );
-              }}
-              aria-label="filter by status"
-              data-kbc-tours-status
-            >
-              <option value="">every status</option>
-              {statuses.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </header>
+      <PageHeader
+        title={`Tours — ${repo}`}
+        lede={
+          <>
+            A tour is a walk through references into this repo — prose, a blob and a camera per
+            step. Every step is re-resolved on every read, and a step whose code moved says{" "}
+            <em>carried</em> rather than pretending its line number still means what it meant.
+          </>
+        }
+        actions={
+          <div className="kbc-tours__controls">
+            <label>
+              <span>Status</span>
+              <select
+                value={statusOptimistic ?? ""}
+                onChange={(e) => {
+                  setStatusOptimistic(e.target.value || null);
+                  // V76-R4d.3 — merge onto the CURRENT location at call time,
+                  // never the render-time snapshot (deferred v7 commits).
+                  const value = e.target.value;
+                  navigate(
+                    {
+                      search: mergeCurrentSearch((next) => {
+                        if (value) next.set("status", value);
+                        else next.delete("status");
+                      }),
+                    },
+                    { replace: true },
+                  );
+                }}
+                aria-label="filter by status"
+                data-kbc-tours-status
+              >
+                <option value="">every status</option>
+                {statuses.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        }
+      />
 
       {query.isLoading ? (
         <div className="kbc-reader__hint">Loading tours…</div>
