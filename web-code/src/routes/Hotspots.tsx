@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router";
 import type { HotspotRow } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import Sparkline from "../components/Sparkline";
 import { useHotspots, useTimeseries } from "../hooks/useBehavioral";
 import { useScopes } from "../hooks/useScopes";
@@ -108,13 +109,15 @@ export default function Hotspots() {
 
   return (
     <div className="kbc-hotspots" id="main" data-kbc-hotspots>
-      <header className="kbc-hotspots__head">
-        <h1 className="kbc-hotspots__title">Hotspots — {repo}</h1>
-        <p className="kbc-hotspots__hint" data-kbc-hotspots-hint>
-          Ranks where to look first from change history — attention signals, not
-          code quality.
-        </p>
-      </header>
+      <PageHeader
+        title={`Hotspots — ${repo}`}
+        lede={
+          <span data-kbc-hotspots-hint>
+            Ranks where to look first from change history — attention signals, not code
+            quality.
+          </span>
+        }
+      />
 
       {hotspots.data?.truncated && (
         <div className="kbc-hotspots__trunc" role="status">
@@ -194,10 +197,10 @@ export default function Hotspots() {
             <thead>
               <tr>
                 <th>Path</th>
-                <th>Revisions</th>
-                <th>Churn</th>
-                <th>Complexity</th>
-                <th>Age</th>
+                <th data-kbc-col-numeric>Revisions</th>
+                <th data-kbc-col-numeric>Churn</th>
+                <th data-kbc-col-numeric>Complexity</th>
+                <th data-kbc-col-numeric>Age</th>
                 <th>Score</th>
               </tr>
             </thead>
@@ -219,16 +222,16 @@ export default function Hotspots() {
                         {row.path}
                       </Link>
                     </td>
-                    <td data-kbc-hotspots-revisions>{row.revisions}</td>
-                    <td data-kbc-hotspots-churn>{row.churn}</td>
-                    <td data-kbc-hotspots-complexity title="loc + indent_sum">
+                    <td data-kbc-hotspots-revisions data-kbc-col-numeric>{row.revisions}</td>
+                    <td data-kbc-hotspots-churn data-kbc-col-numeric>{row.churn}</td>
+                    <td data-kbc-hotspots-complexity data-kbc-col-numeric title="loc + indent_sum">
                       {row.complexity.loc}
                       <span className="kbc-hotspots__dim">
                         {" "}
                         / {row.complexity.indent_sum}
                       </span>
                     </td>
-                    <td data-kbc-hotspots-age>
+                    <td data-kbc-hotspots-age data-kbc-col-numeric>
                       {row.age_days != null ? `${Math.round(row.age_days)}d` : "—"}
                     </td>
                     <td>

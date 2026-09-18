@@ -12,6 +12,12 @@ export interface PageHeaderProps {
   /// Rendered inside the `<h1>`. A caller that needs a badge/icon next to
   /// the text (e.g. Inbox's unread count) puts it here, not in `actions`.
   title: ReactNode;
+  /// V80-R5 — an extra class on the `<h1>` ITSELF (not the outer
+  /// `<header>` — that's `className` below). Only for a caller with a
+  /// pre-existing test-selected class on its title (e.g. Commit's
+  /// `.kbc-commit__subject`, asserted by `time.spec.ts`) that must keep
+  /// resolving after adopting this component; a fresh page never needs it.
+  titleClassName?: string;
   /// A one-line (or short) explanation under the title, `--fs-sm`/muted,
   /// bounded to the reading contract's `--measure` so a long lede still
   /// wraps at a sane column count.
@@ -27,7 +33,14 @@ export interface PageHeaderProps {
   className?: string;
 }
 
-export default function PageHeader({ title, lede, actions, kicker, className }: PageHeaderProps) {
+export default function PageHeader({
+  title,
+  titleClassName,
+  lede,
+  actions,
+  kicker,
+  className,
+}: PageHeaderProps) {
   return (
     <header className={className ? `kbc-page-head ${className}` : "kbc-page-head"}>
       <div className="kbc-page-head__row">
@@ -35,7 +48,9 @@ export default function PageHeader({ title, lede, actions, kicker, className }: 
           {kicker !== undefined && kicker !== null && (
             <div className="kbc-page-head__kicker">{kicker}</div>
           )}
-          <h1 className="kbc-page-head__title">{title}</h1>
+          <h1 className={titleClassName ? `kbc-page-head__title ${titleClassName}` : "kbc-page-head__title"}>
+            {title}
+          </h1>
         </div>
         {actions !== undefined && actions !== null && (
           <div className="kbc-page-head__actions">{actions}</div>
