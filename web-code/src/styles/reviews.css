@@ -494,6 +494,27 @@
 .kbc-review__risk[open] .kbc-review__risk-sum {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
+/* V80-R7 — touch-target hit-slop (padding + canceling negative margin, the
+ * same recipe as `.kbc-review__file-viewed` in mobile.css). Declared HERE,
+ * not in mobile.css: this file is dynamic-imported per route
+ * (`ReviewDetail.tsx`/`ReviewDiff.tsx`/`Reviews.tsx`), so its `<link>`
+ * lands in `<head>` AFTER the eagerly-bundled main-chunk stylesheet that
+ * carries mobile.css — for the SAME property on the SAME selector at equal
+ * specificity, the later stylesheet wins regardless of which one is
+ * conditioned on `@media (pointer: coarse)`. The `padding: 1px 8px`
+ * immediately above is exactly that conflict; overriding it here, later in
+ * THIS file, wins on ordinary same-file source order instead. */
+@media (pointer: coarse) {
+  .kbc-review__risk-sum {
+    /* Horizontal padding restores the base rule's own `8px` (this shorthand
+     * fully replaces the base rule's, including the axis we don't want to
+     * change) — only the vertical axis grows, and only invisibly (negative
+     * margin only on that axis, since horizontal is back to its original
+     * visual size). */
+    padding: 13px 8px;
+    margin: -13px 0;
+  }
+}
 .kbc-review__risk-terms {
   position: absolute;
   right: 0;
@@ -1082,6 +1103,16 @@
   color: var(--ink);
   border-color: var(--accent);
 }
+/* V80-R7 — see the identical comment on `.kbc-review__risk-sum` above:
+ * this file's own unconditional `min-width`/`min-height: 28px` just above
+ * wins over mobile.css's `@media (pointer: coarse)` rule on chunk-load
+ * order, so the touch-target floor is set here instead. */
+@media (pointer: coarse) {
+  .kbc-rdiff__help {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 
 /* --- PRR-U3 — findings overlay selector (design-ui.md §S3) --------------- */
 
@@ -1323,6 +1354,13 @@
 }
 .kbc-rdiff__collapse:hover {
   color: var(--ink);
+}
+/* V80-R7 — same chunk-load-order conflict as `.kbc-rdiff__help` above. */
+@media (pointer: coarse) {
+  .kbc-rdiff__collapse {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 .kbc-rdiff__focus {
   font-size: var(--fs-md);
