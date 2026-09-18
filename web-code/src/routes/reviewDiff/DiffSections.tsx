@@ -30,6 +30,8 @@ import { githubThreadVisibleInOverlay, type OverlayMode } from "../../lib/diffFi
 import { githubOrphansForPath, indexGithubThreadsByLine } from "../../lib/githubThreads";
 import { impactChipText, topChangedSymbol } from "../../lib/reviewImpact";
 import { codeUrl, type DiffCtxDial } from "../../lib/codeUrl";
+import { shortSha } from "../../lib/format";
+import { statusKind } from "../../lib/reviewFileTree";
 import { deepLinkExpands, hunkCollapse } from "../../lib/collapseOnTick";
 import {
   hunkHasThreads,
@@ -51,8 +53,10 @@ import {
   combineExpand,
   contextCaption,
   dialNeedsFile,
+  emptyDiffView,
   expandHunk,
   fileLines,
+  wholeFileHunk,
   type ExpandRequest,
 } from "../../lib/diffContext";
 import { draftsInSpan, type DraftsState } from "../../lib/reviewDrafts";
@@ -134,6 +138,8 @@ export function FileDiffBody({
   overlay,
   githubThreads,
   v2,
+  fileStatus,
+  psNumber,
 }: {
   repo: string;
   reviewId: number;
@@ -152,6 +158,16 @@ export function FileDiffBody({
   /// `"github"` lane.
   githubThreads?: GithubThread[];
   v2?: DiffV2Api | null;
+  /// V80-M1 — this path's REAL `files_changed` row status, or `null`/
+  /// absent when the path is reachable only from OUTSIDE the diff (the
+  /// "All files" tree, or a deep link to a path the diff never touched).
+  /// Feeds `emptyDiffView`'s `inDiff`/`deleted` facts — nothing else reads
+  /// it.
+  fileStatus?: string | null;
+  /// V80-M1 — the resolved patchset number (never `"latest"`), for the
+  /// whole-file caption's "at ps N" clause. `null`/absent degrades the
+  /// caption honestly (`emptyDiffView`'s own doc).
+  psNumber?: number | null;
 }) {
   const navigate = useNavigate();
   const { data, isLoading, error } = useDiff(repo, path, from, to);
@@ -185,11 +201,21 @@ export function FileDiffBody({
     if (parsed && onParsed) onParsed(path, parsed);
   }, [parsed, path, onParsed]);
 
+  // V80-M1 — a real `files_changed` row names this path; absent means the
+  // path is reachable only from OUTSIDE the diff. A known deletion needs
+  // no fetch at all — the file cannot exist at the tip.
+  const inDiff = fileStatus != null && fileStatus !== "";
+  const isDeleted = inDiff && statusKind(fileStatus as string) === "deleted";
+  const noRealHunks = !!parsed && parsed.hunks.length === 0 && !parsed.binary;
+
   // V73-K2a — the context dial. `3` needs nothing (the wire already sent
   // git's own -U3); `10`/`full` splice REAL rows out of the file at this
   // patchset's tip. `useFile` is gated on that, so the default page fires
-  // no extra request per file.
-  const wantFile = !!v2 && dialNeedsFile(v2.ctx);
+  // no extra request per file. V80-M1 widens the gate: a file with zero
+  // REAL hunks (and not already known-deleted) also needs the file, to
+  // build the whole-file body — same fetch, same cache key, no duplicate
+  // request.
+  const wantFile = (!!v2 && dialNeedsFile(v2.ctx)) || (noRealHunks && !isDeleted);
   const fileQ = useFile(wantFile ? repo : undefined, wantFile ? path : undefined, to);
   const contentLines = useMemo(
     () =>
@@ -200,8 +226,42 @@ export function FileDiffBody({
     ? contextCaption(v2.ctx, contentLines !== null, fileQ.isLoading)
     : null;
 
+  // V80-M1 — "the review diff shows ANY file" (`lib/diffContext.ts`'s
+  // `emptyDiffView`/`wholeFileHunk`). Only ever computed when there are no
+  // real hunks; `emptyNote`/`wholeFileNote` are mutually exclusive (see
+  // `DiffFile`'s own doc) and `effectiveParsed` is what actually renders —
+  // `onHunks`/`onParsed` below keep reporting the REAL (possibly empty)
+  // parse, so hunk-cursor stepping and the moved-block index are untouched.
+  let emptyNote: string | undefined;
+  let wholeFileNote: string | undefined;
+  let effectiveParsed = parsed;
+  if (noRealHunks && parsed) {
+    const fetchState: "pending" | "missing" | "binary" | "ready" = isDeleted
+      ? "missing" // unreachable — `deleted` short-circuits emptyDiffView first
+      : fileQ.isLoading
+        ? "pending"
+        : fileQ.error
+          ? "missing"
+          : contentLines === null
+            ? "binary"
+            : "ready";
+    const view = emptyDiffView({
+      inDiff,
+      deleted: isDeleted,
+      fetch: fetchState,
+      psNumber: psNumber ?? null,
+      tipShaShort: to ? shortSha(to) : "",
+    });
+    if (view.renderBody && contentLines) {
+      effectiveParsed = { ...parsed, hunks: [wholeFileHunk(contentLines)] };
+      wholeFileNote = view.caption;
+    } else {
+      emptyNote = view.caption;
+    }
+  }
+
   const hunkViews: HunkView[] | null = useMemo(() => {
-    if (!v2 || !parsed) return null;
+    if (!v2 || !effectiveParsed) return null;
     const threadRefs: HunkThreadRef[] = [];
     for (const list of rawComments?.byLine.values() ?? []) {
       for (const c of list) {
@@ -212,7 +272,7 @@ export function FileDiffBody({
         });
       }
     }
-    return parsed.hunks.map((hunk, i) => {
+    return effectiveParsed.hunks.map((hunk, i) => {
       const id = hunkId(path, hunk);
       const noise = classifyHunk(path, hunk, v2.fileNoise, v2.movedIndex);
       const byNoise = noiseCollapses(v2.noiseMode, noise);
@@ -267,7 +327,7 @@ export function FileDiffBody({
         collapsedBy: collapse.collapsedBy,
       };
     });
-  }, [v2, parsed, path, contentLines, rawComments?.byLine]);
+  }, [v2, effectiveParsed, path, contentLines, rawComments?.byLine]);
 
   // PRR-U9 (design-addendum-2.md §D) — diagnostics for this file. `useDiagnostics`
   // gates its own fetch on the repo's intel provider covering `path`'s
@@ -347,6 +407,11 @@ export function FileDiffBody({
   if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
   if (error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
   if (!parsed) return null;
+  // `effectiveParsed` only ever diverges from `parsed` inside the
+  // `noRealHunks && parsed` branch above, so it is null here IFF `parsed`
+  // is — but that's a runtime fact, not one `let`-narrowing can see, so
+  // spell it out for the type checker rather than asserting it away.
+  const finalParsed = effectiveParsed ?? parsed;
   return (
     <>
     {ctxNote && (
@@ -356,10 +421,12 @@ export function FileDiffBody({
     )}
     <DiffFile
       path={path}
-      parsed={parsed}
+      parsed={finalParsed}
       mode={mode}
       comments={comments}
       hunkViews={hunkViews}
+      emptyNote={emptyNote}
+      wholeFileNote={wholeFileNote}
       currentHunk={v2?.currentHunk ?? null}
       onHunkFold={(hi) => {
         const view = hunkViews?.[hi];
@@ -417,6 +484,7 @@ export function LazyDiffSection({
   githubThreads,
   v2,
   eager,
+  psNumber,
 }: {
   repo: string;
   reviewId: number;
@@ -441,6 +509,11 @@ export function LazyDiffSection({
   /// Mount the body without waiting for IntersectionObserver — used for a
   /// deep-link target so the flash row exists as soon as the diff loads.
   eager?: boolean;
+  /// V80-M1 — the resolved patchset number, forwarded verbatim to
+  /// `FileDiffBody`'s whole-file caption. `fileStatus` is not a separate
+  /// prop here: `file` (a real `ordered` row in this stream) already
+  /// carries it.
+  psNumber?: number | null;
 }) {
   const { ref, inView } = useInViewOnce();
   return (
@@ -497,6 +570,8 @@ export function LazyDiffSection({
               overlay={overlay}
               githubThreads={githubThreads}
               v2={v2}
+              fileStatus={file.status}
+              psNumber={psNumber}
             />
           ) : (
             <div className="kbc-rdiff__placeholder">Scroll to load diff</div>

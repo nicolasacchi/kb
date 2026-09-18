@@ -48,6 +48,17 @@
   }
 }
 
+/* V80-M1 — the whole-file section's caption ("Not changed in this
+ * patchset — showing the whole file…" / "No textual difference"), the
+ * SAME shape `.kbc-rdiff__ctx-note` (reviews.css) already uses for the
+ * context-dial's own honest-degrade note. */
+.kbc-diff__wholefile-note {
+  margin: 0;
+  padding: 2px 10px;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs, 0.8125rem);
+}
+
 /* Mobile is unified-only: hide the split toggle (DiffFile also forces
  * unified via useIsMobile at the same 860px breakpoint). */
 @media (max-width: 860px) {
