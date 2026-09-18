@@ -324,9 +324,16 @@ async fn inbox_route_human_open_excludes_agent_authored_threads_and_includes_eve
     // Exactly one open human thread (the plain note) — the resolved
     // question and the agent-opened question are both excluded.
     assert_eq!(rows[0]["human_open"], 1);
-    // The agent's own open question DOES still count toward
-    // `unanswered_questions` — the two terms are deliberately independent.
-    assert_eq!(rows[0]["unanswered_questions"], 1);
+    // `unanswered_questions` is author-agnostic by design (see
+    // `review_inbox.rs`'s own module doc): BOTH the plain note (thread A,
+    // "you") and the agent's own open question (thread C, "claude") are
+    // unanswered question-intent threads with zero replies, so both count
+    // here — 2, not 1. This is the whole point of the test: the SAME two
+    // threads score differently on the two terms (`human_open` excludes
+    // thread C for its author, `unanswered_questions` does not), proving
+    // they are deliberately independent rather than one a subset of the
+    // other.
+    assert_eq!(rows[0]["unanswered_questions"], 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
