@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router";
 import type { CommentOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import { useComments, useCommentsSummary } from "../hooks/useComments";
 import { readerUrl } from "../lib/breadcrumbs";
 import {
@@ -184,60 +186,65 @@ export default function Comments() {
 
   return (
     <div className="kbc-comments-dash" id="main" data-kbc-comments-dash>
-      <header className="kbc-comments-dash__head">
-        <h1 className="kbc-comments-dash__title">Comments — {repo}</h1>
-        <p className="kbc-comments-dash__hint">
-          comments/1: doc · annotation · directive · section · licence · generated · commented-out
-          code · prose.
-        </p>
-        {boundsCaption && <p className="kbc-comments-dash__bounds">{boundsCaption}</p>}
-      </header>
+      <PageHeader
+        title={`Comments — ${repo}`}
+        lede="comments/1: doc · annotation · directive · section · licence · generated · commented-out code · prose."
+      />
+      {boundsCaption && (
+        <MetaLine className="kbc-comments-dash__bounds" items={[boundsCaption]} />
+      )}
 
       <div className="kbc-comments-dash__filters">
-        <div className="kbc-comments-dash__chips" role="group" aria-label="kind filter">
-          <button
-            type="button"
-            className={"kbc-comments-dash__chip" + (filters.kind === null ? " is-on" : "")}
-            onClick={() => setFilters((f) => ({ ...f, kind: null }))}
-            data-kbc-comments-dash-chip="kind-all"
-          >
-            All kinds
-          </button>
-          {kindChips.map(([kind, count]) => (
-            <button
-              key={kind}
-              type="button"
-              className={"kbc-comments-dash__chip" + (filters.kind === kind ? " is-on" : "")}
-              onClick={() => setFilters((f) => ({ ...f, kind: f.kind === kind ? null : kind }))}
-              data-kbc-comments-dash-chip={`kind-${kind}`}
-            >
-              {KIND_LABELS[kind] ?? kind}
-              <span className="kbc-comments-dash__chip-n">{count}</span>
-            </button>
-          ))}
-        </div>
-        {keywordChips.length > 0 && (
-          <div className="kbc-comments-dash__chips" role="group" aria-label="keyword filter">
+        <div className="kbc-comments-dash__chipgroup">
+          <span className="kbc-comments-dash__chipgroup-label">Kind</span>
+          <div className="kbc-comments-dash__chips" role="group" aria-label="kind filter">
             <button
               type="button"
-              className={"kbc-comments-dash__chip" + (filters.keyword === null ? " is-on" : "")}
-              onClick={() => setFilters((f) => ({ ...f, keyword: null }))}
-              data-kbc-comments-dash-chip="keyword-all"
+              className={"kbc-comments-dash__chip" + (filters.kind === null ? " is-on" : "")}
+              onClick={() => setFilters((f) => ({ ...f, kind: null }))}
+              data-kbc-comments-dash-chip="kind-all"
             >
-              All keywords
+              All kinds
             </button>
-            {keywordChips.map(([kw, count]) => (
+            {kindChips.map(([kind, count]) => (
               <button
-                key={kw}
+                key={kind}
                 type="button"
-                className={"kbc-comments-dash__chip" + (filters.keyword === kw ? " is-on" : "")}
-                onClick={() => setFilters((f) => ({ ...f, keyword: f.keyword === kw ? null : kw }))}
-                data-kbc-comments-dash-chip={`keyword-${kw}`}
+                className={"kbc-comments-dash__chip" + (filters.kind === kind ? " is-on" : "")}
+                onClick={() => setFilters((f) => ({ ...f, kind: f.kind === kind ? null : kind }))}
+                data-kbc-comments-dash-chip={`kind-${kind}`}
               >
-                {kw}
+                {KIND_LABELS[kind] ?? kind}
                 <span className="kbc-comments-dash__chip-n">{count}</span>
               </button>
             ))}
+          </div>
+        </div>
+        {keywordChips.length > 0 && (
+          <div className="kbc-comments-dash__chipgroup">
+            <span className="kbc-comments-dash__chipgroup-label">Keyword</span>
+            <div className="kbc-comments-dash__chips" role="group" aria-label="keyword filter">
+              <button
+                type="button"
+                className={"kbc-comments-dash__chip" + (filters.keyword === null ? " is-on" : "")}
+                onClick={() => setFilters((f) => ({ ...f, keyword: null }))}
+                data-kbc-comments-dash-chip="keyword-all"
+              >
+                All keywords
+              </button>
+              {keywordChips.map(([kw, count]) => (
+                <button
+                  key={kw}
+                  type="button"
+                  className={"kbc-comments-dash__chip" + (filters.keyword === kw ? " is-on" : "")}
+                  onClick={() => setFilters((f) => ({ ...f, keyword: f.keyword === kw ? null : kw }))}
+                  data-kbc-comments-dash-chip={`keyword-${kw}`}
+                >
+                  {kw}
+                  <span className="kbc-comments-dash__chip-n">{count}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         <div className="kbc-comments-dash__row2">
