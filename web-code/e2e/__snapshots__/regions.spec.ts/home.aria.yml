@@ -1,4 +1,9 @@
 - banner
 - banner
+# V80-R1 — the Inbox summary section (routes/Home.tsx's HomeInboxSummary,
+# `<section aria-label="Inbox summary">`) is a deliberate NEW landmark, not
+# a regression: it's the page's first-class first section now, promoted
+# out of the old unlabelled two-card grid row.
+- region "Inbox summary"
 - banner
 - contentinfo

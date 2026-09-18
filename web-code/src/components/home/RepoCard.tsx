@@ -217,20 +217,24 @@ export default function RepoCard({ repo }: RepoCardProps) {
         )}
       </section>
 
-      {/* V80-R1 — the six footer links as a `MetaLine` (its own
-          "·"-separated caption row), rather than hand-rolled `<span
-          aria-hidden>·</span>` separators between each `<Link>`. */}
-      <MetaLine
-        className="kbc-home-card__footer"
-        items={[
-          <Link to={branchesUrl(repo.name)}>Branches</Link>,
-          <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>,
-          <Link to={`${codeBasePath(repo.name, "")}/~todos`}>TODOs</Link>,
-          <Link to={hotspotsUrl(repo.name)}>Hotspots</Link>,
-          <Link to={reviewsUrl(repo.name)}>Reviews</Link>,
-          <Link to={fullSearchUrl("", repo.name)}>Search in {repo.name}</Link>,
-        ]}
-      />
+      {/* V80-R1 fix — the six footer links are a `MetaLine` (its own
+          "·"-separated caption row) INSIDE the `<footer>` that used to wrap
+          them directly: the `<footer>` is what computes to the `contentinfo`
+          landmark `e2e/regions.spec.ts`'s "home" template pins (a bare
+          `MetaLine` has no landmark role of its own), so dropping the
+          wrapper silently deleted that landmark from the page. */}
+      <footer className="kbc-home-card__footer">
+        <MetaLine
+          items={[
+            <Link to={branchesUrl(repo.name)}>Branches</Link>,
+            <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>,
+            <Link to={`${codeBasePath(repo.name, "")}/~todos`}>TODOs</Link>,
+            <Link to={hotspotsUrl(repo.name)}>Hotspots</Link>,
+            <Link to={reviewsUrl(repo.name)}>Reviews</Link>,
+            <Link to={fullSearchUrl("", repo.name)}>Search in {repo.name}</Link>,
+          ]}
+        />
+      </footer>
     </div>
   );
 }
