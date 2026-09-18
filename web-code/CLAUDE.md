@@ -1314,6 +1314,25 @@ second, quietly different answer to a question the server answers exactly.
 Absent (an older daemon), failed or in-flight all read `false`, the safe
 direction, and a refusal is still surfaced with the daemon's own message.
 
+**The `[review] remote_mutations` family has its OWN probe, because
+`useLoopback()` alone can't answer for it.** `review_mutations_gate`
+admits a non-loopback caller when `[review] remote_mutations = true`, so
+"is this caller loopback" is the wrong question for verdict PUT/DELETE,
+finding disposition PUT/DELETE, manual finding create, and publish
+recording. `GET /api/identity`'s additive `review_mutations_admitted`
+(V80-F2) answers the RIGHT one — computed per request from the exact
+peer classification the gate itself runs — and
+`hooks/useReviewMutationsAdmitted.ts` is the one place that reads it,
+paired with one shared caption (`REVIEW_MUTATIONS_ADMITTED_HINT`, naming
+both remedies: run kb-code on the box, or set the config flag). Every
+consumer (`VerdictBar`, `DiffLineComposerV2`'s finding-mode submit,
+`DispositionMenu` and `DiffThread`'s inline disposition chips) disables
+the control and shows that caption BEFORE a submit rather than only after
+one 404s — the fix for a standing v0.37 deferral. Same "never hidden"
+rule as the loopback-only pattern above: a disabled control still shows
+what it would do, with the reason attached, never a control that
+silently vanishes.
+
 ## `~rails` and the Rails reader surfaces (`rails/1`, `V72-I2`)
 
 `routes/Rails.tsx` is a repo-scoped sentinel page mounted in `app.tsx`
