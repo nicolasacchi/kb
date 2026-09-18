@@ -641,6 +641,9 @@
   font-size: 12px;
   text-decoration: none;
   white-space: nowrap;
+  /* V80-R0 — the other clickable bit of a toast; see `.kbc-toast`'s own
+   * `pointer-events: none` in reader.css. */
+  pointer-events: auto;
 }
 .kbc-toast__link:hover {
   text-decoration: underline;
