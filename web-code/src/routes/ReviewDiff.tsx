@@ -1377,18 +1377,48 @@ export default function ReviewDiff() {
   // `focusThreadId` CHANGE (guarded by `lastFlashed` so it never re-flashes
   // the SAME id twice) — `t`/`T` repeatedly change `focusThreadId`, so this
   // is the same machinery, just no longer single-shot.
+  //
+  // V80-R4 (carry-over from M1) — a path OUTSIDE the diff (or with zero
+  // real hunks) renders its thread rows from a WHOLE-FILE body, which
+  // needs `FileDiffBody`'s own `GET /api/file` fetch to land before
+  // `[data-kbc-review-thread]` exists at all — the SAME race the `?line=`
+  // effect below already had to handle (M1 gave THAT one a bounded
+  // retry; this one still bailed on the first miss). Retry a BOUNDED
+  // number of times instead of silently giving up on the flash (root
+  // CLAUDE.md #31's "bounded per-frame retry" posture). A section that
+  // exists but is COLLAPSED is a different, already-handled case — it is
+  // not retried here; `derivedExpandedFiles` is already a dep, so
+  // expanding the section re-runs this effect and finds it un-collapsed.
   const lastFlashed = useRef<string | null>(null);
   useEffect(() => {
     if (!focusThreadId || lastFlashed.current === focusThreadId) return;
-    const el = document.querySelector(`[data-kbc-review-thread="${cssAttr(focusThreadId)}"]`);
-    if (!el) return;
-    const section = el.closest("[data-kbc-rdiff-file]");
-    if (section?.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
-    lastFlashed.current = focusThreadId;
-    el.classList.add("kbc-rdiff__flash");
-    el.scrollIntoView({ block: "center" });
-    const t = window.setTimeout(() => el.classList.remove("kbc-rdiff__flash"), 1400);
-    return () => window.clearTimeout(t);
+    const tid = focusThreadId;
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    let flashTimer: number | undefined;
+
+    function attempt(remaining: number) {
+      if (cancelled || lastFlashed.current === tid) return;
+      const el = document.querySelector(`[data-kbc-review-thread="${cssAttr(tid)}"]`);
+      if (!el) {
+        if (remaining > 0) retryTimer = window.setTimeout(() => attempt(remaining - 1), 150);
+        return;
+      }
+      const section = el.closest("[data-kbc-rdiff-file]");
+      if (section?.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
+      lastFlashed.current = tid;
+      el.classList.add("kbc-rdiff__flash");
+      el.scrollIntoView({ block: "center" });
+      flashTimer = window.setTimeout(() => el.classList.remove("kbc-rdiff__flash"), 1400);
+    }
+    // 20 × 150ms ≈ 3s, the same budget the `?line=` effect below uses.
+    attempt(20);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      window.clearTimeout(flashTimer);
+    };
   }, [focusThreadId, commentsQ.data, hunkCounts, mode, derivedExpandedFiles]);
 
   // `?line=N&side=` deep-link: scroll + flash. Works in both unified and split
@@ -1578,6 +1608,8 @@ export default function ReviewDiff() {
         paths={paths}
         onSetHelpOpen={setHelpOpen}
         onPickFile={openFileInCenter}
+        filesMode={filesMode}
+        onSetFilesMode={setFilesMode}
       />
       <ReviewDiffCenter
         repo={repo}
@@ -1623,7 +1655,6 @@ export default function ReviewDiff() {
         splitRef={splitHandle}
         onOpenFile={openFileInCenter}
         filesMode={filesMode}
-        onSetFilesMode={setFilesMode}
         outsideDiffFiles={outsideDiffFiles}
       />
       <ReviewDiffRail

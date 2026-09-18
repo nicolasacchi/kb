@@ -9,6 +9,7 @@
 // forbids, in this route's shape.
 import type { MutableRefObject } from "react";
 import type { GithubThread, PseudoFile, ReviewFileRow } from "../../api/types";
+import FileHeaderLegend from "../../components/diff/FileHeaderLegend";
 import ReviewMapColumn, { type OutsideDiffFile } from "../../components/reviews/ReviewMapColumn";
 import ReviewMapSplit, { type ReviewMapSplitHandle } from "../../components/reviews/ReviewMapSplit";
 import type { ReviewFileTreeHandle } from "../../components/reviews/ReviewFileTree";
@@ -73,9 +74,10 @@ export interface ReviewDiffCenterProps {
   /// Navigate to single-file focus. Map click uses this so the center
   /// actually opens THAT file (V76-R2b); `]f`/`[f` keep using `onGoFile`.
   onOpenFile?: (path: string) => void;
-  /// V80-M1 — "Changed (N) | All files", threaded to the map column.
+  /// V80-M1 — "Changed (N) | All files", threaded to the map column so it
+  /// renders the right tree. The TOGGLE itself lives in the toolbar's View
+  /// cluster (V80-R4) — this component only reads the mode, never writes it.
   filesMode: "changed" | "all";
-  onSetFilesMode: (mode: "changed" | "all") => void;
   outsideDiffFiles?: readonly OutsideDiffFile[];
 }
 
@@ -123,7 +125,6 @@ export default function ReviewDiffCenter({
   splitRef,
   onOpenFile,
   filesMode,
-  onSetFilesMode,
   outsideDiffFiles,
 }: ReviewDiffCenterProps) {
   const pseudoName = pseudoNameFromPath(focusPath);
@@ -157,7 +158,6 @@ export default function ReviewDiffCenter({
       repo={repo}
       tipSha={tipSha}
       filesMode={filesMode}
-      onSetFilesMode={onSetFilesMode}
       outsideDiffFiles={outsideDiffFiles}
     />
   ) : null;
@@ -205,21 +205,26 @@ export default function ReviewDiffCenter({
                 >
                   <header className="kbc-rdiff__section-head" data-kbc-rdiff-section={file.path}>
                     <span className="kbc-rdiff__section-path">{file.path}</span>
-                    <span className="kbc-review__file-stats">
-                      <span className="kbc-review__file-add">+{file.additions}</span>{" "}
-                      <span className="kbc-review__file-del">−{file.deletions}</span>
+                    <span className="kbc-rdiff__file-cues kbc-rdiff__file-cues--status">
+                      <span className="kbc-review__file-stats">
+                        <span className="kbc-review__file-add">+{file.additions}</span>{" "}
+                        <span className="kbc-review__file-del">−{file.deletions}</span>
+                      </span>
                     </span>
                     {file.blob_sha && (
-                      <label className="kbc-review__file-viewed">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => void toggleViewed(file)}
-                          aria-label={checked ? "mark unviewed" : "mark viewed"}
-                          data-kbc-review-viewed={file.path}
-                        />
-                      </label>
+                      <span className="kbc-rdiff__file-cues kbc-rdiff__file-cues--viewed">
+                        <label className="kbc-review__file-viewed">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => void toggleViewed(file)}
+                            aria-label={checked ? "mark unviewed" : "mark viewed"}
+                            data-kbc-review-viewed={file.path}
+                          />
+                        </label>
+                      </span>
                     )}
+                    <FileHeaderLegend />
                   </header>
                   <FileDiffBody
                     repo={repo}
