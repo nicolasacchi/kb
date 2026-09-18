@@ -1601,6 +1601,37 @@ span.kbc-diff__impact-chip {
   font-size: var(--fs-xs);
   line-height: 1.4;
 }
+/* V80-M1 — "Changed (N) | All files", the same two-button active-toggle
+ * shape `.kbc-diff__modes`/`.kbc-diff__mode` already use (diff.css). */
+.kbc-rmap__files-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-card-hi, var(--bg-panel-2));
+}
+.kbc-rmap__files-mode-btn {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  border-radius: var(--radius-sm, 4px);
+}
+.kbc-rmap__files-mode-btn:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi, var(--bg-panel-2));
+}
+.kbc-rmap__files-mode-btn.is-active,
+.kbc-rmap__files-mode-btn[aria-pressed="true"] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.kbc-rmap__chapter--outside .kbc-rmap__chapter-head {
+  color: var(--ink-mute);
+}
 .kbc-rmap__chapter {
   margin-top: var(--pad-2);
 }
@@ -1728,6 +1759,12 @@ span.kbc-diff__impact-chip {
 .kbc-ftree__row.is-cursor {
   border-left-color: var(--accent);
   background: var(--bg-panel-2);
+}
+/* V80-M1 — "All files": unchanged rows render plain, dimmed relative to a
+ * changed row's full-strength path text (the changed/unchanged distinction
+ * the brief asks the tree to keep visible without a status letter). */
+.kbc-ftree__row--plain .kbc-ftree__path {
+  color: var(--ink-mute);
 }
 .kbc-ftree__twist {
   display: inline-flex;

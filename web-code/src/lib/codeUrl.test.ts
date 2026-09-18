@@ -20,6 +20,7 @@ import {
   parseReviewPs,
   parseReviewTab,
   parseDiffCtx,
+  parseDiffFiles,
   parseDiffMap,
   parseDiffPs,
   formatDiffPs,
@@ -713,6 +714,30 @@ describe("reviewDiffHref", () => {
       ],
       "/r/kb/~reviews/7/diff/a.rs?hunk=deadbeefdeadbeef&expanded=a.rs&hexpanded=deadbeefdeadbeef",
     ],
+    // V80-M1 — `?files=all`, appended LAST.
+    [
+      "files= all",
+      ["kb", 7, undefined, { files: "all" }],
+      "/r/kb/~reviews/7/diff?files=all",
+    ],
+    [
+      "files= 'changed' is omitted (the default)",
+      ["kb", 7, undefined, { files: "changed" }],
+      "/r/kb/~reviews/7/diff",
+    ],
+    [
+      "param ORDER grows at the end AGAIN: hexpanded then files",
+      [
+        "kb",
+        7,
+        "a.rs",
+        {
+          hexpanded: ["deadbeefdeadbeef"],
+          files: "all",
+        },
+      ],
+      "/r/kb/~reviews/7/diff/a.rs?hexpanded=deadbeefdeadbeef&files=all",
+    ],
   ];
   for (const [name, args, expected] of cases) {
     it(name, () => {
@@ -783,6 +808,18 @@ describe("parseDiffMap", () => {
     expect(parseDiffMap("1")).toBe(true);
     expect(parseDiffMap("")).toBe(true);
     expect(parseDiffMap("0")).toBe(false);
+  });
+});
+
+describe("parseDiffFiles", () => {
+  it("defaults to 'changed' — the tree lists only files_changed", () => {
+    for (const raw of [null, "", "changed", "junk", "ALL"]) {
+      expect(parseDiffFiles(raw)).toBe("changed");
+    }
+  });
+
+  it("'all' switches to the whole tip tree", () => {
+    expect(parseDiffFiles("all")).toBe("all");
   });
 });
 
