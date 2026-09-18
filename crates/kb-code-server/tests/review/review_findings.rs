@@ -184,6 +184,87 @@ async fn create_manual_finding(
     (status, body)
 }
 
+/// V80-M5 — a top-level, review-bound human comment (`POST
+/// /api/annotations`, same shape `review_comments.rs`'s own `comment_on`
+/// helper uses) — the adoption fixture every promote test below anchors
+/// against.
+async fn comment_on(
+    client: &reqwest::Client,
+    base: &str,
+    repo: &str,
+    review_id: i64,
+    path: &str,
+    line: u32,
+    body: &str,
+    side: &str,
+) -> serde_json::Value {
+    let resp = client
+        .post(format!("{base}/api/annotations"))
+        .json(&serde_json::json!({
+            "repo": repo,
+            "path": path,
+            "line": line,
+            "body": body,
+            "review_id": review_id,
+            "side": side,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CREATED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    resp.json().await.unwrap()
+}
+
+/// A REPLY on an existing annotation (`parent_id` set) — for the
+/// "adopt-a-reply is 400" test.
+async fn reply_to(
+    client: &reqwest::Client,
+    base: &str,
+    repo: &str,
+    parent_id: &str,
+    body: &str,
+) -> serde_json::Value {
+    let resp = client
+        .post(format!("{base}/api/annotations"))
+        .json(&serde_json::json!({
+            "repo": repo,
+            "path": "order.rb",
+            "body": body,
+            "parent_id": parent_id,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CREATED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    resp.json().await.unwrap()
+}
+
+async fn comments_at(client: &reqwest::Client, base: &str, id: i64, ps: &str) -> serde_json::Value {
+    let resp = client
+        .get(format!("{base}/api/reviews/{id}/comments"))
+        .query(&[("ps", ps)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    resp.json().await.unwrap()
+}
+
 async fn set_disposition(
     client: &reqwest::Client,
     base: &str,
@@ -1185,4 +1266,310 @@ async fn create_manual_finding_wires_evidence_through_to_the_view() {
     .await;
     assert_eq!(status2, 201, "{created2}");
     assert!(created2["evidence"].is_null(), "{created2}");
+}
+
+// --- V80-M5 (D6) — promoting a bound human comment to a finding ---------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_comment_adopts_the_existing_annotation() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let thread = comment_on(
+        &client,
+        &base,
+        "r",
+        id,
+        "order.rb",
+        2,
+        "this looks off\nsecond line",
+        "new",
+    )
+    .await;
+    let ann_id = thread["id"].as_str().unwrap().to_string();
+
+    let (status, created) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "from_annotation_id": ann_id,
+            "severity": "concern",
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    assert_eq!(created["annotation_id"], ann_id, "{created}");
+    assert_eq!(created["origin"], "manual", "{created}");
+    assert_eq!(created["author"], "you", "{created}");
+    assert_eq!(created["category"], "other", "{created}");
+    assert_eq!(created["act"], "issue", "{created}");
+    assert_eq!(created["blocking"], false, "{created}");
+    // Title defaults to the comment's FIRST LINE only, rationale to its
+    // whole body.
+    assert_eq!(created["title"], "this looks off", "{created}");
+    assert_eq!(
+        created["rationale"], "this looks off\nsecond line",
+        "{created}"
+    );
+    // Location is DERIVED from the comment's own anchor, never guessed.
+    assert_eq!(created["location"]["path"], "order.rb", "{created}");
+    assert_eq!(created["location"]["kind"], "single", "{created}");
+    assert_eq!(
+        created["location"]["lines"],
+        serde_json::json!([2]),
+        "{created}"
+    );
+
+    // Round-trips through the list view.
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let f = finding_by_slug(&listed, created["slug"].as_str().unwrap());
+    assert_eq!(f["annotation_id"], ann_id);
+
+    // `GET .../comments` still lists the SAME thread — promoting never
+    // detaches it, it just gains a `review_findings` sibling row.
+    let comments = comments_at(&client, &base, id, "latest").await;
+    let all_comment_ids: Vec<&str> = comments["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| g["comments"].as_array().unwrap())
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        all_comment_ids.contains(&ann_id.as_str()),
+        "promoted thread must still be listed by /comments: {comments}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_comment_lets_the_caller_override_title_and_rationale() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let thread = comment_on(
+        &client,
+        &base,
+        "r",
+        id,
+        "order.rb",
+        2,
+        "raw comment text",
+        "new",
+    )
+    .await;
+    let ann_id = thread["id"].as_str().unwrap().to_string();
+
+    let (status, created) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "from_annotation_id": ann_id,
+            "severity": "blocker",
+            "title": "A better title",
+            "rationale": "A fuller rationale.",
+            "category": "security",
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    assert_eq!(created["title"], "A better title");
+    assert_eq!(created["rationale"], "A fuller rationale.");
+    assert_eq!(created["category"], "security");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_not_bound_to_this_review_is_4xx() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let review_a = create_review(&client, &base, "r").await;
+    let review_b = create_review(&client, &base, "r").await;
+    let thread = comment_on(
+        &client,
+        &base,
+        "r",
+        review_a,
+        "order.rb",
+        2,
+        "on review A",
+        "new",
+    )
+    .await;
+    let ann_id = thread["id"].as_str().unwrap().to_string();
+
+    let (status, body) = create_manual_finding(
+        &client,
+        &base,
+        review_b,
+        &serde_json::json!({
+            "from_annotation_id": ann_id,
+            "severity": "concern",
+        }),
+    )
+    .await;
+    assert!(
+        status.is_client_error(),
+        "expected a 4xx for an annotation not bound to THIS review, got {status}: {body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_the_same_comment_twice_is_409() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let thread = comment_on(
+        &client,
+        &base,
+        "r",
+        id,
+        "order.rb",
+        2,
+        "double promote me",
+        "new",
+    )
+    .await;
+    let ann_id = thread["id"].as_str().unwrap().to_string();
+
+    let (status1, first) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({ "from_annotation_id": ann_id, "severity": "concern", "slug": "f-first" }),
+    )
+    .await;
+    assert_eq!(status1, 201, "{first}");
+
+    let (status2, second) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({ "from_annotation_id": ann_id, "severity": "ok", "slug": "f-second" }),
+    )
+    .await;
+    assert_eq!(
+        status2,
+        reqwest::StatusCode::CONFLICT,
+        "an annotation already backing a finding must 409 on a second adoption, got {second}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_a_reply_is_400() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let thread = comment_on(
+        &client,
+        &base,
+        "r",
+        id,
+        "order.rb",
+        2,
+        "the thread opener",
+        "new",
+    )
+    .await;
+    let thread_id = thread["id"].as_str().unwrap().to_string();
+    let reply = reply_to(&client, &base, "r", &thread_id, "a reply, not a thread").await;
+    let reply_id = reply["id"].as_str().unwrap().to_string();
+
+    let (status, body) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({ "from_annotation_id": reply_id, "severity": "concern" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "a reply is not a promotable thread: {body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_an_unknown_annotation_is_404() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let (status, body) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({ "from_annotation_id": "a_doesnotexist", "severity": "concern" }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promote_a_path_less_general_comment_400s_by_name() {
+    // A review-level "General" comment (`anchor_kind: "review"`, path-less)
+    // has no line for a finding to anchor against — 400 by name, never a
+    // guess (this module's own "Adoption" doc).
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let resp = client
+        .post(format!("{base}/api/annotations"))
+        .json(&serde_json::json!({
+            "repo": "r",
+            "path": "",
+            "anchor_kind": "review",
+            "body": "a general question about the review",
+            "review_id": id,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CREATED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let general: serde_json::Value = resp.json().await.unwrap();
+    let ann_id = general["id"].as_str().unwrap().to_string();
+
+    let (status, body) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({ "from_annotation_id": ann_id, "severity": "concern" }),
+    )
+    .await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("review"),
+        "expected the 400 to name the offending anchor kind: {body}"
+    );
 }
