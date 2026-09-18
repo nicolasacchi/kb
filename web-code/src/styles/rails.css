@@ -9,26 +9,18 @@
    author by accident. */
 
 .kbc-rails {
-  max-width: 1040px;
+  max-width: var(--measure, 1040px);
   margin: 0 auto;
   padding: 32px 16px 64px;
 }
-.kbc-rails__head {
-  margin-bottom: 16px;
-}
-.kbc-rails__title {
-  font-size: 24px;
-  margin: 0 0 4px;
-}
-.kbc-rails__hint,
 .kbc-rails__muted {
   color: var(--ink-mute);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-rails__error {
   color: var(--danger);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 /* --- passport --------------------------------------------------------- */
@@ -49,7 +41,7 @@
   display: flex;
   gap: 6px;
   align-items: baseline;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-rails__passport-fact dt {
   color: var(--ink-mute);
@@ -58,6 +50,7 @@
 .kbc-rails__passport-fact dd {
   margin: 0;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .kbc-rails__counts {
   display: flex;
@@ -71,7 +64,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 2px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-rails__count-n {
   font-variant-numeric: tabular-nums;
@@ -81,7 +74,7 @@
 /* --- honesty ---------------------------------------------------------- */
 .kbc-rails__honesty {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 6px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
@@ -99,7 +92,7 @@
 .kbc-rails__note,
 .kbc-rails__caption {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   line-height: 1.5;
 }
@@ -122,14 +115,14 @@
   text-align: left;
 }
 .kbc-rails__section-title {
-  font-size: 15px;
+  font-size: var(--fs-title);
   font-weight: 600;
   margin: 0;
 }
 .kbc-rails__section-n {
   font-variant-numeric: tabular-nums;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-rails__section-body {
   padding-top: 10px;
@@ -149,10 +142,10 @@
   border-radius: var(--radius-sm);
   background: var(--bg-input, var(--bg-card));
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-rails__page-caption {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
 }
@@ -167,7 +160,7 @@
   color: var(--ink);
   border-radius: var(--radius-sm);
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-rails__paging button:disabled {
@@ -199,7 +192,7 @@
 }
 .kbc-railscard__name {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-lg);
   color: var(--ink);
   text-decoration: none;
   overflow-wrap: anywhere;
@@ -210,13 +203,13 @@
 .kbc-railscard__addr {
   margin: 2px 0 6px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   overflow-wrap: anywhere;
 }
 .kbc-railscard__orphan {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   border: 1px dashed var(--warn);
   border-radius: var(--radius-sm);
@@ -231,7 +224,7 @@
 .kbc-railscard__fact {
   display: flex;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-railscard__fact dt {
   color: var(--ink-mute);
@@ -249,7 +242,7 @@
   list-style: none;
   margin: 0 0 6px;
   padding: 0;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--warn);
 }
 .kbc-railscard__chips {
@@ -261,7 +254,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 1px 8px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   text-decoration: none;
 }
@@ -271,7 +264,7 @@
 }
 .kbc-railscard__witness {
   margin: 6px 0 0;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   line-height: 1.4;
 }
@@ -285,7 +278,7 @@
   background: var(--bg-card);
 }
 .kbc-rails__lane-title {
-  font-size: 13px;
+  font-size: var(--fs-lg);
   margin: 0 0 4px;
   display: flex;
   gap: 8px;
@@ -294,12 +287,12 @@
 .kbc-rails__lane-n {
   font-variant-numeric: tabular-nums;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-rails__lane-why,
 .kbc-rails__lane-caption {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   line-height: 1.5;
 }
@@ -322,12 +315,12 @@
   align-items: baseline;
   text-decoration: none;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   min-width: 0;
 }
 .kbc-rails__lane-path {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   overflow-wrap: anywhere;
 }
@@ -348,11 +341,11 @@
 }
 .kbc-schema__title {
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-schema__table {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kbc-schema__fold {
@@ -361,7 +354,7 @@
   background: none;
   color: var(--ink-mute);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 1px 8px;
   cursor: pointer;
 }
@@ -372,7 +365,7 @@
 .kbc-schema__cols {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kbc-schema__cols th {
   text-align: left;
@@ -385,7 +378,7 @@
   padding: 0;
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kbc-schema__colname:hover {
@@ -401,7 +394,7 @@
   overflow-wrap: anywhere;
 }
 .kbc-schema__section pre {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   margin: 4px 0 0;
   white-space: pre-wrap;
@@ -409,7 +402,7 @@
 .kbc-schema__caption,
 .kbc-schema__absence {
   margin: 6px 0 0;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   line-height: 1.4;
 }
@@ -424,7 +417,7 @@
   background: none;
   color: var(--ink-mute);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 1px 8px;
   cursor: pointer;
 }
@@ -436,11 +429,11 @@
 .kbc-railsatoms {
   border-top: 1px solid var(--line);
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-railsatoms__head {
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   margin-bottom: 4px;
 }
@@ -449,7 +442,7 @@
 }
 .kbc-railsatoms__kind {
   margin: 0 0 2px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
 }
 .kbc-railsatoms__targets {
@@ -467,7 +460,7 @@
 }
 .kbc-railsatoms__target {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   overflow-wrap: anywhere;
 }
@@ -477,7 +470,7 @@
 .kbc-railsatoms__dstkind,
 .kbc-railsatoms__note,
 .kbc-railsatoms__caption {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   line-height: 1.4;
 }
@@ -486,7 +479,7 @@
   margin: 4px 0 0;
 }
 .kbc-railsatoms__search {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kbc-railsatoms__actions {
@@ -501,14 +494,14 @@
   display: flex;
   gap: 6px;
   align-items: baseline;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kbc-railsatoms__action-cli {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kbc-railsatoms__action-off {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--warn);
 }
