@@ -34,8 +34,10 @@ import SearchSection from "../components/search/SearchSection";
 import FacetRail from "../components/search/FacetRail";
 import SearchPreview from "../components/search/SearchPreview";
 import { useOmniSearch } from "../hooks/useOmniSearch";
+import { useReviewFiles } from "../hooks/useReviews";
 import { useScopes } from "../hooks/useScopes";
 import { readerUrl } from "../lib/breadcrumbs";
+import { useCurrentReview } from "../lib/currentReview";
 import { sectionsToRowCounts } from "../lib/omniSearch";
 import { initialPaletteState, paletteReducer } from "../lib/paletteReducer";
 import { applyPrefixChip, PREFIX_CHIPS } from "../lib/prefixChips";
@@ -116,6 +118,25 @@ export default function Search() {
 
   const { sections, loading, error, response } = useOmniSearch(q, repo, LIMIT);
   const scopes = useScopes();
+
+  // V80-M3 — "in review diff" chip: ONE fetch of the current review's
+  // changed files (`lib/currentReview.ts`), never a per-row fetch. Only
+  // possible while the search itself is scoped to a repo (`?repo=`) —
+  // there is no single "current review" to mean anything for a fleet-wide
+  // search, and an unscoped hit's OWN repo may not even be the one the
+  // marker is for.
+  const currentReview = useCurrentReview(repo ?? "");
+  const currentReviewIdNum = currentReview ? Number(currentReview.id) : NaN;
+  const reviewFilesQ = useReviewFiles(
+    repo,
+    Number.isFinite(currentReviewIdNum) ? currentReviewIdNum : undefined,
+    "latest",
+    !!repo && !!currentReview && Number.isFinite(currentReviewIdNum),
+  );
+  const reviewFilePaths = useMemo(
+    () => (reviewFilesQ.data ? new Set(reviewFilesQ.data.files.map((f) => f.path)) : null),
+    [reviewFilesQ.data],
+  );
   const [state, dispatch] = useReducer(paletteReducer, initialPaletteState());
   const trimmedQ = q.trim();
 
@@ -449,6 +470,8 @@ export default function Search() {
                 onRamp={(rung, target) => {
                   ramp.activate(rung, target);
                 }}
+                reviewFilePaths={reviewFilePaths}
+                reviewFileRepo={repo}
               />
             ))
           )}

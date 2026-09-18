@@ -285,6 +285,20 @@
   font-size: 10px;
   text-transform: uppercase;
 }
+/* V80-M3 — "in review diff" (a hit whose path is in the current review's
+ * changed files). LINE-style (a border, not a solid fill) — root
+ * CLAUDE.md's rule for any marker that carries meaning: never hue-only. */
+.kbc-search__inreview {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  color: var(--ink-mute);
+  font-size: 10px;
+  text-transform: uppercase;
+  background: transparent;
+}
 .kbc-search__mark {
   background: color-mix(in srgb, var(--warn) 35%, transparent);
   color: var(--ink);

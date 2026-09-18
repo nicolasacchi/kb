@@ -10,6 +10,8 @@ import { applyPrefixChip } from "../lib/prefixChips";
 import { fullSearchUrl, orderSections } from "../lib/searchLanes";
 import { resolveSearchTarget } from "../lib/searchTargets";
 import { useOmniSearch } from "../hooks/useOmniSearch";
+import { useReviewFiles } from "../hooks/useReviews";
+import { useCurrentReview } from "../lib/currentReview";
 import PrefixChips from "./search/PrefixChips";
 import SearchSection from "./search/SearchSection";
 import { useCommands } from "../commands/CommandRoot";
@@ -93,6 +95,22 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
   const { sections, loading, error } = useOmniSearch(commandMode ? "" : q, repo, LIMIT);
   const [state, dispatch] = useReducer(paletteReducer, initialPaletteState());
   const ordered = useMemo(() => orderSections(sections), [sections]);
+
+  // V80-M3 — "in review diff" chip, same ONE-fetch shape `routes/Search.tsx`
+  // uses: only possible while the omnibox is scoped to a repo (opened from
+  // inside the reader).
+  const currentReview = useCurrentReview(repo ?? "");
+  const currentReviewIdNum = currentReview ? Number(currentReview.id) : NaN;
+  const reviewFilesQ = useReviewFiles(
+    repo,
+    Number.isFinite(currentReviewIdNum) ? currentReviewIdNum : undefined,
+    "latest",
+    !!repo && !!currentReview && Number.isFinite(currentReviewIdNum),
+  );
+  const reviewFilePaths = useMemo(
+    () => (reviewFilesQ.data ? new Set(reviewFilesQ.data.files.map((f) => f.path)) : null),
+    [reviewFilesQ.data],
+  );
 
   /// Run a palette row. `mutation !== "none"` goes through the ONE
   /// ConfirmProvider (root CLAUDE.md #32) — a palette makes every destructive
@@ -371,6 +389,8 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
                   onRamp={(rung, target) => {
                     ramp.activate(rung, target);
                   }}
+                  reviewFilePaths={reviewFilePaths}
+                  reviewFileRepo={repo}
                 />
               ))}
           </div>
