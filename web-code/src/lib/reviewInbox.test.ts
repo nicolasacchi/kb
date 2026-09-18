@@ -18,6 +18,7 @@ function inboxRow(overrides: Partial<ReviewInboxRow> = {}): ReviewInboxRow {
     title: "Fix the thing",
     unresolved_findings: 0,
     unanswered_questions: 0,
+    human_open: 0,
     verdict: null,
     verdict_stale: false,
     pr_head_drift: null,
