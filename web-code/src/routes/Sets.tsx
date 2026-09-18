@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router";
 import type { SetSummary } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useCreateSet, useDeleteSet, usePatchSet, useSets } from "../hooks/useSets";
 import { relativeTime } from "../lib/format";
@@ -81,12 +82,10 @@ export default function Sets() {
 
   return (
     <div className="kbc-sets" id="main">
-      <header className="kbc-sets__head">
-        <h1 className="kbc-sets__title">Reading sets — {repo}</h1>
-        <p className="kbc-sets__hint">
-          Ordered file/span walkthroughs — build one from the reader's "+ Set" menu, or start here.
-        </p>
-      </header>
+      <PageHeader
+        title={`Reading sets — ${repo}`}
+        lede={'Ordered file/span walkthroughs — build one from the reader\'s "+ Set" menu, or start here.'}
+      />
 
       <form className="kbc-sets__create" onSubmit={(e) => void create(e)} data-kbc-sets-create-form>
         <input

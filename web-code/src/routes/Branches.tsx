@@ -6,6 +6,7 @@ import BrowseAllBranches from "../components/branches/BrowseAllBranches";
 import RankedBranchList from "../components/branches/RankedBranchList";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { useBranches } from "../hooks/useBranches";
 import { useWorkspaceGroups } from "../hooks/useSets";
 import { readerUrl } from "../lib/breadcrumbs";
@@ -60,7 +61,7 @@ export default function Branches() {
 
   return (
     <div className="kbc-branches">
-      <h1 className="kbc-branches__title">Branches</h1>
+      <PageHeader title="Branches" />
       {truncated && (
         <div className="kbc-branches__truncated" data-kbc-branches-truncated>
           Showing a bounded subset of branches.
