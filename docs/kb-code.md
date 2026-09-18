@@ -33,6 +33,33 @@ reading for humans and agents") and its implementation plan live as
 artifacts in the `research` kb corpus (outside this repo) rather than under
 `docs/research/` here.
 
+**Binding a comment to a review after the fact (V80-M0).** Review-scoped
+comments were previously reachable ONLY at create time
+(`CreateAnnotationBody.review_id`/`ps`/`side`); `kb-code annotate bind <ID>
+--review N [--ps N] [--side old|new]` (`PUT /api/annotations/{id}/review`)
+and `kb-code annotate unbind <ID>` (`DELETE`, idempotent) let a human, from
+the plain file reader, write a working-tree note and attach it to a
+review — or move an existing comment between reviews — so it shows in
+that review's Room beside the agent's findings. Validation mirrors
+create's (`review` exists, belongs to the same repo, `ps` defaults to
+latest); binding ALSO refuses onto a `closed` review (`409
+urn:kb:errors:review-closed`), a check create does not make. A REPLY has
+no scope of its own (it always inherits its parent's) and 400s naming
+`parent_id`. Binding never refuses because the path/line is absent at the
+target patchset's pinned sha — the daemon's usual rule holds here too ("a
+wrong line is worse than an honest orphan"): the row lazily resolves as an
+`orphaned` thread on the next `GET /api/reviews/{id}/comments`, exactly
+like any other carry-forward miss. A rebind onto a DIFFERENT review emits
+a SECOND `annotation.changed` SSE frame naming the OLD review id, so both
+Rooms invalidate. The same `bind_review`/`unbind_review` ops exist on
+`POST /api/annotations/batch`. `GET /api/reviews/{id}/comments` additionally
+captions each path group `in_diff: true|false` — whether that path is one
+`files_changed(base_sha, tip_sha)` touched at the target patchset — so the
+Room (and `kb-code review comments ID`'s human output, grouped under `in
+the diff` / `outside the diff` / `general`) can tell a comment that lands
+on a changed file from one that does not. It is a per-read caption, never
+a filter: every comment is still listed either way.
+
 **`kb-code review distill <ID> [--json]`** (CT-E7, `GET
 /api/reviews/{id}/distill`, `review-distill/1`) composes one completed
 review's full local record — meta, every patchset, files touched at the

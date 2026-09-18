@@ -1034,6 +1034,24 @@ invariant #2 records).
     unchanged — every authoring surface here is loopback-only and root
     invariant #4 is not amended. `review_doc::routes::V73_K1_ROUTES` joins
     invariant 15's `RouteContract` walk from both sides.
+    (e) **A plain annotation's review scope is set ONLY at create or bind,
+    never inferred from its path** (V80-M0, `routes::{resolve_review_
+    create_scope,resolve_review_bind_scope}` share one `resolve_review_
+    ps_side` core). `PUT`/`DELETE /api/annotations/{id}/review`
+    (bind/rebind/unbind, plus the batch `bind_review`/`unbind_review` ops)
+    are the ONLY way to change `review_id`/`ps_number`/`side` on an
+    EXISTING row — same "PATCH never touches anchor" discipline
+    `update_annotation` already has for those columns, just for THESE
+    three instead. Binding additionally REFUSES a `closed` review (`409`,
+    `reviews::ERR_REVIEW_CLOSED`) — a check create does not make, since
+    binding is a deliberate later action on an existing comment, not a
+    fresh finding filed while the review is still live. `GET
+    /api/reviews/{id}/comments`'s per-group `in_diff` (from `crate::
+    reviews::changed_path_set`/`changed_path_set_from`, reusing
+    `files_changed` — never a second `git diff`) is a per-READ CAPTION
+    ONLY: computed fresh every call, never persisted, and never a filter
+    — a comment on a file outside the diff is still listed, merely
+    labelled `in_diff: false`.
 
 24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by
