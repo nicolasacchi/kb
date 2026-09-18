@@ -613,23 +613,116 @@
    * padding) and the publish-mark toggle (`.kbc-publish-mark`, same
    * pill shape) were both missed by the original coarse-pointer sweep. */
   .kbc-dispo,
-  .kbc-publish-mark {
+  .kbc-publish-mark,
+  /* V80-R7 — the mobile touch-target audit's own sweep of every remaining
+   * plain-button-shaped control across Home/Search/Reader/Reviews/Room/
+   * review-diff (the six pages named in the unit brief). Grouped by shared
+   * rule so a future control joins ONE list instead of inventing a new
+   * block — same recipe this file already uses. Repo pill (shared
+   * chrome, reader.css/topbar.css): */
+  .kbc-repopill-home,
+  .kbc-repopill,
+  /* Reader toolbar controls the SH.C3 comment above explicitly deferred
+   * ("widening those is a separate, not-yet-run touch-target pass") —
+   * this IS that pass. */
+  .kbc-topbar__chip,
+  .kbc-sticky-toggle,
+  .kbc-provenance-toggle__opt,
+  .kbc-refpicker__trigger,
+  .kbc-addset__trigger,
+  /* Search page toolbar chips (incl. the `<summary>` "Actions" disclosure
+   * and every revealed overflow-menu chip — same class, `.kbc-search__chip-
+   * btn`, already wraps via `flex-wrap: wrap` on both `.kbc-search__chips`
+   * and `.kbc-searchpage__toolbar-menu-panel`, so a taller row just wraps
+   * sooner, never scrolls or clips). */
+  .kbc-search__chip-btn,
+  .kbc-searchpage__input,
+  .kbc-searchpage__refine,
+  /* Review list "Start review" + Room's shared `.kbc-review__action`
+   * (Open full page/Guided tour/Snapshot now/Close/Delete/Comment/Approve/
+   * Request changes all resolve to this one class per reviews.css). */
+  .kbc-reviews__start,
+  .kbc-review__action,
+  .kbc-review__compare-toggle,
+  .kbc-review__view-tab,
+  .kbc-review__filter,
+  .kbc-review__sort,
+  .kbc-review__sort-lab,
+  /* The Room's OWN file tree (`kbc-ftree__*` — distinct from the Reader's
+   * `kbc-tree__*` mobile-drawer tree that V80-F1 owns; see that unit's
+   * note in the brief before touching `.kbc-tree__row`). */
+  .kbc-ftree__row,
+  .kbc-ftree__section-head,
+  /* review-diff toolbar icon buttons — `.kbc-rdiff__toolbar` is already in
+   * the h-scroll sweep below, so a taller button just scrolls, never wraps
+   * or clips. `.kbc-rdiff__help`/`.kbc-rdiff__collapse` are NOT here: both
+   * carry their OWN unconditional `min-width`/`min-height: 28px` in
+   * reviews.css, a same-property/same-specificity conflict that a lazily
+   * chunk-loaded stylesheet can win over this eagerly-loaded one purely on
+   * chunk-injection order (reviews.css is dynamic-imported per route, this
+   * file is a static `main.tsx` import) — the touch-target audit caught
+   * this losing silently. Fixed at the source instead, right next to each
+   * base rule in reviews.css, where same-file source order makes the
+   * override unconditionally win. `.kbc-review__risk-sum` has the same
+   * fix in the same place for the same reason (its own `padding` conflict). */
+  .kbc-rdiff__cluster-trigger,
+  .kbc-rdiff__file-legend-btn,
+  /* the Reviews landing's "all sessions" + the Room's "Analytics"
+   * `<details>` disclosures (review-inbox.css / review-analytics.css)
+   * share this shape too — grouped in here rather than duplicated. */
+  .kbc-inbox-browse__summary,
+  .kbc-analytics__summary {
     min-height: 44px;
   }
   .kbc-burger,
   .kbc-inspector-toggle,
   .kbc-review-sheet-toggle,
-  .kbc-iconbtn {
+  .kbc-iconbtn,
+  .kbc-search-mini,
+  .kbc-repopill-home,
+  .kbc-search__chip-btn,
+  .kbc-rdiff__file-legend-btn,
+  .kbc-provenance-toggle__opt {
     min-width: 44px;
   }
-  /* Tree rows + working-set chips. */
-  .kbc-tree__row,
+  .kbc-inbox-browse__summary,
+  .kbc-analytics__summary {
+    display: flex;
+    align-items: center;
+  }
+  /* `.kbc-repopill-home` is icon-only ("R") — center it in its new 44px
+   * box rather than leaving the icon flush left of the added width.
+   * `.kbc-search__chip-btn` also matches the toolbar's `<summary>Actions
+   * </summary>` disclosure (native `display: list-item`, not flex) — force
+   * it onto the same centered-row layout every other chip in the group
+   * already has. */
+  .kbc-repopill-home,
+  .kbc-search__chip-btn {
+    justify-content: center;
+  }
+  .kbc-search__chip-btn {
+    display: inline-flex;
+    align-items: center;
+  }
+  /* Working-set chips: bumped from the tree drawer's own 40px (F1's
+   * territory, `.kbc-tree__row` — left untouched) up to the full 44px
+   * floor this pass targets everywhere else. (This rule used to also
+   * cover `.kbc-rdiff__file-row`, the review-diff mobile file row — V80-F1
+   * dropped that flat list for the drawer's own `ReviewFileTree`
+   * [`.kbc-drawer .kbc-ftree__row`, above], so `.kbc-rdiff__file-row` is
+   * now dead CSS; dropped here rather than left targeting nothing.) */
   .kbc-ws-chip {
+    min-height: 44px;
+  }
+  /* `.kbc-tree__row` (the Reader's mobile drawer file tree) stays at 40px
+   * here — V80-F1 owns its own touch-target pass on that component; see
+   * WAVE3-PREAMBLE.md / the R7 unit brief. */
+  .kbc-tree__row {
     min-height: 40px;
   }
   /* Inspector rail's icon tabs + comments/annotations action buttons. */
   .kbc-inspector__itab {
-    min-height: 40px;
+    min-height: 44px;
   }
   /* SH.C1 — omnibox result rows + section headers, missed by the earlier
    * coarse-pointer sweep. */
@@ -642,15 +735,113 @@
    * `<label>` that natively toggles its `<input>` on click — reviews.css,
    * shared by the cockpit file list AND the diff toolbar's own viewed
    * checkboxes) reads at ~18px (reviews.css bump, both pointers). Pad the
-   * label out to a real ~40px tap target rather than growing the checkbox
+   * label out to a real tap target rather than growing the checkbox
    * further; the negative margin cancels the padding's footprint so
-   * neighboring row content doesn't shift. */
+   * neighboring row content doesn't shift.
+   * V80-R7: 11px → 13px — the touch-target audit's ≥44px floor (18px
+   * checkbox + 2×13px = 44px; the prior 11px landed at ~40px). */
   .kbc-review__file-viewed {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 11px;
-    margin: -11px;
+    padding: 13px;
+    margin: -13px;
+  }
+  /* SH.C2's own checkbox-in-a-label recipe, same class shape, for the
+   * Reviews list "Show closed" filter. */
+  .kbc-reviews__filter {
+    padding: 13px 8px;
+    margin: -13px -8px;
+  }
+
+  /* V80-R7 — hit-slop pass: dense inline text links (breadcrumbs, home
+   * dashboard card rows, inline lens chips, tiny badge/pill links) where
+   * growing the VISIBLE box would either misalign a tight nowrap trail
+   * (breadcrumbs) or inflate a deliberately-dense list (Home's per-repo
+   * cards). Same padding+negative-margin recipe as `.kbc-review__file-
+   * viewed` above: the invisible tap area grows to ≥44px on the shorter
+   * axis without moving a single visible pixel of surrounding layout. Each
+   * selector below sits inline next to siblings that get the SAME
+   * treatment, so the invisible boxes may overlap each other at the
+   * boundary — normal and harmless for adjacent hit-slop (the tap still
+   * resolves to whichever element's content it lands nearest), never
+   * overlapping unrelated page content.
+   *
+   * Honest residual: the vertical padding below (15px) guarantees ≥44px
+   * height on every instance measured (the shortest is 14px tall). Width
+   * is NOT guaranteed to 44px for the very narrowest members of this
+   * group — a single-digit ahead/behind count (`.kbc-home-card__chip a`,
+   * ~4-6px of glyph) or a one-word breadcrumb segment (`.kbc-breadcrumbs
+   * a`, e.g. "src" at 17px) would need ~15-20px of horizontal padding
+   * EACH side to reach 44px, and at these elements' tight native spacing
+   * (a 6px chip gap, a 4px breadcrumb separator margin) that much padding
+   * overlaps the NEXT interactive sibling's own hit-slop, not just empty
+   * space — turning "tap near this number" into "tap ambiguously resolves
+   * to one of two adjacent numbers." 6px horizontal padding is a real,
+   * substantial improvement (in some cases 4-5x the original width) without
+   * that regression; the report names which instances still fall short of
+   * 44px width and why. */
+  .kbc-breadcrumbs a,
+  .kbc-breadcrumbs__symbol,
+  .kbc-rdiff__focus,
+  .kbc-home-card__chip a,
+  .kbc-home-card__footer a {
+    padding: 15px 6px;
+    margin: -15px -6px;
+  }
+  /* `.kbc-lens__chip` is NOT in the group above: unlike the others, it
+   * paints a filled pill `background` — the padding+negative-margin trick
+   * would grow that painted background right along with the padding
+   * (verified visually: it produced a highlighter-sized box overlapping
+   * the code lines below), which is exactly the "moving a visible pixel"
+   * outcome this whole pass is supposed to avoid. A transparent `::before`
+   * overlay is the correct hit-slop primitive for a element with its own
+   * background: the invisible layer extends the tappable AREA without
+   * being part of the chip's own painted box. */
+  .kbc-lens__chip {
+    position: relative;
+  }
+  .kbc-lens__chip::before {
+    content: "";
+    position: absolute;
+    inset: -15px -6px;
+  }
+  .kbc-home__section-title a,
+  .kbc-home-card__name,
+  a.kbc-home-card__head,
+  .kbc-home-card__branch-name,
+  .kbc-reviews__row-title,
+  .kbc-reviews__all-prs,
+  .kbc-review__back {
+    display: inline-block;
+    padding: 13px 9px;
+    margin: -13px -9px;
+  }
+  /* `.kbc-rdiff__back` is already `display: inline-flex` (icon + label
+   * gap, reviews.css) — same padding recipe, no `display` override so its
+   * existing flex layout survives untouched. */
+  .kbc-rdiff__back {
+    padding: 13px 9px;
+    margin: -13px -9px;
+  }
+  .kbc-home__inbox-link {
+    padding: 13px 0;
+    margin: -13px 0;
+  }
+  /* `.kbc-review__risk-sum`'s own fix lives in reviews.css, next to its
+   * base rule — see the comment on `.kbc-rdiff__cluster-trigger` above. */
+  /* Home's "recent file" list row and the Inbox-summary lane link are
+   * real, full-width-ish list rows (not inline prose) — grow them for
+   * real rather than hit-slop, same idiom as `.kbc-ftree__row` above. */
+  .kbc-home-card__file {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .kbc-home__inbox-lane-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
   }
 
   /* Review-mode gutter compose is too small; the row-tap pill is the
