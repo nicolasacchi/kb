@@ -34,7 +34,7 @@
   cursor: pointer;
 }
 .kbc-stacks__default {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   font-family: var(--font-mono, monospace);
 }
@@ -45,7 +45,7 @@
   border: 1px solid var(--warn);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-stacks__muted {
   color: var(--ink-mute);
@@ -116,21 +116,22 @@
   font-size: 13px;
 }
 .kbc-stacks__layer-base {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   font-family: var(--font-mono, monospace);
 }
 .kbc-stacks__layer-ab {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
 }
 .kbc-stacks__layer-tip {
   flex: 1 1 100%;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-stacks__tag {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid var(--rule);
@@ -193,7 +194,7 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kbc-layered-dag__leg-import,
