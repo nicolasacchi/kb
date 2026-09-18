@@ -73,6 +73,10 @@ export interface ReviewDiffToolbarProps {
   jumpHits: SpeedFilterHit<ReviewFileRow>[];
   paths: string[];
   onSetHelpOpen: (open: boolean) => void;
+  /// V80-M1 — a jump hit outside `paths` (an "All files" candidate with no
+  /// cursor index) navigates through THIS instead of `onGoFile` — the same
+  /// path-based single-file-focus navigation the map column's tree uses.
+  onPickFile: (path: string) => void;
 }
 
 export default function ReviewDiffToolbar({
@@ -122,6 +126,7 @@ export default function ReviewDiffToolbar({
   jumpHits,
   paths,
   onSetHelpOpen: setHelpOpen,
+  onPickFile,
 }: ReviewDiffToolbarProps) {
   return (
       <header className="kbc-rdiff__toolbar" data-kbc-rdiff-toolbar>
@@ -343,8 +348,12 @@ export default function ReviewDiffToolbar({
               const hit = jumpHits[0]?.item;
               if (!hit) return;
               e.preventDefault();
+              // V80-M1 — a hit outside `paths` (an "All files" candidate)
+              // has no cursor index to go to; it opens single-file focus
+              // instead, the same as picking it from the map/tree would.
               const idx = paths.indexOf(hit.path);
               if (idx >= 0) goFile(idx);
+              else onPickFile(hit.path);
               setJump("");
             }}
           />
@@ -358,6 +367,7 @@ export default function ReviewDiffToolbar({
                     onClick={() => {
                       const idx = paths.indexOf(item.path);
                       if (idx >= 0) goFile(idx);
+                      else onPickFile(item.path);
                       setJump("");
                     }}
                   >
