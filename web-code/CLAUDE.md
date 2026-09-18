@@ -987,6 +987,39 @@ second drag implementation, no `autoSaveId`); `g =` / a separator
 double-click resets the width. Tree keys: `g f` focus, `z f` toggle
 folder, `z m` collapse all.
 
+**A file outside the diff renders whole at the tip (V80-M1).** A zero-
+textual-hunk file used to bail with a bare "No textual difference" and
+nothing else — no gutter, no thread, no composer, which is what made a
+comment on such a file (the server already accepts one — path need only
+exist at the pinned sha) undiscoverable through its own deep link. Rule:
+whenever `parsed.hunks.length === 0` and the file isn't a known deletion,
+`FileDiffBody` (`routes/reviewDiff/DiffSections.tsx`) fetches
+`GET /api/file?ref=<patchset tip>` — the SAME call `?ctx=full` already
+makes (`lib/diffContext.ts`) — and splices it into ONE synthetic
+`wholeFileHunk`: pure `context` rows, `oldLine === newLine` throughout.
+That hunk rides through `UnifiedHunks`/`SplitHunks` exactly like a real
+one (same gutter, same comment buttons, same fold/viewed), because
+`DiffFile` only ever looks at `hunkViews`/`parsed.hunks` — never at
+whether the change is real. `hunkId` (`lib/diffHunks.ts`) hashes the path
+plus each `+`/`-` line; with none of either it collapses to
+`fnv1a64(path)`, stable and per-file-unique, so "mark this whole file
+viewed" persists exactly like a real hunk's mark. `lib/diffContext.ts`'s
+`emptyDiffView` is the ONE decision table for the caption: a known
+`files_changed` row with no textual hunks keeps the old "No textual
+difference" text (a mode/rename change) WITH the body below it; a path
+outside the diff gets "Not changed in this patchset — showing the whole
+file at ps N (<short sha>)"; a known deletion, a binary blob, or a file
+absent at the tip get their own honest caption and NO body — never a
+guessed line. `?files=all` (`ReviewFileTree`'s `mode` prop,
+`lib/reviewFileTree.ts`'s `buildAllFilesTree`/`walkAllFiles`, `z A`
+toggles it) widens the map/tree to the tip sha's whole tree (client-side,
+recursive over `GET /api/tree` — the reader's per-directory read, capped
+honestly at `ALL_FILES_CAP`); changed files keep their status chip,
+everything else renders `kbc-ftree__row--plain`. A thread/finding anchored
+outside the diff surfaces in the map column's own "outside the diff" group
+REGARDLESS of `filesMode` — a thread is never hidden because its file has
+no hunks.
+
 ## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
 
 `?tab=doc` is the Review Room's sixth cockpit tab. Four rules, each with a
