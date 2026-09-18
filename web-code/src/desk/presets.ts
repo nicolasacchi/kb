@@ -37,7 +37,7 @@ export interface DeskPresetDef {
   panes: Pick<DeskPanesState, "count" | "split">;
   railTab: RailTab;
   /// Present's larger reading type — a multiplier over the operator's own
-  /// `readerFontSize` pref, never a replacement for it (the pref is still
+  /// `codeFontSize` pref, never a replacement for it (the pref is still
   /// what the A−/A+ stepper writes; Present just reads it bigger).
   fontScale: number;
 }
