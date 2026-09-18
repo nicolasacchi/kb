@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   fetchDefs,
@@ -158,12 +158,16 @@ import {
   parseEntParam,
   parseLineParam,
   parsePane2,
+  parseReviewIdParam,
   permalinkFor,
+  reviewDiffHref,
+  reviewUrl,
   storyUrl,
   type LineSel as PaneLineSel,
   type PaneLoc,
   type TrailVia,
 } from "../lib/codeUrl";
+import { setCurrentReview, useCurrentReview } from "../lib/currentReview";
 import { createCursorUrlSync, createPane2CursorUrlSync, type CursorUrlSync } from "../lib/cursorUrlSync";
 import { currentHistoryIndex, historyStepTarget } from "../lib/historyStep";
 import { workspacesUrl } from "../lib/setsUrl";
@@ -506,6 +510,52 @@ export default function Reader() {
   // (lib/codeUrl.ts) is the one parser — a blank `ent=` is not an address.
   const entParam = parseEntParam(searchParams.get("ent"));
   const dossierMode = entParam !== null;
+  // V80-M3 — the reader's `?review=` mirror of the browser-only "current
+  // review" marker (`lib/currentReview.ts` — the daemon has no notion of
+  // it). `currentReview` also gates the rail's Review tab below.
+  const reviewParam = parseReviewIdParam(searchParams.get("review"));
+  const currentReview = useCurrentReview(repo);
+  // Precedence (V80-M3 brief): a `?review=` on the URL SETS the session
+  // marker on load — a shared link wins over stale session state. Once the
+  // marker is set, landing on ANY reader URL for this repo that does not
+  // carry `?review=` re-appends it via one `replace` ("navigation inside
+  // the reader keeps appending it while the state is set"). Every URL param
+  // this route reads is in the dependency list so ANY navigation — not just
+  // ones that happen to change `reviewParam`'s own value — re-evaluates the
+  // check; the logic itself is idempotent (a landing that already matches
+  // does nothing), so re-running it on every nav is cheap and safe.
+  //
+  // `lastUrlReviewIdRef` guards a real race, not a hypothetical one: the
+  // TopBar chip's clear action runs `clearCurrentReview` (synchronous,
+  // fires this effect via `currentReview` going `null` on this SAME tick)
+  // THEN `navigate(...)` to strip `?review=` (its URL commit is deferred —
+  // react-router v7 batches it inside `React.startTransition`, per
+  // `mergeCurrentSearch`'s own doc). The effect can therefore run on an
+  // INTERMEDIATE render where the url still says `?review=<id>` but
+  // `currentReview` is already `null` — without this guard that render's
+  // `reviewParam` branch reads "the URL wins" and calls `setCurrentReview`
+  // right back, resurrecting the marker the chip just cleared and leaving
+  // the two actions fighting forever. The ref instead tracks the last id
+  // this effect has already CONSUMED from the url, so seeing that same id
+  // again on a stale intermediate render is a no-op; a genuinely NEW id
+  // (a fresh `?review=` link, or the operator hand-editing the url) still
+  // updates session state exactly once.
+  const lastUrlReviewIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!repo) return;
+    if (reviewParam) {
+      if (lastUrlReviewIdRef.current !== reviewParam) {
+        lastUrlReviewIdRef.current = reviewParam;
+        if (currentReview?.id !== reviewParam) setCurrentReview(repo, { id: reviewParam });
+      }
+      return;
+    }
+    lastUrlReviewIdRef.current = null;
+    if (currentReview) {
+      navigate({ search: mergeCurrentSearch((p) => p.set("review", currentReview.id)) }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, path, gitRef, lineParam, pane2Param, symParam, entParam, reviewParam, currentReview, navigate]);
   // Dossier VIEW state. None of it belongs in the URL: `?ent=` names the
   // PLACE, and the sort/inherited/usages cut are refinements of how that one
   // place is read — the Location Contract's own axis (`samePlace` keys on
@@ -4620,6 +4670,31 @@ export default function Reader() {
   // region (its width, its collapse, its stripe, its mobile-sheet
   // promotion) and hands back the two things only it knows — whether
   // this render is the phone's bottom sheet, and which tab is active.
+  //
+  // V80-M3 — a MINIMAL Review tab body: title + link to the Room + link to
+  // this file in the review diff. M2 replaces this with the real thread
+  // panel; for now the tab is only SELECTABLE (`hasReviewContext`) and says
+  // honestly that threads aren't here yet.
+  const reviewPanel = currentReview ? (
+    <div className="kbc-inspector__hint" data-kbc-current-review-panel>
+      <p>
+        <Link to={reviewUrl(repo, currentReview.id)} data-kbc-current-review-room-link>
+          {currentReview.title ?? `Review #${currentReview.id}`}
+        </Link>
+      </p>
+      {focusedPath && (
+        <p>
+          <Link
+            to={reviewDiffHref(repo, currentReview.id, focusedPath)}
+            data-kbc-current-review-diff-link
+          >
+            Open this file in the review diff
+          </Link>
+        </p>
+      )}
+      <p>Threads for this file arrive with M2.</p>
+    </div>
+  ) : null;
   const railSlot = (ctx: DeskRailSlotCtx) => (
             <InspectorRail
               ref={inspectorRef}
@@ -4629,7 +4704,8 @@ export default function Reader() {
               caretSubject={rail.caretSubject}
               pinned={railPinned}
               onTogglePin={() => setRailPinned((v) => !v)}
-              hasReviewContext={false}
+              hasReviewContext={!!currentReview}
+              reviewPanel={reviewPanel}
               symbols={focusedSymbols}
               onJumpOutline={(line) => jumpToLine(focusedPane, line)}
               whyPanel={whyPanel}
