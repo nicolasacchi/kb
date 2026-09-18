@@ -2991,6 +2991,37 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// V80-M0 — bind/rebind (`scope = Some((review_id, ps_number, side))`)
+    /// or unbind (`scope = None`) a TOP-LEVEL annotation's review scope
+    /// AFTER creation. Sets all three columns together (never a partial
+    /// `COALESCE` like [`Self::update_annotation`] — a scope is one unit,
+    /// not three independently-settable fields) and stamps `updated_at`.
+    /// Never touches `anchor`/`anchor_kind`/`anchor2`/`parent_id`/`body`/
+    /// `resolved`/`intent` — same "one route, one column family" discipline
+    /// `update_annotation` already follows. Returns `true` iff a row with
+    /// `id` existed (the route's 404 check) — the caller reads the PRIOR
+    /// `review_id` via [`Self::get_annotation`] BEFORE calling this (single-
+    /// writer `Mutex`, so that read-then-write is already atomic w.r.t. any
+    /// other store call).
+    pub fn update_annotation_review_scope(
+        &self,
+        id: &str,
+        scope: Option<(i64, i64, &str)>,
+        updated_at: i64,
+    ) -> Result<bool> {
+        let (review_id, ps_number, side) = match scope {
+            Some((r, p, s)) => (Some(r), Some(p), Some(s)),
+            None => (None, None, None),
+        };
+        let n = self.lock().execute(
+            "UPDATE annotations SET
+                review_id = ?2, ps_number = ?3, side = ?4, updated_at = ?5
+             WHERE id = ?1",
+            params![id, review_id, ps_number, side, updated_at],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Hard-delete one annotation AND cascade to its replies (D-server —
     /// `parent_id` has no SQL `ON DELETE CASCADE`, see the migration's doc,
     /// so this does it in code: both deletes run in ONE transaction so a
@@ -3396,6 +3427,37 @@ impl Store {
                 }
                 PreparedAnnotationOp::ClearSuggestion { annotation_id } => {
                     if delete_suggestion_on(&tx, annotation_id)? {
+                        report.changed = true;
+                    }
+                }
+                PreparedAnnotationOp::BindReview {
+                    id,
+                    review_id,
+                    ps_number,
+                    side,
+                } => {
+                    let Some(cur) = get_annotation_on(&tx, id)? else {
+                        return Err(StoreError::NotFound(format!("annotation {id}")));
+                    };
+                    let same = cur.review_id == Some(*review_id)
+                        && cur.ps_number == Some(*ps_number)
+                        && cur.side.as_deref() == Some(side.as_str());
+                    if !same {
+                        update_annotation_review_scope_on(
+                            &tx,
+                            id,
+                            Some((*review_id, *ps_number, side.as_str())),
+                            now,
+                        )?;
+                        report.changed = true;
+                    }
+                }
+                PreparedAnnotationOp::UnbindReview { id } => {
+                    let Some(cur) = get_annotation_on(&tx, id)? else {
+                        return Err(StoreError::NotFound(format!("annotation {id}")));
+                    };
+                    if cur.review_id.is_some() {
+                        update_annotation_review_scope_on(&tx, id, None, now)?;
                         report.changed = true;
                     }
                 }
@@ -7902,6 +7964,27 @@ fn update_annotation_on(
     Ok(n > 0)
 }
 
+/// Tx-scoped twin of [`Store::update_annotation_review_scope`] — V80-M0's
+/// `BindReview`/`UnbindReview` batch ops. See that method's doc.
+fn update_annotation_review_scope_on(
+    tx: &Transaction<'_>,
+    id: &str,
+    scope: Option<(i64, i64, &str)>,
+    updated_at: i64,
+) -> Result<bool> {
+    let (review_id, ps_number, side) = match scope {
+        Some((r, p, s)) => (Some(r), Some(p), Some(s)),
+        None => (None, None, None),
+    };
+    let n = tx.execute(
+        "UPDATE annotations SET
+            review_id = ?2, ps_number = ?3, side = ?4, updated_at = ?5
+         WHERE id = ?1",
+        params![id, review_id, ps_number, side, updated_at],
+    )?;
+    Ok(n > 0)
+}
+
 fn delete_annotation_on(tx: &Transaction<'_>, id: &str) -> Result<bool> {
     tx.execute(
         "DELETE FROM annotation_suggestions
@@ -8224,6 +8307,19 @@ pub enum PreparedAnnotationOp {
     UpsertSuggestion(PreparedSuggestionWrite),
     ClearSuggestion {
         annotation_id: String,
+    },
+    /// V80-M0 — bind/rebind an EXISTING top-level annotation's review
+    /// scope. `(review_id, ps_number, side)` is already fully resolved
+    /// (existence/repo-match/open-state validated) by the route.
+    BindReview {
+        id: String,
+        review_id: i64,
+        ps_number: i64,
+        side: String,
+    },
+    /// V80-M0 — clear an EXISTING annotation's review scope.
+    UnbindReview {
+        id: String,
     },
 }
 

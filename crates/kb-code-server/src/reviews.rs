@@ -598,6 +598,37 @@ pub fn files_changed(
     history::diff_files(repo_root, "diff", &["-M", &range]).map_err(Into::into)
 }
 
+/// V80-M0 — the set of paths a diff touches, BOTH endpoints of a rename
+/// (`FileChange::path` is the post-change name; `old_path` is `Some` only
+/// on a rename/copy) — the `review_comments::review_comments` `in_diff`
+/// caption's data source. Pure post-processing over [`files_changed`]'s
+/// own rows, never a second matcher.
+pub fn changed_path_set_from(files: &[crate::numstat::FileChange]) -> HashSet<String> {
+    let mut set = HashSet::with_capacity(files.len() * 2);
+    for f in files {
+        set.insert(f.path.clone());
+        if let Some(old) = &f.old_path {
+            set.insert(old.clone());
+        }
+    }
+    set
+}
+
+/// [`files_changed`] + [`changed_path_set_from`] in one call — the ONE
+/// shell-out `review_comments::review_comments` needs for `in_diff`.
+/// `review_distill` already computes its own `files` (for its `files_out`
+/// block) and calls `changed_path_set_from` directly on that instead, so
+/// it never shells a SECOND `git diff` for the same patchset.
+pub fn changed_path_set(
+    repo_root: &Path,
+    base_sha: &str,
+    tip_sha: &str,
+) -> Result<HashSet<String>, ReviewGitError> {
+    Ok(changed_path_set_from(&files_changed(
+        repo_root, base_sha, tip_sha,
+    )?))
+}
+
 /// Default branch name — same signal `/api/branches` uses
 /// ([`crate::git::default_branch`]: `refs/remotes/origin/HEAD`, else
 /// `GitRepo::head_info().branch`). Falls back to `"main"` when both

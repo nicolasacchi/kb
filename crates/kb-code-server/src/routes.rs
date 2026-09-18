@@ -2827,20 +2827,22 @@ struct ReviewCreateScope {
     side: String,
 }
 
+/// Shared core of [`resolve_review_create_scope`] and (V80-M0)
+/// [`resolve_review_bind_scope`]: review exists + belongs to `repo_name` +
+/// `ps` resolves (default latest) + `side` is `old`/`new` (default `new`).
+/// Returns the review row alongside the resolved patchset+side so a bind
+/// caller that also needs `review.state` doesn't re-fetch it.
 /// 2026-08-31 incident (store.rs module doc): takes `store: &Store` plus
 /// the specific primitives it needs (not `&CreateAnnotationBody`, which
 /// isn't `'static`-cloneable-for-free) so every async call site can run
 /// this inside its own `run_blocking` closure.
-fn resolve_review_create_scope(
+fn resolve_review_ps_side(
     store: &Store,
-    review_id: Option<i64>,
+    review_id: i64,
     repo_name: &str,
     ps: Option<i64>,
     side: Option<&str>,
-) -> Result<Option<ReviewCreateScope>, ApiError> {
-    let Some(review_id) = review_id else {
-        return Ok(None);
-    };
+) -> Result<(store::ReviewRow, store::ReviewPatchsetRow, String), ApiError> {
     let review = store
         .get_review(review_id)?
         .ok_or_else(|| ApiError::bad_request(format!("no such review: {review_id}")))?;
@@ -2864,11 +2866,62 @@ fn resolve_review_create_scope(
             "invalid side: {side:?} (expected \"old\" or \"new\")"
         )));
     }
+    Ok((review, ps, side.to_string()))
+}
+
+/// `None` when the body has no `review_id` (plain create, unchanged).
+fn resolve_review_create_scope(
+    store: &Store,
+    review_id: Option<i64>,
+    repo_name: &str,
+    ps: Option<i64>,
+    side: Option<&str>,
+) -> Result<Option<ReviewCreateScope>, ApiError> {
+    let Some(review_id) = review_id else {
+        return Ok(None);
+    };
+    let (_review, ps, side) = resolve_review_ps_side(store, review_id, repo_name, ps, side)?;
     Ok(Some(ReviewCreateScope {
         review_id,
         ps,
-        side: side.to_string(),
+        side,
     }))
+}
+
+/// V80-M0 — `PUT /api/annotations/{id}/review` validation: the SAME
+/// existence/repo-match/ps/side ladder [`resolve_review_create_scope`]
+/// uses for create (via the shared [`resolve_review_ps_side`] helper),
+/// PLUS a closed-review refusal create does NOT have. Binding is a
+/// deliberate action a human takes on an ALREADY-EXISTING comment from the
+/// plain file reader, at any point after creation — unlike create (whose
+/// gap predates this unit, has no test pinning either behavior, and is
+/// intentionally left alone here), a closed review is a settled one and
+/// gets no new bindings. 409 (not 400): this is a conflict with the
+/// review's current state, the same class `PreparedAnnotationOp`'s sibling
+/// `StoreError::NameConflict`/`SlugTakenByOtherKind` mappings and
+/// `reviews::review_closed_error_body` already use `StatusCode::CONFLICT`
+/// for, reusing `reviews::ERR_REVIEW_CLOSED`'s URN so a client can branch
+/// on the same machine code `start-pr`'s closed refusal carries.
+fn resolve_review_bind_scope(
+    store: &Store,
+    review_id: i64,
+    repo_name: &str,
+    ps: Option<i64>,
+    side: Option<&str>,
+) -> Result<ReviewCreateScope, ApiError> {
+    let (review, ps, side) = resolve_review_ps_side(store, review_id, repo_name, ps, side)?;
+    if review.state == "closed" {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!("review {review_id} is closed; cannot bind a comment to a closed review"),
+        )
+        .with_problem_type(crate::reviews::ERR_REVIEW_CLOSED));
+    }
+    Ok(ReviewCreateScope {
+        review_id,
+        ps,
+        side,
+    })
 }
 
 /// Read the pinned blob for `side` of `ps` — same ODB path the `diff`
@@ -3541,6 +3594,158 @@ pub async fn delete_annotation(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// --- V80-M0 — bind/rebind/unbind a review scope after creation ------------
+
+#[derive(Debug, Deserialize)]
+pub struct BindAnnotationReviewBody {
+    pub review_id: i64,
+    /// Patchset to bind against. Default: the review's latest.
+    #[serde(default)]
+    pub ps: Option<i64>,
+    /// `"old"` | `"new"` (default `"new"`).
+    #[serde(default)]
+    pub side: Option<String>,
+}
+
+/// `PUT /api/annotations/{id}/review` (V80-M0) — bind or REBIND a
+/// TOP-LEVEL annotation's review scope after the fact. Lets a human,
+/// working from the plain file reader, write a comment (or reuse an
+/// OLDER working-tree note) and attach it to a review so it shows in that
+/// review's Room beside the agent's findings — the only pre-existing way
+/// to set `review_id`/`ps_number`/`side` was at CREATE time
+/// (`CreateAnnotationBody`; `PATCH /api/annotations/{id}` never touches
+/// scope, same as it never touches an anchor). Validation mirrors
+/// [`resolve_review_create_scope`] via the shared [`resolve_review_ps_side`]
+/// helper, plus [`resolve_review_bind_scope`]'s closed-review 409. A REPLY
+/// has no scope of its own (it inherits its parent's,
+/// `assemble_reply_annotation`'s ladder) — `400` naming `parent_id`.
+///
+/// This route does NOT read the pinned blob and never refuses on a
+/// path/line absent at the target patchset's sha — that resolves lazily,
+/// as an honest orphan, on the NEXT `GET /api/reviews/{id}/comments`
+/// (`review_comments::resolve_for_ps`'s job, never this route's: "a wrong
+/// line is worse than an honest orphan," that module's own doc).
+///
+/// Emits `annotation.changed{repo,path,review_id}` for the NEW review,
+/// and — on a REBIND onto a DIFFERENT review — a SECOND event carrying
+/// the OLD `review_id`, so both Rooms' SSE-bridge caches invalidate (kb
+/// root CLAUDE.md #24; `web-code/src/lib/queryClient.ts` keys its review
+/// cache invalidation on this field). BEARER — the same plain `api`
+/// router `POST /api/annotations` sits on, NOT `review_remote`/loopback:
+/// binding an annotation carries the same trust as creating one.
+pub async fn bind_annotation_review(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<BindAnnotationReviewBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let state_bg = state.clone();
+    let id_bg = id.clone();
+    // 2026-08-31 incident (store.rs module doc): fetch + validate + write +
+    // read-back are all synchronous (no `.await` in this handler at all) —
+    // one closure.
+    let (view, repo_name, path, old_review_id, new_review_id) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let row = store
+                .get_annotation(&id_bg)?
+                .ok_or_else(|| ApiError::not_found(format!("annotation {id_bg:?}")))?;
+            if row.parent_id.is_some() {
+                return Err(ApiError::bad_request(
+                    "a reply has no review scope of its own — bind its parent (see parent_id)",
+                ));
+            }
+            let repo = find_repo_by_id(&state_bg, row.repo_id)?;
+            let repo_name = repo.name.clone();
+            let scope = resolve_review_bind_scope(
+                store,
+                payload.review_id,
+                &repo_name,
+                payload.ps,
+                payload.side.as_deref(),
+            )?;
+            let old_review_id = row.review_id;
+            store.update_annotation_review_scope(
+                &id_bg,
+                Some((scope.review_id, scope.ps.ps_number, scope.side.as_str())),
+                now,
+            )?;
+            let updated = store.get_annotation(&id_bg)?.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("annotation {id_bg:?} vanished immediately after bind"),
+                )
+            })?;
+            // V70-A2 (SEC-13) — same containment-checked read `patch_
+            // annotation` uses for its own post-update view content.
+            let content = crate::security::paths::contained_abs_path(&repo.path, &updated.path)
+                .ok()
+                .and_then(|abs| std::fs::read_to_string(abs).ok())
+                .unwrap_or_default();
+            let path = updated.path.clone();
+            let new_review_id = updated.review_id;
+            let view = annotation_view(store, updated, &repo_name, &content)?;
+            Ok((view, repo_name, path, old_review_id, new_review_id))
+        })
+        .await?;
+    emit_annotation_changed(&state.bus, &repo_name, &path, new_review_id);
+    if old_review_id.is_some() && old_review_id != new_review_id {
+        emit_annotation_changed(&state.bus, &repo_name, &path, old_review_id);
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+
+/// `DELETE /api/annotations/{id}/review` (V80-M0) — unbind: clears
+/// `review_id`/`ps_number`/`side`. Idempotent — an already-unbound (or
+/// never-bound) annotation still `200`s with its (unchanged) view, since
+/// "unbind" names a target STATE, not a state transition. `404` only when
+/// `id` itself does not exist. A REPLY has no scope of its own — `400`
+/// naming `parent_id`, same as bind. Emits
+/// `annotation.changed{repo,path,review_id}` naming the review that LOST
+/// this comment (the OLD `review_id`, so its Room refreshes) — the key is
+/// simply absent (the ordinary plain-annotation shape) when it was
+/// already unbound.
+pub async fn unbind_annotation_review(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let state_bg = state.clone();
+    let id_bg = id.clone();
+    let (view, repo_name, path, old_review_id) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let row = store
+                .get_annotation(&id_bg)?
+                .ok_or_else(|| ApiError::not_found(format!("annotation {id_bg:?}")))?;
+            if row.parent_id.is_some() {
+                return Err(ApiError::bad_request(
+                    "a reply has no review scope of its own — unbind its parent (see parent_id)",
+                ));
+            }
+            let repo = find_repo_by_id(&state_bg, row.repo_id)?;
+            let repo_name = repo.name.clone();
+            let old_review_id = row.review_id;
+            store.update_annotation_review_scope(&id_bg, None, now)?;
+            let updated = store.get_annotation(&id_bg)?.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("annotation {id_bg:?} vanished immediately after unbind"),
+                )
+            })?;
+            let content = crate::security::paths::contained_abs_path(&repo.path, &updated.path)
+                .ok()
+                .and_then(|abs| std::fs::read_to_string(abs).ok())
+                .unwrap_or_default();
+            let path = updated.path.clone();
+            let view = annotation_view(store, updated, &repo_name, &content)?;
+            Ok((view, repo_name, path, old_review_id))
+        })
+        .await?;
+    emit_annotation_changed(&state.bus, &repo_name, &path, old_review_id);
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+
 // --- V4.C2 suggestion storage + batch ------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -3827,6 +4032,22 @@ pub enum AnnotationBatchOp {
     ClearSuggestion {
         id: String,
     },
+    /// V80-M0 — bind/rebind an EXISTING top-level annotation's review
+    /// scope. Same validation as `PUT /api/annotations/{id}/review`
+    /// (`resolve_review_bind_scope`); a reply → 400.
+    BindReview {
+        id: String,
+        review_id: i64,
+        #[serde(default)]
+        ps: Option<i64>,
+        #[serde(default)]
+        side: Option<String>,
+    },
+    /// V80-M0 — clear an EXISTING annotation's review scope. Same
+    /// validation as `DELETE /api/annotations/{id}/review`; a reply → 400.
+    UnbindReview {
+        id: String,
+    },
 }
 
 fn emit_annotation_batch_changed(
@@ -4104,6 +4325,55 @@ pub async fn batch_annotations(
                         prepared.push(store::PreparedAnnotationOp::ClearSuggestion {
                             annotation_id: id,
                         });
+                    }
+                    AnnotationBatchOp::BindReview {
+                        id,
+                        review_id,
+                        ps,
+                        side,
+                    } => {
+                        let row = require_existing_annotation(store, &id)?;
+                        if row.parent_id.is_some() {
+                            return Err(ApiError::bad_request(
+                                "a reply has no review scope of its own — bind its parent \
+                                 (see parent_id)",
+                            ));
+                        }
+                        let scope = resolve_review_bind_scope(
+                            store,
+                            review_id,
+                            &repo_label_bg,
+                            ps,
+                            side.as_deref(),
+                        )?;
+                        // Post-op state (the NEW scope), mirroring
+                        // `AddComment`'s own `built.row.review_id` above —
+                        // the Room that needs to know about this change is
+                        // the one the comment now belongs to.
+                        paths.push(row.path);
+                        review_ids.push(Some(scope.review_id));
+                        prepared.push(store::PreparedAnnotationOp::BindReview {
+                            id,
+                            review_id: scope.review_id,
+                            ps_number: scope.ps.ps_number,
+                            side: scope.side,
+                        });
+                    }
+                    AnnotationBatchOp::UnbindReview { id } => {
+                        let row = require_existing_annotation(store, &id)?;
+                        if row.parent_id.is_some() {
+                            return Err(ApiError::bad_request(
+                                "a reply has no review scope of its own — unbind its parent \
+                                 (see parent_id)",
+                            ));
+                        }
+                        // Pre-op state (the OLD scope) — the Room that
+                        // needs to know is the one losing this comment;
+                        // after the op there is no review to attribute it
+                        // to.
+                        paths.push(row.path.clone());
+                        review_ids.push(row.review_id);
+                        prepared.push(store::PreparedAnnotationOp::UnbindReview { id });
                     }
                 }
             }

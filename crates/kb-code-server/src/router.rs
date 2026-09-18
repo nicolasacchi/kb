@@ -633,6 +633,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/annotations/{id}/suggestion",
             put(routes::put_annotation_suggestion).delete(routes::delete_annotation_suggestion),
         )
+        // V80-M0 — bind/rebind/unbind an EXISTING annotation's review
+        // scope after the fact (same bearer, annotation-mutation family;
+        // NOT `review_remote`/loopback — see `routes::bind_annotation_
+        // review`'s doc). No `RouteContract` (invariant 15): the payload
+        // (a review id + optional ps/side) IS the contract, same as every
+        // other PUT/DELETE mutation on this family — `trails::V74_L3B_
+        // TRAIL_ROUTES`'s own doc records the identical reasoning for its
+        // five mutations.
+        .route(
+            "/annotations/{id}/review",
+            put(routes::bind_annotation_review).delete(routes::unbind_annotation_review),
+        )
         // W5.1 + W5.2 — the agent context verbs (see the module doc above).
         .route("/map", get(agentview::map::map_route))
         .route("/pack", get(agentview::pack::pack_route))
