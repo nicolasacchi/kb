@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { ApiError } from "../../api/client";
 import type { ReviewDetail, ReviewVerdict, ReviewVerdictState } from "../../api/types";
+import {
+  REVIEW_MUTATIONS_ADMITTED_HINT,
+  useReviewMutationsAdmitted,
+} from "../../hooks/useReviewMutationsAdmitted";
 import { usePutReviewVerdict } from "../../hooks/useReviews";
 import { Icon } from "../icons";
-import { LOOPBACK_HINT, isLoopbackRefusal } from "./ReviewHeader";
+import { isLoopbackRefusal } from "./ReviewHeader";
 
 const STATES: { key: ReviewVerdictState; label: string }[] = [
   { key: "comment", label: "Comment" },
@@ -62,17 +66,25 @@ export interface VerdictBarProps {
   review: ReviewDetail;
 }
 
-/// Segmented review-pass verdict. PUT is loopback-only — a 404 latches an
-/// inline hint (StartReviewDialog precedent) so later clicks don't retry.
+/// Segmented review-pass verdict. `PUT /api/reviews/{id}/verdict` is one of
+/// `review_mutations_gate`'s five graduated families (loopback admits
+/// unconditionally, else `[review] remote_mutations`) — V80-F2 reads the
+/// loopback pre-probe (`useReviewMutationsAdmitted`) to disable the
+/// segment BEFORE a submit rather than only after one 404s. The post-submit
+/// latch (`refused`) stays as a fallback for the rare case the probe and
+/// the gate's live verdict disagree (a config reload mid-session) — belt
+/// and suspenders, not the primary signal.
 export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) {
   const put = usePutReviewVerdict(repo);
+  const admitted = useReviewMutationsAdmitted();
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(review.verdict?.note ?? "");
-  const [loopback, setLoopback] = useState(false);
+  const [refused, setRefused] = useState(false);
+  const disabled = !admitted || refused;
   const latestPs = review.patchsets.length > 0 ? review.patchsets[review.patchsets.length - 1].ps_number : null;
 
   async function choose(state: ReviewVerdictState, withNote?: string) {
-    if (loopback) return;
+    if (disabled) return;
     try {
       const trimmed = (withNote ?? note).trim();
       await put.mutateAsync({
@@ -82,7 +94,7 @@ export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) 
       setNoteOpen(false);
     } catch (e) {
       if (isLoopbackRefusal(e) || (e instanceof ApiError && e.status === 404)) {
-        setLoopback(true);
+        setRefused(true);
       }
     }
   }
@@ -98,7 +110,8 @@ export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) 
               "kbc-verdict__btn" + (review.verdict?.state === s.key ? " is-active" : "")
             }
             aria-pressed={review.verdict?.state === s.key}
-            disabled={loopback || put.isPending}
+            disabled={disabled || put.isPending}
+            title={disabled ? REVIEW_MUTATIONS_ADMITTED_HINT : undefined}
             onClick={() => void choose(s.key)}
             data-kbc-review-verdict={s.key}
           >
@@ -114,12 +127,16 @@ export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) 
           {latestPs != null ? ` — ps${latestPs} landed` : " — newer patchset landed"}
         </span>
       )}
-      {loopback && (
-        <p className="kbc-verdict__loopback" data-kbc-review-verdict-loopback>
-          {LOOPBACK_HINT}
+      {disabled && (
+        <p
+          className="kbc-verdict__loopback"
+          data-kbc-review-verdict-loopback
+          title={REVIEW_MUTATIONS_ADMITTED_HINT}
+        >
+          {REVIEW_MUTATIONS_ADMITTED_HINT}
         </p>
       )}
-      {review.verdict && !loopback && (
+      {review.verdict && !disabled && (
         <button
           type="button"
           className="kbc-verdict__note-toggle"
@@ -132,7 +149,7 @@ export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) 
           Note
         </button>
       )}
-      {noteOpen && review.verdict && !loopback && (
+      {noteOpen && review.verdict && !disabled && (
         <div className="kbc-verdict__popover" role="dialog" aria-label="verdict note">
           <input
             type="text"

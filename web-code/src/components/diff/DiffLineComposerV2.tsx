@@ -1,5 +1,9 @@
 import { useState } from "react";
 import type { AnnotationIntent } from "../../api/types";
+import {
+  REVIEW_MUTATIONS_ADMITTED_HINT,
+  useReviewMutationsAdmitted,
+} from "../../hooks/useReviewMutationsAdmitted";
 import { INTENT_OPTIONS, intentLabel } from "../../lib/annotations";
 import { SEVERITIES, severityLabel, type FindingSeverity } from "../../lib/diffFindings";
 import type { DiffSide } from "../../lib/reviewComments";
@@ -64,6 +68,12 @@ export default function DiffLineComposerV2({
   const [rationale, setRationale] = useState("");
   const [recommendation, setRecommendation] = useState("");
   const [busy, setBusy] = useState(false);
+  /// V80-F2 — `POST /api/reviews/{id}/findings` (manual finding create) is
+  /// one of `review_mutations_gate`'s five graduated families; the
+  /// composer's Comment/Question modes ride the ordinary bearer
+  /// `POST /api/annotations` route untouched by that gate (`onSubmit`
+  /// above is never affected by this flag).
+  const findingWritesAdmitted = useReviewMutationsAdmitted();
 
   async function saveComment() {
     const trimmed = body.trim();
@@ -80,7 +90,7 @@ export default function DiffLineComposerV2({
   }
 
   async function saveFinding() {
-    if (busy || !onSubmitFinding) return;
+    if (busy || !onSubmitFinding || !findingWritesAdmitted) return;
     if (!category.trim() || !title.trim() || !rationale.trim()) return;
     setBusy(true);
     try {
@@ -111,7 +121,8 @@ export default function DiffLineComposerV2({
   }
 
   const showFindingMode = !!onSubmitFinding;
-  const canSaveFinding = !!category.trim() && !!title.trim() && !!rationale.trim() && !busy;
+  const canSaveFinding =
+    !!category.trim() && !!title.trim() && !!rationale.trim() && !busy && findingWritesAdmitted;
   const modeLabel = mode === "finding" ? "Finding" : mode === "question" ? "Question" : "Comment";
 
   return (
@@ -193,6 +204,15 @@ export default function DiffLineComposerV2({
             Findings are code-anchored — this creates one at line {line}. For a general point, use a
             comment instead.
           </p>
+          {!findingWritesAdmitted && (
+            <p
+              className="kbc-rcompose__hint kbc-rcompose__hint--admit"
+              data-kbc-review-composer-finding-admit-hint
+              title={REVIEW_MUTATIONS_ADMITTED_HINT}
+            >
+              {REVIEW_MUTATIONS_ADMITTED_HINT}
+            </p>
+          )}
           <div className="kbc-rcompose__row">
             <label className="kbc-rcompose__intent">
               <span>Severity</span>
@@ -252,6 +272,7 @@ export default function DiffLineComposerV2({
                 type="button"
                 onClick={() => void saveFinding()}
                 disabled={!canSaveFinding}
+                title={!findingWritesAdmitted ? REVIEW_MUTATIONS_ADMITTED_HINT : undefined}
                 data-kbc-review-composer-submit-finding
               >
                 {busy ? "Saving…" : "Create finding"}

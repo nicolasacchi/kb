@@ -495,6 +495,15 @@
   align-items: center;
   gap: 4px;
 }
+.kbc-finding__dispo {
+  /* V80-F2 — wraps `.kbc-finding__dispo-row` + the (now always-possible,
+     never a replacement) admit-hint caption so both stack as ONE flex item
+     inside `.kbc-finding__foot`'s row, rather than the caption competing
+     for its own top-level slot in that row. */
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .kbc-finding__dispo-row {
   display: inline-flex;
   gap: 6px;
@@ -516,6 +525,17 @@
 .kbc-dispo:hover {
   border-color: var(--accent-bor);
   color: var(--ink);
+}
+.kbc-dispo:disabled {
+  /* V80-F2 — stays visible when review-mutation writes are not admitted;
+     see `.kbc-rthread__disposition-chip:disabled` (diff.css) for the same
+     rule applied to this control's diff-page sibling. */
+  opacity: 0.5;
+  cursor: default;
+}
+.kbc-dispo:disabled:hover {
+  border-color: var(--rule-hi);
+  color: var(--ink-mute);
 }
 .kbc-dispo--active-agree {
   background: color-mix(in srgb, var(--green) 14%, transparent);
