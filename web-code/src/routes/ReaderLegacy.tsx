@@ -153,16 +153,16 @@ import {
 } from "../lib/egoGraph";
 import { getRecentFiles, goBack, goForward, recordJump } from "../lib/navHistory";
 import {
+  CODE_FONT_SIZE_MAX,
+  CODE_FONT_SIZE_MIN,
+  loadCodeFontSize,
   loadCodeLenses,
   loadParamHints,
-  loadReaderFontSize,
   loadStickyContext,
   loadWrap,
-  READER_FONT_SIZE_MAX,
-  READER_FONT_SIZE_MIN,
+  saveCodeFontSize,
   saveCodeLenses,
   saveParamHints,
-  saveReaderFontSize,
   saveStickyContext,
   saveWrap,
 } from "../lib/prefs";
@@ -392,7 +392,7 @@ export default function ReaderLegacy() {
   // SH.C3 — reading-mode prefs (line wrap + CM6 font size), same
   // useState-lazy-init + prefs.ts round-trip pattern as the three above.
   const [wrapEnabled, setWrapEnabled] = useState(() => loadWrap());
-  const [readerFontSize, setReaderFontSize] = useState(() => loadReaderFontSize());
+  const [codeFontSize, setCodeFontSize] = useState(() => loadCodeFontSize());
   const [cursorLineUi, setCursorLineUi] = useState(1);
   const [copiedTick, setCopiedTick] = useState(0);
   /// Suppress the next file-open `recordJump` when the navigation was
@@ -2222,8 +2222,8 @@ export default function ReaderLegacy() {
               aria-label="Decrease reader font size"
               title="Smaller text"
               data-kbc-fontsize-dec
-              disabled={readerFontSize <= READER_FONT_SIZE_MIN}
-              onClick={() => setReaderFontSize((cur) => saveReaderFontSize(cur - 1))}
+              disabled={codeFontSize <= CODE_FONT_SIZE_MIN}
+              onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur - 1))}
             >
               A−
             </button>
@@ -2233,8 +2233,8 @@ export default function ReaderLegacy() {
               aria-label="Increase reader font size"
               title="Larger text"
               data-kbc-fontsize-inc
-              disabled={readerFontSize >= READER_FONT_SIZE_MAX}
-              onClick={() => setReaderFontSize((cur) => saveReaderFontSize(cur + 1))}
+              disabled={codeFontSize >= CODE_FONT_SIZE_MAX}
+              onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur + 1))}
             >
               A+
             </button>
@@ -2431,7 +2431,7 @@ export default function ReaderLegacy() {
                       linkify={linkifyCallbacksForPane(1)}
                       conflictActive={!!activeFile && conflictedPaths.has(activeFile)}
                       wrap={wrapEnabled}
-                      fontSize={readerFontSize}
+                      fontSize={codeFontSize}
                     />
                   )
                 ) : (
@@ -2518,7 +2518,7 @@ export default function ReaderLegacy() {
                           linkify={linkifyCallbacksForPane(2)}
                           conflictActive={!!pane2Loc?.path && conflictedPaths.has(pane2Loc.path)}
                           wrap={wrapEnabled}
-                          fontSize={readerFontSize}
+                          fontSize={codeFontSize}
                         />
                       )
                     ) : null}
