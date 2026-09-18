@@ -3,7 +3,7 @@
 // (token, icon) pair so a later edit that silently recolours an axis fails
 // HERE, by name.
 import { describe, expect, it } from "vitest";
-import type { ReviewFileRow, ReviewFinding } from "../api/types";
+import type { ReviewComment, ReviewCommentsOut, ReviewFileRow, ReviewFinding } from "../api/types";
 import { Icon } from "../components/icons";
 import {
   ACT_CHIPS,
@@ -18,12 +18,37 @@ import {
   heroBaseSourceOf,
   heroCounts,
   heroLedeOf,
+  humanOpenThreads,
   nextRoomDensity,
   parseRoomDensity,
   sectionDecor,
   severityChip,
   truncateMiddle,
 } from "./reviewRoom";
+
+function comment(overrides: Partial<ReviewComment> = {}): ReviewComment {
+  return {
+    id: "c1",
+    path: "src/lib.rs",
+    intent: "note",
+    body: "look here",
+    author: "you",
+    created_at: 1000,
+    updated_at: 1000,
+    resolved: false,
+    anchor_kind: "line",
+    side: "new",
+    ps_number: 1,
+    resolution: { line: 5, orphaned: false, resolved_against: { ps: 1, sha: "abc" } },
+    suggestion: null,
+    replies: [],
+    ...overrides,
+  };
+}
+
+function commentsOut(groups: { path: string; in_diff: boolean; comments: ReviewComment[] }[]): ReviewCommentsOut {
+  return { schema: "review-comments/1", review_id: 1, repo: "fixture", ps: 1, groups };
+}
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -210,5 +235,39 @@ describe("the Room density pair", () => {
     expect(parseRoomDensity("junk")).toBe("comfortable");
     expect(nextRoomDensity("compact")).toBe("comfortable");
     expect(nextRoomDensity("comfortable")).toBe("compact");
+  });
+});
+
+// V80-M4 — "the Room reads human threads first-class." ONE derivation the
+// Report hero's "open questions from you" line and the guided tour's
+// per-file stops both share.
+describe("humanOpenThreads", () => {
+  it("degrades to empty for an undefined (still-loading) query", () => {
+    expect(humanOpenThreads(undefined)).toEqual([]);
+  });
+
+  it("counts an open thread opened by a human, across every group including General", () => {
+    const out = commentsOut([
+      { path: "a.rb", in_diff: true, comments: [comment({ id: "c1", author: "you" })] },
+      { path: "", in_diff: false, comments: [comment({ id: "c2", path: "", author: "you" })] },
+    ]);
+    expect(humanOpenThreads(out).map((t) => t.id)).toEqual(["c1", "c2"]);
+  });
+
+  it("excludes a resolved thread even when opened by a human", () => {
+    const out = commentsOut([{ path: "a.rb", in_diff: true, comments: [comment({ resolved: true })] }]);
+    expect(humanOpenThreads(out)).toEqual([]);
+  });
+
+  it("excludes an agent-opened thread — 'claude' is the ONE signal every Room surface shares", () => {
+    const out = commentsOut([{ path: "a.rb", in_diff: true, comments: [comment({ author: "claude" })] }]);
+    expect(humanOpenThreads(out)).toEqual([]);
+  });
+
+  it("is intent-agnostic — a plain 'note' thread counts just like a 'question'", () => {
+    const out = commentsOut([
+      { path: "a.rb", in_diff: true, comments: [comment({ intent: "note", author: "you" })] },
+    ]);
+    expect(humanOpenThreads(out)).toHaveLength(1);
   });
 });
