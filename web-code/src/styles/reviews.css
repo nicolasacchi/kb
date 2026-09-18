@@ -236,9 +236,20 @@
    `.kbc-review__action` class) — that base class is shared by several
    OTHER toolbars (`ReviewDiffToolbar`, `DocPanel`, `ReadingOrderPanel`,
    `DraftsTray`, `TimelinePanel`) that are not wrapped in this container and
-   must keep their own independent-pill look untouched. */
+   must keep their own independent-pill look untouched.
+   Fix-up: `display: inline-flex` made this box INLINE-LEVEL, so with
+   nothing rendered between it and the preceding `.kbc-review__refs`
+   (also `inline-flex`, hence also inline-level — the meta line's
+   `ps1 @ <sha> · N commits`) — e.g. no PR chip, no staleness banner —
+   the two shared one inline line and the meta line's tail got clipped
+   behind the button group. `display: flex` + `width: fit-content` keeps
+   the same content-hugging bounded box WITHOUT the inline sharing: a
+   flex container is still a normal block box by default, so it always
+   starts its own line; `width: fit-content` is what was actually doing
+   the "hug the buttons, don't stretch full width" work. */
 .kbc-review__actions {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   flex-wrap: wrap;
   gap: 0;
   margin-top: 10px;
