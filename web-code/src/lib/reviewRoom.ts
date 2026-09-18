@@ -11,7 +11,8 @@
 // sides of that (a mapped icon that does not exist fails the golden, and
 // the mapping tables themselves are golden-pinned).
 
-import type { FindingSeverity, ReviewFileRow, ReviewFinding, ReviewReport } from "../api/types";
+import type { FindingSeverity, ReviewCommentsOut, ReviewFileRow, ReviewFinding, ReviewReport } from "../api/types";
+import { isAgentAuthorName } from "./questionState";
 
 // ── the live counts ───────────────────────────────────────────────────────
 // `liveFindingCounts` moved HERE from `ReportPanel.tsx` in V76-R2a so the
@@ -176,6 +177,46 @@ export function heroCounts(findings: ReviewFinding[]): LiveCounts {
 /// a stale viewed mark is not a viewed file).
 export function filesViewedOf(files: ReviewFileRow[]): { viewed: number; total: number } {
   return { viewed: files.filter((f) => f.viewed && !f.viewed_stale).length, total: files.length };
+}
+
+// ── human threads (V80-M4) ─────────────────────────────────────────────────
+// "The Room reads human threads first-class": a thread's own OPENER (its
+// top-level `author` — never a reply's, and never the "latest voice" pick
+// `questionState.ts`'s ❓ chip uses for a DIFFERENT question — that module
+// answers "whose turn is it," this one answers "did a human raise this,
+// and is it still open") decides whether it counts here. Reuses
+// `isAgentAuthorName` — the ONE author-classification signal every other
+// Room surface already keys off (`DiffThread`, `ReviewThreadsCard`'s ❓
+// chip) — rather than inventing a second classifier. ONE derivation, two
+// renderers (the Report hero's "open questions from you" line and the
+// guided tour's per-file stops, `lib/reviewTour.ts`), so the two can never
+// disagree about which threads count.
+
+export interface HumanOpenThread {
+  /// `""` for a review-level ("general") thread — never a file to visit,
+  /// so the guided tour's per-path walk simply never reaches it (a
+  /// structural omission, not a filter).
+  path: string;
+  id: string;
+  createdAt: number;
+}
+
+/// Every OPEN (unresolved) top-level review thread whose opener is a
+/// human, across every group `GET /reviews/{id}/comments` returned —
+/// `in_diff`/`path` groupings are irrelevant here, this is a flat count
+/// over the whole thread set. `undefined` (query still loading/absent)
+/// degrades to an empty list, never a throw.
+export function humanOpenThreads(comments: ReviewCommentsOut | undefined): HumanOpenThread[] {
+  if (!comments) return [];
+  const out: HumanOpenThread[] = [];
+  for (const g of comments.groups) {
+    for (const c of g.comments) {
+      if (!c.resolved && !isAgentAuthorName(c.author)) {
+        out.push({ path: g.path, id: c.id, createdAt: c.created_at });
+      }
+    }
+  }
+  return out;
 }
 
 export interface HeroAgent {
