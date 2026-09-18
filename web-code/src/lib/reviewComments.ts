@@ -210,3 +210,25 @@ export function buildAskAgentPayload(draft: AskAgentDraft): CreateAnnotationInpu
     body,
   };
 }
+
+// ── V80-M2 — the "Review" selector's hint line ────────────────────────────
+
+/// The composer's "Review" selector hint line (`ReviewBindSelector.tsx`),
+/// pulled out pure so it's testable without a React Query mock — same
+/// "guard/derivation lives here" discipline every other builder in this
+/// file follows. `null` when no review is selected (nothing to say).
+/// `inDiff: false` is the only branch that changes the message — `true`
+/// AND `null` (still loading / not yet known) both default to the "will
+/// appear in the Room" reassurance, since a false positive there ("not in
+/// the diff") would be a WRONG claim, while defaulting to the room message
+/// is merely uninformative until the real answer lands.
+export function reviewBindHintText(
+  reviewId: number | null,
+  reviewTitle: string | undefined,
+  inDiff: boolean | null,
+  ps: number | null,
+): string | null {
+  if (reviewId === null) return null;
+  if (inDiff === false) return `not in this review's diff — anchors to ps ${ps ?? "?"}'s tip`;
+  return `will appear in the Room of ${reviewTitle ?? `Review #${reviewId}`}`;
+}

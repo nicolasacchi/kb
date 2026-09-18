@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { ApiError } from "../../api/client";
+import { ApiError, type BindAnnotationReviewInput } from "../../api/client";
 import type { AnchorKind, AnnotationIntent, AnnotationView } from "../../api/types";
 import {
   useAnnotations,
+  useBindAnnotationReview,
   useCreateAnnotation,
   useDeleteAnnotation,
   usePatchAnnotation,
+  useUnbindAnnotationReview,
 } from "../../hooks/useAnnotations";
+import { useReviews } from "../../hooks/useReviews";
 import {
   anchorBadgeLabel,
   buildCreatePayload,
@@ -17,11 +20,13 @@ import {
   intentLabel,
   type AnnotationThread,
 } from "../../lib/annotations";
-import { commitUrl } from "../../lib/codeUrl";
+import { commitUrl, reviewUrl } from "../../lib/codeUrl";
+import { useCurrentReview } from "../../lib/currentReview";
 import { formatUnixSeconds, shortSha } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { useConfirm } from "../ConfirmProvider";
 import IntentChip from "./IntentChip";
+import ReviewBindSelector from "./ReviewBindSelector";
 
 export interface AnnotationsPanelProps {
   repo: string;
@@ -80,7 +85,34 @@ export default function AnnotationsPanel({
   const create = useCreateAnnotation(repo, path);
   const patch = usePatchAnnotation(repo, path);
   const del = useDeleteAnnotation(repo, path);
+  const bindReviewMut = useBindAnnotationReview(repo, path);
+  const unbindReviewMut = useUnbindAnnotationReview(repo, path);
   const confirm = useConfirm();
+
+  // V80-M2 — every open review's title, for the card chip's label + the
+  // composer's "will appear in the Room of <title>" hint (shared cache
+  // with `ReviewBindSelector`'s own `useReviews` call, so this costs no
+  // extra request). A row bound to a since-closed review just falls back
+  // to `#<id>` — the same honest degrade `lib/currentReview.ts` documents
+  // for its own title-less marker.
+  const openReviews = useReviews(repo, "open");
+  function reviewTitleFor(id: number): string | undefined {
+    return openReviews.data?.reviews.find((r) => r.id === id)?.title ?? undefined;
+  }
+
+  // V80-M2 — the composer's "Review" selector preselects to the current
+  // review (`lib/currentReview.ts`, M3) on mount. A one-time seed, not a
+  // standing sync: this component instance persists across a file switch
+  // within the same reader session (`InspectorRail` never remounts it on
+  // `path` alone), and re-clobbering an operator's deliberate mid-session
+  // choice every time the ambient marker changes elsewhere (a Room visit
+  // in another tab, say) would be more surprising than a preselection that
+  // only applies once, fresh.
+  const currentReview = useCurrentReview(repo);
+  const [reviewId, setReviewId] = useState<number | null>(() => {
+    const n = currentReview ? Number(currentReview.id) : NaN;
+    return Number.isFinite(n) ? n : null;
+  });
 
   const [line, setLine] = useState<number>(activeLine ?? 1);
   const [lineEnd, setLineEnd] = useState<number | null>(activeLineEnd);
@@ -116,15 +148,26 @@ export default function AnnotationsPanel({
   const threads = data ? groupThreads(data.annotations) : [];
   const visibleThreads = filter === "all" ? threads : threads.filter((t) => t.parent.intent === filter);
 
-  const payload = buildCreatePayload({
-    repo,
-    path,
-    line,
-    lineEnd: isRange ? (lineEnd ?? undefined) : undefined,
-    body,
-    anchorKind,
-    intent,
-  });
+  // V80-M2 — splice the selected review onto an otherwise-plain create
+  // payload. `ps` is deliberately omitted (→ server default, the review's
+  // latest); `side` is always `"new"` — this composer only ever anchors to
+  // the CURRENT working-tree content, never a historical diff side.
+  function withReviewScope(p: ReturnType<typeof buildCreatePayload>) {
+    if (!p || reviewId === null) return p;
+    return { ...p, review_id: reviewId, side: "new" as const };
+  }
+
+  const payload = withReviewScope(
+    buildCreatePayload({
+      repo,
+      path,
+      line,
+      lineEnd: isRange ? (lineEnd ?? undefined) : undefined,
+      body,
+      anchorKind,
+      intent,
+    }),
+  );
 
   // F3a — every mutation here `await`s `…mutateAsync(...)` wrapped in a
   // try/catch so a rejection (a stale ETag, a network blip) always surfaces
@@ -143,7 +186,7 @@ export default function AnnotationsPanel({
       // automatically, and say so.
       if (anchorKind === "symbol" && e instanceof ApiError && e.status === 404) {
         toast.warn("no enclosing symbol here — saved as a line annotation instead");
-        const fallback = buildCreatePayload({ repo, path, line, body, anchorKind: "line", intent });
+        const fallback = withReviewScope(buildCreatePayload({ repo, path, line, body, anchorKind: "line", intent }));
         if (fallback) {
           try {
             await create.mutateAsync(fallback);
@@ -179,6 +222,29 @@ export default function AnnotationsPanel({
       await del.mutateAsync(id);
     } catch (e) {
       toast.err(`couldn't delete annotation: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /// V80-M2 — bind, or rebind onto a different review, an EXISTING
+  /// annotation. Returns whether it actually applied, so `ThreadItem`
+  /// closes its inline picker only on success (a rejection — most likely
+  /// the server's honest 409 on a closed target review — leaves the
+  /// picker open to retry or pick something else).
+  async function bindToReview(id: string, input: BindAnnotationReviewInput): Promise<boolean> {
+    try {
+      await bindReviewMut.mutateAsync({ id, input });
+      return true;
+    } catch (e) {
+      toast.err(`couldn't bind to review: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  async function unbindFromReview(id: string) {
+    try {
+      await unbindReviewMut.mutateAsync(id);
+    } catch (e) {
+      toast.err(`couldn't unbind from review: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -251,6 +317,7 @@ export default function AnnotationsPanel({
             ))}
           </select>
         </div>
+        <ReviewBindSelector repo={repo} path={path} value={reviewId} onChange={setReviewId} />
         <button
           type="button"
           className="kbc-annotations__save"
@@ -293,6 +360,9 @@ export default function AnnotationsPanel({
               onToggleResolved={toggleResolved}
               onDelete={remove}
               onReply={reply}
+              reviewTitleFor={reviewTitleFor}
+              onBindReview={bindToReview}
+              onUnbindReview={unbindFromReview}
             />
           ))}
         </ul>
@@ -308,6 +378,12 @@ interface ThreadItemProps {
   onToggleResolved: (id: string, resolved: boolean) => void;
   onDelete: (id: string) => void;
   onReply: (parentId: string, body: string) => Promise<boolean>;
+  /// V80-M2 — resolves an open review's title for the binding chip's
+  /// label; `undefined` for a since-closed (or otherwise not-currently-
+  /// open) review, which the chip degrades to `#<id>` for.
+  reviewTitleFor: (id: number) => string | undefined;
+  onBindReview: (id: string, input: BindAnnotationReviewInput) => Promise<boolean>;
+  onUnbindReview: (id: string) => Promise<void>;
 }
 
 /// One thread: the parent row (anchor badge, body, intent chip, meta,
@@ -315,11 +391,30 @@ interface ThreadItemProps {
 /// it, plus an inline reply composer that opens on demand. Resolving the
 /// parent visually resolves the WHOLE thread (`.is-resolved` on the `<li>`
 /// root) — a reply is never independently resolved through this UI.
-function ThreadItem({ repo, thread, onGotoLine, onToggleResolved, onDelete, onReply }: ThreadItemProps) {
+///
+/// V80-M2 — the parent ALSO carries its review binding: a chip linking to
+/// the Room when `review_id` is set, plus "bind to review…"/"rebind"
+/// (opens an inline `ReviewBindSelector`) and "unbind". A REPLY has no
+/// scope of its own (`routes::bind_annotation_review`'s doc — it always
+/// inherits its parent's), so none of this renders on a reply row.
+function ThreadItem({
+  repo,
+  thread,
+  onGotoLine,
+  onToggleResolved,
+  onDelete,
+  onReply,
+  reviewTitleFor,
+  onBindReview,
+  onUnbindReview,
+}: ThreadItemProps) {
   const { parent, replies } = thread;
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [replyPending, setReplyPending] = useState(false);
+  const [bindPickerOpen, setBindPickerOpen] = useState(false);
+  const [bindPickerValue, setBindPickerValue] = useState<number | null>(parent.review_id ?? null);
+  const [bindPending, setBindPending] = useState(false);
 
   async function saveReply() {
     if (!replyBody.trim() || replyPending) return;
@@ -330,6 +425,32 @@ function ThreadItem({ repo, thread, onGotoLine, onToggleResolved, onDelete, onRe
       setReplyBody("");
       setReplyOpen(false);
     }
+  }
+
+  function openBindPicker() {
+    setBindPickerValue(parent.review_id ?? null);
+    setBindPickerOpen(true);
+  }
+
+  /// "No review" in the picker is a valid choice — same effect as the
+  /// dedicated Unbind button, just reached from inside the picker instead.
+  async function applyBindPicker() {
+    setBindPending(true);
+    const ok =
+      bindPickerValue === null
+        ? await (async () => {
+            await onUnbindReview(parent.id);
+            return true;
+          })()
+        : await onBindReview(parent.id, { review_id: bindPickerValue });
+    setBindPending(false);
+    if (ok) setBindPickerOpen(false);
+  }
+
+  async function unbindNow() {
+    setBindPending(true);
+    await onUnbindReview(parent.id);
+    setBindPending(false);
   }
 
   return (
@@ -353,7 +474,34 @@ function ThreadItem({ repo, thread, onGotoLine, onToggleResolved, onDelete, onRe
             {parent.resolved && (
               <span className="kbc-annotations__badge kbc-annotations__badge--resolved">resolved</span>
             )}
+            {parent.review_id != null && (
+              <Link
+                to={reviewUrl(repo, parent.review_id)}
+                className="kbc-annotations__review-chip"
+                data-kbc-annot-review-chip
+              >
+                in review {reviewTitleFor(parent.review_id) ?? `#${parent.review_id}`}
+              </Link>
+            )}
           </div>
+          {bindPickerOpen && (
+            <div className="kbc-annotations__review-picker-inline" data-kbc-annot-review-picker>
+              <ReviewBindSelector repo={repo} path={parent.path} value={bindPickerValue} onChange={setBindPickerValue} />
+              <div className="kbc-annotations__review-picker-actions">
+                <button
+                  type="button"
+                  disabled={bindPending}
+                  onClick={() => void applyBindPicker()}
+                  data-kbc-annot-review-apply
+                >
+                  {bindPending ? "Saving…" : "Save"}
+                </button>
+                <button type="button" onClick={() => setBindPickerOpen(false)} data-kbc-annot-review-cancel>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="kbc-annotations__item-actions">
           <button type="button" onClick={() => onToggleResolved(parent.id, parent.resolved)} data-kbc-annot-resolve>
@@ -362,6 +510,14 @@ function ThreadItem({ repo, thread, onGotoLine, onToggleResolved, onDelete, onRe
           <button type="button" onClick={() => setReplyOpen((v) => !v)} data-kbc-annot-reply-toggle>
             Reply{replies.length > 0 ? ` (${replies.length})` : ""}
           </button>
+          <button type="button" onClick={openBindPicker} data-kbc-annot-review-toggle>
+            {parent.review_id != null ? "Rebind" : "Bind to review…"}
+          </button>
+          {parent.review_id != null && (
+            <button type="button" disabled={bindPending} onClick={() => void unbindNow()} data-kbc-annot-review-unbind>
+              Unbind
+            </button>
+          )}
           <button
             type="button"
             className="kbc-annotations__delete"
