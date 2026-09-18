@@ -7719,6 +7719,21 @@ async fn identity(daemon: &str, json: bool) -> Result<()> {
     println!("name:       {}", s("name"));
     println!("version:    {}", s("version"));
     println!("started_at: {}", s("started_at"));
+    // V80-F2 — the loopback pre-probe: whether a `review_mutations_gate`
+    // write (verdict, finding disposition, manual finding create, publish
+    // recording) would be admitted from THIS caller right now. Absent on
+    // an older daemon — printed as `?`, never guessed.
+    println!(
+        "review writes admitted: {}",
+        match body
+            .get("review_mutations_admitted")
+            .and_then(|v| v.as_bool())
+        {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "?",
+        }
+    );
     let repos = body["repos"].as_array().cloned().unwrap_or_default();
     println!("repos:      {}", repos.len());
     for r in &repos {
