@@ -88,6 +88,16 @@ const FILTERS: { key: ThreadFilter; label: string }[] = [
   { key: "github", label: "GitHub" },
 ];
 
+// V80-R3 — presentational split of the SAME `FILTERS` list (one shared
+// `filter`/`setFilter` state, unchanged) into a mutually-exclusive STATE
+// segment and the two "awaiting" + GitHub toggles beside it — the "Why"'s
+// overcrowded single seven-chip row, now two scannable groups. Every
+// button below keeps its `data-kbc-review-threads-filter` hook regardless
+// of which group renders it.
+const STATE_KEYS: ThreadFilter[] = ["all", "open", "resolved", "orphaned"];
+const STATE_FILTERS = FILTERS.filter((f) => (STATE_KEYS as string[]).includes(f.key));
+const AWAITING_FILTERS = FILTERS.filter((f) => !(STATE_KEYS as string[]).includes(f.key));
+
 function matches(
   filter: ThreadFilter,
   c: ReviewComment,
@@ -163,35 +173,61 @@ export default function ReviewThreadsCard({
           <h2 className="kbc-review__card-title">
             Findings <span className="n">{findingTotal}</span>
           </h2>
-          <div className="kbc-filters" role="group" aria-label="finding severity filter">
-            {(["all", "blocker", "concern", "ok"] as FindingSeverityFilter[]).map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={sevFilter === s ? "is-on" : ""}
-                aria-pressed={sevFilter === s}
-                onClick={() => setSevFilter(s)}
-                data-kbc-finding-filter-severity={s}
+          {/* V80-R3 — two LABELLED segmented controls on one line (was two
+              unlabelled chip rows stacked with no indication of what either
+              was filtering) — wraps to its own second group when the rail
+              is too narrow for both, never overlapping or clipping. */}
+          <div className="kbc-finding-filters">
+            <div className="kbc-finding-filters__group">
+              <span className="kbc-finding-filters__label" id="kbc-sevfilter-label">
+                Severity
+              </span>
+              <div
+                className="kbc-filters"
+                role="group"
+                aria-label="finding severity filter"
+                aria-labelledby="kbc-sevfilter-label"
               >
-                {s === "all" ? "All" : s}
-              </button>
-            ))}
-          </div>
-          <div className="kbc-filters" role="group" aria-label="finding disposition filter">
-            {(["all", "open", "agree", "dispute", "waive", "fix-later"] as FindingDispositionFilter[]).map(
-              (d) => (
-                <button
-                  key={d}
-                  type="button"
-                  className={dispoFilter === d ? "is-on" : ""}
-                  aria-pressed={dispoFilter === d}
-                  onClick={() => setDispoFilter(d)}
-                  data-kbc-finding-filter-disposition={d}
-                >
-                  {d === "all" ? "All" : d}
-                </button>
-              ),
-            )}
+                {(["all", "blocker", "concern", "ok"] as FindingSeverityFilter[]).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={sevFilter === s ? "is-on" : ""}
+                    aria-pressed={sevFilter === s}
+                    onClick={() => setSevFilter(s)}
+                    data-kbc-finding-filter-severity={s}
+                  >
+                    {s === "all" ? "All" : s}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="kbc-finding-filters__group">
+              <span className="kbc-finding-filters__label" id="kbc-dispofilter-label">
+                Disposition
+              </span>
+              <div
+                className="kbc-filters"
+                role="group"
+                aria-label="finding disposition filter"
+                aria-labelledby="kbc-dispofilter-label"
+              >
+                {(["all", "open", "agree", "dispute", "waive", "fix-later"] as FindingDispositionFilter[]).map(
+                  (d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      className={dispoFilter === d ? "is-on" : ""}
+                      aria-pressed={dispoFilter === d}
+                      onClick={() => setDispoFilter(d)}
+                      data-kbc-finding-filter-disposition={d}
+                    >
+                      {d === "all" ? "All" : d}
+                    </button>
+                  ),
+                )}
+              </div>
+            </div>
           </div>
           {findings.length === 0 ? (
             <p className="kbc-review__card-empty">No findings match this filter.</p>
@@ -201,8 +237,13 @@ export default function ReviewThreadsCard({
         </div>
       )}
       <h2 className="kbc-review__card-title">Threads</h2>
-      <div className="kbc-rthreads__filters" role="group" aria-label="thread filter">
-        {FILTERS.map((f) => (
+      {/* V80-R3 — ONE segmented state control (All/Open/Resolved/Orphaned,
+          mutually exclusive) plus the "awaiting" + GitHub toggles as a
+          second, separate group — the "Why"'s third overcrowded chip row,
+          split for scanability. Still ONE `filter`/`setFilter` state; every
+          button keeps its `data-kbc-review-threads-filter` hook. */}
+      <div className="kbc-rthreads__filters" role="group" aria-label="thread state">
+        {STATE_FILTERS.map((f) => (
           <button
             key={f.key}
             type="button"
@@ -213,6 +254,20 @@ export default function ReviewThreadsCard({
           >
             {f.label}
             {f.key === "open" && indexed ? ` ${indexed.rollup.open}` : ""}
+          </button>
+        ))}
+      </div>
+      <div className="kbc-rthreads__awaiting" role="group" aria-label="awaiting / GitHub">
+        {AWAITING_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            className={"kbc-rthreads__filter" + (filter === f.key ? " is-active" : "")}
+            aria-pressed={filter === f.key}
+            onClick={() => setFilter(f.key)}
+            data-kbc-review-threads-filter={f.key}
+          >
+            {f.label}
             {f.key === "github" ? ` (${githubThreads.length})` : ""}
           </button>
         ))}
@@ -316,14 +371,20 @@ export default function ReviewThreadsCard({
                       ? ` · L${c.resolution.line}`
                       : ""}{" "}
                   · {c.author}:{" "}
-                  <ProseBlock
-                    text={c.body}
-                    refs={c.body_refs}
-                    repo={repo}
-                    reviewId={reviewId}
-                    inline
-                    nolink
-                  />
+                  {/* V80-R3 — the thread's own body reads a step above its
+                      author/time meta (which stays at the row's `--fs-sm`
+                      floor) — the "Why"'s complaint that the rail is
+                      uniformly the smallest text on the site. */}
+                  <span className="kbc-rthreads__text">
+                    <ProseBlock
+                      text={c.body}
+                      refs={c.body_refs}
+                      repo={repo}
+                      reviewId={reviewId}
+                      inline
+                      nolink
+                    />
+                  </span>
                 </Link>
               );
             })}

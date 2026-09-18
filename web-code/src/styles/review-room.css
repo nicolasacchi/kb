@@ -700,17 +700,48 @@
   font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
+/* V80-R3 — the severity + disposition filters now sit as two LABELLED,
+   bounded groups on one line (`.kbc-finding-filters`), replacing two
+   unlabelled `.kbc-filters` rows stacked with no indication of what either
+   was filtering. A bounded "fieldset" pill (border + background), not a
+   seamless border-collapsed segmented control — the disposition group has
+   six segments and must still look correct if it wraps to a second line
+   on a narrow rail. */
+.kbc-finding-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.kbc-finding-filters__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kbc-finding-filters__label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  flex: 0 0 auto;
+}
 .kbc-filters {
   display: flex;
   gap: 5px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  padding: 3px 6px;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
 }
 .kbc-filters button {
   padding: 2px 10px;
   border: 1px solid var(--rule-hi);
   border-radius: var(--radius-pill);
-  background: var(--bg-panel);
+  background: var(--bg-card);
   color: var(--ink-mute);
   font: inherit;
   font-size: var(--fs-sm);
@@ -756,9 +787,13 @@
   font-size: var(--fs-sm);
   color: var(--ink);
 }
+/* V80-R3 — the rail's own smallest text (the "Why"'s "paths 10px"): bumped
+   one step, matching the slug line above it. Overridden again below (same
+   value) where the two-line layout rule restates it — see that rule's own
+   note. */
 .kbc-frow .loc {
   color: var(--ink-faint);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
 }
 .kbc-frow .state {
@@ -1095,8 +1130,11 @@
   gap: 4px;
   margin-bottom: 10px;
 }
+/* V80-R3 — the lane chips floored at `--fs-xs` (12px, unchanged by density
+   — `tokens.css` never overrides `--fs-xs` in compact mode), never a raw
+   sub-12px literal. */
 .kbc-timeline__lane {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 7px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--rule-hi);
@@ -1126,13 +1164,13 @@
   color: var(--warn);
 }
 .kbc-timeline__lane-count {
-  font-size: 9px;
+  font-size: var(--fs-xs);
   background: var(--bg-card-hi);
   border-radius: 999px;
   padding: 0 5px;
 }
 .kbc-timeline__lane-cycle {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 7px;
   border-radius: var(--radius-sm);
   border: 1px dashed var(--rule-hi);
@@ -1426,6 +1464,28 @@
   flex-wrap: wrap;
   margin-top: 14px;
 }
+/* V80-R3 — the three severity counts read as ONE segmented control (was
+   three free-floating `.kbc-room-chip--btn`s with no shared boundary and no
+   pressed state). Each segment keeps its own `--kbc-room-chip-color` wash;
+   the outer border is the ONLY new visual element. */
+.kbc-room-hero__severity-seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.kbc-room-hero__severity-seg .kbc-room-chip--btn {
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid var(--rule-hi);
+}
+.kbc-room-hero__severity-seg .kbc-room-chip--btn:last-child {
+  border-right: none;
+}
+.kbc-room-hero__severity-seg .kbc-room-chip--btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--kbc-room-chip-color, var(--ink-dim)) 24%, transparent);
+}
 .kbc-room-hero__lede {
   margin: 14px 0 0;
   font-size: var(--fs-title);
@@ -1433,15 +1493,11 @@
   color: var(--ink);
   max-width: 78ch;
 }
-.kbc-room-hero__agent {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--rule);
-  color: var(--accent-soft);
-  font-size: var(--fs-sm);
+/* V80-R3 — the agent chip now rides the identity line (`.kbc-room-hero__refs`)
+   as an ordinary `.kbc-room-chip`, not a separate bordered block; only the
+   session link inside keeps its own mono styling. */
+.kbc-room-hero__agent-chip {
+  gap: 6px;
 }
 .kbc-room-hero__session {
   color: var(--blue);
@@ -1490,8 +1546,12 @@
 .kbc-finding__body {
   margin-bottom: 4px;
 }
+/* V80-R3 — the card title reads at BODY scale, not `--fs-title` (the same
+   size as the section headers above it, `.kbc-room-section`) — a real
+   `<h3>` (unchanged) still reads as a heading via weight + the head zone's
+   own border, without competing with the page's actual section hierarchy. */
 .kbc-finding__ti {
-  font-size: var(--fs-title);
+  font-size: var(--fs-body);
   font-weight: 650;
   margin: 0 0 6px;
   line-height: 1.35;
@@ -1539,7 +1599,7 @@
   overflow-wrap: anywhere;
 }
 .kbc-frow .loc {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 .kbc-frow .state {
