@@ -22,11 +22,13 @@ import RiskBadge from "./RiskBadge";
 import {
   buildStatusSections,
   countsText,
+  flattenTree,
   flattenVisible,
   langIdFromSyntax,
   middleTruncate,
   type FileStatusKind,
   type FileTreeFolderNode,
+  type FileTreeNode,
   type StatusSection,
 } from "../../lib/reviewFileTree";
 import { mapRowTitle, type MapRowState } from "../../lib/reviewMapColumn";
@@ -51,6 +53,22 @@ export interface ReviewFileTreeProps {
   riskAvailable?: boolean;
   riskByPath?: ReadonlyMap<string, ReviewRiskFile>;
   onToggleViewed?: (file: ReviewFileRow) => void;
+  /// V80-M1 — "Changed (N) | All files". Defaults to `"changed"`, which is
+  /// byte-identical to every pre-V80 caller (`FilesPanel`, the diff map
+  /// column when the operator has not toggled it): the status-sectioned
+  /// render below is completely untouched.
+  mode?: "changed" | "all";
+  /// V80-M1 — the ALL-mode tree (`lib/reviewFileTree.ts`'s
+  /// `buildAllFilesTree`, built by the caller — this component computes
+  /// nothing about it, same kbc-tree/1 "renders rows it did not compute"
+  /// rule the status-sectioned tree already follows). `null`/absent while
+  /// `mode === "all"` renders an honest "loading" line rather than an
+  /// empty tree that looks like zero files.
+  allTree?: readonly FileTreeNode[] | null;
+  /// V80-M1 — which paths in `allTree` are REAL `files_changed` rows (as
+  /// opposed to a synthetic `status: ""` placeholder) — `renderFile` shows
+  /// the status/stats chip only for these, "plain" for everything else.
+  changedPaths?: ReadonlySet<string>;
 }
 
 export interface ReviewFileTreeHandle {
@@ -108,17 +126,35 @@ export default function ReviewFileTree({
   riskAvailable,
   riskByPath,
   onToggleViewed,
+  mode = "changed",
+  allTree,
+  changedPaths,
 }: ReviewFileTreeProps) {
-  const sections = useMemo(() => buildStatusSections(files), [files]);
+  const sections = useMemo(
+    () => (mode === "all" ? [] : buildStatusSections(files)),
+    [mode, files],
+  );
   const [collapsedSections, setCollapsedSections] = useState<Set<FileStatusKind>>(() => new Set());
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [treeCursor, setTreeCursor] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const currentRef = useRef<HTMLDivElement | null>(null);
 
+  // V80-M1 — keyboard nav (`onTreeKey`/`toggleFocusedFolder`/
+  // `collapseAllFolders` below) walks `visible` regardless of which mode
+  // built it, so `g f`/`z f`/`z m` stay the SAME code path in both modes.
+  // The `status` a mode="all" row carries is a filler (`toggleFolder`'s own
+  // `_status` param is unused — collapse state keys on path only); nothing
+  // reads it meaningfully outside `changed` mode's per-section rendering.
   const visible = useMemo(
-    () => flattenVisible(sections, collapsedFolders, collapsedSections),
-    [sections, collapsedFolders, collapsedSections],
+    () =>
+      mode === "all"
+        ? flattenTree(allTree ?? [], collapsedFolders).map((r) => ({
+            ...r,
+            status: "modified" as FileStatusKind,
+          }))
+        : flattenVisible(sections, collapsedFolders, collapsedSections),
+    [mode, allTree, sections, collapsedFolders, collapsedSections],
   );
 
   useEffect(() => {
@@ -265,7 +301,7 @@ export default function ReviewFileTree({
     );
   }
 
-  function renderFile(file: ReviewFileRow, name: string, depth: number) {
+  function renderFile(file: ReviewFileRow, name: string, depth: number, changed = true) {
     const st = stateByPath?.get(file.path);
     const current = file.path === currentPath;
     const lang = langIdFromSyntax(file.path, syntaxRows);
@@ -281,7 +317,11 @@ export default function ReviewFileTree({
             ref={current ? currentRef : undefined}
             role="button"
             tabIndex={0}
-            className={"kbc-ftree__row kbc-ftree__row--file" + (current ? " is-current" : "")}
+            className={
+              "kbc-ftree__row kbc-ftree__row--file" +
+              (current ? " is-current" : "") +
+              (changed ? "" : " kbc-ftree__row--plain")
+            }
             style={{ paddingInlineStart: 8 + depth * 12 }}
             title={`${title} · ${file.path}`}
             onClick={() => onPick(file.path)}
@@ -292,18 +332,28 @@ export default function ReviewFileTree({
               }
             }}
             {...fileRowAttrs(file.path, current)}
+            data-kbc-ftree-changed={changed ? "1" : "0"}
           >
             <span className="kbc-ftree__twist" aria-hidden />
             <FileKindIcon lang={lang} />
             <span className="kbc-ftree__name kbc-ftree__path" data-kbc-ftree-path={file.path}>
               {shown}
             </span>
-            <span className="kbc-rmap__stats">
-              <span className="kbc-review__file-add">+{file.additions}</span>{" "}
-              <span className="kbc-review__file-del">−{file.deletions}</span>
-            </span>
-            {riskAvailable && <RiskBadge file={file} riskRow={riskByPath?.get(file.path)} />}
-            {onToggleViewed && (
+            {/* V80-M1 — "changed files marked by their status chip and
+                unchanged ones plain": an unchanged row (mode="all" only,
+                `changed` false) shows neither the +/- stat span nor the
+                viewed checkbox (its `blob_sha` is already "" for a
+                synthetic row, which would hide the checkbox anyway — this
+                also drops the always-"+0 −0" span that would otherwise
+                read as a real, checked diff stat). */}
+            {changed && (
+              <span className="kbc-rmap__stats">
+                <span className="kbc-review__file-add">+{file.additions}</span>{" "}
+                <span className="kbc-review__file-del">−{file.deletions}</span>
+              </span>
+            )}
+            {riskAvailable && changed && <RiskBadge file={file} riskRow={riskByPath?.get(file.path)} />}
+            {onToggleViewed && changed && (
               <label className="kbc-review__file-viewed" onClick={(e) => e.stopPropagation()}>
                 <input
                   type="checkbox"
@@ -373,7 +423,16 @@ export default function ReviewFileTree({
     return renderFile(node.file, node.name, depth);
   }
 
-  if (files.length === 0) {
+  // V80-M1 — the "All files" tree has no status sections at all: one flat
+  // walk, `renderFolder` reused verbatim (its `status` param is a filler —
+  // see `visible`'s own comment above), `renderFile`'s new `changed`
+  // argument telling it whether THIS path is a real `files_changed` row.
+  function renderNodeAll(node: FileTreeNode, depth: number) {
+    if (node.kind === "folder") return renderFolder(node, depth, "modified");
+    return renderFile(node.file, node.name, depth, changedPaths?.has(node.file.path) ?? true);
+  }
+
+  if (mode !== "all" && files.length === 0) {
     return <p className="kbc-rmap__note">No files in this patchset.</p>;
   }
 
@@ -384,36 +443,47 @@ export default function ReviewFileTree({
       tabIndex={0}
       onKeyDown={onTreeKey}
       data-kbc-ftree
-      aria-label="Review files"
+      data-kbc-ftree-mode={mode}
+      aria-label={mode === "all" ? "Review files — all" : "Review files"}
     >
-      {sections.map((sec) => {
-        const closed = collapsedSections.has(sec.status);
-        return (
-          <section
-            key={sec.status}
-            className="kbc-ftree__section"
-            data-kbc-rdiff-map-status={sec.status}
-            data-kbc-rdiff-map-chapter={sec.label}
-          >
-            <button
-              type="button"
-              className="kbc-ftree__section-head"
-              aria-expanded={!closed}
-              onClick={() => toggleSection(sec.status)}
-              data-kbc-ftree-section={sec.status}
+      {mode === "all" ? (
+        allTree && allTree.length > 0 ? (
+          <ul className="kbc-ftree__list">{allTree.map((n) => renderNodeAll(n, 0))}</ul>
+        ) : (
+          <p className="kbc-rmap__note" data-kbc-ftree-all-loading>
+            Loading the full tree…
+          </p>
+        )
+      ) : (
+        sections.map((sec) => {
+          const closed = collapsedSections.has(sec.status);
+          return (
+            <section
+              key={sec.status}
+              className="kbc-ftree__section"
+              data-kbc-rdiff-map-status={sec.status}
+              data-kbc-rdiff-map-chapter={sec.label}
             >
-              <span className="kbc-ftree__twist" aria-hidden>
-                {closed ? <Icon.Chevron /> : <Icon.ChevDown />}
-              </span>
-              <h2 className="kbc-rmap__chapter-head">
-                {sec.label}
-                <span className="kbc-rmap__chapter-n">{countsText(sec.counts)}</span>
-              </h2>
-            </button>
-            {!closed && <ul className="kbc-ftree__list">{sec.tree.map((n) => renderNode(n, 0, sec.status))}</ul>}
-          </section>
-        );
-      })}
+              <button
+                type="button"
+                className="kbc-ftree__section-head"
+                aria-expanded={!closed}
+                onClick={() => toggleSection(sec.status)}
+                data-kbc-ftree-section={sec.status}
+              >
+                <span className="kbc-ftree__twist" aria-hidden>
+                  {closed ? <Icon.Chevron /> : <Icon.ChevDown />}
+                </span>
+                <h2 className="kbc-rmap__chapter-head">
+                  {sec.label}
+                  <span className="kbc-rmap__chapter-n">{countsText(sec.counts)}</span>
+                </h2>
+              </button>
+              {!closed && <ul className="kbc-ftree__list">{sec.tree.map((n) => renderNode(n, 0, sec.status))}</ul>}
+            </section>
+          );
+        })
+      )}
     </div>
   );
 }
