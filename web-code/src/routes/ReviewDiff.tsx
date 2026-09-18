@@ -41,6 +41,7 @@ import {
 import { buildTourStops, clampTourStep } from "../lib/reviewTour";
 import { mergeCurrentSearch, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
 import { setCurrentReview } from "../lib/currentReview";
+import { humanOpenThreads } from "../lib/reviewRoom";
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
@@ -275,9 +276,14 @@ export default function ReviewDiff() {
   // already fetched for the overlay) into one flat stop list; NO new fetch.
   // State is client-only: `?tour=1` seeds the INITIAL on/off, the step
   // index lives in plain component state (this unit's own brief).
+  // V80-M4 — "the guided tour mentions human threads": every open human
+  // thread joins the tour as its own stop (see `buildTourStops`'s own doc),
+  // derived from the SAME `commentsQ.data` this route already fetched for
+  // the diff's own comment overlay — no new fetch.
+  const humanThreadStops = useMemo(() => humanOpenThreads(commentsQ.data), [commentsQ.data]);
   const tourStops = useMemo(
-    () => buildTourStops(paths, findingsQ.data?.findings ?? []),
-    [paths, findingsQ.data],
+    () => buildTourStops(paths, findingsQ.data?.findings ?? [], humanThreadStops),
+    [paths, findingsQ.data, humanThreadStops],
   );
   const [tourOn, setTourOnState] = useState(() => tourParamOn);
   const [tourStepIdx, setTourStepIdx] = useState(0);
