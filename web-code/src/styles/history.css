@@ -21,7 +21,7 @@
   color: var(--ink-mute);
   padding: 3px 9px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-provenance-toggle__opt:hover {
   color: var(--ink);

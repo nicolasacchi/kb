@@ -377,7 +377,7 @@
   color: var(--ink);
   padding: 4px 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-addset__trigger:hover {
   border-color: var(--rule-hi);

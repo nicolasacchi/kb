@@ -43,7 +43,7 @@ a.kbc-lens__doc-title:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-lens__refresh {
@@ -72,7 +72,7 @@ a.kbc-lens__doc-title:hover {
   padding: 5px 10px;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__save-set-btn:hover:not(:disabled) {
   border-color: var(--accent);
@@ -118,7 +118,7 @@ a.kbc-lens__doc-title:hover {
 .kbc-lens__repo-sha {
   font-family: var(--font-mono);
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__repo.is-selected .kbc-lens__repo-sha {
   color: inherit;
@@ -129,7 +129,7 @@ a.kbc-lens__doc-title:hover {
 }
 .kbc-lens__repo-state {
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__repo.is-selected .kbc-lens__repo-state {
   color: inherit;
@@ -137,14 +137,14 @@ a.kbc-lens__doc-title:hover {
 }
 .kbc-lens__repo-reason {
   color: var(--red);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 /* DCB-W2.B.R fix 3 — `ScorecardRepoRow.partial` (a repo's OWN resolution hit
  * the deadline before finishing) rendered as its own small tag, distinct
  * from the dirty dot and the state text. */
 .kbc-lens__repo-partial {
   color: var(--warn);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   border: 1px solid var(--warn);
   border-radius: var(--radius-pill);
   padding: 0 4px;
@@ -153,7 +153,7 @@ a.kbc-lens__doc-title:hover {
 
 .kbc-lens__dirty-banner {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--warn);
 }
 
@@ -168,7 +168,7 @@ a.kbc-lens__doc-title:hover {
  * CodeRefsSection.tsx`), gated on `lens.truncated || lens.partial`. */
 .kbc-lens__truncated {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--warn);
 }
 
@@ -184,7 +184,7 @@ a.kbc-lens__doc-title:hover {
    * intended columns starting on row 2. */
   grid-column: 1 / -1;
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
 
@@ -247,7 +247,7 @@ a.kbc-lens__doc-title:hover {
   white-space: nowrap;
 }
 .kbc-lens__rail-count {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: inherit;
   opacity: 0.7;
   flex: 0 0 auto;
@@ -288,13 +288,13 @@ a.kbc-lens__doc-title:hover {
 }
 .kbc-lens__row-raw {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 .kbc-lens__row-link {
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-decoration: none;
   cursor: pointer;
   overflow-wrap: anywhere;
@@ -305,7 +305,7 @@ a.kbc-lens__doc-title:hover {
 .kbc-lens__row-external {
   color: var(--ink-mute);
   text-decoration: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__row-external:hover {
   color: var(--ink);
@@ -313,11 +313,11 @@ a.kbc-lens__doc-title:hover {
 .kbc-lens__row-search {
   color: var(--blue);
   text-decoration: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__row-note {
   color: var(--warn);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 /* DCB-W2.B.R fix 6 — the external (vendor/gem) tier's OWN tag, parity with
  * kb's `.kb-pinsp__coderef-external-tag` (`web/src/components/
@@ -326,7 +326,7 @@ a.kbc-lens__doc-title:hover {
  * a fold into the absent tier's styling. */
 .kbc-lens__row-external-tag {
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   border: 1px solid var(--rule-hi);
   border-radius: var(--radius-pill);
   padding: 0 6px;
@@ -349,7 +349,7 @@ a.kbc-lens__doc-title:hover {
 .kbc-lens__candidates a {
   color: var(--blue);
   text-decoration: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
 }
 .kbc-lens__candidates a:hover {
@@ -362,7 +362,7 @@ a.kbc-lens__doc-title:hover {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   border-radius: var(--radius-pill);
   font-weight: 500;
@@ -391,7 +391,7 @@ a.kbc-lens__doc-title:hover {
  * outlined, no fill) — it never replaces `LineBadge` above, only notes when
  * the era-resolved verdict differs from the current-tree one. */
 .kbc-lens__badge--era {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 0 5px;
   border: 1px solid var(--rule-hi);
   color: var(--ink-mute);
