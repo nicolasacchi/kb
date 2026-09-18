@@ -235,13 +235,24 @@ export function truncateMiddle(value: string, max = 48): string {
 }
 
 // ── density ───────────────────────────────────────────────────────────────
-// The Room's compact/comfortable toggle. The PREFERENCE's home is
-// localStorage (D16's browser-local ruling — same as the global
-// `data-density` contract); `?density=` only MIRRORS it so a shared link
-// carries it (`lib/branchViews.ts`'s `?density=` precedent, K2a).
+// The Room's compact/comfortable toggle. V80-R0 retired the Room's OWN
+// preference store: `?density=`/the toggle now read and write the GLOBAL
+// `density` pref (`lib/prefs.ts`'s `loadDensity`/`setThemePrefs`, which also
+// drives the app-wide `[data-density="compact"]` attribute) — one
+// preference, not two. `RoomDensity`/`parseRoomDensity` (still TOTAL, still
+// the type every caller passes around)/`nextRoomDensity` are unchanged.
+// `ROOM_DENSITY_STORAGE_KEY` now names a LEGACY key only: `ReviewDetail.tsx`
+// migrates it into the global pref once (read-then-remove) on mount, then
+// never writes it again. `?density=` is still the share-link mirror, but on
+// load it now WRITES THROUGH to the global pref rather than only
+// overriding one page's render (`lib/branchViews.ts`'s `?density=`
+// precedent, K2a, is unaffected — that is a SEPARATE, still-URL-only store
+// for the Branches page).
 
 export type RoomDensity = "comfortable" | "compact";
 
+/// LEGACY key, read once by `ReviewDetail.tsx`'s migration effect and then
+/// removed — never written again.
 export const ROOM_DENSITY_STORAGE_KEY = "kbc:review-room-density";
 
 /// TOTAL parse: anything that is not literally `compact` reads as the
