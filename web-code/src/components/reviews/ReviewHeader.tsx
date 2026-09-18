@@ -8,6 +8,7 @@ import {
   useSnapshotReview,
 } from "../../hooks/useReviews";
 import { reviewDiffHref, reviewsUrl } from "../../lib/codeUrl";
+import { setCurrentReview, useCurrentReview } from "../../lib/currentReview";
 import { shortSha } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import AgentVerdictCard from "./AgentVerdictCard";
@@ -65,6 +66,14 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
   const title = review.title?.trim() || review.head_ref;
   const reviewPr = review as ReviewDetailPr;
   const latestPs = review.patchsets.length > 0 ? review.patchsets[review.patchsets.length - 1].ps_number : null;
+  // V80-M3 — `ReviewDetail.tsx`'s own mount effect already auto-sets this on
+  // entry (no click needed); this button is for the operator who's read
+  // several rooms since and wants to pick one back explicitly.
+  const currentReview = useCurrentReview(repo);
+  const isWorkingThis = currentReview?.id === String(id);
+  function onWorkThis() {
+    setCurrentReview(repo, { id: String(id), title });
+  }
 
   async function onSnapshot() {
     try {
@@ -138,6 +147,17 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
       <PrChip repo={repo} reviewId={id} review={reviewPr} />
       <StalenessBanner review={review} latestPs={latestPs} />
       <div className="kbc-review__actions">
+        <button
+          type="button"
+          className={"kbc-review__action" + (isWorkingThis ? " is-active" : "")}
+          onClick={onWorkThis}
+          disabled={isWorkingThis}
+          aria-pressed={isWorkingThis}
+          title="Sets this as the browser's current review — carried onto reader files you open next"
+          data-kbc-review-work-this
+        >
+          {isWorkingThis ? "Working this review ✓" : "Work this review"}
+        </button>
         <Link
           to={reviewDiffHref(repo, id)}
           className="kbc-review__action"
