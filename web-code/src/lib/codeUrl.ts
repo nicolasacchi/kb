@@ -419,6 +419,11 @@ export interface ReviewDiffHrefOpts {
   expanded?: readonly string[];
   /// V76-R2c — `?hexpanded=` viewed-but-open hunk ids. Omitted when empty.
   hexpanded?: readonly string[];
+  /// V80-M1 — `?files=all` — the file tree/map lists the tip sha's WHOLE
+  /// tree rather than only `files_changed`. Omitted for the default
+  /// `"changed"`, appended LAST per this interface's own rule (every
+  /// pre-V80 golden stays byte-identical).
+  files?: "changed" | "all";
 }
 
 /// `?ps=` — one patchset number, or an inclusive `from..to` interdiff
@@ -479,6 +484,12 @@ export function parseDiffMap(raw: string | null): boolean {
   return raw !== "0";
 }
 
+/// Parse `?files=`. TOTAL — anything other than the literal `"all"`
+/// (absent, junk, `"changed"` itself) degrades to the default `"changed"`.
+export function parseDiffFiles(raw: string | null): "changed" | "all" {
+  return raw === "all" ? "all" : "changed";
+}
+
 /// `reviewDiffHref(repo, id, file?, opts?)` → `/r/{repo}/~reviews/{id}/diff
 /// [/file]` `[?finding=][&overlay=][&ps=][&ctx=][&noise=][&map=][&file=]
 /// [&hunk=][&expanded=][&hexpanded=]`. `opts` params are appended LAST (the
@@ -511,6 +522,7 @@ export function reviewDiffHref(
   if (expanded) params.push(`expanded=${expanded}`);
   const hexpanded = opts?.hexpanded ? formatExpandedParam(opts.hexpanded) : null;
   if (hexpanded) params.push(`hexpanded=${hexpanded}`);
+  if (opts?.files === "all") params.push("files=all");
   return params.length > 0 ? `${withFile}?${params.join("&")}` : withFile;
 }
 

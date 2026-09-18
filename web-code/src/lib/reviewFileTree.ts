@@ -11,7 +11,7 @@
 // Pure: files in, nodes out. The component renders rows it did not
 // compute (kbc-tree/1).
 
-import type { ReviewFileRow, SyntaxRowOut } from "../api/types";
+import type { ReviewFileRow, SyntaxRowOut, TreeEntry } from "../api/types";
 import { langIdForPath } from "./codeUrl";
 
 export type FileStatusKind = "added" | "modified" | "renamed" | "deleted";
@@ -245,11 +245,36 @@ export function langIdFromSyntax(
   return langIdForPath(path);
 }
 
-export interface VisibleTreeRow {
+export interface FlatTreeRow {
   key: string;
   depth: number;
   node: FileTreeNode;
+}
+
+export interface VisibleTreeRow extends FlatTreeRow {
   status: FileStatusKind;
+}
+
+/// Flatten ONE tree for keyboard walking, honouring which folders are
+/// collapsed. A collapsed folder hides its descendants. No notion of a
+/// status section — that's `flattenVisible`'s own layer, built on top of
+/// this (V80-M1: the "All files" tree has no sections at all, and calls
+/// this directly).
+export function flattenTree(
+  tree: readonly FileTreeNode[],
+  collapsedFolders: ReadonlySet<string>,
+): FlatTreeRow[] {
+  const out: FlatTreeRow[] = [];
+  function walk(nodes: readonly FileTreeNode[], depth: number) {
+    for (const node of nodes) {
+      out.push({ key: node.kind === "folder" ? `dir:${node.path}` : node.path, depth, node });
+      if (node.kind === "folder" && !collapsedFolders.has(node.path)) {
+        walk(node.children, depth + 1);
+      }
+    }
+  }
+  walk(tree, 0);
+  return out;
 }
 
 /// Flatten the sections for keyboard walking, honouring which folders
@@ -262,17 +287,109 @@ export function flattenVisible(
   collapsedSections: ReadonlySet<FileStatusKind>,
 ): VisibleTreeRow[] {
   const out: VisibleTreeRow[] = [];
-  function walk(nodes: readonly FileTreeNode[], depth: number, status: FileStatusKind) {
-    for (const node of nodes) {
-      out.push({ key: node.kind === "folder" ? `dir:${node.path}` : node.path, depth, node, status });
-      if (node.kind === "folder" && !collapsedFolders.has(node.path)) {
-        walk(node.children, depth + 1, status);
-      }
-    }
-  }
   for (const sec of sections) {
     if (collapsedSections.has(sec.status)) continue;
-    walk(sec.tree, 0, sec.status);
+    for (const row of flattenTree(sec.tree, collapsedFolders)) {
+      out.push({ ...row, status: sec.status });
+    }
   }
   return out;
+}
+
+// --- V80-M1 — "All files": one flat tree over the union of the changed
+// rows and the tip sha's whole tree, changed files marked, everything else
+// plain (`web-code/CLAUDE.md`'s Review diff v2 section). ------------------
+
+/// Build the union tree: every `changed` row keeps its REAL `ReviewFileRow`
+/// (real status, real +/- counts); every OTHER path in `allPaths` is
+/// synthesized with `status: ""` — deliberately outside `FileStatusKind`'s
+/// closed vocabulary (`statusKind` is never called on it), so a renderer
+/// can tell "plain" from "changed" with a single `changedPaths.has(path)`
+/// check rather than by inspecting a fabricated status letter.
+export function buildAllFilesTree(
+  changed: readonly ReviewFileRow[],
+  allPaths: readonly string[],
+): { tree: FileTreeNode[]; changedPaths: ReadonlySet<string> } {
+  const changedPaths = new Set(changed.map((f) => f.path));
+  const rows: ReviewFileRow[] = [...changed];
+  for (const p of allPaths) {
+    if (changedPaths.has(p)) continue;
+    rows.push({
+      path: p,
+      old_path: null,
+      status: "",
+      additions: 0,
+      deletions: 0,
+      blob_sha: "",
+      viewed: false,
+      viewed_stale: false,
+      open_annotations: 0,
+    });
+  }
+  return { tree: buildFolderTree(rows), changedPaths };
+}
+
+/// How many leaf paths one "All files" walk will ever hold. Bounds memory
+/// and render cost on a very large repo; `AllFilesResult.capped` says so on
+/// the wire rather than truncating silently.
+export const ALL_FILES_CAP = 4000;
+
+export interface AllFilesResult {
+  paths: string[];
+  capped: boolean;
+}
+
+interface AllFilesSink {
+  paths: string[];
+  capped: boolean;
+}
+
+async function walkAllFilesDir(
+  listDir: (dir: string) => Promise<readonly TreeEntry[]>,
+  dir: string,
+  cap: number,
+  sink: AllFilesSink,
+): Promise<void> {
+  if (sink.capped) return;
+  const entries = await listDir(dir);
+  const dirs: string[] = [];
+  for (const e of entries) {
+    if (sink.capped) break;
+    const p = dir ? `${dir}/${e.name}` : e.name;
+    if (e.kind === "dir") {
+      dirs.push(p);
+      continue;
+    }
+    // "file" / "symlink" / "submodule" are all LEAVES here — a submodule
+    // is reported, never descended into (mirrors `git::tree::EntryKind`'s
+    // own doc server-side: it has no tree of its own this handle can
+    // walk), but it is still part of "the tip sha's full tree" and stays
+    // in the list rather than vanishing silently.
+    if (sink.paths.length >= cap) {
+      sink.capped = true;
+      break;
+    }
+    sink.paths.push(p);
+  }
+  if (sink.capped || dirs.length === 0) return;
+  // Sibling directories fan out concurrently (the same shape server-side
+  // `buffered_join` uses, #28) — a deep tree should not pay for its depth
+  // in serial round trips. `sink` is shared and mutated in place; safe
+  // under JS's single-threaded concurrency, and `sink.capped` short-
+  // circuits every in-flight sibling on the next entry it checks.
+  await Promise.all(dirs.map((d) => walkAllFilesDir(listDir, d, cap, sink)));
+}
+
+/// Recursively walk a per-directory tree listing (`listDir`, injected so
+/// this stays pure/testable without a network mock — `hooks/
+/// useReviewAllFiles.ts` wires it to `GET /api/tree`) into a flat, sorted
+/// leaf-path list, capped at `cap`. `listDir("")` is the root.
+export async function walkAllFiles(
+  listDir: (dir: string) => Promise<readonly TreeEntry[]>,
+  cap: number = ALL_FILES_CAP,
+): Promise<AllFilesResult> {
+  const sink: AllFilesSink = { paths: [], capped: false };
+  await walkAllFilesDir(listDir, "", cap, sink);
+  sink.paths.sort();
+  return { paths: sink.paths, capped: sink.capped };
 }
