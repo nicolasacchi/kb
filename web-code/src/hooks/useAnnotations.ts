@@ -1,10 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  bindAnnotationReview,
   createAnnotation,
   deleteAnnotation,
   fetchAnnotations,
   fetchOpenAnnotations,
   patchAnnotation,
+  unbindAnnotationReview,
+  type BindAnnotationReviewInput,
   type CreateAnnotationInput,
   type PatchAnnotationInput,
 } from "../api/client";
@@ -47,6 +50,39 @@ export function useDeleteAnnotation(repo: string, path: string) {
   return useMutation({
     mutationFn: (id: string) => deleteAnnotation(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: annotationsQueryKey(repo, path) }),
+  });
+}
+
+/// V80-M2 — `PUT /api/annotations/{id}/review`: bind, or rebind onto a
+/// different review, an EXISTING annotation. `annotation.changed`
+/// (`api/queryClient.ts`) already prefix-invalidates `["reviews", repo,
+/// "comments"]` on either event a bind/rebind emits (the NEW review, and —
+/// on a rebind — a second one naming the OLD review; the prefix match
+/// isn't scoped to one id, so either alone already covers both Rooms) —
+/// this mutation ALSO invalidates it directly, belt-and-braces, so the
+/// mutating tab itself never waits on that round trip.
+export function useBindAnnotationReview(repo: string, path: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: BindAnnotationReviewInput }) =>
+      bindAnnotationReview(id, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: annotationsQueryKey(repo, path) });
+      void qc.invalidateQueries({ queryKey: ["reviews", repo, "comments"] });
+    },
+  });
+}
+
+/// V80-M2 — `DELETE /api/annotations/{id}/review`: unbind. Same
+/// belt-and-braces invalidation as [`useBindAnnotationReview`] above.
+export function useUnbindAnnotationReview(repo: string, path: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unbindAnnotationReview(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: annotationsQueryKey(repo, path) });
+      void qc.invalidateQueries({ queryKey: ["reviews", repo, "comments"] });
+    },
   });
 }
 
