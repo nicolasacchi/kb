@@ -85,15 +85,22 @@ test.describe("review threads + verdict (V4.C4)", () => {
     await expect(page.locator("[data-kbc-review-threads]")).toBeVisible();
     await expect(page.locator("[data-kbc-review-verdict-bar]")).toBeVisible();
 
-    // --- compose on a new-side line in the cockpit ------------------------
+    // --- compose on a new-side line — V80-F1: the Files-tab row click
+    // NAVIGATES to the full-page diff now (the inline cockpit expansion
+    // is retired from this interaction). ------------------------------
     await page.locator(`[data-kbc-review-file-row="${FEATURE_FILE}"]`).click();
-    const featDiff = page.locator(`[data-kbc-review-file-diff="${FEATURE_FILE}"]`);
+    await expect(page).toHaveURL(new RegExp(`~reviews/${reviewId}/diff/${FEATURE_FILE}(\\?|$)`));
+    const featDiff = page.locator(`[data-kbc-rdiff-file="${FEATURE_FILE}"]`);
     await expect(featDiff).toBeVisible({ timeout: 10_000 });
     await featDiff.locator("[data-kbc-review-compose-new]").first().click();
     const composer = page.locator("[data-kbc-review-composer]");
     await expect(composer).toBeVisible();
     await composer.locator("[data-kbc-review-composer-body]").fill("thread from cockpit");
     await composer.locator("[data-kbc-review-composer-submit]").click();
+    // V80-F1 — the real full-page diff drafts a compose (V73-K2a) and
+    // auto-opens the tray; publish before it's a live thread (the
+    // reply/resolve below act on a real one).
+    await page.locator("[data-kbc-rdiff-drafts-publish]").click();
     const thread = featDiff.locator("[data-kbc-review-thread]").first();
     await expect(thread).toBeVisible({ timeout: 10_000 });
     await expect(thread).toContainText("thread from cockpit");
@@ -122,6 +129,7 @@ test.describe("review threads + verdict (V4.C4)", () => {
     await expect(baitComposer).toBeVisible();
     await baitComposer.locator("[data-kbc-review-composer-body]").fill("orphan bait");
     await baitComposer.locator("[data-kbc-review-composer-submit]").click();
+    await page.locator("[data-kbc-rdiff-drafts-publish]").click();
     const baitThread = featDiff
       .locator("[data-kbc-review-thread]")
       .filter({ hasText: "orphan bait" });
@@ -129,20 +137,38 @@ test.describe("review threads + verdict (V4.C4)", () => {
     const baitThreadId = await baitThread.getAttribute("data-kbc-review-thread");
     expect(baitThreadId).toBeTruthy();
 
-    // --- old-side compose in split mode (README.md has a remove line) -----
+    // --- old-side compose in split mode (README.md has a remove line) —
+    // back to the cockpit first (V80-F1's Files-tab click leaves the
+    // FEATURE_FILE diff page it navigated to above), then the README row
+    // navigates to README's OWN diff page. ---------------------------------
+    await page.locator("[data-kbc-rdiff-back]").click();
+    await expect(page.locator("[data-kbc-review-files]")).toBeVisible({ timeout: 10_000 });
     await page.locator(`[data-kbc-review-file-row="${README}"]`).click();
-    const readmeDiff = page.locator(`[data-kbc-review-file-diff="${README}"]`);
+    await expect(page).toHaveURL(new RegExp(`~reviews/${reviewId}/diff/${README}(\\?|$)`));
+    const readmeDiff = page.locator(`[data-kbc-rdiff-file="${README}"]`);
     await expect(readmeDiff).toBeVisible({ timeout: 10_000 });
-    await readmeDiff.locator('[data-kbc-diff-mode-toggle="split"]').click();
+    // V80-F1 — unified/split is a PAGE-WIDE toggle on the full diff page
+    // (the toolbar, `ReviewDiffToolbar.tsx`), not a per-file one like the
+    // old inline preview's own header toggle — scope to the page, not
+    // `readmeDiff` (which has no `onModeChange`, `DiffSections.tsx`'s own
+    // `FileDiffBody` call).
+    await page.locator('[data-kbc-diff-mode-toggle="split"]').click();
     await expect(readmeDiff.locator("[data-kbc-sdiff]")).toBeVisible();
     await readmeDiff.locator("[data-kbc-review-compose-old]").first().click();
     const oldComposer = readmeDiff.locator("[data-kbc-review-composer]");
     await expect(oldComposer).toBeVisible();
     await oldComposer.locator("[data-kbc-review-composer-body]").fill("old-side note");
     await oldComposer.locator("[data-kbc-review-composer-submit]").click();
+    await page.locator("[data-kbc-rdiff-drafts-publish]").click();
     await expect(readmeDiff.locator("[data-kbc-review-thread]")).toContainText("old-side note", {
       timeout: 10_000,
     });
+
+    // Back to the cockpit — V80-F1: the reload below (and its
+    // `[data-kbc-review-files]` check) targets the cockpit page, not
+    // whichever file's diff page a Files-tab click last navigated to.
+    await page.locator("[data-kbc-rdiff-back]").click();
+    await expect(page.locator("[data-kbc-review-files]")).toBeVisible({ timeout: 10_000 });
 
     // --- orphan: amend FEATURE_FILE + snapshot ps2 ------------------------
     git(["checkout", "-q", THREADS_BRANCH]);
@@ -170,9 +196,15 @@ test.describe("review threads + verdict (V4.C4)", () => {
     // correct fix, not a mask.
     await expect(page.locator("[data-kbc-review-files]")).toBeVisible({ timeout: 20_000 });
     await page.locator(`[data-kbc-review-file-row="${FEATURE_FILE}"]`).click();
-    const featDiff2 = page.locator(`[data-kbc-review-file-diff="${FEATURE_FILE}"]`);
+    await expect(page).toHaveURL(new RegExp(`~reviews/${reviewId}/diff/${FEATURE_FILE}(\\?|$)`));
+    const featDiff2 = page.locator(`[data-kbc-rdiff-file="${FEATURE_FILE}"]`);
     await expect(featDiff2.locator("[data-kbc-review-orphans]")).toBeVisible({ timeout: 20_000 });
     await expect(featDiff2.locator("[data-kbc-review-orphan-was]")).toContainText(/was ps\d+:L\d+/);
+
+    // Back to the cockpit — the ThreadsCard deep-link below clicks a RAIL
+    // row (`ReviewSidePanel`/`ReviewThreadsCard`), which only renders there.
+    await page.locator("[data-kbc-rdiff-back]").click();
+    await expect(page.locator("[data-kbc-review-files]")).toBeVisible({ timeout: 10_000 });
 
     // --- ThreadsCard deep-link --------------------------------------------
     const cardRow = page.locator(`[data-kbc-review-threads-row="${baitThreadId}"]`);
