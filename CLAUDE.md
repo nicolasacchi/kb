@@ -129,6 +129,22 @@ crates/
                        workspaces v0 — all of it, with the invariants,
                        in [crates/kb-code-server/CLAUDE.md](crates/kb-code-server/CLAUDE.md);
                        read that before touching any of them.**
+                       **v8.0 "The Margin" (2026-09-18/19)** — the human turn:
+                       review comments are annotations rows bound at create
+                       OR after the fact (`PUT`/`DELETE /api/annotations/{id}/
+                       review`, batch `bind_review`/`unbind_review`; a rebind
+                       emits `annotation.changed` for BOTH reviews) and every
+                       `GET /reviews/{id}/comments` group carries `in_diff` —
+                       a per-read caption, never a filter, never stored;
+                       `GET /api/identity` carries `review_mutations_admitted`
+                       (computed per request from the gate's own peer
+                       classification, so the SPA can disable-with-caption
+                       BEFORE a refused write); inbox rows carry `human_open`;
+                       findings may adopt a bound human comment
+                       (`from_annotation_id`, origin manual) and carry a
+                       derived `touched_in` (later patchsets whose hunks
+                       overlap the finding's lines — surfaced, never a
+                       verdict). Full text: crates/kb-code-server/CLAUDE.md.
   kb-lip/          bin (`kb-lip`) — generic LSP→HTTP adapter (lip/1):
                        wraps ANY language server (config argv, stdio
                        JSON-RPC) behind identity/hover/definition/references/
@@ -228,6 +244,23 @@ web-code/          kb-code's own SPA (React 18 + Vite + TS, mirrors web/'s
                        invariants, in [web-code/CLAUDE.md](web-code/CLAUDE.md).
                        Its keyboard-dispatch section is load-bearing for
                        every future bare-key binding; read it first.**
+                       **v8.0 "The Margin"**: the reading contract everywhere —
+                       ONE type ramp (`tokens.css` 12/13/14/15 · body 15 ·
+                       title 20 · hero 28; compact = one step down, never
+                       below 14/12) with an explicit html base, ONE density
+                       pref (the Room's `?density=` mirrors it), `PageHeader`
+                       + `MetaLine` on every dock page, labelled toolbar
+                       clusters (Search, reader, review diff — one line at
+                       ≥1280px), the Room's findings rail at body scale;
+                       plus the marginalia: the review diff renders ANY file
+                       whole at the patchset tip (`?files=all`), the reader
+                       composer binds to a review (current review =
+                       browser state + `?review=` on reader URLs, the
+                       daemon knows nothing), the rail's Review tab lists
+                       the file's threads, the Room sections threads In the
+                       diff / Outside the diff / General, human comments
+                       promote to findings. Every `var()` must resolve
+                       (`lint:css-vars`). Full text: web-code/CLAUDE.md.
                        `just ci-code-spa` (build + vitest);
                        web-code/e2e/ Playwright harness (`just ci-code-e2e`)
 corpus/canon/      4 sample artifacts (frozen — copied from research)
