@@ -19,6 +19,7 @@ import {
   heroCounts,
   heroLedeOf,
   humanOpenThreads,
+  manualFindingCount,
   nextRoomDensity,
   parseRoomDensity,
   sectionDecor,
@@ -205,6 +206,21 @@ describe("hero derivations — every number off the wire", () => {
     expect(heroBaseSourceOf({})).toBeNull();
     expect(heroBaseSourceOf({ base_source: 42 })).toBeNull();
     expect(heroBaseSourceOf({ base_source: "stack" })).toBe("stack");
+  });
+
+  // V80-M5 (D6) — "authored by you: N" counts `origin: "manual"` findings
+  // (typed directly, or promoted from a bound comment — both mint the
+  // identical origin), excludes `import` and excludes superseded rows,
+  // same rule every other live count in this module follows.
+  it("manualFindingCount counts origin:manual, excludes import and superseded", () => {
+    expect(
+      manualFindingCount([
+        finding({ origin: "manual" }),
+        finding({ origin: "manual", superseded: true }),
+        finding({ origin: "import" }),
+      ]),
+    ).toBe(1);
+    expect(manualFindingCount([])).toBe(0);
   });
 });
 
