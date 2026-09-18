@@ -126,7 +126,12 @@ ci-code-spa:
     # APCA + Oklab state separation incl. CVD simulation). It runs BEFORE the
     # unit suite so a palette regression fails on its own named step with a
     # table of offending pairs, rather than inside a vitest assertion.
-    cd web-code && npm ci && npm run build && npm run lint:themes && npm test
+    # V80-C1 — `lint:css-vars` is the undefined-CSS-custom-property gate (R0/
+    # R4/R5 each independently found a `var(--name)` referencing a `--name`
+    # nothing declares — an invalid var() silently falls back to inherited/
+    # initial rather than erroring). A pure static scan of src/**/*.css (+
+    # .ts/.tsx), no build needed, so it runs first.
+    cd web-code && npm ci && npm run lint:css-vars && npm run build && npm run lint:themes && npm test
 
 # W4.3 — the Search-Everywhere box's Playwright smoke: a real
 # kb-code-server fast-profile binary against a fresh git fixture repo
