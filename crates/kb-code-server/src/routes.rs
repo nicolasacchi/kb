@@ -443,6 +443,12 @@ impl From<StoreError> for ApiError {
             StoreError::SlugTakenByOtherKind { .. } => {
                 ApiError::new(StatusCode::CONFLICT, e.to_string())
             }
+            // V80-M5 — a finding-adoption insert losing a race for the same
+            // `annotation_id` is a client error (409), the same class as
+            // the two constraint collisions above, never an opaque 500.
+            StoreError::AnnotationAlreadyFinding(_) => {
+                ApiError::new(StatusCode::CONFLICT, e.to_string())
+            }
             // V4.C2 — batch unknown-id path. 400 (not 404) so a batch
             // never reports a partial apply via a not-found status.
             StoreError::NotFound(_) => ApiError::bad_request(e.to_string()),

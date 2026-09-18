@@ -200,6 +200,16 @@ pub enum StoreError {
     /// than surfacing as an opaque sqlite constraint error.
     #[error("the slug {slug:?} is already taken in this repo by a {kind}")]
     SlugTakenByOtherKind { slug: String, kind: String },
+    /// V80-M5 — a finding-ADOPTION insert (`Store::insert_review_finding_
+    /// adopting`) lost a race against another finding already claiming the
+    /// SAME `annotation_id` (`review_findings.annotation_id`'s own UNIQUE
+    /// index, V0024: one annotation backs at most one finding). Caught at
+    /// the sqlite layer (`annotation_finding_conflict_or`) rather than
+    /// surfacing as an opaque [`StoreError::Sqlite`] 500 — see that
+    /// function's own doc for why a constraint hit here is a client error
+    /// (409), never a panic.
+    #[error("annotation {0:?} is already linked to a finding — a thread backs at most one")]
+    AnnotationAlreadyFinding(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -9196,6 +9206,42 @@ pub struct NewReviewFinding {
     pub fingerprint: Option<String>,
 }
 
+/// V80-M5 — a finding that ADOPTS an already-existing top-level, review-
+/// bound `annotations` row as its thread, rather than minting a fresh
+/// annotation the way [`NewReviewFinding`] does. Same shape as
+/// [`NewReviewFinding`] minus every anchor field (`anchor_kind`/`anchor`/
+/// `anchor2`/`side`) and the linked annotation's own `author` — those all
+/// come from the annotation being adopted, verbatim, never re-derived —
+/// plus `cites_json`/`fingerprint`, which findings v2 gives no route to set
+/// on an adoption (a promoted comment has no document to fingerprint
+/// against). See `review_findings.rs`'s module doc for the full adoption
+/// contract (the OWNED item this unit resolves).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptedReviewFinding {
+    pub review_id: i64,
+    /// The `annotations.id` being adopted — MUST already exist, be
+    /// top-level (`parent_id IS NULL`), and be bound to `review_id`
+    /// (`review_findings.rs`'s route boundary validates all three before
+    /// this ever reaches the store; this struct trusts its caller).
+    pub annotation_id: String,
+    pub slug: String,
+    pub severity: String,
+    pub category: String,
+    pub location_kind: String,
+    pub location_path: String,
+    pub location_lines: Option<String>,
+    pub location_removed: bool,
+    pub title: String,
+    pub rationale: String,
+    pub recommendation: Option<String>,
+    pub evidence_lang: Option<String>,
+    pub evidence_source: Option<String>,
+    pub import_batch_id: String,
+    pub finding_author: Option<String>,
+    pub act: String,
+    pub blocking: bool,
+}
+
 /// One finding inside a `findings/import` batch — same shape as
 /// [`NewReviewFinding`] minus the fields that are constant for the WHOLE
 /// batch (`review_id`/`repo_id`/`ps_number`/`author`/`import_batch_id`),
@@ -9587,6 +9633,86 @@ fn insert_review_finding_on(
     Ok((annotation_id, finding_id))
 }
 
+/// V80-M5 — maps an `annotation_id` UNIQUE-constraint violation (on
+/// `review_findings.annotation_id`) to [`StoreError::AnnotationAlreadyFinding`];
+/// any OTHER sqlite error (including a DIFFERENT constraint on the same
+/// INSERT, e.g. a `(review_id, slug)` collision) passes through as
+/// [`StoreError::Sqlite`] unchanged — same "catch the specific constraint
+/// at the sqlite layer" shape as [`name_conflict_or`], one column over.
+/// Sqlite's own constraint-violation message names the failing
+/// `table.column` (`"UNIQUE constraint failed: review_findings.annotation_id"`),
+/// which is the only way to tell the two constraints apart from the error
+/// alone — the caller has already validated slug availability before this
+/// INSERT runs, so a slug collision here should be rare, but it must never
+/// be misreported as an annotation conflict.
+fn annotation_finding_conflict_or(e: rusqlite::Error, annotation_id: &str) -> StoreError {
+    if e.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation)
+        && e.to_string().contains("annotation_id")
+    {
+        StoreError::AnnotationAlreadyFinding(annotation_id.to_string())
+    } else {
+        StoreError::Sqlite(e)
+    }
+}
+
+/// V80-M5 — the ADOPTION twin of [`insert_review_finding_on`]: writes only
+/// the `review_findings` row, reusing `f.annotation_id` verbatim rather than
+/// minting a new `annotations` row. No transaction of its own (a single
+/// `INSERT` is already atomic) — takes `&Connection` rather than
+/// `&Transaction<'_>` so [`Store::insert_review_finding_adopting`] can hand
+/// it the locked connection directly.
+fn insert_review_finding_adopting_on(
+    conn: &Connection,
+    f: &AdoptedReviewFinding,
+    now: i64,
+) -> Result<i64> {
+    let result = conn.execute(
+        "INSERT INTO review_findings
+            (review_id, annotation_id, slug, severity, category,
+             location_kind, location_path, location_lines, location_removed,
+             title, rationale, recommendation, evidence_lang, evidence_source,
+             origin, author,
+             disposition, disposition_note, disposition_by, disposition_at,
+             content_updated_at, published_state, published_at, published_url,
+             superseded, superseded_at, superseded_reason, import_batch_id,
+             created_at, updated_at,
+             act, blocking, cites_json, fingerprint, superseded_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 ?15, ?16,
+                 NULL, NULL, NULL, NULL,
+                 NULL, 'unpublished', NULL, NULL,
+                 0, NULL, NULL, ?17, ?18, ?19,
+                 ?20, ?21, NULL, NULL, NULL)",
+        params![
+            f.review_id,
+            f.annotation_id,
+            f.slug,
+            f.severity,
+            f.category,
+            f.location_kind,
+            f.location_path,
+            f.location_lines,
+            f.location_removed as i64,
+            f.title,
+            f.rationale,
+            f.recommendation,
+            f.evidence_lang,
+            f.evidence_source,
+            FINDING_ORIGIN_MANUAL,
+            f.finding_author,
+            f.import_batch_id,
+            now,
+            now,
+            f.act,
+            f.blocking as i64,
+        ],
+    );
+    match result {
+        Ok(_) => Ok(conn.last_insert_rowid()),
+        Err(e) => Err(annotation_finding_conflict_or(e, &f.annotation_id)),
+    }
+}
+
 impl Store {
     // -- PR binding (V0024) -------------------------------------------------
 
@@ -9930,6 +10056,24 @@ impl Store {
         let result = insert_review_finding_on(&tx, f, now)?;
         tx.commit()?;
         Ok(result)
+    }
+
+    /// V80-M5 — a finding that ADOPTS an existing annotation as its thread,
+    /// rather than minting one. A single `INSERT` (no `annotations` row to
+    /// write, unlike [`Self::insert_review_finding`]) — the "the human
+    /// comment's PEER" contract: same `review_findings` table, `origin =
+    /// "manual"`, the caller-supplied `annotation_id` reused verbatim. A
+    /// race against another adoption of the SAME annotation (or an ordinary
+    /// double-submit) hits `annotation_id`'s own UNIQUE index and surfaces
+    /// as [`StoreError::AnnotationAlreadyFinding`] (409), never a raw sqlite
+    /// panic — see [`annotation_finding_conflict_or`]. Returns the new
+    /// `review_findings.id`.
+    pub fn insert_review_finding_adopting(
+        &self,
+        f: &AdoptedReviewFinding,
+        now: i64,
+    ) -> Result<i64> {
+        insert_review_finding_adopting_on(&self.lock(), f, now)
     }
 
     /// Lookup by the finding's own stable identity — `(review_id, slug)`,
