@@ -30,7 +30,9 @@
 //! kb-code→kb, and this route doesn't even use that lane.
 
 use crate::review_comments::build_comment_groups;
-use crate::reviews::{files_changed, require_review, resolve_ps, verdict_block};
+use crate::reviews::{
+    changed_path_set_from, files_changed, require_review, resolve_ps, verdict_block,
+};
 use crate::routes::ApiError;
 use crate::state::SharedState;
 use crate::store::{ReviewPatchsetRow, ReviewRow};
@@ -129,19 +131,30 @@ fn compose_distill(
         .filter(|r| r.parent_id.is_none() && !r.resolved)
         .count();
 
-    let comments = build_comment_groups(&state.store, repo_root, latest_ps, rows, &{
-        // V76-B3 (kbc-prose/1) — the refs ctx every comment body resolves
-        // against: this review's repo + slug space.
-        let repo_id = state
-            .store
-            .repo_id(&review.repo)?
-            .ok_or_else(|| ApiError::not_found(format!("no such repo: {:?}", review.repo)))?;
-        crate::prose_refs::RefCtx {
-            repo_id,
-            review_id: Some(review.id),
-            ps_number: Some(latest_ps.ps_number),
-        }
-    })?;
+    // V80-M0 — reuse the `files` this fn already fetched above (for
+    // `files_out`) rather than a second `git diff` shell-out for the SAME
+    // patchset.
+    let changed_paths = changed_path_set_from(&files);
+    let comments = build_comment_groups(
+        &state.store,
+        repo_root,
+        latest_ps,
+        rows,
+        &{
+            // V76-B3 (kbc-prose/1) — the refs ctx every comment body resolves
+            // against: this review's repo + slug space.
+            let repo_id = state
+                .store
+                .repo_id(&review.repo)?
+                .ok_or_else(|| ApiError::not_found(format!("no such repo: {:?}", review.repo)))?;
+            crate::prose_refs::RefCtx {
+                repo_id,
+                review_id: Some(review.id),
+                ps_number: Some(latest_ps.ps_number),
+            }
+        },
+        &changed_paths,
+    )?;
 
     // Flat suggestion list with the FULL applied-audit trail
     // (`applied_head_sha`) — the per-comment `suggestion` block above is
