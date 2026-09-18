@@ -2161,14 +2161,6 @@ span.kbc-diff__impact-chip {
   justify-content: center;
   color: var(--fg-dim);
 }
-.kbc-ftree__kind-abbr {
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  line-height: 1;
-}
 .kbc-ftree__name,
 .kbc-ftree__path {
   flex: 1 1 auto;

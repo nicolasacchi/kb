@@ -687,7 +687,6 @@ export default function ReviewDetail() {
       loading={filesQ.isLoading}
       error={(filesQ.error as Error | null) ?? null}
       expanded={expanded}
-      onOpenFile={openFile}
       pathFilter={pathFilter}
       onPathFilter={setPathFilter}
       fileSort={fileSort}

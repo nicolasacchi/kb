@@ -245,6 +245,34 @@ export function langIdFromSyntax(
   return langIdForPath(path);
 }
 
+/// V80-F1 — a coarse, CLOSED vocabulary a `lang` id (from `langIdFromSyntax`)
+/// maps into for the tree's kind icon. `components/icons.tsx` is a small
+/// 16x16-outline UI-chrome set with no per-language glyphs, so this picks
+/// among the few EXISTING icons that already carry a fitting semantic (a
+/// page for prose, a prompt for shell, a grid for tabular config) rather
+/// than inventing new SVGs; every other lang — including no lang at all —
+/// falls back to `"generic"` (the plain file icon). One source: the
+/// component switches on this return value and computes nothing of its
+/// own, so a row's kind is never re-derived twice.
+///
+/// Fixes a real bug, not just cosmetics: the old render was the lang id's
+/// first TWO characters as text (`"ru"` for both "rust" and "ruby" — an
+/// actual collision a reviewer could misread).
+export type FileIconKind = "doc" | "shell" | "config" | "generic";
+
+const DOC_LANGS = new Set(["markdown", "mdx", "rst", "text", "plaintext"]);
+const SHELL_LANGS = new Set(["bash", "sh", "shell", "zsh", "fish", "powershell"]);
+const CONFIG_LANGS = new Set(["json", "yaml", "toml", "ini", "xml"]);
+
+export function fileIconKind(lang: string | null): FileIconKind {
+  if (!lang) return "generic";
+  const l = lang.toLowerCase();
+  if (DOC_LANGS.has(l)) return "doc";
+  if (SHELL_LANGS.has(l)) return "shell";
+  if (CONFIG_LANGS.has(l)) return "config";
+  return "generic";
+}
+
 export interface FlatTreeRow {
   key: string;
   depth: number;
