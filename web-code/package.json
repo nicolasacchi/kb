@@ -13,7 +13,8 @@
     "test:watch": "TZ=UTC vitest",
     "gen:themes": "node scripts/gen-themes.mjs",
     "gen:commands": "node scripts/gen-commands.mjs",
-    "lint:themes": "node scripts/theme-lint.mjs"
+    "lint:themes": "node scripts/theme-lint.mjs",
+    "lint:css-vars": "node scripts/css-undefined-vars.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
