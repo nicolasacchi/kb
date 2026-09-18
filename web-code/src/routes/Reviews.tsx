@@ -181,45 +181,52 @@ function ReviewRow({ repo, review }: { repo: string; review: ReviewSummary }) {
       <Link to={reviewUrl(repo, review.id)} className="kbc-reviews__row-title" data-kbc-reviews-row-link={review.id}>
         {title}
       </Link>
-      <span className="kbc-reviews__row-refs">
-        <code>{review.head_ref}</code>
-        <span aria-hidden="true">→</span>
-        <code>{review.base_ref}</code>
-      </span>
-      <span className="kbc-reviews__row-meta">
-        {review.latest_ps != null ? `ps${review.latest_ps}` : "no ps"}
-        {review.state === "closed" && <span className="kbc-reviews__badge kbc-reviews__badge--closed">closed</span>}
-        {review.verdict && (
-          <span
-            data-kbc-reviews-verdict={review.verdict.state}
-            data-kbc-reviews-verdict-stale={review.verdict_stale ? "true" : undefined}
-          >
-            <VerdictChip
-              verdict={review.verdict}
-              stale={review.verdict_stale}
-              latestPs={review.latest_ps}
-            />
+      {/* V80-R3 — verdict/refs/progress grouped onto ONE readable sub-line
+          below the title, all sharing the same `--fs-sm` scale (was a flat
+          flex-wrap of differently-sized fragments that read as scattered
+          fine print). Every existing `data-kbc-*` hook stays exactly where
+          it was — this only adds a wrapper. */}
+      <div className="kbc-reviews__row-line">
+        <span className="kbc-reviews__row-refs">
+          <code>{review.head_ref}</code>
+          <span aria-hidden="true">→</span>
+          <code>{review.base_ref}</code>
+        </span>
+        <span className="kbc-reviews__row-meta">
+          {review.latest_ps != null ? `ps${review.latest_ps}` : "no ps"}
+          {review.state === "closed" && <span className="kbc-reviews__badge kbc-reviews__badge--closed">closed</span>}
+          {review.verdict && (
+            <span
+              data-kbc-reviews-verdict={review.verdict.state}
+              data-kbc-reviews-verdict-stale={review.verdict_stale ? "true" : undefined}
+            >
+              <VerdictChip
+                verdict={review.verdict}
+                stale={review.verdict_stale}
+                latestPs={review.latest_ps}
+              />
+            </span>
+          )}
+        </span>
+        <div
+          className="kbc-reviews__progress"
+          title={`${viewed}/${files} viewed`}
+          data-kbc-reviews-progress={`${viewed}/${files}`}
+        >
+          <div className="kbc-reviews__progress-bar" style={{ width: `${pct}%` }} />
+          <span className="kbc-reviews__progress-label">
+            {viewed}/{files}
+          </span>
+        </div>
+        {review.open_annotations > 0 && (
+          <span className="kbc-reviews__ann-badge" data-kbc-reviews-ann={review.open_annotations}>
+            {review.open_annotations} open
           </span>
         )}
-      </span>
-      <div
-        className="kbc-reviews__progress"
-        title={`${viewed}/${files} viewed`}
-        data-kbc-reviews-progress={`${viewed}/${files}`}
-      >
-        <div className="kbc-reviews__progress-bar" style={{ width: `${pct}%` }} />
-        <span className="kbc-reviews__progress-label">
-          {viewed}/{files}
+        <span className="kbc-reviews__row-time" title={new Date(review.updated_at * 1000).toLocaleString()}>
+          {relativeTime(review.updated_at)}
         </span>
       </div>
-      {review.open_annotations > 0 && (
-        <span className="kbc-reviews__ann-badge" data-kbc-reviews-ann={review.open_annotations}>
-          {review.open_annotations} open
-        </span>
-      )}
-      <span className="kbc-reviews__row-time" title={new Date(review.updated_at * 1000).toLocaleString()}>
-        {relativeTime(review.updated_at)}
-      </span>
     </li>
   );
 }
