@@ -537,6 +537,7 @@ paste to someone else — reproduces the view exactly.
 | `map` | `0` | hide the file-map column. Absent = shown. |
 | `file` | a path | the map cursor / all-files scroll hint. |
 | `hunk` | a hunk id | the hunk cursor, content-addressed (below). |
+| `files` | `all` | the file map/tree lists the tip sha's WHOLE tree, not only `files_changed`. Absent = `changed`. |
 
 **The file map column.** The review's files as a left column, grouped into
 chapters. The chapters are DERIVED from `GET /reviews/{id}/reading-order`'s
@@ -573,6 +574,26 @@ asks for. The daemon stores the id opaquely and does not parse diffs; the
 addressing scheme can therefore version (a `kbc-hunkid/2`) with no
 migration, and an id minted under an older scheme simply stops matching —
 a viewed hunk reads UNVIEWED, never the reverse.
+
+**Any file, not only a changed one (v8.0, V80-M1).** `?files=all` widens
+the map/tree to the tip sha's whole tree (walked client-side over
+`GET /api/tree`, capped at 4000 leaf paths — a capped walk says so rather
+than truncating silently); changed files keep their real status chip,
+everything else renders plain. Opening any such path — from the tree, from
+the jump palette, or from a bare `?file=`/`?thread=` deep link (the Room's
+own `threadHref` needs exactly this) — no longer bails with "No textual
+difference": `GET /api/file?ref=<patchset tip>` (the SAME fetch the context
+dial already uses) is spliced into ONE synthetic whole-file hunk, rendered
+through the ordinary hunk view, gutter, comment buttons and fold/viewed
+affordances included — a comment on a file outside the diff is something
+the server already accepted (`assemble_top_level_annotation` only needs the
+path to exist at the pinned sha); this unit is what makes it visible.
+Deleted / binary / absent-at-tip files keep an honest caption instead
+("deleted in this patchset", "binary", "not present at ps N tip") and no
+composer. Threads anchored outside the diff surface in a small "outside the
+diff" group in the map column even in `Changed` mode, so one is never
+undiscoverable just because its file has no hunks. Key: `z A` toggles the
+tree mode.
 
 **The patchset switcher.** A base→head pair in the diff header. Head picks
 `GET /reviews/{id}/files?ps=N`; choosing a base patchset switches to
