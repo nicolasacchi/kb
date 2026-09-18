@@ -299,7 +299,12 @@ async fn inbox_route_human_open_excludes_agent_authored_threads_and_includes_eve
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), reqwest::StatusCode::OK, "{}", resp.text().await.unwrap());
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
     // An agent-opened, unresolved thread — must not count as `human_open`
     // even though it is exactly the shape `unanswered_questions` DOES
     // count (an unanswered question with zero replies).
