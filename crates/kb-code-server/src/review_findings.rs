@@ -45,6 +45,38 @@
 //! test `reconcile_findings_import_refresh_never_overwrites_a_manual_
 //! finding_even_on_slug_collision`).
 //!
+//! # Adoption — a human comment PEER to the agent's import (V80-M5, D6)
+//!
+//! The v5 cut list left this open deliberately: a human's own review
+//! comment is a thread, but only the agent's `findings/import` minted
+//! severity-graded findings. D6 resolves it in favour of the human — a
+//! top-level, review-bound comment (M0/M2's own bind route) may be
+//! PROMOTED to a finding via [`CreateManualFindingBody::from_annotation_id`]
+//! on the SAME `POST /api/reviews/{id}/findings` route addendum §E already
+//! ships: the new finding ADOPTS that annotation ([`Store::
+//! insert_review_finding_adopting`]) as its thread — `annotation_id`
+//! becomes the comment's own id verbatim, never a freshly minted one — so
+//! a promoted comment's replies, resolve state and carry-forward ladder are
+//! completely undisturbed by becoming a finding. Validated at the route
+//! boundary ([`create_manual_finding_route`]): the annotation must exist
+//! (404), be top-level (`parent_id IS NULL`, else 400 — a reply is not a
+//! thread), be bound to THIS review (`review_id` matches, else 400), and
+//! not already back another finding (`review_findings.annotation_id`'s own
+//! UNIQUE index, surfaced as a 409 via [`store::StoreError::
+//! AnnotationAlreadyFinding`], never a raw constraint panic). `location`
+//! is DERIVED from the adopted annotation's own anchor
+//! ([`location_from_annotation`], the inverse of `store::
+//! derive_finding_anchor` for the two kinds a review-scoped top-level
+//! comment can ever carry — `line`/`range`; a path-less, general `review`-
+//! anchored comment has no location a finding can adopt and 400s by name,
+//! never guessed). `title` defaults to the comment's own first line
+//! (≤80 chars, [`title_from_comment_body`]) and `rationale` defaults to the
+//! comment's whole body when the caller sends neither. `origin` is always
+//! `"manual"` and `author` defaults to `"you"`, same as every other manual
+//! finding. Emits the SAME `review.changed{reason:"findings_import",
+//! finding_slug}` a non-adopted manual create does — see that route's own
+//! doc for why this module never grew a distinct `"finding"` reason.
+//!
 //! # Resolution — the SAME ladder, never a second one
 //!
 //! Every finding's displayed position is computed via
@@ -164,10 +196,26 @@ pub struct CreateManualFindingBody {
     #[serde(default)]
     pub slug: Option<String>,
     pub severity: String,
-    pub category: String,
-    pub location: FindingLocationBody,
-    pub title: String,
-    pub rationale: String,
+    /// Required unless [`Self::from_annotation_id`] adopts an existing
+    /// comment (route-validated, never here) — defaults to `"other"` on
+    /// the adopt path when omitted, [`crate::review_doc::CATEGORIES`]'s own
+    /// catch-all.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Required unless [`Self::from_annotation_id`] is set, in which case
+    /// it is IGNORED (a caller-supplied location on an adoption is a
+    /// contradiction — the location comes from the adopted comment's own
+    /// anchor) — see `review_findings.rs`'s module doc.
+    #[serde(default)]
+    pub location: Option<FindingLocationBody>,
+    /// Required unless [`Self::from_annotation_id`] is set, in which case it
+    /// defaults to the adopted comment's first line (≤80 chars).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Required unless [`Self::from_annotation_id`] is set, in which case it
+    /// defaults to the adopted comment's whole body.
+    #[serde(default)]
+    pub rationale: Option<String>,
     #[serde(default)]
     pub recommendation: Option<String>,
     /// Resolved identity — same "body field defaulting to `you`"
@@ -182,6 +230,26 @@ pub struct CreateManualFindingBody {
     /// findings add --evidence`.
     #[serde(default)]
     pub evidence: Option<FindingEvidenceBody>,
+    /// findings v2's SPEECH-ACT axis (`crate::review_doc::ACTS`) — V80-M5.
+    /// Was silently hardcoded `"issue"` before this unit (every pre-M5
+    /// manual finding IS an `"issue"`, so an absent value keeps meaning
+    /// exactly that). Route-validated against the closed vocabulary.
+    #[serde(default)]
+    pub act: Option<String>,
+    /// The reviewer's own call, never derived from `severity` — V80-M5.
+    /// Was silently hardcoded `false` before this unit.
+    #[serde(default)]
+    pub blocking: bool,
+    /// V80-M5 (D6) — ADOPT this existing top-level, review-bound human
+    /// comment's `annotations` row as the finding's thread instead of
+    /// minting a fresh one: `annotation_id` becomes this value verbatim,
+    /// `location`/`title`/`rationale` derive from the comment when the
+    /// caller omits them (above), and [`Self::location`] is ignored
+    /// entirely when this is set. See `review_findings.rs`'s module doc for
+    /// the full validation ladder (top-level, bound to this review, not
+    /// already a finding's row).
+    #[serde(default)]
+    pub from_annotation_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -473,6 +541,85 @@ fn build_finding_anchor(
         },
     )
     .map_err(ApiError::bad_request)
+}
+
+// --- adoption (V80-M5) ----------------------------------------------------
+
+/// Adoption's default title (this module's own doc, "Adoption" section):
+/// the comment's first line, trimmed and capped at 80 CHARS (never bytes —
+/// a truncated multibyte character is worse than a slightly short title).
+/// Falls back to `"finding"` (mirroring [`kebab_case`]'s own empty-title
+/// fallback) when the body is blank or all-whitespace.
+fn title_from_comment_body(body: &str) -> String {
+    let first_line = body.lines().next().unwrap_or("").trim();
+    let truncated: String = first_line.chars().take(80).collect();
+    if truncated.is_empty() {
+        "finding".to_string()
+    } else {
+        truncated
+    }
+}
+
+/// Adoption's location derivation (this module's own doc, "Adoption"
+/// section) — the INVERSE of `store::derive_finding_anchor` for the two
+/// `anchor_kind`s a review-scoped top-level comment can ever actually carry
+/// (`routes::assemble_top_level_annotation`'s own restriction: a
+/// review-scoped create only accepts `line`/`range`/`review`, and `review`
+/// is path-less). Pure — no I/O, the annotation's own `anchor`/`anchor2`
+/// JSON already IS the pinned selection, so there is no blob to re-read.
+/// `Err` names exactly why (never a guess) — surfaced as a 400 by the
+/// caller.
+fn location_from_annotation(ann: &store::AnnotationRow) -> Result<FindingLocationBody, String> {
+    fn selection_line(raw: &str, which: &str) -> Result<i64, String> {
+        let anchor: kb_core::review::Anchor = serde_json::from_str(raw)
+            .map_err(|e| format!("comment's {which} anchor is not valid JSON: {e}"))?;
+        match anchor {
+            kb_core::review::Anchor::Selection { offset, .. } => Ok(offset as i64),
+            other => Err(format!(
+                "comment's {which} anchor is a {:?}, not a line selection",
+                other.scope_name()
+            )),
+        }
+    }
+
+    let removed = ann.side.as_deref() == Some("old");
+    match ann.anchor_kind.as_str() {
+        annotations::ANCHOR_KIND_LINE => {
+            let raw = ann
+                .anchor
+                .as_deref()
+                .ok_or_else(|| "comment has no anchor to adopt".to_string())?;
+            let line = selection_line(raw, "primary")?;
+            Ok(FindingLocationBody {
+                path: ann.path.clone(),
+                kind: store::LOCATION_KIND_SINGLE.to_string(),
+                lines: Some(vec![line]),
+                removed,
+            })
+        }
+        annotations::ANCHOR_KIND_RANGE => {
+            let raw = ann
+                .anchor
+                .as_deref()
+                .ok_or_else(|| "comment has no anchor to adopt".to_string())?;
+            let raw2 = ann
+                .anchor2
+                .as_deref()
+                .ok_or_else(|| "comment's range anchor is missing its end selection".to_string())?;
+            let start = selection_line(raw, "start")?;
+            let end = selection_line(raw2, "end")?;
+            Ok(FindingLocationBody {
+                path: ann.path.clone(),
+                kind: store::LOCATION_KIND_RANGE.to_string(),
+                lines: Some(vec![start, end]),
+                removed,
+            })
+        }
+        other => Err(format!(
+            "comments anchored as {other:?} have no file location a finding can adopt — only \
+             line/range comments can be promoted (never a general, path-less \"review\" comment)",
+        )),
+    }
 }
 
 // --- SSE ---------------------------------------------------------------
@@ -1388,7 +1535,14 @@ async fn compose_document(
 /// (V70-A3X, [`FindingEvidenceBody`]) is optional and stored verbatim as
 /// `evidence_lang`/`evidence_source` — the SAME field the `import` path
 /// (above) has always accepted; a manual `add` simply never threaded it
-/// through before this fix.
+/// through before this fix. `body.act`/`body.blocking` (V80-M5) are
+/// findings v2's axes, route-validated against [`crate::review_doc::ACTS`]
+/// and defaulting to `"issue"`/`false` — every pre-M5 manual finding WAS
+/// exactly that, hardcoded. `body.from_annotation_id` (V80-M5, D6) ADOPTS
+/// an existing top-level, review-bound human comment as this finding's
+/// thread instead of minting a fresh one — see this module's own doc,
+/// "Adoption," for the full validation ladder and the resulting 400/404/409
+/// shapes.
 pub async fn create_manual_finding_route(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
@@ -1402,28 +1556,99 @@ pub async fn create_manual_finding_route(
             body.severity
         )));
     }
-    if let Err(e) = validate_location_shape(&body.location) {
-        let (_, message) = describe_location_error(e, &body.location);
-        return Err(ApiError::bad_request(message));
+    let act = body.act.clone().unwrap_or_else(|| "issue".to_string());
+    if !crate::review_doc::is_valid_act(&act) {
+        return Err(ApiError::bad_request(format!(
+            "act must be {}, got {act:?}",
+            crate::review_doc::ACTS.join("|")
+        )));
+    }
+    let adopting = body.from_annotation_id.is_some();
+    // Explicit fields required on the non-adopt path only — an adoption
+    // derives location/title/rationale from the comment it adopts (this
+    // module's own doc, "Adoption"), and a caller-supplied `location` is
+    // simply ignored there (the location comes from the comment's anchor,
+    // never both).
+    if !adopting {
+        let Some(location) = &body.location else {
+            return Err(ApiError::bad_request(
+                "location is required unless from_annotation_id adopts an existing comment",
+            ));
+        };
+        if let Err(e) = validate_location_shape(location) {
+            let (_, message) = describe_location_error(e, location);
+            return Err(ApiError::bad_request(message));
+        }
+        if body.title.is_none() {
+            return Err(ApiError::bad_request(
+                "title is required unless from_annotation_id adopts an existing comment",
+            ));
+        }
+        if body.rationale.is_none() {
+            return Err(ApiError::bad_request(
+                "rationale is required unless from_annotation_id adopts an existing comment",
+            ));
+        }
+        if body.category.is_none() {
+            return Err(ApiError::bad_request(
+                "category is required unless from_annotation_id adopts an existing comment",
+            ));
+        }
     }
 
     // 2026-08-31 incident (store.rs module doc): latest_patchset + the
-    // slug lookup/derivation are contiguous store work — one blocking-pool
-    // trip. `SlugOutcome` carries the 409-conflict branch back out since a
-    // closure can't early-return the OUTER response.
+    // slug lookup/derivation (+ V80-M5's adoption lookup/validation) are
+    // contiguous store work — one blocking-pool trip. `SlugOutcome` carries
+    // the 409-conflict branch back out since a closure can't early-return
+    // the OUTER response.
     enum SlugOutcome {
         Conflict(String),
         Slug(String),
     }
     let body_slug = body.slug.clone();
     let body_title = body.title.clone();
-    let (target_ps, slug_outcome) = state
+    let from_annotation_id = body.from_annotation_id.clone();
+    let (target_ps, slug_outcome, adopted) = state
         .store
         .run_blocking(
-            move |store| -> Result<(ReviewPatchsetRow, SlugOutcome), ApiError> {
+            move |store| -> Result<
+                (ReviewPatchsetRow, SlugOutcome, Option<store::AnnotationRow>),
+                ApiError,
+            > {
                 let target_ps = store.latest_patchset(id)?.ok_or_else(|| {
                     ApiError::bad_request(format!("review {id} has no patchsets"))
                 })?;
+
+                // V80-M5 — the adoption ladder: exists, top-level, bound to
+                // THIS review. A slug/annotation conflict is checked below
+                // (the slug branch) resp. by the INSERT itself (`review_
+                // findings.annotation_id`'s UNIQUE index) so a race is a
+                // 409, never a silent double-adopt.
+                let adopted = match &from_annotation_id {
+                    None => None,
+                    Some(ann_id) => {
+                        let ann = store.get_annotation(ann_id)?.ok_or_else(|| {
+                            ApiError::not_found(format!("annotation {ann_id:?} not found"))
+                        })?;
+                        if ann.parent_id.is_some() {
+                            return Err(ApiError::bad_request(
+                                "from_annotation_id names a reply, not a thread's own top-level \
+                                 comment — only the top-level comment can be promoted",
+                            ));
+                        }
+                        if ann.review_id != Some(id) {
+                            return Err(ApiError::bad_request(format!(
+                                "annotation {ann_id:?} is not bound to review {id}"
+                            )));
+                        }
+                        Some(ann)
+                    }
+                };
+
+                let effective_title = body_title
+                    .clone()
+                    .or_else(|| adopted.as_ref().map(|a| title_from_comment_body(&a.body)));
+
                 let outcome = match &body_slug {
                     Some(s) => {
                         if !is_valid_finding_slug(s) {
@@ -1437,9 +1662,13 @@ pub async fn create_manual_finding_route(
                             SlugOutcome::Slug(s.clone())
                         }
                     }
-                    None => SlugOutcome::Slug(derive_unique_slug(store, id, &body_title)?),
+                    None => SlugOutcome::Slug(derive_unique_slug(
+                        store,
+                        id,
+                        &effective_title.unwrap_or_default(),
+                    )?),
                 };
-                Ok((target_ps, outcome))
+                Ok((target_ps, outcome, adopted))
             },
         )
         .await?;
@@ -1458,61 +1687,106 @@ pub async fn create_manual_finding_route(
     };
 
     let author = body.author.clone().unwrap_or_else(|| "you".to_string());
-    let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
-    let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &body.location)?;
-
+    let category = body.category.clone().unwrap_or_else(|| "other".to_string());
     let now = now_unix();
-    let new = store::NewReviewFinding {
-        review_id: id,
-        repo_id,
-        ps_number: target_ps.ps_number,
-        slug: slug.clone(),
-        severity: body.severity.clone(),
-        category: body.category.clone(),
-        location_kind: body.location.kind.clone(),
-        location_path: body.location.path.clone(),
-        location_lines: body
-            .location
-            .lines
-            .as_deref()
-            .map(store::location_lines_json),
-        location_removed: body.location.removed,
-        title: body.title.clone(),
-        rationale: body.rationale.clone(),
-        recommendation: body.recommendation.clone(),
-        evidence_lang: body.evidence.as_ref().and_then(|e| e.lang.clone()),
-        evidence_source: body.evidence.as_ref().and_then(|e| e.source.clone()),
-        anchor_kind: anchor.anchor_kind,
-        anchor: anchor.anchor,
-        anchor2: anchor.anchor2,
-        side: anchor.side,
-        author: author.clone(),
-        import_batch_id: "manual".to_string(),
-        origin: store::FINDING_ORIGIN_MANUAL.to_string(),
-        finding_author: Some(author),
-        // V73-K1 — a human-authored finding created through the v1 route
-        // carries no v2 axes and, deliberately, no fingerprint: a manual
-        // finding is never matched by content (V0024's origin rule says a
-        // compose may not adopt or supersede one), so giving it one would
-        // suggest a reconciliation that must never happen.
-        act: "issue".to_string(),
-        blocking: false,
-        cites_json: None,
-        fingerprint: None,
-    };
-    let slug_c = slug.clone();
-    let row = state
-        .store
-        .run_blocking(move |store| -> Result<ReviewFindingRow, ApiError> {
-            store.insert_review_finding(&new, now)?;
-            store.get_review_finding(id, &slug_c)?.ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "finding vanished immediately after insert",
-                )
+
+    let row = if let Some(ann) = &adopted {
+        // ADOPT path (V80-M5) — the location comes from the comment's own
+        // anchor, never re-derived from a request body; no git read, no
+        // fresh `annotations` row.
+        let location = location_from_annotation(ann).map_err(ApiError::bad_request)?;
+        let title = body
+            .title
+            .clone()
+            .unwrap_or_else(|| title_from_comment_body(&ann.body));
+        let rationale = body.rationale.clone().unwrap_or_else(|| ann.body.clone());
+        let adopted_new = store::AdoptedReviewFinding {
+            review_id: id,
+            annotation_id: ann.id.clone(),
+            slug: slug.clone(),
+            severity: body.severity.clone(),
+            category,
+            location_kind: location.kind.clone(),
+            location_path: location.path.clone(),
+            location_lines: location.lines.as_deref().map(store::location_lines_json),
+            location_removed: location.removed,
+            title,
+            rationale,
+            recommendation: body.recommendation.clone(),
+            evidence_lang: body.evidence.as_ref().and_then(|e| e.lang.clone()),
+            evidence_source: body.evidence.as_ref().and_then(|e| e.source.clone()),
+            import_batch_id: "manual".to_string(),
+            finding_author: Some(author),
+            act,
+            blocking: body.blocking,
+        };
+        let slug_c = slug.clone();
+        state
+            .store
+            .run_blocking(move |store| -> Result<ReviewFindingRow, ApiError> {
+                store.insert_review_finding_adopting(&adopted_new, now)?;
+                store.get_review_finding(id, &slug_c)?.ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "finding vanished immediately after insert",
+                    )
+                })
             })
-        })
-        .await?;
+            .await?
+    } else {
+        // The pre-M5 path, unchanged in spirit: mint a fresh annotation
+        // anchored from the request's own `location`.
+        let location = body.location.clone().expect("validated required above");
+        let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
+        let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &location)?;
+        let new = store::NewReviewFinding {
+            review_id: id,
+            repo_id,
+            ps_number: target_ps.ps_number,
+            slug: slug.clone(),
+            severity: body.severity.clone(),
+            category,
+            location_kind: location.kind.clone(),
+            location_path: location.path.clone(),
+            location_lines: location.lines.as_deref().map(store::location_lines_json),
+            location_removed: location.removed,
+            title: body.title.clone().expect("validated required above"),
+            rationale: body.rationale.clone().expect("validated required above"),
+            recommendation: body.recommendation.clone(),
+            evidence_lang: body.evidence.as_ref().and_then(|e| e.lang.clone()),
+            evidence_source: body.evidence.as_ref().and_then(|e| e.source.clone()),
+            anchor_kind: anchor.anchor_kind,
+            anchor: anchor.anchor,
+            anchor2: anchor.anchor2,
+            side: anchor.side,
+            author: author.clone(),
+            import_batch_id: "manual".to_string(),
+            origin: store::FINDING_ORIGIN_MANUAL.to_string(),
+            finding_author: Some(author),
+            // V73-K1 — a human-authored finding created through the v1
+            // route carries no fingerprint: a manual finding is never
+            // matched by content (V0024's origin rule says a compose may
+            // not adopt or supersede one), so giving it one would suggest
+            // a reconciliation that must never happen.
+            act,
+            blocking: body.blocking,
+            cites_json: None,
+            fingerprint: None,
+        };
+        let slug_c = slug.clone();
+        state
+            .store
+            .run_blocking(move |store| -> Result<ReviewFindingRow, ApiError> {
+                store.insert_review_finding(&new, now)?;
+                store.get_review_finding(id, &slug_c)?.ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "finding vanished immediately after insert",
+                    )
+                })
+            })
+            .await?
+    };
 
     emit_findings_review_changed(&state.bus, id, &review.repo, "findings_import", Some(&slug));
 
