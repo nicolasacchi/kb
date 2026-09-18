@@ -706,6 +706,14 @@
   color: var(--accent-fg);
 }
 
+.kbc-rthread__disposition-chip:disabled {
+  /* V80-F2 — the chip stays VISIBLE when review-mutation writes are not
+     admitted (see `useReviewMutationsAdmitted`'s doc: never hide, only
+     disable-with-reason); this is the visual affordance for that. */
+  opacity: 0.5;
+  cursor: default;
+}
+
 .kbc-rthread__disposition-loopback {
   font-size: var(--fs-sm);
   color: var(--ink-mute);
@@ -857,6 +865,13 @@ span.kbc-diff__diag-chip {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--ink-mute);
+}
+
+.kbc-rcompose__hint--admit {
+  /* V80-F2 — the loopback pre-probe caption on the finding composer's
+     submit; --warn (not --ink-mute) so it reads as "why this is disabled"
+     rather than blending into the ordinary anchoring hint above it. */
+  color: var(--warn);
 }
 
 .kbc-rcompose__category,
