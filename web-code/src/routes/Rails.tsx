@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from "react-router";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import RailsOrphans from "../components/rails/RailsOrphans";
 import RailsSection from "../components/rails/RailsSection";
 import { useRailsHome, useRailsOrphans } from "../hooks/useRails";
@@ -82,13 +83,10 @@ export default function Rails() {
   // become a different page (the landmark golden's own rule: a surface may
   // collapse a region, never move or rename one).
   const head = (
-    <header className="kbc-rails__head">
-      <h1 className="kbc-rails__title">Rails — {repo}</h1>
-      <p className="kbc-rails__hint">
-        rails/1 — a per-request join of the entity index, the rails-lens convention edges and the
-        mirror index. Nothing here is stored, and no row is ever exact.
-      </p>
-    </header>
+    <PageHeader
+      title={`Rails — ${repo}`}
+      lede="rails/1 — a per-request join of the entity index, the rails-lens convention edges and the mirror index. Nothing here is stored, and no row is ever exact."
+    />
   );
 
   if (home.error) {

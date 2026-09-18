@@ -12,6 +12,7 @@ import type { Symbol, SymbolMatch } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { ClassBadge } from "../components/hierarchy/HierarchyPanel";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { readerUrl } from "../lib/breadcrumbs";
 import {
   browserUrl,
@@ -437,26 +438,29 @@ export default function BrowserPage() {
 
   return (
     <div className="kbc-browser" id="main" data-kbc-browser ref={rootRef}>
-      <header className="kbc-browser__head">
-        <div>
-          <h1 className="kbc-browser__title">Browser — {repo}</h1>
-          <p className="kbc-browser__hint" data-kbc-browser-hint>
+      <PageHeader
+        className="kbc-browser__head"
+        title={`Browser — ${repo}`}
+        lede={
+          <span className="kbc-browser__hint" data-kbc-browser-hint>
             Symbol-first lens over containers, members, source, and callers.
             Files stay primary — open the reader from any row.{" "}
             <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>h</kbd>/<kbd>l</kbd> panes ·{" "}
             <kbd>Enter</kbd> drills.
-          </p>
-        </div>
-        <input
-          className="kbc-browser__filter"
-          type="search"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter containers…"
-          aria-label="filter containers"
-          data-kbc-browser-filter
-        />
-      </header>
+          </span>
+        }
+        actions={
+          <input
+            className="kbc-browser__filter"
+            type="search"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter containers…"
+            aria-label="filter containers"
+            data-kbc-browser-filter
+          />
+        }
+      />
 
       <div className="kbc-browser__panes">
         {/* Pane 1 — containers / types */}
