@@ -932,6 +932,36 @@ export function deleteAnnotation(id: string): Promise<void> {
   return sendJson<void>("DELETE", `/api/annotations/${encodeURIComponent(id)}`);
 }
 
+/// `PUT /api/annotations/{id}/review` body (V80-M0's `BindAnnotationReviewBody`).
+export interface BindAnnotationReviewInput {
+  review_id: number;
+  /// Patchset to bind against. Omitted → the review's latest.
+  ps?: number;
+  /// `"old"` | `"new"` (default `"new"`).
+  side?: "old" | "new";
+}
+
+/// `PUT /api/annotations/{id}/review` (V80-M0) — bind, or REBIND onto a
+/// different review, a TOP-LEVEL annotation's review scope after the
+/// fact. BEARER, same trust as `createAnnotation`. A reply 400s naming
+/// `parent_id` (`routes::bind_annotation_review`'s doc); a closed target
+/// review 409s `urn:kb:errors:review-closed`.
+export function bindAnnotationReview(
+  id: string,
+  input: BindAnnotationReviewInput,
+): Promise<AnnotationView> {
+  return sendJson<AnnotationView>("PUT", `/api/annotations/${encodeURIComponent(id)}/review`, input);
+}
+
+/// `DELETE /api/annotations/{id}/review` (V80-M0) — unbind: clears
+/// `review_id`/`ps_number`/`side`, leaving the annotation itself in
+/// place as a plain working-tree note. Idempotent (an already-unbound row
+/// still 200s with its unchanged view) — `404` only when `id` itself
+/// doesn't exist; a reply 400s naming `parent_id`, same as bind.
+export function unbindAnnotationReview(id: string): Promise<AnnotationView> {
+  return sendJson<AnnotationView>("DELETE", `/api/annotations/${encodeURIComponent(id)}/review`);
+}
+
 /// `PUT /api/annotations/{id}/suggestion` — BEARER. Body `{replacement}`.
 /// Server captures `original` + `base_blob_sha`; a re-PUT resets `applied`.
 export function putAnnotationSuggestion(
