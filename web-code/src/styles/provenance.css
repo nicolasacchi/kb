@@ -1450,7 +1450,7 @@ a.kbc-inspector__citedby-title:hover {
   background: var(--accent-bg);
   border-bottom: 1px solid var(--accent-bor);
   color: var(--accent-soft);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-livemirror-toast__refresh {
   background: var(--accent);
@@ -1458,7 +1458,7 @@ a.kbc-inspector__citedby-title:hover {
   border: none;
   border-radius: var(--radius-sm);
   padding: 2px 10px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-livemirror-toast__dismiss,
@@ -1479,7 +1479,7 @@ a.kbc-inspector__citedby-title:hover {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   border-bottom: 1px solid var(--warn);
   color: var(--warn);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   flex: 0 0 auto;
 }
 .kbc-headmoved-banner code {
@@ -1491,7 +1491,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--warn);
   padding: 2px 10px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
@@ -1575,10 +1575,10 @@ a.kbc-inspector__citedby-title:hover {
 }
 .confirm__title {
   margin: 0 0 10px;
-  font-size: 15px;
+  font-size: var(--fs-lg);
 }
 .confirm__body {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   margin-bottom: 16px;
 }
@@ -1593,7 +1593,7 @@ a.kbc-inspector__citedby-title:hover {
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   padding: 6px 14px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .confirm__go {
@@ -1602,7 +1602,7 @@ a.kbc-inspector__citedby-title:hover {
   border: none;
   border-radius: var(--radius-sm);
   padding: 6px 14px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .confirm__go.is-danger {
@@ -1618,7 +1618,7 @@ a.kbc-inspector__citedby-title:hover {
   margin: 8px 0 0;
   padding-left: 18px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--warn);
 }
 .kbc-checkout__error {
@@ -1628,17 +1628,11 @@ a.kbc-inspector__citedby-title:hover {
 /* --- Session diff page (/session/:sid/diff, W4.4) ------------------------ */
 
 .kbc-sessiondiff {
-  max-width: 760px;
+  max-width: var(--measure, 760px);
   margin: 0 auto;
   padding: 24px 16px 64px;
 }
-.kbc-sessiondiff__title {
-  font-size: 18px;
-  margin: 0 0 4px;
-}
 .kbc-sessiondiff__totals {
-  color: var(--ink-mute);
-  font-size: 12px;
   font-family: var(--font-mono);
 }
 .kbc-sessiondiff__degraded {
@@ -1647,7 +1641,7 @@ a.kbc-inspector__citedby-title:hover {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   border-radius: var(--radius-sm);
   color: var(--warn);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-sessiondiff__segments {
   margin-top: 20px;
@@ -1660,13 +1654,13 @@ a.kbc-inspector__citedby-title:hover {
   padding-left: 12px;
 }
 .kbc-sessiondiff__prompt-header {
-  font-size: 14px;
+  font-size: var(--fs-lg);
   margin: 0 0 2px;
   font-weight: 500;
 }
 .kbc-sessiondiff__ts {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-sessiondiff__commit {
   padding: 8px 12px;
@@ -1687,14 +1681,14 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-sessiondiff__author {
   margin-left: auto;
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-sessiondiff__files {
   list-style: none;
   margin: 0;
   padding: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-sessiondiff__files li {
   display: flex;
@@ -1706,12 +1700,12 @@ a.kbc-inspector__citedby-title:hover {
 }
 .kbc-sessiondiff__undiffed {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-style: italic;
 }
 .kbc-sessiondiff__uncommitted-label {
   color: var(--warn);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   margin-bottom: 4px;
 }
