@@ -911,6 +911,15 @@ export interface AnnotationView {
   line_end: number | null;
   /// `diff` only — the full commit sha this annotation is pinned to.
   sha: string | null;
+  /// V80-M2 — mirrors the Rust `AnnotationView`'s pre-existing V4.C1
+  /// fields (never mirrored here until this unit needed to render a
+  /// binding chip): present only on a review-scoped row, `undefined`
+  /// (`skip_serializing_if`) for a plain annotation. `symbol`/`trail_id`
+  /// (also on the Rust struct, V70-A4/V74-L3b) are STILL not mirrored —
+  /// no caller here needs them yet.
+  review_id?: number;
+  ps_number?: number;
+  side?: string;
   /// V70-A10 — present only on a workspace-scoped row (`reading_sets.id`).
   /// `undefined` (the server omits the key, `skip_serializing_if`) for
   /// every pre-V0029 / non-workspace annotation.
