@@ -1374,6 +1374,20 @@ one 404s — the fix for a standing v0.37 deferral. Same "never hidden"
 rule as the loopback-only pattern above: a disabled control still shows
 what it would do, with the reason attached, never a control that
 silently vanishes.
+**An ABSENT probe never pre-empts a write the daemon might admit**
+(V80-F2b — a real compatibility bug caught post-merge, `review-room.spec.ts`
+failing against a server binary that predates this field). The hook
+returns `{ admitted, unknown }`, and `admitted` is `true` unless the
+daemon's identity response said `review_mutations_admitted: false`
+EXPLICITLY — an older daemon (rolling deploy, mixed fleet), a failed
+identity fetch, and an in-flight one all read `admitted: true`
+(`unknown: true`), never `false`. Every consumer disables ONLY on the
+explicit `false`; the pre-existing post-submit 404 latch (`VerdictBar`'s
+`refused`, `DispositionMenu`/`DiffThread`'s `dispositionLoopbackLatched`)
+is what discovers an unknown-but-actually-refused write, exactly as it
+did before this probe existed — the probe narrows the window that latch
+has to cover, it does not replace it, and it must never be stricter than
+"no answer yet" would have been.
 
 ## `~rails` and the Rails reader surfaces (`rails/1`, `V72-I2`)
 

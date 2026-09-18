@@ -7,6 +7,14 @@
 // `useIdentity` reads is enough — `useIdentity`'s own `staleTime:
 // Infinity` (see that hook's doc) means a query that already has data at
 // mount never refetches, so no case here ever makes a network attempt.
+//
+// V80-F2b — a real compatibility bug caught post-merge (`review-room.spec.ts`
+// failed against a server binary predating this field: the disposition
+// button rendered disabled+captioned even though the loopback gate would
+// have admitted the write). `admitted` must be `true` UNLESS the daemon
+// EXPLICITLY said `false` — an absent field (older daemon), a failed
+// fetch, and an in-flight one all read `admitted: true` / `unknown: true`
+// now, never `admitted: false`.
 
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -16,8 +24,8 @@ import type { IdentityOut } from "../api/types";
 import { useReviewMutationsAdmitted } from "./useReviewMutationsAdmitted";
 
 function Probe() {
-  const admitted = useReviewMutationsAdmitted();
-  return h("div", { "data-admitted": String(admitted) });
+  const { admitted, unknown } = useReviewMutationsAdmitted();
+  return h("div", { "data-admitted": String(admitted), "data-unknown": String(unknown) });
 }
 
 /// `seed === undefined` simulates "no identity fetch has landed yet" via
@@ -45,23 +53,27 @@ function markup(seed: Partial<IdentityOut> | undefined): string {
 }
 
 describe("useReviewMutationsAdmitted", () => {
-  it("reads true only when the daemon's per-request probe said so", () => {
+  it("reads admitted:true, unknown:false when the daemon's per-request probe explicitly said so", () => {
     const html = markup({ review_mutations_admitted: true });
     expect(html).toContain('data-admitted="true"');
+    expect(html).toContain('data-unknown="false"');
   });
 
-  it("reads false when the daemon said false (the [review] remote_mutations default)", () => {
+  it("reads admitted:false ONLY on an explicit false (the [review] remote_mutations default for a non-loopback caller)", () => {
     const html = markup({ review_mutations_admitted: false });
     expect(html).toContain('data-admitted="false"');
+    expect(html).toContain('data-unknown="false"');
   });
 
-  it("degrades to false — an older daemon that omits the field entirely", () => {
+  it("V80-F2b: an older daemon that omits the field entirely reads admitted:true (never pre-empts a write it might admit), unknown:true", () => {
     const html = markup({});
-    expect(html).toContain('data-admitted="false"');
+    expect(html).toContain('data-admitted="true"');
+    expect(html).toContain('data-unknown="true"');
   });
 
-  it("degrades to false — no identity fetch has landed yet (cold cache)", () => {
+  it("V80-F2b: no identity fetch has landed yet (cold cache) reads admitted:true, unknown:true", () => {
     const html = markup(undefined);
-    expect(html).toContain('data-admitted="false"');
+    expect(html).toContain('data-admitted="true"');
+    expect(html).toContain('data-unknown="true"');
   });
 });

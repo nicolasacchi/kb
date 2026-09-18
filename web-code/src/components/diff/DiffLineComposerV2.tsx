@@ -72,8 +72,10 @@ export default function DiffLineComposerV2({
   /// one of `review_mutations_gate`'s five graduated families; the
   /// composer's Comment/Question modes ride the ordinary bearer
   /// `POST /api/annotations` route untouched by that gate (`onSubmit`
-  /// above is never affected by this flag).
-  const findingWritesAdmitted = useReviewMutationsAdmitted();
+  /// above is never affected by this flag). V80-F2b: `admitted` is `true`
+  /// unless the daemon explicitly said `false` — an absent probe (older
+  /// daemon) must never disable this button.
+  const { admitted: findingWritesAdmitted } = useReviewMutationsAdmitted();
 
   async function saveComment() {
     const trimmed = body.trim();
