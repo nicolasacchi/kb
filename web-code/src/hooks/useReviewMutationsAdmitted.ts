@@ -23,16 +23,34 @@ import { useIdentity } from "./useIdentity";
 export const REVIEW_MUTATIONS_ADMITTED_HINT =
   "review writes are loopback-only on this daemon — open kb-code on the box, or set [review] remote_mutations = true";
 
-/// `true` only when the daemon SAID so for THIS request. An older daemon
-/// that omits the field, a failed identity fetch, and an in-flight one all
-/// read `false` — the same safe-direction convention `lib/loopback.ts`'s
-/// `isLoopbackCaller` documents: hiding an affordance that would have
-/// worked costs a caption; offering one that cannot costs a 404 the
-/// operator has to interpret. Never used to pre-empt a request the server
-/// would actually admit — it is read FROM the server's own per-request
-/// verdict, not guessed at client-side from `remote_mutations` + a
-/// separately-fetched loopback bit.
-export function useReviewMutationsAdmitted(): boolean {
+/// V80-F2b (a real compatibility bug found post-merge): a consumer must
+/// disable ONLY on an EXPLICIT `false`. `admitted` is `true` whenever the
+/// daemon has not said otherwise — an older daemon that omits the field
+/// (a rolling deploy, mixed fleet), a failed identity fetch, and an
+/// in-flight one all read `admitted: true` here, never `false`. Getting
+/// this backwards (V80-F2's original shape: absent read as `false`) is a
+/// REAL regression against an old server — it pre-empts a write the
+/// daemon would actually have admitted, on nothing more than "I don't yet
+/// know". `unknown` names the reason: it is `true` exactly when
+/// `admitted: true` was NOT read from an explicit server `true` — a
+/// consumer wanting to distinguish "confirmed admitted" from "unconfirmed,
+/// optimistically admitted" may read it, but neither currently needs to:
+/// the pre-existing post-submit 404 latch (`VerdictBar`'s `refused` state
+/// and its siblings) is what discovers an unknown-but-actually-refused
+/// write, exactly as it did before this field existed at all.
+export interface ReviewMutationsAdmitted {
+  /// Whether a control should render enabled. `false` if AND ONLY IF the
+  /// daemon's own `GET /api/identity` explicitly said
+  /// `review_mutations_admitted: false` for THIS request.
+  admitted: boolean;
+  /// `true` when the daemon has not told us either way yet — `admitted`
+  /// is optimistic in this case, never a confirmed fact.
+  unknown: boolean;
+}
+
+export function useReviewMutationsAdmitted(): ReviewMutationsAdmitted {
   const identity = useIdentity();
-  return identity.data?.review_mutations_admitted === true;
+  const raw = identity.data?.review_mutations_admitted;
+  if (raw === false) return { admitted: false, unknown: false };
+  return { admitted: true, unknown: raw === undefined };
 }

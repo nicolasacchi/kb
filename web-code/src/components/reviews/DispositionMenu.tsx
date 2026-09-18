@@ -76,7 +76,7 @@ export interface DispositionMenuProps {
 
 export default function DispositionMenu({ repo, reviewId, finding }: DispositionMenuProps) {
   const mutate = useDispositionMutation(repo);
-  const admitted = useReviewMutationsAdmitted();
+  const { admitted } = useReviewMutationsAdmitted();
   const loopback = useDispositionLoopbackLatched();
   const refused = !admitted || loopback;
   const current = finding.disposition?.state ?? null;

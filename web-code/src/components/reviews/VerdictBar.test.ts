@@ -1,13 +1,18 @@
-// V80-F2 — the ONE place the disabled-with-caption state under
-// `review_mutations_admitted: false` is exercisable at all: the loopback
-// Playwright harness (`e2e/review-room.spec.ts`) always boots loopback, so
-// `admitted` is always `true` there and the segment is never disabled —
-// see that spec's own note. `renderToStaticMarkup` + a pre-seeded
-// `["identity"]` cache entry (this repo's established pattern, see
-// `hooks/useReviewMutationsAdmitted.test.ts`'s same technique) drives
-// `useReviewMutationsAdmitted` to `false` with no mocking at all;
-// `usePutReviewVerdict`'s mutation is never triggered by this test (no
-// click, just rendered markup), so it needs no seed/mock either.
+// V80-F2 — the ONE place the disabled-with-caption state under an
+// EXPLICIT `review_mutations_admitted: false` is exercisable at all: the
+// loopback Playwright harness (`e2e/review-room.spec.ts`) always boots
+// loopback, so `admitted` is always `true` there and the segment is never
+// disabled — see that spec's own note. `renderToStaticMarkup` + a
+// pre-seeded `["identity"]` cache entry (this repo's established pattern,
+// see `hooks/useReviewMutationsAdmitted.test.ts`'s same technique) drives
+// `useReviewMutationsAdmitted` with no mocking at all; `usePutReviewVerdict`'s
+// mutation is never triggered by this test (no click, just rendered
+// markup), so it needs no seed/mock either.
+//
+// V80-F2b — a real compatibility bug caught post-merge: an ABSENT field
+// (an older daemon) must read as ENABLED, not disabled — see the
+// "degrades to ENABLED" case below, which used to (wrongly) assert
+// disabled.
 
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -75,8 +80,9 @@ describe("VerdictBar", () => {
     expect(html).toContain("set [review] remote_mutations = true");
   });
 
-  it("degrades to DISABLED — an older daemon that omits the field entirely", () => {
+  it("V80-F2b: degrades to ENABLED, no caption — an older daemon that omits the field entirely must never be pre-empted", () => {
     const html = markup(undefined);
-    expect((html.match(/disabled=""/g) ?? []).length).toBe(3);
+    expect(html).not.toContain("disabled");
+    expect(html).not.toContain("data-kbc-review-verdict-loopback");
   });
 });
