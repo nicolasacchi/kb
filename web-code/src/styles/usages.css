@@ -13,7 +13,7 @@
   gap: 6px;
   height: 100%;
   min-height: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .kbc-usages__census {
@@ -163,7 +163,7 @@
   gap: 6px;
   margin: 6px 0 2px;
   padding: 2px 0;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   text-transform: none;
   color: var(--fg-dim);
@@ -246,7 +246,7 @@
   border-radius: 8px;
   background: var(--bg-elev, var(--bg));
   box-shadow: var(--shadow-2, 0 8px 28px rgb(0 0 0 / 35%));
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .kbc-actions__head {
@@ -287,7 +287,7 @@
 }
 
 .kbc-actions__target-kind {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--fg-dim);
@@ -321,7 +321,7 @@
 
 .kbc-actions__group-head {
   margin: 6px 0 2px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -372,7 +372,7 @@
 .kbc-actions__row-flag,
 .kbc-actions__row-why {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 
 .kbc-actions__browser {
@@ -412,7 +412,7 @@
   border-radius: 999px;
   background: var(--bg-elev, var(--bg));
   box-shadow: var(--shadow-2, 0 6px 20px rgb(0 0 0 / 30%));
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .kbc-actions__pill-row,

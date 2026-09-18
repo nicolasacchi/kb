@@ -24,6 +24,52 @@
   background: var(--bg-panel);
   flex: 0 0 auto;
 }
+/* V80-R2 — the breadcrumb absorbs the row's free space so the toolbar
+ * cluster (below) pins to the right edge regardless of how many of its
+ * groups happen to be rendered. Scoped to this header specifically:
+ * `.kbc-breadcrumbs` is reused in `ReaderLegacy.tsx` too, which keeps its
+ * own flat (ungrouped) toolbar and doesn't need this. A real `min-width`
+ * floor (not `0`) — an EARLIER version of this rule used `min-width: 0`,
+ * which let a wide toolbar (five groups, `flex: 0 0 auto`, never shrinks)
+ * squeeze the breadcrumb all the way to invisible at 1280px; the floor
+ * guarantees a path is always at least partially readable, and the
+ * toolbar scrolls (below) to absorb the rest of the squeeze instead. */
+.kbc-reader__top > .kbc-breadcrumbs {
+  flex: 1 1 auto;
+  min-width: 96px;
+}
+
+/* V80-R2 — the reading-mode toolbar: five named, separated clusters
+ * (View / Text size / Blame / Comments / Ref) instead of one flat row of
+ * chips. `role="group" aria-label` on each `.kbc-toolbar-group` names it
+ * for assistive tech; the visible rule between adjacent groups (an
+ * ordinary adjacent-sibling border, so an absent group never leaves a
+ * dangling separator) does the same for sighted reading. `overflow-x:
+ * auto` (scrollbar hidden, same idiom `mobile.css`'s `.kbc-reader__top`
+ * fix already uses) is what lets the breadcrumb floor above hold at
+ * narrow desktop widths — the CLUSTER scrolls internally rather than
+ * stealing the breadcrumb's space when everything can't fit. */
+.kbc-reader-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.kbc-reader-toolbar::-webkit-scrollbar {
+  display: none;
+}
+.kbc-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kbc-toolbar-group + .kbc-toolbar-group {
+  padding-left: 10px;
+  border-left: 1px solid var(--rule);
+}
 
 .kbc-reader__body {
   display: flex;
@@ -62,6 +108,12 @@
 .kbc-reader__hint {
   padding: 24px;
   color: var(--ink-mute);
+  /* V80-R2 — this is prose (a full sentence explaining why the center
+   * pane is empty), not a code line; the reading contract's `--measure`
+   * (tokens.css) caps its line box the same way it would a rendered
+   * markdown paragraph, so a long hint doesn't run edge-to-edge on a wide
+   * viewport. */
+  max-width: var(--measure);
 }
 .kbc-reader__hint--error {
   color: var(--red);
@@ -73,7 +125,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -107,7 +159,7 @@
   color: var(--ink-mute);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   max-width: 12em;
   overflow: hidden;
@@ -120,7 +172,7 @@
 .kbc-breadcrumbs__ellip {
   color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 /* --- F1 — app shell (TopBar above every route) ------------------------- */
@@ -171,7 +223,7 @@
   border: 1px solid var(--rule-hi);
   background: var(--bg-panel);
   box-shadow: var(--shadow);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   /* V80-R0 — see `.kbc-toasts` above: re-enabled only on the interactive
    * children (`.kbc-toast__x`, `.kbc-toast__link`), never the card
    * itself — its background and `.kbc-toast__msg` carry no handler. */
@@ -223,7 +275,7 @@
   background: var(--bg-card);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-repopill:hover {
@@ -240,7 +292,7 @@
   place-items: center;
   font-weight: 700;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kbc-repopill-name {
   font-weight: 500;
@@ -280,7 +332,7 @@
 .kbc-repopopover__empty {
   padding: 10px;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-repopopover__item {
   display: flex;
@@ -307,7 +359,7 @@
 .kbc-repopopover__meta {
   flex: 1 1 auto;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
 }
 .kbc-repopopover__badge {
@@ -315,7 +367,7 @@
   border-radius: var(--radius-sm);
   background: var(--accent-bg);
   color: var(--accent-soft);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   flex: 0 0 auto;
 }
 
@@ -384,7 +436,7 @@
 }
 .kbc-empty__hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--ink-mute);
   max-width: 46ch;
@@ -397,7 +449,7 @@
   background: var(--accent-bg);
   color: var(--accent-soft);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   text-decoration: none;
 }
@@ -437,7 +489,7 @@
 }
 .kbc-reader-start__card h2 {
   margin: 0 0 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-dim);
@@ -460,7 +512,7 @@
   color: var(--ink-mute);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 4px 6px;
   cursor: pointer;
   overflow: hidden;
@@ -487,7 +539,7 @@
 }
 .kbc-reader-start__key dt kbd {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   background: var(--bg-panel);
   border: 1px solid var(--rule);
@@ -497,7 +549,7 @@
 .kbc-reader-start__key dd {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 @media (max-width: 520px) {
   .kbc-reader-start__cards {
@@ -518,7 +570,7 @@
   padding: 4px 10px;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-refpicker__menu {
   position: absolute;
@@ -556,13 +608,13 @@
 }
 .kbc-refpicker__group {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   padding: 6px 8px 2px;
 }
 .kbc-refpicker__head {
   margin-left: 6px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--green);
 }
 
@@ -584,7 +636,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   cursor: pointer;
   user-select: none;
@@ -600,7 +652,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 /* V3.2-B3 — attention overlay tints via inline style.backgroundColor
  * (attentionTintStyle → accent opacity). Never red-as-shame. */
@@ -673,7 +725,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   padding: 1px 5px;
   cursor: pointer;
@@ -688,7 +740,7 @@
   align-items: center;
   gap: 6px;
   padding: 0 8px 6px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   flex: 0 0 auto;
 }
@@ -698,7 +750,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   padding: 1px 5px;
   cursor: pointer;
@@ -706,7 +758,7 @@
 .kbc-tree__note {
   margin: 0 8px 4px;
   padding: 4px 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   line-height: 1.35;
   color: var(--ink-mute);
   background: var(--bg-panel);
@@ -744,7 +796,7 @@
 }
 .kbc-tree__trust {
   margin-left: 6px;
-  font-size: 9px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-mute);
@@ -758,7 +810,7 @@
 }
 .kbc-tree__matchcount {
   margin-left: 6px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
 }
 .kbc-tree__lanes {
@@ -769,7 +821,7 @@
   flex: 0 0 auto;
 }
 .kbc-tree__lane {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   color: var(--ink-mute);
 }
@@ -780,7 +832,7 @@
   flex: 0 0 auto;
   border-top: 1px solid var(--rule);
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   max-height: 30%;
   overflow: auto;
@@ -788,7 +840,7 @@
 .kbc-tree__unplaced-row {
   display: block;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   cursor: pointer;
   background: none;
@@ -804,14 +856,14 @@
   gap: 8px;
   padding: 6px 8px;
   border-top: 1px solid var(--rule);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   flex: 0 0 auto;
 }
 .kbc-tree__actions {
   border-top: 1px solid var(--rule);
   padding: 8px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   max-height: 45%;
   overflow: auto;
   flex: 0 0 auto;
@@ -825,7 +877,7 @@
 .kbc-tree__action-warn,
 .kbc-tree__action-note {
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 .kbc-tree__action-cli,
 .kbc-tree__cli code {
@@ -835,7 +887,7 @@
   background: var(--bg-panel);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   word-break: break-all;
   white-space: pre-wrap;
@@ -843,7 +895,7 @@
 .kbc-tree__cli {
   flex: 0 0 auto;
   padding: 4px 8px 8px;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 
@@ -857,7 +909,7 @@
 .kbc-outline--empty {
   padding: 16px;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-outline__item {
   display: flex;
@@ -868,7 +920,7 @@
   border: none;
   color: var(--ink);
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-outline__item:hover {
@@ -877,7 +929,7 @@
 .kbc-outline__kind {
   color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   flex: 0 0 auto;
   align-self: center;
@@ -916,7 +968,7 @@
   background: var(--bg-panel);
   border-bottom: 1px solid var(--rule);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   pointer-events: auto;
 }
 .kbc-sticky-context__row {
@@ -968,7 +1020,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -995,7 +1047,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   line-height: 1;
   padding: 2px 6px;
   cursor: pointer;
@@ -1124,7 +1176,7 @@
 
 .kbc-diff {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .kbc-diff__header {
   display: flex;
@@ -1202,7 +1254,7 @@
   border-bottom: 1px solid var(--rule);
 }
 .kbc-diffcomment-composer__label {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -1213,7 +1265,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 4px 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-sans);
   resize: vertical;
 }
@@ -1226,7 +1278,7 @@
   border-radius: var(--radius-sm);
   background: none;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 10px;
   cursor: pointer;
 }
@@ -1260,7 +1312,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-diffannot__line {
   flex: 0 0 auto;
@@ -1285,7 +1337,7 @@
 .kbc-diffannot__meta {
   flex: 0 0 auto;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-sm);
 }
 .kbc-diffannot__row button {
   flex: 0 0 auto;
@@ -1293,7 +1345,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -1301,12 +1353,12 @@
   display: flex;
   gap: 8px;
   padding: 4px 0 4px 20px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   border-left: 2px solid var(--rule);
   margin: 4px 0 0 4px;
 }
 .kbc-diffannot__reply .kbc-diffannot__body {
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 
 /* --- A3 — vim reading buffer chrome ---------------------------------- */
@@ -1334,7 +1386,7 @@
 }
 .kbc-codeview .cm-panel {
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-codeview .cm-panel input,
 .kbc-codeview .cm-panel button {
@@ -1356,7 +1408,7 @@
 }
 .kbc-codeview .cm-panel label {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-codeview .cm-searchMatch {
   background: color-mix(in srgb, var(--warn) 30%, transparent);
@@ -1383,7 +1435,7 @@
 /* V3.N1 — Recent Locations popup rows (rides Omnibox chrome). */
 .kbc-recent-locs__header {
   padding: 8px 14px 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1401,7 +1453,7 @@
   padding: 8px 14px;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recent-locs__row:hover,
 .kbc-recent-locs__row.is-active {
@@ -1412,7 +1464,7 @@
 }
 .kbc-recent-locs__snippet {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1433,7 +1485,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-outline__item--focused {
   background: var(--accent-bg, var(--bg-card-hi));
@@ -1457,7 +1509,7 @@
 .kbc-structure-popup__line {
   color: var(--ink-dim);
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 
 /* T1 (design-ui.md §9.2) — the row is now a `<div role="option">` (rather
@@ -1533,7 +1585,7 @@
   cursor: pointer;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-bookmarks__jump:hover .kbc-bookmarks__path {
   color: var(--accent);
@@ -1550,7 +1602,7 @@
   border: 1px solid var(--rule);
   color: var(--accent-soft);
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   flex: 0 0 auto;
 }
 .kbc-bookmarks__path {
@@ -1559,7 +1611,7 @@
 .kbc-bookmarks__note {
   flex: 1 1 100%;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1576,7 +1628,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-dim);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   cursor: pointer;
   text-transform: uppercase;
@@ -1604,7 +1656,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
 }
 .kbc-bookmarks__edit button {
@@ -1613,7 +1665,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -1643,7 +1695,7 @@
    * light). */
   color: var(--accent-soft);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.08em;
   pointer-events: none;
   z-index: 4;
@@ -1664,7 +1716,7 @@
   border-radius: 5px;
   background: var(--bg-panel-2);
   color: var(--green);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   pointer-events: none;
   z-index: 4;
 }
@@ -1730,7 +1782,7 @@
 }
 .kbc-kbdhelp__group h3 {
   margin: 10px 0 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--accent-soft, var(--accent));
 }
 .kbc-kbdhelp__group dl {
@@ -1747,7 +1799,7 @@
 }
 .kbc-kbdhelp__row dt kbd {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   background: var(--bg-card);
   border: 1px solid var(--rule);
@@ -1758,7 +1810,7 @@
 .kbc-kbdhelp__row dd {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 /* SH.C3 — context-aware ordering: the current surface's group(s) get a
@@ -1777,7 +1829,7 @@
   gap: 8px;
   margin: 14px 0 2px;
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1831,7 +1883,7 @@
   flex: 0 0 auto;
 }
 .kbc-peek__mode {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--ink-dim);
@@ -1850,7 +1902,7 @@
  * current row set is approximate, never hidden. */
 .kbc-peek__badge {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   background: var(--accent-bg);
@@ -1878,7 +1930,7 @@
 .kbc-peek__hint {
   padding: 12px;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-peek__error {
   color: var(--red);
@@ -1890,7 +1942,7 @@
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-peek__row:hover {
   background: var(--bg-card-hi);
@@ -1903,7 +1955,7 @@
 .kbc-peek__row-kind {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   color: var(--ink-dim);
   padding-top: 1px;
@@ -1935,13 +1987,13 @@
 }
 .kbc-peek__row-container {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-peek__row-text {
   display: block;
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1949,7 +2001,7 @@
 .kbc-peek__counts {
   padding: 8px;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   border-top: 1px solid var(--rule);
 }
 
@@ -1988,7 +2040,7 @@
 .kbc-peek__card-doc {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: pre-wrap;
 }
 .kbc-peek__card-meta {
@@ -1996,13 +2048,13 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-peek__card-provenance {
   padding-top: 6px;
   border-top: 1px solid var(--rule);
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-peek__card-sig-first {
   font-weight: 600;
@@ -2010,7 +2062,7 @@
 .kbc-peek__card-sig-rest {
   font-weight: 400;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 /* T1 (design-ui.md §9.1) — the hover card's footer action hints (`Enter go
  * to def · u usages · h callers`), replacing the old single "open
@@ -2030,13 +2082,13 @@
   background: none;
   color: var(--accent-soft);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   padding: 0;
 }
 .kbc-peek__card-action kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -2060,7 +2112,7 @@
   flex: 0 0 auto;
 }
 .kbc-trust__pill {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   white-space: nowrap;
@@ -2092,7 +2144,7 @@
   color: var(--ink-mute);
 }
 .kbc-trust__live {
-  font-size: 9px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 1px 5px;
@@ -2220,7 +2272,7 @@
   flex: 0 0 auto;
   padding: 3px 6px;
   border-radius: var(--radius-sm);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   color: var(--ink-mute);
   cursor: pointer;
@@ -2283,7 +2335,7 @@
   flex: 0 0 auto;
   padding: 3px 8px;
   border-radius: var(--radius-pill);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-family: var(--font-ui);
   background: var(--accent-bg);
   color: var(--accent-soft);
@@ -2314,7 +2366,7 @@
   border: none;
   background: none;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   text-decoration: underline;
   cursor: pointer;
   padding: 0;
@@ -2368,7 +2420,7 @@
 }
 .kbc-impact__note {
   padding: 4px 12px 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   line-height: 1.35;
   border-bottom: 1px solid var(--rule);
@@ -2392,7 +2444,7 @@
 .kbc-impact__prov {
   width: 100%;
   padding-left: 1.4em;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--ink-dim);
 }
@@ -2405,12 +2457,12 @@
 }
 .kbc-impact__depth {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding-left: 22px;
 }
 .kbc-impact__depth-chip {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   border-radius: 4px;
@@ -2420,7 +2472,7 @@
 .kbc-impact__trunc {
   color: var(--ink-dim);
   font-style: italic;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 
 /* V3.1-H3b — ego-graph. `.kbc-ego` itself carries no positioning — it's
@@ -2455,7 +2507,7 @@
 }
 .kbc-ego__more {
   margin-top: 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
 
@@ -2465,7 +2517,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 8px 10px 12px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-entity__head {
   display: flex;
@@ -2480,7 +2532,7 @@
   color: var(--ink);
 }
 .kbc-entity__kind {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   border: 1px solid var(--rule);
   border-radius: 4px;
@@ -2489,7 +2541,7 @@
 .kbc-entity__sig {
   display: block;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--ink);
@@ -2501,7 +2553,7 @@
   margin: 0;
   white-space: pre-wrap;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-family: inherit;
 }
 .kbc-entity__row {
@@ -2516,7 +2568,7 @@
   flex-wrap: wrap;
   gap: 8px;
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-entity__muted {
   color: var(--ink-dim);
@@ -2534,7 +2586,7 @@
   border-radius: 4px;
   padding: 2px 8px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-entity__btn:hover {
@@ -2553,13 +2605,13 @@
 }
 .kbc-entity__history-title {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--ink);
 }
 .kbc-entity__history-note {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   line-height: 1.35;
 }
@@ -2567,7 +2619,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-entity__score-details summary {
@@ -2612,13 +2664,13 @@
 }
 .kbc-entity__ts-note {
   margin: 0;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   line-height: 1.35;
   max-width: 100%;
 }
 .kbc-entity__ts-trunc {
-  font-size: 10px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   color: var(--ink-dim);
 }
@@ -2657,14 +2709,14 @@
   gap: 3px;
 }
 .kbc-entity__partners-hint {
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   line-height: 1.3;
   margin-bottom: 2px;
 }
 .kbc-entity__partner-link {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--accent-soft);
   text-decoration: none;
   word-break: break-all;
@@ -2813,7 +2865,7 @@
 .kbc-claim__evidence-link,
 .kbc-claim__evidence-plain {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-card-hi);
@@ -2834,7 +2886,7 @@
  * (that vocabulary is exact/likely/candidate; this join has no candidate
  * tier at all) — same LINE-STYLE-is-the-signal convention, a narrower pair. */
 .kbc-turntier {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   cursor: help;
@@ -2872,7 +2924,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lift);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-ui);
   color: var(--ink);
 }
@@ -2925,5 +2977,5 @@
 }
 .kbc-scrub__trunc {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }

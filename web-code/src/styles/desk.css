@@ -204,7 +204,7 @@
   border-radius: 7px;
   background: var(--accent);
   color: var(--accent-fg, var(--bg));
-  font-size: 9px;
+  font-size: var(--fs-xs);
   line-height: 14px;
   text-align: center;
   font-weight: 600;
@@ -232,7 +232,7 @@
   scrollbar-width: thin;
 }
 .kbc-desk__drawer-empty-tab {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   white-space: nowrap;
 }
@@ -261,7 +261,7 @@
   background: none;
   color: inherit;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 6px;
   cursor: pointer;
   min-width: 0;
@@ -323,7 +323,7 @@
 }
 .kbc-desk__drawer-caption {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   font-style: italic;
 }
@@ -332,7 +332,7 @@
   align-items: center;
   gap: 6px;
   margin: 8px 0 4px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--ink-mute);
 }
@@ -343,7 +343,7 @@
   padding: 2px 4px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-desk__drawer-row:hover {
   background: var(--bg-card-hi);
@@ -355,7 +355,7 @@
 .kbc-desk__drawer-row-loc {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-desk__drawer-row-line {
@@ -368,7 +368,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink);
 }
 
@@ -417,7 +417,7 @@
   border-radius: 999px;
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 10px;
   cursor: pointer;
 }
@@ -435,7 +435,7 @@
   border-radius: 999px;
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 10px;
   cursor: pointer;
 }
@@ -484,11 +484,11 @@
   box-shadow: inset 2px 0 0 0 var(--accent);
 }
 .kbc-desk__preset-item-name {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 .kbc-desk__preset-item-hint {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
 
@@ -505,7 +505,7 @@
   border-radius: 999px;
   background: var(--accent);
   color: var(--accent-fg, var(--bg));
-  font-size: 11px;
+  font-size: var(--fs-sm);
   box-shadow: var(--shadow-lift);
 }
 .kbc-desk__mode-hint {
@@ -524,13 +524,13 @@
   padding: 0 10px;
   background: var(--bg-panel);
   border-top: 1px solid var(--rule);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   z-index: var(--z-bar);
 }
 
 /* Present enlarges the reading type — a multiplier over the operator's
- * own `readerFontSize` pref, never a replacement for it. */
+ * own `codeFontSize` pref, never a replacement for it. */
 .kbc-desk[data-desk-chrome="present"] .cm-content,
 .kbc-desk[data-desk-chrome="present"] .cm-gutters {
   font-size: 1.25em;
@@ -557,7 +557,7 @@
   overflow: hidden;
 }
 .kbc-inspector__subject-seg {
-  font-size: 9px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 1px 5px;
@@ -589,7 +589,7 @@
 .kbc-inspector__subject-name {
   margin-top: 3px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -597,7 +597,7 @@
 }
 .kbc-inspector__subject-caption {
   margin-top: 1px;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   font-style: italic;
 }
@@ -609,7 +609,7 @@
 }
 .kbc-inspector__section-head {
   margin: 8px 8px 2px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -624,7 +624,7 @@
   border-radius: 5px;
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 10px;
+  font-size: var(--fs-sm);
   padding: 2px 7px;
   cursor: pointer;
   white-space: nowrap;
