@@ -18,6 +18,7 @@ import {
   useReviewPseudoList,
   useReviewReadingOrder,
 } from "../hooks/useReviews";
+import { useReviewAllFiles } from "../hooks/useReviewAllFiles";
 import { indexThreads, type DiffSide } from "../lib/reviewComments";
 import type { ParsedDiff } from "../lib/diff";
 import {
@@ -132,6 +133,7 @@ export default function ReviewDiff() {
     psQuery,
     ctxDial,
     noiseMode,
+    filesMode,
     mapParamOpen,
     hunkParam,
     line,
@@ -148,6 +150,7 @@ export default function ReviewDiff() {
     setPs,
     setCtx,
     setNoiseMode,
+    setFilesMode,
     setMapOpen,
     setView,
     setOverlay,
@@ -242,6 +245,22 @@ export default function ReviewDiff() {
   const stops = orderQ.data === null || orderQ.data === undefined ? null : orderQ.data.stops;
   const ordered = useMemo(() => orderedRows(files, stops), [files, stops]);
   const paths = useMemo(() => ordered.map((f) => f.path), [ordered]);
+
+  // V80-M1 — threads/findings anchored on a path `files_changed` never
+  // named. A thread is never hidden because its file has no hunks (this
+  // module's own "Why"), so these are surfaced in the map column's small
+  // "outside the diff" group REGARDLESS of `filesMode` — discoverable in
+  // `Changed` mode too, not only after switching to `All files`.
+  const outsideDiffFiles = useMemo(() => {
+    const changed = new Set(paths);
+    const out: { path: string; count: number }[] = [];
+    for (const [path, threads] of threadsByPath) {
+      if (changed.has(path) || threads.length === 0) continue;
+      out.push({ path, count: threads.length });
+    }
+    out.sort((a, b) => a.path.localeCompare(b.path));
+    return out;
+  }, [paths, threadsByPath]);
 
   // PRR-U3 — `t`/`T` stop list: severity-ordered findings then comments,
   // per file, in `paths` order, overlay-filtered.
@@ -433,9 +452,36 @@ export default function ReviewDiff() {
     () => (commentsQ.data ? indexThreads(commentsQ.data).rollup.perFile : null),
     [commentsQ.data],
   );
+  // V80-M1 — `?files=all`: the jump palette's candidates widen to the
+  // whole tip tree too (this route's own copy of `useReviewAllFiles`;
+  // TanStack Query shares the cache with `ReviewMapColumn`'s call under
+  // the same key, so this is never a second fetch). Every extra path is a
+  // synthetic, `status: ""` row — same "outside the diff" shape
+  // `buildAllFilesTree` uses — so `jumpHits`' own `SpeedFilterHit<
+  // ReviewFileRow>` type needs no widening.
+  const allFilesQ = useReviewAllFiles(repo, tipSha, filesMode === "all");
+  const jumpCandidates = useMemo(() => {
+    if (filesMode !== "all") return ordered;
+    const known = new Set(paths);
+    const extra: ReviewFileRow[] = (allFilesQ.data?.paths ?? [])
+      .filter((p) => !known.has(p))
+      .map((p) => ({
+        path: p,
+        old_path: null,
+        status: "",
+        additions: 0,
+        deletions: 0,
+        blob_sha: "",
+        viewed: false,
+        viewed_stale: false,
+        open_annotations: 0,
+      }));
+    return [...ordered, ...extra];
+  }, [filesMode, ordered, paths, allFilesQ.data]);
   const jumpHits = useMemo(
-    () => speedFilterItems(ordered, jump, (f) => f.path + (f.old_path ? ` ${f.old_path}` : "")),
-    [ordered, jump],
+    () =>
+      speedFilterItems(jumpCandidates, jump, (f) => f.path + (f.old_path ? ` ${f.old_path}` : "")),
+    [jumpCandidates, jump],
   );
 
   async function toggleViewed(file: ReviewFileRow) {
@@ -1247,6 +1293,10 @@ export default function ReviewDiff() {
       setNoiseMode(noiseMode === "collapsed" ? "shown" : "collapsed"),
     ),
     "diff.map-toggle": gated(() => setMapOpen(!mapParamOpen)),
+    // V80-M1 — the tree mode toggle ("Changed (N) | All files").
+    "diff.tree-mode-toggle": gated(() =>
+      setFilesMode(filesMode === "all" ? "changed" : "all"),
+    ),
     "diff.tree-focus": gated(() => treeHandle.current?.focus()),
     "diff.tree-toggle-folder": gated(() => treeHandle.current?.toggleFocusedFolder()),
     "diff.tree-collapse-all": gated(() => treeHandle.current?.collapseAllFolders()),
@@ -1332,22 +1382,55 @@ export default function ReviewDiff() {
 
   // `?line=N&side=` deep-link: scroll + flash. Works in both unified and split
   // (rows carry data-old-line / data-new-line).
+  //
+  // V80-M1 — a path OUTSIDE the diff (or a known one with no textual
+  // hunks) renders its rows from a WHOLE-FILE body, which needs
+  // `FileDiffBody`'s own `GET /api/file` fetch to land before `[data-*-
+  // line]` exists at all — a beat after this effect's own deps settle,
+  // and none of them change once that fetch resolves (it lives entirely
+  // inside `FileDiffBody`'s local state). A single synchronous check would
+  // silently miss the flash for exactly that case. Retry a BOUNDED number
+  // of times instead — never a standing loop (root CLAUDE.md #31's own
+  // "bounded per-frame retry" posture) — rather than trade one miss for
+  // another.
   const flashed = useRef(false);
   useEffect(() => {
     if (flashed.current || line == null || side == null) return;
     const path = focusPath || fileHint || paths[keys.cursor.fileIdx];
     if (!path) return;
-    const root = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
-    if (!root) return;
-    if (root.getAttribute("data-kbc-rdiff-collapsed") === "1") return;
     const attr = side === "old" ? "data-old-line" : "data-new-line";
-    const row = root.querySelector(`[${attr}="${line}"]`);
-    if (!row) return;
-    flashed.current = true;
-    row.classList.add("kbc-rdiff__flash");
-    row.scrollIntoView({ block: "center" });
-    const t = window.setTimeout(() => row.classList.remove("kbc-rdiff__flash"), 1400);
-    return () => window.clearTimeout(t);
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    let flashTimer: number | undefined;
+
+    function attempt(remaining: number) {
+      if (cancelled || flashed.current) return;
+      const root = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
+      const row =
+        root && root.getAttribute("data-kbc-rdiff-collapsed") !== "1"
+          ? root.querySelector(`[${attr}="${line}"]`)
+          : null;
+      if (row) {
+        flashed.current = true;
+        row.classList.add("kbc-rdiff__flash");
+        row.scrollIntoView({ block: "center" });
+        flashTimer = window.setTimeout(() => row.classList.remove("kbc-rdiff__flash"), 1400);
+        return;
+      }
+      if (remaining > 0) {
+        retryTimer = window.setTimeout(() => attempt(remaining - 1), 150);
+      }
+    }
+    // 20 × 150ms ≈ 3s — comfortably past a same-host `/api/file` round
+    // trip; the fast (already-rendered) case still flashes on this very
+    // first, synchronous call, exactly as before this unit.
+    attempt(20);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      window.clearTimeout(flashTimer);
+    };
   }, [
     line,
     side,
@@ -1483,6 +1566,7 @@ export default function ReviewDiff() {
         jumpHits={jumpHits}
         paths={paths}
         onSetHelpOpen={setHelpOpen}
+        onPickFile={openFileInCenter}
       />
       <ReviewDiffCenter
         repo={repo}
@@ -1509,6 +1593,7 @@ export default function ReviewDiff() {
         overlay={overlay}
         flashThreadId={flashThreadId}
         githubThreads={reviewGithubThreadsQ.data?.threads}
+        psNumber={activePsNum ?? null}
         onHunks={onHunks}
         onGoFile={goFile}
         onSetMapOpen={setMapOpen}
@@ -1526,6 +1611,9 @@ export default function ReviewDiff() {
         treeRef={treeHandle}
         splitRef={splitHandle}
         onOpenFile={openFileInCenter}
+        filesMode={filesMode}
+        onSetFilesMode={setFilesMode}
+        outsideDiffFiles={outsideDiffFiles}
       />
       <ReviewDiffRail
         filesOpen={filesOpen}
