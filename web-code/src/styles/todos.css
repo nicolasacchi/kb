@@ -1,21 +1,9 @@
 /* Phase N — `/r/:repo/~todos` page. */
 
 .kbc-todos {
-  max-width: 960px;
+  max-width: var(--measure, 960px);
   margin: 0 auto;
   padding: 32px 16px 64px;
-}
-.kbc-todos__head {
-  margin-bottom: 16px;
-}
-.kbc-todos__title {
-  font-size: 24px;
-  margin: 0 0 4px;
-}
-.kbc-todos__hint {
-  color: var(--ink-mute);
-  margin: 0;
-  font-size: 13px;
 }
 .kbc-todos__trunc {
   margin-bottom: 12px;
@@ -24,13 +12,25 @@
   border: 1px solid var(--warn);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-todos__filters {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-bottom: 20px;
+}
+.kbc-todos__chipgroup {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-todos__chipgroup-label {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-mute);
 }
 .kbc-todos__chips {
   display: flex;
@@ -46,7 +46,7 @@
   border-radius: var(--radius-pill);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 4px 10px;
   cursor: pointer;
 }
@@ -56,8 +56,9 @@
   color: var(--accent-soft);
 }
 .kbc-todos__chip-n {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
 }
 .kbc-todos__chip.is-on .kbc-todos__chip-n {
   color: var(--accent-soft);
@@ -74,7 +75,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 7px 10px;
 }
 .kbc-todos__scope {
@@ -84,16 +85,16 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 7px 10px;
 }
 .kbc-todos__muted {
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-todos__error {
   color: var(--red);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-todos__groups {
   display: flex;
@@ -120,7 +121,7 @@
   cursor: pointer;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-todos__group-head:hover {
   background: var(--bg-card-hi);
@@ -139,7 +140,8 @@
 .kbc-todos__group-n {
   flex: 0 0 auto;
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
 }
 .kbc-todos__items {
   list-style: none;
@@ -155,7 +157,7 @@
   color: var(--ink);
   text-decoration: none;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   /* SH.C3 (audit re-check): pixel-measured both the desktop and mobile
    * todos screenshots — `.kbc-todos__text` below already carries the full
    * overflow/white-space/text-overflow triple and DOES ellipsize once a
@@ -177,7 +179,7 @@
 .kbc-todos__marker {
   flex: 0 0 auto;
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--warn);
   min-width: 4.5em;
 }

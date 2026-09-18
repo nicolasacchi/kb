@@ -112,30 +112,33 @@ export default function Todos() {
       )}
 
       <div className="kbc-todos__filters">
-        <div className="kbc-todos__chips" role="group" aria-label="marker filter">
-          <button
-            type="button"
-            className={"kbc-todos__chip" + (marker === null ? " is-on" : "")}
-            onClick={() => setMarker(null)}
-            data-kbc-todos-chip="all"
-          >
-            All
-            {allTodos.data && (
-              <span className="kbc-todos__chip-n">{allTodos.data.total}</span>
-            )}
-          </button>
-          {markerChips.map(({ marker: m, count }) => (
+        <div className="kbc-todos__chipgroup">
+          <span className="kbc-todos__chipgroup-label">Marker</span>
+          <div className="kbc-todos__chips" role="group" aria-label="marker filter">
             <button
-              key={m}
               type="button"
-              className={"kbc-todos__chip" + (marker === m ? " is-on" : "")}
-              onClick={() => setMarker((cur) => (cur === m ? null : m))}
-              data-kbc-todos-chip={m}
+              className={"kbc-todos__chip" + (marker === null ? " is-on" : "")}
+              onClick={() => setMarker(null)}
+              data-kbc-todos-chip="all"
             >
-              {m}
-              <span className="kbc-todos__chip-n">{count}</span>
+              All
+              {allTodos.data && (
+                <span className="kbc-todos__chip-n">{allTodos.data.total}</span>
+              )}
             </button>
-          ))}
+            {markerChips.map(({ marker: m, count }) => (
+              <button
+                key={m}
+                type="button"
+                className={"kbc-todos__chip" + (marker === m ? " is-on" : "")}
+                onClick={() => setMarker((cur) => (cur === m ? null : m))}
+                data-kbc-todos-chip={m}
+              >
+                {m}
+                <span className="kbc-todos__chip-n">{count}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="kbc-todos__row2">
           <input
