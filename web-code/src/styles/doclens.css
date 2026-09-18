@@ -31,7 +31,7 @@
   flex-wrap: wrap;
 }
 .kbc-lens__doc-title {
-  font-size: 18px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--ink);
   text-decoration: none;
@@ -51,7 +51,7 @@ a.kbc-lens__doc-title:hover {
   border: none;
   color: var(--ink-mute);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1;
   padding: 2px;
   border-radius: var(--radius-sm);
@@ -98,7 +98,7 @@ a.kbc-lens__doc-title:hover {
   background: var(--bg-card);
   color: var(--ink);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__repo:hover {
   background: var(--bg-card-hi);
@@ -230,7 +230,7 @@ a.kbc-lens__doc-title:hover {
   text-align: left;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__rail-row:hover {
   background: var(--bg-card-hi);
@@ -275,7 +275,7 @@ a.kbc-lens__doc-title:hover {
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-lens__row.is-selected {
   background: var(--bg-card-hi);
