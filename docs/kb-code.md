@@ -248,8 +248,34 @@ position resolved via the SAME `resolve_for_ps_with_content` ladder
 `/comments`/`/distill` use, so a finding can never disagree with what a
 human sees in the browser. `kb-code review findings add ID --severity S
 --category C --path P {--line N|--lines A-B|--whole-file} -m TITLE
---rationale R` (`POST /api/reviews/{id}/findings`, LOOPBACK-ONLY, addendum
-§E) lets a human author one finding directly. `kb-code review disposition ID
+--rationale R [--act A] [--blocking]` (`POST /api/reviews/{id}/findings`,
+LOOPBACK-ONLY, addendum §E) lets a human author one finding directly.
+`--act` (findings v2's speech-act axis — `issue`|`question`|`suggestion`|
+`nitpick`|`praise`|`note`|`todo`|`chore`, default `issue`) and `--blocking`
+(the reviewer's own call, never derived from `severity`) were previously
+hardcoded to `"issue"`/`false`; V80-M5 threads them through like every other
+manual-finding field.
+
+**Promoting a comment (V80-M5, D6).** A human's OWN review comment (M0/M2's
+bind surface — a top-level, review-bound annotation) is a PEER of the
+agent's imported findings, not a second class: `kb-code review findings add
+ID --from-comment ANNOTATION_ID --severity S [--act A] [--blocking]` ADOPTS
+that comment's `annotations` row as the new finding's thread instead of
+anchoring a fresh one — `--category`/`--path`/`-m`/`--rationale` are all
+OPTIONAL on this form (the server derives `category: "other"`, `title` from
+the comment's first line (≤80 chars), `rationale` from its whole body, and
+`location` from the comment's own anchor). Validation: the annotation must
+exist (`404`), be the thread's own top-level comment, not a reply (`400`),
+be bound to THIS review (`400`), and not already back another finding
+(`review_findings.annotation_id`'s own UNIQUE index — a race is a `409`,
+never a raw constraint error). A path-less, review-level "General" comment
+(`anchor_kind: "review"`) has no line for a finding to anchor against and
+400s by name — only a `line`/`range`-anchored (i.e. file-scoped) comment can
+be promoted. The SPA surfaces this as "Promote to finding" on every bound
+human thread in the Room (`ReviewThreadsCard`) and the reader's Review rail
+(`ReviewFileThreadsPanel`); a successful promotion re-renders that thread as
+a finding card (`origin: "manual"`, a `you` chip) in place, and the Report
+tab's derived totals gain an "authored by you: N" line. `kb-code review disposition ID
 SLUG {agree|dispute|waive|fix-later|clear} [-m NOTE]` (`PUT`/`DELETE
 /api/reviews/{id}/findings/{slug}/disposition`, LOOPBACK-ONLY) records the
 human's verdict on each finding. `GET /api/reviews/{id}/findings/recurrence`

@@ -1052,6 +1052,26 @@ invariant #2 records).
     ONLY: computed fresh every call, never persisted, and never a filter
     — a comment on a file outside the diff is still listed, merely
     labelled `in_diff: false`.
+    (f) **Adoption is a peer create, not a second finding path** (V80-M5,
+    D6). `POST /api/reviews/{id}/findings`'s optional `from_annotation_id`
+    lets a finding ADOPT an existing top-level, review-bound comment
+    (M0/M2's bind surface) as its thread instead of minting a fresh
+    annotation — `review_findings.annotation_id` still owns exactly ONE
+    `annotations` row (the table's own UNIQUE index, part (d) above and
+    V0024's original rule), so an adoption is validated (exists, top-level,
+    bound to THIS review, not already claimed — a race on the last check
+    surfaces as `StoreError::AnnotationAlreadyFinding`/409, never a raw
+    constraint panic) and then simply REUSES the id rather than routing
+    around the constraint. `origin` is always `"manual"` on an adoption,
+    same as every other human-authored finding, so V0024's origin rule
+    (a `manual` row is never superseded or overwritten by an import/compose)
+    protects a promoted comment exactly as it protects one typed straight
+    into the finding form. `location` is derived from the adopted
+    annotation's own anchor (never a second git read — the anchor is
+    already the pinned selection) and is the one part of this route that a
+    caller cannot override on the adopt path; `title`/`rationale` default
+    from the comment's own first line / whole body but a caller MAY still
+    override either.
 
 24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by
