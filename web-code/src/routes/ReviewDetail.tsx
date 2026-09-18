@@ -786,6 +786,7 @@ export default function ReviewDetail() {
             docCards={cockpitView === "doc" ? docCards : undefined}
             focusedRef={focusedRef}
             onFocusRef={setFocusedRef}
+            tipSha={tipSha}
             findingSeverityFilter={findingSevFilter}
             onFindingSeverityFilter={setFindingSevFilter}
           />
@@ -840,6 +841,7 @@ export default function ReviewDetail() {
                 docCards={cockpitView === "doc" ? docCards : undefined}
                 focusedRef={focusedRef}
                 onFocusRef={setFocusedRef}
+                tipSha={tipSha}
                 density={density}
                 onToggleDensity={() => setDensity(nextRoomDensity(density))}
                 onCollapseRail={() => setRail((cur) => toggleRail(cur))}
