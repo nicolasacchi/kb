@@ -537,6 +537,31 @@ bool` for capability discovery (never required reading — every route
 enforces the gate itself); the SPA renders a small "Remote review
 mutations: on/off" chip on Home when present.
 
+**The loopback pre-probe (V80-F2, `review_mutations_admitted`).** A
+standing v0.37 deferral: `remote_mutations` above answers "is the flag
+on", not "would the gate admit ME" — a non-loopback caller with the flag
+off and a loopback caller both read `remote_mutations: false`/`true`
+identically regardless of which one they are, so the Room's VerdictBar
+and every other gated control only learned they were refused AFTER a
+submit hit the byte-identical 404. `GET /api/identity` additionally
+carries `review_mutations_admitted: bool`, computed PER REQUEST from the
+EXACT SAME peer classification `review_mutations_gate` itself runs
+(`kb_server::middleware::is_loopback_origin` over `ConnectInfo` +
+`state.auth.trusted_proxies`) — `true` unconditionally for a loopback
+caller, else it mirrors `remote_mutations`. Nothing is cached, so the
+field can never disagree with the 404/200 the gate would actually return
+to that same caller on its very next request. SPA:
+`hooks/useReviewMutationsAdmitted.ts` reads it off the shared identity
+query; `VerdictBar`, the diff finding composer
+(`components/diff/DiffLineComposerV2.tsx`'s finding-mode submit) and both
+disposition-control call sites (`components/reviews/DispositionMenu.tsx`
+in the Room, `components/diff/DiffThread.tsx` inline in the diff) render
+their control DISABLED with an inline caption + matching tooltip when it
+is `false` — never hidden, and never pre-empting a request the daemon
+would actually admit. `kb-code identity`'s human-readable output prints
+`review writes admitted: true|false|?` (`?` on a daemon old enough to
+omit the field).
+
 **Wire types (V76-R4a).** kb-code-server exports a curated set of HTTP
 wire structs through ts-rs (the same generator kb-server uses, not
 schemars) behind the `ts-export` cargo feature. `just gen-ts-code` writes
