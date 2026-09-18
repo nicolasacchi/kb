@@ -75,7 +75,10 @@ export default function ReviewFileItem({
         <span className="kbc-review__file-status" data-kbc-review-file-status={f.status}>
           {statusGlyph(f.status)}
         </span>
-        <span className="kbc-review__file-path">
+        <span
+          className="kbc-review__file-path"
+          title={f.old_path ? `${f.old_path} → ${f.path}` : f.path}
+        >
           {highlightSegments(
             f.old_path ? `${f.old_path} → ${f.path}` : f.path,
             ranges,
