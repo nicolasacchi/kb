@@ -132,7 +132,7 @@
   margin-bottom: 10px;
 }
 .kbc-searchpage__title {
-  font-size: 18px;
+  font-size: var(--fs-title);
   margin: 0;
   flex: 0 0 auto;
 }
@@ -144,13 +144,17 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   padding: 8px 10px;
-  font-size: 14px;
+  font-size: var(--fs-md);
 }
 .kbc-searchpage__scope,
 .kbc-searchpage__status {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
   white-space: nowrap;
+}
+/* V80-R1 — "index generation N" moved under the header as a `MetaLine`. */
+.kbc-searchpage__meta {
+  margin: 0 0 10px;
 }
 .kbc-searchpage__body {
   margin-top: 10px;
@@ -213,6 +217,7 @@
 .kbc-search__header-count {
   font-family: var(--font-mono);
   color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
 }
 .kbc-search__header.is-active .kbc-search__header-count {
   color: var(--accent-soft);
@@ -257,16 +262,20 @@
   background: var(--accent-bg);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+/* V80-R1 — was `13px` (title) / `11px` (path); the results-page brief's
+ * "title `--fs-body`, path `--fs-sm` mono" applies here since both classes
+ * are shared by the Omnibox overlay too (this file's own header doc) —
+ * one row shape, one readability fix. */
 .kbc-search__title {
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--fs-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .kbc-search__meta {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -342,10 +351,21 @@
   align-items: start;
   margin-top: 10px;
 }
+/* V80-R1 — the preview pane is collapsible (`previewOn`, persisted via
+ * `lib/prefs.ts`'s `searchPreviewOpen`): when it is off, `SearchPreview`
+ * simply isn't rendered, so the grid must drop its third TRACK too —
+ * otherwise the explicit `minmax(0, 1fr)` column stays reserved and empty
+ * (the exact "preview pane takes 40% of the width while empty" complaint
+ * this unit exists to fix, just relocated from "empty content" to "empty
+ * track"). */
+.kbc-searchpage__cols--no-preview {
+  grid-template-columns: 220px minmax(0, 1fr);
+}
 /* One column below the Desk's own mobile breakpoint: the rail and the
    preview stack under the results rather than squeezing them. */
 @media (max-width: 1100px) {
-  .kbc-searchpage__cols {
+  .kbc-searchpage__cols,
+  .kbc-searchpage__cols--no-preview {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -362,20 +382,82 @@
 }
 .kbc-searchpage__bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 16px;
   justify-content: space-between;
 }
-.kbc-searchpage__controls {
+/* V80-R1 — the prefix chips as ONE labelled group: a visible caption
+ * beside the SAME `role="group"` `PrefixChips` already wraps itself in
+ * (`components/search/PrefixChips.tsx`), matching the toolbar's own
+ * visible group labels below. */
+.kbc-searchpage__chipgroup {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kbc-searchpage__grouplabel {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+/* V80-R1 — the 7 action pills as 3 labelled groups (Results · Query ·
+ * Set), replacing the old flat `.kbc-searchpage__controls` row. */
+.kbc-searchpage__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.kbc-searchpage__toolbar-group {
+  display: flex;
+  align-items: center;
   gap: 6px;
+}
+.kbc-searchpage__toolbar-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  margin-right: 2px;
+}
+/* The collapsed <1100px overflow menu: a native `<details>` disclosure —
+ * keyboard-operable with no extra outside-click JS — whose panel stacks
+ * the SAME three groups `renderToolbarGroups()` also renders inline on a
+ * wide viewport (`routes/Search.tsx`, one source of buttons, never two). */
+.kbc-searchpage__toolbar-menu {
+  position: relative;
+}
+.kbc-searchpage__toolbar-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.kbc-searchpage__toolbar-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.kbc-searchpage__toolbar-menu-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  min-width: 220px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+}
+.kbc-searchpage__toolbar-menu-panel .kbc-searchpage__toolbar-group {
   flex-wrap: wrap;
 }
 .kbc-searchpage__ran,
 .kbc-searchpage__diag,
-.kbc-searchpage__refined,
-.kbc-searchpage__stale {
+.kbc-searchpage__refined {
   margin: 4px 0 0;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -420,12 +502,17 @@
   overflow-y: auto;
   padding-right: 6px;
 }
+/* V80-R1 — "facets rail ≥13px": every raw `10px`/`11px` in this rail
+ * becomes `var(--fs-sm)` (13px at the default `comfortable` density).
+ * `compact` steps `--fs-sm` down to 12px by design (V80-R0's own floor:
+ * captions never drop below 12px) — that is the app-wide density contract
+ * the operator opts into, not a regression of this rail specifically. */
 .kbc-facets__basis,
 .kbc-facets__empty,
 .kbc-facets__omitted,
 .kbc-facets__refused {
   margin: 0 0 8px;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
   color: var(--ink-dim);
 }
@@ -438,7 +525,7 @@
 }
 .kbc-facets__label {
   margin: 0 0 4px;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-mute);
@@ -454,7 +541,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 3px 6px;
   cursor: pointer;
   text-align: left;
@@ -476,9 +563,10 @@
 .kbc-facets__count {
   flex: 0 0 auto;
   color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
 }
 .kbc-facets__count--clause {
-  font-size: 10px;
+  font-size: var(--fs-sm);
   opacity: 0.8;
 }
 

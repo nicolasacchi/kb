@@ -117,6 +117,15 @@ export interface Prefs {
   commentGutterMode?: CommentGutterMode;
   /// V76-R3a — coverage band on the blame gutter (default off).
   coverageBand?: boolean;
+  /// V80-R1 — the `/search` page's collapsible preview pane. `undefined`
+  /// (no stored choice yet) lets the page pick a WIDTH-based default
+  /// (`loadSearchPreviewOpen`'s own viewport-width param: open ≥1280px,
+  /// closed narrower) rather than a fixed boolean — the first explicit
+  /// toggle (`Alt-p` / the toolbar's "preview" button) pins it for every
+  /// width thereafter, same "an unset pref degrades to a sane default,
+  /// never a silent choice" posture as every other reading-mode toggle
+  /// above.
+  searchPreviewOpen?: boolean;
 }
 
 const PREFS_KEY = "kbc:prefs";
@@ -489,6 +498,25 @@ export function saveCoverageBand(on: boolean): void {
   const cur = loadPrefs();
   if (cur.coverageBand === on) return;
   savePrefs({ ...cur, coverageBand: on });
+}
+
+/// V80-R1 — the search results page's preview pane. No stored choice yet ⇒
+/// derive the default from the CALLER's own viewport width (an injected
+/// param, not a `window` read here, so this stays testable without a DOM) —
+/// open at ≥1280px, closed narrower. Once the operator has toggled it
+/// explicitly, that choice wins at every width.
+export const SEARCH_PREVIEW_DEFAULT_MIN_WIDTH = 1280;
+
+export function loadSearchPreviewOpen(viewportWidth: number): boolean {
+  const v = loadPrefs().searchPreviewOpen;
+  if (typeof v === "boolean") return v;
+  return viewportWidth >= SEARCH_PREVIEW_DEFAULT_MIN_WIDTH;
+}
+
+export function saveSearchPreviewOpen(open: boolean): void {
+  const cur = loadPrefs();
+  if (cur.searchPreviewOpen === open) return;
+  savePrefs({ ...cur, searchPreviewOpen: open });
 }
 
 /// SH.C3 — clamp to the reader font-size stepper's bounds; a non-finite
