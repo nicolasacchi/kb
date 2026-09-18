@@ -78,18 +78,19 @@ export default function Branches() {
       ) : (
         <>
           <BranchViews repo={repo} />
-          <details className="kbc-branches__legacy" data-kbc-branches-legacy open={rows.length <= 5}>
-            <summary className="kbc-branches__legacy-summary">
-              Suggested ranking and the full table (the v4 landing)
-            </summary>
-            <RankedBranchList repo={repo} defaultBranch={defaultBranch} workspaceCountsByRef={workspaceCountsByRef} />
-            <BrowseAllBranches
-              repo={repo}
-              defaultBranch={defaultBranch}
-              rows={rows}
-              workspaceCountsByRef={workspaceCountsByRef}
-            />
-          </details>
+          {/* V80-R5 — the ranked suggestion list is a primary reading
+              surface (reason chips, ahead/behind, start-review CTA), not a
+              footnote — it no longer hides inside the same fold as the raw
+              table. Only the RAW table (BrowseAllBranches' own `<details
+              data-kbc-browse>`, unchanged markup/attrs so
+              `branches-landing.spec.ts` keeps matching) stays demoted. */}
+          <RankedBranchList repo={repo} defaultBranch={defaultBranch} workspaceCountsByRef={workspaceCountsByRef} />
+          <BrowseAllBranches
+            repo={repo}
+            defaultBranch={defaultBranch}
+            rows={rows}
+            workspaceCountsByRef={workspaceCountsByRef}
+          />
         </>
       )}
     </div>
