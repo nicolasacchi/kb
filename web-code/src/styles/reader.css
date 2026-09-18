@@ -319,68 +319,23 @@
   flex: 0 0 auto;
 }
 
-/* --- Home (F1 minimal landing → F4 fleet dashboard; the container/head
- * rules stay here since they predate F4, the card grid itself lives in its
- * own `styles/home.css`, mirroring `history.css`'s "a new complex feature
- * gets its own stylesheet" precedent). ------------------------------------ */
+/* --- Home (F1 minimal landing → F4 fleet dashboard; the container rule
+ * stays here since it predates F4, the card grid itself lives in its own
+ * `styles/home.css`, mirroring `history.css`'s "a new complex feature gets
+ * its own stylesheet" precedent).
+ *
+ * V80-R1 — the header ITSELF (`.kbc-home__head`/`__head-row`/`__title`/
+ * `__summary`/`__capability`) is GONE: `routes/Home.tsx` now builds it from
+ * `PageHeader` + `MetaLine` (`components/page.css`), and nothing else ever
+ * read these five selectors (grepped before deleting). `__hint`/
+ * `__inbox-link` moved to `styles/home.css` instead of being deleted — they
+ * are the two bits `PageHeader` has no slot for (a loading/error line,
+ * and the Inbox link handed to its `actions` prop). --------------------- */
 
 .kbc-home {
   max-width: 1160px;
   margin: 0 auto;
   padding: 32px 16px 64px;
-}
-.kbc-home__head {
-  margin-bottom: 20px;
-}
-.kbc-home__title {
-  font-size: 28px;
-  margin: 0 0 4px;
-}
-/* S2-A — unified inbox (design-s2.md §S2-A): Home's other documented entry
- * point besides the TopBar Explore menu (Home has no active repo, so the
- * repo-scoped review chips never render here). */
-.kbc-home__head-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.kbc-home__inbox-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-mute);
-  font-size: 13px;
-  text-decoration: none;
-  flex: 0 0 auto;
-}
-.kbc-home__inbox-link:hover {
-  color: var(--accent-soft);
-}
-.kbc-home__hint {
-  color: var(--ink-mute);
-  margin: 0 0 4px;
-}
-.kbc-home__hint kbd {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 1px 5px;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  color: var(--ink-dim);
-}
-.kbc-home__summary {
-  color: var(--ink-dim);
-  font-size: 12px;
-  margin: 0;
-}
-/* S2-B (design-s2.md §S2-B) — the `remote_mutations` capability chip;
- * `routes/Home.tsx` only renders this element at all once the field is
- * present on `GET /api/identity`. */
-.kbc-home__capability {
-  color: var(--ink-dim);
-  font-size: 11px;
-  margin: 4px 0 0;
 }
 
 /* --- Shared EmptyState (F6) — mirrors kb's own `web/src/components/

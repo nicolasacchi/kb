@@ -9,6 +9,7 @@ import { effectiveIntelProviders } from "../../lib/diagnostics";
 import { shortSha } from "../../lib/format";
 import { fullSearchUrl } from "../../lib/searchLanes";
 import { splitPath } from "../../lib/workingSet";
+import MetaLine from "../MetaLine";
 import AttributionCard from "../history/AttributionCard";
 import { BranchAhead, BranchBehind } from "../history/BranchAheadBehind";
 
@@ -216,19 +217,20 @@ export default function RepoCard({ repo }: RepoCardProps) {
         )}
       </section>
 
-      <footer className="kbc-home-card__footer">
-        <Link to={branchesUrl(repo.name)}>Branches</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={`${codeBasePath(repo.name, "")}/~todos`}>TODOs</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={hotspotsUrl(repo.name)}>Hotspots</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={reviewsUrl(repo.name)}>Reviews</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={fullSearchUrl("", repo.name)}>Search in {repo.name}</Link>
-      </footer>
+      {/* V80-R1 — the six footer links as a `MetaLine` (its own
+          "·"-separated caption row), rather than hand-rolled `<span
+          aria-hidden>·</span>` separators between each `<Link>`. */}
+      <MetaLine
+        className="kbc-home-card__footer"
+        items={[
+          <Link to={branchesUrl(repo.name)}>Branches</Link>,
+          <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>,
+          <Link to={`${codeBasePath(repo.name, "")}/~todos`}>TODOs</Link>,
+          <Link to={hotspotsUrl(repo.name)}>Hotspots</Link>,
+          <Link to={reviewsUrl(repo.name)}>Reviews</Link>,
+          <Link to={fullSearchUrl("", repo.name)}>Search in {repo.name}</Link>,
+        ]}
+      />
     </div>
   );
 }
