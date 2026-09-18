@@ -39,6 +39,7 @@ import {
 } from "../lib/diffFindings";
 import { buildTourStops, clampTourStep } from "../lib/reviewTour";
 import { mergeCurrentSearch, nextDiffCtx, reviewDiffHref, reviewUrl } from "../lib/codeUrl";
+import { setCurrentReview } from "../lib/currentReview";
 // V73-K2a — diff v2's four pure halves: hunk identity, noise labels, the
 // context dial, the drafts tray. Each is unit-pinned in its own file; this
 // route only wires them together.
@@ -425,6 +426,16 @@ export default function ReviewDiff() {
   const review = reviewQ.data;
   const title = review?.title?.trim() || review?.head_ref || `Review #${id}`;
   const activePsNum = filesQ.data?.ps_number;
+
+  // V80-M3 — entering the review diff auto-sets the browser-only "current
+  // review" marker for this repo (no click needed), same as
+  // `ReviewDetail.tsx`'s Room mount effect — `lib/currentReview.ts`; the
+  // daemon has no notion of it.
+  useEffect(() => {
+    if (!idOk || !review) return;
+    setCurrentReview(repo, { id: String(id), title });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, id, idOk, review, title]);
 
   const [helpOpen, setHelpOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
