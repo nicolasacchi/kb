@@ -3,7 +3,7 @@ import type { PseudoFile, ReviewFileRow } from "../../api/types";
 import { Icon } from "../icons";
 import { mapCensusText, type MapChapter, type MapRowState } from "../../lib/reviewMapColumn";
 import { useSyntax } from "../../hooks/useSyntax";
-import { useReviewAllFiles } from "../../hooks/useReviewAllFiles";
+import { ALL_FILES_CAP, useReviewAllFiles } from "../../hooks/useReviewAllFiles";
 import { buildAllFilesTree, buildStatusSections } from "../../lib/reviewFileTree";
 import ReviewFileTree, { type ReviewFileTreeHandle } from "./ReviewFileTree";
 
@@ -39,13 +39,16 @@ export interface ReviewMapColumnProps {
   pseudoFiles: PseudoFile[];
   onPickPseudo: (name: string) => void;
   treeRef?: MutableRefObject<ReviewFileTreeHandle | null>;
-  /// V80-M1 — "Changed (N) | All files". `repo`/`tipSha` are only used to
-  /// fetch the whole tree WHILE `filesMode === "all"` (`useReviewAllFiles`'s
-  /// own `enabled` gate — the default view fires no extra request).
+  /// V80-M1 — "Changed (N) | All files" — the TOGGLE itself lives in
+  /// `ReviewDiffToolbar`'s View cluster now (V80-R4: reachable with the
+  /// map closed, since it also widens the jump palette and the "outside
+  /// the diff" group). This component only reads `filesMode` to pick
+  /// which tree it renders, and `repo`/`tipSha` to fetch the whole tree
+  /// WHILE `filesMode === "all"` (`useReviewAllFiles`'s own `enabled`
+  /// gate — the default view fires no extra request).
   repo: string;
   tipSha?: string;
   filesMode: "changed" | "all";
-  onSetFilesMode: (mode: "changed" | "all") => void;
   /// V80-M1 — threads/findings anchored outside the diff, discoverable
   /// even in `Changed` mode. Omitted/empty renders nothing extra.
   outsideDiffFiles?: readonly OutsideDiffFile[];
@@ -70,7 +73,6 @@ export default function ReviewMapColumn({
   repo,
   tipSha,
   filesMode,
-  onSetFilesMode,
   outsideDiffFiles,
 }: ReviewMapColumnProps) {
   const syntaxQ = useSyntax();
@@ -106,32 +108,6 @@ export default function ReviewMapColumn({
         <span className="kbc-rmap__census" data-kbc-rdiff-map-census>
           {mapCensusText(fileCount, viewedCount, sections.length, "section")}
         </span>
-        {/* V80-M1 — the tree-mode toggle (`Space z A` twin: `z A`). A
-            two-button group rather than a single flip button, so the
-            currently-active mode reads directly off `aria-pressed`
-            without a hover/title round trip. */}
-        <span className="kbc-rmap__files-mode" role="group" aria-label="File list">
-          <button
-            type="button"
-            className={"kbc-rmap__files-mode-btn" + (filesMode === "changed" ? " is-active" : "")}
-            aria-pressed={filesMode === "changed"}
-            onClick={() => onSetFilesMode("changed")}
-            title="List only files_changed"
-            data-kbc-rdiff-files-mode="changed"
-          >
-            Changed ({fileCount})
-          </button>
-          <button
-            type="button"
-            className={"kbc-rmap__files-mode-btn" + (filesMode === "all" ? " is-active" : "")}
-            aria-pressed={filesMode === "all"}
-            onClick={() => onSetFilesMode("all")}
-            title="List the tip sha's whole tree — unchanged files render plain"
-            data-kbc-rdiff-files-mode="all"
-          >
-            All files
-          </button>
-        </span>
         <button
           type="button"
           className="kbc-rmap__close"
@@ -143,6 +119,16 @@ export default function ReviewMapColumn({
           <Icon.X />
         </button>
       </header>
+      {/* V80-R4 (carry-over from M1) — `walkAllFiles` caps at
+          `ALL_FILES_CAP` leaves and says so on the wire (`capped`); this
+          was fetched but never SHOWN, which would have made a very large
+          repo's "All files" list read as complete when it silently
+          wasn't. An honest caption, never a silent truncation. */}
+      {filesMode === "all" && allFilesQ.data?.capped && (
+        <p className="kbc-rmap__note" data-kbc-rdiff-map-capped>
+          first {ALL_FILES_CAP.toLocaleString()} files shown — narrow with the jump palette
+        </p>
+      )}
       {!!outsideDiffFiles && outsideDiffFiles.length > 0 && (
         <section
           className="kbc-rmap__chapter kbc-rmap__chapter--outside"
