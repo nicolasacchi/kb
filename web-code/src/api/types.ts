@@ -2130,6 +2130,11 @@ export interface ReviewComment {
 
 export interface ReviewCommentGroup {
   path: string;
+  /** V80-M0 — per-read caption: `path` is one `files_changed(base_sha,
+   * tip_sha)` touched at the target patchset. `false` for the path-less
+   * "general" group (`path === ""`). Never a filter — every group's
+   * `comments` is still listed either way. */
+  in_diff: boolean;
   comments: ReviewComment[];
 }
 
