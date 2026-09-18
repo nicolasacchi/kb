@@ -90,7 +90,7 @@ export interface DiffThreadProps {
 export default function DiffThread({ thread, comments, orphaned = false, className }: DiffThreadProps) {
   const { repo = "" } = useParams<{ repo: string }>();
   const loopback = useApplyLoopbackLatched();
-  const admitted = useReviewMutationsAdmitted();
+  const { admitted } = useReviewMutationsAdmitted();
   const dispositionLoopback = useDispositionLoopbackLatched();
   const dispositionRefused = !admitted || dispositionLoopback;
   const finding = comments.findingsById.get(thread.id) ?? null;

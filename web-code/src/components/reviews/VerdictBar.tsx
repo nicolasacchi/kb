@@ -70,13 +70,15 @@ export interface VerdictBarProps {
 /// `review_mutations_gate`'s five graduated families (loopback admits
 /// unconditionally, else `[review] remote_mutations`) — V80-F2 reads the
 /// loopback pre-probe (`useReviewMutationsAdmitted`) to disable the
-/// segment BEFORE a submit rather than only after one 404s. The post-submit
-/// latch (`refused`) stays as a fallback for the rare case the probe and
-/// the gate's live verdict disagree (a config reload mid-session) — belt
-/// and suspenders, not the primary signal.
+/// segment BEFORE a submit rather than only after one 404s. `admitted` is
+/// `true` unless the daemon EXPLICITLY said `false` (V80-F2b: an older
+/// daemon that omits the field must never read as refused — that pre-empts
+/// a write the daemon would actually have admitted). The post-submit
+/// latch (`refused`) stays as the fallback that discovers an unknown-but-
+/// actually-refused write, exactly as it did before the probe existed.
 export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) {
   const put = usePutReviewVerdict(repo);
-  const admitted = useReviewMutationsAdmitted();
+  const { admitted } = useReviewMutationsAdmitted();
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(review.verdict?.note ?? "");
   const [refused, setRefused] = useState(false);
