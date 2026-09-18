@@ -60,6 +60,20 @@ the diff` / `outside the diff` / `general`) can tell a comment that lands
 on a changed file from one that does not. It is a per-read caption, never
 a filter: every comment is still listed either way.
 
+**The SPA reader, over the same routes (V80-M2).** The plain file
+reader's own composer (`AnnotationsPanel`, opened by `a`) and the Commit/
+Compare pages' diff-line composer both gained a "Review" selector: pick
+one of the repo's open reviews (preselecting whichever one the browser's
+"current review" marker — `V80-M3` — names) and the comment posts
+review-scoped, same as a Room composer's own comment would. Every
+top-level annotation card in the Notes panel shows its binding as a chip
+linking to the Room, with bind/rebind/unbind actions riding this
+section's `PUT`/`DELETE /api/annotations/{id}/review`. The reader rail's
+Review tab lists the current review's threads for the open file (same
+`GET /api/reviews/{id}/comments` read, filtered to that path) with the
+same `in_diff` caption this section documents, and a "Comment here" door
+into the same composer.
+
 **`kb-code review distill <ID> [--json]`** (CT-E7, `GET
 /api/reviews/{id}/distill`, `review-distill/1`) composes one completed
 review's full local record — meta, every patchset, files touched at the

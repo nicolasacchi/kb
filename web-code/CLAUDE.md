@@ -510,13 +510,43 @@ param).
 (`ReviewDiff.tsx`) auto-sets the marker (no click); the Room's own "Work
 this review" button re-affirms it explicitly. `Reader.tsx` flips
 `InspectorRail`'s `hasReviewContext` to `!!currentReview`, making the rail's
-Review tab selectable — the panel itself is still the M2-deferred minimal
-stub (title + link to the Room + link to this file in the review diff).
-Search results (`components/search/SearchSection.tsx`'s `reviewFilePaths`/
-`reviewFileRepo` props, wired from ONE `useReviewFiles` fetch in
-`routes/Search.tsx`/`components/Omnibox.tsx`, never a per-row fetch) mark a
-hit whose path is in the current review's changed files with a LINE-style
-`in review diff` chip — never hue-only.
+Review tab selectable. Search results (`components/search/
+SearchSection.tsx`'s `reviewFilePaths`/`reviewFileRepo` props, wired from
+ONE `useReviewFiles` fetch in `routes/Search.tsx`/`components/Omnibox.tsx`,
+never a per-row fetch) mark a hit whose path is in the current review's
+changed files with a LINE-style `in review diff` chip — never hue-only.
+
+**Binding a comment to a review, from the plain reader (`V80-M2`, riding
+M0's `PUT`/`DELETE /api/annotations/{id}/review`).** The composer
+`AnnotationsPanel`/`DiffLineComposer` share (`components/annotations/
+ReviewBindSelector.tsx`) lists the repo's OPEN reviews and preselects the
+current review (a one-time seed on mount, not a standing sync — see that
+component's own doc for why re-clobbering a deliberate mid-session choice
+every time the ambient marker changes elsewhere would be the wrong
+trade-off); submitting with a review chosen passes `review_id` (`ps`
+omitted → the review's latest, `side: "new"` — this composer only ever
+anchors to CURRENT working-tree/blob content, never a historical diff
+side). The selector's own hint line reads `useReviewFileBindHint`
+(`hooks/useReviewComments.ts`): "will appear in the Room of &lt;title&gt;"
+by default, or "not in this review's diff — anchors to ps N's tip" once
+that hook POSITIVELY knows the file isn't one the target patchset's diff
+touches (comments-wire `in_diff` when a thread already exists there, else
+the review's files-at-latest-ps list — never a guess while still
+loading). Every Notes-panel card for a top-level (non-reply — a reply has
+no scope of its own) annotation carries its binding as a chip ("in review
+&lt;title&gt;", linking to the Room) plus bind/rebind (opens the same
+selector inline)/unbind actions (`useBindAnnotationReview`/
+`useUnbindAnnotationReview`, `hooks/useAnnotations.ts`) — belt-and-braces
+invalidating `["reviews", repo, "comments"]` themselves alongside the
+`annotation.changed` SSE bridge's own prefix invalidation on either event
+a bind/rebind emits. The rail's Review tab (`components/reviews/
+ReviewFileThreadsPanel.tsx`) replaces M3's "arrives with M2" stub: the
+current review's threads for the FOCUSED file (`useReviewComments`, the
+SAME query the Room's own cards share), a header caption from the SAME
+`in_diff` hint the composer's selector reads, and a "Comment here" door
+that seeds the composer at the focused pane's own caret line and opens
+the Notes tab (the composer then preselects this same review with no
+further plumbing).
 
 ## Search grammar and match rendering (kbcq/1, `V71-D1`)
 
