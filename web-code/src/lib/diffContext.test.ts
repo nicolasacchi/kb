@@ -5,11 +5,14 @@ import {
   contextCaption,
   ctxLinesFor,
   dialNeedsFile,
+  emptyDiffView,
   EXPAND_STEP,
   expandForDial,
   expandHunk,
   expandParsed,
   fileLines,
+  wholeFileHunk,
+  type EmptyDiffInfo,
 } from "./diffContext";
 
 /// A NON-size-neutral hunk: it removes one line and adds two, so the
@@ -170,5 +173,83 @@ describe("expandParsed", () => {
     expect(out).toHaveLength(1);
     expect(out[0].addedBefore).toBe(1);
     expect(out[0].addedAfter).toBe(0);
+  });
+});
+
+// --- V80-M1 — the whole-file synthesis ------------------------------------
+
+describe("wholeFileHunk", () => {
+  it("covers the whole file as pure context, oldLine === newLine throughout", () => {
+    const hunk = wholeFileHunk(["a", "b", "c"]);
+    expect(hunk.oldStart).toBe(1);
+    expect(hunk.newStart).toBe(1);
+    expect(hunk.oldLines).toBe(3);
+    expect(hunk.newLines).toBe(3);
+    expect(hunk.lines).toEqual([
+      { kind: "context", text: "a", oldLine: 1, newLine: 1 },
+      { kind: "context", text: "b", oldLine: 2, newLine: 2 },
+      { kind: "context", text: "c", oldLine: 3, newLine: 3 },
+    ]);
+  });
+
+  it("handles an empty file honestly (zero lines, not a phantom one)", () => {
+    const hunk = wholeFileHunk([]);
+    expect(hunk.lines).toEqual([]);
+    expect(hunk.oldLines).toBe(0);
+    expect(hunk.newLines).toBe(0);
+  });
+});
+
+describe("emptyDiffView", () => {
+  const base: EmptyDiffInfo = {
+    inDiff: false,
+    deleted: false,
+    fetch: "ready",
+    psNumber: 3,
+    tipShaShort: "abc1234",
+  };
+
+  it("a known-deleted file never attempts a body, regardless of fetch state", () => {
+    const out = emptyDiffView({ ...base, inDiff: true, deleted: true, fetch: "pending" });
+    expect(out).toEqual({ caption: "deleted in this patchset", renderBody: false });
+  });
+
+  it("loading names the wait, not a guess", () => {
+    expect(emptyDiffView({ ...base, fetch: "pending" }).renderBody).toBe(false);
+    expect(emptyDiffView({ ...base, fetch: "pending" }).caption).toContain("loading");
+  });
+
+  it("a missing file names the resolved ps number", () => {
+    const out = emptyDiffView({ ...base, fetch: "missing" });
+    expect(out).toEqual({ caption: "not present at ps 3 tip", renderBody: false });
+  });
+
+  it("a missing file with no known ps degrades honestly", () => {
+    const out = emptyDiffView({ ...base, fetch: "missing", psNumber: null });
+    expect(out.caption).toBe("not present at this patchset's tip");
+    expect(out.renderBody).toBe(false);
+  });
+
+  it("binary never renders a body", () => {
+    expect(emptyDiffView({ ...base, fetch: "binary" })).toEqual({
+      caption: "binary",
+      renderBody: false,
+    });
+  });
+
+  it("a known files_changed row with no textual hunks keeps the old text, WITH a body", () => {
+    const out = emptyDiffView({ ...base, inDiff: true, fetch: "ready" });
+    expect(out).toEqual({ caption: "No textual difference", renderBody: true });
+  });
+
+  it("a path outside the diff gets the whole-file caption, verbatim shape, WITH a body", () => {
+    const out = emptyDiffView({ ...base, inDiff: false, fetch: "ready" });
+    expect(out.caption).toBe("Not changed in this patchset — showing the whole file at ps 3 (abc1234)");
+    expect(out.renderBody).toBe(true);
+  });
+
+  it("degrades the caption honestly when ps/sha are unknown — never a blank parenthesis", () => {
+    const out = emptyDiffView({ ...base, inDiff: false, fetch: "ready", psNumber: null, tipShaShort: "" });
+    expect(out.caption).toBe("Not changed in this patchset — showing the whole file");
   });
 });
