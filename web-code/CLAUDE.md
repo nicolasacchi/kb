@@ -1845,13 +1845,23 @@ only if a future wire does. A hero count chip filters the rail — the
 severity filter is LIFTED to `ReviewDetail.tsx` (controlled props on
 `ReviewThreadsCard`), so the hero and the rail share one state.
 
-**Prose scale.** The Room's body is ≥15px via local size custom properties
-(`--room-fs-*`, declared once in `review-room.css`); finding titles are
-real `h3`s; section dividers are `RoomChips.tsx`'s `SectionDecor` (icon +
-token per `RoomSectionKind`) with a `data-kbc-room-section` anchor the
-`review.jump.*` rows scroll to. The density toggle (compact/comfortable)
-lives in localStorage with `?density=` as the share-link mirror — K2a's
-`lib/branchViews.ts` posture, `parseRoomDensity` total.
+**Prose scale.** *V80-R0:* the Room's body text rides the GLOBAL type ramp
+(`--fs-body`/`--fs-sm`/`--fs-title`/`--fs-hero`, `tokens.css`) — the
+private `--room-fs-*` set (body 15 / small 13 / title 17 / hero 26,
+declared once in `review-room.css`) is retired, and with it the Room's own
+density store: `?density=`/the toggle now read and write the app-wide
+`density` preference (`lib/prefs.ts`'s `loadDensity`/`setThemePrefs`),
+which also drives `[data-density="compact"]` on `<html>` — one preference,
+not two. `lib/reviewRoom.ts`'s `RoomDensity`/`parseRoomDensity` (still
+total)/`nextRoomDensity` are unchanged; `ROOM_DENSITY_STORAGE_KEY` now
+names a LEGACY key only, migrated into the global pref once
+(read-then-remove) on a Room mount that still finds it. `?density=` is
+still the share-link mirror, but on load it now WRITES THROUGH to the
+global pref (so a shared compact link makes the whole app compact, not
+just the Room's render) rather than only overriding one page's render.
+Finding titles are real `h3`s; section dividers are `RoomChips.tsx`'s
+`SectionDecor` (icon + token per `RoomSectionKind`) with a
+`data-kbc-room-section` anchor the `review.jump.*` rows scroll to.
 
 **Keys.** Seven new `scope: "review"` / `dispatch: "surface"` rows, no
 `vim_kind` (this route mounts no CodeView): `Space i` rail toggle (`Space r`
