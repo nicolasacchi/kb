@@ -25,7 +25,7 @@
 
 /* --- passport --------------------------------------------------------- */
 .kbc-rails__passport {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   padding: 12px 14px;
@@ -61,7 +61,7 @@
   display: inline-flex;
   gap: 6px;
   align-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: 999px;
   padding: 2px 10px;
   font-size: var(--fs-sm);
@@ -77,7 +77,7 @@
   font-size: var(--fs-sm);
   padding: 6px 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   color: var(--ink-mute);
 }
 .kbc-rails__honesty.is-partial {
@@ -108,7 +108,7 @@
   width: 100%;
   background: none;
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--rule);
   padding: 6px 0;
   color: var(--ink);
   cursor: pointer;
@@ -138,7 +138,7 @@
   flex: 1 1 240px;
   min-width: 180px;
   padding: 5px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-input, var(--bg-card));
   color: var(--ink);
@@ -155,7 +155,7 @@
   margin-top: 10px;
 }
 .kbc-rails__paging button {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: var(--bg-card);
   color: var(--ink);
   border-radius: var(--radius-sm);
@@ -175,11 +175,11 @@
   gap: 10px;
 }
 .kbc-railscard {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   /* The trust channel: dashed = likely, dotted = candidate. */
   border-left-width: 3px;
   border-left-style: var(--kbc-trust-style, dotted);
-  border-left-color: var(--kbc-trust-color, var(--line));
+  border-left-color: var(--kbc-trust-color, var(--rule));
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   padding: 10px 12px;
@@ -202,7 +202,7 @@
 }
 .kbc-railscard__addr {
   margin: 2px 0 6px;
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--ink-mute);
   overflow-wrap: anywhere;
@@ -251,7 +251,7 @@
   gap: 4px;
 }
 .kbc-railscard__chip {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: 999px;
   padding: 1px 8px;
   font-size: var(--fs-sm);
@@ -271,7 +271,7 @@
 
 /* --- orphans ---------------------------------------------------------- */
 .kbc-rails__lane {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   margin-bottom: 10px;
@@ -319,7 +319,7 @@
   min-width: 0;
 }
 .kbc-rails__lane-path {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--ink-mute);
   overflow-wrap: anywhere;
@@ -327,7 +327,7 @@
 
 /* --- the Schema card (inspector rail) --------------------------------- */
 .kbc-schema {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin-bottom: 10px;
@@ -344,13 +344,13 @@
   font-size: var(--fs-sm);
 }
 .kbc-schema__table {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kbc-schema__fold {
   margin-left: auto;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: none;
   color: var(--ink-mute);
   border-radius: var(--radius-sm);
@@ -377,7 +377,7 @@
   border: 0;
   padding: 0;
   color: var(--ink);
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   cursor: pointer;
 }
@@ -386,7 +386,7 @@
 }
 .kbc-schema__type {
   color: var(--ink-mute);
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   padding-right: 6px;
 }
 .kbc-schema__mods {
@@ -412,11 +412,11 @@
   padding: 2px 0;
 }
 .kbc-schemafold__btn {
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--rule);
   border-radius: var(--radius-sm);
   background: none;
   color: var(--ink-mute);
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   padding: 1px 8px;
   cursor: pointer;
@@ -427,7 +427,7 @@
 
 /* --- the Rails atom table (under the hover card) ---------------------- */
 .kbc-railsatoms {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--rule);
   padding: 8px 10px;
   font-size: var(--fs-sm);
 }
@@ -454,12 +454,12 @@
   display: flex;
   gap: 6px;
   align-items: baseline;
-  border-left: 2px solid var(--kbc-trust-color, var(--line));
+  border-left: 2px solid var(--kbc-trust-color, var(--rule));
   border-left-style: var(--kbc-trust-style, dotted);
   padding-left: 6px;
 }
 .kbc-railsatoms__target {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink);
   overflow-wrap: anywhere;
@@ -497,7 +497,7 @@
   font-size: var(--fs-xs);
 }
 .kbc-railsatoms__action-cli {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink-mute);
 }

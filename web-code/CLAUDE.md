@@ -417,6 +417,25 @@ that way — a palette regression should fail on its own named step with the
 offending pairs listed, not surface as an unexplained vitest assertion three
 files away.
 
+**Every `var(--name)` must resolve (V80-C1).** Three independent v8.0 review
+passes (R0 on `tours.css`, R4 on `--fg`/`--fg-dim` — ~65 references across
+five files, R5 on `branches.css` + a named list of six more) each found the
+same bug: a `var(--name)` referencing a `--name` nothing declares. CSS hides
+this — an invalid `var()` doesn't error, it makes the declaration invalid at
+computed-value time, which silently falls back to the inherited value
+(`color`, `font-family`, …) or the property's initial value (`background`,
+`border`, `box-shadow`, …: transparent / none / 0) — a plausible-looking
+render that is simply wrong, and worse under a theme nobody's screen was on.
+`npm run lint:css-vars` (`scripts/css-undefined-vars.mjs`, wired into
+`ci-code-spa`) statically scans every `var(--…)` under `src/**/*.css` (and
+`.ts`/`.tsx` string literals) and fails on any reference that has no
+fallback, or whose fallback chain (however many `var(--x, var(--y, …))`
+levels deep) never bottoms out on a name some `--name:` declaration actually
+defines. A literal fallback (`var(--x, 8px)`) is accepted as resolved — CSS
+guarantees a real value there in every theme — so it is not itself a
+mandate to add the token; a `var(--x, var(--y))` where `--y` is ALSO
+undefined is not.
+
 ## The Desk (`V70-A4`, design §P1)
 
 `desk/deskState.ts` is the reducer that owns the shell's geometry — five
