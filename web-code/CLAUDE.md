@@ -466,6 +466,58 @@ comparison to cover content drift without re-reading D26's own stated
 grammar first — "dirty" here answers one question only: has the FILE SET
 changed.
 
+## The current review (`V80-M3`)
+
+"Which review am I working" is a per-repo BROWSER marker
+(`lib/currentReview.ts`), not a server fact — the daemon has no route, no
+table and no wire type for it, the same CLI-parity exemption
+`lib/reviewDrafts.ts` already carries. It lives in `sessionStorage` under
+`kbc:current-review:<repo>` (never `localStorage` — a marker that outlived
+the tab would resurface weeks later pointing at a closed or deleted
+review), and a plain `useSyncExternalStore` pub-sub (the `lib/
+publishMarks.ts` idiom) is what lets the TopBar chip, the reader and the
+search results chip — three separate React subtrees with no shared owner —
+agree within one tab, since `sessionStorage` fires no `storage` event for a
+same-tab write.
+
+**The URL mirror is reader-only.** `?review=<id>` rides `lib/codeUrl.ts`'s
+`appendReviewParam`/`parseReviewIdParam` (the `pane2`/`sym`/`ent`/`trail`
+precedent: a scalar appended LAST to an already-built URL, never a second
+grammar) and `nav/location.ts`'s Location Contract (`Location.review` on
+`mode: "reader"` only — `ReviewLoc` reused with just `id` populated).
+`transition()` needed no new clause: a review-only change falls through to
+the existing generic `encode(...) !== encode(...)` catch-all in rule 5 and
+comes out a `replace`, same as a rail-tab or trail-only change already
+does — never a `push`, never a `none`.
+
+**Precedence, and why it can't loop.** A `?review=` present on load SETS
+the session marker (a shared link wins over stale session state — see
+`Reader.tsx`'s sync effect). Once the marker is set, landing on ANY reader
+URL for that repo with no `?review=` re-appends it via one `replace`
+("navigation inside the reader keeps appending it while the state is
+set") — the effect's dependency list includes every URL-affecting param
+this route reads, not just `review` itself, because most of `Reader.tsx`'s
+own internal `navigate(codeUrl({...}))` calls build a URL from scratch and
+drop `review` even when the path is unchanged; the check itself is
+idempotent (a landing that already matches session state is a no-op), so
+re-running it on every navigation converges in at most one extra
+`replace`. Clearing the TopBar chip's `×` clears the session marker AND
+strips `?review=` from the current URL in the same action (`lib/
+mergeCurrentSearch` — a no-op strip on any page that never carried the
+param).
+
+**Set/show.** Entering a Room (`ReviewDetail.tsx`) or the review diff
+(`ReviewDiff.tsx`) auto-sets the marker (no click); the Room's own "Work
+this review" button re-affirms it explicitly. `Reader.tsx` flips
+`InspectorRail`'s `hasReviewContext` to `!!currentReview`, making the rail's
+Review tab selectable — the panel itself is still the M2-deferred minimal
+stub (title + link to the Room + link to this file in the review diff).
+Search results (`components/search/SearchSection.tsx`'s `reviewFilePaths`/
+`reviewFileRepo` props, wired from ONE `useReviewFiles` fetch in
+`routes/Search.tsx`/`components/Omnibox.tsx`, never a per-row fetch) mark a
+hit whose path is in the current review's changed files with a LINE-style
+`in review diff` chip — never hue-only.
+
 ## Search grammar and match rendering (kbcq/1, `V71-D1`)
 
 `lib/kbcq.ts` is a MIRROR of the daemon's `search/grammar.rs`, not a
