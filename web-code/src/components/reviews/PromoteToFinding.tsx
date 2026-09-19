@@ -53,7 +53,13 @@ export default function PromoteToFinding({ repo, reviewId, thread }: PromoteToFi
   const [blocking, setBlocking] = useState(false);
   const [title, setTitle] = useState(() => defaultTitle(thread.body));
   const [busy, setBusy] = useState(false);
-  const admitted = useReviewMutationsAdmitted();
+  // V80-F2b — a consumer disables ONLY on an EXPLICIT `false`; an absent
+  // probe (older daemon, cold cache, in-flight fetch) must never pre-empt a
+  // write the daemon would actually admit. Destructured here, the ONE local
+  // read every downstream use (`disabled`/`hint`/the submit button's
+  // `title`) derives from — matches `VerdictBar`/`DispositionMenu`'s own
+  // post-F2b shape.
+  const { admitted } = useReviewMutationsAdmitted();
   const noLocation = generalNoLocation(thread);
   const promote = useCreateManualFindingMutation(repo, reviewId);
   const disabled = !admitted || noLocation;
