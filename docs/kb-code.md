@@ -278,7 +278,16 @@ a finding card (`origin: "manual"`, a `you` chip) in place, and the Report
 tab's derived totals gain an "authored by you: N" line. `kb-code review disposition ID
 SLUG {agree|dispute|waive|fix-later|clear} [-m NOTE]` (`PUT`/`DELETE
 /api/reviews/{id}/findings/{slug}/disposition`, LOOPBACK-ONLY) records the
-human's verdict on each finding. `GET /api/reviews/{id}/findings/recurrence`
+human's verdict on each finding. Every finding also carries `own_ps` (the
+patchset it was raised against, from its linked annotation's `ps_number`)
+and `touched_in` — V80-F3's `[{ps, hunks, overlap: "exact"|"adjacent"}]`,
+one entry per LATER patchset whose diff (own-ps tip -> that ps tip) touched
+the finding's cited lines, capped at 20 later patchsets
+(`touched_in_capped: true` when more existed). Derived per read, never
+stored, never a disposition — evidence the author acted near the location,
+never a claim that anything was "fixed"; `kb-code review findings list`
+prints it as `touched ps3 (exact)` after the location. `GET
+/api/reviews/{id}/findings/recurrence`
 (bearer, route-only — no dedicated CLI verb yet) surfaces which of a
 review's own findings recur across the repo's other reviews, off the same
 `recurrence_pairs` query `review analytics` uses.

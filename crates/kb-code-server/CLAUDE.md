@@ -1072,6 +1072,17 @@ invariant #2 records).
     caller cannot override on the adopt path; `title`/`rationale` default
     from the comment's own first line / whole body but a caller MAY still
     override either.
+    (g) **`touched_in` is derived per read, never persisted, never a
+    disposition** (V80-F3, `src/review_finding_touches.rs`). For a finding
+    at `path:lines` in the patchset it was raised against (its linked
+    annotation's `ps_number` — not a `review_findings` column), each LATER
+    patchset's diff (own-ps tip -> that ps tip) is checked for a hunk whose
+    old-side range intersects (`exact`) or sits within 3 lines
+    (`adjacent`) of the finding's own lines, capped at 20 later patchsets
+    per finding (`touched_in_capped`). Evidence the author acted near the
+    location — surfaced on `GET /api/reviews/{id}/findings` and every
+    single-finding response `finding_json` composes, never scored, and
+    the word "fixed" appears nowhere in this lane.
 
 24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by
