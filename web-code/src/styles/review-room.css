@@ -504,6 +504,33 @@
   flex-direction: column;
   gap: 4px;
 }
+/* V80-F3 — "lines changed in ps N" (`TouchedInChips`). A LINE-style chip
+ * (monospace, low-contrast, tabular digits) rather than `.kbc-chip`'s loud
+ * uppercase pill — this is evidence riding beside the actions row, not a
+ * status badge. */
+.kbc-finding__touched {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.kbc-finding__touched-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+.kbc-finding__touched-chip:hover {
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+}
 .kbc-finding__dispo-row {
   display: inline-flex;
   gap: 6px;
