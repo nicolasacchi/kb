@@ -141,6 +141,13 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "provenance/report.rs",
     "recipes.rs",
     "repo_state.rs",
+    // V80-F3 — `review_finding_touches.rs` spawns git ONLY inside its
+    // `#[cfg(test)]` fixture helper (`git -C <tmpdir> init/add/commit`, no
+    // caller-supplied ref or pathspec); the derivation itself calls the
+    // already-audited `diff.rs`/`history::diff_files` with `Revspec`-typed
+    // shas. The lint is not cfg-aware, so the file is listed like
+    // `git/tests.rs` is.
+    "review_finding_touches.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",
