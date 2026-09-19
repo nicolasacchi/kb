@@ -1727,7 +1727,7 @@ a.kbc-review__action {
 .kbc-promote-finding {
   margin: 6px 0 0 8px;
   padding: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: 6px;
   display: flex;
   flex-direction: column;
