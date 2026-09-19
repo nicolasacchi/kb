@@ -17562,10 +17562,36 @@ fn format_finding_line(f: &serde_json::Value) -> String {
         ""
     };
     let title = f["title"].as_str().unwrap_or("");
+    let touched = format_touched_in(f);
     format!(
-        "{slug}  [{severity}]  {category}  {path}:{loc}  disposition={disp}  \
+        "{slug}  [{severity}]  {category}  {path}:{loc}{touched}  disposition={disp}  \
          origin={origin}{superseded}  {title}"
     )
+}
+
+/// V80-F3 — `  touched ps3 (exact), ps5 (adjacent)` after the location, or
+/// `""` when `touched_in` is absent/empty (an older daemon, a `whole_file`
+/// finding, or a finding a later patchset never came near). Evidence, not
+/// a verdict — this string never says "fixed".
+fn format_touched_in(f: &serde_json::Value) -> String {
+    let entries = match f["touched_in"].as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => return String::new(),
+    };
+    let parts: Vec<String> = entries
+        .iter()
+        .map(|t| {
+            let ps = t["ps"].as_i64().unwrap_or(0);
+            let overlap = t["overlap"].as_str().unwrap_or("?");
+            format!("ps{ps} ({overlap})")
+        })
+        .collect();
+    let capped = if f["touched_in_capped"].as_bool().unwrap_or(false) {
+        ", capped"
+    } else {
+        ""
+    };
+    format!("  touched {}{capped}", parts.join(", "))
 }
 
 /// `kb-code review findings add ID --severity S --category C --path P
@@ -27142,6 +27168,80 @@ mod tests {
         assert_eq!(
             story_gap_line(&e),
             "— session join unavailable for 2 commits (100..200) —"
+        );
+    }
+
+    // --- V80-F3: `touched ps3 (exact)` in `review findings list`'s human output ---
+
+    #[test]
+    fn format_touched_in_is_empty_when_the_field_is_absent_or_empty() {
+        assert_eq!(format_touched_in(&serde_json::json!({})), "");
+        assert_eq!(
+            format_touched_in(&serde_json::json!({"touched_in": []})),
+            ""
+        );
+    }
+
+    #[test]
+    fn format_touched_in_lists_one_entry_per_ps() {
+        let f = serde_json::json!({
+            "touched_in": [
+                {"ps": 3, "hunks": 1, "overlap": "exact"},
+                {"ps": 5, "hunks": 2, "overlap": "adjacent"},
+            ],
+        });
+        assert_eq!(
+            format_touched_in(&f),
+            "  touched ps3 (exact), ps5 (adjacent)"
+        );
+    }
+
+    #[test]
+    fn format_touched_in_names_the_cap() {
+        let f = serde_json::json!({
+            "touched_in": [{"ps": 3, "hunks": 1, "overlap": "exact"}],
+            "touched_in_capped": true,
+        });
+        assert_eq!(format_touched_in(&f), "  touched ps3 (exact), capped");
+    }
+
+    #[test]
+    fn format_finding_line_places_touched_in_after_the_location() {
+        let f = serde_json::json!({
+            "slug": "f-a",
+            "severity": "blocker",
+            "category": "Correctness",
+            "location": {"path": "a.rb"},
+            "resolution": {"orphaned": false, "line": 12},
+            "disposition": null,
+            "origin": "import",
+            "superseded": false,
+            "title": "t",
+            "touched_in": [{"ps": 2, "hunks": 1, "overlap": "exact"}],
+        });
+        assert_eq!(
+            format_finding_line(&f),
+            "f-a  [blocker]  Correctness  a.rb:L12  touched ps2 (exact)  \
+             disposition=undecided  origin=import  t"
+        );
+    }
+
+    #[test]
+    fn format_finding_line_is_unchanged_when_touched_in_is_absent() {
+        let f = serde_json::json!({
+            "slug": "f-a",
+            "severity": "blocker",
+            "category": "Correctness",
+            "location": {"path": "a.rb"},
+            "resolution": {"orphaned": false, "line": 12},
+            "disposition": null,
+            "origin": "import",
+            "superseded": false,
+            "title": "t",
+        });
+        assert_eq!(
+            format_finding_line(&f),
+            "f-a  [blocker]  Correctness  a.rb:L12  disposition=undecided  origin=import  t"
         );
     }
 
