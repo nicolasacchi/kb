@@ -3558,6 +3558,32 @@ export interface ReviewFinding {
   resolution: FindingResolution;
   thread_count: number;
   unresolved_count: number;
+  /**
+   * V80-F3 — the patchset this finding was RAISED against (its linked
+   * annotation's own `ps_number`). `null` only for a should-never-happen
+   * missing annotation, or an older daemon that predates this field.
+   */
+  own_ps?: number | null;
+  /**
+   * V80-F3 — evidence, not a verdict: one entry per LATER patchset whose
+   * diff (this finding's own ps tip -> that ps tip) touched its cited
+   * lines. `[]` for a `whole_file`/no-lines finding, or when nothing
+   * later came near. Absent on an older daemon.
+   */
+  touched_in?: FindingTouchedIn[];
+  /**
+   * V80-F3 — `true` when more than 20 later patchsets existed and this
+   * finding's `touched_in` walk stopped early. Absent on an older daemon
+   * (the same "absent ≠ false" reading `verdict_stale`'s siblings use).
+   */
+  touched_in_capped?: boolean;
+}
+
+/** V80-F3 — one `ReviewFinding.touched_in` row. */
+export interface FindingTouchedIn {
+  ps: number;
+  hunks: number;
+  overlap: "exact" | "adjacent";
 }
 
 /// `GET /api/reviews/{id}/findings?ps=&disposition=&include_superseded=`
