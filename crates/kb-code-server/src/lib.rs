@@ -427,6 +427,10 @@ pub mod review_distill;
 /// V73-K1 — `kbc-review/1`: the review document, its refs, cards, lint and
 /// HTML export. See `review_doc`'s own module doc for the four rules.
 pub mod review_doc;
+/// V80-F3 — the `touched_in` derivation (`GET /api/reviews/{id}/findings`'s
+/// additive per-finding field): does a LATER patchset's diff touch a
+/// finding's cited lines. See the module's own doc for the full contract.
+pub mod review_finding_touches;
 pub mod review_findings;
 pub mod review_gate;
 pub mod review_github_export;

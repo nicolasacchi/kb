@@ -92,6 +92,7 @@
 
 use crate::annotations;
 use crate::review_comments::{self, ResolvedAgainst, ResolvedForPs};
+use crate::review_finding_touches::{self, TouchedInQuery, TouchedInResult};
 use crate::reviews::{emit_review_changed, require_review, resolve_ps};
 use crate::routes::ApiError;
 use crate::state::SharedState;
@@ -663,6 +664,30 @@ fn orphaned_resolution(target_ps: &ReviewPatchsetRow) -> ResolvedForPs {
     }
 }
 
+/// V80-F3 — the `review_finding_touches::TouchedInQuery` for one finding
+/// row, or `None` when there is nothing to check: no known own-ps (a
+/// missing/orphaned annotation), or no cited lines (`whole_file`, or a
+/// location whose `location_lines` failed to parse — the SAME degrade
+/// `finding_json`'s own `lines_json` uses for a malformed blob, never a
+/// guess).
+fn touched_in_query_for(f: &ReviewFindingRow, own_ps: Option<i64>) -> Option<TouchedInQuery> {
+    let own_ps = own_ps?;
+    let lines: Vec<i64> = f
+        .location_lines
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(TouchedInQuery {
+        finding_id: f.id,
+        own_ps,
+        path: f.location_path.clone(),
+        lines,
+    })
+}
+
 /// The list-item / single-finding wire shape (design doc §2 row 9) — the
 /// ONE JSON builder every findings route returns through, so a manual
 /// create's response and a disposition set/clear's response are
@@ -680,6 +705,8 @@ fn finding_json(
     resolution: &ResolvedForPs,
     thread_count: usize,
     unresolved_count: usize,
+    own_ps: Option<i64>,
+    touched: &TouchedInResult,
 ) -> serde_json::Value {
     let confidence = if resolution.orphaned {
         "orphaned"
@@ -759,6 +786,16 @@ fn finding_json(
         },
         "thread_count": thread_count,
         "unresolved_count": unresolved_count,
+        // V80-F3 (`kbc-hunkid/1`-adjacent, `review_finding_touches`) — the
+        // patchset this finding was RAISED against (from its linked
+        // annotation's own `ps_number`; `None` only for a should-never-
+        // happen missing annotation) and, derived per read from it, the
+        // set of LATER patchsets whose diff touched this finding's cited
+        // lines. Evidence, never a verdict: the word "fixed" never
+        // appears here or in any caller of this function.
+        "own_ps": own_ps,
+        "touched_in": &touched.entries,
+        "touched_in_capped": touched.capped,
     })
 }
 
@@ -808,7 +845,29 @@ pub(crate) fn compose_finding_view(
         None => orphaned_resolution(target_ps),
     };
     let unresolved = replies.iter().filter(|r| !r.resolved).count();
-    let mut view = finding_json(row, &resolution, replies.len(), unresolved);
+    // V80-F3 — same `touched_in` computation `list_findings_route` does in
+    // batch, just for this one row: `finding_json`'s doc requires every
+    // response shape stay byte-identical, so a single-finding view cannot
+    // omit the field (an absent/empty `touched_in` here would be
+    // indistinguishable from "computed, found nothing").
+    let own_ps = ann.as_ref().and_then(|a| a.ps_number);
+    let touched = match touched_in_query_for(row, own_ps) {
+        Some(q) => {
+            let patchsets = store.list_patchsets(row.review_id)?;
+            review_finding_touches::compute_touched_in(repo_root, &patchsets, &[q])
+                .remove(&row.id)
+                .unwrap_or_default()
+        }
+        None => TouchedInResult::default(),
+    };
+    let mut view = finding_json(
+        row,
+        &resolution,
+        replies.len(),
+        unresolved,
+        own_ps,
+        &touched,
+    );
     // V76-B3 (kbc-prose/1) — additive per-field refs, the SAME helper
     // `list_findings_route`'s batch pass uses, so the single-finding routes
     // and the list can never disagree about the key names.
@@ -1826,20 +1885,22 @@ pub async fn list_findings_route(
             )));
         }
     }
-    // 2026-08-31 incident (store.rs module doc): the three sequential
-    // reads below (ps resolve, findings, annotations) are contiguous
-    // store work — one blocking-pool trip.
+    // 2026-08-31 incident (store.rs module doc): the four sequential reads
+    // below (ps resolve, findings, annotations, patchsets — the last one
+    // V80-F3's `touched_in` needs) are contiguous store work — one
+    // blocking-pool trip.
     let ps_param = params.ps.clone();
     let disposition_param = params.disposition.clone();
     let include_superseded = params.include_superseded;
-    let (target_ps, findings, ann_rows) = state
+    let (target_ps, findings, ann_rows, patchsets) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
             let target_ps = resolve_ps(store, id, ps_param.as_deref())?;
             let findings =
                 store.list_review_findings(id, disposition_param.as_deref(), include_superseded)?;
             let ann_rows = store.list_review_annotations(id, true)?;
-            Ok((target_ps, findings, ann_rows))
+            let patchsets = store.list_patchsets(id)?;
+            Ok((target_ps, findings, ann_rows, patchsets))
         })
         .await?;
 
@@ -1855,7 +1916,12 @@ pub async fn list_findings_route(
     }
 
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
-    let mut out = Vec::with_capacity(findings.len());
+    // Pass 1: resolution + own_ps + the touched_in QUERY per finding — no
+    // git work for touched_in yet, so the batch below shares its caches
+    // across every finding rather than one `compute_touched_in` call each.
+    let mut resolved: Vec<(ResolvedForPs, usize, usize, Option<i64>)> =
+        Vec::with_capacity(findings.len());
+    let mut touch_queries: Vec<TouchedInQuery> = Vec::new();
     for f in &findings {
         let ann = by_id.get(&f.annotation_id);
         let replies = replies_by_parent
@@ -1882,7 +1948,41 @@ pub async fn list_findings_route(
             None => orphaned_resolution(&target_ps),
         };
         let unresolved = replies.iter().filter(|r| !r.resolved).count();
-        out.push(finding_json(f, &resolution, replies.len(), unresolved));
+        let own_ps = ann.and_then(|a| a.ps_number);
+        if let Some(q) = touched_in_query_for(f, own_ps) {
+            touch_queries.push(q);
+        }
+        resolved.push((resolution, replies.len(), unresolved, own_ps));
+    }
+
+    // V80-F3 — ONE batched pass over every finding's `touched_in`, sharing
+    // the rename/hunk caches across the whole review (see
+    // `review_finding_touches`'s own doc: an import batch commonly
+    // creates several findings against the SAME own-ps). This is git I/O,
+    // not store/sqlite work, so it runs on `spawn_blocking` directly —
+    // the SAME split `review_interdiff` (this file's own sibling route)
+    // uses for its own git reads, never through `state.store.run_blocking`.
+    let touched_by_finding = {
+        let root = repo.path.clone();
+        tokio::task::spawn_blocking(move || {
+            review_finding_touches::compute_touched_in(&root, &patchsets, &touch_queries)
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
+
+    let mut out = Vec::with_capacity(findings.len());
+    for (f, (resolution, thread_count, unresolved, own_ps)) in findings.iter().zip(resolved.iter())
+    {
+        let touched = touched_by_finding.get(&f.id).cloned().unwrap_or_default();
+        out.push(finding_json(
+            f,
+            resolution,
+            *thread_count,
+            *unresolved,
+            *own_ps,
+            &touched,
+        ));
     }
 
     // V76-B3 (kbc-prose/1) — every prose field carries its refs, computed
@@ -2435,7 +2535,14 @@ mod tests {
         f.cites_json = Some(r#"["code:a.rb:1","sym:Order#total"]"#.to_string());
         f.fingerprint = Some("deadbeefcafe0001".into());
         f.superseded_by = Some("f-b".into());
-        let v = finding_json(&f, &resolution_for_test(), 0, 0);
+        let v = finding_json(
+            &f,
+            &resolution_for_test(),
+            0,
+            0,
+            None,
+            &TouchedInResult::default(),
+        );
         assert_eq!(v["act"], "question");
         assert_eq!(v["blocking"], true);
         assert_eq!(v["cites"][0], "code:a.rb:1");
@@ -2450,7 +2557,14 @@ mod tests {
         // value for: an `issue`, not blocking, citing nothing, with no
         // fingerprint and no successor.
         let f = finding_row(1, "f-a", "correctness", "a.rb");
-        let v = finding_json(&f, &resolution_for_test(), 0, 0);
+        let v = finding_json(
+            &f,
+            &resolution_for_test(),
+            0,
+            0,
+            None,
+            &TouchedInResult::default(),
+        );
         assert_eq!(v["act"], "issue");
         assert_eq!(v["blocking"], false);
         assert!(v["cites"].is_null());
@@ -2465,7 +2579,14 @@ mod tests {
         // card state an absence it never verified.
         let mut f = finding_row(1, "f-a", "correctness", "a.rb");
         f.cites_json = Some("{ not json".to_string());
-        let v = finding_json(&f, &resolution_for_test(), 0, 0);
+        let v = finding_json(
+            &f,
+            &resolution_for_test(),
+            0,
+            0,
+            None,
+            &TouchedInResult::default(),
+        );
         assert!(v["cites"].is_null());
     }
 
