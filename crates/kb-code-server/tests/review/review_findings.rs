@@ -188,6 +188,7 @@ async fn create_manual_finding(
 /// /api/annotations`, same shape `review_comments.rs`'s own `comment_on`
 /// helper uses) — the adoption fixture every promote test below anchors
 /// against.
+#[allow(clippy::too_many_arguments)]
 async fn comment_on(
     client: &reqwest::Client,
     base: &str,
