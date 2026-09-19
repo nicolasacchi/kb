@@ -856,6 +856,18 @@ async fn from_doc_materializes_present_refs_and_stamps_provenance_with_a_real_gi
     let boot = boot_from_doc("fixture", repo_tmp.path(), kb_addr).await;
     let client = reqwest::Client::new();
 
+    // `resolve_lens` (called in-process by `from_doc_route`) treats a repo
+    // still mid-boot-walk as `SERVICE_UNAVAILABLE` ("repo_indexing"), which
+    // `from_doc_route` then collapses into the SAME `404` this test would
+    // see on a genuinely unresolvable doc (reading_sets.rs's own doc on
+    // `from_doc_route`: "collapsed to ONE honest `ApiError::not_found`").
+    // Without waiting for the boot walk first, this races it: hit before
+    // `lib.rs`/`main.rs` are indexed and the 201 this test expects becomes
+    // a 404 — which is what flaked once on GitHub-hosted runners (V80-C2).
+    // Same wait the CRUD/pack tests above already use before touching a
+    // route that reads the store.
+    wait_for_indexed(&boot.base, "fixture", 2).await;
+
     let resp = client
         .post(format!("{}/api/sets/from-doc", boot.base))
         .json(&serde_json::json!({
@@ -935,6 +947,12 @@ async fn from_doc_409s_an_explicit_name_collision() {
     let body = serde_json::json!({
         "repo": "fixture", "kb": "platform", "doc": "doc1", "name": "dup name",
     });
+
+    // Same latent boot-walk race as
+    // `from_doc_materializes_present_refs_and_stamps_provenance_with_a_real_git_ref`
+    // above (its comment has the full explanation) — this test's first
+    // POST also expects a 201, so it needs the repo indexed first too.
+    wait_for_indexed(&boot.base, "fixture", 2).await;
 
     let first = client
         .post(format!("{}/api/sets/from-doc", boot.base))
