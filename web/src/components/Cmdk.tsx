@@ -14,6 +14,8 @@ import { useExplicitKb } from "../hooks/useActiveKb";
 import {
   fetchKbs,
   fetchRecall,
+  lookupArtifact,
+  type LookupResponse,
   type RecallHit,
   type SearchMode,
 } from "../api/client";
@@ -69,6 +71,35 @@ function relativeTime(unixSec: number, nowSec: number): string {
 }
 
 const MODES: SearchMode[] = ["hybrid", "keyword", "semantic"];
+
+// Identifier tokens the lookup route resolves against title and filename
+// stem. A unique hit is pinned above ranked search; 0 or many must not
+// replace those results. Mirrors lookup arm 5 (`^#?\d{3,}$`, slug ≥ 6).
+const TICKET_RE = /^#?\d{3,}$/;
+const SLUG_RE = /^[A-Za-z0-9-]{6,}$/;
+
+function isLookupQuery(q: string): boolean {
+  if (TICKET_RE.test(q)) return true;
+  if (!SLUG_RE.test(q)) return false;
+  // All-hyphen is not a slug. Pure digits are tickets, already matched.
+  return /[A-Za-z0-9]/.test(q);
+}
+
+// `exact` / `unique_suffix` are the one-hit kinds. The client union only
+// types `id`; the wire flattens LookupHit (title, source_relative) beside it.
+type ExactPin = { id: string; source_relative: string; title: string };
+
+function pinFromLookup(res: LookupResponse): ExactPin | null {
+  if (res.kind !== "exact" && res.kind !== "unique_suffix") return null;
+  const row = res as LookupResponse & {
+    source_relative?: string;
+    title?: string | null;
+  };
+  const rel = row.source_relative?.trim() ?? "";
+  if (!rel) return null;
+  const stem = rel.split("/").pop() || rel;
+  return { id: res.id, source_relative: rel, title: row.title?.trim() || stem };
+}
 
 // v0.11 S3 — built-in action rows the palette shows above search hits.
 // Match on a substring of the label so typing "mem" surfaces the
@@ -268,6 +299,8 @@ export default function Cmdk({
   const [allNotes, setAllNotes] = useState<NoteSummary[]>([]);
   const [allSessions, setAllSessions] = useState<SessionRow[]>([]);
   const [memories, setMemories] = useState<RecallHit[]>([]);
+  // Unique ticket/slug lookup. Null unless /lookup returned exactly one hit.
+  const [exact, setExact] = useState<ExactPin | null>(null);
   const identity = useIdentity();
   const me = identity?.user;
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -359,6 +392,33 @@ export default function Cmdk({
     };
   }, [q]);
 
+  // Ticket (`#15715` / `15715`) or slug ≥ 6: also resolve via /lookup.
+  // Ranked search keeps running. One hit is pinned; 0 or many leave it alone.
+  useEffect(() => {
+    const needle = q.trim();
+    if (!kb || !isLookupQuery(needle)) {
+      setExact(null);
+      return;
+    }
+    // Drop the previous token's pin immediately so a new query never
+    // shows another artifact as Exact while this lookup is in flight.
+    setExact(null);
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      lookupArtifact(kb, needle, ctl.signal)
+        .then((res) => {
+          if (!ctl.signal.aborted) setExact(pinFromLookup(res));
+        })
+        .catch(() => {
+          if (!ctl.signal.aborted) setExact(null);
+        });
+    }, 80);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [q, kb]);
+
   useEffect(() => {
     // When the App-level URL has no ?kb=, pick the first configured kb
     // so Enter on a result still routes to /a/{kb}/{id}. This fetch is
@@ -443,6 +503,10 @@ export default function Cmdk({
       .slice(0, FED_VISIBLE);
   }, [q, allSessions]);
 
+  // The pin is a hit row only when we can navigate it. Lookup already
+  // requires `kb`; this keeps the cursor count aligned with the render.
+  const showExact = Boolean(exact && kb);
+
   // Combined nav cursor — recents, commands, hits, then the federated groups
   // (notes, memory, sessions). The flat cursor indexes the concatenation; the
   // tested cmdkRows geometry is the single source of truth for both ↑↓/Enter
@@ -451,7 +515,7 @@ export default function Cmdk({
     () => ({
       recents: visibleRecents.length,
       commands: visibleCommands.length,
-      hits: result.hits.length,
+      hits: result.hits.length + (showExact ? 1 : 0),
       notes: visibleNotes.length,
       memories: memories.length,
       sessions: visibleSessions.length,
@@ -460,6 +524,7 @@ export default function Cmdk({
       visibleRecents.length,
       visibleCommands.length,
       result.hits.length,
+      showExact,
       visibleNotes.length,
       memories.length,
       visibleSessions.length,
@@ -513,7 +578,10 @@ export default function Cmdk({
             visibleCommands[at.idx]?.run({ navigate, onClose, kb: explicitKb });
             return;
           case "hit": {
-            const hit = result.hits[at.idx];
+            const hit =
+              showExact && at.idx === 0
+                ? exact
+                : result.hits[at.idx - (showExact ? 1 : 0)];
             if (hit && kb) {
               // v0.6+ H4 — record the query as a deliberate intent (Enter /
               // click-result, not every keystroke). Server-side dedups within
@@ -563,6 +631,8 @@ export default function Cmdk({
       onClose,
       q,
       result.hits,
+      showExact,
+      exact,
       totalRows,
       visibleCommands,
       visibleNotes,
@@ -671,7 +741,7 @@ export default function Cmdk({
                   </button>
                 );
               })}
-              {result.hits.length > 0 && (
+              {result.hits.length > 0 && !showExact && (
                 <div className="cmdk__section">Search results</div>
               )}
             </>
@@ -686,13 +756,52 @@ export default function Cmdk({
             !result.error &&
             q &&
             result.hits.length === 0 &&
+            !showExact &&
             visibleNotes.length === 0 &&
             memories.length === 0 &&
             visibleSessions.length === 0 && (
               <div className="cmdk__hint">no matches</div>
             )}
+          {showExact && exact && kb && (
+            <>
+              <div className="cmdk__section">Exact</div>
+              <Link
+                key={`exact-${exact.id}`}
+                to={artifactHref(kb, exact.source_relative)}
+                role="option"
+                aria-selected={
+                  visibleRecents.length + visibleCommands.length === cursor
+                }
+                className={`cmdk__hit ${
+                  visibleRecents.length + visibleCommands.length === cursor
+                    ? "is-active"
+                    : ""
+                }`}
+                onMouseEnter={() =>
+                  setCursor(visibleRecents.length + visibleCommands.length)
+                }
+                onClick={(e) => {
+                  void recordSearch(kb, q);
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0)
+                    return;
+                  onClose();
+                }}
+              >
+                <span className="cmdk__hit-title">
+                  <Icon.Doc aria-hidden="true" /> {exact.title || "(untitled)"}
+                </span>
+                <span className="cmdk__hit-path" title={exact.source_relative}>
+                  {exact.source_relative}
+                </span>
+              </Link>
+            </>
+          )}
+          {showExact && result.hits.length > 0 && (
+            <div className="cmdk__section">Search results</div>
+          )}
           {result.hits.map((h, i) => {
-            const rowIdx = visibleRecents.length + visibleCommands.length + i;
+            const rowIdx =
+              visibleRecents.length + visibleCommands.length + (showExact ? 1 : 0) + i;
             return kb ? (
               // Real anchor so ctrl/⌘/middle-click opens the result in a
               // new kb tab natively. recordSearch still fires (same H4

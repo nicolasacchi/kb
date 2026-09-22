@@ -3713,6 +3713,10 @@ pub struct RecollectParams {
     /// Relative recency window over `started_at`: `day|week|month|year`.
     pub since: Option<String>,
     pub limit: Option<u32>,
+    /// Optional recollect budget in milliseconds. An arm that misses it is
+    /// dropped and named in `degraded` (`error_class: timeout`); absent
+    /// means no cap.
+    pub deadline_ms: Option<u64>,
 }
 
 /// R3 — one recollected session: the match + the SURFACED signals the agent
@@ -3761,6 +3765,14 @@ pub struct RecollectSessionOut {
 pub struct RecollectResponse {
     pub sessions: Vec<RecollectSessionOut>,
     pub ms: u64,
+    /// Swallowed per-corpus failures. Absent when empty so a healthy
+    /// recollect stays byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "ts-export",
+        ts(as = "Option<Vec<crate::routes::context::DegradedLane>>", optional)
+    )]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
 }
 
 fn since_window_secs(s: &str) -> Option<i64> {
@@ -3840,12 +3852,33 @@ pub(crate) async fn recollect_compose(
         .unwrap_or(RECOLLECT_DEFAULT_LIMIT)
         .clamp(1, RECOLLECT_MAX_LIMIT) as usize;
 
+    let deadline = crate::routes::context::deadline_at(params.deadline_ms);
+    if deadline.is_some_and(|d| d.saturating_duration_since(std::time::Instant::now()).is_zero())
+    {
+        let degraded = state
+            .kbs
+            .iter()
+            .map(|(name, _)| {
+                crate::routes::context::degraded_of(
+                    name.as_str(),
+                    "recollect",
+                    crate::routes::context::QueryErrorClass::Timeout,
+                )
+            })
+            .collect();
+        return Ok(RecollectResponse {
+            sessions: Vec::new(),
+            ms: started.elapsed().as_millis() as u64,
+            degraded,
+        });
+    }
+
     // Embed the query once per distinct embedder model (mirrors recall).
     let mut vec_by_model: std::collections::HashMap<&'static str, Vec<f32>> =
         std::collections::HashMap::new();
     for (_, ctx) in state.kbs.iter() {
         if let Some(emb) = &ctx.embedder {
-            let model = emb.lock().unwrap_or_else(|e| e.into_inner()).model_name();
+            let model = crate::embed_cache::embedder_model_name(emb);
             if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
                 if let Ok(out) = crate::embed_cache::embed_query(&state.embed_cache, emb, &q).await
                 {
@@ -3867,97 +3900,140 @@ pub(crate) async fn recollect_compose(
     }
     let q_ref = &q;
     let vbm = &vec_by_model;
-    let mut futs: Vec<super::CorpusFut<'_, Vec<Hit>>> = Vec::new();
+    let mut futs: Vec<super::CorpusFut<'_, (Vec<Hit>, Option<crate::routes::context::DegradedLane>)>> =
+        Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
-            // ensure_* returns Ok when the index already exists; a real Err
-            // would make the query fail with a less-specific message. Skip
-            // this corpus (invariant #28) rather than swallow-and-continue.
-            if let Err(e) = ctx.storage.ensure_fts_index().await {
-                tracing::warn!(
-                    kb = %kb_name,
-                    error = %e,
-                    "recollect: ensure_fts_index failed; skipping corpus"
-                );
-                return Vec::new();
-            }
-            // Drop the embedder guard before any await (#15): model_name()
-            // returns &'static str.
-            let model_vec = ctx.embedder.as_ref().and_then(|emb| {
-                let m = emb.lock().unwrap_or_else(|e| e.into_inner()).model_name();
-                vbm.get(m).cloned()
-            });
-            let rows = match model_vec {
-                Some(v) => {
-                    ctx.storage
-                        .hybrid_query(q_ref.clone(), v, RECOLLECT_POOL)
-                        .await
+            let work = async move {
+                // ensure_* returns Ok when the index already exists; a real Err
+                // would make the query fail with a less-specific message. Skip
+                // this corpus (invariant #28) rather than swallow-and-continue.
+                if let Err(e) = ctx.storage.ensure_fts_index().await {
+                    tracing::warn!(
+                        kb = %kb_name,
+                        error = %e,
+                        "recollect: ensure_fts_index failed; skipping corpus"
+                    );
+                    return (
+                        Vec::new(),
+                        Some(crate::routes::context::degraded_of(
+                            kb_name.as_str(),
+                            "recollect",
+                            crate::routes::context::classify_query_error(&e.to_string()),
+                        )),
+                    );
                 }
-                None => {
-                    ctx.storage
-                        .bm25_query(q_ref.clone(), RECOLLECT_POOL, false)
-                        .await
-                }
-            };
-            let rows = rows.unwrap_or_else(|e| {
-                tracing::warn!(kb = %kb_name, error = %e, "recollect query failed");
-                Vec::new()
-            });
-            // Keep only session digests; dense-rank them (rank 0 = best match
-            // among this corpus's sessions). Identity is carried as the lance
-            // artifact id — NOT `d.kb_session`, which is the raw
-            // `<meta name="kb-session">` value and can be a capture-hook-dirty
-            // hint (trailing dash / truncation, #11); the canonical session id
-            // is resolved below via the sqlite `artifact_id` join.
-            let cands: Vec<(usize, String, Option<String>)> = rows
-                .into_iter()
-                .filter(|d| {
-                    d.kb_category.as_deref() == Some(kb_core::sessions::MEMORY_SESSION_CATEGORY)
-                })
-                .enumerate()
-                .map(|(rank, d)| (rank, d.id, d.summary))
-                .collect();
-            if cands.is_empty() {
-                return Vec::new();
-            }
-            let artifact_ids: Vec<String> = cands.iter().map(|(_, id, _)| id.clone()).collect();
-            let session_rows = ctx
-                .storage
-                .sessions_get_by_artifact_ids(artifact_ids)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(kb = %kb_name, error = %e, "sessions_get_by_artifact_ids failed");
-                    Vec::new()
+                // Model name is cached beside the mutex, so no embedder guard
+                // is taken here (and none can cross the await below, #15).
+                let model_vec = ctx.embedder.as_ref().and_then(|emb| {
+                    let m = crate::embed_cache::embedder_model_name(emb);
+                    vbm.get(m).cloned()
                 });
-            let by_artifact: std::collections::HashMap<String, String> = session_rows
-                .into_iter()
-                .map(|r| (r.artifact_id, r.session_id))
-                .collect();
-            cands
-                .into_iter()
-                .filter_map(|(rank, artifact_id, summary)| {
-                    let session_id = by_artifact.get(&artifact_id)?.clone();
-                    Some(Hit {
-                        session_id,
-                        kb: kb_name.as_str().to_string(),
-                        summary,
-                        rank,
+                let rows = match model_vec {
+                    Some(v) => {
+                        ctx.storage
+                            .hybrid_query(q_ref.clone(), v, RECOLLECT_POOL)
+                            .await
+                    }
+                    None => {
+                        ctx.storage
+                            .bm25_query(q_ref.clone(), RECOLLECT_POOL, false)
+                            .await
+                    }
+                };
+                let rows = match rows {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(kb = %kb_name, error = %e, "recollect query failed");
+                        return (
+                            Vec::new(),
+                            Some(crate::routes::context::degraded_of(
+                                kb_name.as_str(),
+                                "recollect",
+                                crate::routes::context::classify_query_error(&e.to_string()),
+                            )),
+                        );
+                    }
+                };
+                // Keep only session digests; dense-rank them (rank 0 = best match
+                // among this corpus's sessions). Identity is carried as the lance
+                // artifact id — NOT `d.kb_session`, which is the raw
+                // `<meta name="kb-session">` value and can be a capture-hook-dirty
+                // hint (trailing dash / truncation, #11); the canonical session id
+                // is resolved below via the sqlite `artifact_id` join.
+                let cands: Vec<(usize, String, Option<String>)> = rows
+                    .into_iter()
+                    .filter(|d| {
+                        d.kb_category.as_deref() == Some(kb_core::sessions::MEMORY_SESSION_CATEGORY)
                     })
-                })
-                .collect::<Vec<_>>()
+                    .enumerate()
+                    .map(|(rank, d)| (rank, d.id, d.summary))
+                    .collect();
+                if cands.is_empty() {
+                    return (Vec::new(), None);
+                }
+                let artifact_ids: Vec<String> = cands.iter().map(|(_, id, _)| id.clone()).collect();
+                let session_rows = match ctx.storage.sessions_get_by_artifact_ids(artifact_ids).await
+                {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(kb = %kb_name, error = %e, "sessions_get_by_artifact_ids failed");
+                        return (
+                            Vec::new(),
+                            Some(crate::routes::context::degraded_of(
+                                kb_name.as_str(),
+                                "recollect",
+                                crate::routes::context::classify_query_error(&e.to_string()),
+                            )),
+                        );
+                    }
+                };
+                let by_artifact: std::collections::HashMap<String, String> = session_rows
+                    .into_iter()
+                    .map(|r| (r.artifact_id, r.session_id))
+                    .collect();
+                let hits = cands
+                    .into_iter()
+                    .filter_map(|(rank, artifact_id, summary)| {
+                        let session_id = by_artifact.get(&artifact_id)?.clone();
+                        Some(Hit {
+                            session_id,
+                            kb: kb_name.as_str().to_string(),
+                            summary,
+                            rank,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (hits, None)
+            };
+            match crate::routes::context::within_deadline(deadline, work).await {
+                Ok(v) => v,
+                Err(()) => (
+                    Vec::new(),
+                    Some(crate::routes::context::degraded_of(
+                        kb_name.as_str(),
+                        "recollect",
+                        crate::routes::context::QueryErrorClass::Timeout,
+                    )),
+                ),
+            }
         }));
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
-    let raw_hits: Vec<Hit> = super::buffered_join(futs, state.fanout_cap)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut degraded = Vec::new();
+    let mut raw_hits: Vec<Hit> = Vec::new();
+    for (hits, lane) in super::buffered_join(futs, state.fanout_cap).await {
+        raw_hits.extend(hits);
+        if let Some(d) = lane {
+            degraded.push(d);
+        }
+    }
     if raw_hits.is_empty() {
         return Ok(RecollectResponse {
             sessions: Vec::new(),
             ms: started.elapsed().as_millis() as u64,
+            degraded,
         });
     }
 
@@ -4111,6 +4187,7 @@ pub(crate) async fn recollect_compose(
     Ok(RecollectResponse {
         sessions,
         ms: started.elapsed().as_millis() as u64,
+        degraded,
     })
 }
 

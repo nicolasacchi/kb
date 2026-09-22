@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { sse } from "../api/sse";
 
 // Per-route stats emitted in metrics.tick.routes. Order matches the
-// kb_server::state::RouteKind enum (8 entries always).
+// kb_server::state::RouteKind enum (9 entries always).
 export type RouteSnapshot = {
   kind: string;
   count: number;

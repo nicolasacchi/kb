@@ -91,6 +91,7 @@ async fn boot(files: &[(&str, String)]) -> (tempfile::TempDir, std::net::SocketA
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,

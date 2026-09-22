@@ -77,8 +77,8 @@ const KBCODE = whichBin("kb-code");
 /** Hard cap on any tool result handed back to the model. */
 const TOOL_RESULT_CAP = 30_000;
 
-/** The CT-A3 machine-readable recall marker kb-recall.sh folds into each hit. */
-const RECALL_MARKER_RE = /<!--kb-recall\/1 kb=([^\s>]+) id=([0-9a-f]{6,})-->/g;
+/** CT-A3 marker. Body is an unordered key=value bag — `kb` and `id` required, `pos` and unknown pairs accepted — same grammar as view.rs `parse_recall_marker`. Layout v2's trailing `pos=` must match. */
+const RECALL_MARKER_RE = /<!--kb-recall\/1\s+([^>]*?)-->/g;
 
 /** EXACT customType — a downstream capture-phase reader is built against it. */
 const RECALL_LEDGER_TYPE = "kb.recall";
@@ -497,12 +497,23 @@ export default function kbMemoryOmp(pi: {
     }).catch(() => {});
   }
 
-  /** Every `<!--kb-recall/1 kb=… id=…-->` marker in an injected block. */
+  /** Every `<!--kb-recall/1 …-->` marker in an injected block. */
   function recallMarkers(text: string): { raw: string; kb: string; id: string }[] {
     const out: { raw: string; kb: string; id: string }[] = [];
     try {
       for (const m of text.matchAll(RECALL_MARKER_RE)) {
-        out.push({ raw: m[0], kb: m[1], id: m[2] });
+        let kb = "";
+        let id = "";
+        for (const pair of (m[1] ?? "").trim().split(/\s+/)) {
+          const eq = pair.indexOf("=");
+          if (eq <= 0) continue;
+          const key = pair.slice(0, eq);
+          const value = pair.slice(eq + 1);
+          if (key === "kb") kb = value;
+          else if (key === "id") id = value;
+        }
+        if (!kb || !/^[0-9a-f]{6,}$/.test(id)) continue;
+        out.push({ raw: m[0], kb, id });
         if (out.length >= 64) break;
       }
     } catch {}
