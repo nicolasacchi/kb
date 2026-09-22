@@ -143,7 +143,16 @@ fi
 # run outside a repo or against a daemon too old to know "auto".
 recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
-hits="$(timeout 6 kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || exit 0
+# Served-recall ledger. session=$sid when the hook has one (`kb recall`
+# appends &session=). Empty KB_RECALL_SESSION means no session= — a stale
+# marker must not be sent. Not clap --session: Recall has no such flag,
+# and an unknown flag would exit this hook and drop the injection.
+# timeout 6 stays; only the session argument is added.
+recall_prefix=(env "KB_RECALL_SESSION=${sid}")
+if [ -n "$sid" ]; then
+  recall_prefix+=("session=${sid}")
+fi
+hits="$(timeout 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || exit 0
 
 # CT-A3 — alongside the human-readable line, append ONE machine-readable
 # marker per hit (`<!--kb-recall/1 kb=<kb-name> id=<hex12>[ pos=<n>]-->`),
