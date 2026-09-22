@@ -24,6 +24,7 @@ use axum::extract::{Extension, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use kb_core::storage::sqlite::ServedRecallRow;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -107,7 +108,7 @@ pub async fn get(
         identity,
         &q,
         cwd,
-        session,
+        session.clone(),
         remaining_ms(deadline),
         deadline,
     )
@@ -122,6 +123,13 @@ pub async fn get(
             String::new()
         }
     };
+    // Same served-recall rows as GET /api/memory/recall?session=.
+    // routes::memory::record_served_recalls is private; this is the
+    // smallest append. A write failure must not 500 the turn or drop
+    // degraded[].
+    if let Some(session_id) = session.as_deref() {
+        record_served_turn(&state, session_id, &hits).await;
+    }
 
     let recalled = recalled_of(&hits);
     let text = compose_text(&hits, &scent);
@@ -374,4 +382,102 @@ fn scent_line(scent: &str) -> String {
         "kb has prior context for this task — {scent}.\n\
 Counts only (nothing episodic is auto-injected). Run `kb context \"<your task>\"` to pull the pack: prior-session pointers, open comments on matching artifacts, and the code paths those artifacts cite."
     )
+}
+
+/// Same caps as `routes::memory`'s serve-time ledger. Private there.
+const TURN_SERVED_WRITE_CAP: usize = 50;
+const TURN_SERVED_TITLE_CAP: usize = 240;
+const TURN_SERVED_SESSION_CAP: usize = 128;
+
+/// Record the hits this turn returned. Never fails the response: a bad
+/// id, a missing sessions corpus, or a write error is logged and dropped.
+/// INSERT only — never `memory_recalls_replace`.
+async fn record_served_turn(state: &KbHandles, session_id: &str, hits: &[RecallResult]) {
+    let Some(session_id) = accept_turn_session(session_id) else {
+        return;
+    };
+    let rows = served_turn_rows(hits);
+    if rows.is_empty() {
+        return;
+    }
+    let Some(storage) = sessions_storage(state) else {
+        tracing::debug!(
+            session_id,
+            n = rows.len(),
+            "served recall ledger skipped: no sessions corpus"
+        );
+        return;
+    };
+    if let Err(e) = storage
+        .memory_recalls_append(session_id.clone(), rows)
+        .await
+    {
+        tracing::debug!(
+            session_id,
+            error = %e,
+            "served recall ledger not written"
+        );
+    }
+}
+
+fn accept_turn_session(raw: &str) -> Option<String> {
+    let id = raw.trim();
+    if id.is_empty() || id.chars().count() > TURN_SERVED_SESSION_CAP {
+        return None;
+    }
+    if id.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn served_turn_rows(hits: &[RecallResult]) -> Vec<ServedRecallRow> {
+    let served_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    hits.iter()
+        .take(TURN_SERVED_WRITE_CAP)
+        .enumerate()
+        .map(|(i, hit)| {
+            let title_chars = hit.title.chars().count();
+            let summary_chars = hit
+                .summary
+                .as_deref()
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            ServedRecallRow {
+                memory_kb: hit.kb.clone(),
+                memory_id: hit.id.clone(),
+                pos: (i as u32).saturating_add(1),
+                title: clip_chars(&hit.title, TURN_SERVED_TITLE_CAP),
+                injected_chars: u32::try_from(title_chars.saturating_add(summary_chars))
+                    .unwrap_or(u32::MAX),
+                served_at,
+            }
+        })
+        .collect()
+}
+
+fn clip_chars(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        s.to_string()
+    } else {
+        s.chars().take(cap).collect()
+    }
+}
+
+/// Sessions corpus: `default_search_category = "memory-session"`, else a
+/// kb named `sessions`. Same lookup as the recall route.
+fn sessions_storage(state: &KbHandles) -> Option<kb_core::storage::StorageHandle> {
+    let by_category = state.kbs.iter().find(|(_, ctx)| {
+        ctx.default_search_category.as_deref() == Some("memory-session")
+    });
+    let (_, ctx) = by_category.or_else(|| {
+        state
+            .kbs
+            .iter()
+            .find(|(name, _)| name.as_str() == "sessions")
+    })?;
+    Some(ctx.storage.clone())
 }
