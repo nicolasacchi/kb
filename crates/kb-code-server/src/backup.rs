@@ -41,6 +41,14 @@
 //! It is a LOCAL FILE operation with no route and no daemon: there is no
 //! new mutation surface here, nothing for the audit ledger to record, and
 //! nothing reachable from a browser.
+//!
+//! Retention is the other half of that door. A snapshot is the size of the
+//! live volume; with no GC, `index.db.pre-V0036.bak` sat for ten days beside
+//! the database. On a successful boot at epoch N, [`prune_snapshots`] deletes
+//! `*.pre-V<e>.bak` for `e < N-1` and logs what it reaped — the current
+//! snapshot and the previous one stay. [`ensure_free_space`] runs before
+//! `VACUUM INTO` and refuses with `needs X GB, has Y GB` rather than failing
+//! halfway through the copy.
 
 use std::path::{Path, PathBuf};
 
@@ -76,6 +84,13 @@ pub enum BackupError {
     },
     #[error("kb-code backup failed: {0}")]
     Snapshot(String),
+    /// Disk cannot hold a snapshot the size of the live database. Raised
+    /// before `VACUUM INTO`, never halfway through it.
+    #[error("needs {needed_gb} GB, has {has_gb} GB")]
+    InsufficientSpace {
+        needed_gb: String,
+        has_gb: String,
+    },
     #[error(
         "refusing to migrate {db} across schema epoch V{epoch:04}: could not write the \
          pre-migration snapshot ({reason}). A schema epoch is a one-way door — an older \
@@ -158,6 +173,10 @@ pub fn is_fresh(receipt: &BackupReceipt, db_path: &Path, volume_epoch: Option<u3
 /// read transaction.
 pub fn take(db_path: &Path, volume_epoch: Option<u32>) -> Result<BackupReceipt, BackupError> {
     let dest = snapshot_path(db_path, volume_epoch);
+    // Before unlinking an existing snapshot and before VACUUM INTO. A short
+    // disk must refuse with the figures, not die halfway through the copy
+    // and not after the previous file is already gone.
+    ensure_free_space(db_path, &dest)?;
     // `VACUUM INTO` refuses an existing destination. Removing one at the
     // SAME epoch is safe by construction — it is a snapshot of the same
     // schema generation of the same volume, which is what we are about to
@@ -193,6 +212,232 @@ pub fn take(db_path: &Path, volume_epoch: Option<u32>) -> Result<BackupReceipt, 
         source: e,
     })?;
     Ok(receipt)
+}
+
+/// Decimal gigabytes, two places (10^9, not GiB) — the unit in "5.25 GB".
+fn format_gb(bytes: u64) -> String {
+    let hundredths = bytes.saturating_add(5_000_000) / 10_000_000;
+    format!("{}.{:02}", hundredths / 100, hundredths % 100)
+}
+
+fn snapshot_bytes_needed(db_path: &Path) -> Result<u64, BackupError> {
+    let main = std::fs::metadata(db_path).map_err(|source| BackupError::Io {
+        path: db_path.display().to_string(),
+        source,
+    })?;
+    let mut wal = db_path.as_os_str().to_owned();
+    wal.push("-wal");
+    let wal_len = std::fs::metadata(Path::new(&wal))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    Ok(main.len().saturating_add(wal_len))
+}
+
+/// Bytes a same-epoch snapshot already occupies. `take` unlinks `dest`
+/// before `VACUUM INTO`, so that space comes back. A directory where the
+/// file should be is not reclaimable (`remove_file` will fail on it).
+fn reclaimable_snapshot(dest: &Path) -> u64 {
+    std::fs::symlink_metadata(dest)
+        .ok()
+        .filter(|m| m.file_type().is_file())
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
+/// Free bytes available to this user on the filesystem holding `path`.
+/// `f_bavail * f_frsize` — the figure `df` reports, not `f_bfree` (which
+/// counts root-reserved blocks this process cannot use).
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+fn available_bytes(path: &Path) -> Result<u64, BackupError> {
+    // glibc `struct statvfs` on 64-bit Linux (`bits/statvfs.h`). The tail
+    // (`f_type`, spare) is only here so the syscall has a buffer large
+    // enough to write; callers read `f_frsize` and `f_bavail` only.
+    #[repr(C)]
+    struct Statvfs {
+        f_bsize: u64,
+        f_frsize: u64,
+        f_blocks: u64,
+        f_bfree: u64,
+        f_bavail: u64,
+        f_files: u64,
+        f_ffree: u64,
+        f_favail: u64,
+        f_fsid: u64,
+        f_flag: u64,
+        f_namemax: u64,
+        f_type: u32,
+        __f_spare: [i32; 5],
+    }
+    const _: () = assert!(std::mem::size_of::<Statvfs>() == 112);
+    extern "C" {
+        fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
+    }
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| BackupError::Io {
+        path: path.display().to_string(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, e),
+    })?;
+    let mut buf = std::mem::MaybeUninit::<Statvfs>::zeroed();
+    // SAFETY: `c_path` is a NUL-terminated path; `buf` is a zeroed
+    // `Statvfs` matching the glibc layout this syscall writes.
+    let rc = unsafe { statvfs(c_path.as_ptr(), buf.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(BackupError::Io {
+            path: path.display().to_string(),
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    // SAFETY: `statvfs` returned 0, so it wrote the struct.
+    let buf = unsafe { buf.assume_init() };
+    if buf.f_frsize == 0 {
+        return Err(BackupError::Snapshot(format!(
+            "statvfs reported a zero fragment size at {}",
+            path.display()
+        )));
+    }
+    Ok(buf.f_bavail.saturating_mul(buf.f_frsize))
+}
+
+#[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+fn available_bytes(path: &Path) -> Result<u64, BackupError> {
+    Err(BackupError::Snapshot(format!(
+        "pre-flight free-space check is unsupported on this platform ({})",
+        path.display()
+    )))
+}
+
+/// Pre-flight for [`take`]. Refuses with `needs X GB, has Y GB` when the
+/// filesystem cannot hold a snapshot the size of `db_path` (plus its
+/// `-wal`, an upper bound on what `VACUUM INTO` will write), instead of
+/// failing mid-copy. Space occupied by an existing same-path snapshot
+/// counts as available — [`take`] unlinks it first.
+pub fn ensure_free_space(db_path: &Path, dest: &Path) -> Result<(), BackupError> {
+    let needed = snapshot_bytes_needed(db_path)?;
+    let available = available_bytes(&db_dir(dest))?;
+    let effective = available.saturating_add(reclaimable_snapshot(dest));
+    if effective >= needed {
+        return Ok(());
+    }
+    let needed_gb = format_gb(needed);
+    let has_gb = format_gb(available);
+    tracing::warn!(
+        needed_bytes = needed,
+        available_bytes = available,
+        db = %db_path.display(),
+        "kb-code: refusing to snapshot before VACUUM: needs {} GB, has {} GB",
+        needed_gb,
+        has_gb,
+    );
+    Err(BackupError::InsufficientSpace { needed_gb, has_gb })
+}
+
+/// Epoch `e` from a `*.pre-V<e>.bak` file name, if `name` is one.
+/// `index.db.pre-V0036.bak` → 36. Anything else — the live database, the
+/// receipt, a WAL sidecar — is `None` and must not be deleted.
+fn snapshot_name_epoch(name: &str) -> Option<u32> {
+    let stem = name.strip_suffix(".bak")?;
+    let idx = stem.rfind(".pre-V")?;
+    let digits = &stem[idx + ".pre-V".len()..];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Delete `*.pre-V<e>.bak` beside `db_path` for `e < epoch - 1`.
+///
+/// A successful boot at epoch `N` keeps the current snapshot (`e == N`)
+/// and the previous one (`e == N - 1`) and logs each reaped path.
+/// `also_keep`, when set, is the snapshot this same boot just took: a
+/// crossing that jumps more than one epoch would otherwise reap its own
+/// rollback target on the boot that created it. The next boot takes
+/// nothing and reaps it if it is older than `N - 1`.
+///
+/// Does not touch the live database, the receipt, or any file that is
+/// not a pre-migration snapshot. A directory read failure is an error;
+/// one stuck file does not stop the rest, and the first unlink error is
+/// returned after the others have been attempted.
+pub fn prune_snapshots(
+    db_path: &Path,
+    epoch: u32,
+    also_keep: Option<&Path>,
+) -> Result<Vec<PathBuf>, BackupError> {
+    let dir = db_dir(db_path);
+    let keep_from = epoch.saturating_sub(1);
+    let keep_name = also_keep.and_then(|p| p.file_name().map(|n| n.to_os_string()));
+    let entries = std::fs::read_dir(&dir).map_err(|source| BackupError::Io {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    let mut reaped = Vec::new();
+    let mut first_err: Option<BackupError> = None;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(source) => {
+                first_err.get_or_insert(BackupError::Io {
+                    path: dir.display().to_string(),
+                    source,
+                });
+                continue;
+            }
+        };
+        if keep_name.as_ref() == Some(&entry.file_name()) {
+            continue;
+        }
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(snapshot_epoch) = snapshot_name_epoch(&name) else {
+            continue;
+        };
+        if snapshot_epoch >= keep_from {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => continue,
+            Ok(_) => {}
+            Err(source) => {
+                first_err.get_or_insert(BackupError::Io {
+                    path: entry.path().display().to_string(),
+                    source,
+                });
+                continue;
+            }
+        }
+        let path = entry.path();
+        if path == db_path {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::info!(
+                    path = %path.display(),
+                    snapshot_epoch,
+                    boot_epoch = epoch,
+                    "kb-code: reaped pre-migration snapshot older than the previous epoch"
+                );
+                reaped.push(path);
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %source,
+                    "kb-code: could not reap pre-migration snapshot"
+                );
+                first_err.get_or_insert(BackupError::Io {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
+    }
+    reaped.sort();
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(reaped),
+    }
 }
 
 /// Take a snapshot of the volume at `db_path`, naming it for the epoch
@@ -429,4 +674,50 @@ mod tests {
         assert!(msg.contains(OVERRIDE_ENV), "{msg}");
         assert!(msg.contains(&format!("V{REKEY_EPOCH:04}")), "{msg}");
     }
+
+    /// Epoch 40 keeps the current snapshot and the previous one, and reaps
+    /// anything older. Temp dir only — never the operator's state directory.
+    #[test]
+    fn epoch_40_keeps_the_previous_snapshot_and_reaps_older_ones() {
+        let dir = tmp();
+        let path = dir.path().join("index.db");
+        std::fs::write(&path, b"live").unwrap();
+        std::fs::write(dir.path().join("backup.marker"), b"{}").unwrap();
+        for epoch in [36u32, 39, 40] {
+            std::fs::write(snapshot_path(&path, Some(epoch)), b"snap").unwrap();
+        }
+
+        let reaped = prune_snapshots(&path, 40, None).unwrap();
+
+        assert_eq!(reaped.len(), 1, "{reaped:?}");
+        assert!(
+            reaped[0].ends_with("index.db.pre-V0036.bak"),
+            "{}",
+            reaped[0].display()
+        );
+        assert!(!snapshot_path(&path, Some(36)).exists(), "pre-V0036.bak deleted");
+        assert!(
+            snapshot_path(&path, Some(39)).exists(),
+            "pre-V0039.bak kept (e == N-1)"
+        );
+        assert!(
+            snapshot_path(&path, Some(40)).exists(),
+            "pre-V0040.bak kept (current epoch)"
+        );
+        assert!(path.exists(), "the live database is not a snapshot");
+        assert!(dir.path().join("backup.marker").exists());
+    }
+
+    #[test]
+    fn a_short_disk_is_refused_with_needed_and_available_gigabytes() {
+        let err = BackupError::InsufficientSpace {
+            needed_gb: format_gb(5_250_000_000),
+            has_gb: format_gb(1_200_000_000),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("needs 5.25 GB"), "{msg}");
+        assert!(msg.contains("has 1.20 GB"), "{msg}");
+        assert!(format_gb(5_249_728_512).starts_with("5.25"), "{}", format_gb(5_249_728_512));
+    }
+
 }

@@ -27,12 +27,21 @@
 //! remote target is loudly reported (stderr warning + an annotated stdout
 //! summary line) but never fails the backup itself — the local tarball is
 //! already a complete backup on its own.
+//!
+//! **`--all`.** [`run_all`] lists every corpus via `GET /api/kbs` and calls
+//! [`run`] once per name (default `<state>/exports/<kb>-<timestamp>.tar.gz`
+//! each). Every listed kb is attempted. A failure is printed and kept; the
+//! command returns an error naming every failed kb, so the process exits
+//! non-zero. It does not stop at the first failure, and it does not report
+//! success when any kb failed.
 
 use super::{load_config_or_default, resolve_config_path};
+use crate::http::client_with_timeout_and_bearer;
 use anyhow::{anyhow, Context, Result};
 use kb_core::paths::KbPaths;
 use kb_core::storage::lance::Storage;
 use kb_core::types::KbName;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -99,6 +108,122 @@ pub async fn run(config_path: Option<&PathBuf>, kb: &str, out: Option<&Path>) ->
     }
 
     Ok(())
+}
+
+/// `kb backup --all` — one tarball per corpus listed by `GET /api/kbs`.
+///
+/// Calls [`run`] with `out = None` so each kb lands at the default export
+/// path. `--out` is not a parameter: one path cannot hold every tarball.
+///
+/// Every listed name is attempted, including after a failure. Each failure
+/// is printed to stderr (`backup: kb <name> FAILED: …`) and retained. If any
+/// attempt failed, this returns an error naming every failed kb (the process
+/// exits non-zero). A later success does not cancel an earlier failure.
+///
+/// An empty list is an error — exiting 0 after writing nothing would hide a
+/// daemon that reported no corpora. An entry with no usable `name` fails the
+/// listing before any tarball is written; it is not skipped.
+pub async fn run_all(
+    config_path: Option<&PathBuf>,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    let names = list_kb_names(daemon, bearer).await?;
+    if names.is_empty() {
+        return Err(anyhow!(
+            "backup --all: GET /api/kbs returned no kbs; nothing was backed up"
+        ));
+    }
+    let mut outcomes = Vec::with_capacity(names.len());
+    for kb in &names {
+        // Do not `?` here. A failed kb must be recorded, and every later kb
+        // must still be backed up.
+        let error = match run(config_path, kb, None).await {
+            Ok(()) => None,
+            Err(e) => {
+                let msg = format!("{e:#}");
+                eprintln!("backup: kb {kb} FAILED: {msg}");
+                Some(msg)
+            }
+        };
+        outcomes.push(KbBackupOutcome {
+            kb: kb.as_str(),
+            error,
+        });
+    }
+    aggregate_backup_failures(&outcomes)
+}
+
+const DEFAULT_DAEMON: &str = "http://127.0.0.1:4000";
+
+async fn list_kb_names(daemon: Option<&str>, bearer: Option<&str>) -> Result<Vec<String>> {
+    let base = daemon.unwrap_or(DEFAULT_DAEMON).trim_end_matches('/');
+    let url = format!("{base}/api/kbs");
+    let client = client_with_timeout_and_bearer(5, bearer)?;
+    let body: Value = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("GET {url}"))?
+        .json()
+        .await
+        .with_context(|| format!("parse JSON from {url}"))?;
+    kb_names_from_api(&body).with_context(|| format!("GET {url}"))
+}
+
+/// Names from a `GET /api/kbs` body, in response order.
+///
+/// A non-array body, a missing or non-string `name`, or an empty `name` is
+/// an error. Entries are never dropped — skipping one would omit a corpus
+/// from the backup set.
+fn kb_names_from_api(body: &Value) -> Result<Vec<String>> {
+    let arr = body
+        .as_array()
+        .ok_or_else(|| anyhow!("GET /api/kbs: expected an array"))?;
+    let mut names = Vec::with_capacity(arr.len());
+    for (i, kb) in arr.iter().enumerate() {
+        let name = kb["name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("GET /api/kbs: entry {i} has no name"))?;
+        names.push(name.to_string());
+    }
+    Ok(names)
+}
+
+/// One kb in a `--all` sweep. `error: Some` is a failure, including an empty
+/// string — never treated as success.
+struct KbBackupOutcome<'a> {
+    kb: &'a str,
+    error: Option<String>,
+}
+
+/// `Err` if any outcome failed. The error names every failed kb, in list
+/// order, with each failure text. Successes are omitted. An empty slice, or
+/// a slice of only successes, is `Ok`.
+fn aggregate_backup_failures(outcomes: &[KbBackupOutcome<'_>]) -> Result<()> {
+    let failed: Vec<&KbBackupOutcome<'_>> = outcomes.iter().filter(|o| o.error.is_some()).collect();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    let listed = failed
+        .iter()
+        .map(|o| {
+            let why = o
+                .error
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown error");
+            format!("{} ({why})", o.kb)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(anyhow!(
+        "backup --all: {} kb(s) failed: {listed}",
+        failed.len()
+    ))
 }
 
 /// Build the consistent snapshot tree at `staging/<kb>/` and tar it.
@@ -198,4 +323,109 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn outcome<'a>(kb: &'a str, error: Option<&str>) -> KbBackupOutcome<'a> {
+        KbBackupOutcome {
+            kb,
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn all_successes_are_ok() {
+        assert!(aggregate_backup_failures(&[]).is_ok());
+        assert!(
+            aggregate_backup_failures(&[outcome("alpha", None), outcome("beta", None)]).is_ok()
+        );
+    }
+
+    #[test]
+    fn fail_if_any_names_every_failed_kb() {
+        let err = aggregate_backup_failures(&[
+            outcome("alpha", None),
+            outcome("beta", Some("no state")),
+            outcome("gamma", None),
+            outcome("delta", Some("lance inconsistent")),
+        ])
+        .expect_err("a failed kb must fail the sweep");
+        let msg = err.to_string();
+        assert!(msg.contains("beta"), "{msg}");
+        assert!(msg.contains("delta"), "{msg}");
+        assert!(msg.contains("no state"), "{msg}");
+        assert!(msg.contains("lance inconsistent"), "{msg}");
+        assert!(
+            !msg.contains("alpha"),
+            "success must not be reported as failed: {msg}"
+        );
+        assert!(
+            !msg.contains("gamma"),
+            "success must not be reported as failed: {msg}"
+        );
+        assert!(msg.contains("2 kb"), "{msg}");
+    }
+
+    #[test]
+    fn empty_failure_text_still_fails_that_kb() {
+        let err = aggregate_backup_failures(&[outcome("alpha", Some(""))])
+            .expect_err("empty error text is still a failure");
+        let msg = err.to_string();
+        assert!(msg.contains("alpha"), "{msg}");
+        assert!(msg.contains("unknown error"), "{msg}");
+        assert!(msg.contains("1 kb"), "{msg}");
+    }
+
+    #[test]
+    fn repeated_failure_is_not_collapsed() {
+        let err = aggregate_backup_failures(&[
+            outcome("beta", Some("first")),
+            outcome("beta", Some("second")),
+        ])
+        .expect_err("both failures must count");
+        let msg = err.to_string();
+        assert!(msg.contains("first"), "{msg}");
+        assert!(msg.contains("second"), "{msg}");
+        assert!(msg.contains("2 kb"), "{msg}");
+    }
+
+    #[test]
+    fn kb_names_keeps_every_named_corpus() {
+        let body = json!([
+            {"name": "docs", "memory_scope": null},
+            {"name": "memory", "memory_scope": "global"},
+            {"name": "scratch"}
+        ]);
+        assert_eq!(
+            kb_names_from_api(&body).unwrap(),
+            vec![
+                "docs".to_string(),
+                "memory".to_string(),
+                "scratch".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn kb_names_rejects_a_hole_instead_of_skipping_it() {
+        let hole = json!([
+            {"name": "docs"},
+            {"doc_count": 3},
+            {"name": "scratch"}
+        ]);
+        let err = kb_names_from_api(&hole).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("entry 1"), "{msg}");
+        assert!(msg.contains("no name"), "{msg}");
+
+        let not_array = kb_names_from_api(&json!({"name": "docs"})).unwrap_err();
+        assert!(
+            not_array.to_string().contains("array"),
+            "{not_array}"
+        );
+    }
 }

@@ -27,6 +27,12 @@
 # `kb remember`) made entirely inside a subagent was previously invisible
 # to this script (parent-transcript-only grep). No sidecar dir → the file
 # list is just the parent transcript, byte-identical to the prior behavior.
+# Stop stdout is a systemMessage into a session that is already over, so a
+# hit also appends `claude <sid> <epoch>` to the shared distill-pending
+# ledger ($XDG_CACHE_HOME/kb/distill-pending, same line grok/kimi/omp
+# already write). The next SessionStart's kb-wake.sh surfaces and consumes
+# it. Deduped by session id, same as queue_distill_pending. Best-effort:
+# a ledger failure must not block the nudge, and a nudge must never block.
 #
 # Gated like kb-capture.sh on KB_SESSIONS_DIR (no sessions corpus → nothing
 # to distill from) and on `kb` being installed (the skill needs it).
@@ -59,7 +65,16 @@ grep -qE '"command":"([^"\\]|\\.)*git commit' "${files[@]}" 2>/dev/null || exit 
 grep -qE 'remembered [0-9a-f]{12}' "${files[@]}" 2>/dev/null && exit 0
 
 mkdir -p "$marker_dir" 2>/dev/null && : >"$marker" 2>/dev/null
+# Shared ledger relay. Marker above already caps this at once per session;
+# the grep is the same session-id dedup grok/kimi use if the marker is gone.
+ledger="$marker_dir/distill-pending"
+if [ -f "$ledger" ] && grep -qF "claude $sid " "$ledger" 2>/dev/null; then
+  :
+else
+  printf 'claude %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null || true
+fi
 jq -n --arg sid "$sid" '{systemMessage:
   ("kb: this session has commits but no curated memory — run /kb-distill "
-   + $sid + " to keep what was decided/shipped (--dry-run to preview).")}' \
+   + $sid + " to keep what was decided/shipped (--dry-run to preview). "
+   + "This ask will be replayed at the next session start.")}' \
   2>/dev/null || exit 0

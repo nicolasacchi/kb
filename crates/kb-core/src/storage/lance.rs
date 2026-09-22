@@ -23,7 +23,7 @@ use lancedb::{
         Index, IndexType,
     },
     query::{ExecutableQuery, QueryBase, Select},
-    table::{Duration, NewColumnTransform, OptimizeAction, Table as LanceTable},
+    table::{CompactionOptions, Duration, NewColumnTransform, OptimizeAction, Table as LanceTable},
     Connection,
 };
 use serde::Serialize;
@@ -50,6 +50,47 @@ const FTS_COLUMNS: &[&str] = &["title", "body", "headings", "code", "prompt"];
 /// (`OptimizeAction::All`, run by the startup heuristic) reconciles it.
 const SCALAR_INDEX_COLUMNS: &[&str] = &["path", "kb_session"];
 
+/// Rows per fragment production compaction aims for.
+///
+/// Lance's `CompactionOptions` default is `1024 * 1024`. No kb fragment
+/// ever reaches that, so every fragment stays a compaction candidate and
+/// each pass rewrites the whole corpus. 2048 is large enough that a
+/// compacted fragment stops being a candidate and small enough that a
+/// kb-scale corpus settles in a handful of fragments. `wants_compaction`
+/// in kb-server reads this same constant.
+pub const COMPACT_TARGET_ROWS_PER_FRAGMENT: usize = 2048;
+
+/// Below this many rows, do not build an IVF-PQ index. PQ-quantised IVF
+/// is a large-corpus tool; on the 1–5k row corpora kb actually holds, a
+/// brute-force scan is exact and faster, and every retrain is a
+/// `CreateIndex` transaction that races compaction.
+///
+/// A `[storage] vector_index_min_rows` knob is deferred because
+/// `config.rs` is owned elsewhere this wave — this constant is the
+/// stand-in.
+pub const VECTOR_INDEX_MIN_ROWS: u64 = 20_000;
+
+/// `Some(partitions)` when `rows` is large enough to train IVF-PQ.
+/// `None` means skip the build and clear the dirty flag (same outcome as
+/// the "not enough rows" arm in `ensure_vector_index`).
+///
+/// Partitions are `round(sqrt(rows))`, not the library default of 256
+/// centroids (which left most clusters empty on kb corpora).
+fn ivf_pq_partitions(rows: u64) -> Option<u32> {
+    if rows < VECTOR_INDEX_MIN_ROWS {
+        return None;
+    }
+    let n = (rows as f64).sqrt().round() as u64;
+    Some(n.clamp(1, u32::MAX as u64) as u32)
+}
+
+fn kb_compaction_options() -> CompactionOptions {
+    let mut options = CompactionOptions::default();
+    // Lance default is 1024*1024 — every kb fragment stays a candidate.
+    options.target_rows_per_fragment = COMPACT_TARGET_ROWS_PER_FRAGMENT;
+    options
+}
+
 /// (id, embedding) pair returned by `Storage::list_embeddings`. The embedding
 /// width matches the kb's configured model dim — 384 for bge-small, 768 for
 /// bge-base, 1024 for bge-large. Callers read width from the data, not from a
@@ -66,14 +107,17 @@ pub type EmbeddingPair = (String, Vec<f32>);
 /// connection (`lance::dataset::DEFAULT_INDEX_CACHE_SIZE` /
 /// `DEFAULT_METADATA_CACHE_SIZE`, dataset.rs:179/183), held for the table's lifetime — on a
 /// multi-kb daemon with a churny corpus this alone grew the resident heap to
-/// ~10 GB. The shipped defaults (256 / 64 MiB) cap that per kb.
+/// ~10 GB. The shipped defaults (256 / 64 MiB) cap that. Opens that resolve
+/// to the same byte caps share one process-wide session, so the daemon pays
+/// the cap once rather than once per kb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LanceOptions {
-    /// Cap for lance's per-connection index cache, in MiB. `0` → lance's own
-    /// default (6 GiB).
+    /// Cap for the lance index cache, in MiB. `0` → lance's own default
+    /// (6 GiB). Both knobs `0` keeps one default session per connection;
+    /// any other pair shares one process-wide session per resolved size.
     pub index_cache_mb: u64,
-    /// Cap for lance's per-connection metadata cache, in MiB. `0` → lance's
-    /// own default (1 GiB).
+    /// Cap for the lance metadata cache, in MiB. `0` → lance's own default
+    /// (1 GiB). Same share rule as [`Self::index_cache_mb`].
     pub metadata_cache_mb: u64,
     /// Minimum seconds between search-triggered FTS rebuilds, and
     /// independently between vector rebuilds. The dirty flags stay the
@@ -111,6 +155,33 @@ impl LanceOptions {
             index_rebuild_min_secs: 0,
         }
     }
+}
+
+/// Process-wide lance session for one resolved cache size.
+///
+/// lancedb's connect builder already accepts a shared session
+/// (`ConnectBuilder::session`). Lance prefixes cache keys with the dataset
+/// URI, so one session can back every kb in this process. Keyed by the
+/// byte caps the caller already resolved from [`LanceOptions`], so a
+/// different per-open size still gets its own session and the `0`/`0`
+/// opt-out (no custom session) is unchanged.
+fn shared_lance_session(index_bytes: usize, metadata_bytes: usize) -> Arc<lancedb::Session> {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    static SESSIONS: LazyLock<Mutex<HashMap<(usize, usize), Arc<lancedb::Session>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let map = &*SESSIONS;
+    let mut guard = map.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .entry((index_bytes, metadata_bytes))
+        .or_insert_with(|| {
+            Arc::new(lancedb::Session::new(
+                index_bytes,
+                metadata_bytes,
+                Arc::new(lancedb::ObjectStoreRegistry::default()),
+            ))
+        })
+        .clone()
 }
 
 /// Escape a value for safe interpolation into a lance filter *string
@@ -541,13 +612,18 @@ impl Storage {
         // `Session` (created per connection when none is supplied) sizes the
         // index cache at 6 GiB and the metadata cache at 1 GiB
         // (`lance::dataset::DEFAULT_*`); a long-lived daemon with several kbs
-        // holds one of each PER kb, which is where the ~10 GB anonymous-heap
-        // growth came from. Both knobs are in MiB; `0` maps back to lance's
-        // default for that cache. The custom session is otherwise identical
-        // to the default one (same default `ObjectStoreRegistry`) and is
-        // inherited by every table opened from this connection, reads and
-        // writes alike (lancedb `ListingDatabase::connect_with_options`
-        // threads `request.session` through open/create).
+        // used to hold one of each PER kb, which is where the ~10 GB
+        // anonymous-heap growth came from. Both knobs are in MiB; `0` maps
+        // back to lance's default for that cache. When either cap is set,
+        // opens that resolve to the same byte caps share one process-wide
+        // session (`shared_lance_session`) — the builder already accepts it,
+        // and lance URI-prefixes cache keys so corpora do not collide. The
+        // `0`/`0` opt-out still lets lancedb build its own default session
+        // per connection. The custom session is otherwise identical to the
+        // default one (same default `ObjectStoreRegistry`) and is inherited
+        // by every table opened from this connection, reads and writes alike
+        // (lancedb `ListingDatabase::connect_with_options` threads
+        // `request.session` through open/create).
         let conn = if opts.index_cache_mb == 0 && opts.metadata_cache_mb == 0 {
             builder
                 .execute()
@@ -569,11 +645,7 @@ impl Storage {
             } else {
                 opts.metadata_cache_mb.saturating_mul(MIB)
             };
-            let session = Arc::new(lancedb::Session::new(
-                index_bytes as usize,
-                metadata_bytes as usize,
-                Arc::new(lancedb::ObjectStoreRegistry::default()),
-            ));
+            let session = shared_lance_session(index_bytes as usize, metadata_bytes as usize);
             builder
                 .session(session)
                 .execute()
@@ -1101,9 +1173,11 @@ impl Storage {
     }
 
     /// Force-create the IVF-PQ vector index on the embedding column.
-    /// Idempotent + tolerant of "not enough rows" (lance requires a minimum
-    /// row count to build a meaningful PQ index; under that, vector queries
-    /// fall back to brute-force scan, which is fine for small kbs).
+    /// Idempotent. Below [`VECTOR_INDEX_MIN_ROWS`] the build is skipped and
+    /// the dirty flag cleared (same outcome as the "not enough rows" arm):
+    /// vector queries fall back to brute-force scan, which is exact and
+    /// faster on kb-scale corpora. Above the bar, partitions are sized from
+    /// row count — not `IvfPqIndexBuilder::default()`'s 256 centroids.
     pub async fn ensure_vector_index(&self) -> Result<()> {
         use std::sync::atomic::Ordering;
         // Fast path — same gate as `ensure_fts_index`: the IVF-PQ index already
@@ -1111,6 +1185,14 @@ impl Storage {
         if !self.vector_needs_build.load(Ordering::Relaxed) {
             return Ok(());
         }
+        let rows = self.count_rows().await?;
+        let Some(partitions) = ivf_pq_partitions(rows) else {
+            // Below VECTOR_INDEX_MIN_ROWS. Same clear as the "not enough
+            // rows" arm below — do not construct IvfPqIndexBuilder::default().
+            // A later dirtying upsert retries once the corpus crosses the bar.
+            self.vector_needs_build.store(false, Ordering::Relaxed);
+            return Ok(());
+        };
         // Fix 2 — same throttle as `ensure_fts_index`. Stale-window serving is
         // safe here by the long-standing design: vector queries brute-force-
         // scan fragments the IVF-PQ index doesn't cover, so freshness never
@@ -1120,7 +1202,10 @@ impl Storage {
         }
         let result = self
             .table
-            .create_index(&["embedding"], Index::IvfPq(IvfPqIndexBuilder::default()))
+            .create_index(
+                &["embedding"],
+                Index::IvfPq(IvfPqIndexBuilder::default().num_partitions(partitions)),
+            )
             .execute()
             .await;
         if let Err(e) = result {
@@ -1160,28 +1245,29 @@ impl Storage {
         Ok(())
     }
 
-    /// GC-B7 — retention window for the old-manifest prune step below.
-    /// Lance's own `OptimizeAction::All` hardcodes 7 DAYS *and*
-    /// `delete_unverified: false` (which additionally protects any
-    /// unreferenced data file younger than 7 days even once its owning
-    /// manifest is pruned) — a sane default for an untrusted multi-writer
-    /// environment, but wildly conservative for kb: the storage actor is
-    /// the dataset's SOLE writer AND sole compactor for a given kb (root
-    /// invariant #2 / architecture invariant #17's sibling on the storage
-    /// side), so nothing else is ever mid-transaction against these files.
-    /// The only real hazard is an in-flight READ (a search/gallery query
-    /// already scanning a manifest's fragments) losing a file mid-scan if a
-    /// concurrent compaction prunes it out from under that read — every
-    /// read measured in the 2026-07-11 20k-doc scale test finished in well
-    /// under a second even under heavy fragmentation (worst recorded
-    /// ~157ms facets p50), so a few-minutes window is a generous multiple
-    /// of any realistic in-flight read duration while still reclaiming
-    /// disk same-session instead of after a week.
-    const PRUNE_RETENTION_MINUTES: i64 = 5;
+    /// Retention window for the old-manifest prune step below.
+    ///
+    /// 24 hours (1440 minutes). The old policy — 5 minutes, paired with
+    /// `delete_unverified: true` — treated the storage actor as the
+    /// dataset's sole writer, so nothing else could be mid-transaction
+    /// against these files. That is not safe: an in-flight `CreateIndex`
+    /// / index rewrite writes data files before its transaction commits,
+    /// and a compaction that prunes unverified files inside minutes
+    /// unlinks them (lance-02 / lance-04). Lance's own
+    /// `OptimizeAction::All` hardcodes 7 days and `delete_unverified:
+    /// false` for this reason. 24 h is kb's default — a cheap accidental
+    /// safety net; `kb backup` / `kb restore` is the documented rollback
+    /// path. Tests that need deterministic reclaim call
+    /// `compact_all_with_retention(0, true)` and are unchanged.
+    const PRUNE_RETENTION_MINUTES: i64 = 24 * 60;
 
-    /// Run compaction + a physical old-version reclaim, using kb's own
-    /// (safe-for-single-writer) retention policy — see
-    /// `PRUNE_RETENTION_MINUTES` and `compact_all_with_retention`.
+    /// Run compaction + a physical old-version reclaim.
+    ///
+    /// Production policy is [`Self::PRUNE_RETENTION_MINUTES`] (24 h) and
+    /// `delete_unverified: false`. Fragment target is
+    /// [`COMPACT_TARGET_ROWS_PER_FRAGMENT`] (2048), not lance's
+    /// `1024 * 1024` default, which makes every kb fragment a permanent
+    /// candidate.
     ///
     /// Why we need it: every `upsert_docs` is a `merge_insert` that
     /// commits a fresh manifest + a new data fragment. The indexer used to
@@ -1197,23 +1283,24 @@ impl Storage {
     /// `old_versions_removed=0` every cycle under lance's own 7-day/
     /// unverified=false default).
     pub async fn compact_all(&self) -> Result<CompactStats> {
-        self.compact_all_with_retention(Self::PRUNE_RETENTION_MINUTES, true)
+        self.compact_all_with_retention(Self::PRUNE_RETENTION_MINUTES, false)
             .await
     }
 
     /// Same as `compact_all` but with an explicit retention window +
     /// `delete_unverified` flag, so callers (and tests) can exercise the
     /// physical-reclaim path deterministically — production always goes
-    /// through `compact_all`, which pins the safe defaults above. Runs
-    /// compaction and pruning as TWO separate `optimize` calls (rather than
-    /// `OptimizeAction::All`, which hardcodes lance's 7-day/
-    /// `delete_unverified: false` prune policy with no way to override
-    /// either), plus a best-effort index optimize — matching what `All`
-    /// used to do end to end. Never runs concurrently with itself: the
-    /// storage actor parks any other Lance-mutating message
-    /// (`defers_during_compact`, `storage/actor.rs`) while a compaction is
-    /// in flight, so at most one physical reclaim pass per compaction
-    /// cycle.
+    /// through `compact_all`, which pins 24 h / `delete_unverified: false`.
+    /// The zero-window + `delete_unverified: true` arguments tests pass
+    /// are intentional and unchanged. Runs compaction and pruning as TWO
+    /// separate `optimize` calls (rather than `OptimizeAction::All`, which
+    /// hardcodes lance's 7-day / `delete_unverified: false` prune policy
+    /// with no way to override either), plus a best-effort index optimize
+    /// — matching what `All` used to do end to end. Never runs
+    /// concurrently with itself: the storage actor parks any other
+    /// Lance-mutating message (`defers_during_compact`, `storage/actor.rs`)
+    /// while a compaction is in flight, so at most one physical reclaim
+    /// pass per compaction cycle.
     pub async fn compact_all_with_retention(
         &self,
         retention_minutes: i64,
@@ -1222,7 +1309,7 @@ impl Storage {
         let compaction = self
             .table
             .optimize(OptimizeAction::Compact {
-                options: Default::default(),
+                options: kb_compaction_options(),
                 remap_options: None,
             })
             .await
@@ -1557,17 +1644,34 @@ impl Storage {
         ids
     }
 
-    /// Build the IVF-PQ index on the chunk embedding column. Same gate +
-    /// small-table tolerance as `ensure_vector_index`, but its OWN dirty
+    /// Build the IVF-PQ index on the chunk embedding column. Same row-count
+    /// gate and partition sizing as `ensure_vector_index`, but its OWN dirty
     /// flag so chunk writes never rebuild the doc index.
     pub async fn ensure_chunk_vector_index(&self) -> Result<()> {
         use std::sync::atomic::Ordering;
         if !self.chunk_vector_needs_build.load(Ordering::Relaxed) {
             return Ok(());
         }
+        let rows = self
+            .chunk_table
+            .count_rows(None)
+            .await
+            .map_err(|e| crate::Error::Storage(format!("lance chunk count: {e}")))?
+            as u64;
+        let Some(partitions) = ivf_pq_partitions(rows) else {
+            // Same clear as the "not enough rows" arm below. See
+            // VECTOR_INDEX_MIN_ROWS — the `[storage]` knob is deferred
+            // because config.rs is owned elsewhere this wave.
+            self.chunk_vector_needs_build
+                .store(false, Ordering::Relaxed);
+            return Ok(());
+        };
         let result = self
             .chunk_table
-            .create_index(&["embedding"], Index::IvfPq(IvfPqIndexBuilder::default()))
+            .create_index(
+                &["embedding"],
+                Index::IvfPq(IvfPqIndexBuilder::default().num_partitions(partitions)),
+            )
             .execute()
             .await;
         if let Err(e) = result {
@@ -5188,6 +5292,18 @@ mod tests {
         s.ensure_vector_index().await.unwrap();
     }
 
+    #[test]
+    fn ivf_pq_partitions_gates_below_min_rows_and_sizes_from_row_count() {
+        assert_eq!(ivf_pq_partitions(0), None);
+        assert_eq!(ivf_pq_partitions(VECTOR_INDEX_MIN_ROWS - 1), None);
+        let at = ivf_pq_partitions(VECTOR_INDEX_MIN_ROWS).expect("at the bar");
+        assert_ne!(at, 256, "must not train the library default of 256 centroids");
+        let sqrt = (VECTOR_INDEX_MIN_ROWS as f64).sqrt().round() as u32;
+        assert_eq!(at, sqrt);
+        let bigger = ivf_pq_partitions(VECTOR_INDEX_MIN_ROWS * 4).unwrap();
+        assert!(bigger > at, "partitions must grow with row count");
+    }
+
     // --- v0.3: atlas migration + update + read round-trip --------------
 
     #[tokio::test]
@@ -5782,14 +5898,14 @@ mod tests {
     }
 
     /// GC-B7 — `compact_all` (production defaults) never physically reclaims
-    /// disk inside a fast test: the 5-minute retention window is a deliberate
-    /// safety margin, and every version here is milliseconds old. This test
+    /// disk inside a fast test: the 24-hour retention window and
+    /// `delete_unverified: false` exist so an in-flight index build is not
+    /// unlinked, and every version here is milliseconds old. This test
     /// exercises the actual reclaim mechanism via `compact_all_with_retention`
     /// with a zero window + `delete_unverified: true` — the knobs `compact_all`
     /// can't expose without breaking that safety margin — proving the
     /// mechanism itself (not just that it's gated) actually frees old-version
     /// bytes instead of the `old_versions_removed=0` the 2026-07-11 scale test
-    /// measured under lance's own default policy.
     #[tokio::test]
     async fn compact_all_with_retention_reclaims_old_versions() {
         let tmp = tempfile::tempdir().unwrap();
@@ -5850,6 +5966,17 @@ mod tests {
     }
 
     // ---- Fix 1/2/3: cache caps, rebuild throttle, orphan _indices GC ----
+    #[test]
+    fn shared_lance_session_reuses_matching_caps() {
+        let a = shared_lance_session(1024, 512);
+        let b = shared_lance_session(1024, 512);
+        let c = shared_lance_session(2048, 512);
+        assert!(Arc::ptr_eq(&a, &b), "same caps must share one session");
+        assert!(
+            !Arc::ptr_eq(&a, &c),
+            "different caps must not collapse onto one session"
+        );
+    }
 
     /// Fix 1 — the capped-cache session path (`open_with_options` with a
     /// custom `lancedb::Session`) opens, writes, and searches exactly like

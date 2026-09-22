@@ -39,7 +39,10 @@ pub const LOG_FILE_PREFIX: &str = "kb.ndjson";
 /// `error` — lance 4.0.0 emits a paired `_score`/`_distance`
 /// auto-projection deprecation WARN on every FTS + vector search, the
 /// same noise both binaries already pin out of their stderr defaults.
-const DEFAULT_FILE_FILTER: &str = "info,lance::dataset::scanner=error";
+/// `lance::execution` and `lance::file_audit` are pinned to `warn` so
+/// their INFO lines do not flood the ndjson file.
+const DEFAULT_FILE_FILTER: &str =
+    "info,lance::dataset::scanner=error,lance::execution=warn,lance::file_audit=warn";
 
 /// L2 — reload handle for the FILE layer's `EnvFilter`, letting
 /// `PUT /api/log-level` flip verbosity without a restart. The handle type
@@ -235,6 +238,16 @@ mod tests {
         assert_eq!(
             resolve_file_filter(Some("   ")).max_level_hint(),
             Some(LevelFilter::INFO)
+        );
+        assert!(
+            DEFAULT_FILE_FILTER.contains("lance::execution=warn")
+                && DEFAULT_FILE_FILTER.contains("lance::file_audit=warn"),
+            "lance INFO targets must stay below info: {DEFAULT_FILE_FILTER}"
+        );
+        assert!(
+            !DEFAULT_FILE_FILTER.contains("lance::execution=info")
+                && !DEFAULT_FILE_FILTER.contains("lance::file_audit=info"),
+            "{DEFAULT_FILE_FILTER}"
         );
     }
 

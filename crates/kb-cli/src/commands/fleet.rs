@@ -1,8 +1,11 @@
 //! `kb fleet` — cross-daemon verbs over `~/.config/kb/daemons.toml`.
 //!
-//! `kb fleet status` (v0.24 T1) sweeps every configured daemon's
-//! `/api/identity` + `/api/stats` into one health report (the TUI
-//! fleet grid's CLI replacement). `kb fleet replicate --kb NAME` (Q4)
+//! `kb fleet init` writes that address book with the local daemon and
+//! leaves existing entries intact. A file that already has entries is
+//! not overwritten unless `--force`. `kb fleet status` (v0.24 T1)
+//! sweeps every configured daemon's `/api/identity` + `/api/stats`
+//! into one health report (the TUI fleet grid's CLI replacement).
+//! `kb fleet replicate --kb NAME` (Q4)
 //! queries each daemon's `/api/kb/{kb}/docs` for the artifact id set
 //! and prints a diff matrix: which daemons are missing which docs.
 //!
@@ -245,6 +248,137 @@ enum DaemonState {
     },
 }
 
+// ---- `kb fleet init` ----------------------------------------------------
+
+/// Refused because the address book already has entries and `--force`
+/// was not passed. The file is left untouched.
+#[derive(Debug, PartialEq, Eq)]
+struct InitRefused {
+    entries: usize,
+}
+
+/// `kb fleet init [--force]`.
+///
+/// Writes `~/.config/kb/daemons.toml` (honours `KB_CONFIG_DIR` /
+/// `KB_HOME`) with the local daemon (`local` → `http://127.0.0.1:4000`).
+/// Existing entries are kept. A file that already has entries is not
+/// rewritten unless `force`; even then peers are not removed and an
+/// existing `local` endpoint is not replaced. Prints the path.
+///
+/// Registered from `FleetAction` in `main.rs` — this module does not
+/// own the clap enum.
+pub async fn init(force: bool) -> Result<()> {
+    let paths = KbPaths::new("default")?;
+    let path = paths.daemons_file();
+    let existing = if path.exists() {
+        Some(
+            DaemonsConfig::load(&path)
+                .map_err(|e| anyhow!("read {}: {e}", path.display()))?,
+        )
+    } else {
+        None
+    };
+    let cfg = match decide_init(existing.as_ref(), force) {
+        Ok(cfg) => cfg,
+        Err(refused) => {
+            let noun = if refused.entries == 1 {
+                "entry"
+            } else {
+                "entries"
+            };
+            return Err(anyhow!(
+                "refusing to clobber {} — address book already has {} {noun}; pass --force to add the local daemon without removing existing entries",
+                path.display(),
+                refused.entries,
+            ));
+        }
+    };
+    let body = render_daemons_toml(&cfg);
+    kb_core::fsx::write_atomic(&path, body.as_bytes())
+        .map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+/// Seed a missing or empty address book with the local daemon. Refuse
+/// to rewrite a book that already has entries unless `force`. On
+/// force, insert `local` only when absent — never replace a peer or
+/// an existing local endpoint.
+fn decide_init(
+    existing: Option<&DaemonsConfig>,
+    force: bool,
+) -> std::result::Result<DaemonsConfig, InitRefused> {
+    match existing {
+        None => Ok(DaemonsConfig::default_local()),
+        Some(cfg) if cfg.daemon.is_empty() => Ok(DaemonsConfig::default_local()),
+        Some(cfg) if !force => Err(InitRefused {
+            entries: cfg.daemon.len(),
+        }),
+        Some(cfg) => Ok(ensure_local(cfg)),
+    }
+}
+
+fn ensure_local(cfg: &DaemonsConfig) -> DaemonsConfig {
+    let mut out = cfg.clone();
+    if let Some((name, entry)) = DaemonsConfig::default_local().daemon.into_iter().next() {
+        out.daemon.entry(name).or_insert(entry);
+    }
+    out
+}
+
+fn absent_address_book_message(path: &Path) -> String {
+    format!(
+        "fleet: address book absent ({}); this is not a configured fleet. \
+         Run `kb fleet init` to record the local daemon.",
+        path.display()
+    )
+}
+
+fn render_daemons_toml(cfg: &DaemonsConfig) -> String {
+    let mut out = String::from(
+        "# kb fleet address book — one [daemon.<name>] per host.\n\
+         # `kb fleet init` records the local daemon and does not remove peers.\n",
+    );
+    for (name, entry) in &cfg.daemon {
+        out.push_str(&format!(
+            "\n[daemon.{}]\nendpoint = {}\n",
+            toml_key(name),
+            toml_basic_string(&entry.endpoint),
+        ));
+    }
+    out
+}
+
+fn toml_key(s: &str) -> String {
+    let bare = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if bare {
+        s.to_string()
+    } else {
+        toml_basic_string(s)
+    }
+}
+
+fn toml_basic_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 // ---- `kb fleet status` (v0.24 T1) --------------------------------------
 
 /// Cross-daemon health sweep — the TUI fleet grid's replacement. For
@@ -252,13 +386,33 @@ enum DaemonState {
 /// kbs) + `GET /api/stats` (docs + open errors per kb). Per-daemon
 /// failures are non-fatal (an unreachable daemon is a report row, not
 /// an abort) — the same connection model as `replicate` above.
+/// A missing address book is reported as absent, not swept as one
+/// daemon. A file that exists and lists one daemon is still that one
+/// daemon.
 pub async fn status(json: bool, bearer: Option<&str>) -> Result<()> {
     let paths = KbPaths::new("default")?;
     let daemons_file = paths.daemons_file();
-    // Missing daemons.toml → single local default, like the retired TUI
-    // did — first-run users get a useful `kb fleet status` with zero
-    // config.
-    let daemons = DaemonsConfig::load_or_default(&daemons_file);
+    // Missing daemons.toml is not a one-daemon fleet. load_or_default
+    // used to synthesise `local`, so status printed "fleet: 1 daemon(s)"
+    // on every host that had never written the address book.
+    if !daemons_file.exists() {
+        let message = absent_address_book_message(&daemons_file);
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "address_book": "absent",
+                    "path": daemons_file.display().to_string(),
+                    "message": message,
+                }))?
+            );
+        } else {
+            println!("{message}");
+        }
+        return Ok(());
+    }
+    let daemons = DaemonsConfig::load(&daemons_file)
+        .map_err(|e| anyhow!("read {}: {e}", daemons_file.display()))?;
     if daemons.daemon.is_empty() {
         return Err(anyhow!(
             "no daemons configured — populate {}",
@@ -433,4 +587,56 @@ fn pick_source(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{absent_address_book_message, decide_init};
+    use kb_core::config::{DaemonEntry, DaemonsConfig};
+    use std::path::Path;
+
+    #[test]
+    fn absent_address_book_message_does_not_claim_one_daemon() {
+        let path = Path::new("/home/nik/.config/kb/daemons.toml");
+        let msg = absent_address_book_message(path);
+        assert!(msg.contains("address book"), "{msg}");
+        assert!(msg.contains("absent"), "{msg}");
+        assert!(msg.contains(&path.display().to_string()), "{msg}");
+        assert!(
+            !msg.contains("daemon(s)"),
+            "missing file must not read as a healthy fleet count: {msg}"
+        );
+    }
+
+    #[test]
+    fn decide_init_does_not_clobber_existing_entries() {
+        let mut existing = DaemonsConfig::default_local();
+        existing.daemon.get_mut("local").unwrap().endpoint = "http://127.0.0.1:9999".into();
+        existing.daemon.insert(
+            "h".into(),
+            DaemonEntry {
+                endpoint: "https://kb.example".into(),
+            },
+        );
+
+        let refused = decide_init(Some(&existing), false).expect_err("must not clobber");
+        assert_eq!(refused.entries, 2);
+        assert_eq!(existing.daemon["local"].endpoint, "http://127.0.0.1:9999");
+        assert_eq!(existing.daemon["h"].endpoint, "https://kb.example");
+
+        let written = decide_init(Some(&existing), true).unwrap();
+        assert_eq!(written.daemon.len(), 2, "force must not drop peers");
+        assert_eq!(
+            written.daemon["local"].endpoint, "http://127.0.0.1:9999",
+            "force must not replace an existing local endpoint"
+        );
+        assert_eq!(written.daemon["h"].endpoint, "https://kb.example");
+    }
+
+    #[test]
+    fn decide_init_seeds_local_when_address_book_missing() {
+        let cfg = decide_init(None, false).unwrap();
+        assert_eq!(cfg.daemon.len(), 1);
+        assert_eq!(cfg.daemon["local"].endpoint, "http://127.0.0.1:4000");
+    }
 }
