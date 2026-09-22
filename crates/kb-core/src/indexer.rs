@@ -1291,14 +1291,20 @@ async fn finish_run_tail(
 
 /// ops-06 — whether the unchanged-hash pre-gate may dismiss this open error.
 ///
-/// An IO failure is recorded with `content_hash: None`. `clear_errors_for_path`
-/// runs only from `finish_indexed_doc`'s success tail, which this skip never
-/// reaches, so a NULL-hash row written after the last successful index stays
-/// open forever: reconcile hashes, sees no change, heals mtime, and continues.
-/// A row that carries a content_hash is quarantine / embed-gate state and
-/// must survive this arm. Empty string is a hash, not SQL NULL.
-fn unchanged_pre_gate_dismisses(content_hash: Option<&str>) -> bool {
-    content_hash.is_none()
+/// An IO read failure is recorded with kind `"io"` and `content_hash: None`
+/// (`prepare_doc`'s `record_failure`). `clear_errors_for_path` runs only from
+/// `finish_indexed_doc`'s success tail, which this skip never reaches, so that
+/// row stays open forever: reconcile hashes, sees no change, heals mtime, and
+/// continues. Dismiss only that pair — NULL hash is not enough.
+///
+/// Edge writes (`EdgeRecordHook`) and failed deletes also store
+/// `content_hash: None`, but with kind `"storage"`. An unchanged reconcile
+/// must leave those for `clear_errors_for_path` on a real success; dismissing
+/// them here drops the edge write or the delete without a retry. A row that
+/// carries a content_hash is quarantine / embed-gate state and must survive
+/// this arm. Empty string is a hash, not SQL NULL.
+fn unchanged_pre_gate_dismisses(content_hash: Option<&str>, kind: &str) -> bool {
+    content_hash.is_none() && kind == "io"
 }
 
 /// Open error ids for `path` that [`unchanged_pre_gate_dismisses`] selects.
@@ -1308,7 +1314,8 @@ fn null_hash_error_ids_for_path<'a>(
 ) -> Vec<&'a str> {
     rows.iter()
         .filter(|row| {
-            row.path == path && unchanged_pre_gate_dismisses(row.content_hash.as_deref())
+            row.path == path
+                && unchanged_pre_gate_dismisses(row.content_hash.as_deref(), row.kind.as_str())
         })
         .map(|row| row.id.as_str())
         .collect()
@@ -1327,7 +1334,9 @@ async fn load_null_hash_open_errors(
     match storage.list_open_errors().await {
         Ok(rows) => rows
             .into_iter()
-            .filter(|row| unchanged_pre_gate_dismisses(row.content_hash.as_deref()))
+            .filter(|row| {
+                unchanged_pre_gate_dismisses(row.content_hash.as_deref(), row.kind.as_str())
+            })
             .collect(),
         Err(e) => {
             tracing::warn!(
@@ -1340,7 +1349,7 @@ async fn load_null_hash_open_errors(
     }
 }
 
-/// Dismiss open NULL-hash errors for `path`. `cached` is loaded once per
+/// Dismiss open NULL-hash `"io"` errors for `path`. `cached` is loaded once per
 /// ingest batch: a restart walk hits the unchanged arm for every
 /// already-indexed file, and a per-file `list_open_errors` would serialize
 /// that many actor reads ahead of real ingest (the same storm class as the
@@ -1528,9 +1537,10 @@ async fn process_ingest_batch(
                             }
                         }
                     }
-                    // ops-06 — beside the mtime heal, before continue. Hashed
-                    // rows are not dismissed; quarantine and embed_gated are
-                    // untouched. `force` never reaches this arm.
+                    // ops-06 — beside the mtime heal, before continue. Only a
+                    // NULL-hash `"io"` row is dismissed. Storage/edge/delete
+                    // NULL-hash rows and hashed quarantine / embed-gate rows
+                    // stay until a real success. `force` never reaches this arm.
                     dismiss_null_hash_open_errors(
                         storage,
                         bus,
@@ -5489,18 +5499,19 @@ mod tests {
         assert_eq!(storage.count_rows().await.unwrap(), 2);
     }
 
-    /// ops-06 — the unchanged-hash pre-gate dismisses an open error whose
-    /// `content_hash` IS NULL and leaves a hashed row in place. The filter
-    /// is path-scoped: another path's NULL-hash row is not this skip's.
+    /// ops-06 — the unchanged-hash pre-gate dismisses an open `"io"` error
+    /// whose `content_hash` IS NULL. A NULL-hash non-io row (edge write /
+    /// failed delete, kind `"storage"`) and a hashed row stay. The filter
+    /// is path-scoped: another path's NULL-hash IO row is not this skip's.
     /// Empty string is a stored hash, not SQL NULL.
     #[test]
     fn unchanged_pre_gate_selects_only_null_hash_rows_for_path() {
         let path = std::path::PathBuf::from("/corpus/doc.html");
         let other = std::path::PathBuf::from("/corpus/other.html");
-        let row = |id: &str, path: &std::path::Path, hash: Option<&str>| {
+        let row = |id: &str, path: &std::path::Path, kind: &str, hash: Option<&str>| {
             crate::storage::sqlite::ErrorRow {
                 id: id.into(),
-                kind: "io".into(),
+                kind: kind.into(),
                 source_slug: "src".into(),
                 path: path.to_path_buf(),
                 message: id.into(),
@@ -5510,24 +5521,27 @@ mod tests {
             }
         };
         let rows = vec![
-            row("null", &path, None),
-            row("hashed", &path, Some("kept-hash")),
-            row("empty", &path, Some("")),
-            row("other-null", &other, None),
+            row("null", &path, "io", None),
+            row("storage-null", &path, "storage", None),
+            row("hashed", &path, "io", Some("kept-hash")),
+            row("empty", &path, "io", Some("")),
+            row("other-null", &other, "io", None),
         ];
         assert_eq!(null_hash_error_ids_for_path(&path, &rows), vec!["null"]);
-        assert!(unchanged_pre_gate_dismisses(None));
-        assert!(!unchanged_pre_gate_dismisses(Some("kept-hash")));
-        assert!(!unchanged_pre_gate_dismisses(Some("")));
+        assert!(unchanged_pre_gate_dismisses(None, "io"));
+        assert!(!unchanged_pre_gate_dismisses(None, "storage"));
+        assert!(!unchanged_pre_gate_dismisses(Some("kept-hash"), "io"));
+        assert!(!unchanged_pre_gate_dismisses(Some(""), "io"));
     }
 
     /// ops-06 — reconcile re-emits `watch.modify` for a byte-identical file.
     /// The pre-gate hashes, sees no change, and continues before
     /// `finish_indexed_doc`'s `clear_errors_for_path`. That skip must still
-    /// dismiss an IO error recorded with `content_hash: None` after the last
-    /// successful index, and must not dismiss a hashed error (quarantine /
-    /// embed-gate state). A sentinel indexes after the modify so the assert
-    /// runs only once the skip has been processed.
+    /// dismiss an IO error recorded with kind `"io"` and `content_hash: None`
+    /// after the last successful index, and must not dismiss a hashed error
+    /// (quarantine / embed-gate state) or a NULL-hash non-io error (edge
+    /// write / failed delete, kind `"storage"`). A sentinel indexes after the
+    /// modify so the assert runs only once the skip has been processed.
     #[tokio::test]
     async fn unchanged_pre_gate_dismisses_null_hash_error_keeps_hashed() {
         let (bus, storage, kb, slug, tmp) = setup().await;
@@ -5612,6 +5626,28 @@ mod tests {
             )
             .await
             .unwrap();
+        // `record_error` dedups on (path, COALESCE(content_hash, '')), so the
+        // edge/delete NULL-hash row cannot be seeded through it beside the IO
+        // row. Insert directly. A real ErrorId so a mistaken dismiss would
+        // actually close the row and fail the assert below.
+        let storage_id = crate::ids::ErrorId::new();
+        {
+            let conn = rusqlite::Connection::open(tmp.path().join("index.db")).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            conn.execute(
+                "INSERT INTO errors (id, kind, source_slug, path, message, content_hash, created_at)
+                 VALUES (?1, 'storage', ?2, ?3, ?4, NULL, ?5)",
+                rusqlite::params![
+                    storage_id.as_str(),
+                    slug.as_str(),
+                    html_path.to_string_lossy().into_owned(),
+                    "record_edges: synthetic",
+                    unix_now(),
+                ],
+            )
+            .unwrap();
+        }
 
         std::fs::write(&html_path, html).unwrap();
         bus.emit(
@@ -5670,10 +5706,16 @@ mod tests {
 
         let open = storage.list_open_errors().await.unwrap();
         assert!(
-            !open
-                .iter()
-                .any(|row| row.path == html_path && row.content_hash.is_none()),
-            "NULL-hash error must be dismissed by the unchanged pre-gate, got {open:?}"
+            !open.iter().any(|row| {
+                row.path == html_path && row.kind == "io" && row.content_hash.is_none()
+            }),
+            "NULL-hash IO error must be dismissed by the unchanged pre-gate, got {open:?}"
+        );
+        assert!(
+            open.iter().any(|row| {
+                row.path == html_path && row.kind == "storage" && row.content_hash.is_none()
+            }),
+            "NULL-hash non-io error must survive the unchanged pre-gate, got {open:?}"
         );
         assert!(
             open.iter().any(|row| {

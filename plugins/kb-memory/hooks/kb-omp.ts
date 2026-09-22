@@ -1136,6 +1136,8 @@ export default function kbMemoryOmp(pi: {
     state: SlatePushState;
     timer: ReturnType<typeof setTimeout> | null;
     stopped: boolean;
+    /** Backoff timer is armed. `child` is already null; do not spawn again. */
+    restarting: boolean;
     inFlight: boolean;
     restarts: number;
     backoffMs: number;
@@ -1249,6 +1251,9 @@ export default function kbMemoryOmp(pi: {
     const args = ["slate", "watch", "--json", "--harness", "omp"];
     if (p.cwd) args.push("--cwd", p.cwd);
     if (p.sid) args.push("--session-id", p.sid);
+    // This process, not ppid: a watcher already reparented to init must
+    // still follow omp while omp is alive.
+    args.push("--parent-pid", String(process.pid));
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(KB, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -1278,10 +1283,12 @@ export default function kbMemoryOmp(pi: {
       if (p.stopped) return;
       if (p.restarts >= PUSH_MAX_RESTARTS) {
         p.stopped = true;
+        p.restarting = false;
         p.note = `push gave up after ${p.restarts} restarts${p.note ? ` — ${p.note}` : ""}`;
         return;
       }
       p.restarts++;
+      p.restarting = true;
       // A watch that died in seconds is a real failure (no daemon, no git
       // repo at this cwd, no `kb`) and earns the backoff; one that ran for a
       // while is an ordinary stream close and retries at the floor.
@@ -1289,6 +1296,7 @@ export default function kbMemoryOmp(pi: {
       const delay = lived > 60_000 ? 5_000 : p.backoffMs;
       p.backoffMs = lived > 60_000 ? 5_000 : Math.min(p.backoffMs * 2, 60_000);
       const t = setTimeout(() => {
+        p.restarting = false;
         if (!p.stopped) spawnWatch(p);
       }, delay);
       (t as any)?.unref?.();
@@ -1320,6 +1328,7 @@ export default function kbMemoryOmp(pi: {
           state: { pendingSince: null, lastEventAt: 0, lastDeliveredAt: 0 },
           timer: null,
           stopped: false,
+          restarting: false,
           inFlight: false,
           restarts: 0,
           backoffMs: 5_000,
@@ -1331,7 +1340,7 @@ export default function kbMemoryOmp(pi: {
         };
         pushers.set(info.sid, p);
       }
-      if (p.child || p.stopped) return;
+      if (p.child || p.stopped || p.restarting) return;
       spawnWatch(p);
     } catch {}
   };

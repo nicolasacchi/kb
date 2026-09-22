@@ -599,6 +599,10 @@ async fn recall_inner(
     if let Some(vt) = &wire_visible_to {
         q.push_str(&format!("&visible_to={}", http::encode_path_segment(vt)));
     }
+    // Served-recall ledger. Absent / blank session stays this URL —
+    // no `session=` param. An old daemon ignores the param; a missing
+    // session must not become `session=`.
+    append_recall_session(&mut q, recall_session_id().as_deref());
     // Recall embeds the query (a large model like bge-large is ~1024-dim and
     // costly on a busy CPU) then fans out FTS + vector queries across every
     // in-scope memory corpus, so a cold/loaded recall can run ~10-20s. The
@@ -625,6 +629,38 @@ async fn recall_inner(
         Err(e) => return Err(e.into()),
     };
     Ok((url, body))
+}
+
+/// Append `&session=` when `session` is a non-blank id. Blank or absent
+/// leaves `q` unchanged — the pre-ledger request.
+fn append_recall_session(q: &mut String, session: Option<&str>) {
+    let Some(sid) = session.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    q.push_str("&session=");
+    q.push_str(&http::encode_path_segment(sid));
+}
+
+/// Session id for `session=` on `GET /api/memory/recall`.
+///
+/// `KB_RECALL_SESSION` is the hook's explicit pass (`kb-recall.sh` sets it
+/// on the `kb recall` child, including empty when the payload has no sid).
+/// A set-but-blank value means "no session" and does not fall through to
+/// the marker — a stale `current-session` must not be sent. Unset falls
+/// back to the marker `kb remember` already reads, so a bare `kb recall`
+/// during a harness session still records.
+fn recall_session_id() -> Option<String> {
+    match std::env::var("KB_RECALL_SESSION") {
+        Ok(raw) => {
+            let sid = raw.trim();
+            if sid.is_empty() {
+                None
+            } else {
+                Some(sid.to_string())
+            }
+        }
+        Err(_) => read_session_marker(),
+    }
 }
 
 /// `kb forget <id>` — MI-W2.3: soft-forgets by default (tombstones the
@@ -2311,6 +2347,23 @@ mod tests {
                 (scope.to_string(), Some("named".to_string()), None)
             );
         }
+    }
+
+    #[test]
+    fn append_recall_session_absent_leaves_the_request_unchanged() {
+        let mut q = "http://127.0.0.1:4000/api/memory/recall?q=hi&scope=all&limit=5".to_string();
+        let before = q.clone();
+        append_recall_session(&mut q, None);
+        append_recall_session(&mut q, Some(""));
+        append_recall_session(&mut q, Some("  "));
+        assert_eq!(q, before);
+    }
+
+    #[test]
+    fn append_recall_session_adds_encoded_session_param() {
+        let mut q = "http://127.0.0.1:4000/api/memory/recall?q=hi&scope=all&limit=5".to_string();
+        append_recall_session(&mut q, Some(" sid/1 "));
+        assert!(q.ends_with("&session=sid%2F1"), "{q}");
     }
 
     /// ux-01 — a foreign repo basename listed in `project_slugs` maps onto

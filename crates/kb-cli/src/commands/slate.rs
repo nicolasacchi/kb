@@ -34,7 +34,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1352,16 +1352,18 @@ pub(crate) fn watch_query(slug: &str) -> String {
 /// Why a watch loop should stop instead of opening another SSE stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WatchStop {
-    /// `--parent-pid` was set and that process is no longer alive.
+    /// `--parent-pid` was set and that process is no longer alive, or no
+    /// pid was named and a non-TTY watch has been reparented to init.
     ParentDead,
     /// Stdout could not be written, or the pipe is already hung up.
     StdoutClosed,
 }
 
 /// Pure exit decision for `kb slate watch`. `parent_alive` is `None` when
-/// `--parent-pid` was not passed — the check is optional and must not fire.
-/// A stdout failure always stops: reconnecting after the pipe closed is how
-/// a watcher holds an SSE subscription for days (ops-08).
+/// `--parent-pid` was not passed — that poll is optional and must not fire.
+/// Reparent-to-init with no named pid is `orphaned_pipe_stop`, not this
+/// function. A stdout failure always stops: reconnecting after the pipe
+/// closed is how a watcher holds an SSE subscription for days (ops-08).
 pub(crate) fn watch_stop(parent_alive: Option<bool>, stdout_ok: bool) -> Option<WatchStop> {
     if parent_alive == Some(false) {
         return Some(WatchStop::ParentDead);
@@ -1372,18 +1374,30 @@ pub(crate) fn watch_stop(parent_alive: Option<bool>, stdout_ok: bool) -> Option<
     None
 }
 
-/// How often to re-check `--parent-pid` and stdout hangup while the SSE
-/// stream is quiet. PDEATHSIG is immediate; this poll is the backup for a
-/// named pid that is not ppid, and for a pipe that closed with no post to
+/// Stop for reparent-to-init only when no `--parent-pid` was named and
+/// stdout is not a TTY. A named pid is polled on its own — a live one must
+/// not be abandoned because ppid is already 1. An interactive TTY watch
+/// keeps running.
+pub(crate) fn orphaned_pipe_stop(
+    parent_named: bool,
+    stdout_is_tty: bool,
+    ppid_is_init: bool,
+) -> bool {
+    !parent_named && !stdout_is_tty && ppid_is_init
+}
+
+/// How often to re-check `--parent-pid`, a reparent to init, and stdout
+/// hangup while the SSE stream is quiet. PDEATHSIG is immediate; this poll
+/// is the backup for a named pid that is not ppid, for a pipe child whose
+/// parent died before `prctl`, and for a pipe that closed with no post to
 /// write. Five seconds cannot hold a subscription for days.
 const PARENT_POLL_SECS: u64 = 5;
 
-/// Arm `SIGTERM` for parent death, and exit if that signal can never
-/// arrive. Linux only — other targets compile the no-op stub.
-///
-/// The `getppid()==1` check is the classic race: the parent died after
-/// fork and before `prctl`, the child is already init's, and PDEATHSIG
-/// will not be delivered for that death.
+/// Arm `SIGTERM` for parent death. Linux only — other targets compile the
+/// no-op stub. Does not exit: a `getppid()==1` race (parent died after
+/// fork and before `prctl`, so PDEATHSIG will not be delivered for that
+/// death) is decided in `current_stop`, which still honors a live
+/// `--parent-pid` and an interactive TTY.
 #[cfg(target_os = "linux")]
 fn install_parent_death_signal() -> Result<()> {
     // SAFETY: no pointers. arg2 is the signal as unsigned long, which is
@@ -1398,10 +1412,6 @@ fn install_parent_death_signal() -> Result<()> {
             0 as libc::c_ulong,
         )
     };
-    if unsafe { libc::getppid() } == 1 {
-        note_watch("parent already gone (ppid 1); exiting");
-        std::process::exit(0);
-    }
     if rc != 0 {
         return Err(std::io::Error::last_os_error()).context("prctl(PR_SET_PDEATHSIG, SIGTERM)");
     }
@@ -1456,6 +1466,24 @@ fn stdout_broken() -> bool {
     false
 }
 
+/// `true` when this process has been reparented to init. Unix only; other
+/// targets have no pid-1 convention to honor.
+#[cfg(unix)]
+fn ppid_is_init() -> bool {
+    unsafe { libc::getppid() == 1 }
+}
+
+#[cfg(not(unix))]
+fn ppid_is_init() -> bool {
+    false
+}
+
+/// Interactive `kb slate watch` keeps running when ppid is 1. A pipe
+/// (omp's stdio, a redirect) does not.
+fn stdout_is_tty() -> bool {
+    std::io::stdout().is_terminal()
+}
+
 fn note_watch(msg: &str) {
     let mut err = std::io::stderr().lock();
     let _ = writeln!(err, "[kb slate watch] {msg}");
@@ -1469,7 +1497,15 @@ fn note_stop(stop: WatchStop) {
 }
 
 fn current_stop(parent_pid: Option<u32>) -> Option<WatchStop> {
-    watch_stop(parent_pid.map(pid_is_alive), !stdout_broken())
+    if let Some(stop) = watch_stop(parent_pid.map(pid_is_alive), !stdout_broken()) {
+        return Some(stop);
+    }
+    // No named pid: the poll above must not fire. A non-TTY already
+    // reparented to init will never get PDEATHSIG for that death.
+    if orphaned_pipe_stop(parent_pid.is_some(), stdout_is_tty(), ppid_is_init()) {
+        return Some(WatchStop::ParentDead);
+    }
+    None
 }
 
 fn write_stdout_line(line: &str) -> std::io::Result<()> {
@@ -1489,10 +1525,14 @@ fn write_stdout_line(line: &str) -> std::io::Result<()> {
 /// skipped, which is what stops the loop reacting to itself.
 ///
 /// The loop must not outlive its parent (ops-08 / agent-13). On Linux the
-/// parent-death signal is armed before the first request. `--parent-pid`
-/// is optional and polled, so a spawner that is not ppid can still be
-/// named. A stdout write error — or a pipe that is already hung up — is a
-/// clean exit: reconnecting would hold the SSE subscription forever.
+/// parent-death signal is armed before the first request; arming does not
+/// exit. `--parent-pid` is optional and polled, so a spawner that is not
+/// ppid can still be named — a live named pid keeps the watch even when
+/// this process was already reparented to init. With no `--parent-pid`, a
+/// non-TTY stdout and `getppid()==1` is a stop. An interactive TTY watch
+/// keeps running. A stdout write error — or a pipe that is already hung
+/// up — is a clean exit: reconnecting would hold the SSE subscription
+/// forever.
 pub async fn watch(
     ctx: &Ctx,
     once: bool,
@@ -1660,8 +1700,9 @@ async fn sleep_until_opt(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-/// Completes when `--parent-pid` is dead or stdout is hung up. Pends
-/// (polling) while neither is true, including when no pid was named.
+/// Completes when `--parent-pid` is dead, stdout is hung up, or (no named
+/// pid, non-TTY) the process has been reparented to init. Pends while
+/// none of those is true.
 async fn wait_stop(parent_pid: Option<u32>) -> WatchStop {
     loop {
         if let Some(stop) = current_stop(parent_pid) {
@@ -2406,6 +2447,21 @@ mod tests {
         assert_eq!(watch_stop(None, false), Some(WatchStop::StdoutClosed));
         assert_eq!(watch_stop(Some(true), true), None);
         assert_eq!(watch_stop(None, true), None);
+    }
+
+    #[test]
+    fn orphaned_pipe_stops_only_without_a_named_parent_and_a_tty() {
+        assert!(orphaned_pipe_stop(false, false, true));
+        assert!(
+            !orphaned_pipe_stop(true, false, true),
+            "a named parent is polled on its own; ppid 1 must not abandon it"
+        );
+        assert!(
+            !orphaned_pipe_stop(false, true, true),
+            "an interactive TTY watch keeps running when ppid is 1"
+        );
+        assert!(!orphaned_pipe_stop(false, false, false));
+        assert!(!orphaned_pipe_stop(true, true, false));
     }
 
     #[test]
