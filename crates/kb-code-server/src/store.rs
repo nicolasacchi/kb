@@ -342,7 +342,10 @@ impl Store {
         // `None` (and touches nothing) on every boot that is not a
         // crossing, which is all of them once a volume is past
         // `backup::REKEY_EPOCH`.
-        crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
+        // The receipt is held so the prune below can spare the snapshot
+        // THIS boot just took. Retention itself runs only after the runner
+        // succeeds — a failed migration must still have its rollback target.
+        let pre_migration = crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
             .map_err(|e| StoreError::BackupRequired(e.to_string()))?;
 
         // V72-B1 — one-time, narrowly-targeted repair for the ONE migration
@@ -355,6 +358,22 @@ impl Store {
         embedded::migrations::runner()
             .run(&mut conn)
             .map_err(|e| StoreError::Migration(e.to_string()))?;
+        // ch-10 — successful boot at epoch N reaps `*.pre-V<e>.bak` for
+        // e < N-1. The snapshot taken above (if this boot was a crossing)
+        // is spared; the next boot reaps it if it is older than N-1. A
+        // stuck file is a warning, not a boot refusal.
+        if let Err(e) = crate::backup::prune_snapshots(
+            path,
+            schema_epoch(),
+            pre_migration
+                .as_ref()
+                .map(|r| std::path::Path::new(&r.backup_path)),
+        ) {
+            tracing::warn!(
+                error = %e,
+                "kb-code: could not reap pre-migration snapshots older than the previous epoch"
+            );
+        }
 
         Ok(Self {
             conn: Mutex::new(conn),

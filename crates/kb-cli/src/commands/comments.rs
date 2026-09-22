@@ -1,4 +1,4 @@
-//! `kb comments {list,show,export,add,reply,resolve,unresolve,edit,delete}`
+//! `kb comments {list,show,export,add,reply,resolve,unresolve,edit,delete,keep}`
 //! — every verb talks to the daemon over HTTP (R6). No verb reads or
 //! writes `.review/*.json` on disk: reads go through `GET /reviews` +
 //! `GET /review/{id}` + `POST .../export`, mutations through the R5
@@ -1433,6 +1433,34 @@ pub async fn delete(
         Some(rid) => println!("✓ deleted reply {rid} in {kb}/{id}"),
         None => println!("✓ deleted {comment_id} in {kb}/{id}"),
     }
+    Ok(())
+}
+
+/// `kb comments keep <comment_id> [--kb …] [--artifact-id …|--path …]` —
+/// queue a `kb-proposal/1` from one comment
+/// (`POST .../comments/{cid}/keep`). Does not approve and does not delete
+/// the comment. Clap registration is in `main.rs` (`CommentsAction::Keep`);
+/// this crate cannot edit that file.
+pub async fn keep(
+    kb: Option<&str>,
+    artifact_id: Option<&str>,
+    comment_id: &str,
+    path_input: Option<&str>,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    let (kb, id) = resolve_target_auto(kb, artifact_id, path_input, daemon, bearer).await?;
+    let url = format!(
+        "{}/api/kb/{}/review/{}/comments/{}/keep",
+        base_url(daemon),
+        encode_path_segment(&kb),
+        encode_path_segment(&id),
+        encode_path_segment(comment_id),
+    );
+    let client = client_with_timeout_and_bearer(5, bearer)?;
+    let out = send_json(client.post(&url), "keep").await?;
+    let pid = out["id"].as_str().unwrap_or("?");
+    println!("✓ queued proposal {pid} from {comment_id} in {kb}/{id} (not approved)");
     Ok(())
 }
 

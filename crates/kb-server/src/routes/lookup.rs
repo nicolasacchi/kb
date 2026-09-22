@@ -1,13 +1,15 @@
 //! `GET /api/kb/{kb}/lookup?q=<input>` — resolve a user-supplied
-//! identifier (12-hex artifact id, source-relative path, or unique
-//! filename/suffix) to a single artifact's metadata.
+//! identifier (12-hex artifact id, source-relative path, unique
+//! filename/suffix, or a ticket/slug token) to a single artifact's
+//! metadata.
 //!
 //! Drives the `kb find` CLI subcommand and underlies the `--path` flag
 //! on `kb comments {list,export,resolve,add}`. The point is to let
-//! Claude Code (and humans) talk about artifacts by filename instead
-//! of memorising 12-hex hashes.
+//! Claude Code (and humans) talk about artifacts by filename, ticket
+//! number, or slug instead of memorising 12-hex hashes.
 //!
-//! Resolution ladder, first hit wins:
+//! Resolution ladder, first hit wins. Arms 1–4 stay first and unchanged;
+//! arm 5 only fills a miss they did not already answer.
 //!   1. `q` looks like a 12-hex id AND `get_by_id` returns Some → Exact
 //!   2. `q` treated as source-relative path AND `get_by_source_path`
 //!      (against `source_root.join(q)`) returns Some → Exact
@@ -17,7 +19,15 @@
 //!        - 1 hit  → UniqueSuffix
 //!        - 2..=10 → Ambiguous { candidates }
 //!        - 11+    → Ambiguous { candidates: first 10, truncated: true }
-//!        - 0      → NotFound (always returns 200, callers branch on `kind`)
+//!        - 0      → fall through to arm 5
+//!   5. Identifier token, closed patterns (not config):
+//!        ticket `^#?\d{3,}$` (`15715`, `#15715`) or a slug of ASCII
+//!        letters/digits/hyphens, length ≥ 6. Matched against title and
+//!        filename stem.
+//!        - 1 hit → UniqueSuffix
+//!        - 0 or >1 → NotFound. Never Ambiguous and never 404, so a
+//!          non-unique token does not hard-miss a query ranked search
+//!          would still answer.
 //!
 //! No write surface; pure read. Inherits the api tree's bearer auth
 //! and origin allowlist.
@@ -180,6 +190,16 @@ pub async fn lookup(
         .map(|row| hit_from_row(row, &source_root))
         .collect();
 
+    // 5. Identifier token. Arm 4 stays first: a suffix hit is not
+    // overridden. On a suffix miss, exactly one title/stem hit is pushed
+    // so the match below resolves it. Zero or many fall through to
+    // NotFound — not Ambiguous, not 404.
+    if candidates.is_empty() {
+        if let Some(row) = resolve_identifier_token(q, &rows) {
+            candidates.push(hit_from_row(row, &source_root));
+        }
+    }
+
     let result = match candidates.len() {
         0 => LookupResult::NotFound,
         1 => LookupResult::UniqueSuffix(candidates.pop().expect("len==1")),
@@ -236,6 +256,110 @@ fn hit_from_row(
     }
 }
 
+/// Fifth-arm token. Ticket needle is the digit run with at most one
+/// leading `#` stripped. Slug needle is `q` itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentifierToken<'a> {
+    Ticket(&'a str),
+    Slug(&'a str),
+}
+
+/// `^#?\d{3,}$` — optional single `#`, then three or more ASCII digits.
+fn ticket_digits(q: &str) -> Option<&str> {
+    let digits = q.strip_prefix('#').unwrap_or(q);
+    if digits.len() >= 3 && digits.bytes().all(|b| b.is_ascii_digit()) {
+        Some(digits)
+    } else {
+        None
+    }
+}
+
+/// Slug of ASCII letters, digits, and hyphens, length ≥ 6. A pure digit
+/// run is a ticket, not a slug. All-hyphen is not an identifier.
+fn is_slug_token(q: &str) -> bool {
+    let bytes = q.as_bytes();
+    bytes.len() >= 6
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+        && bytes.iter().any(|b| b.is_ascii_alphanumeric())
+        && bytes.iter().any(|b| !b.is_ascii_digit())
+}
+
+fn classify_identifier_token(q: &str) -> Option<IdentifierToken<'_>> {
+    if let Some(digits) = ticket_digits(q) {
+        return Some(IdentifierToken::Ticket(digits));
+    }
+    if is_slug_token(q) {
+        return Some(IdentifierToken::Slug(q));
+    }
+    None
+}
+
+/// Last path segment with the final extension stripped, matching
+/// `Path::file_stem`. Leading-dot names (`.gitignore`) keep the dot.
+fn filename_stem(path: &str) -> &str {
+    let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match base.rfind('.') {
+        Some(i) if i > 0 => &base[..i],
+        _ => base,
+    }
+}
+
+fn is_token_boundary(b: u8) -> bool {
+    !b.is_ascii_alphanumeric()
+}
+
+/// `needle` occurs in `haystack` bounded by start/end or a non-alphanumeric
+/// byte (hyphen, `#`, space, …). Case-insensitive. `15715` matches
+/// `#15715` and `15715-login`, not `157150`.
+fn token_bounded(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    let last = h.len() - n.len();
+    let mut i = 0;
+    while i <= last {
+        let end = i + n.len();
+        if h[i..end].eq_ignore_ascii_case(n)
+            && (i == 0 || is_token_boundary(h[i - 1]))
+            && (end == h.len() || is_token_boundary(h[end]))
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn row_matches_identifier(title: &str, path: &str, token: IdentifierToken<'_>) -> bool {
+    let needle = match token {
+        IdentifierToken::Ticket(digits) | IdentifierToken::Slug(digits) => digits,
+    };
+    token_bounded(title, needle) || token_bounded(filename_stem(path), needle)
+}
+
+/// Unique title/stem hit for an identifier token. `None` when `q` is not
+/// a token, or the token matches 0 or >1 rows — those fall through.
+fn resolve_identifier_token<'a>(
+    q: &str,
+    rows: &'a [kb_core::storage::lance::DocSummary],
+) -> Option<&'a kb_core::storage::lance::DocSummary> {
+    let token = classify_identifier_token(q)?;
+    let mut found = None;
+    for row in rows {
+        if row_matches_identifier(&row.title, &row.path, token) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(row);
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +399,152 @@ mod tests {
     #[test]
     fn path_matches_suffix_rejects_empty() {
         assert!(!path_matches_suffix("/x/y", ""));
+    }
+
+    fn summary(id: &str, title: &str, path: &str) -> kb_core::storage::lance::DocSummary {
+        kb_core::storage::lance::DocSummary {
+            id: id.to_string(),
+            title: title.to_string(),
+            path: path.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn classify_identifier_token_accepts_tickets() {
+        assert_eq!(
+            classify_identifier_token("15715"),
+            Some(IdentifierToken::Ticket("15715"))
+        );
+        assert_eq!(
+            classify_identifier_token("#15715"),
+            Some(IdentifierToken::Ticket("15715"))
+        );
+        assert_eq!(
+            classify_identifier_token("157"),
+            Some(IdentifierToken::Ticket("157"))
+        );
+        // Pure digit runs stay tickets, even when long enough to be a slug.
+        assert_eq!(
+            classify_identifier_token("157150"),
+            Some(IdentifierToken::Ticket("157150"))
+        );
+    }
+
+    #[test]
+    fn classify_identifier_token_rejects_non_tickets() {
+        assert_eq!(classify_identifier_token("12"), None);
+        assert_eq!(classify_identifier_token("#12"), None);
+        assert_eq!(classify_identifier_token("##15715"), None);
+        assert_eq!(classify_identifier_token("15715#"), None);
+        assert_eq!(classify_identifier_token("#15715 "), None);
+        assert_eq!(classify_identifier_token(""), None);
+    }
+
+    #[test]
+    fn classify_identifier_token_accepts_slugs() {
+        assert_eq!(
+            classify_identifier_token("2026-09-19-the-margin"),
+            Some(IdentifierToken::Slug("2026-09-19-the-margin"))
+        );
+        assert_eq!(
+            classify_identifier_token("2026-09-19"),
+            Some(IdentifierToken::Slug("2026-09-19"))
+        );
+        assert_eq!(
+            classify_identifier_token("kb-code"),
+            Some(IdentifierToken::Slug("kb-code"))
+        );
+        assert_eq!(
+            classify_identifier_token("readme"),
+            Some(IdentifierToken::Slug("readme"))
+        );
+    }
+
+    #[test]
+    fn classify_identifier_token_rejects_non_slugs() {
+        assert_eq!(classify_identifier_token("ux-09"), None); // 5 chars
+        assert_eq!(classify_identifier_token("atlas.html"), None);
+        assert_eq!(classify_identifier_token("notes/foo-bar"), None);
+        assert_eq!(classify_identifier_token("foo_bar_baz"), None);
+        assert_eq!(classify_identifier_token("------"), None);
+        assert_eq!(classify_identifier_token("foo bar"), None);
+    }
+
+    #[test]
+    fn filename_stem_strips_final_extension_only() {
+        assert_eq!(filename_stem("/x/y/15715-login.html"), "15715-login");
+        assert_eq!(filename_stem("/x/foo.bar.html"), "foo.bar");
+        assert_eq!(filename_stem("/x/.gitignore"), ".gitignore");
+        assert_eq!(filename_stem(r"C:\x\notes.html"), "notes");
+    }
+
+    #[test]
+    fn resolve_identifier_token_unique_ticket_and_slug() {
+        let rows = vec![
+            summary("aaa", "Fix #15715 login", "/corpus/login.html"),
+            summary("bbb", "The Margin", "/corpus/2026-09-19-the-margin.html"),
+            summary("ccc", "Notes", "/corpus/15715/notes.html"),
+        ];
+        assert_eq!(resolve_identifier_token("15715", &rows).unwrap().id, "aaa");
+        assert_eq!(resolve_identifier_token("#15715", &rows).unwrap().id, "aaa");
+        assert_eq!(
+            resolve_identifier_token("2026-09-19-the-margin", &rows)
+                .unwrap()
+                .id,
+            "bbb"
+        );
+        // Dated prefix, hyphen-bounded inside the stem.
+        assert_eq!(
+            resolve_identifier_token("2026-09-19", &rows).unwrap().id,
+            "bbb"
+        );
+    }
+
+    #[test]
+    fn resolve_identifier_token_matches_stem_when_title_misses() {
+        let rows = vec![summary("aaa", "Login fix", "/corpus/15715-login.html")];
+        assert_eq!(resolve_identifier_token("#15715", &rows).unwrap().id, "aaa");
+        let rows = vec![summary("bbb", "Other", "/corpus/The-Margin.html")];
+        assert_eq!(
+            resolve_identifier_token("the-margin", &rows).unwrap().id,
+            "bbb"
+        );
+    }
+
+    #[test]
+    fn resolve_identifier_token_ambiguous_and_unknown_fall_through() {
+        let rows = vec![
+            summary("aaa", "Fix #15715", "/corpus/a.html"),
+            summary("bbb", "Also #15715", "/corpus/b.html"),
+            summary("ccc", "atlas.html mention", "/corpus/atlas.html"),
+        ];
+        // >1 ticket hits: fall through, not a hard miss.
+        assert!(resolve_identifier_token("15715", &rows).is_none());
+        assert!(resolve_identifier_token("#15715", &rows).is_none());
+        // Unknown shapes are not tokens, even when a title mentions them.
+        assert!(resolve_identifier_token("atlas.html", &rows).is_none());
+        assert!(resolve_identifier_token("12", &rows).is_none());
+        assert!(resolve_identifier_token("ux-09", &rows).is_none());
+        // Classified, but zero hits.
+        assert!(resolve_identifier_token("99999", &rows).is_none());
+        assert!(resolve_identifier_token("not-a-real-slug", &rows).is_none());
+        // Shared dated prefix is ambiguous.
+        let dated = vec![
+            summary("a", "A", "/c/2026-09-19-alpha.html"),
+            summary("b", "B", "/c/2026-09-19-beta.html"),
+        ];
+        assert!(resolve_identifier_token("2026-09-19", &dated).is_none());
+    }
+
+    #[test]
+    fn resolve_identifier_token_rejects_digit_prefix_and_directory() {
+        let rows = vec![
+            summary("aaa", "Ticket 157150", "/corpus/157150-notes.html"),
+            summary("bbb", "Notes", "/corpus/15715/notes.html"),
+            summary("ccc", "Readme more", "/corpus/readmemore.html"),
+        ];
+        assert!(resolve_identifier_token("15715", &rows).is_none());
+        assert!(resolve_identifier_token("readme", &rows).is_none());
     }
 }

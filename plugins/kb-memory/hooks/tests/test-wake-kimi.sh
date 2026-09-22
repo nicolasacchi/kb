@@ -59,7 +59,7 @@ case "$out" in
   *) bad "first prompt emits the memory protocol (got: $out)" ;;
 esac
 case "$out" in
-  *"Recent memories:"*"- T1  [main]"*) ok "first prompt emits the recent-memories index" ;;
+  *"Relevant memories from kb"*"- T1  [main]"*) ok "first prompt emits the recent-memories index" ;;
   *) bad "first prompt emits the recent-memories index (got: $out)" ;;
 esac
 case "$out" in
@@ -89,7 +89,7 @@ fi
 CACHE3="$TMPROOT/cache3"
 out3="$(run_wake "$CACHE3")"
 case "$out3" in
-  *"kb memory is available"*"Recent memories:"*) ok "no ledger -> protocol+index still emitted" ;;
+  *"kb memory is available"*"Relevant memories from kb"*) ok "no ledger -> protocol+index still emitted" ;;
   *) bad "no ledger -> protocol+index still emitted (got: $out3)" ;;
 esac
 case "$out3" in

@@ -2,11 +2,11 @@
 //! for the parent origin's REST + SSE surface, and the artifact-subdomain
 //! fallback that serves `<id>.artifacts.localhost:4000` requests.
 //!
-//! Topic 11 §G "Implementation pointers" suggests a small extractor that
-//! branches on `Host:`. v0.0.1 implements that as a `fallback` handler:
-//! if `/api/*` matches, the API tree handles it; otherwise the fallback
-//! checks the Host header and either serves the artifact (subdomain
-//! request) or returns 404 (parent origin request — no SPA in v0.0.1).
+//! Unmatched `/api/*` is a 404 problem+json on the nest (`api_not_found`),
+//! not the SPA fallback. `GET /metrics` is Prometheus text of the same
+//! counters as `GET /api/metrics` (JSON). Anything else that misses an
+//! explicit route hits [`routes::dispatch::fallback`], which branches on
+//! `Host:` (artifact subdomain → artifact serve, otherwise the SPA shell).
 
 use crate::middleware::{
     auth_bearer, count_requests, is_loopback_web_origin, origin_allowlist, rate_limit, RateLimiter,
@@ -402,6 +402,9 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // above (plain api tree + loopback bypass, no rate-limit bucket) —
         // it composes reads the caller could already make one at a time.
         .route("/context", get(routes::context::get))
+        // Turn block — in-process composition of the reads `kb context` and
+        // `kb recall` already serve. Same auth posture as `/context`.
+        .route("/turn", get(routes::turn::get))
         // W2.15b — the tribal-knowledge proposal inbox: post-session memory
         // CANDIDATES (agent-authored) land in a per-kb `.proposals/` queue;
         // approve fires the same write path `POST .../artifacts` uses.
@@ -880,6 +883,10 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             post(routes::comments::resolve),
         )
         .route(
+            "/kb/{kb}/review/{id}/comments/{cid}/keep",
+            post(routes::comments::keep),
+        )
+        .route(
             "/kb/{kb}/review/{id}/comments/{cid}/unresolve",
             post(routes::comments::unresolve),
         )
@@ -936,14 +943,21 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .merge(attachment_routes)
         .merge(capture_routes)
         .merge(history_routes)
-        // v0.4 A2 — bearer-token auth on the whole /api/* tree.
+        // v0.4 A2 — bearer-token auth on matched /api routes.
         // Loopback bypass keeps local CLI/TUI/SPA flows working without
         // a token; non-loopback requests need `Authorization: Bearer <t>`
         // when the daemon's token file is populated.
+        //
+        // The 404 fallback is registered AFTER this layer so a missing
+        // path is 404 problem+json even without credentials (distinct from
+        // 401, and not the outer SPA shell). count_requests + CORS are
+        // applied AFTER the fallback so they still wrap it: 404s are
+        // counted, and a cross-origin client can read the problem body.
         .layer(from_fn_with_state(auth_state, auth_bearer))
-        // N7 — count every request reaching /api/*. Cheap atomic add;
-        // the ticker in lib.rs converts to a per-second rate and emits
-        // a `metrics.tick` SSE event.
+        .fallback(routes::dispatch::api_not_found)
+        // N7 — count every request reaching /api/*, including the 404
+        // fallback above. Cheap atomic add; the ticker in lib.rs converts
+        // to a per-second rate and emits a `metrics.tick` SSE event.
         .layer(from_fn_with_state(state.metrics.clone(), count_requests))
         // SW3: outermost — loopback-only CORS on reads, so a browser page
         // served by ONE local daemon can read GETs (incl. the
@@ -981,6 +995,17 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
     Router::new()
         .nest("/api", api)
         .merge(capture_share)
+        // Prometheus text of the counters GET /api/metrics already computes.
+        // Own router + route_layer (like /capture) so auth does not re-wrap
+        // the /api tree. The `.route("/metrics")` lives in metrics.rs, not
+        // here: tests/api_docs.rs prefixes every `.route` in THIS file with
+        // `/api` and would clobber the JSON `/api/metrics` row. That
+        // extractor needs a `/metrics` skip (same as `/healthz`) before this
+        // mount can move inline — that test file is not part of this change.
+        .merge(routes::metrics::prometheus_router(state.auth.clone()))
+        // `.nest("/api")` matches `/api` but not `/api/`. Without this the
+        // trailing-slash prefix falls through to the SPA shell below.
+        .merge(routes::dispatch::api_trailing_slash_router())
         // P0 ops — unauthenticated liveness probe. Mounted on the TOP-LEVEL
         // Router (NOT inside the /api nest), so it bypasses auth_bearer + the
         // rate limiters + count_requests + the loopback-CORS layer (all
@@ -990,10 +1015,9 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // methods, so this GET passes untouched. (Mirror any change in the
         // `/healthz` skip in tests/api_docs.rs.)
         .route("/healthz", get(routes::health::get))
-        // Anything not matched by /api/* lands at the dispatcher, which
-        // forwards to artifact-subdomain serving OR the SPA shell based
-        // on the Host header. Lets one daemon serve both /api/* +
-        // <id>.artifacts.localhost + parent-origin SPA on one port.
+        // Non-API misses only. Unmatched /api/* is the nest fallback above,
+        // not this dispatcher. Host selects artifact-subdomain serving OR
+        // the parent-origin SPA shell.
         .fallback(routes::dispatch::fallback)
         .layer(from_fn_with_state(origin_state, origin_allowlist))
         .layer(TraceLayer::new_for_http())

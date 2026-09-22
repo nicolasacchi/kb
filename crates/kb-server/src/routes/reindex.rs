@@ -8,14 +8,14 @@
 use crate::middleware::error_to_problem_json;
 use crate::state::KbHandles;
 use axum::{
-    body::Body,
-    extract::{Path, State},
+    body::{Body, Bytes},
+    extract::{Path, Query, State},
     http::{Response, StatusCode},
     response::IntoResponse,
     Json,
 };
 use kb_core::ids::RunId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug, Serialize)]
@@ -27,6 +27,8 @@ pub struct ReindexResponse {
 pub async fn post(
     State(state): State<Arc<KbHandles>>,
     Path((kb, src)): Path<(String, String)>,
+    Query(params): Query<ReindexParams>,
+    body: Bytes,
 ) -> Response<Body> {
     let (_kb_name, ctx) = match crate::routes::resolve_kb(&state, &kb) {
         Ok(v) => v,
@@ -38,7 +40,11 @@ pub async fn post(
         return error_to_problem_json(&err);
     }
 
-    spawn_walk(ctx).await
+    let re_embed = match re_embed_requested(&params, &body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    spawn_walk(ctx, re_embed).await
 }
 
 /// v0.6 — kb-level reindex shortcut. Each kb currently has a single
@@ -55,15 +61,44 @@ pub async fn post(
 pub async fn kb_post(
     State(state): State<Arc<KbHandles>>,
     Path(kb): Path<String>,
+    Query(params): Query<ReindexParams>,
+    body: Bytes,
 ) -> Response<Body> {
     let (_kb_name, ctx) = match crate::routes::resolve_kb(&state, &kb) {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    spawn_walk(ctx).await
+    let re_embed = match re_embed_requested(&params, &body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    spawn_walk(ctx, re_embed).await
 }
 
-async fn spawn_walk(ctx: &crate::state::KbContext) -> Response<Body> {
+/// `re_embed` query param or JSON field. Either `true` forces a real embed.
+/// Absent body and absent query keep the default: reuse stored vectors.
+///
+/// The CLI (`crates/kb-cli/src/commands/reindex.rs`, wired from
+/// `crates/kb-cli/src/main.rs`) POSTs with no query and no body, so it gets
+/// reuse. A `--re-embed` flag would require those files; this route param
+/// is the hatch.
+#[derive(Debug, Default, Deserialize)]
+pub struct ReindexParams {
+    #[serde(default)]
+    re_embed: bool,
+}
+
+fn re_embed_requested(query: &ReindexParams, body: &[u8]) -> Result<bool, Response<Body>> {
+    if body.iter().all(|b| b.is_ascii_whitespace()) {
+        return Ok(query.re_embed);
+    }
+    let parsed: ReindexParams = serde_json::from_slice(body).map_err(|e| {
+        error_to_problem_json(&kb_core::Error::BadRequest(format!("reindex body: {e}")))
+    })?;
+    Ok(query.re_embed || parsed.re_embed)
+}
+
+async fn spawn_walk(ctx: &crate::state::KbContext, re_embed: bool) -> Response<Body> {
     let run = RunId::new();
 
     // Spawn a background walk that pushes a force `WatchWork` for each
@@ -81,12 +116,11 @@ async fn spawn_walk(ctx: &crate::state::KbContext) -> Response<Body> {
     let skips = ctx.skip_patterns.clone();
     tokio::task::spawn_blocking(move || {
         // `force = true`: explicit operator reindex bypasses the indexer's
-        // byte-identical dedup gate. Without this, files whose content is
-        // unchanged since the last index never re-run the parse/embed/
-        // edge-resolve pipeline — and links that originally didn't resolve
-        // (because the target wasn't indexed yet) stay un-recorded forever.
-        // No mtime map: the operator wants the full pipeline for every file.
-        kb_core::indexer::walk_send_work(&ingest, &path, &skips, true, None);
+        // byte-identical early return so parse, edges, anchors, and
+        // coderefs re-run. It does not re-embed when the content hash,
+        // model, and dim match — `re_embed` is that hatch (perf-04).
+        // No mtime map: the operator wants the parse pipeline for every file.
+        kb_core::indexer::walk_send_reindex(&ingest, &path, &skips, re_embed);
     });
 
     let mut resp = (

@@ -6,6 +6,7 @@
 use crate::http;
 use crate::session_marker::read_session_marker;
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// `kb remember "<text>"` — render + POST a memory artifact.
@@ -231,7 +232,7 @@ pub(crate) async fn remember_inner(
 /// pass it outright for a true cross-project fan-out (a dedup oracle like
 /// `/kb-reflect` must keep doing this on purpose). `global`/`project` are
 /// unchanged.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, dead_code)]
 pub async fn recall(
     query: &str,
     scope: &str,
@@ -245,8 +246,42 @@ pub async fn recall(
     bearer: Option<&str>,
     json: bool,
 ) -> Result<()> {
+    recall_with_timeout(
+        query, scope, project, cwd, limit, for_kb, no_floor, explain, daemon, bearer, json, None,
+    )
+    .await
+}
+
+/// Same as [`recall`], plus an optional HTTP deadline in seconds. `None`
+/// keeps the 30s cap. A timeout fails soft: non-zero, one short error line,
+/// no hang. The clap `--timeout` flag is not on this function — `Cmd::Recall`
+/// lives in `main.rs`, and `kb context` lives in `commands/context.rs`.
+#[allow(clippy::too_many_arguments)]
+pub async fn recall_with_timeout(
+    query: &str,
+    scope: &str,
+    project: Option<&str>,
+    cwd: Option<&str>,
+    limit: usize,
+    for_kb: Option<&str>,
+    no_floor: bool,
+    explain: bool,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    json: bool,
+    timeout_secs: Option<u64>,
+) -> Result<()> {
     let res = recall_inner(
-        query, scope, project, cwd, limit, for_kb, no_floor, daemon, bearer,
+        query,
+        scope,
+        project,
+        cwd,
+        limit,
+        for_kb,
+        no_floor,
+        daemon,
+        bearer,
+        timeout_secs,
     )
     .await;
     match res {
@@ -368,6 +403,115 @@ fn resolve_recall_wire(
     }
 }
 
+/// ux-01 — slug → corpus name from local `[kb.<name>] project_slugs`.
+/// First kb name in sorted order wins if two corpora claim the same basename.
+/// Missing or unreadable `kb.toml` is an empty map: fail open, never a
+/// reason to narrow recall.
+pub(crate) fn local_project_slug_aliases() -> HashMap<String, String> {
+    let Ok(path) = super::resolve_config_path(None) else {
+        return HashMap::new();
+    };
+    let Ok(cfg) = super::load_config_or_default(&path) else {
+        return HashMap::new();
+    };
+    project_slug_aliases(&cfg)
+}
+
+pub(crate) fn project_slug_aliases(cfg: &kb_core::config::KbConfig) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for (name, section) in &cfg.kb {
+        for slug in &section.project_slugs {
+            let slug = slug.trim();
+            if slug.is_empty() {
+                continue;
+            }
+            out.entry(slug.to_string())
+                .or_insert_with(|| name.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Corpus a `project_slugs` entry maps `slug` onto. A `project_slugs` array
+/// on the `GET /api/kbs` JSON wins when the daemon already speaks the field
+/// (it doesn't today); the local map fills what the wire omits.
+pub(crate) fn aliased_corpus_name<'a>(
+    slug: &str,
+    kbs: &'a serde_json::Value,
+    local: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    if let Some(arr) = kbs.as_array() {
+        for k in arr {
+            let Some(name) = k["name"].as_str() else {
+                continue;
+            };
+            let Some(slugs) = k["project_slugs"].as_array() else {
+                continue;
+            };
+            if slugs.iter().any(|s| s.as_str().map(str::trim) == Some(slug)) {
+                return Some(name);
+            }
+        }
+    }
+    local.get(slug).map(String::as_str)
+}
+
+pub(crate) fn corpus_names(kbs: &serde_json::Value) -> Vec<&str> {
+    kbs.as_array()
+        .map(|arr| arr.iter().filter_map(|k| k["name"].as_str()).collect())
+        .unwrap_or_default()
+}
+
+/// ux-01 — keep a derived project filter only when that name, or a
+/// `project_slugs` alias for this basename, is a real corpus. On a miss:
+/// no project, no `visible_to` (fail open to unfiltered recall), and the
+/// derived name for the one stderr line. Never returns a project that is
+/// not in `known`.
+pub(crate) fn confirm_derived_project(
+    slug: &str,
+    known: &[&str],
+    alias: Option<&str>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    if let Some(name) = alias {
+        if known.iter().any(|n| *n == name) {
+            return (
+                Some(name.to_string()),
+                Some(format!("{slug},{name}")),
+                None,
+            );
+        }
+    }
+    let derived = format!("memory-{slug}");
+    if known.iter().any(|n| *n == derived) {
+        return (
+            Some(derived.clone()),
+            Some(format!("{slug},{derived}")),
+            None,
+        );
+    }
+    (None, None, Some(derived))
+}
+
+pub(crate) fn derived_project_miss_line(derived: &str) -> String {
+    format!(
+        "note: derived project corpus {derived} has no matching corpus; sending no project filter"
+    )
+}
+
+/// The write path's `GET /api/kbs`. Recall reuses it before sending a
+/// derived project filter.
+pub(crate) async fn fetch_kbs(daemon: &str, bearer: Option<&str>) -> Result<serde_json::Value> {
+    let client = http::client_with_timeout_and_bearer(5, bearer)?;
+    let kbs: serde_json::Value = client
+        .get(format!("{daemon}/api/kbs"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(kbs)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn recall_inner(
     query: &str,
@@ -379,6 +523,7 @@ async fn recall_inner(
     no_floor: bool,
     daemon: Option<&str>,
     bearer: Option<&str>,
+    timeout_secs: Option<u64>,
 ) -> Result<(String, serde_json::Value)> {
     let url = require_daemon(daemon, bearer).await?;
     // Shell git ONLY when the caller actually asked for `auto` — every
@@ -393,8 +538,43 @@ async fn recall_inner(
     } else {
         None
     };
-    let (wire_scope, wire_project, wire_visible_to) =
-        resolve_recall_wire(scope, project.map(str::to_string), slug);
+    let (wire_scope, mut wire_project, mut wire_visible_to) =
+        resolve_recall_wire(scope, project.map(str::to_string), slug.clone());
+    // ux-01 — a derived project filter is sent only after GET /api/kbs
+    // confirms the name (or a project_slugs alias) exists. A miss drops
+    // both project and visible_to: fail open to unfiltered recall, one
+    // stderr line, never a filter that matches nothing. An explicit
+    // --project is the caller's name and is not checked here.
+    if scope == "auto" && project.is_none() {
+        if let Some(s) = slug.as_deref() {
+            if wire_project.is_some() {
+                match fetch_kbs(&url, bearer).await {
+                    Ok(kbs) => {
+                        let local = local_project_slug_aliases();
+                        let alias = aliased_corpus_name(s, &kbs, &local);
+                        let known = corpus_names(&kbs);
+                        let (confirmed, visible, miss) =
+                            confirm_derived_project(s, &known, alias);
+                        wire_project = confirmed;
+                        wire_visible_to = visible;
+                        if let Some(derived) = miss {
+                            eprintln!("{}", derived_project_miss_line(&derived));
+                        }
+                    }
+                    Err(_) => {
+                        // Could not verify. Sending the derived name would
+                        // be a filter that might match nothing. This is not
+                        // a confirmed miss, so it does not use that line.
+                        wire_project = None;
+                        wire_visible_to = None;
+                        eprintln!(
+                            "note: derived project corpus memory-{s} could not be checked against GET /api/kbs; sending no project filter"
+                        );
+                    }
+                }
+            }
+        }
+    }
     let mut q = format!(
         "{url}/api/memory/recall?q={}&scope={}&limit={limit}",
         http::encode_path_segment(query),
@@ -423,15 +603,27 @@ async fn recall_inner(
     // costly on a busy CPU) then fans out FTS + vector queries across every
     // in-scope memory corpus, so a cold/loaded recall can run ~10-20s. The
     // old 10s cap tipped over on cold starts; 30s gives comfortable headroom
-    // while still bounding a genuinely-stuck daemon.
-    let client = http::client_with_timeout_and_bearer(30, bearer)?;
-    let resp = client.get(&q).send().await?;
+    // while still bounding a genuinely-stuck daemon. `--timeout` (when the
+    // caller passes one) replaces that cap; a hit fails soft.
+    let secs = timeout_secs.unwrap_or(30);
+    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    let resp = match client.get(&q).send().await {
+        Ok(r) => r,
+        Err(e) if e.is_timeout() => {
+            return Err(anyhow!("recall timed out after {secs}s"));
+        }
+        Err(e) => return Err(e.into()),
+    };
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(anyhow!("daemon returned {status}: {body}"));
     }
-    let body: serde_json::Value = resp.json().await?;
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) if e.is_timeout() => return Err(anyhow!("recall timed out after {secs}s")),
+        Err(e) => return Err(e.into()),
+    };
     Ok((url, body))
 }
 
@@ -1379,16 +1571,10 @@ async fn resolve_memory_kb(
         return Ok(MemoryTarget::Corpus(k.to_string()));
     }
     let want = scope.unwrap_or("project");
-    let client = http::client_with_timeout_and_bearer(5, bearer)?;
-    let kbs: serde_json::Value = client
-        .get(format!("{daemon}/api/kbs"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let kbs = fetch_kbs(daemon, bearer).await?;
     let slug = current_repo_slug();
-    pick_memory_target(&kbs, want, &slug)
+    let aliases = local_project_slug_aliases();
+    pick_memory_target_aliased(&kbs, want, &slug, &aliases)
 }
 
 /// CT-C3 — pure wiring behind `kb remember --failed`, extracted from
@@ -1469,6 +1655,28 @@ fn resolve_visibility(
     }
 }
 
+/// ux-01 — `project_slugs` wins over the derived `memory-<slug>` name when
+/// the aliased corpus is actually on the daemon. A miss falls through to
+/// today's ladder (derived name, else the global corpus).
+fn pick_memory_target_aliased(
+    kbs: &serde_json::Value,
+    want: &str,
+    slug: &str,
+    aliases: &HashMap<String, String>,
+) -> Result<MemoryTarget> {
+    if want == "project" {
+        if let Some(name) = aliased_corpus_name(slug, kbs, aliases) {
+            let exists = kbs
+                .as_array()
+                .is_some_and(|arr| arr.iter().any(|k| k["name"].as_str() == Some(name)));
+            if exists {
+                return Ok(MemoryTarget::Corpus(name.to_string()));
+            }
+        }
+    }
+    pick_memory_target(kbs, want, slug)
+}
+
 /// Pure decision function behind `resolve_memory_kb` — no I/O, so the whole
 /// ladder is unit-testable against fixture `/api/kbs` JSON.
 ///
@@ -1492,6 +1700,7 @@ fn resolve_visibility(
 /// - any other `want`: unchanged from today — filtered against
 ///   `memory_scope`, so an unrecognized scope surfaces as the 0-match
 ///   error.
+
 fn pick_memory_target(kbs: &serde_json::Value, want: &str, slug: &str) -> Result<MemoryTarget> {
     let arr = kbs
         .as_array()
@@ -2102,6 +2311,38 @@ mod tests {
                 (scope.to_string(), Some("named".to_string()), None)
             );
         }
+    }
+
+    /// ux-01 — a foreign repo basename listed in `project_slugs` maps onto
+    /// that corpus for both ladders. A basename with no corpus and no alias
+    /// sends no project filter.
+    #[test]
+    fn project_slugs_maps_a_foreign_basename_onto_the_corpus() {
+        let kbs = serde_json::json!([
+            {"name": "memory-1000f", "memory_scope": "project"},
+            {"name": "memory", "memory_scope": "global"},
+        ]);
+        let mut aliases = HashMap::new();
+        aliases.insert("morning".to_string(), "memory-1000f".to_string());
+
+        let write = pick_memory_target_aliased(&kbs, "project", "morning", &aliases).unwrap();
+        assert_eq!(write, MemoryTarget::Corpus("memory-1000f".to_string()));
+
+        let known = corpus_names(&kbs);
+        let (project, visible, miss) =
+            confirm_derived_project("morning", &known, Some("memory-1000f"));
+        assert_eq!(project.as_deref(), Some("memory-1000f"));
+        assert_eq!(visible.as_deref(), Some("morning,memory-1000f"));
+        assert!(miss.is_none());
+
+        let (project, visible, miss) = confirm_derived_project("morning", &["memory"], None);
+        assert!(project.is_none(), "a miss must not send a project filter");
+        assert!(visible.is_none(), "a miss must not send visible_to");
+        assert_eq!(miss.as_deref(), Some("memory-morning"));
+        assert!(
+            derived_project_miss_line("memory-morning").contains("memory-morning")
+                && derived_project_miss_line("memory-morning").contains("no matching corpus")
+        );
     }
 
     // ---- CT-C3 — apply_failed_outcome (--failed wiring) ----------------

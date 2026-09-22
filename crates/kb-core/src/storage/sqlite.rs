@@ -4421,6 +4421,56 @@ impl Db {
         Ok(())
     }
 
+    /// Append one `memory_recalls` row per live serve. INSERT only — this
+    /// does not delete, and it does not call [`Self::memory_recalls_replace`].
+    ///
+    /// A live serve has no capture id, and `artifact_id` is `NOT NULL`
+    /// (V0035; V0042 does not relax it). Each row is stamped
+    /// `served-{session_id}-{served_at}-{pos}`, so a later capture replace
+    /// or unlink (`DELETE WHERE artifact_id = <capture id>`) cannot remove
+    /// it. `served_at` is stored as `recalled_at`. `turn_id` is NULL (the
+    /// column allows it). `used` is 0. `title` and `injected_chars` are the
+    /// V0042 columns; capture rows leave them NULL.
+    ///
+    /// These rows are not a `sessions` capture, so `newest_capture_pred`
+    /// reads do not surface them.
+    pub fn memory_recalls_append(
+        &mut self,
+        session_id: &str,
+        rows: &[ServedRecallRow],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO memory_recalls
+                    (memory_kb, memory_id, session_id, turn_id, recalled_at,
+                     artifact_id, used, pos, title, injected_chars)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?;
+            for r in rows {
+                let artifact_id = format!("served-{session_id}-{}-{}", r.served_at, r.pos);
+                let turn_id: Option<&str> = None;
+                stmt.execute(params![
+                    r.memory_kb,
+                    r.memory_id,
+                    session_id,
+                    turn_id,
+                    r.served_at,
+                    artifact_id,
+                    0_i64,
+                    i64::from(r.pos),
+                    r.title,
+                    i64::from(r.injected_chars),
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// MI-W1.1 (revised) — every recalled hit for one session id, scoped to
     /// its NEWEST capture (#11 — mirrors `session_files_for_session`'s
     /// shape/predicate exactly: rows now persist per-capture, so a stale
@@ -7103,6 +7153,25 @@ pub struct MemoryRecallRow {
     /// position in the transcript is deliberately not used as a substitute.
     /// SURFACED for display; never read by any scoring path.
     pub pos: Option<u32>,
+}
+
+/// One live serve for [`Db::memory_recalls_append`] (V0042). Not a capture
+/// row: the append stamps `artifact_id`, `turn_id` (NULL), and `used` (0),
+/// and stores `served_at` as `recalled_at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedRecallRow {
+    /// Kb the recalled memory lives in.
+    pub memory_kb: String,
+    /// Recalled memory's artifact id.
+    pub memory_id: String,
+    /// 1-based rank in the pack this serve returned.
+    pub pos: u32,
+    /// Served title. V0042; NULL on capture rows.
+    pub title: String,
+    /// Chars of the served title + summary. V0042; NULL on capture rows.
+    pub injected_chars: u32,
+    /// Unix seconds for the batch. Stored as `recalled_at`.
+    pub served_at: i64,
 }
 
 /// A `memory_id`'s aggregate recall stats within one sessions-corpus kb's
@@ -11375,6 +11444,181 @@ mod tests {
             .unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].pos, None);
+    }
+
+    /// V0042 — a live serve appends rows and must not delete any other
+    /// `artifact_id`. Capture rows (written by `memory_recalls_replace`,
+    /// which does not name `title`/`injected_chars`) still read, and a
+    /// later replace of that capture cannot delete the served rows: their
+    /// `artifact_id` is `served-{session_id}-{served_at}-{pos}`, not the
+    /// capture id.
+    #[test]
+    fn memory_recalls_append_inserts_without_deleting_other_artifact_ids() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-1",
+            &[memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "sid-a",
+                "t-1",
+                Some(100),
+                "cap-1",
+            )],
+        )
+        .unwrap();
+        db.sessions_upsert(&session_row("cap-9", "sid-b", 1_700_000_200))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-9",
+            &[memory_recall_row(
+                "notes",
+                "bbbbbbbbbbbb",
+                "sid-b",
+                "t-9",
+                Some(200),
+                "cap-9",
+            )],
+        )
+        .unwrap();
+
+        // Empty append is a no-op, not a wipe.
+        db.memory_recalls_append("sid-a", &[]).unwrap();
+
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                ServedRecallRow {
+                    memory_kb: "notes".into(),
+                    memory_id: "cccccccccccc".into(),
+                    pos: 1,
+                    title: "retry cap".into(),
+                    injected_chars: 42,
+                    served_at: 1_700_000_500,
+                },
+                ServedRecallRow {
+                    memory_kb: "main".into(),
+                    memory_id: "dddddddddddd".into(),
+                    pos: 2,
+                    title: "other".into(),
+                    injected_chars: 7,
+                    served_at: 1_700_000_500,
+                },
+            ],
+        )
+        .unwrap();
+
+        let raw_count = |db: &Db, artifact_id: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_recalls WHERE artifact_id = ?1",
+                    params![artifact_id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(raw_count(&db, "cap-1"), 1, "append must not delete cap-1");
+        assert_eq!(raw_count(&db, "cap-9"), 1, "append must not delete cap-9");
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-1"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-2"), 1);
+
+        // Existing capture reads are unchanged. Served rows are not a capture,
+        // so newest_capture_pred does not surface them.
+        let cap = db.memory_recalls_for_session("sid-a").unwrap();
+        assert_eq!(cap.len(), 1);
+        assert_eq!(cap[0].artifact_id, "cap-1");
+        assert_eq!(cap[0].memory_id, "aaaaaaaaaaaa");
+        assert_eq!(cap[0].pos, None);
+        assert!(!cap[0].used);
+        assert_eq!(db.memory_recalls_for_session("sid-b").unwrap().len(), 1);
+
+        let (
+            memory_kb,
+            memory_id,
+            session_id,
+            turn_id,
+            recalled_at,
+            used,
+            pos,
+            title,
+            injected_chars,
+        ): (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+        ) = db
+            .conn
+            .query_row(
+                "SELECT memory_kb, memory_id, session_id, turn_id, recalled_at,
+                        used, pos, title, injected_chars
+                 FROM memory_recalls WHERE artifact_id = ?1",
+                params!["served-sid-a-1700000500-1"],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(memory_kb, "notes");
+        assert_eq!(memory_id, "cccccccccccc");
+        assert_eq!(session_id, "sid-a");
+        assert_eq!(turn_id, None, "turn_id is nullable; a live serve has none");
+        assert_eq!(recalled_at, Some(1_700_000_500));
+        assert_eq!(used, 0);
+        assert_eq!(pos, Some(1));
+        assert_eq!(title.as_deref(), Some("retry cap"));
+        assert_eq!(injected_chars, Some(42));
+
+        // Capture rows written without the new columns stay NULL, and still read.
+        let (legacy_title, legacy_chars): (Option<String>, Option<i64>) = db
+            .conn
+            .query_row(
+                "SELECT title, injected_chars FROM memory_recalls WHERE artifact_id = ?1",
+                params!["cap-9"],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(legacy_title, None);
+        assert_eq!(legacy_chars, None);
+
+        // A later capture replace deletes only its own artifact_id.
+        db.memory_recalls_replace(
+            "cap-1",
+            &[memory_recall_row(
+                "notes",
+                "eeeeeeeeeeee",
+                "sid-a",
+                "t-2",
+                Some(300),
+                "cap-1",
+            )],
+        )
+        .unwrap();
+        assert_eq!(raw_count(&db, "cap-1"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-1"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-2"), 1);
+        assert_eq!(raw_count(&db, "cap-9"), 1);
+        let cap = db.memory_recalls_for_session("sid-a").unwrap();
+        assert_eq!(cap.len(), 1);
+        assert_eq!(cap[0].memory_id, "eeeeeeeeeeee");
+        assert_eq!(cap[0].artifact_id, "cap-1");
     }
 
     /// CT-C5 — the CT-B2 "recalled by" read surfaces `used` per row and
