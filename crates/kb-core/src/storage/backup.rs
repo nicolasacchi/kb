@@ -136,6 +136,7 @@ mod tests {
         let cfg = BackupSection {
             remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
             remote_dest: Some(dest.to_string_lossy().into_owned()),
+            schedule_hours: None,
         };
         let outcome = run_remote_copy(&cfg, &src);
         assert_eq!(outcome, Some(RemoteCopyOutcome::Ok));
@@ -162,6 +163,7 @@ mod tests {
                 "{dest}".into(),
             ]),
             remote_dest: Some("remote:bucket/path".into()),
+            schedule_hours: None,
         };
         match run_remote_copy(&cfg, &src) {
             Some(RemoteCopyOutcome::Failed { message }) => {
@@ -182,6 +184,7 @@ mod tests {
         let cfg = BackupSection {
             remote_cmd: Some(vec!["/no/such/uploader-binary-xyz".into(), "{src}".into()]),
             remote_dest: Some("remote:bucket/path".into()),
+            schedule_hours: None,
         };
         match run_remote_copy(&cfg, &src) {
             Some(RemoteCopyOutcome::Failed { message }) => {

@@ -991,7 +991,10 @@ fn parse_session_activity_full(jsonl: &str) -> (SessionActivity, Option<String>)
 /// `kb-session-commits` tail block (already on disk for every capture that
 /// committed — `extract_commits_block`), else **rung 3**, the modal `cwd`
 /// (`repo_root` stays `None`: a bare cwd is not a confirmed git root).
-/// `project_key = claude_project_slug(root)` either way.
+/// `project_key = project_key_of(root)` either way — the Claude slug with
+/// trailing `/` stripped, so a trailing-slash cwd does not split the key.
+/// [`crate::session_bundle::claude_project_slug`] itself is unchanged (a
+/// trailing `/` stays a trailing `-`; `claude -r` depends on that).
 ///
 /// **Rung 1** (a forward-capture `kb-session-project` tail block written by
 /// `kb sessions capture` at commit time — design Proposal 2c/D6) is a capture
@@ -1027,12 +1030,12 @@ pub fn derive_project(
     }
     if let Some(root) = modal_tie_break(&root_counts) {
         return (
-            Some(crate::session_bundle::claude_project_slug(&root)),
+            Some(crate::session_bundle::project_key_of(&root)),
             Some(root),
         );
     }
     match cwd.map(str::trim).filter(|c| !c.is_empty()) {
-        Some(cwd) => (Some(crate::session_bundle::claude_project_slug(cwd)), None),
+        Some(cwd) => (Some(crate::session_bundle::project_key_of(cwd)), None),
         None => (None, None),
     }
 }
@@ -5993,5 +5996,28 @@ mod tests {
             total < 64 * 1024 * 1024,
             "916-row corpus-wide code sum ({total} bytes) should be tens of MB, nowhere near the 2.147 GB ceiling"
         );
+    }
+
+    #[test]
+    fn derive_project_trailing_slash_does_not_split_project_key() {
+        let bare = derive_project(Some("/tmp/kb"), &[]);
+        let slashed = derive_project(Some("/tmp/kb/"), &[]);
+        assert_eq!(bare.0, slashed.0);
+        assert_eq!(bare.0.as_deref(), Some("-tmp-kb"));
+        // Rung 3: a bare cwd is not a confirmed git root.
+        assert_eq!(bare.1, None);
+        assert_eq!(slashed.1, None);
+
+        // Rung 2: the stored root keeps its slash; only the key collapses.
+        let rooted = derive_project(
+            Some("/elsewhere"),
+            &[CapturedCommit {
+                resolved: true,
+                repo_root: Some("/tmp/kb/".into()),
+                ..CapturedCommit::default()
+            }],
+        );
+        assert_eq!(rooted.0.as_deref(), Some("-tmp-kb"));
+        assert_eq!(rooted.1.as_deref(), Some("/tmp/kb/"));
     }
 }
