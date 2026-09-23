@@ -6,6 +6,7 @@ Each section corresponds to one spike. The architecture decisions in
 
 The order matches the research-recommended spike order (`docs/research/spikes.html`).
 
+Frozen at v0.41 (2026-09-22). Later pins live in `Cargo.toml` `[workspace.dependencies]` and `docs/architecture-invariants.md`. This file is not a changelog.
 | spike       | status       | retired at | research source                          |
 |-------------|--------------|------------|------------------------------------------|
 | walker      | worked       | 2026-05-11 | `docs/research/07-html-effectiveness.html` |

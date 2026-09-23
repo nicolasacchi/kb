@@ -74,6 +74,17 @@ fn newest_capture_pred(artifact_col: &str, session_id_expr: &str) -> String {
     )
 }
 
+/// V0042 live-serve rows are stamped `served-{session}-{served_at}-{pos}`
+/// and are not a `sessions` capture, so [`newest_capture_pred`] never
+/// matches them. Readers that should count those hits OR this fragment
+/// beside that predicate — replacing it would let a stale capture's rows
+/// leak. The prefix has no LIKE metacharacters. A caller scoped to one
+/// session must also constrain `session_id`; a bare prefix matches every
+/// session's serves.
+fn served_artifact_pred(artifact_col: &str) -> String {
+    format!("{artifact_col} LIKE 'served-%'")
+}
+
 /// PF-R1 (V0040) — re-derive the materialized `is_newest` flag for one
 /// `session_id`'s capture group, inside the CALLER's transaction. Clears any
 /// currently-flagged row for the group, then re-applies the flag to the
@@ -2319,11 +2330,11 @@ impl Db {
     }
 
     /// R3 (v0.24) — opt-in age-based retention prune. Deletes rows OLDER
-    /// than the configured windows, in ONE transaction, and returns the
-    /// total rows removed. Each window is `Option<seconds>`; `None` prunes
-    /// nothing for that table, so an unset window is a no-op.
+    /// than the configured windows and returns the total rows removed.
+    /// Each window is `Option<seconds>`; `None` prunes nothing for that
+    /// table, so an unset window is a no-op.
     ///
-    /// Two independent deletes:
+    /// History and reading deletes run in ONE transaction:
     ///   1. `reading_sections.last_at < now - reading_max_age` — prunes
     ///      section rows more aggressively than their parent visit (only
     ///      when a reading window is set); the parent history row survives.
@@ -2332,6 +2343,14 @@ impl Db {
     ///      sections. The child rows are deleted EXPLICITLY first (same as
     ///      `history_purge`) so the returned count includes them (cascade
     ///      rows aren't counted by `execute()`).
+    ///
+    /// When the history window is set, live-serve `memory_recalls` rows
+    /// (`artifact_id` LIKE 'served-%') older than that same cutoff are
+    /// deleted by [`Self::memory_recalls_prune_served`] and added to the
+    /// count. The helper uses `self.conn`, so it runs after this
+    /// transaction commits. Capture rows are not matched. An unset history
+    /// window — including a reading-only window — does not touch served
+    /// rows.
     ///
     /// This is invariant #8's documented retention exception: `history` is
     /// append-only EXCEPT this coarse delete of OLD rows — a delete, never
@@ -2365,8 +2384,10 @@ impl Db {
         }
         // (2) History window — explicit child delete FIRST (correct count),
         // then the parent rows (whose cascade would drop any stragglers).
-        if let Some(age) = history_max_age_secs {
-            let cutoff = now_unix.saturating_sub(age);
+        // Served-recall rows share this cutoff. The helper uses `self.conn`,
+        // so it cannot run on `tx`; call it after commit and add its count.
+        let history_cutoff = history_max_age_secs.map(|age| now_unix.saturating_sub(age));
+        if let Some(cutoff) = history_cutoff {
             deleted += tx.execute(
                 "DELETE FROM reading_sections
                    WHERE visit_id IN (SELECT id FROM history WHERE started_at < ?1)",
@@ -2375,6 +2396,9 @@ impl Db {
             deleted += tx.execute("DELETE FROM history WHERE started_at < ?1", params![cutoff])?;
         }
         tx.commit()?;
+        if let Some(cutoff) = history_cutoff {
+            deleted += self.memory_recalls_prune_served(cutoff)?;
+        }
         // Reclaim SOME of the freed pages right away, bounded so a huge
         // one-time backlog can't stall this prune tick indefinitely — see
         // `RetentionSection::INCREMENTAL_VACUUM_PAGES`. A no-op (per SQLite)
@@ -4386,8 +4410,11 @@ impl Db {
     /// capture's own `artifact_id` means an out-of-order or concurrent
     /// capture can never delete a DIFFERENT capture's rows out from under
     /// it; every multi-row READ (`memory_recalls_for_session`,
-    /// `memory_recalls_counts_for_ids`) instead filters to the newest
-    /// capture via `newest_capture_pred` at query time.
+    /// `memory_recalls_counts_for_ids`, the weekly and recalled-by
+    /// siblings) still filters capture rows to the newest capture via
+    /// `newest_capture_pred` at query time, and ORs in live-serve rows
+    /// (`artifact_id` LIKE 'served-%') beside that filter. Those rows are
+    /// not a capture, so the newest predicate alone would hide them.
     pub fn memory_recalls_replace(
         &mut self,
         artifact_id: &str,
@@ -4421,19 +4448,93 @@ impl Db {
         Ok(())
     }
 
-    /// MI-W1.1 (revised) — every recalled hit for one session id, scoped to
-    /// its NEWEST capture (#11 — mirrors `session_files_for_session`'s
-    /// shape/predicate exactly: rows now persist per-capture, so a stale
-    /// capture's rows can coexist with the live one until that stale
-    /// capture's own `sessions` row is unlinked). Ordered by `recalled_at`
-    /// (nulls last), then insertion order.
+    /// Append one `memory_recalls` row per live serve. INSERT only — this
+    /// does not delete, and it does not call [`Self::memory_recalls_replace`].
+    ///
+    /// A live serve has no capture id, and `artifact_id` is `NOT NULL`
+    /// (V0035; V0042 does not relax it). Each row is stamped
+    /// `served-{session_id}-{served_at}-{pos}`, so a later capture replace
+    /// or unlink (`DELETE WHERE artifact_id = <capture id>`) cannot remove
+    /// it. `served_at` is stored as `recalled_at`. `turn_id` is NULL (the
+    /// column allows it). `used` is 0. `title` and `injected_chars` are the
+    /// V0042 columns; capture rows leave them NULL.
+    ///
+    /// These rows are not a `sessions` capture. Readers that are about a
+    /// session's recalls OR in rows whose `artifact_id` starts with
+    /// `served-` beside `newest_capture_pred`, so a serve is visible before
+    /// (and after) the Stop-hook capture. Age them out with
+    /// [`Self::memory_recalls_prune_served`]; capture replace and unlink
+    /// cannot see this `artifact_id`.
+    pub fn memory_recalls_append(
+        &mut self,
+        session_id: &str,
+        rows: &[ServedRecallRow],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO memory_recalls
+                    (memory_kb, memory_id, session_id, turn_id, recalled_at,
+                     artifact_id, used, pos, title, injected_chars)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?;
+            for r in rows {
+                let artifact_id = format!("served-{session_id}-{}-{}", r.served_at, r.pos);
+                let turn_id: Option<&str> = None;
+                stmt.execute(params![
+                    r.memory_kb,
+                    r.memory_id,
+                    session_id,
+                    turn_id,
+                    r.served_at,
+                    artifact_id,
+                    0_i64,
+                    i64::from(r.pos),
+                    r.title,
+                    i64::from(r.injected_chars),
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Delete live-serve rows (`artifact_id` starts with `served-`) whose
+    /// `recalled_at` is strictly older than `cutoff_unix`. Capture rows are
+    /// not matched. A NULL `recalled_at` is not older than any cutoff and
+    /// is kept. Returns the number of rows deleted.
+    ///
+    /// [`Self::retention_prune`] calls this with the history window's
+    /// cutoff when that window is set, and adds the returned count.
+    /// [`Self::sessions_delete`] deletes by capture `artifact_id`, which
+    /// never equals a serve id.
+    pub fn memory_recalls_prune_served(&mut self, cutoff_unix: i64) -> Result<usize> {
+        let sql = format!(
+            "DELETE FROM memory_recalls WHERE {} AND recalled_at < ?1",
+            served_artifact_pred("artifact_id"),
+        );
+        let n = self.conn.execute(&sql, params![cutoff_unix])?;
+        Ok(n)
+    }
+
+    /// MI-W1.1 (revised) — every recalled hit for one session id. Capture
+    /// rows stay scoped to its NEWEST capture (#11 — a stale capture's
+    /// rows can coexist until that capture is unlinked). Live-serve rows
+    /// for this `session_id` (`artifact_id` starts with `served-`) are
+    /// included beside that filter; they are not a capture, so the newest
+    /// predicate alone would hide them. Ordered by `recalled_at` (nulls
+    /// last), then insertion order.
     pub fn memory_recalls_for_session(&self, session_id: &str) -> Result<Vec<MemoryRecallRow>> {
         let sql = format!(
             "SELECT memory_kb, memory_id, session_id, turn_id, recalled_at, artifact_id, used, pos
              FROM memory_recalls
-             WHERE {}
+             WHERE ({} OR (session_id = ?1 AND {}))
              ORDER BY (recalled_at IS NULL) ASC, recalled_at ASC, rowid ASC",
-            newest_capture_pred("artifact_id", "?1")
+            newest_capture_pred("artifact_id", "?1"),
+            served_artifact_pred("artifact_id"),
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt
@@ -4479,6 +4580,9 @@ impl Db {
     /// left behind until THAT capture is unlinked — see
     /// `memory_recalls_replace`) would double-count: both the stale and the
     /// live capture's rows would otherwise satisfy `memory_id IN (...)`.
+    /// Live-serve rows (`artifact_id` LIKE 'served-%') are OR'd in beside
+    /// that filter so a hit recorded at serve time counts; the newest
+    /// predicate on capture rows is unchanged.
     pub fn memory_recalls_counts_for_ids(
         &self,
         memory_kb: Option<&str>,
@@ -4492,7 +4596,7 @@ impl Db {
             "SELECT memory_id, COUNT(*), MAX(recalled_at), SUM(used)
              FROM memory_recalls
              WHERE memory_id IN ({placeholders})
-               AND {}{}
+               AND ({} OR {}){}
              GROUP BY memory_id",
             // The correlation target MUST be qualified by the outer table's
             // own name (`memory_recalls.session_id`), never a bare
@@ -4507,6 +4611,7 @@ impl Db {
             // failing unit test before this fix (a two-different-sessions
             // scenario collapsed to a single row).
             newest_capture_pred("artifact_id", "memory_recalls.session_id"),
+            served_artifact_pred("artifact_id"),
             if memory_kb.is_some() {
                 " AND memory_kb = ?"
             } else {
@@ -4552,8 +4657,9 @@ impl Db {
     /// didn't parse — see `derive_memory_recalls`) lands in bucket 0 rather
     /// than being dropped: the injection still happened, "sometime very
     /// recently" is a safer default than silently uncounting it. Same
-    /// newest-capture scoping + optional `memory_kb` filter as
-    /// `memory_recalls_counts_for_ids` (this is its per-week sibling); a
+    /// newest-capture scoping (plus live-serve rows, same OR as
+    /// `memory_recalls_counts_for_ids`) and optional `memory_kb` filter
+    /// (this is its per-week sibling); a
     /// caller wanting the true corpus-wide histogram fans out across every
     /// kb and sums same-bucket counts (invariant #28), exactly like that
     /// function's own doc comment describes for its aggregate.
@@ -4573,9 +4679,10 @@ impl Db {
                     COUNT(*)
              FROM memory_recalls
              WHERE memory_id IN ({placeholders})
-               AND {}{}
+               AND ({} OR {}){}
              GROUP BY memory_id, wk",
             newest_capture_pred("artifact_id", "memory_recalls.session_id"),
+            served_artifact_pred("artifact_id"),
             if memory_kb.is_some() {
                 " AND memory_kb = ?"
             } else {
@@ -4624,11 +4731,12 @@ impl Db {
     /// The correlation target is qualified `mr.session_id` for the exact
     /// reason documented on `memory_recalls_counts_for_ids`: the subquery's
     /// own `sessions AS s2` range var also has a `session_id` column, so an
-    /// unqualified reference would silently self-correlate. The `JOIN
-    /// sessions s ON s.artifact_id = mr.artifact_id` is safe to leave
-    /// unfiltered by the same predicate: once `mr.artifact_id` is pinned to
-    /// the session's newest capture, joining `sessions` on that exact
-    /// `artifact_id` can only ever resolve to that same newest row.
+    /// unqualified reference would silently self-correlate. Capture rows
+    /// join `sessions` on `mr.artifact_id` (pinned to the newest capture by
+    /// the predicate below). Live-serve rows are not a capture id, so the
+    /// join follows the session's newest capture for title/prompt and is a
+    /// LEFT JOIN: a serve with no capture yet still counts, with NULL
+    /// display fields and `started_at` falling back to `recalled_at`.
     ///
     /// `limit` caps the result set (the route enforces its own cross-kb
     /// total cap on top of this per-kb one).
@@ -4638,16 +4746,24 @@ impl Db {
         memory_id: &str,
         limit: u32,
     ) -> Result<Vec<MemoryRecalledByRow>> {
+        let served = served_artifact_pred("mr.artifact_id");
         let sql = format!(
             "SELECT mr.session_id, mr.turn_id, mr.recalled_at, s.title, s.first_user_prompt,
-                    s.started_at, mr.used, mr.pos
+                    COALESCE(s.started_at, mr.recalled_at, 0), mr.used, mr.pos
              FROM memory_recalls mr
-             JOIN sessions s ON s.artifact_id = mr.artifact_id
+             LEFT JOIN sessions s ON s.artifact_id = (
+                 CASE WHEN {served} THEN (
+                     SELECT artifact_id FROM sessions s3
+                     WHERE s3.session_id = mr.session_id AND s3.is_newest = 1
+                     LIMIT 1
+                 ) ELSE mr.artifact_id END
+             )
              WHERE mr.memory_kb = ?1 AND mr.memory_id = ?2
-               AND {}
+               AND ({} OR {served})
              ORDER BY (mr.recalled_at IS NULL) ASC, mr.recalled_at DESC, mr.rowid ASC
              LIMIT ?3",
-            newest_capture_pred("mr.artifact_id", "mr.session_id")
+            newest_capture_pred("mr.artifact_id", "mr.session_id"),
+            served = served,
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt
@@ -7105,6 +7221,25 @@ pub struct MemoryRecallRow {
     pub pos: Option<u32>,
 }
 
+/// One live serve for [`Db::memory_recalls_append`] (V0042). Not a capture
+/// row: the append stamps `artifact_id`, `turn_id` (NULL), and `used` (0),
+/// and stores `served_at` as `recalled_at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedRecallRow {
+    /// Kb the recalled memory lives in.
+    pub memory_kb: String,
+    /// Recalled memory's artifact id.
+    pub memory_id: String,
+    /// 1-based rank in the pack this serve returned.
+    pub pos: u32,
+    /// Served title. V0042; NULL on capture rows.
+    pub title: String,
+    /// Chars of the served title + summary. V0042; NULL on capture rows.
+    pub injected_chars: u32,
+    /// Unix seconds for the batch. Stored as `recalled_at`.
+    pub served_at: i64,
+}
+
 /// A `memory_id`'s aggregate recall stats within one sessions-corpus kb's
 /// `memory_recalls` table — the census/recall-enrichment read shape
 /// (`memory_recalls_counts_for_ids`). A caller fanning out across every kb
@@ -8421,7 +8556,9 @@ mod tests {
     // ---- R3 (v0.24) — opt-in age-based retention prune ----
 
     /// A history window removes visits OLDER than `now - window` and keeps
-    /// every more-recent visit untouched.
+    /// every more-recent visit untouched. The same cutoff drops an old
+    /// `served-` recall row and keeps a recent one; a capture row is not
+    /// a serve and survives.
     #[test]
     fn retention_prune_removes_old_history_keeps_recent() {
         const NOW: i64 = 1_700_000_000;
@@ -8433,9 +8570,45 @@ mod tests {
             .unwrap();
         db.history_record_open("fresh", NOW - DAY, None, "operator")
             .unwrap();
-        // 30-day history window → only the 40-day-old visit is past the cutoff.
+        let old_at = NOW - 40 * DAY;
+        let fresh_at = NOW - DAY;
+        db.memory_recalls_append(
+            "sid",
+            &[
+                ServedRecallRow {
+                    memory_kb: "notes".into(),
+                    memory_id: "aaaaaaaaaaaa".into(),
+                    pos: 1,
+                    title: "old serve".into(),
+                    injected_chars: 1,
+                    served_at: old_at,
+                },
+                ServedRecallRow {
+                    memory_kb: "notes".into(),
+                    memory_id: "bbbbbbbbbbbb".into(),
+                    pos: 1,
+                    title: "fresh serve".into(),
+                    injected_chars: 1,
+                    served_at: fresh_at,
+                },
+            ],
+        )
+        .unwrap();
+        db.memory_recalls_replace(
+            "cap-old",
+            &[memory_recall_row(
+                "notes",
+                "cccccccccccc",
+                "sid",
+                "t-1",
+                Some(old_at),
+                "cap-old",
+            )],
+        )
+        .unwrap();
+        // 30-day history window → the 40-day visit and the 40-day serve.
         let n = db.retention_prune(NOW, Some(30 * DAY), None).unwrap();
-        assert_eq!(n, 1, "only the 40-day-old visit is pruned");
+        assert_eq!(n, 2, "40-day visit and 40-day served row are pruned");
         let ids: Vec<String> = db
             .history_list(100, None, None, None)
             .unwrap()
@@ -8445,6 +8618,24 @@ mod tests {
         assert!(!ids.iter().any(|i| i == "old"), "old visit gone");
         assert!(ids.iter().any(|i| i == "mid"), "20-day visit kept");
         assert!(ids.iter().any(|i| i == "fresh"), "1-day visit kept");
+        let recall_n = |id: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_recalls WHERE artifact_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            (
+                recall_n(&format!("served-sid-{old_at}-1")),
+                recall_n(&format!("served-sid-{fresh_at}-1")),
+                recall_n("cap-old"),
+            ),
+            (0, 1, 1),
+            "old served- row pruned; recent served- and capture rows kept"
+        );
     }
 
     /// Both windows `None` → keep forever: even an ancient row is untouched.
@@ -11375,6 +11566,211 @@ mod tests {
             .unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].pos, None);
+    }
+
+    /// V0042 — a live serve appends rows and must not delete any other
+    /// `artifact_id`. Capture rows (written by `memory_recalls_replace`,
+    /// which does not name `title`/`injected_chars`) still read, and a
+    /// later replace of that capture cannot delete the served rows: their
+    /// `artifact_id` is `served-{session_id}-{served_at}-{pos}`, not the
+    /// capture id. `memory_recalls_for_session` returns that served row
+    /// beside the newest capture row.
+    #[test]
+    fn memory_recalls_append_inserts_without_deleting_other_artifact_ids() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-1",
+            &[memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "sid-a",
+                "t-1",
+                Some(100),
+                "cap-1",
+            )],
+        )
+        .unwrap();
+        db.sessions_upsert(&session_row("cap-9", "sid-b", 1_700_000_200))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-9",
+            &[memory_recall_row(
+                "notes",
+                "bbbbbbbbbbbb",
+                "sid-b",
+                "t-9",
+                Some(200),
+                "cap-9",
+            )],
+        )
+        .unwrap();
+
+        // Empty append is a no-op, not a wipe.
+        db.memory_recalls_append("sid-a", &[]).unwrap();
+
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                ServedRecallRow {
+                    memory_kb: "notes".into(),
+                    memory_id: "cccccccccccc".into(),
+                    pos: 1,
+                    title: "retry cap".into(),
+                    injected_chars: 42,
+                    served_at: 1_700_000_500,
+                },
+                ServedRecallRow {
+                    memory_kb: "main".into(),
+                    memory_id: "dddddddddddd".into(),
+                    pos: 2,
+                    title: "other".into(),
+                    injected_chars: 7,
+                    served_at: 1_700_000_500,
+                },
+            ],
+        )
+        .unwrap();
+
+        let raw_count = |db: &Db, artifact_id: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_recalls WHERE artifact_id = ?1",
+                    params![artifact_id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(raw_count(&db, "cap-1"), 1, "append must not delete cap-1");
+        assert_eq!(raw_count(&db, "cap-9"), 1, "append must not delete cap-9");
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-1"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-2"), 1);
+
+        // Capture rows stay readable. A served row for this session is
+        // visible; another session's serves are not.
+        let cap = db.memory_recalls_for_session("sid-a").unwrap();
+        assert!(
+            cap.iter()
+                .any(|r| r.artifact_id == "cap-1" && r.memory_id == "aaaaaaaaaaaa"),
+            "append must not delete or hide the capture row"
+        );
+        assert!(
+            cap.iter()
+                .any(|r| r.artifact_id == "served-sid-a-1700000500-1"),
+            "a served row for this session is visible"
+        );
+        assert_eq!(cap.len(), 3, "newest capture plus both served rows");
+        let cap_row = cap.iter().find(|r| r.artifact_id == "cap-1").unwrap();
+        assert_eq!(cap_row.pos, None);
+        assert!(!cap_row.used);
+        let sid_b = db.memory_recalls_for_session("sid-b").unwrap();
+        assert_eq!(sid_b.len(), 1, "sid-b must not see sid-a's serves");
+        assert_eq!(sid_b[0].artifact_id, "cap-9");
+
+        let (
+            memory_kb,
+            memory_id,
+            session_id,
+            turn_id,
+            recalled_at,
+            used,
+            pos,
+            title,
+            injected_chars,
+        ): (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+        ) = db
+            .conn
+            .query_row(
+                "SELECT memory_kb, memory_id, session_id, turn_id, recalled_at,
+                        used, pos, title, injected_chars
+                 FROM memory_recalls WHERE artifact_id = ?1",
+                params!["served-sid-a-1700000500-1"],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(memory_kb, "notes");
+        assert_eq!(memory_id, "cccccccccccc");
+        assert_eq!(session_id, "sid-a");
+        assert_eq!(turn_id, None, "turn_id is nullable; a live serve has none");
+        assert_eq!(recalled_at, Some(1_700_000_500));
+        assert_eq!(used, 0);
+        assert_eq!(pos, Some(1));
+        assert_eq!(title.as_deref(), Some("retry cap"));
+        assert_eq!(injected_chars, Some(42));
+
+        // Capture rows written without the new columns stay NULL, and still read.
+        let (legacy_title, legacy_chars): (Option<String>, Option<i64>) = db
+            .conn
+            .query_row(
+                "SELECT title, injected_chars FROM memory_recalls WHERE artifact_id = ?1",
+                params!["cap-9"],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(legacy_title, None);
+        assert_eq!(legacy_chars, None);
+
+        // A later capture replace deletes only its own artifact_id.
+        db.memory_recalls_replace(
+            "cap-1",
+            &[memory_recall_row(
+                "notes",
+                "eeeeeeeeeeee",
+                "sid-a",
+                "t-2",
+                Some(300),
+                "cap-1",
+            )],
+        )
+        .unwrap();
+        assert_eq!(raw_count(&db, "cap-1"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-1"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-2"), 1);
+        assert_eq!(raw_count(&db, "cap-9"), 1);
+        let cap = db.memory_recalls_for_session("sid-a").unwrap();
+        assert!(
+            cap.iter()
+                .any(|r| r.memory_id == "eeeeeeeeeeee" && r.artifact_id == "cap-1"),
+            "replace rewrites the capture row and does not delete it"
+        );
+        assert!(
+            cap.iter()
+                .any(|r| r.artifact_id == "served-sid-a-1700000500-1"),
+            "replace must not hide the served row"
+        );
+        assert_eq!(cap.len(), 3);
+        // Equal cutoff is not older-than. A later cutoff drops only serves.
+        assert_eq!(db.memory_recalls_prune_served(1_700_000_500).unwrap(), 0);
+        assert_eq!(db.memory_recalls_prune_served(1_700_000_501).unwrap(), 2);
+        assert_eq!(raw_count(&db, "cap-1"), 1, "prune must not delete capture rows");
+        assert_eq!(raw_count(&db, "cap-9"), 1);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-1"), 0);
+        assert_eq!(raw_count(&db, "served-sid-a-1700000500-2"), 0);
+        let after = db.memory_recalls_for_session("sid-a").unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].artifact_id, "cap-1");
     }
 
     /// CT-C5 — the CT-B2 "recalled by" read surfaces `used` per row and

@@ -42,6 +42,7 @@ fn kb_section(path: std::path::PathBuf) -> KbSection {
         atlas: None,
         templates: std::collections::BTreeMap::new(),
         memory_scope: None,
+        project_slugs: Vec::new(),
         default_search_category: None,
         code_url: None,
         decay_policy: None,

@@ -580,17 +580,25 @@ impl Default for IdentitySection {
     }
 }
 
-/// GC-B4 — off-host copy step for `kb backup`. `kb backup` on its own
-/// only ever writes a local tarball under `<state>/exports/` — a SPOF
-/// (see docs/self-host.md "Backups must leave the box"). When both
-/// fields are set, the CLI runs `remote_cmd` (with `{src}`/`{dest}`
-/// substituted) right after a successful local backup, as a best-effort
-/// extra step: a failed remote copy is loudly reported but never fails
-/// the backup itself (the local tarball is still the source of truth).
+/// GC-B4 — off-host copy step for `kb backup`, plus an optional daemon
+/// period. `kb backup` on its own only ever writes a local tarball under
+/// `<state>/exports/` — a SPOF (see docs/self-host.md "Backups must leave
+/// the box"). When both remote fields are set, the CLI runs `remote_cmd`
+/// (with `{src}`/`{dest}` substituted) right after a successful local
+/// backup, as a best-effort extra step: a failed remote copy is loudly
+/// reported but never fails the backup itself (the local tarball is still
+/// the source of truth).
 ///
-/// Both fields are `None` by default — an absent `[backup]` section (or
-/// one with either field unset) changes nothing; no remote command ever
-/// runs.
+/// `schedule_hours` is the operator's request that backups happen on a
+/// period. Absent (serde default) and `Some(0)` are unset. A positive
+/// value does not arm a writer inside the daemon — the tarball writer
+/// lives in the CLI, and the daemon must not shell out to it. A positive
+/// schedule with no `remote_cmd` is a boot WARN (`schedule_without_remote_cmd`)
+/// so that schedule does not look safe.
+///
+/// Remote fields are `None` by default — an absent `[backup]` section (or
+/// one with either remote field unset) changes nothing; no remote command
+/// ever runs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BackupSection {
     /// Explicit argv template for the remote-copy command — NOT a shell
@@ -607,6 +615,13 @@ pub struct BackupSection {
     /// (scp/rsync). Opaque to kb — passed through verbatim.
     #[serde(default)]
     pub remote_dest: Option<String>,
+
+    /// Daemon backup period in hours. Absent (`None`, the serde default)
+    /// and `Some(0)` are unset — zero is not a period. A positive value
+    /// is a configured schedule. Skipped on serialize when absent so an
+    /// existing `kb.toml` round-trip does not grow the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_hours: Option<u64>,
 }
 
 /// MI-W2.1 — `[memory]`: daemon-wide agent-memory scoring knobs. Same
@@ -718,6 +733,19 @@ impl BackupSection {
                 .map(|arg| arg.replace("{src}", &src_str).replace("{dest}", dest))
                 .collect(),
         )
+    }
+
+    /// Positive `schedule_hours`. `None` and `0` are unset.
+    pub fn schedule_hours_set(&self) -> bool {
+        self.schedule_hours.is_some_and(|h| h > 0)
+    }
+
+    /// A positive schedule and no usable `remote_cmd`. The daemon WARNs
+    /// at boot and does not spawn a backup task: there is no in-process
+    /// tarball writer, and it must not shell out to the CLI one. A
+    /// schedule in this state must not look safe.
+    pub fn schedule_without_remote_cmd(&self) -> bool {
+        self.schedule_hours_set() && !self.remote_cmd.as_ref().is_some_and(|c| !c.is_empty())
     }
 }
 
@@ -1085,6 +1113,14 @@ pub struct KbSection {
     /// Read by `GET /api/memory/recall` to resolve the fan-out set.
     #[serde(default)]
     pub memory_scope: Option<String>,
+
+    /// ux-01 — git main-checkout basenames that resolve to THIS corpus
+    /// instead of a derived `memory-<basename>`. Empty (the default, so an
+    /// existing `kb.toml` with no key still parses) means no aliases. A
+    /// basename listed here maps to this kb's name on both the recall read
+    /// ladder and the memory write ladder.
+    #[serde(default)]
+    pub project_slugs: Vec<String>,
 
     /// R0-opt-in — per-kb default for `GET /api/search`'s `category` filter
     /// (`routes/search.rs` `Filters::keep`). Sessions are hidden from search
@@ -1941,6 +1977,18 @@ impl KbConfig {
             issues.push(ValidationIssue::warn(
                 "/backup/remote_cmd",
                 "remote_dest is set but remote_cmd is not; the off-host copy never runs"
+                    .to_string(),
+            ));
+        }
+        // A positive schedule with no remote_cmd looks like the daemon
+        // will back up on its own. It will not — the tarball writer is
+        // the CLI, and the daemon does not shell out. Warn so the
+        // schedule does not look safe. `0` is unset, not a schedule.
+        if self.backup.schedule_without_remote_cmd() {
+            issues.push(ValidationIssue::warn(
+                "/backup/schedule_hours",
+                "schedule_hours is set but remote_cmd is not; the daemon cannot write \
+                 export tarballs and will not run this schedule"
                     .to_string(),
             ));
         }
@@ -2836,6 +2884,7 @@ mod tests {
                 atlas: None,
                 templates: std::collections::BTreeMap::new(),
                 memory_scope: Some("global".into()),
+                project_slugs: Vec::new(),
                 default_search_category: Some("memory-session".into()),
                 code_url: None,
                 decay_policy: None,
@@ -2885,6 +2934,30 @@ mod tests {
         let c = KbConfig::from_toml_str(toml_str).unwrap();
         let kb = c.kb.get(&KbName::new("plain").unwrap()).unwrap();
         assert!(kb.memory_scope.is_none());
+    }
+
+    #[test]
+    fn project_slugs_defaults_empty_and_parses() {
+        let plain = r#"
+            [kb.plain]
+            path = "/tmp/plain"
+        "#;
+        let c = KbConfig::from_toml_str(plain).unwrap();
+        let kb = c.kb.get(&KbName::new("plain").unwrap()).unwrap();
+        assert!(kb.project_slugs.is_empty());
+
+        let aliased = r#"
+            [kb.memory-1000f]
+            path = "/tmp/m"
+            memory_scope = "project"
+            project_slugs = ["morning", "1000farmacie-iac"]
+        "#;
+        let c = KbConfig::from_toml_str(aliased).unwrap();
+        let kb = c.kb.get(&KbName::new("memory-1000f").unwrap()).unwrap();
+        assert_eq!(
+            kb.project_slugs,
+            vec!["morning".to_string(), "1000farmacie-iac".to_string()]
+        );
     }
 
     #[test]
@@ -3073,6 +3146,7 @@ mod tests {
                 atlas: None,
                 templates: std::collections::BTreeMap::new(),
                 memory_scope: None,
+                project_slugs: Vec::new(),
                 default_search_category: None,
                 code_url: Some("https://kbc.example.com".into()),
                 decay_policy: None,
@@ -3414,6 +3488,7 @@ mod tests {
             atlas: None,
             templates: Default::default(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -4071,6 +4146,7 @@ mod tests {
                 "{dest}".into(),
             ]),
             remote_dest: Some("remote:bucket/path".into()),
+            ..Default::default()
         };
         let argv = sec
             .build_argv(Path::new("/tmp/x/kb-20260710.tar.gz"))
@@ -4089,6 +4165,66 @@ mod tests {
         sec.remote_dest = None;
         assert!(sec.build_argv(Path::new("/tmp/x/kb.tar.gz")).is_none());
     }
+
+    /// Absent `[backup]` leaves `schedule_hours` unset. A doctor's raw
+    /// `schedule = "daily"` key is not this field and must still parse.
+    #[test]
+    fn backup_schedule_hours_defaults_absent_and_ignores_legacy_schedule_key() {
+        let absent = KbConfig::from_toml_str("").unwrap();
+        assert_eq!(absent.backup.schedule_hours, None);
+        assert!(!absent.backup.schedule_hours_set());
+        assert!(!absent.backup.schedule_without_remote_cmd());
+
+        let legacy = KbConfig::from_toml_str(
+            "[backup]\nremote_cmd = [\"rclone\", \"copyto\", \"{src}\", \"{dest}\"]\n\
+             remote_dest = \"remote:bucket\"\nschedule = \"daily\"\n",
+        )
+        .unwrap();
+        assert_eq!(legacy.backup.schedule_hours, None);
+        assert!(legacy.backup.is_configured());
+        assert!(legacy
+            .validate()
+            .iter()
+            .all(|i| i.pointer != "/backup/schedule_hours"));
+    }
+
+    #[test]
+    fn backup_schedule_hours_parses_and_warns_without_remote_cmd() {
+        let c = KbConfig::from_toml_str("[backup]\nschedule_hours = 24\n").unwrap();
+        assert_eq!(c.backup.schedule_hours, Some(24));
+        assert!(c.backup.schedule_without_remote_cmd());
+        assert!(c
+            .validate()
+            .iter()
+            .any(|i| i.pointer == "/backup/schedule_hours" && !i.is_hard()));
+
+        // Zero is not a period — unset, so it must not look like a schedule.
+        let zero = KbConfig::from_toml_str("[backup]\nschedule_hours = 0\n").unwrap();
+        assert_eq!(zero.backup.schedule_hours, Some(0));
+        assert!(!zero.backup.schedule_hours_set());
+        assert!(!zero.backup.schedule_without_remote_cmd());
+        assert!(zero
+            .validate()
+            .iter()
+            .all(|i| i.pointer != "/backup/schedule_hours"));
+    }
+
+    #[test]
+    fn backup_schedule_hours_with_remote_cmd_is_not_the_boot_warn() {
+        let c = KbConfig::from_toml_str(
+            "[backup]\nschedule_hours = 12\n\
+             remote_cmd = [\"rclone\", \"copyto\", \"{src}\", \"{dest}\"]\n\
+             remote_dest = \"remote:bucket/path\"\n",
+        )
+        .unwrap();
+        assert!(c.backup.schedule_hours_set());
+        assert!(!c.backup.schedule_without_remote_cmd());
+        assert!(c
+            .validate()
+            .iter()
+            .all(|i| !i.pointer.starts_with("/backup")));
+    }
+
 
     // ---- MI-W2.1 / MI-W5.R — [memory] scoring_v2_relevance/_stability ----
 

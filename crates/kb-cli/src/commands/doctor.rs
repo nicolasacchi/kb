@@ -13,16 +13,18 @@
 //!   4. the V0035 `memory_recalls` ledger fed by capture;
 //!   5. kb-code's why-hook (`plugins/kb-code/hooks/kb-code-why.sh`).
 //!
-//! v0.42 (D30) folds in one more check that ISN'T about provenance: `kb
-//! slate`'s `slate-cursor-<sid>`/`slate-topic-<sid>` markers under the same
-//! `~/.cache/kb` never expire on their own, so `--hooks` also flags any
-//! older than 30 days — and `--fix` removes THOSE ONLY, every other check
-//! here stays read-only.
+//! v0.42 (D30) folds in one more check that ISN'T about provenance: session
+//! marker files under `~/.cache/kb` never expire on their own
+//! (`slate-cursor-`/`slate-topic-`, plus `context-scent-`, `beat-heartbeat-`,
+//! and `waked-`). `--hooks` flags any older than 30 days — and `--fix`
+//! removes THOSE ONLY. A cursor younger than 30 days, and the slate ledger,
+//! are never removed. Every other check here stays read-only.
 //!
-//! Every check below prints PASS/WARN/SKIP + a one-line fix, and is
+//! Every check below prints PASS/WARN/SKIP/FAIL + a one-line fix, and is
 //! explicit about what it couldn't verify (a SKIP is never silently
 //! upgraded to a PASS — "detection is best-effort" means saying so, not
-//! guessing). HTTP-backed checks are split into a thin async fetch + a
+//! guessing). FAIL is a report status, not a process exit. HTTP-backed
+//! checks are split into a thin async fetch + a
 //! pure decision fn (`decide_*`) so the interesting logic is unit-tested
 //! without a live daemon.
 
@@ -36,6 +38,10 @@ enum CheckStatus {
     Pass,
     Warn,
     Skip,
+    /// A configured invariant is broken — still does not change the process
+    /// exit code. `--hooks` stays a report; callers that want a gate read
+    /// the JSON `status`.
+    Fail,
 }
 
 impl CheckStatus {
@@ -44,6 +50,7 @@ impl CheckStatus {
             CheckStatus::Pass => "pass",
             CheckStatus::Warn => "warn",
             CheckStatus::Skip => "skip",
+            CheckStatus::Fail => "fail",
         }
     }
     fn glyph(self) -> &'static str {
@@ -51,6 +58,7 @@ impl CheckStatus {
             CheckStatus::Pass => "✓",
             CheckStatus::Warn => "⚠",
             CheckStatus::Skip => "○",
+            CheckStatus::Fail => "✗",
         }
     }
 }
@@ -81,18 +89,23 @@ impl HookCheck {
     fn skip(id: &'static str, detail: impl Into<String>) -> Self {
         Self::new(id, CheckStatus::Skip, detail)
     }
+    fn fail(id: &'static str, detail: impl Into<String>) -> Self {
+        Self::new(id, CheckStatus::Fail, detail)
+    }
     fn with_fix(mut self, fix: impl Into<String>) -> Self {
         self.fix = Some(fix.into());
         self
     }
 }
 
-/// v1 harness scope: every check below only understands Claude Code's own
-/// marker/hook shapes. Printed once, human mode only (also carried in
-/// `--json`'s `notes`) — honesty over coverage (WORK ORDER item 4).
+/// v1 marker/hook probes only understand Claude Code's own shapes. The
+/// recall-outcome check is the exception: it reads the sessions census for
+/// every harness. Printed once, human mode only (also carried in `--json`'s
+/// `notes`). The "Claude Code only" clause stays — older consumers pin it.
 const HARNESS_SCOPE_NOTE: &str = "harness scope: v1 checks Claude Code only — \
      the codex/kimi capture + distill-nudge adapters exist but aren't probed \
-     by this command";
+     by the marker/hook checks; recall-outcome reads the sessions census for \
+     every harness";
 
 fn render_human(checks: &[HookCheck]) -> String {
     let mut out = String::new();
@@ -116,12 +129,16 @@ fn render_human(checks: &[HookCheck]) -> String {
         .iter()
         .filter(|c| c.status == CheckStatus::Warn)
         .count();
+    let fail = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Fail)
+        .count();
     let skip = checks
         .iter()
         .filter(|c| c.status == CheckStatus::Skip)
         .count();
     out.push_str(&format!(
-        "\n{pass} pass, {warn} warn, {skip} skip ({} checks total)\n",
+        "\n{pass} pass, {warn} warn, {fail} fail, {skip} skip ({} checks total)\n",
         checks.len()
     ));
     out.push_str(&format!("\n{HARNESS_SCOPE_NOTE}\n"));
@@ -469,6 +486,10 @@ struct KbLite {
     memory_scope: Option<String>,
     #[serde(default)]
     default_search_category: Option<String>,
+    /// `[kb.*] code_url`. Absent on an older daemon, `null` when this corpus
+    /// isn't linked to kb-code. Doclens is the consumer; kb never calls it.
+    #[serde(default)]
+    code_url: Option<String>,
 }
 
 async fn fetch_kbs(client: &reqwest::Client, base: &str) -> Result<Vec<KbLite>> {
@@ -526,6 +547,49 @@ fn decide_daemon_sessions_kb(kbs: &[KbLite]) -> HookCheck {
         ),
     )
     .with_fix("add `default_search_category = \"memory-session\"` to the [kb.<name>] stanza capturing transcripts")
+}
+
+/// ux-01 — name a derived `memory-<slug>` that is not a corpus and has no
+/// `project_slugs` alias. The caller skips this entirely when the daemon
+/// is unreachable (same as the provenance checks); a down daemon is not a
+/// failure of this check.
+fn decide_memory_project_corpus(
+    slug: &str,
+    names: &[&str],
+    alias: Option<&str>,
+) -> HookCheck {
+    if slug.is_empty() {
+        return HookCheck::skip(
+            "memory-project-corpus",
+            "no git repo slug — no derived memory-<slug> to check",
+        );
+    }
+    let derived = format!("memory-{slug}");
+    if let Some(name) = alias {
+        if names.iter().any(|n| *n == name) {
+            return HookCheck::pass(
+                "memory-project-corpus",
+                format!("repo slug {slug} maps to corpus {name} via project_slugs"),
+            );
+        }
+    }
+    if names.iter().any(|n| *n == derived.as_str()) {
+        return HookCheck::pass(
+            "memory-project-corpus",
+            format!("derived project corpus {derived} exists"),
+        );
+    }
+    let detail = match alias {
+        Some(name) => format!(
+            "derived project corpus {derived} has no matching corpus (project_slugs points at {name}, also absent)"
+        ),
+        None => format!(
+            "derived project corpus {derived} has no matching corpus and no project_slugs alias"
+        ),
+    };
+    HookCheck::warn("memory-project-corpus", detail).with_fix(format!(
+        "add `{slug}` to [kb.<corpus>] project_slugs, or create a corpus named {derived}"
+    ))
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1019,16 +1083,35 @@ struct StaleSlateMarker {
     age_secs: i64,
 }
 
-/// `commands::slate`'s own `cursor_file`/`topic_file` naming, mirrored by
-/// name rather than imported — this is a read-only filesystem scan in a
-/// different module, not a shared contract the two sides must agree on
-/// beyond the literal prefix.
+/// Explicit prefixes of session-marker files under `~/.cache/kb` that never
+/// expire on their own. An explicit list, not a glob: a name matches only
+/// when it starts with one of these literals.
+///
+/// `context-scent-` (`kb-recall.sh`), `beat-heartbeat-` (`kb-beat-throttle.sh`)
+/// and `waked-` (`kb-wake-kimi.sh`'s `waked-kimi-<sid>`) are the other
+/// per-session files that accumulate forever beside the slate cursor/topic
+/// pair. The slate ledger is not in this list and is never touched. Files
+/// younger than [`SLATE_MARKER_MAX_AGE_SECS`] are not selected — a live
+/// session's cursor stays.
+const SESSION_MARKER_PREFIXES: &[&str] = &[
+    "slate-cursor-",
+    "slate-topic-",
+    "context-scent-",
+    "beat-heartbeat-",
+    "waked-",
+];
+
 fn is_slate_marker_name(name: &str) -> bool {
-    name.starts_with("slate-cursor-") || name.starts_with("slate-topic-")
+    SESSION_MARKER_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
-/// Scan `kb_dir` (`~/.cache/kb`) for slate cursor/topic markers whose
-/// mtime is at least [`SLATE_MARKER_MAX_AGE_SECS`] old. PURE over an
+/// Scan `kb_dir` (`~/.cache/kb`) for session-marker files whose mtime is
+/// at least [`SLATE_MARKER_MAX_AGE_SECS`] old. Names come from
+/// [`SESSION_MARKER_PREFIXES`] — an explicit list, not a glob. A cursor or
+/// topic file younger than 30 days is never selected, and the slate ledger
+/// is not a marker name so it is never selected. PURE over an
 /// already-resolved directory and `now`, so the selection is unit-tested
 /// with a tempdir and an explicit clock rather than the real one.
 /// Best-effort: an unreadable directory, a non-file entry, or a file whose
@@ -1096,17 +1179,17 @@ fn slate_marker_gc_check(cache_dir: Option<&Path>, now: i64, removed: Option<usi
     if let Some(n) = removed.filter(|n| *n > 0) {
         return HookCheck::pass(
             "slate-marker-gc",
-            format!("removed {n} stale slate-cursor/slate-topic marker(s) (--fix)"),
+            format!("removed {n} stale session marker(s) older than 30d (--fix)"),
         );
     }
     if stale.is_empty() {
         return HookCheck::pass(
             "slate-marker-gc",
-            "no slate-cursor/slate-topic marker older than 30d",
+            "no slate-cursor/slate-topic/context-scent/beat-heartbeat/waked marker older than 30d",
         );
     }
     let mut detail = format!(
-        "{} stale slate-cursor/slate-topic marker(s) older than 30d in {}:",
+        "{} stale session marker(s) older than 30d in {}:",
         stale.len(),
         kb_dir.display()
     );
@@ -1122,6 +1205,614 @@ fn slate_marker_gc_check(cache_dir: Option<&Path>, now: i64, removed: Option<usi
     }
     HookCheck::warn("slate-marker-gc", detail).with_fix("kb doctor --hooks --fix removes them")
 }
+// ============================================ i) recall-outcome census
+//
+// `kb doctor --hooks` used to probe Claude's marker files and could PASS
+// while codex/kimi/grok/omp captures carried no `<!--kb-recall/1` markers.
+// The census is the three V0039 columns (`recall_marker_parsed` /
+// `recall_fallback_parsed` / `recall_failed`), summed per harness over the
+// newest capture. No HTTP route exposes that breakdown, so a loopback
+// daemon is read from its own sessions sqlite (read-only). A down daemon
+// is a SKIP, never a failure — silence is not evidence.
+
+/// 48 hours. A tarball younger than this is fresh; exactly this age is not.
+const BACKUP_FRESH_MAX_SECS: i64 = 48 * 3_600;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HarnessRecallCensus {
+    harness: String,
+    captures: u64,
+    /// Newest captures whose `recall_marker_parsed` is non-NULL. NULL is
+    /// "not yet censused", not a measured zero.
+    censused: u64,
+    marker_parsed: u64,
+    fallback: u64,
+    failed: u64,
+}
+
+fn decide_recall_outcomes(rows: &[HarnessRecallCensus]) -> HookCheck {
+    if rows.is_empty() || rows.iter().all(|r| r.captures == 0) {
+        return HookCheck::skip(
+            "recall-outcomes",
+            "sessions census has no captures — nothing to check",
+        );
+    }
+    let silent: Vec<&HarnessRecallCensus> = rows
+        .iter()
+        .filter(|r| r.captures > 0 && r.censused > 0 && r.marker_parsed == 0)
+        .collect();
+    if !silent.is_empty() {
+        let detail = silent
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}: {} captures, marker_parsed={}, fallback={}, failed={}",
+                    r.harness, r.captures, r.marker_parsed, r.fallback, r.failed
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return HookCheck::warn(
+            "recall-outcomes",
+            format!("harness with captures but zero parsed recall markers: {detail}"),
+        )
+        .with_fix(
+            "wire that harness's recall hook so captures carry <!--kb-recall/1 \
+             markers (plugins/kb-memory/hooks); this check does not stop capture",
+        );
+    }
+    let with_captures: Vec<&HarnessRecallCensus> = rows.iter().filter(|r| r.captures > 0).collect();
+    if with_captures.iter().all(|r| r.censused == 0) {
+        let names = with_captures
+            .iter()
+            .map(|r| r.harness.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return HookCheck::skip(
+            "recall-outcomes",
+            format!(
+                "{names}: captures exist but none carry a recall census yet \
+                 (recall_marker_parsed is NULL — not a measured zero)"
+            ),
+        );
+    }
+    let (marker_parsed, fallback, failed) = rows.iter().fold((0u64, 0u64, 0u64), |acc, r| {
+        (
+            acc.0 + r.marker_parsed,
+            acc.1 + r.fallback,
+            acc.2 + r.failed,
+        )
+    });
+    let harnesses: Vec<&str> = with_captures
+        .iter()
+        .filter(|r| r.marker_parsed > 0)
+        .map(|r| r.harness.as_str())
+        .collect();
+    HookCheck::pass(
+        "recall-outcomes",
+        format!(
+            "{} harness(es) with captures have parsed recall markers ({}; \
+             marker_parsed={marker_parsed}, fallback={fallback}, failed={failed})",
+            harnesses.len(),
+            harnesses.join(", ")
+        ),
+    )
+}
+
+fn daemon_base_is_loopback(base: &str) -> bool {
+    let rest = base
+        .trim()
+        .trim_end_matches('/')
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = rest.split('/').next().unwrap_or("");
+    let host = if let Some(inner) = host.strip_prefix('[') {
+        inner.split(']').next().unwrap_or("")
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn resolve_kb_paths() -> Option<kb_core::paths::KbPaths> {
+    let cfg_path = crate::commands::resolve_config_path(None).ok()?;
+    let cfg = crate::commands::load_config_or_default(&cfg_path).ok()?;
+    let name = cfg.daemon.name.unwrap_or_else(|| "default".to_string());
+    kb_core::paths::KbPaths::new(name).ok()
+}
+
+/// Read-only `sqlite3 -json`. Never creates a database: the caller must
+/// have already checked the file exists, and `-ifexists` is the backstop.
+fn sqlite_json(db: &Path, sql: &str) -> Result<serde_json::Value, String> {
+    if !db.is_file() {
+        return Err(format!("no sqlite file at {}", db.display()));
+    }
+    let output = std::process::Command::new("sqlite3")
+        .arg("-noinit")
+        .arg("-readonly")
+        .arg("-ifexists")
+        .arg("-json")
+        .arg("-bail")
+        .arg("-cmd")
+        .arg(".timeout 2000")
+        .arg(db)
+        .arg(sql)
+        .output()
+        .map_err(|e| format!("sqlite3: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let err = err.trim();
+        return Err(if err.is_empty() {
+            format!("sqlite3 {} exited {}", db.display(), output.status)
+        } else {
+            format!("sqlite3 {}: {err}", db.display())
+        });
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(serde_json::Value::Array(Vec::new()));
+    }
+    serde_json::from_str(text).map_err(|e| format!("parse sqlite3 json: {e}"))
+}
+
+fn u64_from_json(v: &serde_json::Value) -> u64 {
+    v.as_u64()
+        .or_else(|| v.as_i64().map(|n| n.max(0) as u64))
+        .unwrap_or(0)
+}
+
+fn query_harness_census(db: &Path) -> Result<Vec<HarnessRecallCensus>, String> {
+    let value = sqlite_json(
+        db,
+        "SELECT harness, \
+                COUNT(*) AS captures, \
+                SUM(CASE WHEN recall_marker_parsed IS NOT NULL THEN 1 ELSE 0 END) AS censused, \
+                COALESCE(SUM(recall_marker_parsed), 0) AS marker_parsed, \
+                COALESCE(SUM(recall_fallback_parsed), 0) AS fallback, \
+                COALESCE(SUM(recall_failed), 0) AS failed \
+         FROM sessions \
+         WHERE is_newest = 1 \
+         GROUP BY harness",
+    )?;
+    let Some(rows) = value.as_array() else {
+        return Err(format!("sessions census from {} was not a JSON array", db.display()));
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let harness = row
+            .get("harness")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        out.push(HarnessRecallCensus {
+            harness,
+            captures: row.get("captures").map(u64_from_json).unwrap_or(0),
+            censused: row.get("censused").map(u64_from_json).unwrap_or(0),
+            marker_parsed: row.get("marker_parsed").map(u64_from_json).unwrap_or(0),
+            fallback: row.get("fallback").map(u64_from_json).unwrap_or(0),
+            failed: row.get("failed").map(u64_from_json).unwrap_or(0),
+        });
+    }
+    Ok(out)
+}
+
+fn merge_census(into: &mut Vec<HarnessRecallCensus>, rows: Vec<HarnessRecallCensus>) {
+    for row in rows {
+        if let Some(existing) = into.iter_mut().find(|e| e.harness == row.harness) {
+            existing.captures += row.captures;
+            existing.censused += row.censused;
+            existing.marker_parsed += row.marker_parsed;
+            existing.fallback += row.fallback;
+            existing.failed += row.failed;
+        } else {
+            into.push(row);
+        }
+    }
+    into.sort_by(|a, b| a.harness.cmp(&b.harness));
+}
+
+fn read_harness_census(
+    paths: &kb_core::paths::KbPaths,
+    kbs: &[KbLite],
+) -> Result<Vec<HarnessRecallCensus>, String> {
+    let mut merged = Vec::new();
+    let mut errors = Vec::new();
+    let mut queried = 0usize;
+    for kb in kbs {
+        let Ok(name) = kb_core::types::KbName::new(kb.name.as_str()) else {
+            continue;
+        };
+        let db = paths.kb_sqlite(&name);
+        if !db.is_file() {
+            continue;
+        }
+        queried += 1;
+        match query_harness_census(&db) {
+            Ok(rows) => merge_census(&mut merged, rows),
+            Err(e) => errors.push(format!("{}: {e}", kb.name)),
+        }
+    }
+    if merged.is_empty() && queried > 0 && errors.len() == queried {
+        return Err(errors.join("; "));
+    }
+    Ok(merged)
+}
+
+fn recall_outcomes_check(kbs: &[KbLite], base: &str) -> HookCheck {
+    if !daemon_base_is_loopback(base) {
+        return HookCheck::skip(
+            "recall-outcomes",
+            format!(
+                "daemon at {base} is not loopback — the per-harness sessions \
+                 census is this box's sessions sqlite, not an HTTP route"
+            ),
+        );
+    }
+    let Some(paths) = resolve_kb_paths() else {
+        return HookCheck::warn(
+            "recall-outcomes",
+            "daemon is up but the state dir could not be resolved — sessions census unread",
+        );
+    };
+    match read_harness_census(&paths, kbs) {
+        Ok(rows) => decide_recall_outcomes(&rows),
+        Err(e) => HookCheck::warn(
+            "recall-outcomes",
+            format!("daemon is up but the sessions census could not be read: {e}"),
+        ),
+    }
+}
+
+// ============================================ j) unwired doclens consumer
+//
+// kb extracts code-ref HINTS whether or not a kb-code daemon is configured
+// (invariant #2). This check only NAMES a corpus whose refs have nowhere to
+// go (`code_refs` exist, `code_url` is null). It does not gate extraction.
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoclensCorpus {
+    kb: String,
+    code_url: Option<String>,
+    /// `None` = couldn't count. `Some(0)` = extracted nothing. `Some(n)` = n rows.
+    code_refs: Option<u64>,
+}
+
+fn code_url_wired(url: &Option<String>) -> bool {
+    url.as_deref().is_some_and(|s| !s.trim().is_empty())
+}
+
+fn decide_doclens_consumer(rows: &[DoclensCorpus]) -> HookCheck {
+    let unwired: Vec<&DoclensCorpus> = rows
+        .iter()
+        .filter(|r| r.code_refs.is_some_and(|n| n > 0) && !code_url_wired(&r.code_url))
+        .collect();
+    if !unwired.is_empty() {
+        let names = unwired
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} (code_refs={}, code_url is null)",
+                    r.kb,
+                    r.code_refs.unwrap_or(0)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return HookCheck::warn(
+            "doclens-consumer",
+            format!("doclens unwired for {names}; extraction is not gated"),
+        )
+        .with_fix(
+            "set [kb.<name>] code_url to the kb-code daemon doclens reads — \
+             extraction keeps running either way; this check does not gate it",
+        );
+    }
+    if rows.is_empty() {
+        return HookCheck::skip("doclens-consumer", "no corpora to check");
+    }
+    let inconclusive = rows.iter().filter(|r| r.code_refs.is_none()).count();
+    let with_refs = rows
+        .iter()
+        .filter(|r| r.code_refs.is_some_and(|n| n > 0))
+        .count();
+    if with_refs == 0 && inconclusive == rows.len() {
+        return HookCheck::skip(
+            "doclens-consumer",
+            "could not tell whether code_refs exist — not gating extraction",
+        );
+    }
+    if with_refs == 0 {
+        return HookCheck::pass(
+            "doclens-consumer",
+            "no extracted code refs — doclens has nothing to consume; extraction is not gated",
+        );
+    }
+    HookCheck::pass(
+        "doclens-consumer",
+        format!(
+            "{with_refs} corpus(es) with code_refs have a code_url; extraction is not gated"
+        ),
+    )
+}
+
+fn query_code_ref_count(db: &Path) -> Result<u64, String> {
+    let value = sqlite_json(db, "SELECT COUNT(*) AS n FROM code_refs")?;
+    let n = value
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("n"))
+        .map(u64_from_json)
+        .ok_or_else(|| format!("code_refs count from {} was not a row", db.display()))?;
+    Ok(n)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodeRefsFeedLite {
+    #[serde(default)]
+    docs: Vec<CodeRefsDocLite>,
+    #[serde(default)]
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodeRefsDocLite {
+    #[serde(default)]
+    ref_count: u64,
+}
+
+/// Existence probe when the local sqlite can't be read. Stops at the first
+/// page that has a ref. Exhausting the feed with a zero sum is an honest
+/// zero; hitting the page cap with more pages left is inconclusive (`None`),
+/// never a fabricated "no refs".
+async fn code_refs_via_http(client: &reqwest::Client, base: &str, kb: &str) -> Option<u64> {
+    let mut cursor: Option<String> = None;
+    let mut seen = 0u64;
+    for _ in 0..4 {
+        let mut url = format!(
+            "{base}/api/kb/{}/code-refs?limit=50&refs=0",
+            crate::http::encode_path_segment(kb)
+        );
+        if let Some(c) = &cursor {
+            url.push_str("&cursor=");
+            url.push_str(&crate::http::encode_path_segment(c));
+        }
+        let feed: CodeRefsFeedLite = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => match r.json().await {
+                Ok(v) => v,
+                Err(_) => return None,
+            },
+            _ => return None,
+        };
+        for doc in &feed.docs {
+            seen = seen.saturating_add(doc.ref_count);
+        }
+        if seen > 0 {
+            return Some(seen);
+        }
+        match feed.next_cursor {
+            Some(next) if !next.is_empty() => cursor = Some(next),
+            _ => return Some(0),
+        }
+    }
+    None
+}
+
+async fn count_code_refs(
+    client: &reqwest::Client,
+    base: &str,
+    kb: &KbLite,
+    paths: Option<&kb_core::paths::KbPaths>,
+) -> Option<u64> {
+    if let Some(paths) = paths {
+        if let Ok(name) = kb_core::types::KbName::new(kb.name.as_str()) {
+            let db = paths.kb_sqlite(&name);
+            if db.is_file() {
+                if let Ok(n) = query_code_ref_count(&db) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    code_refs_via_http(client, base, &kb.name).await
+}
+
+async fn doclens_consumer_check(
+    client: &reqwest::Client,
+    base: &str,
+    kbs: &[KbLite],
+) -> HookCheck {
+    let paths = resolve_kb_paths();
+    let mut rows = Vec::with_capacity(kbs.len());
+    for kb in kbs {
+        let code_refs = count_code_refs(client, base, kb, paths.as_ref()).await;
+        rows.push(DoclensCorpus {
+            kb: kb.name.clone(),
+            code_url: kb.code_url.clone(),
+            code_refs,
+        });
+    }
+    decide_doclens_consumer(&rows)
+}
+
+// ============================================ k) backup age
+//
+// `<state>/exports/` is where `kb backup` writes `<kb>-<stamp>.tar.gz`.
+// Fresh = younger than 48h. Older = WARN. Missing or empty is FAIL only
+// when a `[backup] schedule` is actually configured. The typed
+// `BackupSection` has no schedule field; this reads the raw toml so an
+// unscheduled daemon (or a config we cannot see) is a WARN, never a FAIL.
+// An unresolvable state dir is a SKIP.
+
+/// `Some(age)` is the newest tarball's age in seconds (negative = clock
+/// skew, treated as fresh). `None` is a missing or empty exports dir.
+fn classify_backup_age(newest_age_secs: Option<i64>, schedule_configured: bool) -> CheckStatus {
+    match newest_age_secs {
+        Some(age) if age < BACKUP_FRESH_MAX_SECS => CheckStatus::Pass,
+        Some(_) => CheckStatus::Warn,
+        None if schedule_configured => CheckStatus::Fail,
+        None => CheckStatus::Warn,
+    }
+}
+
+fn schedule_value_set(raw: &str) -> bool {
+    let raw = raw.trim();
+    let value = if let Some(rest) = raw.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("")
+    } else if let Some(rest) = raw.strip_prefix('\'') {
+        rest.split('\'').next().unwrap_or("")
+    } else {
+        raw.split('#').next().unwrap_or("").trim()
+    };
+    let value = value.trim();
+    !value.is_empty()
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "false" | "off" | "0" | "none" | "[]" | "{}"
+        )
+}
+
+/// True only when a `[backup]` table sets a non-empty `schedule`. An absent
+/// table, a remote-copy-only table, a comment, or an unreadable file is
+/// not a schedule — callers must not FAIL on that.
+fn backup_schedule_configured(toml_text: &str) -> bool {
+    let mut in_backup = false;
+    let mut configured = false;
+    for raw in toml_text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.split(']').next().unwrap_or("").trim();
+            in_backup = header == "backup";
+            continue;
+        }
+        if !in_backup {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "schedule" {
+            continue;
+        }
+        configured = schedule_value_set(value);
+    }
+    configured
+}
+
+fn configured_backup_schedule() -> bool {
+    let Ok(path) = crate::commands::resolve_config_path(None) else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    backup_schedule_configured(&text)
+}
+
+fn is_export_tarball(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    !n.starts_with('.') && (n.ends_with(".tar.gz") || n.ends_with(".tgz"))
+}
+
+enum ExportsView {
+    MissingOrEmpty,
+    Unreadable(String),
+    Newest { age_secs: i64, name: String },
+}
+
+fn scan_exports(exports: &Path, now: i64) -> ExportsView {
+    if !exports.exists() {
+        return ExportsView::MissingOrEmpty;
+    }
+    let entries = match std::fs::read_dir(exports) {
+        Ok(entries) => entries,
+        Err(e) => return ExportsView::Unreadable(e.to_string()),
+    };
+    let mut newest: Option<(i64, String)> = None;
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !is_export_tarball(&name) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Some(mtime) = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+        else {
+            continue;
+        };
+        if newest.as_ref().is_none_or(|(prev, _)| mtime > *prev) {
+            newest = Some((mtime, name));
+        }
+    }
+    match newest {
+        Some((mtime, name)) => ExportsView::Newest {
+            age_secs: now - mtime,
+            name,
+        },
+        None => ExportsView::MissingOrEmpty,
+    }
+}
+
+fn decide_backup_age(view: ExportsView, schedule_configured: bool) -> HookCheck {
+    match view {
+        ExportsView::Unreadable(err) => HookCheck::warn(
+            "backup-age",
+            format!("could not read <state>/exports/: {err}"),
+        ),
+        ExportsView::Newest { age_secs, name } => {
+            let status = classify_backup_age(Some(age_secs), schedule_configured);
+            let detail = format!(
+                "newest export {name} is {} old",
+                fmt_age(age_secs.max(0))
+            );
+            if status == CheckStatus::Pass {
+                HookCheck::pass("backup-age", detail)
+            } else {
+                HookCheck::warn("backup-age", format!("{detail} (older than 48h)"))
+                    .with_fix("kb backup <kb>")
+            }
+        }
+        ExportsView::MissingOrEmpty => {
+            if classify_backup_age(None, schedule_configured) == CheckStatus::Fail {
+                HookCheck::fail(
+                    "backup-age",
+                    "<state>/exports/ is missing or empty and a [backup] schedule is configured",
+                )
+                .with_fix("kb backup <kb>  (a configured schedule has produced no tarball)")
+            } else {
+                HookCheck::warn(
+                    "backup-age",
+                    "<state>/exports/ is missing or empty (no [backup] schedule configured — not a failure)",
+                )
+                .with_fix("kb backup <kb>  when you want a local tarball")
+            }
+        }
+    }
+}
+
+fn backup_age_check(now: i64) -> HookCheck {
+    let Some(paths) = resolve_kb_paths() else {
+        return HookCheck::skip(
+            "backup-age",
+            "could not resolve the state dir — not checking <state>/exports/",
+        );
+    };
+    decide_backup_age(scan_exports(&paths.exports, now), configured_backup_schedule())
+}
+
 
 // ==================================================================== run
 
@@ -1204,6 +1895,50 @@ pub async fn hooks(
             ));
         }
     }
+
+    // ux-01 — derived memory-<slug> vs the corpora the daemon actually has.
+    // Skip when the daemon is down; neighboring provenance checks already
+    // skip, and a down daemon must not become a hard failure here.
+    match &kbs {
+        Ok(list) => {
+            let slug = crate::commands::memory::current_repo_slug_in(&repo_path);
+            let aliases = crate::commands::memory::local_project_slug_aliases();
+            let names: Vec<&str> = list.iter().map(|k| k.name.as_str()).collect();
+            checks.push(decide_memory_project_corpus(
+                &slug,
+                &names,
+                aliases.get(&slug).map(String::as_str),
+            ));
+        }
+        Err(_) => checks.push(HookCheck::skip(
+            "memory-project-corpus",
+            "kb daemon unreachable — cannot compare derived memory-<slug> to GET /api/kbs",
+        )),
+    }
+    // Recall census. Skip, do not fail, when the daemon is down — a down
+    // daemon is not evidence that a harness recorded no markers.
+    match &kbs {
+        Ok(list) => checks.push(recall_outcomes_check(list, &base)),
+        Err(_) => checks.push(HookCheck::skip(
+            "recall-outcomes",
+            "kb daemon unreachable — not reading the sessions census",
+        )),
+    }
+
+    // Unwired doclens consumer. Names corpora with code_refs and a null
+    // code_url. Extraction is not gated. Skip when the daemon is down.
+    match &kbs {
+        Ok(list) => checks.push(doclens_consumer_check(&client, &base, list).await),
+        Err(_) => checks.push(HookCheck::skip(
+            "doclens-consumer",
+            "kb daemon unreachable — cannot tell whether code_refs exist",
+        )),
+    }
+
+    // Backup age. Filesystem, not daemon-gated. Skip only when the state
+    // dir itself cannot be resolved.
+    checks.push(backup_age_check(now));
+
 
     // f) kb-code why-hook.
     checks.push(kb_code_why_hook_check());
@@ -1460,6 +2195,7 @@ mod tests {
             name: "sessions-corpus".into(),
             memory_scope: None,
             default_search_category: Some("memory-session".into()),
+            code_url: None,
         }];
         let c = decide_daemon_sessions_kb(&kbs);
         assert_eq!(c.status, CheckStatus::Pass);
@@ -1472,6 +2208,7 @@ mod tests {
             name: "Sessions".into(),
             memory_scope: None,
             default_search_category: None,
+            code_url: None,
         }];
         let c = decide_daemon_sessions_kb(&kbs);
         assert_eq!(c.status, CheckStatus::Pass);
@@ -1484,6 +2221,7 @@ mod tests {
             name: "notes".into(),
             memory_scope: None,
             default_search_category: None,
+            code_url: None,
         }];
         let c = decide_daemon_sessions_kb(&kbs);
         assert_eq!(c.status, CheckStatus::Warn);
@@ -1494,6 +2232,25 @@ mod tests {
     fn decide_daemon_sessions_kb_warns_when_empty() {
         let c = decide_daemon_sessions_kb(&[]);
         assert_eq!(c.status, CheckStatus::Warn);
+    }
+
+    #[test]
+    fn memory_project_corpus_names_a_missing_derived_slug_unless_aliased() {
+        let missing = decide_memory_project_corpus("morning", &["memory", "memory-1000f"], None);
+        assert_eq!(missing.status, CheckStatus::Warn);
+        assert!(missing.detail.contains("memory-morning"));
+        assert!(missing.detail.contains("no matching corpus"));
+        assert!(missing.detail.contains("no project_slugs alias"));
+
+        let aliased = decide_memory_project_corpus(
+            "morning",
+            &["memory", "memory-1000f"],
+            Some("memory-1000f"),
+        );
+        assert_eq!(aliased.status, CheckStatus::Pass);
+
+        let exact = decide_memory_project_corpus("kb", &["memory-kb"], None);
+        assert_eq!(exact.status, CheckStatus::Pass);
     }
 
     // --- decide_ledger_liveness ---------------------------------------------
@@ -1723,11 +2480,19 @@ mod tests {
     const THIRTY_ONE_DAYS_SECS: u64 = 31 * 86_400;
 
     #[test]
-    fn is_slate_marker_name_matches_only_the_two_slate_prefixes() {
+    fn is_slate_marker_name_matches_the_explicit_session_marker_prefixes() {
         assert!(is_slate_marker_name("slate-cursor-sess-a"));
         assert!(is_slate_marker_name("slate-topic-sess-a"));
+        assert!(is_slate_marker_name("context-scent-sess-a"));
+        assert!(is_slate_marker_name("beat-heartbeat-sess-a"));
+        assert!(is_slate_marker_name("waked-kimi-sess-a"));
+        // A non-marker is not selected. The slate ledger is not a marker
+        // name, and a prefix without the trailing hyphen is not either.
         assert!(!is_slate_marker_name("current-session"));
         assert!(!is_slate_marker_name("current-session-repo-kb"));
+        assert!(!is_slate_marker_name("ledger.jsonl"));
+        assert!(!is_slate_marker_name("slate-ledger.jsonl"));
+        assert!(!is_slate_marker_name("waked"));
         // A mid-write `.tmp` sibling (write_marker's atomic-rename source)
         // still starts with the prefix, so it is swept too once stale —
         // that is the intended behaviour, not an edge case to special-case.
@@ -1739,16 +2504,33 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let now = chrono::Utc::now().timestamp();
+        let twenty_nine_days = 29 * 86_400;
 
-        // Fresh slate marker — NOT selected.
+        // Fresh and 29-day cursors — younger than 30d, NOT selected.
         touch_with_age(&dir.join("slate-cursor-fresh"), "10\n", 0);
-        // Old slate markers, both prefixes — selected.
+        touch_with_age(&dir.join("slate-cursor-young"), "10\n", twenty_nine_days);
+        touch_with_age(&dir.join("context-scent-young"), "1\n", twenty_nine_days);
+        // Old session markers, every explicit prefix — selected.
         touch_with_age(&dir.join("slate-cursor-old"), "5\n", THIRTY_ONE_DAYS_SECS);
         touch_with_age(&dir.join("slate-topic-old"), "v7\n", THIRTY_ONE_DAYS_SECS);
-        // Old, but not a slate marker name — NOT selected.
+        touch_with_age(&dir.join("context-scent-old"), "1\n", THIRTY_ONE_DAYS_SECS);
+        touch_with_age(
+            &dir.join("beat-heartbeat-old"),
+            "1\n",
+            THIRTY_ONE_DAYS_SECS,
+        );
+        touch_with_age(&dir.join("waked-kimi-old"), "1\n", THIRTY_ONE_DAYS_SECS);
+        // Old, but not a marker name — NOT selected. Includes a slate-ledger
+        // lookalike so GC never sweeps the ledger by accident.
         touch_with_age(
             &dir.join("current-session-repo-kb"),
             "sess-x\n1\n",
+            THIRTY_ONE_DAYS_SECS,
+        );
+        touch_with_age(&dir.join("ledger.jsonl"), "{}\n", THIRTY_ONE_DAYS_SECS);
+        touch_with_age(
+            &dir.join("slate-ledger.jsonl"),
+            "{}\n",
             THIRTY_ONE_DAYS_SECS,
         );
         // Old directory that happens to match the name — NOT selected
@@ -1760,10 +2542,20 @@ mod tests {
             .iter()
             .map(|m| m.path.file_name().unwrap().to_string_lossy().to_string())
             .collect();
-        assert_eq!(names, vec!["slate-cursor-old", "slate-topic-old"]);
+        assert_eq!(
+            names,
+            vec![
+                "beat-heartbeat-old",
+                "context-scent-old",
+                "slate-cursor-old",
+                "slate-topic-old",
+                "waked-kimi-old",
+            ]
+        );
         assert!(stale
             .iter()
             .all(|m| m.age_secs >= SLATE_MARKER_MAX_AGE_SECS));
+        assert!(!names.iter().any(|n| n.contains("young") || n.contains("ledger")));
     }
 
     #[test]
@@ -1845,4 +2637,117 @@ mod tests {
             CheckStatus::Skip
         );
     }
+
+    // --- recall outcomes / doclens / backup age ----------------------------
+
+    fn census(harness: &str, captures: u64, censused: u64, marker: u64, fallback: u64, failed: u64) -> HarnessRecallCensus {
+        HarnessRecallCensus {
+            harness: harness.into(),
+            captures,
+            censused,
+            marker_parsed: marker,
+            fallback,
+            failed,
+        }
+    }
+
+    #[test]
+    fn recall_outcomes_warns_when_a_harness_has_captures_and_zero_markers() {
+        let c = decide_recall_outcomes(&[
+            census("claude", 4, 4, 9, 1, 0),
+            census("codex", 12, 12, 0, 0, 4),
+        ]);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("codex"), "{}", c.detail);
+        assert!(c.detail.contains("marker_parsed=0"), "{}", c.detail);
+        assert!(c.detail.contains("fallback=0"), "{}", c.detail);
+        assert!(c.detail.contains("failed=4"), "{}", c.detail);
+        assert!(
+            !c.detail.contains("claude:"),
+            "a harness that parsed markers is not the warning: {}",
+            c.detail
+        );
+    }
+
+    #[test]
+    fn recall_outcomes_passes_when_every_captured_harness_parsed_markers() {
+        let c = decide_recall_outcomes(&[census("claude", 2, 2, 3, 0, 0)]);
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("marker_parsed=3"), "{}", c.detail);
+    }
+
+    #[test]
+    fn recall_outcomes_does_not_treat_an_uncensused_capture_as_a_measured_zero() {
+        // NULL census (censused == 0) is not "zero parsed markers".
+        let c = decide_recall_outcomes(&[census("kimi", 5, 0, 0, 0, 0)]);
+        assert_eq!(c.status, CheckStatus::Skip);
+        assert!(c.detail.contains("not a measured zero"), "{}", c.detail);
+    }
+
+    #[test]
+    fn doclens_warns_when_code_refs_exist_and_code_url_is_null() {
+        let c = decide_doclens_consumer(&[DoclensCorpus {
+            kb: "notes".into(),
+            code_url: None,
+            code_refs: Some(12),
+        }]);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("notes"), "{}", c.detail);
+        assert!(c.detail.contains("code_url is null"), "{}", c.detail);
+        assert!(c.detail.contains("extraction is not gated"), "{}", c.detail);
+        assert_ne!(c.status, CheckStatus::Fail);
+        let wired = decide_doclens_consumer(&[DoclensCorpus {
+            kb: "notes".into(),
+            code_url: Some("https://kbc.example".into()),
+            code_refs: Some(12),
+        }]);
+        assert_eq!(wired.status, CheckStatus::Pass);
+    }
+
+    #[test]
+    fn classify_backup_age_is_fresh_under_48h_and_warns_when_older() {
+        let just_under = BACKUP_FRESH_MAX_SECS - 1;
+        assert_eq!(classify_backup_age(Some(0), false), CheckStatus::Pass);
+        assert_eq!(classify_backup_age(Some(just_under), true), CheckStatus::Pass);
+        // A future mtime (clock skew) is younger than 48h, not stale.
+        assert_eq!(classify_backup_age(Some(-30), false), CheckStatus::Pass);
+        assert_eq!(
+            classify_backup_age(Some(BACKUP_FRESH_MAX_SECS), false),
+            CheckStatus::Warn
+        );
+        assert_eq!(
+            classify_backup_age(Some(BACKUP_FRESH_MAX_SECS + 1), true),
+            CheckStatus::Warn
+        );
+    }
+
+    #[test]
+    fn classify_backup_age_fails_only_when_empty_and_a_schedule_is_configured() {
+        assert_eq!(classify_backup_age(None, true), CheckStatus::Fail);
+        assert_eq!(classify_backup_age(None, false), CheckStatus::Warn);
+    }
+
+    #[test]
+    fn empty_exports_warns_and_does_not_fail_an_unscheduled_daemon() {
+        let c = decide_backup_age(ExportsView::MissingOrEmpty, false);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("not a failure"), "{}", c.detail);
+        let scheduled = decide_backup_age(ExportsView::MissingOrEmpty, true);
+        assert_eq!(scheduled.status, CheckStatus::Fail);
+    }
+
+    #[test]
+    fn backup_schedule_is_only_a_nonempty_backup_table_key() {
+        assert!(!backup_schedule_configured(
+            "[backup]\nremote_cmd = [\"rclone\"]\nremote_dest = \"remote:bucket\"\n"
+        ));
+        assert!(backup_schedule_configured("[backup]\nschedule = \"daily\"\n"));
+        assert!(!backup_schedule_configured("[backup]\nschedule = \"\"\n"));
+        assert!(!backup_schedule_configured("[backup]\nschedule = false\n"));
+        // A commented table, or a schedule under a different table, is not
+        // a [backup] schedule — must not fail an unscheduled daemon.
+        assert!(!backup_schedule_configured("# [backup]\nschedule = \"daily\"\n"));
+        assert!(!backup_schedule_configured("[retention]\nschedule = \"daily\"\n"));
+    }
+
 }

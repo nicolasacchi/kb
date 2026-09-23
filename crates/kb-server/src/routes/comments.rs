@@ -15,7 +15,12 @@
 //!   PATCH  …/review/{id}/comments/{cid}/anchor    re-point the anchor (R9)
 //!   DELETE …/review/{id}/comments/{cid}           delete a comment
 //!   DELETE …/review/{id}/comments/{cid}/replies/{rid}  delete a reply
+//!   POST   …/review/{id}/comments/{cid}/keep      queue a proposal → 201
 //!   GET    …/reviews                              list/query comments
+//!
+//! `keep` copies one open or resolved comment into the proposal queue
+//! (`source: "comment"`). It does not approve, does not ingest a memory,
+//! and does not rewrite or delete the comment.
 //!
 //! Concurrency: every mutation runs the load → typed-mutation → save
 //! sequence under the per-kb `review_lock` (`review_lock_for(&kb)`), so
@@ -550,14 +555,166 @@ async fn set_status(
     if let Err(resp) = check_subid(&cid, "comment id") {
         return resp;
     }
-    with_review_mut(&state, &kb_name, &id, StatusCode::OK, |file| {
-        let changed = file.set_comment_status(&cid, status)?;
-        Ok((
-            json!({ "ok": true, "open_count": file.open_count() }),
-            changed,
-        ))
-    })
-    .await
+    // Unresolve (and any future non-resolve status) must not touch the
+    // stale-anchor sidecar. The shared path already holds the review lock
+    // for the file rewrite; there is no sidecar write to sequence with it.
+    if status != CommentStatus::Resolved {
+        return with_review_mut(&state, &kb_name, &id, StatusCode::OK, |file| {
+            let changed = file.set_comment_status(&cid, status)?;
+            Ok((
+                json!({ "ok": true, "open_count": file.open_count() }),
+                changed,
+            ))
+        })
+        .await;
+    }
+
+    // Resolve — same lock scope as `set_anchor` / `delete_comment`: the
+    // review-file rewrite and the stale-anchor sidecar prune share the
+    // per-kb guard so two same-kb mutations can't race a load→remove→save
+    // on the sidecar. A resolved comment's stale flag is meaningless
+    // (ux-13 — the queue was mostly already-resolved rows).
+    let path = state.paths.kb_review_file(&kb_name, &id);
+    let lock = state.review_lock_for(&kb_name);
+    let guard = lock.lock().await;
+    let mut file = match review::load(&path) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return error_to_problem_json(&kb_core::Error::NotFound(format!(
+                "no comments for {kb_name}/{id}"
+            )))
+        }
+        Err(e) => return error_to_problem_json(&e),
+    };
+    let changed = match file.set_comment_status(&cid, status) {
+        Ok(c) => c,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    if changed {
+        if let Err(e) = review::save_atomic(&path, &file, None) {
+            return error_to_problem_json(&e);
+        }
+    }
+    // Prune even on a no-op re-resolve: the comment may already be
+    // Resolved and still own a sidecar row. Non-resolve never reaches here.
+    let review_dir = state.paths.kb_review_dir(&kb_name);
+    let sidecar = kb_core::anchors::sidecar_path(&review_dir);
+    if let Err(e) = kb_core::anchors::prune_if_resolved(&sidecar, &id, &cid, true) {
+        tracing::warn!(kb = %kb_name, error = %e, "failed to prune anchor-stale sidecar on resolve");
+    }
+    drop(guard);
+    if changed {
+        emit_updated(&state, &kb_name, &id, &file);
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "open_count": file.open_count() })),
+    )
+        .into_response()
+}
+
+// --- keep (queue a proposal; do not approve or delete) ---------------------
+
+/// `POST …/review/{id}/comments/{cid}/keep` — copy one comment into the
+/// proposal queue as `kb-proposal/1` with `source: "comment"`. Open and
+/// resolved comments are both eligible. Does not approve, does not ingest
+/// a memory, and does not delete or rewrite the comment.
+///
+/// Wire in `router.rs` (not edited here), beside `resolve`:
+/// `.route("/kb/{kb}/review/{id}/comments/{cid}/keep", post(routes::comments::keep))`.
+pub async fn keep(
+    State(state): State<Arc<KbHandles>>,
+    Path((kb, id, cid)): Path<(String, String, String)>,
+) -> Response<Body> {
+    let kb_name = match validate(&state, &kb, &id) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = check_subid(&cid, "comment id") {
+        return resp;
+    }
+    let review_path = state.paths.kb_review_file(&kb_name, &id);
+    let proposals_dir = state.paths.kb_proposals_dir(&kb_name);
+
+    // Review lock, then the proposal lock. Keep reads the comment and
+    // writes only the queue — never the reverse order, and never the
+    // review file. `set_status`'s stale-anchor prune is not this path.
+    let review_lock = state.review_lock_for(&kb_name);
+    let proposal_lock = state.proposal_lock_for(&kb_name);
+    let review_guard = review_lock.lock().await;
+    let proposal_guard = proposal_lock.lock().await;
+    let proposal = match keep_comment_as_proposal(&review_path, &proposals_dir, &id, &cid) {
+        Ok(p) => p,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    drop(proposal_guard);
+    drop(review_guard);
+
+    if let Some(ctx) = state.kbs.get(&kb_name) {
+        ctx.bus.emit(
+            "proposal.created",
+            json!({
+                "kb": kb_name.as_str(),
+                "id": proposal.id.clone(),
+                "title": proposal.title.clone(),
+            }),
+        );
+    }
+    (StatusCode::CREATED, Json(proposal)).into_response()
+}
+
+/// Read one comment and enqueue a proposal through
+/// [`super::proposals::enqueue_proposal`]. Does not approve, does not
+/// write a memory artifact, and does not mutate the review file.
+fn keep_comment_as_proposal(
+    review_path: &std::path::Path,
+    proposals_dir: &std::path::Path,
+    artifact_id: &str,
+    comment_id: &str,
+) -> kb_core::Result<super::proposals::Proposal> {
+    let file = match review::load(review_path)? {
+        Some(f) => f,
+        None => {
+            return Err(kb_core::Error::NotFound(format!(
+                "no comments for artifact {artifact_id}"
+            )))
+        }
+    };
+    let comment = file
+        .comments
+        .iter()
+        .find(|c| c.id == comment_id)
+        .ok_or_else(|| {
+            kb_core::Error::NotFound(format!(
+                "no comment {comment_id} on artifact {artifact_id}"
+            ))
+        })?;
+    let title = super::proposals::truncate_proposal_title(&comment.body);
+    if title.is_empty() {
+        return Err(kb_core::Error::BadRequest(
+            "proposal title must not be empty".into(),
+        ));
+    }
+    let body = format!(
+        "{}\n\nProvenance: artifact {artifact_id}, comment {comment_id}",
+        comment.body
+    );
+    super::proposals::enqueue_proposal(
+        proposals_dir,
+        super::proposals::EnqueueProposal {
+            title,
+            body,
+            category: super::proposals::default_category(),
+            tags: Vec::new(),
+            global: true,
+            linked_kbs: Vec::new(),
+            salience: None,
+            supersedes: None,
+            session_id: None,
+            source: super::proposals::ProposalSource::Comment,
+            note: None,
+        },
+    )
 }
 
 // --- resolve-all / unresolve-all -------------------------------------------
@@ -1492,4 +1649,115 @@ pub async fn list_reviews(
     }
 
     Json(ReviewsResponse { comments: rows }).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_comment_as_proposal;
+    use kb_core::paths::KbPaths;
+    use kb_core::review::{self, Anchor, Author, CommentStatus, NewComment};
+    use kb_core::types::KbName;
+
+    fn files_under(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn keep_writes_a_proposal_file_and_not_a_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kb = KbName::new("smoke").unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "keep-test");
+        let artifact_id = "abc123def456";
+        let review_path = paths.kb_review_file(&kb, artifact_id);
+        let proposals_dir = paths.kb_proposals_dir(&kb);
+        std::fs::create_dir_all(review_path.parent().unwrap()).unwrap();
+
+        let mut file = review::ReviewFile::empty_skeleton(&kb, artifact_id, "Artifact");
+        let comment_text = "k".repeat(crate::routes::proposals::TITLE_LIMIT + 40);
+        file.add_comment(NewComment {
+            file: artifact_id.to_string(),
+            file_label: "Artifact".to_string(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: comment_text.clone(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: None,
+        });
+        let cid = file.comments[0].id.clone();
+        file.set_comment_status(&cid, CommentStatus::Resolved)
+            .unwrap();
+        review::save_atomic(&review_path, &file, None).unwrap();
+        let review_before = std::fs::read(&review_path).unwrap();
+        let files_before = files_under(tmp.path());
+
+        let proposal =
+            keep_comment_as_proposal(&review_path, &proposals_dir, artifact_id, &cid).unwrap();
+
+        assert_eq!(proposal.schema, crate::routes::proposals::SCHEMA);
+        assert_eq!(
+            proposal.source,
+            crate::routes::proposals::ProposalSource::Comment
+        );
+        assert_eq!(
+            proposal.title,
+            "k".repeat(crate::routes::proposals::TITLE_LIMIT)
+        );
+        assert!(proposal.body.starts_with(&comment_text));
+        assert!(proposal.body.contains(artifact_id));
+        assert!(proposal.body.contains(&cid));
+
+        let on_disk = paths.kb_proposal_file(&kb, &proposal.id);
+        assert!(on_disk.is_file(), "keep must write a proposal file");
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&on_disk).unwrap()).unwrap();
+        assert_eq!(raw["schema"], "kb-proposal/1");
+        assert_eq!(raw["source"], "comment");
+        assert_eq!(raw["id"], proposal.id);
+
+        // Comment remains. Keep must not rewrite or delete the review file.
+        assert_eq!(std::fs::read(&review_path).unwrap(), review_before);
+        let reloaded = review::load(&review_path).unwrap().unwrap();
+        assert_eq!(reloaded.comments.len(), 1);
+        assert_eq!(reloaded.comments[0].id, cid);
+        assert_eq!(reloaded.comments[0].body, comment_text);
+        assert_eq!(reloaded.comments[0].status, CommentStatus::Resolved);
+
+        // The only new file is the queued proposal. Approve would have
+        // deleted it and written an HTML memory; neither happens here.
+        let files_after = files_under(tmp.path());
+        let new_files: Vec<_> = files_after
+            .iter()
+            .filter(|p| !files_before.iter().any(|b| b == *p))
+            .cloned()
+            .collect();
+        assert_eq!(
+            new_files.len(),
+            1,
+            "keep wrote unexpected files: {new_files:?}"
+        );
+        assert_eq!(new_files[0], on_disk);
+        assert!(
+            files_after
+                .iter()
+                .all(|p| p.extension().and_then(|s| s.to_str()) != Some("html")),
+            "keep must not write a memory artifact"
+        );
+    }
 }
