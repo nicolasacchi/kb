@@ -64,6 +64,7 @@ pub fn kb_section(path: PathBuf) -> KbSection {
         capture_dir: None,
         resurface: None,
         slo: None,
+        id_patterns: Vec::new(),
     }
 }
 

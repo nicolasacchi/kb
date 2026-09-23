@@ -1239,6 +1239,11 @@ struct PreparedDoc {
     /// failure condition is gone; a gated one is proof of nothing — the
     /// embed was never attempted).
     embed_gated: bool,
+    /// Model that produced `doc.embedding`, when this pass can name it.
+    /// `None` when the upsert writes a null vector (no embedder, or the
+    /// quarantine gate skipped the embed). Recorded beside the vector only
+    /// after the upsert commits — see `finish_indexed_doc`.
+    embedding_model: Option<String>,
 }
 
 /// Per-file run-completion bookkeeping shared by every exit path (the
@@ -1812,6 +1817,148 @@ enum ChunkReuse {
     Unusable,
 }
 
+/// Sidecar beside the per-kb quarantine directory, not inside it. Restore
+/// only deletes `{stem}.html` / `{stem}.error.txt`, but the model map must
+/// not live in a dir a future sweep might empty. Lance has no embedding-model
+/// column; this file is the persist the reuse decision reads. A missing
+/// file, a blank name, or an unknown schema version is "no stored name" —
+/// today's reuse rule, not a refusal.
+const EMBEDDING_MODEL_SIDECAR_VERSION: u64 = 1;
+
+fn embedding_model_sidecar(quarantine_dir: &Path) -> PathBuf {
+    match (quarantine_dir.parent(), quarantine_dir.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            parent.join(format!("{}.embedding-models.json", name.to_string_lossy()))
+        }
+        _ => quarantine_dir.join("embedding-models.json"),
+    }
+}
+
+fn embedding_model_cache() -> &'static Mutex<HashMap<PathBuf, HashMap<String, String>>> {
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, HashMap<String, String>>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    &CACHE
+}
+
+fn load_embedding_models(path: &Path) -> HashMap<String, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return HashMap::new(),
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "corrupt embedding-models sidecar; treating stored names as missing"
+            );
+            return HashMap::new();
+        }
+    };
+    if value.get("version").and_then(|n| n.as_u64()) != Some(EMBEDDING_MODEL_SIDECAR_VERSION) {
+        tracing::warn!(
+            path = %path.display(),
+            "unknown embedding-models sidecar version; treating stored names as missing"
+        );
+        return HashMap::new();
+    }
+    let Some(obj) = value.get("models").and_then(|m| m.as_object()) else {
+        return HashMap::new();
+    };
+    obj.iter()
+        .filter_map(|(id, name)| {
+            let name = name.as_str()?.trim();
+            if id.is_empty() || name.is_empty() {
+                None
+            } else {
+                Some((id.clone(), name.to_string()))
+            }
+        })
+        .collect()
+}
+
+fn save_embedding_models(path: &Path, models: &HashMap<String, String>) {
+    let mut keys: Vec<&String> = models.keys().collect();
+    keys.sort();
+    let mut ordered = serde_json::Map::new();
+    for key in keys {
+        if let Some(name) = models.get(key) {
+            ordered.insert(key.clone(), serde_json::Value::String(name.clone()));
+        }
+    }
+    let body = serde_json::json!({
+        "version": EMBEDDING_MODEL_SIDECAR_VERSION,
+        "models": ordered,
+    });
+    let Ok(bytes) = serde_json::to_vec_pretty(&body) else {
+        return;
+    };
+    if let Err(e) = crate::fsx::write_atomic(path, &bytes) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "failed to persist embedding-model sidecar"
+        );
+    }
+}
+
+fn with_embedding_models<T>(
+    quarantine_dir: &Path,
+    f: impl FnOnce(&mut HashMap<String, String>) -> (T, bool),
+) -> T {
+    let path = embedding_model_sidecar(quarantine_dir);
+    let mut guard = embedding_model_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !guard.contains_key(&path) {
+        guard.insert(path.clone(), load_embedding_models(&path));
+    }
+    let models = guard.get_mut(&path).expect("just inserted");
+    let (out, dirty) = f(models);
+    if dirty {
+        save_embedding_models(&path, models);
+    }
+    out
+}
+
+/// Stored producer of this artifact's vector. `None` when the sidecar has
+/// no name — the caller keeps today's reuse rule.
+fn stored_embedding_model(quarantine_dir: &Path, artifact_id: &str) -> Option<String> {
+    with_embedding_models(quarantine_dir, |models| {
+        (models.get(artifact_id).cloned(), false)
+    })
+}
+
+fn record_embedding_model(quarantine_dir: &Path, artifact_id: &str, model: &str) {
+    let model = model.trim();
+    if artifact_id.is_empty() || model.is_empty() {
+        return;
+    }
+    with_embedding_models(quarantine_dir, |models| {
+        let dirty = models.get(artifact_id).map(String::as_str) != Some(model);
+        if dirty {
+            models.insert(artifact_id.to_string(), model.to_string());
+        }
+        ((), dirty)
+    });
+}
+
+fn clear_embedding_model(quarantine_dir: &Path, artifact_id: &str) {
+    with_embedding_models(quarantine_dir, |models| {
+        ((), models.remove(artifact_id).is_some())
+    });
+}
+
+#[cfg(test)]
+fn drop_embedding_model_cache(quarantine_dir: &Path) {
+    let path = embedding_model_sidecar(quarantine_dir);
+    embedding_model_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&path);
+}
+
 /// Inputs to [`reuse_stored_embedding`]. Pure so a unit test can pin the
 /// embedder-call decision without a live embedder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1826,14 +1973,13 @@ struct EmbeddingReuseQuery<'a> {
     resolved_model: Option<&'a str>,
     /// Live embedder dim (`Embedder::dim`).
     resolved_dim: Option<usize>,
-    /// Model that produced the stored vector, when the caller can prove it.
+    /// Model that produced the stored vector, when the sidecar names it.
     ///
-    /// Not a lance column — persisting it would need `storage/schema.rs`.
-    /// `None` means unproven: reuse is allowed only when the stored vector's
-    /// width equals the resolved model's registered dim AND that dim belongs
-    /// to exactly one registered model, so a copy cannot cross a model
-    /// change. `bge-base-en-v1.5` and `jina-embeddings-v2-base-code` share
-    /// 768; an unproven 768 vector is refused.
+    /// `None` (missing file, blank name, row indexed before the sidecar
+    /// existed) keeps today's rule: reuse only when the dim uniquely
+    /// identifies `resolved` in the registry. A present name that differs
+    /// refuses, including a same-dim swap (`bge-base-en-v1.5` ↔
+    /// `jina-embeddings-v2-base-code`, both 768).
     stored_model: Option<&'a str>,
     /// `stored_doc.map(|v| v.len())`. `None` = no stored doc vector.
     stored_doc_dim: Option<usize>,
@@ -1971,6 +2117,7 @@ async fn try_preserve_embeddings(
     force: bool,
     re_embed: bool,
     hash_matches: bool,
+    stored_model: Option<&str>,
 ) -> Option<(Vec<f32>, Vec<crate::storage::schema::ChunkDoc>)> {
     if !force || re_embed || !hash_matches {
         return None;
@@ -1993,15 +2140,13 @@ async fn try_preserve_embeddings(
     } else {
         ChunkReuse::NotChunked
     };
-    // Model is not stored on the row. `None` lets the unique-dim rule in
-    // `resolved_model_matches_stored` decide; a shared dim refuses.
     let reuse = reuse_stored_embedding(&EmbeddingReuseQuery {
         force,
         re_embed,
         hash_matches,
         resolved_model: Some(resolved_model),
         resolved_dim: Some(resolved_dim),
-        stored_model: None,
+        stored_model: stored_model.map(str::trim).filter(|s| !s.is_empty()),
         stored_doc_dim: Some(doc_vec.len()),
         chunks,
     });
@@ -2015,7 +2160,6 @@ async fn try_preserve_embeddings(
     };
     Some((doc_vec, chunk_docs))
 }
-
 
 /// GC-B7 — phase 1 of the (former `index_file`) pipeline: read → parse →
 /// embed → build the `Doc` + chunk vectors, everything the drain-batching
@@ -2329,6 +2473,7 @@ async fn prepare_doc(
         let guard = emb.lock().unwrap_or_else(|e| e.into_inner());
         (guard.model_name(), guard.dim())
     });
+    let stored_model_name = stored_embedding_model(quarantine_dir, artifact_id.as_str());
     let preserved = match (force && !re_embed && hash_matches, resolved) {
         (true, Some((model, dim))) => {
             let parsed = if chunked {
@@ -2346,6 +2491,7 @@ async fn prepare_doc(
                 force,
                 re_embed,
                 hash_matches,
+                stored_model_name.as_deref(),
             )
             .await
         }
@@ -2636,6 +2782,10 @@ async fn prepare_doc(
     let enrich_mtime_unix = doc.mtime_unix;
     let seed_global = fields.kb_global;
     let seed_linked_kbs = fields.kb_linked_kbs.clone();
+    let embedding_model = doc
+        .embedding
+        .as_ref()
+        .and_then(|_| resolved.map(|(model, _)| model.to_string()));
 
     Ok(Some(PreparedDoc {
         path: path.to_path_buf(),
@@ -2655,6 +2805,7 @@ async fn prepare_doc(
         seed_global,
         seed_linked_kbs,
         embed_gated,
+        embedding_model,
     }))
 }
 
@@ -2699,7 +2850,12 @@ async fn finish_indexed_doc(
         seed_global,
         seed_linked_kbs,
         embed_gated,
+        embedding_model,
     } = p;
+    match &embedding_model {
+        Some(model) => record_embedding_model(quarantine_dir, artifact_id.as_str(), model),
+        None => clear_embedding_model(quarantine_dir, artifact_id.as_str()),
+    }
     let path = path.as_path();
     let html = html.as_str();
     let raw = raw.as_str();
@@ -5768,8 +5924,8 @@ mod tests {
             "force=true with an unchanged hash/model/dim must not call the embedder"
         );
 
-        // Production has no persisted model column. A unique dim (bge-large
-        // is the only 1024-wide registered model) still proves identity.
+        // A missing sidecar name keeps today's rule: a unique dim still
+        // proves identity. A shared dim (768) stays unproven and refuses.
         let unproven_unique_dim = EmbeddingReuseQuery {
             stored_model: None,
             ..unchanged
@@ -5850,6 +6006,59 @@ mod tests {
             embedder_calls(&both),
             0,
             "aligned chunk vectors reuse in lock-step with the doc vector"
+        );
+    }
+    /// The quarantine-dir sidecar is the stored model name. A present name
+    /// that differs does not reuse; a missing name still reuses when the
+    /// hash and a unique dim match. The name survives a cache drop (restart).
+    #[test]
+    fn embedding_model_sidecar_mismatch_refuses_reuse_missing_name_reuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert!(
+            stored_embedding_model(dir, "art-missing").is_none(),
+            "a missing sidecar name must stay missing"
+        );
+        let missing = EmbeddingReuseQuery {
+            force: true,
+            re_embed: false,
+            hash_matches: true,
+            resolved_model: Some("bge-large-en-v1.5"),
+            resolved_dim: Some(1024),
+            stored_model: None,
+            stored_doc_dim: Some(1024),
+            chunks: ChunkReuse::NotChunked,
+        };
+        assert!(
+            reuse_stored_embedding(&missing),
+            "missing model name + matching hash and unique dim must reuse"
+        );
+
+        record_embedding_model(dir, "art-swap", "jina-embeddings-v2-base-code");
+        drop_embedding_model_cache(dir);
+        let stored = stored_embedding_model(dir, "art-swap");
+        assert_eq!(stored.as_deref(), Some("jina-embeddings-v2-base-code"));
+        let mismatch = EmbeddingReuseQuery {
+            resolved_model: Some("bge-base-en-v1.5"),
+            resolved_dim: Some(768),
+            stored_model: stored.as_deref(),
+            stored_doc_dim: Some(768),
+            ..missing
+        };
+        assert!(
+            !reuse_stored_embedding(&mismatch),
+            "a stored model name that differs must not reuse the vector"
+        );
+
+        record_embedding_model(dir, "art-same", "bge-base-en-v1.5");
+        let same = stored_embedding_model(dir, "art-same");
+        let matched = EmbeddingReuseQuery {
+            stored_model: same.as_deref(),
+            ..mismatch
+        };
+        assert!(
+            reuse_stored_embedding(&matched),
+            "a stored model name that matches must reuse when hash and dim match"
         );
     }
 

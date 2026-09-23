@@ -631,9 +631,7 @@ done
             if std::time::Instant::now() > deadline {
                 drop(hold);
                 let _ = miss_thread.join();
-                panic!(
-                    "miss did not enter QueryLaneGuard before acquiring the embedder mutex"
-                );
+                panic!("miss did not enter QueryLaneGuard before acquiring the embedder mutex");
             }
             std::thread::sleep(Duration::from_millis(5));
         }
