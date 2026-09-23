@@ -2599,6 +2599,15 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
+    /// Fill NULL session `project_key` values from `repo_root` or `cwd`
+    /// already stored on the row. Dry-run by default (writes nothing,
+    /// prints `would_change=<n> changed=<n>`); `--apply` writes. SQLite
+    /// only — no reindex.
+    BackfillProjectKey {
+        /// Write the keys. Absent = dry-run; nothing is written.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -3387,17 +3396,21 @@ enum FleetAction {
         #[arg(long)]
         copy_to: Option<PathBuf>,
     },
-    /// Write `~/.config/kb/daemons.toml` (honours `KB_CONFIG_DIR` /
-    /// `KB_HOME`) with the local daemon (`local` → `http://127.0.0.1:4000`).
-    /// Existing entries are kept. A file that already has entries is not
-    /// rewritten unless `--force`; even then peers are not removed and an
-    /// existing `local` endpoint is not replaced.
+    /// Write `~/.config/kb/daemons.toml` (or `$KB_DAEMONS_FILE`) with the
+    /// daemons named by repeated `--daemon name=url` flags. Refuses to
+    /// overwrite an existing file unless `--force`.
     Init {
-        /// Add the local daemon without removing existing entries. Refused
-        /// when the address book already has entries and this is omitted.
+        /// Daemon to record, as `name=url`. Repeatable.
+        #[arg(long = "daemon", value_name = "NAME=URL")]
+        daemon: Vec<String>,
+        /// Overwrite an existing address book. Without this, an existing
+        /// file is left untouched.
         #[arg(long)]
         force: bool,
     },
+    /// Probe each named daemon's `/healthz`. Prints `ok` or `fail` per
+    /// name. A missing address book is a warning, not an error.
+    Doctor,
 }
 
 /// CT-F5 — the three SLO verbs. `--kb` is optional everywhere: it resolves
@@ -4635,12 +4648,8 @@ async fn main() -> Result<()> {
         } => {
             if all {
                 let bearer = read_bearer();
-                commands::backup::run_all(
-                    cli.config.as_ref(),
-                    daemon.as_deref(),
-                    bearer.as_deref(),
-                )
-                .await
+                commands::backup::run_all(cli.config.as_ref(), daemon.as_deref(), bearer.as_deref())
+                    .await
             } else {
                 let kb = kb.ok_or_else(|| anyhow::anyhow!("kb backup requires <kb> or --all"))?;
                 commands::backup::run(cli.config.as_ref(), &kb, out.as_deref()).await
@@ -5765,6 +5774,9 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            SessionsAction::BackfillProjectKey { apply } => {
+                commands::sessions::backfill_project_key(cli.config.as_ref(), apply)
+            }
         },
         Cmd::Reading {
             target,
@@ -6435,7 +6447,11 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
-            FleetAction::Init { force } => commands::fleet::init(force).await,
+            FleetAction::Init { daemon, force } => commands::fleet::init(&daemon, force).await,
+            FleetAction::Doctor => {
+                let bearer = read_bearer();
+                commands::fleet::doctor(bearer.as_deref()).await
+            }
         },
         Cmd::Pull {
             from,

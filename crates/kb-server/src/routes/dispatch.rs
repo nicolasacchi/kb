@@ -66,7 +66,11 @@ pub fn api_trailing_slash_router() -> Router<Arc<KbHandles>> {
 }
 
 fn no_such_route(method: &Method, path: &str) -> Response<Body> {
-    let mut resp = (StatusCode::NOT_FOUND, Json(no_such_route_body(method, path))).into_response();
+    let mut resp = (
+        StatusCode::NOT_FOUND,
+        Json(no_such_route_body(method, path)),
+    )
+        .into_response();
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),

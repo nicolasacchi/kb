@@ -887,6 +887,10 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             post(routes::comments::keep),
         )
         .route(
+            "/kb/{kb}/comments/{id}/keep",
+            post(routes::comments::keep_memory),
+        )
+        .route(
             "/kb/{kb}/review/{id}/comments/{cid}/unresolve",
             post(routes::comments::unresolve),
         )

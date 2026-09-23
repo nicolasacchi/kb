@@ -34,10 +34,7 @@ pub async fn run(
     if re_embed {
         req = req.query(&[("re_embed", "true")]);
     }
-    let resp = req
-        .send()
-        .await
-        .with_context(|| format!("POST {url}"))?;
+    let resp = req.send().await.with_context(|| format!("POST {url}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
