@@ -68,6 +68,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
+use std::future::Future;
 
 // ---- budget + caps ---------------------------------------------------------
 
@@ -171,6 +172,10 @@ pub struct ContextParams {
     /// the full filter semantics). Absent ⇒ byte-identical to pre-CT-B2
     /// (no visibility filtering on the memories lane).
     pub memory_visible_to: Option<String>,
+    /// Optional pack budget in milliseconds. An arm that misses it is
+    /// dropped and named in `degraded` (`error_class: timeout`); absent
+    /// means no cap. Threaded into the memories and sessions lanes.
+    pub deadline_ms: Option<u64>,
 }
 
 /// One recalled memory, trimmed to the pack shape with its FULL invariant-#10
@@ -300,6 +305,97 @@ impl ContextCodeHint {
     }
 }
 
+/// Closed class of a swallowed per-corpus query failure.
+/// The raw lance/io message is never echoed — it carries fragment ids and paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub enum QueryErrorClass {
+    IndexFragment,
+    Timeout,
+    Storage,
+    Embed,
+    Other,
+}
+
+/// One swallowed per-corpus failure. `error_class` is the closed set above.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub struct DegradedLane {
+    pub kb: String,
+    pub lane: String,
+    pub error_class: QueryErrorClass,
+}
+
+/// Classify a storage/query error without echoing its text or any path in it.
+pub fn classify_query_error(msg: &str) -> QueryErrorClass {
+    let lower = msg.to_ascii_lowercase();
+    if lower.contains("missing fragment")
+        || (lower.contains("fragment")
+            && (lower.contains("not found") || lower.contains("dangling")))
+    {
+        QueryErrorClass::IndexFragment
+    } else if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("deadline")
+    {
+        QueryErrorClass::Timeout
+    } else if lower.contains("embed") {
+        QueryErrorClass::Embed
+    } else if lower.contains("storage")
+        || lower.contains("lance")
+        || lower.contains("sqlite")
+        || lower.contains("io error")
+        || lower.contains("index")
+    {
+        QueryErrorClass::Storage
+    } else {
+        QueryErrorClass::Other
+    }
+}
+
+pub fn degraded_of(kb: &str, lane: &str, class: QueryErrorClass) -> DegradedLane {
+    DegradedLane {
+        kb: kb.to_string(),
+        lane: lane.to_string(),
+        error_class: class,
+    }
+}
+
+/// `Some(instant)` when the caller set `deadline_ms`; `None` means no cap.
+pub fn deadline_at(deadline_ms: Option<u64>) -> Option<std::time::Instant> {
+    deadline_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms))
+}
+
+/// Milliseconds still left on `deadline`, or `None` when there is no cap.
+/// `Some(0)` means the budget is already spent — callers must drop the arm.
+pub fn remaining_ms(deadline: Option<std::time::Instant>) -> Option<u64> {
+    deadline.map(|d| {
+        d.saturating_duration_since(std::time::Instant::now())
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+    })
+}
+
+/// Run `fut` until `deadline`. `Err(())` means the arm missed the budget
+/// and must be dropped and named `error_class: timeout`.
+pub async fn within_deadline<T>(
+    deadline: Option<std::time::Instant>,
+    fut: impl Future<Output = T>,
+) -> Result<T, ()> {
+    let Some(deadline) = deadline else {
+        return Ok(fut.await);
+    };
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(());
+    }
+    match tokio::time::timeout(remaining, fut).await {
+        Ok(v) => Ok(v),
+        Err(_) => Err(()),
+    }
+}
+
 /// The pack.
 #[derive(Debug, Serialize)]
 pub struct ContextResponse {
@@ -364,6 +460,10 @@ pub struct ContextResponse {
     /// never fail because of the slate.
     pub slate_items: u32,
     pub ms: u64,
+    /// Swallowed per-corpus failures (`{kb, lane, error_class}`).
+    /// Absent when empty so a healthy pack stays byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<DegradedLane>,
 }
 
 fn is_zero_u32(n: &u32) -> bool {
@@ -620,6 +720,9 @@ pub async fn get(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // Shared pack budget. None means no cap (byte-identical timing).
+    // Remaining ms is threaded into the composed lanes.
+    let deadline = deadline_at(params.deadline_ms);
 
     // The three query-bearing lanes run SEQUENTIALLY on purpose: they embed
     // the SAME text, and `state.embed_cache` is a plain LRU with no in-flight
@@ -639,6 +742,7 @@ pub async fn get(
             visible_to: params.memory_visible_to.clone(),
             no_floor: params.no_floor,
             with_weekly: false,
+            deadline_ms: remaining_ms(deadline),
         },
     )
     .await
@@ -650,8 +754,10 @@ pub async fn get(
         Err(_) => crate::routes::memory::RecallResponse {
             hits: Vec::new(),
             ms: 0,
+            degraded: Vec::new(),
         },
     };
+    let recall_degraded = recall.degraded;
     let memory_ids: Vec<(String, String)> = recall
         .hits
         .iter()
@@ -697,14 +803,17 @@ pub async fn get(
             project: None,
             since: None,
             limit: Some(SESSION_POOL),
+            deadline_ms: remaining_ms(deadline),
         },
     )
-    .await
-    .map(|r| r.sessions)
-    // Unreachable for the same reason as recall's arm above (this call site
-    // always passes exactly one of q/similar_to).
-    .unwrap_or_default();
-    let sessions: Vec<ContextSession> = recollect
+    .await;
+    // Unreachable Err for the same reason as recall's arm above (this call
+    // site always passes exactly one of q/similar_to).
+    let (recollect_sessions, recollect_degraded) = match recollect {
+        Ok(r) => (r.sessions, r.degraded),
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    let sessions: Vec<ContextSession> = recollect_sessions
         .into_iter()
         // #11 multi-capture: the caller's own session accrues `sessions` rows
         // mid-flight. Telling an agent about itself is noise, not context.
@@ -733,7 +842,7 @@ pub async fn get(
     let sessions = partition_by_cwd(sessions);
 
     // --- the internal artifact-match step (scopes lanes 3 + 4) ------------
-    let matched = matching_artifacts(&state, &q).await;
+    let (matched, artifact_degraded) = matching_artifacts(&state, &q, deadline).await;
     let artifacts_matched = matched.len() as u32;
 
     // --- lane 3: open comments on matching artifacts (invariant #6) -------
@@ -793,6 +902,9 @@ pub async fn get(
         code_hints_total,
         slate_items,
     );
+    let mut degraded = recall_degraded;
+    degraded.extend(recollect_degraded);
+    degraded.extend(artifact_degraded);
     Json(ContextResponse {
         q,
         cwd,
@@ -820,6 +932,7 @@ pub async fn get(
         chars: (m.chars + s.chars + c.chars + h.chars) as u32,
         slate_items,
         ms: started.elapsed().as_millis() as u64,
+        degraded,
     })
     .into_response()
 }
@@ -837,8 +950,22 @@ pub async fn get(
 ///   the sessions lane already covers them as pointers (#11).
 ///
 /// Per-corpus futures through `buffered_join` (#28); a corpus that fails its
-/// index check or query contributes an empty partial rather than 500-ing.
-async fn matching_artifacts(state: &Arc<KbHandles>, q: &str) -> Vec<(String, String)> {
+/// index check or query contributes an empty partial rather than 500-ing,
+/// and is named in `degraded` (never a raw lance message or path).
+async fn matching_artifacts(
+    state: &Arc<KbHandles>,
+    q: &str,
+    deadline: Option<std::time::Instant>,
+) -> (Vec<(String, String)>, Vec<DegradedLane>) {
+    if deadline.is_some_and(|d| d.saturating_duration_since(std::time::Instant::now()).is_zero()) {
+        let degraded = state
+            .kbs
+            .iter()
+            .filter(|(_, ctx)| ctx.memory_scope.is_none())
+            .map(|(name, _)| degraded_of(name.as_str(), "artifacts", QueryErrorClass::Timeout))
+            .collect();
+        return (Vec::new(), degraded);
+    }
     // Embed once per distinct embedder MODEL (mirrors recall/recollect —
     // keying on model NAME, not dim: two models can share a dim and feeding
     // one's vector to the other's index returns garbage).
@@ -849,9 +976,9 @@ async fn matching_artifacts(state: &Arc<KbHandles>, q: &str) -> Vec<(String, Str
             continue;
         }
         if let Some(emb) = &ctx.embedder {
-            // Invariant #15: the guard yields a `&'static str` and drops
-            // before the await below.
-            let model = emb.lock().unwrap_or_else(|e| e.into_inner()).model_name();
+            // Name is cached beside the mutex. A cold slot may lock briefly
+            // inside the helper; that guard drops before the await below (#15).
+            let model = crate::embed_cache::embedder_model_name(emb);
             if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
                 if let Ok(out) = crate::embed_cache::embed_query(&state.embed_cache, emb, q).await {
                     slot.insert(out.vec);
@@ -861,52 +988,89 @@ async fn matching_artifacts(state: &Arc<KbHandles>, q: &str) -> Vec<(String, Str
     }
 
     let vbm = &vec_by_model;
-    let mut futs: Vec<super::CorpusFut<'_, Vec<(String, String)>>> = Vec::new();
+    let mut futs: Vec<super::CorpusFut<'_, (Vec<(String, String)>, Option<DegradedLane>)>> =
+        Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         if ctx.memory_scope.is_some() {
             continue;
         }
         futs.push(Box::pin(async move {
-            if let Err(e) = ctx.storage.ensure_fts_index().await {
-                tracing::warn!(kb = %kb_name, error = %e, "context: ensure_fts_index failed; skipping corpus");
-                return Vec::new();
-            }
-            let model_vec = ctx.embedder.as_ref().and_then(|emb| {
-                let m = emb.lock().unwrap_or_else(|e| e.into_inner()).model_name();
-                vbm.get(m).cloned()
-            });
-            let rows = match model_vec {
-                Some(v) => {
-                    ctx.storage
-                        .hybrid_query(q.to_string(), v, ARTIFACT_MATCH_POOL)
-                        .await
+            let work = async move {
+                if let Err(e) = ctx.storage.ensure_fts_index().await {
+                    tracing::warn!(kb = %kb_name, error = %e, "context: ensure_fts_index failed; skipping corpus");
+                    return (
+                        Vec::new(),
+                        Some(degraded_of(
+                            kb_name.as_str(),
+                            "artifacts",
+                            classify_query_error(&e.to_string()),
+                        )),
+                    );
                 }
-                None => {
-                    ctx.storage
-                        .bm25_query(q.to_string(), ARTIFACT_MATCH_POOL, false)
-                        .await
-                }
+                let model_vec = ctx.embedder.as_ref().and_then(|emb| {
+                    let m = crate::embed_cache::embedder_model_name(emb);
+                    vbm.get(m).cloned()
+                });
+                let rows = match model_vec {
+                    Some(v) => {
+                        ctx.storage
+                            .hybrid_query(q.to_string(), v, ARTIFACT_MATCH_POOL)
+                            .await
+                    }
+                    None => {
+                        ctx.storage
+                            .bm25_query(q.to_string(), ARTIFACT_MATCH_POOL, false)
+                            .await
+                    }
+                };
+                let rows = match rows {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(kb = %kb_name, error = %e, "context: artifact match query failed");
+                        return (
+                            Vec::new(),
+                            Some(degraded_of(
+                                kb_name.as_str(),
+                                "artifacts",
+                                classify_query_error(&e.to_string()),
+                            )),
+                        );
+                    }
+                };
+                let hits = rows
+                    .into_iter()
+                    .filter(|d| {
+                        d.kb_category.as_deref() != Some(kb_core::sessions::MEMORY_SESSION_CATEGORY)
+                    })
+                    .take(ARTIFACT_MATCH_CAP)
+                    .map(|d| (kb_name.as_str().to_string(), d.id))
+                    .collect::<Vec<_>>();
+                (hits, None)
             };
-            let rows = rows.unwrap_or_else(|e| {
-                tracing::warn!(kb = %kb_name, error = %e, "context: artifact match query failed");
-                Vec::new()
-            });
-            rows.into_iter()
-                .filter(|d| {
-                    d.kb_category.as_deref() != Some(kb_core::sessions::MEMORY_SESSION_CATEGORY)
-                })
-                .take(ARTIFACT_MATCH_CAP)
-                .map(|d| (kb_name.as_str().to_string(), d.id))
-                .collect::<Vec<_>>()
+            match within_deadline(deadline, work).await {
+                Ok(v) => v,
+                Err(()) => (
+                    Vec::new(),
+                    Some(degraded_of(
+                        kb_name.as_str(),
+                        "artifacts",
+                        QueryErrorClass::Timeout,
+                    )),
+                ),
+            }
         }));
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
-    super::buffered_join(futs, state.fanout_cap)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
+    let mut hits = Vec::new();
+    let mut degraded = Vec::new();
+    for (partial, lane) in super::buffered_join(futs, state.fanout_cap).await {
+        hits.extend(partial);
+        if let Some(d) = lane {
+            degraded.push(d);
+        }
+    }
+    (hits, degraded)
 }
 
 /// OPEN comments, scoped to `scope_ids`, through the ONE canonical collector
@@ -1032,6 +1196,101 @@ async fn collect_code_hints(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classify_query_error_is_a_closed_set_and_does_not_echo_paths() {
+        let fragment = "storage error: lance::io::exec::take: Missing fragment id during take \
+                        operation fragment_id=9795 /srv/kb/platform/docs.lance";
+        assert_eq!(classify_query_error(fragment), QueryErrorClass::IndexFragment);
+        assert_eq!(
+            classify_query_error("storage error: lance index open failed at /srv/kb/state"),
+            QueryErrorClass::Storage,
+        );
+        assert_eq!(
+            classify_query_error("embedder subprocess exited"),
+            QueryErrorClass::Embed,
+        );
+        assert_eq!(
+            classify_query_error("timed out waiting for query"),
+            QueryErrorClass::Timeout,
+        );
+        assert_eq!(classify_query_error("no such session"), QueryErrorClass::Other);
+
+        let lane = degraded_of("platform", "artifacts", QueryErrorClass::IndexFragment);
+        let json = serde_json::to_value(&lane).unwrap();
+        assert_eq!(json["kb"], "platform");
+        assert_eq!(json["lane"], "artifacts");
+        assert_eq!(json["error_class"], "index_fragment");
+        let rendered = serde_json::to_string(&json).unwrap();
+        assert!(!rendered.contains("/srv/"), "path leaked: {rendered}");
+        assert!(!rendered.contains("fragment_id"), "raw lance text leaked: {rendered}");
+
+        let empty = serde_json::to_value(&ContextResponse {
+            q: "q".into(),
+            cwd: None,
+            session: None,
+            budget: 4_000,
+            no_floor: false,
+            scent: "no prior context".into(),
+            memories: vec![],
+            memories_total: 0,
+            memories_truncated: false,
+            sessions: vec![],
+            sessions_total: 0,
+            sessions_truncated: false,
+            comments: vec![],
+            comments_total: 0,
+            comments_truncated: false,
+            code_hints: vec![],
+            code_hints_total: 0,
+            code_hints_truncated: false,
+            artifacts_matched: 0,
+            budget_exceeded: false,
+            chars: 0,
+            slate_items: 0,
+            ms: 0,
+            degraded: vec![],
+        })
+        .unwrap();
+        assert!(empty.get("degraded").is_none(), "empty degraded must be omitted");
+        let named = serde_json::to_value(&ContextResponse {
+            degraded: vec![lane],
+            ..empty_context_for_degraded_test()
+        })
+        .unwrap();
+        assert_eq!(named["degraded"][0]["error_class"], "index_fragment");
+        assert_eq!(named["degraded"][0]["kb"], "platform");
+        let named_s = serde_json::to_string(&named).unwrap();
+        assert!(!named_s.contains("/srv/"), "path leaked into degraded: {named_s}");
+    }
+
+    fn empty_context_for_degraded_test() -> ContextResponse {
+        ContextResponse {
+            q: "q".into(),
+            cwd: None,
+            session: None,
+            budget: 4_000,
+            no_floor: false,
+            scent: "no prior context".into(),
+            memories: vec![],
+            memories_total: 0,
+            memories_truncated: false,
+            sessions: vec![],
+            sessions_total: 0,
+            sessions_truncated: false,
+            comments: vec![],
+            comments_total: 0,
+            comments_truncated: false,
+            code_hints: vec![],
+            code_hints_total: 0,
+            code_hints_truncated: false,
+            artifacts_matched: 0,
+            budget_exceeded: false,
+            chars: 0,
+            slate_items: 0,
+            ms: 0,
+            degraded: vec![],
+        }
+    }
 
     // ---- the scent line (what the hook injects on turn 1) ----------------
 
@@ -1274,6 +1533,7 @@ mod tests {
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("global".to_string()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
