@@ -44,6 +44,7 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { fetchDaycard, type DaycardDoc } from "../api/client";
 import { currentDaemonBase } from "../api/base";
 import type { DaycardSinceResponse } from "../api/generated/DaycardSinceResponse";
+import type { DaycardResponse } from "../api/generated/DaycardResponse";
 import type { DaycardCommentItem } from "../api/generated/DaycardCommentItem";
 import type { DaycardSessionItem } from "../api/generated/DaycardSessionItem";
 import { artifactHref } from "../lib/artifactHref";
@@ -124,9 +125,11 @@ function commentHref(kb: string, sourceRelative: string, commentId: string): str
   return `${base}${sep}comment=${encodeURIComponent(commentId)}`;
 }
 
-function isSinceDoc(
-  data: { since_unix?: number } | { activity: unknown },
-): data is DaycardSinceResponse | DaycardSinceFleet {
+function isFleet(data: DaycardSinceResponse | DaycardSinceFleet): data is DaycardSinceFleet {
+  return "kbs" in data && Array.isArray(data.kbs);
+}
+
+function isSinceDoc(data: { since_unix?: number } | { activity: unknown }): data is DaycardSinceFleet {
   return "since_unix" in data && typeof data.since_unix === "number";
 }
 
@@ -144,7 +147,7 @@ type DaycardSinceFleet = {
 };
 
 function asFleet(data: DaycardSinceResponse | DaycardSinceFleet): DaycardSinceFleet {
-  if ("kbs" in data && Array.isArray(data.kbs)) return data;
+  if (isFleet(data)) return data;
   return { since_unix: data.since_unix, to_unix: data.to_unix, kbs: [data] };
 }
 
@@ -152,7 +155,7 @@ async function fetchDaycardSince(
   kb: string,
   since: string,
   signal?: AbortSignal,
-): Promise<DaycardSinceFleet | DaycardSinceResponse> {
+): Promise<DaycardSinceFleet> {
   const q = new URLSearchParams();
   q.set("since", since);
   q.set("all", "1");
@@ -161,7 +164,7 @@ async function fetchDaycardSince(
     { headers: { Accept: "application/json" }, signal },
   );
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  return (await r.json()) as DaycardSinceFleet | DaycardSinceResponse;
+  return asFleet((await r.json()) as DaycardSinceResponse | DaycardSinceFleet);
 }
 
 export default function AmbientRoute() {
@@ -214,7 +217,7 @@ export default function AmbientRoute() {
   }, [kb, since, params, setParams]);
 
   const waitingForSince = !!kb && urlSince == null && !identitySettled;
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError } = useQuery<DaycardResponse | DaycardSinceFleet>({
     queryKey: since ? (["daycard", kb, "since", "all", since] as const) : (["daycard", kb] as const),
     queryFn: ({ signal }) =>
       since
