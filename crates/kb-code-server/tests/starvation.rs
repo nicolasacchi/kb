@@ -1,7 +1,7 @@
 //! Async-worker-starvation regression test.
 //!
 //! Ties directly to the 2026-08-31 prod incident documented in the module
-//! doc of `crates/kb-code-server/src/store.rs`: `Store` wraps ONE
+//! doc of `crates/kb-code-server/src/store/mod.rs`: `Store` wraps ONE
 //! `rusqlite::Connection` behind a `std::sync::Mutex`. Before the
 //! `StoreBlocking::run_blocking` fix, a route handler that called a `Store`
 //! method INLINE inside an `async fn` blocked its tokio async-worker thread
