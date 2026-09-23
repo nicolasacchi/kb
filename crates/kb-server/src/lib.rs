@@ -250,11 +250,6 @@ pub async fn serve_with_paths(
             );
         }
     }
-    // A positive [backup] schedule_hours with no remote_cmd must not look
-    // armed. There is no in-process tarball writer here (it lives in the
-    // CLI) and this process must not shell out, so no schedule task is
-    // spawned — WARN at boot instead.
-    warn_backup_schedule_without_remote_cmd(&config.backup);
 
     let started_at = chrono::Utc::now();
     let spa_dist = routes::spa::resolve_spa_dist();
@@ -459,6 +454,15 @@ pub async fn serve_with_paths(
     // the window across every kb. Joined in `teardown_tasks` like every task
     // here, so an in-process config reload can't leak it.
     if let Some(h) = spawn_retention_prune(handles.clone(), &config.retention) {
+        tasks.push(h);
+    }
+    // Daemon-wide opt-in export schedule. Spawns NOTHING unless
+    // `[backup] schedule_hours` is a positive integer. When set, one task
+    // (also running once at boot) writes an export tarball per kb via the
+    // in-process writer — never the `kb` binary. A schedule with no
+    // `remote_cmd` already WARNs at config load; do not warn again here.
+    // Joined in `teardown_tasks` like the retention prune above.
+    if let Some(h) = spawn_backup_schedule(handles.clone(), &config.backup) {
         tasks.push(h);
     }
     // L2 — daemon log-file retention. Always on (validated ≥ 1 day, default
@@ -1198,24 +1202,100 @@ fn retention_windows(
     (history.is_some() || reading.is_some()).then_some((history, reading))
 }
 
-/// Boot WARN for a positive `[backup] schedule_hours` with no `remote_cmd`.
-///
-/// A set schedule is daemon-wide and opt-in, like `spawn_retention_prune`,
-/// but this does not spawn. The only tarball writer is the CLI (`kb backup`);
-/// there is no in-process export path here, and this process must not shell
-/// out. A schedule in this state would otherwise look safe. `None` and `0`
-/// are unset and stay quiet. A schedule that does have `remote_cmd` is also
-/// quiet: remote copy still needs a tarball this process does not write.
-fn warn_backup_schedule_without_remote_cmd(backup: &kb_core::config::BackupSection) {
-    if !backup.schedule_without_remote_cmd() {
-        return;
+/// Period for `[backup] schedule_hours`. `None` and `Some(0)` are unset,
+/// so the caller spawns nothing. A positive count is the tick interval;
+/// the task also runs once at boot (`interval`'s first tick).
+fn backup_schedule_period(backup: &kb_core::config::BackupSection) -> Option<Duration> {
+    let hours = backup.schedule_hours.filter(|h| *h > 0)?;
+    Some(Duration::from_secs(hours.saturating_mul(3_600)))
+}
+
+enum ScheduledBackup {
+    Skipped,
+    Written(std::path::PathBuf),
+}
+
+/// One kb on a schedule tick. Skips when the sqlite index has no writes
+/// newer than that kb's newest export tarball. The writer is in-process
+/// (`tar` + `VACUUM INTO`) — this must not exec the `kb` binary, and it
+/// does not take a maintenance lock.
+async fn backup_one_kb(paths: &kb_core::paths::KbPaths, kb: &KbName) -> Result<ScheduledBackup> {
+    if kb_core::storage::backup::should_skip_scheduled_backup(
+        &paths.kb_sqlite(kb),
+        &paths.exports,
+        kb.as_str(),
+    ) {
+        return Ok(ScheduledBackup::Skipped);
     }
-    tracing::warn!(
+    let path = kb_core::storage::backup::write_kb_export(paths, kb)
+        .await
+        .with_context(|| format!("export tarball for {kb}"))?;
+    Ok(ScheduledBackup::Written(path))
+}
+
+/// Boot-then-period export task. `None` when `[backup] schedule_hours` is
+/// unset, so an unconfigured daemon pays nothing. Watches the shutdown
+/// watch and is joined in `teardown_tasks`, so an in-process config reload
+/// can't leak it. Does not warn about a missing `remote_cmd` — config load
+/// already does.
+fn spawn_backup_schedule(
+    handles: Arc<crate::state::KbHandles>,
+    backup: &kb_core::config::BackupSection,
+) -> Option<tokio::task::JoinHandle<()>> {
+    use tokio::time::{interval, MissedTickBehavior};
+    let period = backup_schedule_period(backup)?;
+    let mut shutdown = handles.shutdown.subscribe();
+    tracing::info!(
         schedule_hours = ?backup.schedule_hours,
-        "[backup] schedule_hours is set but remote_cmd is not; the daemon cannot \
-         write export tarballs and will not shell out to the CLI writer — this \
-         schedule will not run"
+        "backup schedule enabled"
     );
+    Some(tokio::spawn(async move {
+        // First tick is immediate → one pass at boot, then once per period.
+        // Skip missed ticks so a slow export doesn't burst into another.
+        let mut ticker = interval(period);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.wait_for(|&down| down) => break,
+                _ = ticker.tick() => {}
+            }
+            let names: Vec<KbName> = handles.kbs.keys().cloned().collect();
+            for kb_name in &names {
+                if *shutdown.borrow() {
+                    return;
+                }
+                match backup_one_kb(&handles.paths, kb_name).await {
+                    Ok(ScheduledBackup::Skipped) => {
+                        tracing::debug!(
+                            kb = %kb_name,
+                            "backup schedule: index unchanged since newest tarball, skipped"
+                        );
+                    }
+                    Ok(ScheduledBackup::Written(path)) => {
+                        tracing::info!(
+                            kb = %kb_name,
+                            path = %path.display(),
+                            "backup schedule: wrote export tarball"
+                        );
+                        handles.bus.emit(
+                            "maintenance.backup.written",
+                            serde_json::json!({
+                                "kb": kb_name.as_str(),
+                                "path": path.display().to_string(),
+                            }),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            kb = %kb_name,
+                            error = %e,
+                            "backup schedule: export failed"
+                        );
+                    }
+                }
+            }
+        }
+    }))
 }
 
 /// R3 — daemon-wide opt-in retention prune. One background task that wakes
@@ -1410,9 +1490,6 @@ pub async fn serve_on_random_port_with_paths_and_spa(
 ) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
     let paths = Arc::new(paths);
     paths.ensure_dirs().context("create state dirs")?;
-    // Same boot WARN as `serve_with_paths`: a schedule with no remote_cmd
-    // must not look armed on the test daemon either.
-    warn_backup_schedule_without_remote_cmd(&config.backup);
 
     let started_at = chrono::Utc::now();
     let mut auth = crate::state::AuthConfig::load(&paths.token_file())
@@ -2151,10 +2228,8 @@ async fn bring_up_kb(
         let first_delay = reconcile_first_delay(kb_name.as_str(), interval);
         let first_delay_ms = first_delay.as_millis() as u64;
         let rec_handle = tokio::spawn(async move {
-            let mut ticker = tokio::time::interval_at(
-                tokio::time::Instant::now() + first_delay,
-                interval,
-            );
+            let mut ticker =
+                tokio::time::interval_at(tokio::time::Instant::now() + first_delay, interval);
             // Skip ticks we couldn't run on time (e.g. an oversized
             // walk overran the interval) — we just want "walk again
             // soon", not a queued backlog.
@@ -2842,5 +2917,133 @@ mod tests {
         let path = tmp.path().join("kb.toml");
         std::fs::write(&path, "[server]\naddr = \"127.0.0.1:4321\"\n").unwrap();
         assert_eq!(load_config_for_serve(&path).server.addr, "127.0.0.1:4321");
+    }
+
+    fn backup_section(hours: Option<u64>) -> kb_core::config::BackupSection {
+        kb_core::config::BackupSection {
+            remote_cmd: None,
+            remote_dest: None,
+            schedule_hours: hours,
+        }
+    }
+
+    #[test]
+    fn backup_schedule_period_unset_spawns_nothing() {
+        assert!(
+            backup_schedule_period(&backup_section(None)).is_none(),
+            "absent schedule_hours must not arm a task"
+        );
+        assert!(
+            backup_schedule_period(&backup_section(Some(0))).is_none(),
+            "0 is unset, not a period"
+        );
+        assert_eq!(
+            backup_schedule_period(&backup_section(Some(24))),
+            Some(Duration::from_secs(24 * 3_600))
+        );
+    }
+
+    #[tokio::test]
+    async fn backup_schedule_joins_on_shutdown_and_unset_spawns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Arc::new(KbPaths::rooted_at(tmp.path(), "sched"));
+        let handles = Arc::new(KbHandles::new("sched".into(), paths, chrono::Utc::now()));
+        assert!(spawn_backup_schedule(handles.clone(), &backup_section(None)).is_none());
+        assert!(spawn_backup_schedule(handles.clone(), &backup_section(Some(0))).is_none());
+
+        // Keep a receiver alive so `send` succeeds even if the task has not
+        // subscribed yet. The watch value is what the task observes.
+        let _rx = handles.shutdown.subscribe();
+        let task = spawn_backup_schedule(handles.clone(), &backup_section(Some(24)))
+            .expect("a positive schedule_hours spawns");
+        handles.shutdown.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("shutdown must stop the backup schedule task")
+            .expect("task did not panic");
+    }
+
+    #[tokio::test]
+    async fn backup_one_kb_skips_unchanged_index_and_writes_after_a_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "sched");
+        paths.ensure_dirs().unwrap();
+        let kb = KbName::new("notes").unwrap();
+        std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+        {
+            let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&kb)).unwrap();
+            db.history_record_search("hello", 1_700_000_000, "operator")
+                .unwrap();
+        }
+        let ancient = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let recent = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_003_600);
+        std::fs::File::options()
+            .write(true)
+            .open(paths.kb_sqlite(&kb))
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+        // WAL commits do not bump index.db. A sidecar left at "now" by
+        // Db::open would look like a write newer than the tarball.
+        let wal = {
+            let mut os = paths.kb_sqlite(&kb).into_os_string();
+            os.push("-wal");
+            std::path::PathBuf::from(os)
+        };
+        if wal.is_file() {
+            std::fs::File::options()
+                .write(true)
+                .open(&wal)
+                .unwrap()
+                .set_modified(ancient)
+                .unwrap();
+        }
+        let prior = paths.exports.join("notes-20260101-000000.tar.gz");
+        std::fs::write(&prior, b"already exported").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&prior)
+            .unwrap()
+            .set_modified(recent)
+            .unwrap();
+
+        match backup_one_kb(&paths, &kb).await.unwrap() {
+            ScheduledBackup::Skipped => {}
+            ScheduledBackup::Written(path) => {
+                panic!("unchanged index must be skipped, wrote {}", path.display())
+            }
+        }
+        let stamped = std::fs::read_dir(&paths.exports)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name().to_str().is_some_and(|n| {
+                    n.starts_with("notes-")
+                        && n.ends_with(".tar.gz")
+                        && n != "notes-20260101-000000.tar.gz"
+                })
+            })
+            .count();
+        assert_eq!(stamped, 0, "a skip must not write another tarball");
+
+        std::fs::File::options()
+            .write(true)
+            .open(paths.kb_sqlite(&kb))
+            .unwrap()
+            .set_modified(recent + Duration::from_secs(60))
+            .unwrap();
+        match backup_one_kb(&paths, &kb).await.unwrap() {
+            ScheduledBackup::Written(path) => {
+                assert!(path.is_file(), "written path missing: {}", path.display());
+                assert!(
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("notes-") && n.ends_with(".tar.gz")),
+                    "export must land in the scheduled name, got {}",
+                    path.display()
+                );
+            }
+            ScheduledBackup::Skipped => panic!("an index write since the tarball must export"),
+        }
     }
 }

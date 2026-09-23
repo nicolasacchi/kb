@@ -1246,6 +1246,15 @@ pub struct KbSection {
     /// (surfaced, never enforced — see [`crate::slo`]).
     #[serde(default)]
     pub slo: Option<SloSection>,
+
+    /// Item 20 — dated-slug regexes for the lookup ticket arm
+    /// (`GET /api/kb/{kb}/lookup`). Empty (the default, so a `kb.toml`
+    /// with no key still parses) means that arm does not run and lookup
+    /// is unchanged. A non-empty list also enables bare-digit and
+    /// `#`+digit tokens. Each entry is a regex, compiled once; an invalid
+    /// pattern is ignored (warn here, never a route 500).
+    #[serde(default)]
+    pub id_patterns: Vec<String>,
 }
 
 /// CT-F5 — `[kb.<name>.slo]`: the four operator-seeded corpus-health targets.
@@ -2091,6 +2100,16 @@ impl KbConfig {
                     ));
                 }
             }
+            for (i, pat) in kb.id_patterns.iter().enumerate() {
+                if regex::Regex::new(pat).is_err() {
+                    issues.push(ValidationIssue::warn(
+                        format!("/kb/{name}/id_patterns/{i}"),
+                        format!(
+                            "invalid id_patterns regex `{pat}` is ignored; lookup will not 500"
+                        ),
+                    ));
+                }
+            }
             if let Some(w) = kb.graph_boost {
                 if !w.is_finite() || w <= 0.0 || w > 4.0 {
                     issues.push(ValidationIssue::warn(
@@ -2896,6 +2915,7 @@ mod tests {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
         c.save(&path).unwrap();
@@ -2957,6 +2977,32 @@ mod tests {
         assert_eq!(
             kb.project_slugs,
             vec!["morning".to_string(), "1000farmacie-iac".to_string()]
+        );
+    }
+
+    #[test]
+    fn id_patterns_defaults_empty_and_parses() {
+        let plain = r#"
+            [kb.plain]
+            path = "/tmp/plain"
+        "#;
+        let c = KbConfig::from_toml_str(plain).unwrap();
+        let kb = c.kb.get(&KbName::new("plain").unwrap()).unwrap();
+        assert!(kb.id_patterns.is_empty());
+
+        let with = r#"
+            [kb.tickets]
+            path = "/tmp/t"
+            id_patterns = ["^\\d{4}-\\d{2}-\\d{2}-[a-z0-9-]+$", "(unclosed"]
+        "#;
+        let c = KbConfig::from_toml_str(with).unwrap();
+        let kb = c.kb.get(&KbName::new("tickets").unwrap()).unwrap();
+        assert_eq!(
+            kb.id_patterns,
+            vec![
+                r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$".to_string(),
+                "(unclosed".to_string(),
+            ]
         );
     }
 
@@ -3158,6 +3204,7 @@ mod tests {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
         c.save(&path).unwrap();
@@ -3500,6 +3547,7 @@ mod tests {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         }
     }
 
@@ -4224,7 +4272,6 @@ mod tests {
             .iter()
             .all(|i| !i.pointer.starts_with("/backup")));
     }
-
 
     // ---- MI-W2.1 / MI-W5.R — [memory] scoring_v2_relevance/_stability ----
 

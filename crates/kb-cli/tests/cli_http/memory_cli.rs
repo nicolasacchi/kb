@@ -51,6 +51,7 @@ async fn boot_memory() -> (tempfile::TempDir, SocketAddr) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     kb_map.insert(
@@ -79,6 +80,7 @@ async fn boot_memory() -> (tempfile::TempDir, SocketAddr) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

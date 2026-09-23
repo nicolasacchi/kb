@@ -448,7 +448,10 @@ pub(crate) fn aliased_corpus_name<'a>(
             let Some(slugs) = k["project_slugs"].as_array() else {
                 continue;
             };
-            if slugs.iter().any(|s| s.as_str().map(str::trim) == Some(slug)) {
+            if slugs
+                .iter()
+                .any(|s| s.as_str().map(str::trim) == Some(slug))
+            {
                 return Some(name);
             }
         }
@@ -474,11 +477,7 @@ pub(crate) fn confirm_derived_project(
 ) -> (Option<String>, Option<String>, Option<String>) {
     if let Some(name) = alias {
         if known.iter().any(|n| *n == name) {
-            return (
-                Some(name.to_string()),
-                Some(format!("{slug},{name}")),
-                None,
-            );
+            return (Some(name.to_string()), Some(format!("{slug},{name}")), None);
         }
     }
     let derived = format!("memory-{slug}");
@@ -553,8 +552,7 @@ async fn recall_inner(
                         let local = local_project_slug_aliases();
                         let alias = aliased_corpus_name(s, &kbs, &local);
                         let known = corpus_names(&kbs);
-                        let (confirmed, visible, miss) =
-                            confirm_derived_project(s, &known, alias);
+                        let (confirmed, visible, miss) = confirm_derived_project(s, &known, alias);
                         wire_project = confirmed;
                         wire_visible_to = visible;
                         if let Some(derived) = miss {

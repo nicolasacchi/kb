@@ -72,33 +72,46 @@ function relativeTime(unixSec: number, nowSec: number): string {
 
 const MODES: SearchMode[] = ["hybrid", "keyword", "semantic"];
 
-// Identifier tokens the lookup route resolves against title and filename
-// stem. A unique hit is pinned above ranked search; 0 or many must not
-// replace those results. Mirrors lookup arm 5 (`^#?\d{3,}$`, slug ≥ 6).
-const TICKET_RE = /^#?\d{3,}$/;
-const SLUG_RE = /^[A-Za-z0-9-]{6,}$/;
+// Ticket tokens that also hit /lookup, in parallel with ranked search.
+// A bare number, `#` plus digits, or a slug that contains a date
+// (`YYYY-MM-DD` or `YYYYMMDD`). Anything else must not call lookup.
+const BARE_NUMBER_RE = /^\d+$/;
+const HASH_DIGITS_RE = /^#\d+$/;
+const SLUG_RE = /^[A-Za-z0-9-]+$/;
+// Calendar-plausible so a random digit run is not treated as a date.
+const ISO_DATE_RE =
+  /(?:^|-)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:-|$)/;
+const COMPACT_DATE_RE =
+  /(?:^|-)(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?:-|$)/;
 
-function isLookupQuery(q: string): boolean {
-  if (TICKET_RE.test(q)) return true;
+function isTicketLookupQuery(q: string): boolean {
+  if (BARE_NUMBER_RE.test(q) || HASH_DIGITS_RE.test(q)) return true;
   if (!SLUG_RE.test(q)) return false;
-  // All-hyphen is not a slug. Pure digits are tickets, already matched.
-  return /[A-Za-z0-9]/.test(q);
+  return ISO_DATE_RE.test(q) || COMPACT_DATE_RE.test(q);
 }
 
-// `exact` / `unique_suffix` are the one-hit kinds. The client union only
-// types `id`; the wire flattens LookupHit (title, source_relative) beside it.
+// Pin only the ticket arm: one flattened hit, `kind: "exact"` plus
+// `match: "ticket"`. The generated union types `id` only; the wire
+// flattens source_relative and title beside it. Any other kind, or a
+// hit with no path, leaves the palette as search-only.
 type ExactPin = { id: string; source_relative: string; title: string };
 
 function pinFromLookup(res: LookupResponse): ExactPin | null {
-  if (res.kind !== "exact" && res.kind !== "unique_suffix") return null;
+  if (res.kind !== "exact") return null;
   const row = res as LookupResponse & {
+    match?: unknown;
     source_relative?: string;
     title?: string | null;
   };
+  if (row.match !== "ticket") return null;
   const rel = row.source_relative?.trim() ?? "";
-  if (!rel) return null;
+  if (!res.id || !rel) return null;
   const stem = rel.split("/").pop() || rel;
-  return { id: res.id, source_relative: rel, title: row.title?.trim() || stem };
+  return {
+    id: res.id,
+    source_relative: rel,
+    title: row.title?.trim() || stem,
+  };
 }
 
 // v0.11 S3 — built-in action rows the palette shows above search hits.
@@ -299,7 +312,7 @@ export default function Cmdk({
   const [allNotes, setAllNotes] = useState<NoteSummary[]>([]);
   const [allSessions, setAllSessions] = useState<SessionRow[]>([]);
   const [memories, setMemories] = useState<RecallHit[]>([]);
-  // Unique ticket/slug lookup. Null unless /lookup returned exactly one hit.
+  // Unique ticket lookup. Null unless /lookup returned match:"ticket" and one hit.
   const [exact, setExact] = useState<ExactPin | null>(null);
   const identity = useIdentity();
   const me = identity?.user;
@@ -392,11 +405,12 @@ export default function Cmdk({
     };
   }, [q]);
 
-  // Ticket (`#15715` / `15715`) or slug ≥ 6: also resolve via /lookup.
-  // Ranked search keeps running. One hit is pinned; 0 or many leave it alone.
+  // Ticket token (`15715`, `#15715`, dated slug): also resolve via /lookup.
+  // Search is not gated on this request. A miss, error, or non-ticket
+  // match leaves the palette as search-only.
   useEffect(() => {
     const needle = q.trim();
-    if (!kb || !isLookupQuery(needle)) {
+    if (!kb || !isTicketLookupQuery(needle)) {
       setExact(null);
       return;
     }

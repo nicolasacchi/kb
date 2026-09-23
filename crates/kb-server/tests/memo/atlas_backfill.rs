@@ -70,6 +70,7 @@ async fn boot() -> (tempfile::TempDir, std::net::SocketAddr, PathBuf) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

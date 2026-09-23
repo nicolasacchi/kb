@@ -17,12 +17,42 @@
 # `omp <sid> <epoch>` to the shared $XDG_CACHE_HOME/kb/distill-pending ledger,
 # so the next interactive session's wake (any harness) surfaces it too —
 # same relay grok uses for its headless sessions.
+# A hit also posts one slate ask, `Distill session <sid> (omp)?`, via
+# `kb slate ask` with the session cwd when this hook has one (payload
+# `.cwd`, else the session header). Best-effort: a missing `kb`, a daemon
+# error, or a hang must not block the notify line or the ledger append.
+# A suppressed run posts nothing.
 #
 # Modes:
 #   hook mode : stdin carries {session_file, session_id, cwd}   (from kb-omp.ts)
 #   CLI mode  : kb-distill-nudge-omp.sh <session.jsonl>         (backfill/tests;
 #               sid read from the file's own session header)
 set -u
+
+# Call only after the commit-without-remember check. Slate stdout is
+# discarded so it cannot corrupt the notify line. Never blocks.
+post_distill_ask() {
+  local sid="$1" harness="$2" cwd="${3:-}"
+  command -v kb >/dev/null 2>&1 || return 0
+  local args=(
+    slate ask "Distill session ${sid} (${harness})?"
+    --harness "$harness"
+    --session-id "$sid"
+    --ref "session:${sid}"
+  )
+  [ -n "$cwd" ] && args+=(--cwd "$cwd")
+  # Loopback must not ride HTTP(S)_PROXY (same reason as kb-wake-kimi.sh).
+  (
+    export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
+    export no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
+    unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 4 kb "${args[@]}" >/dev/null 2>&1 || true
+    else
+      kb "${args[@]}" >/dev/null 2>&1 || true
+    fi
+  )
+}
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -30,7 +60,7 @@ marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
 ledger="$marker_dir/distill-pending"
 
 check_one() {
-  local tpath="$1" sid="$2"
+  local tpath="$1" sid="$2" cwd="${3:-}"
   [ -f "$tpath" ] || return 0
   [ -n "$sid" ] || return 0
 
@@ -59,20 +89,31 @@ check_one() {
 
   # Shared cross-harness relay: next interactive wake surfaces + consumes.
   printf 'omp %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null || true
+  # Payload cwd wins; CLI mode and a cwd-less payload fall back to the
+  # session header this hook already reads for the sid.
+  if [ -z "$cwd" ]; then
+    cwd="$(head -c 262144 "$tpath" 2>/dev/null \
+      | jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null \
+      | head -1)"
+  fi
+  post_distill_ask "$sid" omp "$cwd"
   return 0
 }
 
 if [ "$#" -gt 0 ]; then
   for arg in "$@"; do
-    sid="$(head -c 262144 "$arg" 2>/dev/null \
-      | jq -r 'select(.type == "session") | .id // empty' 2>/dev/null \
+    hdr="$(head -c 262144 "$arg" 2>/dev/null \
+      | jq -c 'select(.type == "session") | {id: (.id // ""), cwd: (.cwd // "")}' 2>/dev/null \
       | head -1)"
-    check_one "$arg" "$sid"
+    sid="$(jq -r '.id // empty' <<<"$hdr" 2>/dev/null)"
+    cwd="$(jq -r '.cwd // empty' <<<"$hdr" 2>/dev/null)"
+    check_one "$arg" "$sid" "$cwd"
   done
 else
   input="$(cat)"
   tpath="$(printf '%s' "$input" | jq -r '.session_file // .transcript_path // empty' 2>/dev/null)"
   sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
-  check_one "$tpath" "$sid"
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+  check_one "$tpath" "$sid" "$cwd"
 fi
 exit 0
