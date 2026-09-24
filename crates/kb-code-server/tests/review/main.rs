@@ -30,5 +30,6 @@ mod review_inbox_timeline;
 mod review_map_route;
 mod review_routes;
 mod review_sweep;
+mod rs_u0_golden;
 mod unified_inbox;
 mod v73_k3;
