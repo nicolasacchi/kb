@@ -11,6 +11,40 @@
 //! also print a generic "fatal: …".
 
 use std::fmt;
+use std::sync::LazyLock;
+
+use regex::Regex;
+
+/// A quoted URL or path in git's messages (`unable to access '<url>'`,
+/// `repository '<url>' not found`). Its CONTENT is attacker/user text — a
+/// repo named `openssl-tls` must not classify as `tls` — so it is replaced
+/// by a placeholder before any phrase is matched.
+static QUOTED_URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"'(?:[a-z][a-z0-9+.\-]*://|/|~|git@)[^'\n]*'").expect("static regex")
+});
+
+/// Exact TLS phrases from curl/OpenSSL/GnuTLS/NSS/schannel — never a bare
+/// `ssl`/`tls` substring.
+const TLS_PHRASES: &[&str] = &[
+    "ssl certificate",
+    "ssl: certificate",
+    "certificate problem",
+    "certificate verify failed",
+    "certificate has expired",
+    "unable to get local issuer certificate",
+    "self-signed certificate",
+    "self signed certificate",
+    "server certificate verification failed",
+    "ssl_connect",
+    "ssl connect error",
+    "ssl routines",
+    "gnutls_handshake",
+    "gnutls recv error",
+    "tls handshake",
+    "tlsv1 alert",
+    "schannel:",
+    "openssl ssl_read",
+];
 
 /// What kind of credential the failing call carried — the same stderr
 /// means different things with and without one (a 401 after we SENT a
@@ -40,8 +74,12 @@ pub enum FailureClass {
     CredentialRejected,
     /// A deploy key answered "repository not found" (key for another repo).
     CredentialWrongRepo,
-    /// The remote says the repository does not exist (or hides it).
+    /// The remote says the repository does not exist (or hides it), and
+    /// no credential was sent.
     RepoNotFound,
+    /// A token WAS sent and the forge still says "repository not found" —
+    /// GitHub's answer for "this account cannot see it". Auth-class.
+    AuthNoAccess,
     /// ssh has no pinned host key for the host.
     HostKeyUnknown,
     /// ssh host key CHANGED — never auto-repaired.
@@ -81,6 +119,7 @@ impl FailureClass {
             Self::CredentialRejected => "credential-rejected",
             Self::CredentialWrongRepo => "credential-wrong-repo",
             Self::RepoNotFound => "repo-not-found",
+            Self::AuthNoAccess => "auth-no-access",
             Self::HostKeyUnknown => "host-key-unknown",
             Self::HostKeyMismatch => "host-key-mismatch",
             Self::AuthRequired => "auth-required",
@@ -114,6 +153,7 @@ impl FailureClass {
             self,
             Self::CredentialRejected
                 | Self::CredentialWrongRepo
+                | Self::AuthNoAccess
                 | Self::AuthRequired
                 | Self::CredentialAccountMismatch
                 | Self::CredentialUnavailable
@@ -130,7 +170,8 @@ impl fmt::Display for FailureClass {
 
 /// Classify a (redacted, `LC_ALL=C`) git stderr.
 pub fn classify(stderr: &str, auth: AuthContext) -> FailureClass {
-    let s = stderr.to_ascii_lowercase();
+    let lower = stderr.to_ascii_lowercase();
+    let s = QUOTED_URL.replace_all(&lower, "'<url>'");
     let has = |n: &str| s.contains(n);
 
     if has("no space left on device") || has("enospc") || has("disk quota exceeded") {
@@ -162,13 +203,13 @@ pub fn classify(stderr: &str, auth: AuthContext) -> FailureClass {
         return FailureClass::CredentialRejected;
     }
     if has("repository not found") || (has("repository '") && has("' not found")) {
-        return if auth == AuthContext::DeployKey {
-            FailureClass::CredentialWrongRepo
-        } else {
-            FailureClass::RepoNotFound
+        return match auth {
+            AuthContext::DeployKey => FailureClass::CredentialWrongRepo,
+            AuthContext::Token => FailureClass::AuthNoAccess,
+            AuthContext::None | AuthContext::Ambient => FailureClass::RepoNotFound,
         };
     }
-    if has("ssl") || has("tls") || has("certificate") || has("gnutls") {
+    if TLS_PHRASES.iter().any(|p| has(p)) {
         return FailureClass::Tls;
     }
     let auth_shaped = has("authentication failed")
@@ -257,7 +298,34 @@ mod tests {
         (
             "remote: Repository not found.\nfatal: repository 'https://github.com/acme/widgets.git/' not found\n",
             A::Token,
+            F::AuthNoAccess,
+        ),
+        (
+            "remote: Repository not found.\nfatal: repository 'https://github.com/acme/widgets.git/' not found\n",
+            A::None,
             F::RepoNotFound,
+        ),
+        // A repo NAME must not drive the class: `openssl-tls-certificate`
+        // inside the quoted URL is not a TLS failure.
+        (
+            "fatal: unable to access 'https://github.com/acme/openssl-tls-certificate.git/': Could not resolve host: github.com\n",
+            A::Token,
+            F::Offline,
+        ),
+        (
+            "fatal: repository 'https://github.com/acme/permission-denied-publickey-no-space-left-on-device.git/' not found\n",
+            A::None,
+            F::RepoNotFound,
+        ),
+        (
+            "fatal: unable to access 'https://git.example.com/x.git/': SSL certificate problem: unable to get local issuer certificate\n",
+            A::Token,
+            F::Tls,
+        ),
+        (
+            "fatal: unable to access 'https://git.example.com/x.git/': gnutls_handshake() failed: The TLS connection was non-properly terminated.\n",
+            A::None,
+            F::Tls,
         ),
         (
             "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",

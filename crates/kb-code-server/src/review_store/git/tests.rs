@@ -172,7 +172,8 @@ fn the_token_reaches_the_server_but_never_argv_or_environ() {
     server.join().unwrap();
     assert!(!err.detail.contains(FAKE_TOKEN));
     assert!(!err.to_string().contains(FAKE_TOKEN));
-    assert_eq!(err.class, FailureClass::RepoNotFound, "{err}");
+    // A token was sent and the forge still says "not found": auth-class.
+    assert_eq!(err.class, FailureClass::AuthNoAccess, "{err}");
     // nothing landed on disk under the store home either
     for e in walk(sg.git_home()) {
         let bytes = std::fs::read(&e).unwrap_or_default();
@@ -248,8 +249,17 @@ fn the_scrubbed_environment_is_exactly_the_allowlist() {
 
     let fake_path = fake_dir.clone();
     let sg = StoreGit::with_env_fn(tmp.path().join("git-home"), move |k| match k {
-        "PATH" => Some(fake_path.clone().into_os_string()),
+        // Empty and relative entries are dropped.
+        "PATH" => Some(
+            std::env::join_paths([
+                fake_path.clone(),
+                PathBuf::from(""),
+                PathBuf::from("relative/bin"),
+            ])
+            .unwrap(),
+        ),
         "HTTPS_PROXY" => Some("http://proxy.example.invalid:3128".into()),
+        "SSL_CERT_FILE" => Some("/etc/ssl/certs/ca-bundle.example.pem".into()),
         // Present in the "daemon env", must NOT reach git.
         "SSH_AUTH_SOCK" | "GH_TOKEN" | "GIT_DIR" => Some("leak".into()),
         _ => None,
@@ -281,7 +291,7 @@ fn the_scrubbed_environment_is_exactly_the_allowlist() {
         ("XDG_CONFIG_HOME", home.clone()),
         ("GIT_CEILING_DIRECTORIES", home.clone()),
         ("GIT_CONFIG_NOSYSTEM", "1".into()),
-        ("GIT_CONFIG_GLOBAL", "/dev/null".into()),
+        ("GIT_CONFIG_GLOBAL", format!("{home}/gitconfig")),
         ("GIT_ASKPASS", "".into()),
         ("SSH_ASKPASS", "".into()),
         ("SSH_ASKPASS_REQUIRE", "never".into()),
@@ -292,6 +302,10 @@ fn the_scrubbed_environment_is_exactly_the_allowlist() {
         ("GIT_ALLOW_PROTOCOL", "http".into()),
         ("GIT_DIR", store.display().to_string()),
         ("HTTPS_PROXY", "http://proxy.example.invalid:3128".into()),
+        (
+            "SSL_CERT_FILE",
+            "/etc/ssl/certs/ca-bundle.example.pem".into(),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -330,7 +344,189 @@ fn the_scrubbed_environment_is_exactly_the_allowlist() {
         .collect::<Vec<_>>();
     assert_eq!(helper.len(), 1);
     assert!(helper[0].contains("'127.0.0.1:4242'"));
-    assert!(helper[0].contains("cat <&"));
+    assert!(helper[0].contains("cat <&3"), "single-digit helper fd");
+    assert_eq!(sg.resolved_git(), Some(fake_dir.join("git")));
+}
+
+/// The helper snippet must work under every `/bin/sh` git may use — dash
+/// (Debian/Ubuntu) above all, which rejects multi-digit `<&NN`. Runs it
+/// under each shell present on PATH, with the pipe dup'ed onto fd 3 by the
+/// same pre-exec hook production uses.
+#[test]
+fn the_helper_snippet_runs_under_every_available_posix_sh() {
+    let cred = test_cred(4242);
+    let payload = cred.helper_payload();
+    let mut shells: Vec<Vec<&str>> = vec![vec!["sh"]];
+    for (bin, args) in [("dash", vec!["dash"]), ("busybox", vec!["busybox", "sh"])] {
+        let found = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+            .unwrap_or(false);
+        if found {
+            shells.push(args);
+        } else {
+            eprintln!("skipping {bin}: not on PATH");
+        }
+    }
+    for sh in shells {
+        for (host, want) in [("127.0.0.1:4242", true), ("127.0.0.1:9999", false)] {
+            let pipe = token_pipe(&payload).unwrap();
+            let mut cmd = Command::new(sh[0]);
+            cmd.args(&sh[1..])
+                .arg("-c")
+                .arg(format!("{} get", helper_snippet(&cred)));
+            inherit_fd_in_child(&mut cmd, pipe.as_raw_fd());
+            let spec = RunSpec {
+                timeout: Duration::from_secs(10),
+                stdout_cap: 4096,
+                stderr_cap: 4096,
+                stdin: Some(format!("protocol=http\nhost={host}\n\n").into_bytes()),
+            };
+            let got = proc::run(&mut cmd, &spec).unwrap();
+            drop(pipe);
+            assert!(
+                got.status.unwrap().success(),
+                "{sh:?}: {}",
+                String::from_utf8_lossy(&got.stderr)
+            );
+            if want {
+                assert_eq!(&got.stdout[..], &payload[..], "{sh:?} did not relay fd 3");
+            } else {
+                assert!(got.stdout.is_empty(), "{sh:?} answered a foreign host");
+            }
+        }
+    }
+}
+
+#[test]
+fn local_sources_are_trusted_by_exact_path_in_kbs_own_global_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sg = store_git(tmp.path());
+    let get_all = || {
+        sg.run(
+            GitCall::new(
+                "config",
+                GitArgs::new("config")
+                    .flag("--global")
+                    .flag("--get-all")
+                    .end_of_options()
+                    .composed("safe.directory".into()),
+            )
+            .allow_nonzero(),
+        )
+        .unwrap()
+        .stdout_str()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    };
+    assert!(get_all().is_empty(), "nothing trusted by default");
+    sg.allow_local_source(Path::new("/srv/acme/widgets"))
+        .unwrap();
+    sg.allow_local_source(Path::new("/srv/acme/we\"ird\\path"))
+        .unwrap();
+    sg.allow_local_source(Path::new("/srv/acme/widgets"))
+        .unwrap();
+    assert_eq!(
+        get_all(),
+        ["/srv/acme/we\"ird\\path", "/srv/acme/widgets"],
+        "exact paths only, escaped, deduplicated — never `*`"
+    );
+    assert!(sg.allow_local_source(Path::new("relative")).is_err());
+    assert!(sg
+        .allow_local_source(Path::new("/srv/x\n[core]\n\thooksPath = /tmp"))
+        .is_err());
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(sg.git_home().join("gitconfig"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn inherit_mode_strips_prompting_debug_and_exec_path_variables() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ambient: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "DISPLAY",
+        "GIT_EXEC_PATH",
+        "GIT_TRACE",
+        "GIT_TRACE_PACKET",
+        "GIT_TRACE_CURL",
+        "GIT_CURL_VERBOSE",
+        "GIT_SSL_NO_VERIFY",
+        "GIT_DIR",
+        // an explicit ssh command: kb must not add its own
+        "GIT_SSH_COMMAND",
+    ]
+    .iter()
+    .map(|k| (std::ffi::OsString::from(*k), std::ffi::OsString::from("x")))
+    .collect();
+    let sg = store_git(tmp.path()).with_ambient_for_test(ambient);
+    let cmd = sg.build(
+        &GitCall::new("ls-remote", GitArgs::new("ls-remote")).auth(FetchAuth::Inherit),
+        None,
+    );
+    let envs: BTreeMap<String, Option<String>> = cmd
+        .get_envs()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    for gone in [
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "DISPLAY",
+        "GIT_EXEC_PATH",
+        "GIT_TRACE",
+        "GIT_TRACE_PACKET",
+        "GIT_TRACE_CURL",
+        "GIT_CURL_VERBOSE",
+        "GIT_SSL_NO_VERIFY",
+        "GIT_DIR",
+    ] {
+        assert_eq!(envs.get(gone), Some(&None), "{gone} not removed");
+    }
+    assert_eq!(envs.get("GIT_TERMINAL_PROMPT"), Some(&Some("0".into())));
+    assert_eq!(envs.get("SSH_ASKPASS_REQUIRE"), Some(&Some("never".into())));
+    assert!(
+        !envs.contains_key("GIT_SSH_COMMAND"),
+        "an ambient GIT_SSH_COMMAND is left alone"
+    );
+    // inherit keeps the user's helpers (no reset)
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(!args.contains(&"credential.helper=".to_string()));
+}
+
+#[test]
+fn an_unknown_ssh_probe_never_overrides_and_is_not_cached() {
+    assert_eq!(
+        ssh_probe_verdict(false, Some(0), b"ssh -i key\n"),
+        Some(true)
+    );
+    assert_eq!(ssh_probe_verdict(false, Some(1), b""), Some(false));
+    assert_eq!(
+        ssh_probe_verdict(true, None, b""),
+        None,
+        "timeout = unknown"
+    );
+    assert_eq!(
+        ssh_probe_verdict(false, Some(128), b""),
+        None,
+        "error = unknown"
+    );
+    assert_eq!(
+        ssh_probe_verdict(false, None, b""),
+        None,
+        "signal = unknown"
+    );
 }
 
 #[test]
