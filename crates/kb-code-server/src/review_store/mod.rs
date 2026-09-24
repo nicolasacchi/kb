@@ -13,14 +13,34 @@
 //! * [`classify`] / [`redact`] — failure classes with stable
 //!   `urn:kb:errors:<slug>` slugs, and the secret redactor.
 //!
-//! `ReviewStore` itself (store key, membership, seeding, manifest, flock)
-//! is RS-U3 and builds on these.
+//! RS-U3 adds the store itself, on top of those:
+//!
+//! * [`key`] — `store_key` normalization (`host/owner/name`, `local:<uuid>`);
+//! * [`ladder`] — the base-URL ladder and membership (README §5.1);
+//! * [`settings`] — `[review.store]` / `[[review.repos]]`, tolerant enums;
+//! * [`seed`] — seed-by-fetch (README §5.2) and the sync primitives;
+//! * [`manifest`] — `kb-code-store.json` + the per-store `flock`;
+//! * [`registry`] — [`ReviewStores`] on `AppState`: registration, the seeding
+//!   state machine, the fetch/ops mutexes, and the handle API later units
+//!   call (`handle_for_repo`, `admit_mutation`, `fetch_lock`, `ops_lock`,
+//!   `resolve_credential`, `fetch_base`);
+//! * [`boot`] — the background boot seeding job (D4);
+//! * [`routes`] — `GET /api/repos/{name}/store|credentials` and the
+//!   loopback-only `store/sync`, `store/base-url`, `credentials/test`.
 
+pub mod boot;
 pub mod classify;
 pub mod cred;
 pub mod git;
+pub mod key;
+pub mod ladder;
+pub mod manifest;
 mod proc;
 pub mod redact;
+pub mod registry;
+pub mod routes;
+pub mod seed;
+pub mod settings;
 pub mod url;
 
 pub use classify::{AuthContext, FailureClass};
@@ -30,4 +50,8 @@ pub use cred::{
     SecretToken,
 };
 pub use git::{FetchAuth, GitArgs, GitCall, GitOutput, StoreGit, StoreGitError, NO_PUSH_URL};
+pub use registry::{
+    ReviewStores, StoreHandle, StoreRefusal, StoreUnavailable, SEEDING_RETRY_AFTER_SECS,
+    URN_STORE_SEEDING,
+};
 pub use url::{FetchRefspec, RefName, RefSource, RemoteName, RemoteUrl, UrlRejected};
