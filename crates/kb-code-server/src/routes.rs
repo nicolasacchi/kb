@@ -35,6 +35,7 @@
 use crate::annotations::{self, DiffAnchor2, SymbolDescriptor};
 use crate::config::RepoEntry;
 use crate::extract::Symbol;
+use crate::git::roots::{GitCtx, WorkTreeRoot};
 use crate::git::{GitError, GitRepo, RefKind, RefRange, Revspec, DEFAULT_BLOB_SIZE_CAP};
 use crate::ingest;
 use crate::lang;
@@ -551,11 +552,99 @@ pub(crate) struct FileRead {
     pub(crate) blob_hash: String,
 }
 
+/// RS-U4 (design §6 S8) — HOW [`read_repo_file`] finds the bytes. It
+/// replaces the old bare `rev: Option<&str>`; its constructors ARE the
+/// classification, so a call site cannot compile without choosing one:
+///
+/// * [`RevResolver::work_tree`] — the live working-tree bytes (the old
+///   `None`), for LSP-live/boards/lanes/dossier-style reads.
+/// * [`RevResolver::user_repo`] — a rev read from the USER repo only (the
+///   old `Some(rev)` verbatim). General code-intel whose rev does not
+///   address review data, or a helper not yet bridged.
+/// * [`RevResolver::bridged`] / [`RevResolver::lookup`] — a store-aware
+///   read: a store-addressable rev (full sha, `refs/kbc/*`) is read from
+///   the review store first and the work tree second; any other name
+///   (`HEAD`, `main`) stays on the work tree, since it means something
+///   else in a bare store. `lookup` resolves the `GitCtx` lazily, only for
+///   store-addressable revs, so a hot loop pays no store query for `None`/
+///   branch names. With no ready store (today) both equal `user_repo`.
+#[derive(Clone, Copy)]
+pub(crate) struct RevResolver<'a> {
+    rev: Option<&'a str>,
+    via: RevVia<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum RevVia<'a> {
+    UserRepo,
+    Ctx(&'a crate::git::roots::GitCtx),
+    Lookup(&'a Store),
+}
+
+impl<'a> RevResolver<'a> {
+    pub(crate) fn work_tree() -> Self {
+        Self {
+            rev: None,
+            via: RevVia::UserRepo,
+        }
+    }
+
+    pub(crate) fn user_repo(rev: Option<&'a str>) -> Self {
+        Self {
+            rev,
+            via: RevVia::UserRepo,
+        }
+    }
+
+    pub(crate) fn bridged(ctx: &'a crate::git::roots::GitCtx, rev: Option<&'a str>) -> Self {
+        Self {
+            rev,
+            via: RevVia::Ctx(ctx),
+        }
+    }
+
+    /// [`Self::bridged`] when a context was resolved (see [`bridge_ctx`]),
+    /// else [`Self::user_repo`].
+    pub(crate) fn maybe_bridged(ctx: Option<&'a GitCtx>, rev: Option<&'a str>) -> Self {
+        match ctx {
+            Some(c) => Self::bridged(c, rev),
+            None => Self::user_repo(rev),
+        }
+    }
+
+    /// Sync store query inside — call from a blocking context only (the
+    /// same rule as every other `&Store` method).
+    pub(crate) fn lookup(store: &'a Store, rev: Option<&'a str>) -> Self {
+        Self {
+            rev,
+            via: RevVia::Lookup(store),
+        }
+    }
+}
+
+/// RS-U4 — the `GitCtx` a caller-supplied `rev` needs, resolved (async,
+/// one store query) ONLY when that rev is store-addressable; `None` for
+/// the working tree and for names, which never touch the store. Pair with
+/// [`RevResolver::maybe_bridged`].
+pub(crate) async fn bridge_ctx(
+    state: &SharedState,
+    repo: &RepoEntry,
+    rev: Option<&str>,
+) -> Option<GitCtx> {
+    match rev {
+        Some(r) if crate::git::roots::is_store_addressable(r) => {
+            Some(GitCtx::resolve_entry(&state.store, repo).await)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn read_repo_file(
     repo: &RepoEntry,
     path: &str,
-    rev: Option<&str>,
+    rev: RevResolver<'_>,
 ) -> Result<FileRead, ApiError> {
+    let RevResolver { rev, via } = rev;
     // V70-A2 — three checks, in this order, all BEFORE any bytes move:
     //   1. `safe_rel_path` — the pre-existing LEXICAL gate (`..`,
     //      absolute, prefix), kept as the first check per SEC-13's fix.
@@ -574,8 +663,20 @@ pub(crate) fn read_repo_file(
             // injection shapes) and an ODB resolve second (404
             // `urn:kb:errors:unknown-ref` on a well-formed miss).
             let spec = parse_revspec(rev)?;
-            let git = GitRepo::open(&repo.path)?;
-            git.read_blob(spec.as_str(), path, DEFAULT_BLOB_SIZE_CAP)?
+            let read_at = |root: &dyn crate::git::roots::GitRoot| -> Result<Vec<u8>, ApiError> {
+                let git = GitRepo::open(root.git_path())?;
+                Ok(git.read_blob(spec.as_str(), path, DEFAULT_BLOB_SIZE_CAP)?)
+            };
+            let work = crate::git::roots::WorkTreeRoot::of_repo(repo);
+            let addressable = crate::git::roots::is_store_addressable(spec.as_str());
+            match via {
+                RevVia::Ctx(ctx) if addressable => ctx.read_with_fallback(read_at)?,
+                RevVia::Lookup(store) if addressable => {
+                    crate::git::roots::GitCtx::for_repo(store, &repo.name, work)
+                        .read_with_fallback(read_at)?
+                }
+                _ => read_at(&work)?,
+            }
         }
         None => {
             let abs = crate::security::paths::contained_abs_path(&repo.path, path)?;
@@ -1317,7 +1418,12 @@ pub async fn file(
     // `read_repo_file` re-checks the floor for every caller that has no
     // `AppState`; see `security::secrets`' two-level split.
     state.secret_policy.check(&params.path)?;
-    let read = read_repo_file(repo, &params.path, params.rev.as_deref())?;
+    let git_ctx = bridge_ctx(&state, repo, params.rev.as_deref()).await;
+    let read = read_repo_file(
+        repo,
+        &params.path,
+        RevResolver::maybe_bridged(git_ctx.as_ref(), params.rev.as_deref()),
+    )?;
     let lang_info = lang::detect(&params.path, Some(&read.bytes));
     // V72-H1 — the same registry lookup `ingest` makes, so the wire can
     // never disagree with what the pipeline actually did.
@@ -1442,7 +1548,12 @@ pub async fn symbols(
         )),
         (None, None) => Err(ApiError::bad_request("pass one of `path` or `q`")),
         (Some(path), None) => {
-            let read = read_repo_file(repo, path, params.rev.as_deref())?;
+            let git_ctx = bridge_ctx(&state, repo, params.rev.as_deref()).await;
+            let read = read_repo_file(
+                repo,
+                path,
+                RevResolver::maybe_bridged(git_ctx.as_ref(), params.rev.as_deref()),
+            )?;
             let lang_info = lang::detect(path, Some(&read.bytes));
             // 2026-08-31 incident (store.rs module doc): single store call,
             // still wrapped so it can never park this async worker.
@@ -1962,14 +2073,18 @@ pub async fn blame(
     let path = safe_rel_path(&params.path)?.to_string();
     let line_range = parse_line_range(params.start, params.end)?;
 
-    let repo_root = repo.path.clone();
+    // RS-U4 (S8 bridge) — blame stays on the user clone; a ready review
+    // store's objects ride along read-only (per-process alternates).
+    let repo_root = GitCtx::resolve_entry(&state.store, repo)
+        .await
+        .bridged_work_tree();
     let cache = state.blame_cache.clone();
     let rev = params.rev.clone();
     let path_for_task = path.clone();
     let result =
         tokio::task::spawn_blocking(move || -> Result<crate::blame::BlameResult, ApiError> {
-            let git = GitRepo::open(&repo_root)?;
-            crate::blame::blame_file(
+            let git = GitRepo::open(repo_root.work_tree().path())?;
+            crate::blame::blame_file_bridged(
                 &cache,
                 &git,
                 repo_id,
@@ -2966,6 +3081,7 @@ fn resolve_review_bind_scope(
 /// Read the pinned blob for `side` of `ps` — same ODB path the `diff`
 /// create branch uses (`read_repo_file` at a full sha).
 fn read_pinned_review_file(
+    git_ctx: &GitCtx,
     repo: &RepoEntry,
     path: &str,
     ps: &store::ReviewPatchsetRow,
@@ -2976,7 +3092,8 @@ fn read_pinned_review_file(
     } else {
         ps.tip_sha.as_str()
     };
-    let read = read_repo_file(repo, path, Some(sha))?;
+    // RS-U4 (S6) — a patchset pin: store first once it is ready.
+    let read = read_repo_file(repo, path, RevResolver::bridged(git_ctx, Some(sha)))?;
     String::from_utf8(read.bytes)
         .map_err(|_| ApiError::bad_request(format!("{path} at {sha}: not valid UTF-8")))
 }
@@ -3310,7 +3427,16 @@ async fn assemble_top_level_annotation(
     // arms below can share it. Plain creates leave this None and take
     // the existing working-tree read in each arm.
     let pinned_content = match &review_scope {
-        Some(scope) => Some(read_pinned_review_file(repo, path, &scope.ps, &scope.side)?),
+        Some(scope) => {
+            let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+            Some(read_pinned_review_file(
+                &git_ctx,
+                repo,
+                path,
+                &scope.ps,
+                &scope.side,
+            )?)
+        }
         None => None,
     };
 
@@ -3324,7 +3450,11 @@ async fn assemble_top_level_annotation(
                     "sha must be 4-64 hex characters (got {sha:?})"
                 )));
             }
-            let repo_root = repo.path.clone();
+            // RS-U4 (S8 bridge) — a diff anchor may name a commit that only
+            // the review store holds: resolve it in the user repo widened
+            // (read-only) to the store's objects, then read the file at it.
+            let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+            let repo_root = git_ctx.bridged_work_tree();
             let sha_owned = sha.to_string();
             let full_sha = tokio::task::spawn_blocking(move || {
                 crate::history::commit::commit_meta(&repo_root, &sha_owned).map(|m| m.sha)
@@ -3336,7 +3466,7 @@ async fn assemble_top_level_annotation(
                     format!("sha resolve task panicked: {e}"),
                 )
             })??;
-            let read = read_repo_file(repo, path, Some(&full_sha))?;
+            let read = read_repo_file(repo, path, RevResolver::bridged(&git_ctx, Some(&full_sha)))?;
             let content = String::from_utf8(read.bytes).map_err(|_| {
                 ApiError::bad_request(format!("{path} at {full_sha}: not valid UTF-8"))
             })?;
@@ -3902,7 +4032,8 @@ fn capture_suggestion_from_row(
             ))
         })?;
         // side != old is already rejected; C1's new-side path is tip_sha.
-        let content = read_pinned_review_file(repo, &row.path, &ps, "new")?;
+        let git_ctx = GitCtx::for_entry(store, repo);
+        let content = read_pinned_review_file(&git_ctx, repo, &row.path, &ps, "new")?;
         let original = original_from_content(&content, lines, &row.path)?;
         Ok(SuggestionCapture {
             original,
@@ -4693,8 +4824,10 @@ pub async fn commit_route(
     let repo_root = repo.path.clone();
     let sha_owned = sha.to_string();
     let (meta, files) = tokio::task::spawn_blocking(move || {
-        let meta = crate::history::commit::commit_meta(&repo_root, &sha_owned)?;
-        let files = crate::history::commit::commit_files(&repo_root, &meta.sha)?;
+        let meta =
+            crate::history::commit::commit_meta(&WorkTreeRoot::user_clone(&repo_root), &sha_owned)?;
+        let files =
+            crate::history::commit::commit_files(&WorkTreeRoot::user_clone(&repo_root), &meta.sha)?;
         Ok::<_, crate::history::HistoryError>((meta, files))
     })
     .await
@@ -4798,7 +4931,12 @@ pub async fn compare_route(
     Query(params): Query<CompareParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
+    // RS-U4 (S8 bridge) — names resolve in the user repo; objects a ready
+    // review store holds (a patchset sha the clone never fetched) are
+    // visible read-only through per-process alternates.
+    let repo_root = GitCtx::resolve_entry(&state.store, repo)
+        .await
+        .bridged_work_tree();
     let from = parse_revspec(&params.from)?;
     let to = parse_revspec(&params.to)?;
     let three_dot = params.three_dot;
@@ -5175,7 +5313,7 @@ pub async fn branches_route(
                     let ab = tokio::task::spawn_blocking(move || {
                         let _permit = permit;
                         crate::history::branches::ahead_behind(
-                            &repo_root,
+                            &WorkTreeRoot::user_clone(&repo_root),
                             &RefRange::new(default_owned, branch_owned, true),
                         )
                     })
@@ -5305,7 +5443,12 @@ pub async fn file_history_route(
     let path_for_task = path.clone();
     let before = params.before;
     let (entries, truncated) = tokio::task::spawn_blocking(move || {
-        crate::history::file_history::file_history(&repo_root, &path_for_task, limit, before)
+        crate::history::file_history::file_history(
+            &WorkTreeRoot::user_clone(&repo_root),
+            &path_for_task,
+            limit,
+            before,
+        )
     })
     .await
     .map_err(|e| {
@@ -5374,7 +5517,7 @@ pub async fn file_stops_route(
     let agent_emails = state.branches.resolved_agent_emails();
     let page = tokio::task::spawn_blocking(move || {
         crate::history::scrub::file_stops(
-            &repo_root,
+            &WorkTreeRoot::user_clone(&repo_root),
             &path_for_task,
             rev.as_ref(),
             limit,
@@ -5439,7 +5582,13 @@ pub async fn file_at_route(
     let at = params.at;
     let agent_emails = state.branches.resolved_agent_emails();
     let hit = tokio::task::spawn_blocking(move || {
-        crate::history::scrub::file_at(&repo_root, &path_for_task, rev.as_ref(), at, &agent_emails)
+        crate::history::scrub::file_at(
+            &WorkTreeRoot::user_clone(&repo_root),
+            &path_for_task,
+            rev.as_ref(),
+            at,
+            &agent_emails,
+        )
     })
     .await
     .map_err(|e| {
@@ -5469,7 +5618,9 @@ pub async fn file_at_route(
     if stop.path != path {
         state.secret_policy.check(&stop.path)?;
     }
-    let read = read_repo_file(repo, &stop.path, Some(&stop.sha))?;
+    // RS-U4 — the stop's sha came out of the WORK TREE's own history walk
+    // (`scrub::file_at` above), so it is read there.
+    let read = read_repo_file(repo, &stop.path, RevResolver::user_repo(Some(&stop.sha)))?;
     let (encoding, content) = match String::from_utf8(read.bytes.clone()) {
         Ok(s) => ("utf8", s),
         Err(_) => (
@@ -5564,7 +5715,7 @@ pub async fn stacks_route(
     let default_for_task = default.clone();
     let detected = tokio::task::spawn_blocking(move || {
         crate::history::stacks::detect_stacks(
-            &repo_root,
+            &WorkTreeRoot::user_clone(&repo_root),
             &branch_tips,
             default_for_task.as_deref(),
             include_all,
@@ -5634,7 +5785,7 @@ pub async fn stacks_layer_diff_route(
     let branch = parse_revspec(&params.branch)?;
     let ld = tokio::task::spawn_blocking(move || {
         crate::history::stacks::layer_diff(
-            &repo_root,
+            &WorkTreeRoot::user_clone(&repo_root),
             &branch_tips,
             default_for_task.as_deref(),
             &branch,
@@ -5718,7 +5869,12 @@ pub async fn merge_check_route(
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mc = tokio::task::spawn_blocking(move || {
-        crate::history::merge_check::merge_check(&repo_root, &scratch_root, &from, &to)
+        crate::history::merge_check::merge_check(
+            &WorkTreeRoot::user_clone(&repo_root),
+            &scratch_root,
+            &from,
+            &to,
+        )
     })
     .await
     .map_err(|e| {
@@ -5779,7 +5935,7 @@ pub async fn range_diff_route(
     let old = parse_ref_range(&params.old)?;
     let new = parse_ref_range(&params.new)?;
     let rd = tokio::task::spawn_blocking(move || {
-        crate::history::range_diff::range_diff(&repo_root, &old, &new)
+        crate::history::range_diff::range_diff(&WorkTreeRoot::user_clone(&repo_root), &old, &new)
     })
     .await
     .map_err(|e| {

@@ -844,6 +844,10 @@ pub fn resolve_refs(store: &Store, ctx: &RefCtx, refs: &mut [ProseRef]) -> Resul
                 None => store.latest_patchset(id)?,
             }
             .ok_or_else(|| ApiError::not_found("review patchset not found"))?;
+            // RS-U4 bypass — a review read (the patchset tip) through the
+            // user clone, outside every typed `git::roots` door; pinned by
+            // `review_store_bypass_tripwire` (tests/security/git_argv_lint.rs)
+            // until it is moved onto `GitCtx`.
             let root = store
                 .repo_root(ctx.repo_id)?
                 .ok_or_else(|| ApiError::not_found("repo not found"))?;

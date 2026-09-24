@@ -186,9 +186,11 @@ async fn sweep_one(
         .run_blocking(move |store| local_only_fields(store, &review_for_local))
         .await?;
 
-    let repo_root = {
+    let (repo_root, git_ctx) = {
         let (repo_entry, _repo_id) = find_repo(&state, &review.repo)?;
-        repo_entry.path.clone()
+        let repo_entry = repo_entry.clone();
+        let git_ctx = crate::git::roots::GitCtx::resolve_entry(&state.store, &repo_entry).await;
+        (repo_entry.path, git_ctx)
     };
 
     let root_for_origin = repo_root.clone();
@@ -267,24 +269,28 @@ async fn sweep_one(
     let new_head_commits = if head_drift {
         match &old_head {
             Some(old) => {
-                let root2 = repo_root.clone();
+                let root2 = git_ctx.clone();
                 let old2 = old.clone();
                 let new2 = pull.head_sha.clone();
                 let resolved: Result<(String, String), ReviewGitError> =
                     tokio::task::spawn_blocking(move || {
-                        let o =
-                            reviews::resolve_commit_sha(&root2, &reviews::parse_user_ref(&old2)?)?;
-                        let n =
-                            reviews::resolve_commit_sha(&root2, &reviews::parse_user_ref(&new2)?)?;
+                        let (old_spec, new_spec) = (
+                            reviews::parse_user_ref(&old2)?,
+                            reviews::parse_user_ref(&new2)?,
+                        );
+                        let o = root2
+                            .read_with_fallback(|r| reviews::resolve_commit_sha(r, &old_spec))?;
+                        let n = root2
+                            .read_with_fallback(|r| reviews::resolve_commit_sha(r, &new_spec))?;
                         Ok((o, n))
                     })
                     .await
                     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 match resolved {
                     Ok((o, n)) => {
-                        let root3 = repo_root.clone();
+                        let root3 = git_ctx.clone();
                         let count = tokio::task::spawn_blocking(move || {
-                            reviews::commit_count(&root3, &o, &n)
+                            root3.read_with_fallback(|r| reviews::commit_count(r, &o, &n))
                         })
                         .await
                         .map_err(|e| {

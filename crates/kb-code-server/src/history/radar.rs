@@ -65,6 +65,7 @@
 
 use super::scratch::ScratchOdb;
 use super::{HistoryError, Result};
+use crate::git::roots::GitRoot;
 use crate::git::Revspec;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -193,10 +194,14 @@ struct MergeTreeRun {
 /// SEC-15 — every git child here runs with the scratch ODB primary and the
 /// repo's real objects as a read-only alternate. Kept as one helper so the
 /// two env vars can never be set on one call and forgotten on the other.
-fn git_in_scratch(repo_root: &Path, scratch: &ScratchOdb, args: &[&str]) -> Result<MergeTreeRun> {
+fn git_in_scratch(
+    repo_root: &dyn GitRoot,
+    scratch: &ScratchOdb,
+    args: &[&str],
+) -> Result<MergeTreeRun> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         .env("GIT_OBJECT_DIRECTORY", scratch.dir())
         .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", scratch.alternates())
         .args(args)
@@ -296,7 +301,7 @@ pub struct Candidate {
 /// Blocking: the caller runs this inside `spawn_blocking` while holding a
 /// `git_fanout` permit.
 pub fn radar(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     scratch_root: &Path,
     against: &Revspec,
     against_sha: &str,

@@ -38,6 +38,7 @@
 //! rather than silently dropped.
 
 use crate::annotations;
+use crate::git::roots::GitCtx;
 use crate::github::PrCommentOut;
 use crate::review_comments;
 use crate::reviews::require_review;
@@ -50,7 +51,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use kb_core::review::Anchor;
 use std::collections::HashMap;
-use std::path::Path;
 
 pub const SCHEMA: &str = "kbc-github-threads/1";
 
@@ -62,6 +62,7 @@ pub async fn github_threads_route(
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (review, repo, _repo_id) = require_review(&state, id).await?;
+    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
     // 2026-08-31 incident (store.rs module doc): two separate blocking-pool
     // trips (not merged) so the pr_number 400 still short-circuits BEFORE
     // the latest_patchset lookup, byte-identical to the pre-fix ordering.
@@ -105,7 +106,7 @@ pub async fn github_threads_route(
         .await
     {
         Ok((list, truncated)) => {
-            let threads = build_threads(&repo.path, &latest_ps, &list);
+            let threads = build_threads(&git_ctx, &latest_ps, &list);
             (threads, truncated, None)
         }
         Err(e) => (Vec::new(), false, Some(e.to_string())),
@@ -133,7 +134,7 @@ pub async fn github_threads_route(
 /// [`position_for`] result; replies are conversation under an already-
 /// positioned thread and carry no position of their own.
 fn build_threads(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     latest_ps: &ReviewPatchsetRow,
     comments: &[PrCommentOut],
 ) -> Vec<serde_json::Value> {
@@ -223,7 +224,7 @@ fn attach_position(obj: &mut serde_json::Value, position: Position) {
 
 /// Position-map one comment onto `latest_ps` — see the module doc.
 fn position_for(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     latest_ps: &ReviewPatchsetRow,
     c: &PrCommentOut,
     cache: &mut HashMap<(String, String), Option<String>>,
