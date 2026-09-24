@@ -87,10 +87,7 @@ pub enum BackupError {
     /// Disk cannot hold a snapshot the size of the live database. Raised
     /// before `VACUUM INTO`, never halfway through it.
     #[error("needs {needed_gb} GB, has {has_gb} GB")]
-    InsufficientSpace {
-        needed_gb: String,
-        has_gb: String,
-    },
+    InsufficientSpace { needed_gb: String, has_gb: String },
     #[error(
         "refusing to migrate {db} across schema epoch V{epoch:04}: could not write the \
          pre-migration snapshot ({reason}). A schema epoch is a one-way door — an older \
@@ -273,10 +270,11 @@ fn available_bytes(path: &Path) -> Result<u64, BackupError> {
         fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
     }
     use std::os::unix::ffi::OsStrExt;
-    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| BackupError::Io {
-        path: path.display().to_string(),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, e),
-    })?;
+    let c_path =
+        std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| BackupError::Io {
+            path: path.display().to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidInput, e),
+        })?;
     let mut buf = std::mem::MaybeUninit::<Statvfs>::zeroed();
     // SAFETY: `c_path` is a NUL-terminated path; `buf` is a zeroed
     // `Statvfs` matching the glibc layout this syscall writes.
@@ -695,7 +693,10 @@ mod tests {
             "{}",
             reaped[0].display()
         );
-        assert!(!snapshot_path(&path, Some(36)).exists(), "pre-V0036.bak deleted");
+        assert!(
+            !snapshot_path(&path, Some(36)).exists(),
+            "pre-V0036.bak deleted"
+        );
         assert!(
             snapshot_path(&path, Some(39)).exists(),
             "pre-V0039.bak kept (e == N-1)"
@@ -717,7 +718,10 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("needs 5.25 GB"), "{msg}");
         assert!(msg.contains("has 1.20 GB"), "{msg}");
-        assert!(format_gb(5_249_728_512).starts_with("5.25"), "{}", format_gb(5_249_728_512));
+        assert!(
+            format_gb(5_249_728_512).starts_with("5.25"),
+            "{}",
+            format_gb(5_249_728_512)
+        );
     }
-
 }
