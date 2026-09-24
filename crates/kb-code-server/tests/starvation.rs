@@ -235,6 +235,9 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
             kb_code_server::history::facts::BaseCache::default(),
         )),
         review_jobs: std::sync::Arc::new(kb_code_server::review_jobs::ReviewJobs::default()),
+        review_stores: std::sync::Arc::new(kb_code_server::review_store::ReviewStores::disabled(
+            "starvation fixture",
+        )),
     }))
 }
 

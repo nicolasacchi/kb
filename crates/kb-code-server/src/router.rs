@@ -493,6 +493,16 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/schemas", get(crate::api_schemas::list_schemas_route))
         .route("/schemas/{name}", get(crate::api_schemas::get_schema_route))
         .route("/repos", get(routes::repos))
+        // RS-U3 (review store) — the store card + the persisted fetch
+        // credential. Bearer reads: no secret bytes, no repo content.
+        .route(
+            "/repos/{name}/store",
+            get(crate::review_store::routes::store_show_route),
+        )
+        .route(
+            "/repos/{name}/credentials",
+            get(crate::review_store::routes::credentials_route),
+        )
         // V75-M1 (D13/D14) — the Workspace re-key's two reads and the
         // `@ref` frame table. Ordinary `auth_bearer` reads on the same
         // sub-router as `/repos`: they carry repository PATHS and git
@@ -1453,6 +1463,21 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/trails/state", post(crate::trails::routes::set_state))
         .route("/trails/{id}", get(crate::trails::routes::get_trail))
         .route("/trails/{id}/fork", post(crate::trails::routes::fork_trail))
+        // RS-U3 (review store) — store/credential MUTATIONS, loopback-only
+        // like every other sanctioned git write (README §8: "key and
+        // credential endpoints are loopback-only and audited").
+        .route(
+            "/repos/{name}/store/sync",
+            post(crate::review_store::routes::store_sync_route),
+        )
+        .route(
+            "/repos/{name}/store/base-url",
+            post(crate::review_store::routes::store_base_url_route),
+        )
+        .route(
+            "/repos/{name}/credentials/test",
+            post(crate::review_store::routes::credential_test_route),
+        )
         .layer(from_fn_with_state(
             auth.clone(),
             transcripts::search::loopback_only,

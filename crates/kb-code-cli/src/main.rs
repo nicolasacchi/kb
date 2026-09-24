@@ -189,6 +189,8 @@ mod envelope;
 mod redact;
 mod token;
 mod tools;
+// RS-U3 (review store) — `kb-code store …`.
+mod store_cmd;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -1583,6 +1585,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: WorkspaceCmd,
     },
+    // ── RS-U3 (review store) — begin ──
+    /// `kb-code store show|members|doctor|sync|set-base-url|credentials`
+    /// — the kb-owned internal review store (one per forge project, shared
+    /// by every clone of it). Daemon-only; `sync`, `set-base-url` and
+    /// `credentials --test` are loopback-only on the daemon.
+    Store {
+        #[command(subcommand)]
+        cmd: store_cmd::StoreCmd,
+    },
+    // ── RS-U3 (review store) — end ──
     // ── V70-A8 (D20 CLI hygiene) — the self-description surface ──────────
     /// `kb-code tools [--json]` — clap-tree walk manifest of every verb
     /// this binary knows about (recon `cli-agent-surface.md` open question
@@ -6989,6 +7001,8 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
         // ── V70-A10: `kb-code workspace …` dispatch ──
+        // RS-U3 (review store).
+        Cmd::Store { cmd } => store_cmd::run(cmd).await,
         Cmd::Workspace { cmd } => match cmd {
             WorkspaceCmd::List {
                 repo,

@@ -1359,7 +1359,74 @@ pub struct ReviewSection {
     /// template bytes to the loopback-only twin.
     #[serde(default)]
     pub doc_templates: std::collections::BTreeMap<String, std::path::PathBuf>,
+    // ── RS-U3 (review store) — begin ─────────────────────────────────
+    /// RS-U3 — `[review.store]`: the kb-owned internal review store
+    /// (`crate::review_store`, README §11). See [`ReviewStoreSection`].
+    #[serde(default)]
+    pub store: ReviewStoreSection,
+    /// RS-U3 — `[[review.repos]]`: per-repo store settings (base URL,
+    /// fetch credential). `name` is a `[[repos]]` name; members of one
+    /// store may each set these. Enum values are TOLERANT: an unknown
+    /// value warns and falls back to the default
+    /// (`review_store::settings`). See [`ReviewRepoEntry`].
+    #[serde(default)]
+    pub repos: Vec<ReviewRepoEntry>,
+    // ── RS-U3 (review store) — end ───────────────────────────────────
 }
+
+// ── RS-U3 (review store) — begin ─────────────────────────────────────
+/// `[review.store]` (README §11). All optional.
+///
+/// ```toml
+/// [review.store]
+/// root = "~/.local/state/kb/kb-code/git"   # keys/ and ssh/ never follow this
+/// seed_on_boot = true
+/// allow_inherited_credentials = true
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReviewStoreSection {
+    /// Store root. `None` = `<state>/git` (`<state>` is the daemon's own
+    /// `kb-code` state dir). `~` is expanded.
+    pub root: Option<PathBuf>,
+    /// Seed stores in the background at boot, local-only, for repos that
+    /// have reviews (D4).
+    pub seed_on_boot: bool,
+    /// Whether the ambient-environment (`inherit`) credential rung may be
+    /// used (D7: flips to `false` with the first shipped service unit).
+    pub allow_inherited_credentials: bool,
+}
+
+impl Default for ReviewStoreSection {
+    fn default() -> Self {
+        Self {
+            root: None,
+            seed_on_boot: true,
+            allow_inherited_credentials: true,
+        }
+    }
+}
+
+/// One `[[review.repos]]` entry (README §11). Enum-valued keys are kept
+/// as strings here and parsed tolerantly by `review_store::settings`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReviewRepoEntry {
+    /// A `[[repos]]` name.
+    pub name: String,
+    /// Skip the registration ladder (rung 2).
+    pub base_url: Option<String>,
+    /// `auto|gh-cli|deploy-key|token|anonymous|inherit|none`.
+    pub credential: Option<String>,
+    /// gh-cli: which gh account must answer (D12).
+    pub gh_user: Option<String>,
+    /// `credential = token`: an owner-only token file. `~` is expanded.
+    pub token_file: Option<PathBuf>,
+    pub default_branch: Option<String>,
+    /// `auto|github|gitlab|gitea|forgejo|bitbucket-server|none`.
+    pub forge: Option<String>,
+}
+// ── RS-U3 (review store) — end ───────────────────────────────────────
 
 impl ReviewSection {
     fn default_patchset_capture() -> bool {
@@ -1377,6 +1444,8 @@ impl Default for ReviewSection {
             max_patchsets: Self::default_max_patchsets(),
             remote_mutations: false,
             doc_templates: std::collections::BTreeMap::new(),
+            store: ReviewStoreSection::default(),
+            repos: Vec::new(),
         }
     }
 }

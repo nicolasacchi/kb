@@ -1,0 +1,734 @@
+//! RS-U3 — review-store seeding, registration and boot tests. Hermetic:
+//! real git over local fixture clones (synthetic `acme/widgets`), a temp
+//! DB, no network. Test-only direct `git` spawns build the fixtures (this
+//! file is in SEC-17's `GIT_SPAWNING_FILES`).
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use super::*;
+use crate::config::{RepoEntry, ReviewSection};
+use crate::review_store::registry::{Registration, ReviewStores, StoreUnavailable};
+use crate::store::Store;
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+fn commit(dir: &Path, file: &str, body: &str) -> String {
+    std::fs::write(dir.join(file), body).unwrap();
+    git(dir, &["add", file]);
+    git(dir, &["commit", "-q", "-m", file]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+/// `widgets.01` (origin = acme/widgets, plus a personal fork remote) and
+/// `widgets.02` cloned from it (origin re-pointed at acme/widgets). No
+/// network is ever touched: the forge URLs are config only.
+struct Fixture {
+    _tmp: tempfile::TempDir,
+    home: PathBuf,
+    one: PathBuf,
+    two: PathBuf,
+    main_tip: String,
+    feat_tip: String,
+}
+
+fn fixture() -> Fixture {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("state");
+    let one = tmp.path().join("work/widgets.01");
+    let two = tmp.path().join("work/widgets.02");
+    std::fs::create_dir_all(&one).unwrap();
+    git(&one, &["init", "-q", "-b", "main"]);
+    commit(&one, "a.txt", "a");
+    let main_tip = commit(&one, "b.txt", "b");
+    git(&one, &["checkout", "-q", "-b", "feature/x"]);
+    let feat_tip = commit(&one, "c.txt", "c");
+    git(&one, &["checkout", "-q", "main"]);
+    git(
+        &one,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+    git(
+        &one,
+        &[
+            "remote",
+            "add",
+            "mine",
+            "https://github.com/someone/widgets.git",
+        ],
+    );
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-local",
+            one.to_str().unwrap(),
+            two.to_str().unwrap(),
+        ],
+    );
+    git(
+        &two,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/Acme/Widgets.git",
+        ],
+    );
+    git(&two, &["checkout", "-q", "-b", "only-in-two"]);
+    commit(&two, "d.txt", "d");
+    git(&two, &["checkout", "-q", "main"]);
+    Fixture {
+        _tmp: tmp,
+        home,
+        one,
+        two,
+        main_tip,
+        feat_tip,
+    }
+}
+
+struct Env {
+    fx: Fixture,
+    store: Store,
+    rs: ReviewStores,
+    ids: HashMap<String, i64>,
+}
+
+fn env_with(fx: Fixture, review: ReviewSection) -> Env {
+    std::fs::create_dir_all(&fx.home).unwrap();
+    let store = Store::open(&fx.home.join("index.db")).unwrap();
+    let repos = vec![
+        RepoEntry {
+            name: "widgets-01".into(),
+            path: fx.one.clone(),
+        },
+        RepoEntry {
+            name: "widgets-02".into(),
+            path: fx.two.clone(),
+        },
+    ];
+    let mut ids = HashMap::new();
+    for r in &repos {
+        ids.insert(
+            r.name.clone(),
+            store
+                .upsert_repo(&r.name, &r.path.to_string_lossy())
+                .unwrap(),
+        );
+    }
+    let rs = ReviewStores::new(&review, &fx.home, &repos, &ids);
+    Env { fx, store, rs, ids }
+}
+
+fn env() -> Env {
+    env_with(fixture(), ReviewSection::default())
+}
+
+/// A review with one patchset whose ref is pinned in `clone`.
+fn review_in(e: &Env, repo: &str, clone: &Path, tip: &str, base: &str) -> i64 {
+    let id = e
+        .store
+        .create_review(
+            repo,
+            Some("t"),
+            "refs/remotes/origin/main",
+            "feature/x",
+            None,
+            1,
+        )
+        .unwrap();
+    e.store.insert_patchset(id, 1, tip, base, 1).unwrap();
+    git(clone, &["update-ref", &patchset_ref(id, 1), tip]);
+    id
+}
+
+fn row_for(e: &Env, repo: &str) -> crate::store::ReviewStoreRow {
+    e.store.store_for_repo_name(repo).unwrap().expect("a store")
+}
+
+fn store_refs(dir: &Path) -> Vec<String> {
+    let out = git(dir, &["for-each-ref", "--format=%(refname)"]);
+    out.lines().map(str::to_string).collect()
+}
+
+fn member_id(r: &Registration) -> i64 {
+    match r {
+        Registration::Member { store_id, .. } => *store_id,
+        other => panic!("expected Member, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+
+#[test]
+fn common_dir_resolves_worktrees_and_bare_repos() {
+    let fx = fixture();
+    let common = common_dir_of(&fx.one).unwrap();
+    assert_eq!(common, std::fs::canonicalize(fx.one.join(".git")).unwrap());
+    let wt = fx.one.parent().unwrap().join("widgets.01-wt");
+    git(
+        &fx.one,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "feature/x"],
+    );
+    assert_eq!(common_dir_of(&wt).unwrap(), common);
+    let bare = fx.one.parent().unwrap().join("bare.git");
+    git(
+        fx.one.parent().unwrap(),
+        &["init", "-q", "--bare", bare.to_str().unwrap()],
+    );
+    assert_eq!(
+        common_dir_of(&bare).unwrap(),
+        std::fs::canonicalize(&bare).unwrap()
+    );
+    assert!(common_dir_of(fx.one.parent().unwrap()).is_err());
+}
+
+#[test]
+fn remotes_are_read_from_the_member_config() {
+    let e = env();
+    let g = e.rs.git().unwrap();
+    let r = read_remotes(g, &common_dir_of(&e.fx.one).unwrap()).unwrap();
+    let names: Vec<&str> = r.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, vec!["mine", "origin"]);
+    git(&e.fx.one, &["config", "remote.origin.gh-resolved", "base"]);
+    let r = read_remotes(g, &common_dir_of(&e.fx.one).unwrap()).unwrap();
+    assert_eq!(
+        r.iter()
+            .find(|x| x.name == "origin")
+            .unwrap()
+            .gh_resolved
+            .as_deref(),
+        Some("base")
+    );
+}
+
+/// README §15.1: two member clones of one project resolve to ONE store,
+/// each seeded under its own `work-<id>` namespace, reviews from both.
+#[test]
+fn two_member_clones_share_one_store() {
+    let e = env();
+    let r1 = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    e.store
+        .set_review_pr_binding(r1, 7, "acme/widgets", None, None, None)
+        .unwrap();
+    let two_tip = git(&e.fx.two, &["rev-parse", "only-in-two"]);
+    let r2 = review_in(&e, "widgets-02", &e.fx.two, &two_tip, &e.fx.main_tip);
+
+    // widgets-01 has two forge remotes; its PR binding's slug decides (rung 3).
+    let reg1 = e.rs.register_repo(&e.store, "widgets-01", None);
+    match &reg1 {
+        Registration::Member {
+            store_key,
+            source,
+            joined_existing,
+            ..
+        } => {
+            assert_eq!(store_key, "github.com/acme/widgets");
+            assert_eq!(source, "pr-slug");
+            assert!(!joined_existing);
+        }
+        other => panic!("{other:?}"),
+    }
+    // widgets-02's origin normalizes to the same key → joins.
+    let reg2 = e.rs.register_repo(&e.store, "widgets-02", None);
+    assert_eq!(member_id(&reg1), member_id(&reg2));
+    assert!(
+        matches!(&reg2, Registration::Member { source, joined_existing: true, .. } if source == "member")
+    );
+    assert_eq!(e.store.list_review_stores().unwrap().len(), 1);
+    let row = row_for(&e, "widgets-02");
+    assert_eq!(row.state, "absent");
+    assert_eq!(
+        row.base_url.as_deref(),
+        Some("https://github.com/acme/widgets.git")
+    );
+    assert_eq!(row.forge_kind.as_deref(), Some("github"));
+    assert_eq!(row.forge_verified, "verified");
+    assert!(row.git_dir.ends_with(&format!("{}.git", row.uuid)));
+
+    let report = e.rs.seed(&e.store, row.id, false).unwrap();
+    assert!(matches!(report.base, BaseFetch::Skipped { ref code } if code == "offline-seed"));
+    assert!(
+        report.objects_missing.is_empty(),
+        "{:?}",
+        report.objects_missing
+    );
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(row.state, "ready");
+    let dir = PathBuf::from(&row.git_dir);
+    let refs = store_refs(&dir);
+    let (i1, i2) = (e.ids["widgets-01"], e.ids["widgets-02"]);
+    for want in [
+        format!("refs/remotes/work-{i1}/main"),
+        format!("refs/remotes/work-{i1}/feature/x"),
+        format!("refs/remotes/work-{i2}/main"),
+        format!("refs/remotes/work-{i2}/only-in-two"),
+        patchset_ref(r1, 1),
+        patchset_ref(r2, 1),
+    ] {
+        assert!(refs.contains(&want), "missing {want} in {refs:?}");
+    }
+    assert!(!tmp_dir(&e.rs.settings().root, &row.uuid).exists());
+    manifest::check(&dir, &row.uuid, &row.store_key).unwrap();
+    // Store config: hooks neutralised, no push, gc off, HEAD parked.
+    let cfg = |k: &str| git(&dir, &["config", "--get", k]);
+    assert_eq!(cfg("gc.auto"), "0");
+    assert_eq!(cfg("maintenance.auto"), "false");
+    assert_eq!(cfg("fetch.prune"), "false");
+    assert_eq!(cfg("core.hooksPath"), "/dev/null");
+    assert_eq!(cfg("protocol.version"), "2");
+    assert_eq!(cfg("uploadpack.allowAnySHA1InWant"), "true");
+    assert_eq!(
+        cfg(&format!("remote.work-{i1}.pushurl")),
+        crate::review_store::NO_PUSH_URL
+    );
+    assert_eq!(cfg("remote.base.pushurl"), crate::review_store::NO_PUSH_URL);
+    assert_eq!(
+        cfg("remote.base.url"),
+        "https://github.com/acme/widgets.git"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("HEAD")).unwrap().trim(),
+        "ref: refs/kbc/none"
+    );
+    // The handle API opens it.
+    let h = e.rs.handle_for_repo(&e.store, "widgets-02").unwrap();
+    assert_eq!(h.git_dir, dir);
+}
+
+/// README §15.2: `refs/kbc/pr/N` disagreeing between two clones is never
+/// imported, so it cannot conflict.
+#[test]
+fn legacy_pr_refs_are_ignored_even_when_clones_disagree() {
+    let e = env();
+    git(&e.fx.one, &["update-ref", "refs/kbc/pr/15", &e.fx.main_tip]);
+    git(&e.fx.two, &["update-ref", "refs/kbc/pr/15", &e.fx.feat_tip]);
+    review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    // widgets-02 has ONE forge remote → rung 5; then 01 joins by membership.
+    member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    let rep = e.rs.seed(&e.store, id, false).unwrap();
+    assert!(rep.members.iter().all(|m| m.conflicts.is_empty()));
+    let refs = store_refs(Path::new(&row_for(&e, "widgets-01").git_dir));
+    assert!(
+        !refs.iter().any(|r| r.starts_with("refs/kbc/pr/")),
+        "{refs:?}"
+    );
+}
+
+/// README §15 / U3 done-when: reviews whose tips exist nowhere go
+/// `objects-missing` while the store itself goes `ready`; a review whose
+/// ref was lost but whose commit survives is recovered by sha.
+#[test]
+fn missing_tips_mark_reviews_while_the_store_goes_ready() {
+    let e = env();
+    let ok = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    let gone_a = e
+        .store
+        .create_review("widgets-01", None, "main", "x", None, 1)
+        .unwrap();
+    e.store
+        .insert_patchset(gone_a, 1, &"1".repeat(40), &e.fx.main_tip, 1)
+        .unwrap();
+    let gone_b = e
+        .store
+        .create_review("widgets-02", None, "main", "y", None, 1)
+        .unwrap();
+    e.store
+        .insert_patchset(gone_b, 1, &"2".repeat(40), &"3".repeat(40), 1)
+        .unwrap();
+    // A dangling commit: reachable from no ref in the clone.
+    git(&e.fx.one, &["checkout", "-q", "-b", "tmp-dangling"]);
+    let dangling = commit(&e.fx.one, "e.txt", "e");
+    git(&e.fx.one, &["checkout", "-q", "main"]);
+    git(&e.fx.one, &["branch", "-q", "-D", "tmp-dangling"]);
+    let lost = e
+        .store
+        .create_review("widgets-01", None, "main", "z", None, 1)
+        .unwrap();
+    e.store
+        .insert_patchset(lost, 1, &dangling, &e.fx.main_tip, 1)
+        .unwrap();
+    e.store
+        .set_review_objects_state(ok, Some(OBJECTS_MISSING))
+        .unwrap();
+
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.register_repo(&e.store, "widgets-01", None);
+    let rep = e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(rep.objects_missing, vec![gone_a, gone_b]);
+    assert_eq!(rep.recovered_by_sha, 1);
+    assert_eq!(row_for(&e, "widgets-01").state, "ready");
+    let st = |id| e.store.get_review_base(id).unwrap().unwrap().objects_state;
+    assert_eq!(st(gone_a).as_deref(), Some(OBJECTS_MISSING));
+    assert_eq!(st(gone_b).as_deref(), Some(OBJECTS_MISSING));
+    assert_eq!(
+        st(ok),
+        None,
+        "a previously-missing review that is whole clears"
+    );
+    assert_eq!(st(lost), None);
+    let refs = store_refs(Path::new(&row_for(&e, "widgets-01").git_dir));
+    assert!(
+        refs.contains(&patchset_ref(lost, 1)),
+        "recovered ref recreated"
+    );
+    // The member clone was never written to by the recovery.
+    assert!(
+        !git(&e.fx.one, &["for-each-ref", "--format=%(refname)"]).contains(&patchset_ref(lost, 1))
+    );
+}
+
+/// README §15.3: a many-pack source seeds into ONE pack.
+#[test]
+fn a_many_pack_source_seeds_one_pack() {
+    let e = env();
+    for i in 0..6 {
+        commit(&e.fx.one, &format!("p{i}.txt"), &format!("{i}"));
+        git(&e.fx.one, &["repack", "-q"]);
+    }
+    let packs = std::fs::read_dir(e.fx.one.join(".git/objects/pack"))
+        .unwrap()
+        .flatten()
+        .filter(|p| p.path().extension().is_some_and(|x| x == "pack"))
+        .count();
+    assert!(packs >= 5, "fixture should be many-pack, got {packs}");
+    // Only widgets-01 is a member.
+    let id = member_id(&e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("https://github.com/acme/widgets.git"),
+    ));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let s = store_stats(Path::new(&row_for(&e, "widgets-01").git_dir));
+    assert_eq!(s.packs, 1, "{s:?}");
+    assert_eq!(s.loose_objects, 0, "{s:?}");
+}
+
+/// README §15.3: an injected failure mid-seed leaves no `.tmp`, and the
+/// store stays `absent` (with the failure recorded) for the next attempt.
+#[test]
+fn an_injected_failure_mid_seed_leaves_no_tmp() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.register_repo(&e.store, "widgets-01", None);
+    let row = e.store.get_review_store(id).unwrap().unwrap();
+    let (mut plan, _) = e.rs.plan_for(&e.store, &row).unwrap();
+    plan.fail_after_members = Some(1);
+    let err = seed_store(e.rs.git().unwrap(), &plan, None, 1).unwrap_err();
+    assert_eq!(err.stage, "member-fetch");
+    assert!(!tmp_dir(&plan.root, &plan.uuid).exists());
+    assert!(!store_dir(&plan.root, &plan.uuid).exists());
+    // A leftover tmp from a "crashed" process is swept at boot.
+    std::fs::create_dir_all(tmp_dir(&plan.root, "dead-uuid")).unwrap();
+    assert_eq!(sweep_stale_tmp(&plan.root), 1);
+    // A real seed afterwards succeeds.
+    e.rs.seed(&e.store, id, false).unwrap();
+}
+
+#[test]
+fn a_manifest_mismatch_breaks_the_store_instead_of_adopting_it() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let row = e.store.get_review_store(id).unwrap().unwrap();
+    let dir = PathBuf::from(&row.git_dir);
+    let mut m = manifest::read(&dir).unwrap();
+    m.store_key = "github.com/acme/gadgets".into();
+    manifest::write(&dir, &m).unwrap();
+    // A fresh process (no lock held yet) opens it.
+    let repos = vec![RepoEntry {
+        name: "widgets-02".into(),
+        path: e.fx.two.clone(),
+    }];
+    let fresh = ReviewStores::new(&ReviewSection::default(), &e.fx.home, &repos, &e.ids);
+    drop(e.rs); // releases the first registry's flock
+    match fresh.handle_for_repo(&e.store, "widgets-02") {
+        Err(StoreUnavailable::Broken { code }) => assert_eq!(code, "manifest-mismatch"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        e.store.get_review_store(id).unwrap().unwrap().state,
+        "broken"
+    );
+}
+
+#[test]
+fn a_second_process_sees_the_store_locked() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let repos = vec![RepoEntry {
+        name: "widgets-02".into(),
+        path: e.fx.two.clone(),
+    }];
+    let other = ReviewStores::new(&ReviewSection::default(), &e.fx.home, &repos, &e.ids);
+    assert_eq!(
+        other.handle_for_repo(&e.store, "widgets-02").unwrap_err(),
+        StoreUnavailable::LockedElsewhere
+    );
+    assert!(other.admit_mutation(&e.store, "widgets-02").is_err());
+    assert!(e.rs.handle_for_repo(&e.store, "widgets-02").is_ok());
+}
+
+#[test]
+fn an_ambiguous_repo_refuses_and_an_explicit_url_resolves_it() {
+    let e = env();
+    // widgets-01 has two forge remotes, no PR binding, no store yet.
+    match e.rs.register_repo(&e.store, "widgets-01", None) {
+        Registration::Refused {
+            code, candidates, ..
+        } => {
+            assert_eq!(code, "base-url-ambiguous");
+            assert_eq!(candidates.len(), 2);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(e.store.store_for_repo_name("widgets-01").unwrap().is_none());
+    let r = e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("git@github.com:acme/widgets.git"),
+    );
+    assert!(matches!(r, Registration::Member { ref source, .. } if source == "explicit"));
+    // Never a re-key.
+    match e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("https://github.com/acme/gadgets"),
+    ) {
+        Registration::Refused { code, .. } => assert_eq!(code, "base-url-key-mismatch"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_repo_with_no_forge_remote_gets_a_local_store() {
+    let e = env();
+    git(&e.fx.two, &["remote", "remove", "origin"]);
+    let r = e.rs.register_repo(&e.store, "widgets-02", None);
+    let row = row_for(&e, "widgets-02");
+    assert!(matches!(r, Registration::Member { ref source, .. } if source == "local"));
+    assert_eq!(row.store_key, format!("local:{}", row.uuid));
+    assert_eq!(row.base_url, None);
+    let rep = e.rs.seed(&e.store, row.id, true).unwrap();
+    assert!(matches!(rep.base, BaseFetch::Skipped { ref code } if code == "no-base-remote"));
+}
+
+#[test]
+fn the_boot_job_registers_and_seeds_only_repos_with_reviews() {
+    let e = env();
+    review_in(&e, "widgets-02", &e.fx.two, &e.fx.main_tip, &e.fx.main_tip);
+    let s = crate::review_store::boot::run_boot(&e.rs, &e.store);
+    assert_eq!(s.registered, vec!["widgets-02".to_string()]);
+    assert_eq!(s.seeded, 1, "{s:?}");
+    assert!(e.store.store_for_repo_name("widgets-01").unwrap().is_none());
+    assert_eq!(row_for(&e, "widgets-02").state, "ready");
+    // A second boot pass only opens it.
+    let s2 = crate::review_store::boot::run_boot(&e.rs, &e.store);
+    assert_eq!((s2.seeded, s2.opened), (0, 1));
+    // `seed_on_boot = false` registers but leaves it absent.
+    let mut review = ReviewSection::default();
+    review.store.seed_on_boot = false;
+    let e2 = env_with(fixture(), review);
+    review_in(
+        &e2,
+        "widgets-02",
+        &e2.fx.two,
+        &e2.fx.main_tip,
+        &e2.fx.main_tip,
+    );
+    let s3 = crate::review_store::boot::run_boot(&e2.rs, &e2.store);
+    assert_eq!(s3.seeded, 0);
+    assert_eq!(row_for(&e2, "widgets-02").state, "absent");
+}
+
+#[test]
+fn a_seeding_store_refuses_mutations() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.store.set_review_store_state(id, "seeding", None).unwrap();
+    match e.rs.admit_mutation(&e.store, "widgets-02") {
+        Err(r) => assert_eq!(r.0, StoreUnavailable::Seeding),
+        Ok(h) => panic!("admitted {h:?}"),
+    }
+    // A second concurrent seed of the same store is refused in-process.
+    e.store.set_review_store_state(id, "absent", None).unwrap();
+    assert!(e
+        .rs
+        .admit_mutation(&e.store, "widgets-02")
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn the_sync_route_answers_503_while_seeding() {
+    use axum::extract::{Path as AxPath, Query, State};
+    use axum::response::IntoResponse;
+    let fx = fixture();
+    let cfg = crate::config::KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: "widgets-02".into(),
+            path: fx.two.clone(),
+        }],
+        transcripts: crate::config::TranscriptsSection {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let paths = kb_core::paths::KbPaths::rooted_at(&fx.home, "kb-code");
+    let state = crate::build_state_for_test(cfg, paths).await.unwrap();
+    let st = state.clone();
+    let id = tokio::task::spawn_blocking(move || {
+        member_id(
+            &st.review_stores
+                .register_repo(&st.store, "widgets-02", None),
+        )
+    })
+    .await
+    .unwrap();
+    state
+        .store
+        .set_review_store_state(id, "seeding", None)
+        .unwrap();
+    let resp = crate::review_store::routes::store_sync_route(
+        State(state.clone()),
+        AxPath("widgets-02".into()),
+        Query(crate::review_store::routes::SyncQuery::default()),
+    )
+    .await
+    .into_response();
+    assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(resp
+        .headers()
+        .get(axum::http::header::RETRY_AFTER)
+        .is_some());
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["type"], "urn:kb:errors:store-seeding");
+    assert_eq!(v["retry_after"], 30);
+
+    // Once absent, the same route seeds it (offline) and the card says ready.
+    state
+        .store
+        .set_review_store_state(id, "absent", None)
+        .unwrap();
+    let resp = crate::review_store::routes::store_sync_route(
+        State(state.clone()),
+        AxPath("widgets-02".into()),
+        Query(crate::review_store::routes::SyncQuery { offline: true }),
+    )
+    .await
+    .into_response();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let resp = crate::review_store::routes::store_show_route(
+        State(state.clone()),
+        AxPath("widgets-02".into()),
+    )
+    .await;
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let card: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(card["schema"], "kbc-store/1");
+    assert_eq!(card["store"]["state"], "ready");
+    assert_eq!(card["store"]["store_key"], "github.com/acme/widgets");
+    assert_eq!(card["disk"]["packs"], 1);
+    // A sync of the now-ready store takes the fetch locks and reports.
+    let resp = crate::review_store::routes::store_sync_route(
+        State(state.clone()),
+        AxPath("widgets-02".into()),
+        Query(crate::review_store::routes::SyncQuery { offline: true }),
+    )
+    .await
+    .into_response();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    // Unknown repo: 404.
+    let resp =
+        crate::review_store::routes::store_show_route(State(state), AxPath("nope".into())).await;
+    assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+}
+
+/// RS-U3 benchmark (not part of the suite): seed a store from REAL local
+/// clones named by env vars, into a scratch root, local-only. Run with
+/// `KBRS_BENCH_CLONES=/a,/b KBRS_BENCH_ROOT=/scratch cargo test … --
+/// --ignored bench_seed_from_env --nocapture`.
+#[test]
+#[ignore]
+fn bench_seed_from_env() {
+    let clones: Vec<PathBuf> = std::env::var("KBRS_BENCH_CLONES")
+        .expect("KBRS_BENCH_CLONES")
+        .split(',')
+        .map(PathBuf::from)
+        .collect();
+    let root = PathBuf::from(std::env::var("KBRS_BENCH_ROOT").expect("KBRS_BENCH_ROOT"));
+    std::fs::create_dir_all(&root).unwrap();
+    let g = StoreGit::new(root.join("git-home")).unwrap();
+    let uuid = crate::review_store::registry::new_store_uuid().unwrap();
+    let members: Vec<SeedMember> = clones
+        .iter()
+        .enumerate()
+        .map(|(i, c)| SeedMember {
+            repo_id: i as i64 + 1,
+            common_dir: common_dir_of(c).unwrap(),
+        })
+        .collect();
+    let plan = SeedPlan {
+        root: root.join("stores"),
+        uuid: uuid.clone(),
+        store_key: "bench/local".into(),
+        base_url: None,
+        members,
+        base_branches: vec![],
+        patchsets: vec![],
+        fail_after_members: None,
+    };
+    let t = std::time::Instant::now();
+    let rep = seed_store(&g, &plan, None, 0).unwrap();
+    let wall = t.elapsed();
+    let s = store_stats(&rep.git_dir);
+    let review_refs = store_refs_count(&rep.git_dir, "refs/kbc/review/");
+    let pr_refs = store_refs_count(&rep.git_dir, "refs/kbc/pr/");
+    println!(
+        "BENCH seed wall={:.1}s packs={} pack_bytes={} total_bytes={} loose={} review_refs={} pr_refs={} members={}",
+        wall.as_secs_f64(),
+        s.packs,
+        s.pack_bytes,
+        s.total_bytes,
+        s.loose_objects,
+        review_refs,
+        pr_refs,
+        serde_json::to_string(&rep.members).unwrap()
+    );
+}
+
+fn store_refs_count(dir: &Path, prefix: &str) -> usize {
+    store_refs(dir)
+        .iter()
+        .filter(|r| r.starts_with(prefix))
+        .count()
+}

@@ -1122,6 +1122,14 @@ pub async fn bind_and_spawn(
         n => tracing::info!(swept = n, "kb-code: removed orphaned git scratch dirs"),
     }
 
+    // RS-U3 (review store) — built before `config.repos` moves into
+    // `AppState`; no git I/O here (the boot job below does that).
+    let review_stores = Arc::new(review_store::ReviewStores::new(
+        &config.review,
+        &paths.state,
+        &config.repos,
+        &repo_ids,
+    ));
     let state = Arc::new(AppState {
         version: version(),
         started_at,
@@ -1211,7 +1219,12 @@ pub async fn bind_and_spawn(
         // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
         branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
         review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
+        review_stores,
     });
+
+    // RS-U3 (review store) — D4's background boot seeding job: spawned,
+    // never awaited (no git I/O on the boot critical path).
+    let _review_store_boot = review_store::boot::spawn_boot_job(state.clone());
 
     // DCB W3.A — the doc_refs reverse-index sync. Spawned UNCONDITIONALLY,
     // deciding internally whether to idle out (`sync_interval_secs == 0`),
@@ -1308,6 +1321,8 @@ pub(crate) async fn build_state_for_test(
             .with_context(|| format!("register repo {:?} in the kb-code store", repo.name))?;
         repo_ids.insert(repo.name.clone(), id);
     }
+    // RS-U3 (review store) — `repo_ids` moves into `AppState` below.
+    let review_store_repo_ids = repo_ids.clone();
     // Same boot-time pin prune `bind_and_spawn` runs (DCB-W2.A), kept in
     // lock-step so an in-crate test sees the daemon's real pin posture.
     if let Err(e) = doclens::pins::prune_stale_pins(&store, &config.repos) {
@@ -1494,6 +1509,14 @@ pub(crate) async fn build_state_for_test(
         // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
         branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
         review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
+        // RS-U3 (review store) — built from the same config; the fixture
+        // never spawns the boot job (tests drive `boot::run_boot` directly).
+        review_stores: Arc::new(review_store::ReviewStores::new(
+            &config_for_security.review,
+            &paths.state,
+            &config_for_security.repos,
+            &review_store_repo_ids,
+        )),
     }))
 }
 

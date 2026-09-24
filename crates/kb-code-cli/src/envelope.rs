@@ -67,6 +67,18 @@ pub const EXIT_REFUSED: i32 = 4;
 /// The daemon could not be reached at all (connection refused, DNS
 /// failure, timeout) — never got as far as an HTTP status.
 pub const EXIT_UNREACHABLE: i32 = 5;
+// ── RS-U3 (review store) — begin ──
+/// The daemon was reached but an UPSTREAM it depends on failed (a forge
+/// fetch/API call: offline, auth, vanished). Used by `store sync`.
+pub const EXIT_UPSTREAM: i32 = 6;
+/// The verb partly succeeded (e.g. `store sync` fetched some members but
+/// not all). The JSON envelope carries `degraded: true` and the details.
+pub const EXIT_PARTIAL: i32 = 7;
+/// The named thing does not exist (an unknown repo name). Only used by
+/// verbs whose route answers an unambiguous not-found body (see the module
+/// doc on why a bare loopback-only 404 is NOT mapped here).
+pub const EXIT_NOT_FOUND: i32 = 8;
+// ── RS-U3 (review store) — end ──
 
 /// Print the success envelope: `{schema, ok:true, data, warnings, degraded,
 /// empty_reason}`. `schema` should name the DATA's own shape (e.g.
