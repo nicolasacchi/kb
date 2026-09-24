@@ -148,6 +148,20 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // shas. The lint is not cfg-aware, so the file is listed like
     // `git/tests.rs` is.
     "review_finding_touches.rs",
+    // RS-U2 — the internal review store's hardened spawner: the ONLY git
+    // spawn in this crate that may carry a credential. `env_clear()` +
+    // allowlist, `-c` hardening, process-group timeouts, redacted stderr,
+    // argv built solely from static flags and validated atoms
+    // (`review_store::url::{RemoteName, RefName, FetchRefspec, RemoteUrl}`,
+    // `Revspec`), with dynamic positionals after `--end-of-options`. Its
+    // URL/ref validators check for option-shaped values by POSITIVE grammar
+    // (fixed scheme / `git@` / `/` prefix, `Revspec::parse` for ref names),
+    // so the dash predicate still lives in `git/revspec.rs` alone. See
+    // `review_store_spawns_only_through_its_hardened_sites` below for the
+    // extra invariants this directory carries.
+    "review_store/git.rs",
+    // RS-U2 — `#[cfg(test)]` fixture repos + raw-push/hostile-config probes.
+    "review_store/git/tests.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",
@@ -342,5 +356,75 @@ fn caller_supplied_pathspecs_are_preceded_by_a_double_dash() {
     assert!(
         scrub.contains("fn file_floor(stops: &[Stop])"),
         "file_floor must derive the floor from the followed walk, never a second git call"
+    );
+}
+
+/// Strip a file's `#[cfg(test)]` tail (inline test modules are allowed to
+/// spawn fixtures) — every `review_store` file keeps its tests last.
+fn non_test_part(src: &str) -> &str {
+    [
+        "#[cfg(test)]\nmod tests",
+        "#[cfg(test)]\npub(crate) mod tests",
+    ]
+    .iter()
+    .filter_map(|m| src.find(m))
+    .min()
+    .map_or(src, |i| &src[..i])
+}
+
+#[test]
+fn review_store_spawns_only_through_its_hardened_sites() {
+    // RS-U2. `review_store/` is where credentials meet subprocesses, so it
+    // carries three invariants beyond GIT_SPAWNING_FILES:
+    //
+    // 1. Only `git.rs` (StoreGit) and `cred.rs` (GhCli) construct a
+    //    `Command` in production code, and both clear the environment.
+    // 2. No production code builds a push-family argv: the store never
+    //    writes to a remote (README §8). `git.rs`'s run-time refusal list
+    //    (`WRITE_TO_REMOTE`) must stay in place too.
+    // 3. The token pipe is created CLOEXEC (`pipe2(…, O_CLOEXEC)`), so no
+    //    concurrently spawned child outside the git tree can inherit it.
+    let dir = src_root().join("review_store");
+    let mut files = Vec::new();
+    rust_files(&dir, &mut files);
+    assert!(!files.is_empty(), "review_store/ moved? update this lint");
+    for p in &files {
+        let r = rel(p);
+        if r.ends_with("/tests.rs") {
+            continue;
+        }
+        let src = std::fs::read_to_string(p).unwrap();
+        let body = non_test_part(&src);
+        if contains_outside_comments(body, "Command::new(") {
+            assert!(
+                r == "review_store/git.rs" || r == "review_store/cred.rs",
+                "RS-U2: {r} spawns a process; route it through StoreGit or GhCli"
+            );
+            assert!(
+                contains_outside_comments(body, ".env_clear()"),
+                "RS-U2: {r} spawns without env_clear()"
+            );
+        }
+        for push in [
+            "GitArgs::new(\"push\")",
+            "GitArgs::new(\"send-pack\")",
+            "GitArgs::new(\"receive-pack\")",
+        ] {
+            assert!(
+                !contains_outside_comments(body, push),
+                "RS-U2: {r} builds a push-family argv ({push}); the store never pushes"
+            );
+        }
+    }
+    let git = std::fs::read_to_string(dir.join("git.rs")).unwrap();
+    assert!(
+        git.contains(
+            "const WRITE_TO_REMOTE: &[&str] = &[\"push\", \"send-pack\", \"receive-pack\"];"
+        ),
+        "RS-U2: StoreGit's run-time push refusal list changed"
+    );
+    assert!(
+        git.contains("libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC)"),
+        "RS-U2: the credential pipe must be created O_CLOEXEC"
     );
 }

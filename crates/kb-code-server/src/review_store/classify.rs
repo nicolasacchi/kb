@@ -1,0 +1,331 @@
+//! RS-U2 — typed failure classes for store git/credential operations, and
+//! the `LC_ALL=C` stderr classifier (design-internal-store §4.4).
+//!
+//! Every class has a STABLE slug, used verbatim as the
+//! `urn:kb:errors:<slug>` problem type and as the persisted store/review
+//! state. Renaming a slug is a wire break; add a new one instead.
+//!
+//! The classifier reads git's REDACTED stderr (it never needs a secret to
+//! decide) and is ordered most-specific first: an ssh host-key MISMATCH
+//! also prints "Host key verification failed", and a disk-full fetch may
+//! also print a generic "fatal: …".
+
+use std::fmt;
+
+/// What kind of credential the failing call carried — the same stderr
+/// means different things with and without one (a 401 after we SENT a
+/// token is a rejected credential; without one it is "auth required").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthContext {
+    /// No credential at all (local-only, anonymous).
+    None,
+    /// An HTTPS token served by kb's own credential helper.
+    Token,
+    /// An ssh deploy key (Phase 2).
+    DeployKey,
+    /// The ambient environment (`inherit`) — we cannot know what it sent.
+    Ambient,
+}
+
+/// A failure class. See [`FailureClass::slug`] for the wire names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FailureClass {
+    /// The requested ref (or object) is not on the remote.
+    Vanished,
+    /// DNS, connection refused/reset, unreachable network.
+    Offline,
+    /// The per-call deadline fired; the process group was killed.
+    Timeout,
+    /// The credential kb supplied was refused.
+    CredentialRejected,
+    /// A deploy key answered "repository not found" (key for another repo).
+    CredentialWrongRepo,
+    /// The remote says the repository does not exist (or hides it).
+    RepoNotFound,
+    /// ssh has no pinned host key for the host.
+    HostKeyUnknown,
+    /// ssh host key CHANGED — never auto-repaired.
+    HostKeyMismatch,
+    /// The remote wants credentials and none were supplied.
+    AuthRequired,
+    /// TLS / certificate failure.
+    Tls,
+    /// ENOSPC while writing objects or refs.
+    DiskFull,
+    /// A shallow-repository constraint refused the operation.
+    Shallow,
+    /// git refused the transport (`GIT_ALLOW_PROTOCOL`).
+    ProtocolRefused,
+    /// A URL failed the store's allowlist (never echoed).
+    UrlRejected,
+    /// The gh account answering is not the pinned/recorded one (D12).
+    CredentialAccountMismatch,
+    /// A credential source exists but cannot be read now (locked keyring,
+    /// unreadable token file, gh timeout).
+    CredentialUnavailable,
+    /// No credential rung applies.
+    NoCredentials,
+    /// The subprocess could not be started at all (binary missing).
+    SpawnFailed,
+    /// Anything else.
+    Failed,
+}
+
+impl FailureClass {
+    /// The stable wire slug.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Vanished => "vanished",
+            Self::Offline => "offline",
+            Self::Timeout => "timeout",
+            Self::CredentialRejected => "credential-rejected",
+            Self::CredentialWrongRepo => "credential-wrong-repo",
+            Self::RepoNotFound => "repo-not-found",
+            Self::HostKeyUnknown => "host-key-unknown",
+            Self::HostKeyMismatch => "host-key-mismatch",
+            Self::AuthRequired => "auth-required",
+            Self::Tls => "tls",
+            Self::DiskFull => "disk-full",
+            Self::Shallow => "shallow",
+            Self::ProtocolRefused => "protocol-refused",
+            Self::UrlRejected => "url-rejected",
+            Self::CredentialAccountMismatch => "credential-account-mismatch",
+            Self::CredentialUnavailable => "credential-unavailable",
+            Self::NoCredentials => "no-credentials",
+            Self::SpawnFailed => "spawn-failed",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// `urn:kb:errors:<slug>`.
+    pub fn urn(self) -> String {
+        format!("urn:kb:errors:{}", self.slug())
+    }
+
+    /// Network-shaped: worth a retry later, and grounds for an offline
+    /// fallback to cached refs.
+    pub fn is_transient(self) -> bool {
+        matches!(self, Self::Offline | Self::Timeout)
+    }
+
+    /// Auth-shaped: grounds for re-probing the credential ladder (§5.1).
+    pub fn is_auth(self) -> bool {
+        matches!(
+            self,
+            Self::CredentialRejected
+                | Self::CredentialWrongRepo
+                | Self::AuthRequired
+                | Self::CredentialAccountMismatch
+                | Self::CredentialUnavailable
+                | Self::NoCredentials
+        )
+    }
+}
+
+impl fmt::Display for FailureClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.slug())
+    }
+}
+
+/// Classify a (redacted, `LC_ALL=C`) git stderr.
+pub fn classify(stderr: &str, auth: AuthContext) -> FailureClass {
+    let s = stderr.to_ascii_lowercase();
+    let has = |n: &str| s.contains(n);
+
+    if has("no space left on device") || has("enospc") || has("disk quota exceeded") {
+        return FailureClass::DiskFull;
+    }
+    if has("remote host identification has changed") {
+        return FailureClass::HostKeyMismatch;
+    }
+    if has("host key verification failed")
+        || has("no ecdsa host key is known")
+        || has("no ed25519 host key is known")
+        || has("no rsa host key is known")
+    {
+        return FailureClass::HostKeyUnknown;
+    }
+    if has("transport '") && has("' not allowed") {
+        return FailureClass::ProtocolRefused;
+    }
+    if has("couldn't find remote ref") || has("not our ref") || has("no such remote ref") {
+        return FailureClass::Vanished;
+    }
+    if has("shallow update not allowed")
+        || has("attempt to fetch/clone from a shallow repository")
+        || has("is a shallow repository")
+    {
+        return FailureClass::Shallow;
+    }
+    if has("permission denied (publickey") {
+        return FailureClass::CredentialRejected;
+    }
+    if has("repository not found") || (has("repository '") && has("' not found")) {
+        return if auth == AuthContext::DeployKey {
+            FailureClass::CredentialWrongRepo
+        } else {
+            FailureClass::RepoNotFound
+        };
+    }
+    if has("ssl") || has("tls") || has("certificate") || has("gnutls") {
+        return FailureClass::Tls;
+    }
+    let auth_shaped = has("authentication failed")
+        || has("could not read username")
+        || has("could not read password")
+        || has("invalid username or")
+        || has("returned error: 401")
+        || has("returned error: 403")
+        || has("http 401")
+        || has("http 403");
+    if auth_shaped {
+        return if auth == AuthContext::Token || auth == AuthContext::DeployKey {
+            FailureClass::CredentialRejected
+        } else {
+            FailureClass::AuthRequired
+        };
+    }
+    if has("timed out") || has("timeout was reached") {
+        return FailureClass::Timeout;
+    }
+    if has("could not resolve host")
+        || has("could not resolve hostname")
+        || has("name or service not known")
+        || has("temporary failure in name resolution")
+        || has("failed to connect")
+        || has("could not connect to server")
+        || has("couldn't connect to server")
+        || has("connection refused")
+        || has("connection reset")
+        || has("network is unreachable")
+        || has("no route to host")
+        || has("the remote end hung up unexpectedly")
+        || has("rpc failed")
+        || has("could not read from remote repository")
+    {
+        return FailureClass::Offline;
+    }
+    FailureClass::Failed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use AuthContext as A;
+    use FailureClass as F;
+
+    /// Real `LC_ALL=C` git stderr, captured from git 2.55 / OpenSSH 10 on
+    /// synthetic repos (the fixture names are illustrative).
+    const FIXTURES: &[(&str, AuthContext, FailureClass)] = &[
+        ("fatal: couldn't find remote ref refs/heads/nope\n", A::None, F::Vanished),
+        (
+            "fatal: remote error: upload-pack: not our ref deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\nfatal: git upload-pack: not our ref deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n",
+            A::None,
+            F::Vanished,
+        ),
+        (
+            "fatal: unable to access 'https://nosuchhost.invalid/x.git/': Could not resolve host: nosuchhost.invalid\n",
+            A::None,
+            F::Offline,
+        ),
+        (
+            "fatal: unable to access 'https://127.0.0.1:1/x.git/': Failed to connect to 127.0.0.1:1 after 0 ms: Could not connect to server\n",
+            A::Token,
+            F::Offline,
+        ),
+        (
+            "ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.\n",
+            A::DeployKey,
+            F::Timeout,
+        ),
+        (
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+            A::None,
+            F::AuthRequired,
+        ),
+        (
+            "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/acme/widgets.git/'\n",
+            A::Token,
+            F::CredentialRejected,
+        ),
+        (
+            "fatal: unable to access 'https://github.com/acme/widgets.git/': The requested URL returned error: 403\n",
+            A::None,
+            F::AuthRequired,
+        ),
+        (
+            "remote: Repository not found.\nfatal: repository 'https://github.com/acme/widgets.git/' not found\n",
+            A::Token,
+            F::RepoNotFound,
+        ),
+        (
+            "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+            A::DeployKey,
+            F::CredentialWrongRepo,
+        ),
+        (
+            "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n",
+            A::DeployKey,
+            F::CredentialRejected,
+        ),
+        (
+            "No ED25519 host key is known for github.com and you have requested strict checking.\nHost key verification failed.\nfatal: Could not read from remote repository.\n",
+            A::DeployKey,
+            F::HostKeyUnknown,
+        ),
+        (
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nHost key verification failed.\n",
+            A::DeployKey,
+            F::HostKeyMismatch,
+        ),
+        (
+            "fatal: unable to access 'https://expired.example.com/x.git/': SSL certificate OpenSSL verify result: certificate has expired (10)\n",
+            A::None,
+            F::Tls,
+        ),
+        (
+            "error: unable to write file ./objects/pack/tmp_pack_abc: No space left on device\nfatal: fetch-pack: invalid index-pack output\n",
+            A::Token,
+            F::DiskFull,
+        ),
+        (
+            "fatal: attempt to fetch/clone from a shallow repository\n",
+            A::None,
+            F::Shallow,
+        ),
+        (
+            " ! [rejected]        main       -> base/main  (shallow update not allowed)\n",
+            A::Token,
+            F::Shallow,
+        ),
+        ("fatal: transport 'ext' not allowed\n", A::None, F::ProtocolRefused),
+        ("fatal: transport 'http' not allowed\n", A::Token, F::ProtocolRefused),
+        (
+            "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)\nfatal: expected flush after ref listing\n",
+            A::Token,
+            F::Offline,
+        ),
+        ("fatal: bad object HEAD\n", A::None, F::Failed),
+    ];
+
+    #[test]
+    fn the_classifier_matches_the_real_stderr_fixtures() {
+        for (stderr, ctx, want) in FIXTURES {
+            assert_eq!(classify(stderr, *ctx), *want, "stderr: {stderr:?}");
+        }
+    }
+
+    #[test]
+    fn slugs_are_stable_and_urn_shaped() {
+        assert_eq!(
+            F::CredentialAccountMismatch.urn(),
+            "urn:kb:errors:credential-account-mismatch"
+        );
+        assert_eq!(F::DiskFull.slug(), "disk-full");
+        assert_eq!(F::Vanished.slug(), "vanished");
+        assert_eq!(F::Timeout.slug(), "timeout");
+        assert!(F::Offline.is_transient());
+        assert!(F::AuthRequired.is_auth());
+    }
+}
