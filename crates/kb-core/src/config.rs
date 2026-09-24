@@ -591,10 +591,9 @@ impl Default for IdentitySection {
 ///
 /// `schedule_hours` is the operator's request that backups happen on a
 /// period. Absent (serde default) and `Some(0)` are unset. A positive
-/// value does not arm a writer inside the daemon — the tarball writer
-/// lives in the CLI, and the daemon must not shell out to it. A positive
-/// schedule with no `remote_cmd` is a boot WARN (`schedule_without_remote_cmd`)
-/// so that schedule does not look safe.
+/// value arms an in-process export task. It does not shell out to the
+/// CLI. A positive schedule with no `remote_cmd` still writes local
+/// tarballs and WARNs that the off-host copy will not run.
 ///
 /// Remote fields are `None` by default — an absent `[backup]` section (or
 /// one with either remote field unset) changes nothing; no remote command
@@ -740,12 +739,10 @@ impl BackupSection {
         self.schedule_hours.is_some_and(|h| h > 0)
     }
 
-    /// A positive schedule and no usable `remote_cmd`. The daemon WARNs
-    /// at boot and does not spawn a backup task: there is no in-process
-    /// tarball writer, and it must not shell out to the CLI one. A
-    /// schedule in this state must not look safe.
+    /// A positive schedule and no usable `remote_cmd`. Local exports still
+    /// run; the off-host copy does not.
     pub fn schedule_without_remote_cmd(&self) -> bool {
-        self.schedule_hours_set() && !self.remote_cmd.as_ref().is_some_and(|c| !c.is_empty())
+        self.schedule_hours_set() && self.remote_cmd.as_ref().is_none_or(|c| c.is_empty())
     }
 }
 
@@ -1989,15 +1986,12 @@ impl KbConfig {
                     .to_string(),
             ));
         }
-        // A positive schedule with no remote_cmd looks like the daemon
-        // will back up on its own. It will not — the tarball writer is
-        // the CLI, and the daemon does not shell out. Warn so the
-        // schedule does not look safe. `0` is unset, not a schedule.
+        // Local exports run without remote_cmd. Off-host copy does not.
         if self.backup.schedule_without_remote_cmd() {
             issues.push(ValidationIssue::warn(
                 "/backup/schedule_hours",
-                "schedule_hours is set but remote_cmd is not; the daemon cannot write \
-                 export tarballs and will not run this schedule"
+                "schedule_hours is set but remote_cmd is not; local exports still run, \
+                 off-host copy does not"
                     .to_string(),
             ));
         }
