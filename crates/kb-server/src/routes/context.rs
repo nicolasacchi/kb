@@ -989,8 +989,8 @@ async fn matching_artifacts(
     }
 
     let vbm = &vec_by_model;
-    let mut futs: Vec<super::CorpusFut<'_, (Vec<(String, String)>, Option<DegradedLane>)>> =
-        Vec::new();
+    type ContextLane = (Vec<(String, String)>, Option<DegradedLane>);
+    let mut futs: Vec<super::CorpusFut<'_, ContextLane>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         if ctx.memory_scope.is_some() {
             continue;
