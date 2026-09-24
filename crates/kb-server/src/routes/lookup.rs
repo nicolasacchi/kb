@@ -360,10 +360,18 @@ fn token_bounded(haystack: &str, needle: &str) -> bool {
 }
 
 fn row_matches_identifier(title: &str, path: &str, token: IdentifierToken<'_>) -> bool {
-    let needle = match token {
-        IdentifierToken::Ticket(digits) | IdentifierToken::Slug(digits) => digits,
-    };
-    token_bounded(title, needle) || token_bounded(filename_stem(path), needle)
+    match token {
+        // A ticket is a bounded digit run: `#15715` and `15715-login`, not `157150`.
+        IdentifierToken::Ticket(digits) => {
+            token_bounded(title, digits) || token_bounded(filename_stem(path), digits)
+        }
+        // A slug matches the whole title, or a bounded stem (`2026-09-19` inside
+        // `2026-09-19-the-margin`). It does not match a word inside a longer title
+        // (`readme` vs `Readme more`) or an alphanumeric prefix (`readmemore`).
+        IdentifierToken::Slug(slug) => {
+            title.eq_ignore_ascii_case(slug) || token_bounded(filename_stem(path), slug)
+        }
+    }
 }
 
 /// Unique title/stem hit for an identifier token. `None` when `q` is not
