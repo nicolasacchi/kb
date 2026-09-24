@@ -81,6 +81,7 @@ mod rails;
 mod reading;
 mod recipes;
 mod review_docs;
+mod review_stores;
 mod reviews;
 mod scip_runs;
 mod symbols;
@@ -3632,5 +3633,116 @@ fn worktree_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<crate::workspace
         path_resolution: r.get(13)?,
         repo: r.get(14)?,
         created_by_daemon: r.get::<_, i64>(15)? != 0,
+    })
+}
+
+// ── RS-U1: review store + base model (V0045) ───────────────────────────
+//
+// Row types for `review_stores`/`repo_stores` (README §5.1/§5.5, D2/D3)
+// and two small row types for the new `reviews`/`review_patchsets`
+// base-model columns. Methods live in `store/review_stores.rs`; this file
+// stays the type surface, the same split `WorkspaceRow` above follows.
+//
+// `ReviewRow`/`ReviewPatchsetRow` (defined earlier in this file) are
+// DELIBERATELY left untouched: both are constructed as bare struct
+// literals outside this module (`reviews.rs`, `review_timeline.rs`'s test
+// fixtures), and widening them here would force every one of those call
+// sites to learn six new fields for a feature they don't use yet.
+// `ReviewBaseRow`/`PatchsetBaseFields` are read/written through their OWN
+// narrow queries instead — `Store::get_review_base`/`Store::
+// set_review_base`/`Store::insert_patchset_with_base` in
+// `store/review_stores.rs` — so the unit that actually wires the base
+// model into review creation/capture can widen the call sites it owns
+// without this migration's own tests needing to track them.
+
+/// One `review_stores` row (V0045 / RS-U1). See the migration's own header
+/// (`migrations/V0045__review_store.sql`) for what each column means and
+/// why `forge_verified`/`state` are CHECK-constrained while the rest are
+/// route-validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewStoreRow {
+    pub id: i64,
+    pub uuid: String,
+    pub store_key: String,
+    pub git_dir: String,
+    pub base_url: Option<String>,
+    pub base_url_source: Option<String>,
+    pub forge_kind: Option<String>,
+    pub forge_host: Option<String>,
+    pub forge_slug: Option<String>,
+    pub forge_verified: String,
+    pub cred_kind: String,
+    pub cred_reason: Option<String>,
+    pub cred_account: Option<String>,
+    pub key_fingerprint: Option<String>,
+    pub key_read_only: Option<String>,
+    pub state: String,
+    pub state_json: Option<String>,
+    pub created_at: i64,
+}
+
+/// One `repo_stores` row (V0045 / RS-U1) — a single member's membership in
+/// its store. `repo_id` is the PRIMARY KEY (a repo belongs to exactly one
+/// store); many rows can share one `store_id` (D2's shared store, NOT
+/// UNIQUE on purpose — see the migration header).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoStoreRow {
+    pub repo_id: i64,
+    pub store_id: i64,
+    pub legacy_import_json: Option<String>,
+    pub legacy_refs_state: String,
+}
+
+/// The `reviews` base-model columns (V0045 / RS-U1), read/written
+/// separately from [`ReviewRow`] — see this section's own doc above for
+/// why. `objects_state` rides alongside since it is set by the same
+/// seeding/verification pass, even though it is not itself part of the
+/// base POLICY.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReviewBaseRow {
+    pub base_mode: Option<String>,
+    pub base_branch: Option<String>,
+    pub base_member: Option<i64>,
+    pub base_set_by: String,
+    pub base_status: Option<String>,
+    pub objects_state: Option<String>,
+}
+
+/// The two new `review_patchsets` columns (V0045 / RS-U1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PatchsetBaseFields {
+    pub base_tip_sha: Option<String>,
+    pub kind: Option<String>,
+}
+
+fn review_store_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewStoreRow> {
+    Ok(ReviewStoreRow {
+        id: r.get(0)?,
+        uuid: r.get(1)?,
+        store_key: r.get(2)?,
+        git_dir: r.get(3)?,
+        base_url: r.get(4)?,
+        base_url_source: r.get(5)?,
+        forge_kind: r.get(6)?,
+        forge_host: r.get(7)?,
+        forge_slug: r.get(8)?,
+        forge_verified: r.get(9)?,
+        cred_kind: r.get(10)?,
+        cred_reason: r.get(11)?,
+        cred_account: r.get(12)?,
+        key_fingerprint: r.get(13)?,
+        key_read_only: r.get(14)?,
+        state: r.get(15)?,
+        state_json: r.get(16)?,
+        created_at: r.get(17)?,
+    })
+}
+
+fn repo_store_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<RepoStoreRow> {
+    Ok(RepoStoreRow {
+        repo_id: r.get(0)?,
+        store_id: r.get(1)?,
+        legacy_import_json: r.get(2)?,
+        legacy_refs_state: r.get(3)?,
     })
 }
