@@ -3946,6 +3946,53 @@ impl Db {
         Ok(n)
     }
 
+    /// Fill NULL `sessions.project_key` values from a path already on the row.
+    ///
+    /// Eligible rows are `project_key IS NULL` with a non-empty `repo_root`
+    /// or `cwd`. The key source is `repo_root` when that is non-empty, else
+    /// `cwd`. The written value is [`crate::session_bundle::project_key_of`]
+    /// of that path. Rows that already have a `project_key` are left alone.
+    /// SQLite only: no reindex, no Lance write.
+    ///
+    /// `apply = false` returns `(would_change, 0)` and writes nothing.
+    /// `apply = true` returns `(would_change, changed)`. A second apply
+    /// changes 0.
+    pub fn sessions_backfill_project_key(&mut self, apply: bool) -> Result<(u64, u64)> {
+        let candidates: Vec<(String, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT artifact_id,
+                        COALESCE(NULLIF(repo_root, ''), NULLIF(cwd, ''))
+                 FROM sessions
+                 WHERE project_key IS NULL
+                   AND COALESCE(NULLIF(repo_root, ''), NULLIF(cwd, '')) IS NOT NULL",
+            )?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let would_change = candidates.len() as u64;
+        if !apply {
+            return Ok((would_change, 0));
+        }
+        let tx = self.conn.transaction()?;
+        let changed = {
+            let mut upd = tx.prepare(
+                "UPDATE sessions
+                 SET project_key = ?1
+                 WHERE artifact_id = ?2
+                   AND project_key IS NULL",
+            )?;
+            let mut n = 0u64;
+            for (artifact_id, path) in &candidates {
+                let key = crate::session_bundle::project_key_of(path);
+                n += upd.execute(params![key, artifact_id])? as u64;
+            }
+            n
+        };
+        tx.commit()?;
+        Ok((would_change, changed))
+    }
+
     /// R4 — replace the full research list for one session artifact in one tx.
     pub fn session_research_replace(
         &mut self,
@@ -9909,6 +9956,74 @@ mod tests {
     }
 
     #[test]
+    fn sessions_backfill_project_key_dry_run_leaves_rows_apply_fills_nulls() {
+        let mut db = db();
+
+        let mut with_root = session_row("art-root", "sid-root", 1_700_000_100);
+        with_root.project_key = None;
+        with_root.repo_root = Some("/tmp/kb".into());
+        with_root.cwd = Some("/tmp/kb/subdir".into());
+        db.sessions_upsert(&with_root).unwrap();
+
+        let mut cwd_only = session_row("art-cwd", "sid-cwd", 1_700_000_200);
+        cwd_only.project_key = None;
+        cwd_only.repo_root = Some(String::new());
+        cwd_only.cwd = Some("/tmp/other/".into());
+        db.sessions_upsert(&cwd_only).unwrap();
+
+        let mut kept = session_row("art-keep", "sid-keep", 1_700_000_300);
+        kept.project_key = Some("already-set".into());
+        kept.repo_root = Some("/tmp/should-not-overwrite".into());
+        kept.cwd = Some("/tmp/should-not-overwrite".into());
+        db.sessions_upsert(&kept).unwrap();
+
+        let fields = |db: &Db, sid: &str| {
+            let row = db.sessions_get(sid).unwrap().unwrap();
+            (row.project_key, row.repo_root, row.cwd)
+        };
+        let before_root = fields(&db, "sid-root");
+        let before_cwd = fields(&db, "sid-cwd");
+        let before_keep = fields(&db, "sid-keep");
+        assert!(before_root.0.is_none());
+        assert!(before_cwd.0.is_none());
+        assert_eq!(before_keep.0.as_deref(), Some("already-set"));
+
+        assert_eq!(db.sessions_backfill_project_key(false).unwrap(), (2, 0));
+        assert_eq!(fields(&db, "sid-root"), before_root);
+        assert_eq!(fields(&db, "sid-cwd"), before_cwd);
+        assert_eq!(fields(&db, "sid-keep"), before_keep);
+
+        assert_eq!(db.sessions_backfill_project_key(true).unwrap(), (2, 2));
+        let after_root = fields(&db, "sid-root");
+        let after_cwd = fields(&db, "sid-cwd");
+        let after_keep = fields(&db, "sid-keep");
+        assert_eq!(
+            after_root.0.as_deref(),
+            Some(crate::session_bundle::project_key_of("/tmp/kb").as_str())
+        );
+        assert_ne!(
+            after_root.0.as_deref(),
+            Some(crate::session_bundle::project_key_of("/tmp/kb/subdir").as_str())
+        );
+        assert_eq!(after_root.1.as_deref(), Some("/tmp/kb"));
+        assert_eq!(after_root.2.as_deref(), Some("/tmp/kb/subdir"));
+        assert_eq!(
+            after_cwd.0.as_deref(),
+            Some(crate::session_bundle::project_key_of("/tmp/other/").as_str())
+        );
+        assert_eq!(after_cwd.1.as_deref(), Some(""));
+        assert_eq!(after_cwd.2.as_deref(), Some("/tmp/other/"));
+        assert_eq!(after_keep.0.as_deref(), Some("already-set"));
+        assert_eq!(after_keep.1.as_deref(), Some("/tmp/should-not-overwrite"));
+        assert_eq!(after_keep.2.as_deref(), Some("/tmp/should-not-overwrite"));
+
+        assert_eq!(db.sessions_backfill_project_key(true).unwrap(), (0, 0));
+        assert_eq!(fields(&db, "sid-root").0, after_root.0);
+        assert_eq!(fields(&db, "sid-cwd").0, after_cwd.0);
+        assert_eq!(fields(&db, "sid-keep").0.as_deref(), Some("already-set"));
+    }
+
+    #[test]
     fn sessions_research_rollup_groups_counts_and_excludes_cwdless() {
         let mut db = db();
         let row = |aid: &str, sid: &str, cwd: Option<&str>| SessionRow {
@@ -11668,6 +11783,17 @@ mod tests {
         assert_eq!(sid_b.len(), 1, "sid-b must not see sid-a's serves");
         assert_eq!(sid_b[0].artifact_id, "cap-9");
 
+        type RecallCols = (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+        );
         let (
             memory_kb,
             memory_id,
@@ -11678,17 +11804,7 @@ mod tests {
             pos,
             title,
             injected_chars,
-        ): (
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<i64>,
-            i64,
-            Option<i64>,
-            Option<String>,
-            Option<i64>,
-        ) = db
+        ): RecallCols = db
             .conn
             .query_row(
                 "SELECT memory_kb, memory_id, session_id, turn_id, recalled_at,
@@ -11764,7 +11880,11 @@ mod tests {
         // Equal cutoff is not older-than. A later cutoff drops only serves.
         assert_eq!(db.memory_recalls_prune_served(1_700_000_500).unwrap(), 0);
         assert_eq!(db.memory_recalls_prune_served(1_700_000_501).unwrap(), 2);
-        assert_eq!(raw_count(&db, "cap-1"), 1, "prune must not delete capture rows");
+        assert_eq!(
+            raw_count(&db, "cap-1"),
+            1,
+            "prune must not delete capture rows"
+        );
         assert_eq!(raw_count(&db, "cap-9"), 1);
         assert_eq!(raw_count(&db, "served-sid-a-1700000500-1"), 0);
         assert_eq!(raw_count(&db, "served-sid-a-1700000500-2"), 0);

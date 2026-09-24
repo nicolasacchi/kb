@@ -69,6 +69,7 @@ async fn boot() -> (tempfile::TempDir, String) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

@@ -67,8 +67,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::sync::Arc;
 use std::future::Future;
+use std::sync::Arc;
 
 // ---- budget + caps ---------------------------------------------------------
 
@@ -335,9 +335,7 @@ pub fn classify_query_error(msg: &str) -> QueryErrorClass {
             && (lower.contains("not found") || lower.contains("dangling")))
     {
         QueryErrorClass::IndexFragment
-    } else if lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("deadline")
+    } else if lower.contains("timed out") || lower.contains("timeout") || lower.contains("deadline")
     {
         QueryErrorClass::Timeout
     } else if lower.contains("embed") {
@@ -957,7 +955,10 @@ async fn matching_artifacts(
     q: &str,
     deadline: Option<std::time::Instant>,
 ) -> (Vec<(String, String)>, Vec<DegradedLane>) {
-    if deadline.is_some_and(|d| d.saturating_duration_since(std::time::Instant::now()).is_zero()) {
+    if deadline.is_some_and(|d| {
+        d.saturating_duration_since(std::time::Instant::now())
+            .is_zero()
+    }) {
         let degraded = state
             .kbs
             .iter()
@@ -988,8 +989,8 @@ async fn matching_artifacts(
     }
 
     let vbm = &vec_by_model;
-    let mut futs: Vec<super::CorpusFut<'_, (Vec<(String, String)>, Option<DegradedLane>)>> =
-        Vec::new();
+    type ContextLane = (Vec<(String, String)>, Option<DegradedLane>);
+    let mut futs: Vec<super::CorpusFut<'_, ContextLane>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         if ctx.memory_scope.is_some() {
             continue;
@@ -1200,7 +1201,10 @@ mod tests {
     fn classify_query_error_is_a_closed_set_and_does_not_echo_paths() {
         let fragment = "storage error: lance::io::exec::take: Missing fragment id during take \
                         operation fragment_id=9795 /srv/kb/platform/docs.lance";
-        assert_eq!(classify_query_error(fragment), QueryErrorClass::IndexFragment);
+        assert_eq!(
+            classify_query_error(fragment),
+            QueryErrorClass::IndexFragment
+        );
         assert_eq!(
             classify_query_error("storage error: lance index open failed at /srv/kb/state"),
             QueryErrorClass::Storage,
@@ -1213,7 +1217,10 @@ mod tests {
             classify_query_error("timed out waiting for query"),
             QueryErrorClass::Timeout,
         );
-        assert_eq!(classify_query_error("no such session"), QueryErrorClass::Other);
+        assert_eq!(
+            classify_query_error("no such session"),
+            QueryErrorClass::Other
+        );
 
         let lane = degraded_of("platform", "artifacts", QueryErrorClass::IndexFragment);
         let json = serde_json::to_value(&lane).unwrap();
@@ -1222,7 +1229,10 @@ mod tests {
         assert_eq!(json["error_class"], "index_fragment");
         let rendered = serde_json::to_string(&json).unwrap();
         assert!(!rendered.contains("/srv/"), "path leaked: {rendered}");
-        assert!(!rendered.contains("fragment_id"), "raw lance text leaked: {rendered}");
+        assert!(
+            !rendered.contains("fragment_id"),
+            "raw lance text leaked: {rendered}"
+        );
 
         let empty = serde_json::to_value(&ContextResponse {
             q: "q".into(),
@@ -1251,7 +1261,10 @@ mod tests {
             degraded: vec![],
         })
         .unwrap();
-        assert!(empty.get("degraded").is_none(), "empty degraded must be omitted");
+        assert!(
+            empty.get("degraded").is_none(),
+            "empty degraded must be omitted"
+        );
         let named = serde_json::to_value(&ContextResponse {
             degraded: vec![lane],
             ..empty_context_for_degraded_test()
@@ -1260,7 +1273,10 @@ mod tests {
         assert_eq!(named["degraded"][0]["error_class"], "index_fragment");
         assert_eq!(named["degraded"][0]["kb"], "platform");
         let named_s = serde_json::to_string(&named).unwrap();
-        assert!(!named_s.contains("/srv/"), "path leaked into degraded: {named_s}");
+        assert!(
+            !named_s.contains("/srv/"),
+            "path leaked into degraded: {named_s}"
+        );
     }
 
     fn empty_context_for_degraded_test() -> ContextResponse {
@@ -1545,6 +1561,7 @@ mod tests {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         }
     }
 

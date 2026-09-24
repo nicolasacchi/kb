@@ -553,11 +553,7 @@ fn decide_daemon_sessions_kb(kbs: &[KbLite]) -> HookCheck {
 /// `project_slugs` alias. The caller skips this entirely when the daemon
 /// is unreachable (same as the provenance checks); a down daemon is not a
 /// failure of this check.
-fn decide_memory_project_corpus(
-    slug: &str,
-    names: &[&str],
-    alias: Option<&str>,
-) -> HookCheck {
+fn decide_memory_project_corpus(slug: &str, names: &[&str], alias: Option<&str>) -> HookCheck {
     if slug.is_empty() {
         return HookCheck::skip(
             "memory-project-corpus",
@@ -566,14 +562,14 @@ fn decide_memory_project_corpus(
     }
     let derived = format!("memory-{slug}");
     if let Some(name) = alias {
-        if names.iter().any(|n| *n == name) {
+        if names.contains(&name) {
             return HookCheck::pass(
                 "memory-project-corpus",
                 format!("repo slug {slug} maps to corpus {name} via project_slugs"),
             );
         }
     }
-    if names.iter().any(|n| *n == derived.as_str()) {
+    if names.contains(&derived.as_str()) {
         return HookCheck::pass(
             "memory-project-corpus",
             format!("derived project corpus {derived} exists"),
@@ -1376,7 +1372,10 @@ fn query_harness_census(db: &Path) -> Result<Vec<HarnessRecallCensus>, String> {
          GROUP BY harness",
     )?;
     let Some(rows) = value.as_array() else {
-        return Err(format!("sessions census from {} was not a JSON array", db.display()));
+        return Err(format!(
+            "sessions census from {} was not a JSON array",
+            db.display()
+        ));
     };
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -1464,6 +1463,167 @@ fn recall_outcomes_check(kbs: &[KbLite], base: &str) -> HookCheck {
     }
 }
 
+// ============================================ i2) harness capture memories
+//
+// Item 17 remainder: one row per harness that captured in the last 7 days
+// and wrote zero successful memories (`memory_count` on GET /api/sessions).
+// WARN, never FAIL. A down sessions corpus is a SKIP — the same posture as
+// the other daemon-down checks. The fetch copies `ledger_liveness_check`'s
+// client.get / status / json shape; it does not open sqlite.
+
+/// Captures started at or after `now - 7d` are in the window.
+const HARNESS_MEMORY_WINDOW_SECS: i64 = 7 * 24 * 3_600;
+const HARNESS_MEMORY_PAGE: &str = "200";
+const HARNESS_MEMORY_MAX_PAGES: usize = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HarnessMemoryRow {
+    harness: String,
+    captures: u64,
+    memories: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SessionCaptureLite {
+    #[serde(default)]
+    harness: String,
+    started_at: i64,
+    #[serde(default)]
+    memory_count: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SessionsCapturePage {
+    #[serde(default)]
+    sessions: Vec<SessionCaptureLite>,
+    #[serde(default)]
+    next_cursor: Option<i64>,
+    #[serde(default)]
+    next_cursor_id: Option<String>,
+}
+
+fn fold_harness_memories(sessions: &[SessionCaptureLite], now: i64) -> Vec<HarnessMemoryRow> {
+    let cutoff = now.saturating_sub(HARNESS_MEMORY_WINDOW_SECS);
+    let mut rows: Vec<HarnessMemoryRow> = Vec::new();
+    for s in sessions {
+        if s.started_at < cutoff {
+            continue;
+        }
+        let harness = if s.harness.is_empty() {
+            "unknown".to_string()
+        } else {
+            s.harness.clone()
+        };
+        if let Some(row) = rows.iter_mut().find(|r| r.harness == harness) {
+            row.captures += 1;
+            row.memories = row.memories.saturating_add(s.memory_count);
+        } else {
+            rows.push(HarnessMemoryRow {
+                harness,
+                captures: 1,
+                memories: s.memory_count,
+            });
+        }
+    }
+    rows.sort_by(|a, b| a.harness.cmp(&b.harness));
+    rows
+}
+
+/// `window_complete` is false when the probe stopped while every fetched
+/// capture was still inside 7 days and another page remained. A named
+/// silent harness is still a WARN — that row was observed. A clean sample
+/// that did not cover the window is a SKIP, not a pass.
+fn decide_harness_memories(rows: &[HarnessMemoryRow], window_complete: bool) -> HookCheck {
+    let silent: Vec<&HarnessMemoryRow> = rows
+        .iter()
+        .filter(|r| r.captures > 0 && r.memories == 0)
+        .collect();
+    if !silent.is_empty() {
+        let mut detail =
+            String::from("harness with captures in the last 7 days and zero successful memories:");
+        for r in &silent {
+            detail.push_str(&format!(
+                "\n      {}: {} captures, 0 memories",
+                r.harness, r.captures
+            ));
+        }
+        return HookCheck::warn("harness-memories", detail);
+    }
+    if !window_complete {
+        return HookCheck::skip(
+            "harness-memories",
+            "sessions list exceeded the 7-day probe cap — harness outcomes inconclusive",
+        );
+    }
+    if rows.iter().all(|r| r.captures == 0) {
+        return HookCheck::skip(
+            "harness-memories",
+            "no captures in the last 7 days — nothing to check",
+        );
+    }
+    HookCheck::pass(
+        "harness-memories",
+        "every harness with captures in the last 7 days has at least one successful memory",
+    )
+}
+
+fn skip_sessions_down(detail: impl Into<String>) -> HookCheck {
+    HookCheck::skip("harness-memories", detail)
+}
+
+async fn harness_memories_check(client: &reqwest::Client, base: &str, now: i64) -> HookCheck {
+    let cutoff = now.saturating_sub(HARNESS_MEMORY_WINDOW_SECS);
+    let mut cursor: Option<i64> = None;
+    let mut cursor_id: Option<String> = None;
+    let mut seen: Vec<SessionCaptureLite> = Vec::new();
+    let mut window_complete = false;
+    for page in 0..HARNESS_MEMORY_MAX_PAGES {
+        let mut url = format!("{base}/api/sessions?limit={HARNESS_MEMORY_PAGE}");
+        if let Some(c) = cursor {
+            url.push_str(&format!("&cursor={c}"));
+        }
+        if let Some(id) = &cursor_id {
+            url.push_str("&cursor_id=");
+            url.push_str(&crate::http::encode_path_segment(id));
+        }
+        let list: SessionsCapturePage = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => match r.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    return skip_sessions_down(format!(
+                        "sessions corpus at {url} returned an unparsable body ({e}) — skipping harness outcomes"
+                    ));
+                }
+            },
+            Ok(r) => {
+                return skip_sessions_down(format!(
+                    "sessions corpus down at {url}: HTTP {} — not probing harness outcomes",
+                    r.status()
+                ));
+            }
+            Err(e) => {
+                return skip_sessions_down(format!(
+                    "sessions corpus down at {url}: {e} — not probing harness outcomes"
+                ));
+            }
+        };
+        let exhausted = list.sessions.iter().any(|s| s.started_at < cutoff);
+        let next_cursor = list.next_cursor;
+        let next_id = list.next_cursor_id.filter(|s| !s.is_empty());
+        seen.extend(list.sessions);
+        if exhausted || next_cursor.is_none() {
+            window_complete = true;
+            break;
+        }
+        if page + 1 == HARNESS_MEMORY_MAX_PAGES {
+            break;
+        }
+        cursor = next_cursor;
+        cursor_id = next_id;
+    }
+    decide_harness_memories(&fold_harness_memories(&seen, now), window_complete)
+}
+
 // ============================================ j) unwired doclens consumer
 //
 // kb extracts code-ref HINTS whether or not a kb-code daemon is configured
@@ -1530,9 +1690,7 @@ fn decide_doclens_consumer(rows: &[DoclensCorpus]) -> HookCheck {
     }
     HookCheck::pass(
         "doclens-consumer",
-        format!(
-            "{with_refs} corpus(es) with code_refs have a code_url; extraction is not gated"
-        ),
+        format!("{with_refs} corpus(es) with code_refs have a code_url; extraction is not gated"),
     )
 }
 
@@ -1617,11 +1775,7 @@ async fn count_code_refs(
     code_refs_via_http(client, base, &kb.name).await
 }
 
-async fn doclens_consumer_check(
-    client: &reqwest::Client,
-    base: &str,
-    kbs: &[KbLite],
-) -> HookCheck {
+async fn doclens_consumer_check(client: &reqwest::Client, base: &str, kbs: &[KbLite]) -> HookCheck {
     let paths = resolve_kb_paths();
     let mut rows = Vec::with_capacity(kbs.len());
     for kb in kbs {
@@ -1638,91 +1792,31 @@ async fn doclens_consumer_check(
 // ============================================ k) backup age
 //
 // `<state>/exports/` is where `kb backup` writes `<kb>-<stamp>.tar.gz`.
-// Fresh = younger than 48h. Older = WARN. Missing or empty is FAIL only
-// when a `[backup] schedule` is actually configured. The typed
-// `BackupSection` has no schedule field; this reads the raw toml so an
-// unscheduled daemon (or a config we cannot see) is a WARN, never a FAIL.
+// The check reads the newest regular file there — it does not shell out
+// to backup. Fresh = newest mtime younger than 48h. Older = WARN.
+// Missing or empty = FAIL. The fix is always `kb backup --all`.
 // An unresolvable state dir is a SKIP.
 
-/// `Some(age)` is the newest tarball's age in seconds (negative = clock
+/// `Some(age)` is the newest file's age in seconds (negative = clock
 /// skew, treated as fresh). `None` is a missing or empty exports dir.
-fn classify_backup_age(newest_age_secs: Option<i64>, schedule_configured: bool) -> CheckStatus {
+fn classify_backup_age(newest_age_secs: Option<i64>) -> CheckStatus {
     match newest_age_secs {
         Some(age) if age < BACKUP_FRESH_MAX_SECS => CheckStatus::Pass,
         Some(_) => CheckStatus::Warn,
-        None if schedule_configured => CheckStatus::Fail,
-        None => CheckStatus::Warn,
+        None => CheckStatus::Fail,
     }
 }
 
-fn schedule_value_set(raw: &str) -> bool {
-    let raw = raw.trim();
-    let value = if let Some(rest) = raw.strip_prefix('"') {
-        rest.split('"').next().unwrap_or("")
-    } else if let Some(rest) = raw.strip_prefix('\'') {
-        rest.split('\'').next().unwrap_or("")
-    } else {
-        raw.split('#').next().unwrap_or("").trim()
-    };
-    let value = value.trim();
-    !value.is_empty()
-        && !matches!(
-            value.to_ascii_lowercase().as_str(),
-            "false" | "off" | "0" | "none" | "[]" | "{}"
-        )
-}
-
-/// True only when a `[backup]` table sets a non-empty `schedule`. An absent
-/// table, a remote-copy-only table, a comment, or an unreadable file is
-/// not a schedule — callers must not FAIL on that.
-fn backup_schedule_configured(toml_text: &str) -> bool {
-    let mut in_backup = false;
-    let mut configured = false;
-    for raw in toml_text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(header) = line.strip_prefix('[') {
-            let header = header.split(']').next().unwrap_or("").trim();
-            in_backup = header == "backup";
-            continue;
-        }
-        if !in_backup {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "schedule" {
-            continue;
-        }
-        configured = schedule_value_set(value);
-    }
-    configured
-}
-
-fn configured_backup_schedule() -> bool {
-    let Ok(path) = crate::commands::resolve_config_path(None) else {
-        return false;
-    };
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    backup_schedule_configured(&text)
-}
-
-fn is_export_tarball(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    !n.starts_with('.') && (n.ends_with(".tar.gz") || n.ends_with(".tgz"))
-}
-
+#[derive(Debug)]
 enum ExportsView {
     MissingOrEmpty,
     Unreadable(String),
     Newest { age_secs: i64, name: String },
 }
 
+/// Newest regular file in `exports`, by mtime. Directories (including
+/// `.staging-*`) are not files. A missing dir and a dir with no readable
+/// files are both empty.
 fn scan_exports(exports: &Path, now: i64) -> ExportsView {
     if !exports.exists() {
         return ExportsView::MissingOrEmpty;
@@ -1736,9 +1830,6 @@ fn scan_exports(exports: &Path, now: i64) -> ExportsView {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if !is_export_tarball(&name) {
-            continue;
-        }
         let Ok(meta) = entry.metadata() else {
             continue;
         };
@@ -1766,39 +1857,33 @@ fn scan_exports(exports: &Path, now: i64) -> ExportsView {
     }
 }
 
-fn decide_backup_age(view: ExportsView, schedule_configured: bool) -> HookCheck {
+const BACKUP_FIX: &str = "kb backup --all";
+
+fn decide_backup_age(view: ExportsView) -> HookCheck {
     match view {
         ExportsView::Unreadable(err) => HookCheck::warn(
             "backup-age",
             format!("could not read <state>/exports/: {err}"),
-        ),
+        )
+        .with_fix(BACKUP_FIX),
         ExportsView::Newest { age_secs, name } => {
-            let status = classify_backup_age(Some(age_secs), schedule_configured);
             let detail = format!(
-                "newest export {name} is {} old",
+                "<state>/exports/ newest file {name} is {} old",
                 fmt_age(age_secs.max(0))
             );
-            if status == CheckStatus::Pass {
+            if classify_backup_age(Some(age_secs)) == CheckStatus::Pass {
                 HookCheck::pass("backup-age", detail)
-            } else {
-                HookCheck::warn("backup-age", format!("{detail} (older than 48h)"))
-                    .with_fix("kb backup <kb>")
-            }
-        }
-        ExportsView::MissingOrEmpty => {
-            if classify_backup_age(None, schedule_configured) == CheckStatus::Fail {
-                HookCheck::fail(
-                    "backup-age",
-                    "<state>/exports/ is missing or empty and a [backup] schedule is configured",
-                )
-                .with_fix("kb backup <kb>  (a configured schedule has produced no tarball)")
             } else {
                 HookCheck::warn(
                     "backup-age",
-                    "<state>/exports/ is missing or empty (no [backup] schedule configured — not a failure)",
+                    format!("<state>/exports/ is stale: {detail} (older than 48h)"),
                 )
-                .with_fix("kb backup <kb>  when you want a local tarball")
+                .with_fix(BACKUP_FIX)
             }
+        }
+        ExportsView::MissingOrEmpty => {
+            HookCheck::fail("backup-age", "<state>/exports/ is missing or empty")
+                .with_fix(BACKUP_FIX)
         }
     }
 }
@@ -1810,9 +1895,8 @@ fn backup_age_check(now: i64) -> HookCheck {
             "could not resolve the state dir — not checking <state>/exports/",
         );
     };
-    decide_backup_age(scan_exports(&paths.exports, now), configured_backup_schedule())
+    decide_backup_age(scan_exports(&paths.exports, now))
 }
-
 
 // ==================================================================== run
 
@@ -1924,6 +2008,15 @@ pub async fn hooks(
             "kb daemon unreachable — not reading the sessions census",
         )),
     }
+    // Per-harness capture outcomes. Skip, do not fail, when the daemon or
+    // the sessions corpus is down — silence is not evidence of zero memories.
+    match &kbs {
+        Ok(_) => checks.push(harness_memories_check(&client, &base, now).await),
+        Err(_) => checks.push(HookCheck::skip(
+            "harness-memories",
+            "kb daemon unreachable — sessions corpus down, not probing per-harness capture outcomes",
+        )),
+    }
 
     // Unwired doclens consumer. Names corpora with code_refs and a null
     // code_url. Extraction is not gated. Skip when the daemon is down.
@@ -1938,7 +2031,6 @@ pub async fn hooks(
     // Backup age. Filesystem, not daemon-gated. Skip only when the state
     // dir itself cannot be resolved.
     checks.push(backup_age_check(now));
-
 
     // f) kb-code why-hook.
     checks.push(kb_code_why_hook_check());
@@ -2442,7 +2534,7 @@ mod tests {
         assert!(s.contains('⚠'));
         assert!(s.contains('○'));
         assert!(s.contains("fix: do x"));
-        assert!(s.contains("1 pass, 1 warn, 1 skip (3 checks total)"));
+        assert!(s.contains("1 pass, 1 warn, 0 fail, 1 skip (3 checks total)"));
         assert!(s.contains("harness scope"));
     }
 
@@ -2514,11 +2606,7 @@ mod tests {
         touch_with_age(&dir.join("slate-cursor-old"), "5\n", THIRTY_ONE_DAYS_SECS);
         touch_with_age(&dir.join("slate-topic-old"), "v7\n", THIRTY_ONE_DAYS_SECS);
         touch_with_age(&dir.join("context-scent-old"), "1\n", THIRTY_ONE_DAYS_SECS);
-        touch_with_age(
-            &dir.join("beat-heartbeat-old"),
-            "1\n",
-            THIRTY_ONE_DAYS_SECS,
-        );
+        touch_with_age(&dir.join("beat-heartbeat-old"), "1\n", THIRTY_ONE_DAYS_SECS);
         touch_with_age(&dir.join("waked-kimi-old"), "1\n", THIRTY_ONE_DAYS_SECS);
         // Old, but not a marker name — NOT selected. Includes a slate-ledger
         // lookalike so GC never sweeps the ledger by accident.
@@ -2555,7 +2643,9 @@ mod tests {
         assert!(stale
             .iter()
             .all(|m| m.age_secs >= SLATE_MARKER_MAX_AGE_SECS));
-        assert!(!names.iter().any(|n| n.contains("young") || n.contains("ledger")));
+        assert!(!names
+            .iter()
+            .any(|n| n.contains("young") || n.contains("ledger")));
     }
 
     #[test]
@@ -2640,7 +2730,14 @@ mod tests {
 
     // --- recall outcomes / doclens / backup age ----------------------------
 
-    fn census(harness: &str, captures: u64, censused: u64, marker: u64, fallback: u64, failed: u64) -> HarnessRecallCensus {
+    fn census(
+        harness: &str,
+        captures: u64,
+        censused: u64,
+        marker: u64,
+        fallback: u64,
+        failed: u64,
+    ) -> HarnessRecallCensus {
         HarnessRecallCensus {
             harness: harness.into(),
             captures,
@@ -2707,47 +2804,127 @@ mod tests {
     #[test]
     fn classify_backup_age_is_fresh_under_48h_and_warns_when_older() {
         let just_under = BACKUP_FRESH_MAX_SECS - 1;
-        assert_eq!(classify_backup_age(Some(0), false), CheckStatus::Pass);
-        assert_eq!(classify_backup_age(Some(just_under), true), CheckStatus::Pass);
+        assert_eq!(classify_backup_age(Some(0)), CheckStatus::Pass);
+        assert_eq!(classify_backup_age(Some(just_under)), CheckStatus::Pass);
         // A future mtime (clock skew) is younger than 48h, not stale.
-        assert_eq!(classify_backup_age(Some(-30), false), CheckStatus::Pass);
+        assert_eq!(classify_backup_age(Some(-30)), CheckStatus::Pass);
         assert_eq!(
-            classify_backup_age(Some(BACKUP_FRESH_MAX_SECS), false),
+            classify_backup_age(Some(BACKUP_FRESH_MAX_SECS)),
             CheckStatus::Warn
         );
         assert_eq!(
-            classify_backup_age(Some(BACKUP_FRESH_MAX_SECS + 1), true),
+            classify_backup_age(Some(BACKUP_FRESH_MAX_SECS + 1)),
             CheckStatus::Warn
         );
     }
 
     #[test]
-    fn classify_backup_age_fails_only_when_empty_and_a_schedule_is_configured() {
-        assert_eq!(classify_backup_age(None, true), CheckStatus::Fail);
-        assert_eq!(classify_backup_age(None, false), CheckStatus::Warn);
+    fn classify_backup_age_fails_when_exports_are_missing_or_empty() {
+        assert_eq!(classify_backup_age(None), CheckStatus::Fail);
     }
 
     #[test]
-    fn empty_exports_warns_and_does_not_fail_an_unscheduled_daemon() {
-        let c = decide_backup_age(ExportsView::MissingOrEmpty, false);
+    fn empty_exports_fails_and_names_kb_backup_all() {
+        let c = decide_backup_age(ExportsView::MissingOrEmpty);
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.detail.contains("<state>/exports/"), "{}", c.detail);
+        assert!(c.detail.contains("missing or empty"), "{}", c.detail);
+        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
+    }
+
+    #[test]
+    fn stale_exports_warns_and_names_the_dir() {
+        let c = decide_backup_age(ExportsView::Newest {
+            age_secs: BACKUP_FRESH_MAX_SECS,
+            name: "docs-old.tar.gz".into(),
+        });
         assert_eq!(c.status, CheckStatus::Warn);
-        assert!(c.detail.contains("not a failure"), "{}", c.detail);
-        let scheduled = decide_backup_age(ExportsView::MissingOrEmpty, true);
-        assert_eq!(scheduled.status, CheckStatus::Fail);
+        assert!(c.detail.contains("<state>/exports/"), "{}", c.detail);
+        assert!(c.detail.contains("stale"), "{}", c.detail);
+        assert!(c.detail.contains("docs-old.tar.gz"), "{}", c.detail);
+        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
+        assert_ne!(c.status, CheckStatus::Fail);
     }
 
     #[test]
-    fn backup_schedule_is_only_a_nonempty_backup_table_key() {
-        assert!(!backup_schedule_configured(
-            "[backup]\nremote_cmd = [\"rclone\"]\nremote_dest = \"remote:bucket\"\n"
+    fn scan_exports_uses_the_newest_file_not_only_tarballs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = 1_700_000_000;
+        assert!(matches!(
+            scan_exports(&tmp.path().join("missing"), now),
+            ExportsView::MissingOrEmpty
         ));
-        assert!(backup_schedule_configured("[backup]\nschedule = \"daily\"\n"));
-        assert!(!backup_schedule_configured("[backup]\nschedule = \"\"\n"));
-        assert!(!backup_schedule_configured("[backup]\nschedule = false\n"));
-        // A commented table, or a schedule under a different table, is not
-        // a [backup] schedule — must not fail an unscheduled daemon.
-        assert!(!backup_schedule_configured("# [backup]\nschedule = \"daily\"\n"));
-        assert!(!backup_schedule_configured("[retention]\nschedule = \"daily\"\n"));
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(matches!(
+            scan_exports(&empty, now),
+            ExportsView::MissingOrEmpty
+        ));
+        // A staging directory is not a file, so the dir is still empty.
+        std::fs::create_dir(empty.join(".staging-docs-1")).unwrap();
+        assert!(matches!(
+            scan_exports(&empty, now),
+            ExportsView::MissingOrEmpty
+        ));
+        std::fs::write(empty.join("notes.txt"), "not a tarball").unwrap();
+        match scan_exports(&empty, now) {
+            ExportsView::Newest { name, .. } => assert_eq!(name, "notes.txt"),
+            other => panic!("expected the newest file, got {other:?}"),
+        }
     }
 
+    fn capture(harness: &str, started_at: i64, memories: u64) -> SessionCaptureLite {
+        SessionCaptureLite {
+            harness: harness.into(),
+            started_at,
+            memory_count: memories,
+        }
+    }
+
+    #[test]
+    fn harness_memories_warns_and_names_a_harness_with_captures_and_no_memories() {
+        let now = 1_700_000_000;
+        let rows = fold_harness_memories(
+            &[
+                capture("claude", now - 3600, 2),
+                capture("grok", now - 7200, 0),
+                capture("grok", now - 86_400, 0),
+                // Outside the 7-day window — must not create a row.
+                capture("codex", now - HARNESS_MEMORY_WINDOW_SECS - 1, 0),
+            ],
+            now,
+        );
+        let c = decide_harness_memories(&rows, true);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert_ne!(c.status, CheckStatus::Fail);
+        assert!(c.detail.contains("grok"), "{}", c.detail);
+        assert!(c.detail.contains("2 captures"), "{}", c.detail);
+        assert!(c.detail.contains("0 memories"), "{}", c.detail);
+        assert!(
+            !c.detail.contains("claude"),
+            "a harness with memories is not the warning: {}",
+            c.detail
+        );
+        assert!(
+            !c.detail.contains("codex"),
+            "a capture older than 7 days is not in the window: {}",
+            c.detail
+        );
+    }
+
+    #[test]
+    fn harness_memories_passes_when_every_recent_harness_wrote_a_memory() {
+        let now = 1_700_000_000;
+        let rows = fold_harness_memories(&[capture("omp", now - 60, 1)], now);
+        let c = decide_harness_memories(&rows, true);
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("successful memory"), "{}", c.detail);
+    }
+
+    #[test]
+    fn harness_memories_skips_when_the_window_has_no_captures() {
+        let c = decide_harness_memories(&[], true);
+        assert_eq!(c.status, CheckStatus::Skip);
+        assert!(c.detail.contains("no captures"), "{}", c.detail);
+    }
 }

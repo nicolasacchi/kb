@@ -619,11 +619,7 @@ struct DaycardSinceFleet {
 /// CT-E1 fleet — one [`build_since_response`] per mounted kb, bounded by
 /// `buffered_join` (#28). A corpus error is named in `degraded` and dropped
 /// from `kbs`; it does not fail the fleet.
-async fn build_since_fleet(
-    state: &KbHandles,
-    since_unix: i64,
-    to_unix: i64,
-) -> DaycardSinceFleet {
+async fn build_since_fleet(state: &KbHandles, since_unix: i64, to_unix: i64) -> DaycardSinceFleet {
     let mut futs: Vec<super::CorpusFut<'_, SinceArm>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {

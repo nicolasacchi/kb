@@ -591,10 +591,9 @@ impl Default for IdentitySection {
 ///
 /// `schedule_hours` is the operator's request that backups happen on a
 /// period. Absent (serde default) and `Some(0)` are unset. A positive
-/// value does not arm a writer inside the daemon — the tarball writer
-/// lives in the CLI, and the daemon must not shell out to it. A positive
-/// schedule with no `remote_cmd` is a boot WARN (`schedule_without_remote_cmd`)
-/// so that schedule does not look safe.
+/// value arms an in-process export task. It does not shell out to the
+/// CLI. A positive schedule with no `remote_cmd` still writes local
+/// tarballs and WARNs that the off-host copy will not run.
 ///
 /// Remote fields are `None` by default — an absent `[backup]` section (or
 /// one with either remote field unset) changes nothing; no remote command
@@ -740,12 +739,10 @@ impl BackupSection {
         self.schedule_hours.is_some_and(|h| h > 0)
     }
 
-    /// A positive schedule and no usable `remote_cmd`. The daemon WARNs
-    /// at boot and does not spawn a backup task: there is no in-process
-    /// tarball writer, and it must not shell out to the CLI one. A
-    /// schedule in this state must not look safe.
+    /// A positive schedule and no usable `remote_cmd`. Local exports still
+    /// run; the off-host copy does not.
     pub fn schedule_without_remote_cmd(&self) -> bool {
-        self.schedule_hours_set() && !self.remote_cmd.as_ref().is_some_and(|c| !c.is_empty())
+        self.schedule_hours_set() && self.remote_cmd.as_ref().is_none_or(|c| c.is_empty())
     }
 }
 
@@ -1246,6 +1243,15 @@ pub struct KbSection {
     /// (surfaced, never enforced — see [`crate::slo`]).
     #[serde(default)]
     pub slo: Option<SloSection>,
+
+    /// Item 20 — dated-slug regexes for the lookup ticket arm
+    /// (`GET /api/kb/{kb}/lookup`). Empty (the default, so a `kb.toml`
+    /// with no key still parses) means that arm does not run and lookup
+    /// is unchanged. A non-empty list also enables bare-digit and
+    /// `#`+digit tokens. Each entry is a regex, compiled once; an invalid
+    /// pattern is ignored (warn here, never a route 500).
+    #[serde(default)]
+    pub id_patterns: Vec<String>,
 }
 
 /// CT-F5 — `[kb.<name>.slo]`: the four operator-seeded corpus-health targets.
@@ -1980,15 +1986,12 @@ impl KbConfig {
                     .to_string(),
             ));
         }
-        // A positive schedule with no remote_cmd looks like the daemon
-        // will back up on its own. It will not — the tarball writer is
-        // the CLI, and the daemon does not shell out. Warn so the
-        // schedule does not look safe. `0` is unset, not a schedule.
+        // Local exports run without remote_cmd. Off-host copy does not.
         if self.backup.schedule_without_remote_cmd() {
             issues.push(ValidationIssue::warn(
                 "/backup/schedule_hours",
-                "schedule_hours is set but remote_cmd is not; the daemon cannot write \
-                 export tarballs and will not run this schedule"
+                "schedule_hours is set but remote_cmd is not; local exports still run, \
+                 off-host copy does not"
                     .to_string(),
             ));
         }
@@ -2088,6 +2091,16 @@ impl KbConfig {
                     issues.push(ValidationIssue::warn(
                         format!("/kb/{name}/memory_scope"),
                         format!("`{scope}` is not a known memory scope (expected global|project)"),
+                    ));
+                }
+            }
+            for (i, pat) in kb.id_patterns.iter().enumerate() {
+                if regex::Regex::new(pat).is_err() {
+                    issues.push(ValidationIssue::warn(
+                        format!("/kb/{name}/id_patterns/{i}"),
+                        format!(
+                            "invalid id_patterns regex `{pat}` is ignored; lookup will not 500"
+                        ),
                     ));
                 }
             }
@@ -2896,6 +2909,7 @@ mod tests {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
         c.save(&path).unwrap();
@@ -2957,6 +2971,32 @@ mod tests {
         assert_eq!(
             kb.project_slugs,
             vec!["morning".to_string(), "1000farmacie-iac".to_string()]
+        );
+    }
+
+    #[test]
+    fn id_patterns_defaults_empty_and_parses() {
+        let plain = r#"
+            [kb.plain]
+            path = "/tmp/plain"
+        "#;
+        let c = KbConfig::from_toml_str(plain).unwrap();
+        let kb = c.kb.get(&KbName::new("plain").unwrap()).unwrap();
+        assert!(kb.id_patterns.is_empty());
+
+        let with = r#"
+            [kb.tickets]
+            path = "/tmp/t"
+            id_patterns = ["^\\d{4}-\\d{2}-\\d{2}-[a-z0-9-]+$", "(unclosed"]
+        "#;
+        let c = KbConfig::from_toml_str(with).unwrap();
+        let kb = c.kb.get(&KbName::new("tickets").unwrap()).unwrap();
+        assert_eq!(
+            kb.id_patterns,
+            vec![
+                r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$".to_string(),
+                "(unclosed".to_string(),
+            ]
         );
     }
 
@@ -3158,6 +3198,7 @@ mod tests {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
         c.save(&path).unwrap();
@@ -3500,6 +3541,7 @@ mod tests {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         }
     }
 
@@ -4224,7 +4266,6 @@ mod tests {
             .iter()
             .all(|i| !i.pointer.starts_with("/backup")));
     }
-
 
     // ---- MI-W2.1 / MI-W5.R — [memory] scoring_v2_relevance/_stability ----
 

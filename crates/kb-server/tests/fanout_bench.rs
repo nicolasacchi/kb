@@ -43,6 +43,7 @@ fn kb_section(path: std::path::PathBuf) -> KbSection {
         capture_dir: None,
         resurface: None,
         slo: None,
+        id_patterns: Vec::new(),
     }
 }
 

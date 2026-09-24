@@ -74,7 +74,8 @@ fn generate_api_route_table() {
                     && method_re
                         .captures_iter(rest)
                         .any(|m| &m[2] == "routes::metrics::get");
-                if path != "/healthz" && path != "/capture" && (path != "/metrics" || nest_metrics) {
+                if path != "/healthz" && path != "/capture" && (path != "/metrics" || nest_metrics)
+                {
                     // Everything else declared through `.route` in router.rs
                     // lives under the nested /api tree (other non-/api
                     // surfaces: the dispatch fallback, `/capture`, `/healthz`,
