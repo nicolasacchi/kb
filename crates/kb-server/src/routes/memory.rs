@@ -748,9 +748,10 @@ fn clip_chars(s: &str, cap: usize) -> String {
 /// Sessions corpus: `default_search_category = "memory-session"`, else a
 /// kb named `sessions`. The ledger lives there, not on the memory corpus.
 fn sessions_storage(state: &KbHandles) -> Option<kb_core::storage::StorageHandle> {
-    let by_category = state.kbs.iter().find(|(_, ctx)| {
-        ctx.default_search_category.as_deref() == Some("memory-session")
-    });
+    let by_category = state
+        .kbs
+        .iter()
+        .find(|(_, ctx)| ctx.default_search_category.as_deref() == Some("memory-session"));
     let (_, ctx) = by_category.or_else(|| {
         state
             .kbs
@@ -844,7 +845,6 @@ pub(crate) async fn recall_compose(
             degraded,
         });
     }
-
 
     let has_query = !params.q.trim().is_empty();
 
@@ -3592,10 +3592,7 @@ mod tests {
     /// and never more than the write cap.
     #[test]
     fn served_recall_rows_rank_clip_and_cap() {
-        let mut hits = vec![
-            hit("notes", "aaaaaaaaaaaa"),
-            hit("memory", "bbbbbbbbbbbb"),
-        ];
+        let mut hits = vec![hit("notes", "aaaaaaaaaaaa"), hit("memory", "bbbbbbbbbbbb")];
         hits[0].title = "alpha".into();
         hits[0].summary = Some("sum".into());
         hits[1].title = "β".repeat(SERVED_RECALL_TITLE_CAP + 3);
@@ -3628,10 +3625,7 @@ mod tests {
 
         assert!(accept_session_id("  ").is_none());
         assert!(accept_session_id(&"x".repeat(SERVED_SESSION_ID_CAP + 1)).is_none());
-        assert_eq!(
-            accept_session_id("  abc-1  ").as_deref(),
-            Some("abc-1")
-        );
+        assert_eq!(accept_session_id("  abc-1  ").as_deref(), Some("abc-1"));
     }
 
     /// MI-W1.3 — `apply_recall_stats` must NEVER reorder, drop, or add
@@ -4406,6 +4400,7 @@ mod tests {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         }
     }
 

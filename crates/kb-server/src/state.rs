@@ -1402,7 +1402,10 @@ mod tests {
             classify_route("/api/kb/canon/review/abc123/export"),
             RouteKind::Review
         );
-        assert_eq!(classify_route("/api/kb/canon/sessions"), RouteKind::Sessions);
+        assert_eq!(
+            classify_route("/api/kb/canon/sessions"),
+            RouteKind::Sessions
+        );
         assert_eq!(
             classify_route("/api/kb/canon/sessions/sid/view"),
             RouteKind::Sessions

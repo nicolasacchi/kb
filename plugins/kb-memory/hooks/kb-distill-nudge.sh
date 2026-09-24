@@ -34,14 +34,46 @@
 # it. Deduped by session id, same as queue_distill_pending. Best-effort:
 # a ledger failure must not block the nudge, and a nudge must never block.
 #
+# Item 15 — a firing nudge also posts one slate ask,
+# `Distill session <sid> (claude)?`, via `kb slate ask` (and `--cwd` when
+# the Stop payload has a session cwd). Best-effort: a missing `kb`, a
+# daemon error, or a hang must not block the systemMessage or the ledger
+# append. A suppressed run posts nothing.
+#
 # Gated like kb-capture.sh on KB_SESSIONS_DIR (no sessions corpus → nothing
 # to distill from) and on `kb` being installed (the skill needs it).
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v kb >/dev/null 2>&1 || exit 0
 
+# Call only after the commit-without-remember check. Slate stdout is
+# discarded so it cannot corrupt the systemMessage. Never blocks.
+post_distill_ask() {
+  local sid="$1" harness="$2" cwd="${3:-}"
+  command -v kb >/dev/null 2>&1 || return 0
+  local args=(
+    slate ask "Distill session ${sid} (${harness})?"
+    --harness "$harness"
+    --session-id "$sid"
+    --ref "session:${sid}"
+  )
+  [ -n "$cwd" ] && args+=(--cwd "$cwd")
+  # Loopback must not ride HTTP(S)_PROXY (same reason as kb-wake-kimi.sh).
+  (
+    export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
+    export no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
+    unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 4 kb "${args[@]}" >/dev/null 2>&1 || true
+    else
+      kb "${args[@]}" >/dev/null 2>&1 || true
+    fi
+  )
+}
+
 input="$(cat)"
 tpath="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
 [ -n "$tpath" ] && [ -f "$tpath" ] && [ -n "$sid" ] || exit 0
 
 marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
@@ -73,6 +105,7 @@ if [ -f "$ledger" ] && grep -qF "claude $sid " "$ledger" 2>/dev/null; then
 else
   printf 'claude %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null || true
 fi
+post_distill_ask "$sid" claude "${cwd:-}"
 jq -n --arg sid "$sid" '{systemMessage:
   ("kb: this session has commits but no curated memory — run /kb-distill "
    + $sid + " to keep what was decided/shipped (--dry-run to preview). "

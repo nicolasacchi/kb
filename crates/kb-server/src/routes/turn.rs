@@ -88,17 +88,21 @@ pub async fn get(
 
     // Sequential on purpose: both lanes embed the same text, and the context
     // composer already refuses to run its embed-bearing arms concurrently.
-    let hits = match run_recall(&state, identity.clone(), &q, remaining_ms(deadline), deadline).await
+    let hits = match run_recall(
+        &state,
+        identity.clone(),
+        &q,
+        remaining_ms(deadline),
+        deadline,
+    )
+    .await
     {
         Ok(recall) => {
             extend_degraded(&mut degraded, recall.degraded);
             recall.hits
         }
         Err(class) => {
-            push_degraded(
-                &mut degraded,
-                degraded_of("turn", "recall", class),
-            );
+            push_degraded(&mut degraded, degraded_of("turn", "recall", class));
             Vec::new()
         }
     };
@@ -470,9 +474,10 @@ fn clip_chars(s: &str, cap: usize) -> String {
 /// Sessions corpus: `default_search_category = "memory-session"`, else a
 /// kb named `sessions`. Same lookup as the recall route.
 fn sessions_storage(state: &KbHandles) -> Option<kb_core::storage::StorageHandle> {
-    let by_category = state.kbs.iter().find(|(_, ctx)| {
-        ctx.default_search_category.as_deref() == Some("memory-session")
-    });
+    let by_category = state
+        .kbs
+        .iter()
+        .find(|(_, ctx)| ctx.default_search_category.as_deref() == Some("memory-session"));
     let (_, ctx) = by_category.or_else(|| {
         state
             .kbs

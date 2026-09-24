@@ -855,9 +855,9 @@ impl ViewCarry {
                 // gate has to find that line, not require it at byte 0,
                 // or a wake injection never opens.
                 let mut lines = body.lines();
-                let opened = lines.by_ref().any(|l| {
-                    l.trim_start().starts_with("Relevant memories from kb")
-                });
+                let opened = lines
+                    .by_ref()
+                    .any(|l| l.trim_start().starts_with("Relevant memories from kb"));
                 if opened {
                     // Each hit is one `- <title> ...` line; kb-recall.sh may
                     // append a `↳ <summary>` continuation and a
@@ -3619,7 +3619,11 @@ mod tests {
         .join("\n");
         let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
         let derived = derive_memory_recalls(&v);
-        assert_eq!(derived.rows.len(), 3, "one row per marker, not one folded item");
+        assert_eq!(
+            derived.rows.len(),
+            3,
+            "one row per marker, not one folded item"
+        );
         assert_eq!(derived.marker_parsed, 3);
         assert_eq!(derived.fallback_parsed, 0);
         assert_eq!(derived.failed, 0);
@@ -3650,10 +3654,17 @@ mod tests {
         .join("\n");
         let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
         let derived = derive_memory_recalls(&v);
-        assert_eq!(derived.rows.len(), 2, "wake hits are visible past the protocol");
+        assert_eq!(
+            derived.rows.len(),
+            2,
+            "wake hits are visible past the protocol"
+        );
         assert_eq!(derived.marker_parsed, 2);
         assert_eq!(derived.fallback_parsed, 0);
-        assert_eq!(derived.failed, 0, "protocol and pending-distill are not hits");
+        assert_eq!(
+            derived.failed, 0,
+            "protocol and pending-distill are not hits"
+        );
         assert_eq!(
             derived
                 .rows
