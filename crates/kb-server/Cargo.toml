@@ -19,6 +19,7 @@ path = "src/main.rs"
 kb-core = { path = "../kb-core" }
 axum = { workspace = true }
 tower = { workspace = true }
+regex = { workspace = true }
 tower-http = { workspace = true }
 hyper = { workspace = true }
 mime = { workspace = true }

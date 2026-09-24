@@ -17019,9 +17019,7 @@ async fn review_report_emit_cmd(
     json: bool,
 ) -> Result<()> {
     if review_report_absent(report) {
-        anyhow::bail!(
-            "review {id}: no report authored yet; cannot emit an artifact or set a hint"
-        );
+        anyhow::bail!("review {id}: no report authored yet; cannot emit an artifact or set a hint");
     }
     if !report.is_object() {
         anyhow::bail!("review {id}: report response is not a JSON object; cannot emit");
@@ -17029,9 +17027,7 @@ async fn review_report_emit_cmd(
     let config = default_kb_toml_path()?;
     let emitted = write_review_report_artifact(&config, id, kb, report)?;
     if emitted.html.is_empty() {
-        anyhow::bail!(
-            "review {id}: rendered report HTML was empty; artifact hint was not set"
-        );
+        anyhow::bail!("review {id}: rendered report HTML was empty; artifact hint was not set");
     }
     if !json {
         println!(
@@ -17050,9 +17046,12 @@ fn default_kb_toml_path() -> Result<PathBuf> {
 }
 
 /// Render `report` as one self-contained HTML artifact and write it into
-/// `kb`'s watched capture directory (from `config_path`). Returns the HTML
-/// plus the two hint ids. On any config/path failure, returns why the
-/// report was not ingested — the caller must not set a hint.
+/// `kb`'s watched capture directory (from `config_path`). A relative
+/// capture directory is resolved against that corpus root, never the
+/// process cwd. The canonical output must stay inside the canonical root;
+/// otherwise this returns before creating the file. Returns the HTML plus
+/// the two hint ids. On any config/path failure, returns why the report
+/// was not ingested — the caller must not set a hint.
 fn write_review_report_artifact(
     config_path: &Path,
     review_id: i64,
@@ -17101,6 +17100,14 @@ fn write_review_report_artifact(
     // watches. `stable_name` keeps re-emits on the same path, so the hint
     // id does not churn. Sanitize stays off — this HTML is produced here,
     // and ammonia would strip the document shell.
+    // Confinement is checked on the same path `capture` will create.
+    // Relative `capture_dir` joins the corpus root here — `Path::canonicalize`
+    // on a relative path would follow the process cwd instead.
+    let filename = format!(
+        "{}.html",
+        kb_core::capture::capture_slug_checked(&stable).unwrap_or_else(|| stable.clone())
+    );
+    refuse_emit_outside_corpus(&source_root, Path::new(&capture_dir), &filename, kb)?;
     let captured = kb_core::capture::capture(kb_core::capture::CaptureInput {
         source_root: &source_root,
         capture_dir: &capture_dir,
@@ -17130,6 +17137,86 @@ fn write_review_report_artifact(
         artifact_id: captured.id,
         source_relative: captured.source_relative,
     })
+}
+
+/// Destination `capture` will write. Relative `requested` joins `root`;
+/// an absolute path is left absolute so confinement can reject it.
+fn emit_artifact_destination(root: &Path, requested: &Path, filename: &str) -> PathBuf {
+    let dir = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    dir.join(filename)
+}
+
+/// Canonicalize `path` without creating it. The longest existing ancestor
+/// — a symlink included — is canonicalized and the missing suffix appended.
+/// `..` in that suffix is collapsed before the result is compared to the root.
+fn canonicalize_emit_path(path: &Path) -> std::io::Result<PathBuf> {
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path.to_path_buf();
+    loop {
+        if cursor.as_os_str().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "output path has no existing ancestor",
+            ));
+        }
+        let is_link = std::fs::symlink_metadata(&cursor)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_link || cursor.exists() {
+            let mut resolved = cursor.canonicalize()?;
+            for part in suffix.iter().rev() {
+                if part.as_os_str() == ".." {
+                    resolved.pop();
+                } else if part.as_os_str() != "." {
+                    resolved.push(part);
+                }
+            }
+            return Ok(resolved);
+        }
+        let Some(name) = cursor.file_name().map(|n| n.to_os_string()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("cannot resolve {}", path.display()),
+            ));
+        };
+        suffix.push(name);
+        if !cursor.pop() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("cannot resolve {}", path.display()),
+            ));
+        }
+    }
+}
+
+/// One stderr line (via `main`'s `Error:` printer) and a non-zero exit.
+/// Does not create `requested` or any parent of the destination.
+fn refuse_emit_outside_corpus(
+    root: &Path,
+    requested: &Path,
+    filename: &str,
+    kb: &str,
+) -> Result<()> {
+    let dest = emit_artifact_destination(root, requested, filename);
+    let resolved = canonicalize_emit_path(&dest).map_err(|e| {
+        anyhow::anyhow!(
+            "review report --emit-artifact: cannot resolve output path {} against kb {kb} source {} ({e}); the report was not written and the artifact hint was not set",
+            requested.display(),
+            root.display()
+        )
+    })?;
+    if !resolved.starts_with(root) {
+        anyhow::bail!(
+            "review report --emit-artifact: refusing to write {}; it resolves outside kb {kb} source {}; the report was not written and the artifact hint was not set",
+            requested.display(),
+            root.display()
+        );
+    }
+    Ok(())
 }
 
 /// One self-contained HTML file for a stored review report. Prose is
@@ -17167,7 +17254,11 @@ fn review_report_html(review_id: i64, report: &serde_json::Value) -> String {
         out.push_str(&html_escape(&json_display(at)));
     }
     out.push_str(".</p>\n");
-    if let Some(deck) = report.get("deck").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    if let Some(deck) = report
+        .get("deck")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
         push_prose_section(&mut out, "deck", "Deck", deck);
     }
     if let Some(summary) = report
@@ -28130,6 +28221,98 @@ mod tests {
         let msg = no_cfg.to_string();
         assert!(msg.contains("no kb.toml"), "{msg}");
         assert!(msg.contains("artifact hint was not set"), "{msg}");
+    }
+
+    /// `../outside.html` and an absolute path outside the corpus root are
+    /// refused before any write. A relative path is resolved against the
+    /// corpus root, and an in-root path still writes.
+    #[test]
+    fn emit_artifact_refuses_output_outside_the_corpus_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("corpus");
+        std::fs::create_dir(&source).unwrap();
+        let cfg_path = tmp.path().join("kb.toml");
+        let report = serde_json::json!({
+            "summary": "ship the hint",
+        });
+        let outside_rel = tmp.path().join("outside.html");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"../outside.html\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+        let err = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("../outside.html"), "{msg}");
+        assert!(msg.contains("outside"), "{msg}");
+        assert!(
+            !outside_rel.exists(),
+            "relative escape must not create a file"
+        );
+        assert!(
+            !outside_rel.join("review-4-report.html").exists(),
+            "relative escape must not create the artifact"
+        );
+
+        let outside_abs = tmp.path().join("abs-outside.html");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"{}\"\n",
+                source.display(),
+                outside_abs.display()
+            ),
+        )
+        .unwrap();
+        let err = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(&outside_abs.display().to_string()), "{msg}");
+        assert!(
+            !outside_abs.exists(),
+            "absolute escape must not create a file"
+        );
+        assert!(!outside_abs.join("review-4-report.html").exists());
+
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"kept\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+        let emitted = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap();
+        let written = source.join("kept").join("review-4-report.html");
+        assert!(written.is_file(), "in-root relative path must still write");
+        assert_eq!(emitted.source_relative, "kept/review-4-report.html");
+        let written_canon = written.canonicalize().unwrap();
+        let kept_canon = source.join("kept").canonicalize().unwrap();
+        assert_eq!(written_canon.parent(), Some(kept_canon.as_path()));
+
+        let inside_abs = source.join("abs-kept");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"{}\"\n",
+                source.display(),
+                inside_abs.display()
+            ),
+        )
+        .unwrap();
+        let emitted = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap();
+        let written = inside_abs.join("review-4-report.html");
+        assert!(written.is_file(), "in-root absolute path must still write");
+        assert!(
+            written
+                .canonicalize()
+                .unwrap()
+                .starts_with(source.canonicalize().unwrap()),
+            "{}",
+            emitted.source_relative
+        );
     }
 
     /// V70-R — `kb-code review compose ID --from-file FILE`.

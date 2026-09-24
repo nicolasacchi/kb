@@ -92,6 +92,7 @@ pub fn run(
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             });
             "Registered"
         }

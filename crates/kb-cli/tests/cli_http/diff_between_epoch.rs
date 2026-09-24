@@ -118,6 +118,7 @@ async fn boot_git_kb_with_future_era() -> (tempfile::TempDir, SocketAddr, String
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

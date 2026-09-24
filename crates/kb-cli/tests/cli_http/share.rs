@@ -64,6 +64,7 @@ async fn boot_with(setup: impl FnOnce(&std::path::Path)) -> (tempfile::TempDir, 
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
