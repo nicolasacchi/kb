@@ -2173,7 +2173,7 @@ mod tests {
             assert!(spec.text.contains("the comment body"));
             assert!(spec.text.contains(&format!("Citation: comment {cid}")));
             assert!(spec.summary.contains(&cid));
-            let rel = format!("kept-{}.html", spec.comment_id);
+            let rel = format!("kept-{cid}.html");
             std::fs::write(memory_root.join(&rel), &spec.text).unwrap();
             Ok::<_, KeepError>((format!("mem-{cid}"), rel))
         })
