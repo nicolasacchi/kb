@@ -562,14 +562,14 @@ fn decide_memory_project_corpus(slug: &str, names: &[&str], alias: Option<&str>)
     }
     let derived = format!("memory-{slug}");
     if let Some(name) = alias {
-        if names.iter().any(|n| *n == name) {
+        if names.contains(&name) {
             return HookCheck::pass(
                 "memory-project-corpus",
                 format!("repo slug {slug} maps to corpus {name} via project_slugs"),
             );
         }
     }
-    if names.iter().any(|n| *n == derived.as_str()) {
+    if names.contains(&derived.as_str()) {
         return HookCheck::pass(
             "memory-project-corpus",
             format!("derived project corpus {derived} exists"),
@@ -2878,7 +2878,6 @@ mod tests {
             harness: harness.into(),
             started_at,
             memory_count: memories,
-            artifact_id: String::new(),
         }
     }
 
