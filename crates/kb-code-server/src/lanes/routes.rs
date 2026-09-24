@@ -297,7 +297,10 @@ pub async fn facts_route(
         // What every class in this response is computed against.
         let (blob, text): (Option<String>, Option<String>) = match at_blob.as_deref() {
             Some(sha) => {
-                let t = crate::review_comments::read_blob_text(&repo.path, &path, sha);
+                // RS-U4 (dual) — a pinned object read goes through the
+                // store chain; the `None` arm below reads the work tree.
+                let git_ctx = crate::git::roots::GitCtx::for_entry(&store, &repo);
+                let t = crate::review_comments::read_blob_text(&git_ctx, &path, sha);
                 if t.is_none() {
                     notes.push(format!(
                         "{path}: blob {sha} is not readable in this repo — facts anchored to \
@@ -306,7 +309,11 @@ pub async fn facts_route(
                 }
                 (Some(sha.to_string()), t)
             }
-            None => match crate::routes::read_repo_file(&repo, &path, None) {
+            None => match crate::routes::read_repo_file(
+                &repo,
+                &path,
+                crate::routes::RevResolver::work_tree(),
+            ) {
                 Ok(read) => {
                     let t = String::from_utf8(read.bytes).ok();
                     (Some(read.blob_hash), t)

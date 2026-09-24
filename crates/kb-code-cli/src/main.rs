@@ -7625,7 +7625,9 @@ fn cat(repo_path: &Path, path: &str, rev: &str) -> Result<()> {
 
 fn cat_at(repo_path: &Path, path: &str, at: i64) -> Result<()> {
     let emails: Vec<String> = Vec::new();
-    match kb_code_server::history::scrub::file_at(repo_path, path, None, at, &emails)
+    // RS-U4 — a file-history scrub over the user's own clone.
+    let work = kb_code_server::git::roots::WorkTreeRoot::user_clone(repo_path);
+    match kb_code_server::history::scrub::file_at(&work, path, None, at, &emails)
         .map_err(|e| anyhow::anyhow!("{e}"))?
     {
         kb_code_server::history::scrub::AtHit::Hit { stop, .. } => {

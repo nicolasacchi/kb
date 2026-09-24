@@ -49,6 +49,7 @@
 //! surfaces; the surrounding assistant text never leaves loopback and is
 //! not returned here either.
 
+use crate::git::roots::GitCtx;
 use crate::join::ladder;
 use crate::review_hunks::{self, DiffHunk};
 use crate::routes::ApiError;
@@ -339,7 +340,7 @@ pub fn rel_path_in_repo(repo_root: &Path, raw: &str) -> Option<String> {
 /// One `git diff` per changed file — the same read `GET /api/diff` makes,
 /// through the same validated-revspec gate.
 pub fn locate_hunk(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     base_sha: &str,
     tip_sha: &str,
     paths: &[String],
@@ -348,7 +349,9 @@ pub fn locate_hunk(
     let base = crate::git::Revspec::trusted(base_sha.to_string());
     let tip = crate::git::Revspec::trusted(tip_sha.to_string());
     for path in paths {
-        let Ok(text) = crate::diff::diff_file(repo_root, &base, Some(&tip), path) else {
+        let Ok(text) = repo_root
+            .read_with_fallback(|r| crate::diff::diff_file(r.git_path(), &base, Some(&tip), path))
+        else {
             continue;
         };
         for hunk in review_hunks::parse_unified_diff(&text).hunks {
@@ -363,15 +366,15 @@ pub fn locate_hunk(
 /// The commits in `base..tip` that touched `path`, newest-first, capped.
 /// Returns `(commits, truncated)`.
 pub fn commits_touching(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     base_sha: &str,
     tip_sha: &str,
     path: &str,
 ) -> (Vec<String>, bool) {
     let range = format!("{base_sha}..{tip_sha}");
-    let Ok(out) =
-        crate::history::run_git_raw(repo_root, &["log", "--format=%H", &range, "--", path])
-    else {
+    let Ok(out) = repo_root.read_with_fallback(|r| {
+        crate::history::run_git_raw(r, &["log", "--format=%H", &range, "--", path])
+    }) else {
         return (Vec::new(), false);
     };
     let all: Vec<String> = String::from_utf8_lossy(&out)
@@ -387,7 +390,7 @@ pub fn commits_touching(
 /// is what turns "a commit in the range" into "the commit", and it is a
 /// content address comparison, never a heuristic.
 pub fn commits_carrying_hunk(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     commits: &[String],
     path: &str,
     wanted: &str,
@@ -396,7 +399,9 @@ pub fn commits_carrying_hunk(
     for sha in commits {
         let parent = crate::git::Revspec::trusted(format!("{sha}^"));
         let this = crate::git::Revspec::trusted(sha.clone());
-        let Ok(text) = crate::diff::diff_file(repo_root, &parent, Some(&this), path) else {
+        let Ok(text) = repo_root.read_with_fallback(|r| {
+            crate::diff::diff_file(r.git_path(), &parent, Some(&this), path)
+        }) else {
             continue;
         };
         if review_hunks::parse_unified_diff(&text)
@@ -510,6 +515,7 @@ pub async fn turns_for_hunk(
         .await?;
 
     let repo_root = repo.path.clone();
+    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
     let repo_name = repo.name.clone();
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
@@ -517,7 +523,7 @@ pub async fn turns_for_hunk(
 
     // One blocking hop for every git + store read (the 2026-08-31
     // starvation lesson: coarse-wrap the sync ladder, keep async legs out).
-    let root = repo_root.clone();
+    let root = git_ctx.clone();
     let located = tokio::task::spawn_blocking({
         let base = base.clone();
         let tip = tip.clone();
@@ -557,7 +563,7 @@ pub async fn turns_for_hunk(
     };
 
     // Which commits carry this hunk?
-    let root = repo_root.clone();
+    let root = git_ctx.clone();
     let (range_commits, probe_truncated, carrying) = tokio::task::spawn_blocking({
         let base = base.clone();
         let tip = tip.clone();

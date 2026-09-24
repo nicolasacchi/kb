@@ -136,8 +136,9 @@ pub struct BlameResult {
     pub truncated: bool,
 }
 
-/// The service entry point `routes::blame` calls — see the module doc for
-/// the clean/dirty/cache-key contract.
+/// The service entry point — see the module doc for the clean/dirty/
+/// cache-key contract. Blames the user work tree only; `routes::blame`
+/// goes through [`blame_file_bridged`].
 pub fn blame_file(
     cache: &BlameCache,
     repo: &GitRepo,
@@ -147,13 +148,65 @@ pub fn blame_file(
     rev: Option<&str>,
     line_range: Option<(u32, u32)>,
 ) -> Result<BlameResult> {
+    blame_file_inner(cache, repo, repo_id, repo_root, None, path, rev, line_range)
+}
+
+/// RS-U4 (design §6 S8) — [`blame_file`] over a work tree that may be
+/// widened, read-only, to a ready review store's objects
+/// (`BridgedWorkTree`): blame stays a USER-repo invocation (history,
+/// `.git-blame-ignore-revs`, dirty contents), but a `rev` naming a full sha
+/// only the store holds still resolves. With no ready store this is
+/// exactly [`blame_file`].
+pub fn blame_file_bridged(
+    cache: &BlameCache,
+    repo: &GitRepo,
+    repo_id: i64,
+    root: &crate::git::roots::BridgedWorkTree,
+    path: &str,
+    rev: Option<&str>,
+    line_range: Option<(u32, u32)>,
+) -> Result<BlameResult> {
+    use crate::git::roots::GitRoot;
+    blame_file_inner(
+        cache,
+        repo,
+        repo_id,
+        root.git_path(),
+        root.alternate_objects(),
+        path,
+        rev,
+        line_range,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blame_file_inner(
+    cache: &BlameCache,
+    repo: &GitRepo,
+    repo_id: i64,
+    repo_root: &Path,
+    alternates: Option<&Path>,
+    path: &str,
+    rev: Option<&str>,
+    line_range: Option<(u32, u32)>,
+) -> Result<BlameResult> {
     let ignore_revs_file = detect_ignore_revs_file(repo, repo_root);
 
     if let Some(spec) = rev {
-        let sha = repo.resolve(spec)?.to_string();
+        // The in-process gix handle cannot see the alternates; a full sha
+        // it misses is handed to `git blame` verbatim when a store is
+        // bridged in (git then finds it through the alternates, or fails).
+        let sha = match repo.resolve(spec) {
+            Ok(id) => id.to_string(),
+            Err(_) if alternates.is_some() && crate::git::roots::is_object_id(spec) => {
+                spec.to_ascii_lowercase()
+            }
+            Err(e) => return Err(e.into()),
+        };
         let (regions, cached) = full_blame_cached(
             cache,
             repo_root,
+            alternates,
             repo_id,
             &sha,
             path,
@@ -183,6 +236,7 @@ pub fn blame_file(
             contents: Some(&bytes),
             ignore_revs_file: ignore_revs_file.as_deref(),
             line_range,
+            alternates,
         };
         let regions = incremental::run_collect(&opts)?;
         let (regions, truncated) = cap_regions(regions, MAX_REGIONS);
@@ -198,6 +252,7 @@ pub fn blame_file(
     let (regions, cached) = full_blame_cached(
         cache,
         repo_root,
+        alternates,
         repo_id,
         &head_sha,
         path,
@@ -219,6 +274,7 @@ pub fn blame_file(
 fn full_blame_cached(
     cache: &BlameCache,
     repo_root: &Path,
+    alternates: Option<&Path>,
     repo_id: i64,
     sha: &str,
     path: &str,
@@ -234,6 +290,7 @@ fn full_blame_cached(
         contents: None,
         ignore_revs_file,
         line_range: None,
+        alternates,
     };
     let regions = incremental::run_collect(&opts)?;
     cache.put(repo_id, sha, path, regions.clone());

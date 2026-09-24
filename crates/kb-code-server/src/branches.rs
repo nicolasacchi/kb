@@ -715,17 +715,23 @@ fn git_pass(
         let git = crate::git::GitRepo::open(repo_root)?;
         crate::git::default_branch(&git)
     };
-    let default_sha = default_ref
-        .as_deref()
-        .and_then(|r| crate::history::resolve_ref_commit(repo_root, r));
+    let default_sha = default_ref.as_deref().and_then(|r| {
+        crate::history::resolve_ref_commit(
+            &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+            r,
+        )
+    });
 
-    let (raw_refs, ab_source) = facts::enumerate(repo_root, default_sha.as_deref())?;
+    let (raw_refs, ab_source) = facts::enumerate(
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+        default_sha.as_deref(),
+    )?;
     let mut raw_refs = facts::drop_shadowed_remotes(raw_refs);
     let enumerated_total = raw_refs.len();
     let enumeration_truncated = enumerated_total > facts::MAX_REFS;
     raw_refs.truncate(facts::MAX_REFS);
 
-    let mine = facts::mine_identity(repo_root);
+    let mine = facts::mine_identity(&crate::git::roots::WorkTreeRoot::user_clone(repo_root));
     let now = chrono::Utc::now().timestamp();
     let repo_root_canon =
         std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
@@ -796,8 +802,10 @@ fn git_pass(
         let base = match cached {
             Some(b) => b,
             None => {
+                let work = crate::git::roots::WorkTreeRoot::user_clone(repo_root);
                 let b = facts::detect_base(
-                    repo_root,
+                    &work,
+                    &work,
                     &f.raw,
                     default_ref.as_deref(),
                     default_sha.as_deref(),
@@ -878,7 +886,11 @@ fn git_pass(
                 continue;
             };
             probed += 1;
-            if let Some(equivalent) = facts::patch_id_merged(repo_root, &b, &h) {
+            if let Some(equivalent) = facts::patch_id_merged(
+                &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+                &b,
+                &h,
+            ) {
                 out[i].merged = Some(facts::MergedWitness {
                     kind: facts::MergedKind::PatchId,
                     into: base_ref,
@@ -916,7 +928,7 @@ fn git_pass(
             };
             scanned += 1;
             keep.push(facts::touches_path(
-                repo_root,
+                &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
                 &base_sha,
                 &f.raw.tip_sha,
                 &path,
@@ -976,8 +988,10 @@ fn rev_list_ahead_behind(
     ) else {
         return (None, None);
     };
-    match crate::history::branches::ahead_behind(repo_root, &crate::git::RefRange::new(d, b, true))
-    {
+    match crate::history::branches::ahead_behind(
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+        &crate::git::RefRange::new(d, b, true),
+    ) {
         Ok(ab) => (Some(ab.ahead), Some(ab.behind)),
         Err(_) => (None, None),
     }
@@ -1013,8 +1027,12 @@ fn detect_stacks_for(
             tip_sha: f.raw.tip_sha.clone(),
         })
         .collect();
-    let Ok(detected) = crate::history::stacks::detect_stacks(repo_root, &tips, default_ref, true)
-    else {
+    let Ok(detected) = crate::history::stacks::detect_stacks(
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+        &tips,
+        default_ref,
+        true,
+    ) else {
         return out;
     };
     let visible: HashSet<&str> = page.iter().map(|f| f.raw.name.as_str()).collect();
@@ -1117,14 +1135,20 @@ pub async fn conflicts_route(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let out = tokio::task::spawn_blocking(move || -> Result<radar::Radar, ApiError> {
         let _permit = permit;
-        let against_sha = crate::history::resolve_ref_commit(&repo_root, against.as_str())
-            .ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "`against` does not resolve to a commit: {:?}",
-                    against.as_str()
-                ))
-            })?;
-        let (raw_refs, _src) = facts::enumerate(&repo_root, Some(&against_sha))?;
+        let against_sha = crate::history::resolve_ref_commit(
+            &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
+            against.as_str(),
+        )
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "`against` does not resolve to a commit: {:?}",
+                against.as_str()
+            ))
+        })?;
+        let (raw_refs, _src) = facts::enumerate(
+            &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
+            Some(&against_sha),
+        )?;
         let raw_refs = facts::drop_shadowed_remotes(raw_refs);
         let now = chrono::Utc::now().timestamp();
         let mut candidates: Vec<radar::Candidate> = Vec::new();
@@ -1173,7 +1197,7 @@ pub async fn conflicts_route(
             candidates.push(c);
         }
         Ok(radar::radar(
-            &repo_root,
+            &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
             &scratch_root,
             &against,
             &against_sha,
@@ -1401,7 +1425,10 @@ pub async fn start_branch_review(
                         // borrow the ladder's credibility for it.
                         class: BaseClass::Unknown,
                         ref_name: Some(b.as_str().to_string()),
-                        sha: crate::history::resolve_ref_commit(&repo_root, b.as_str()),
+                        sha: crate::history::resolve_ref_commit(
+                            &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
+                            b.as_str(),
+                        ),
                     },
                     "explicit",
                 ));
@@ -1410,10 +1437,16 @@ pub async fn start_branch_review(
                 let git = crate::git::GitRepo::open(&repo_root)?;
                 crate::git::default_branch(&git)
             };
-            let default_sha = default_ref
-                .as_deref()
-                .and_then(|r| crate::history::resolve_ref_commit(&repo_root, r));
-            let (raw_refs, _src) = facts::enumerate(&repo_root, default_sha.as_deref())?;
+            let default_sha = default_ref.as_deref().and_then(|r| {
+                crate::history::resolve_ref_commit(
+                    &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
+                    r,
+                )
+            });
+            let (raw_refs, _src) = facts::enumerate(
+                &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
+                default_sha.as_deref(),
+            )?;
             let raw_refs = facts::drop_shadowed_remotes(raw_refs);
             let raw = raw_refs
                 .iter()
@@ -1439,7 +1472,7 @@ pub async fn start_branch_review(
                 })
                 .collect();
             if let Ok(detected) = crate::history::stacks::detect_stacks(
-                &repo_root,
+                &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
                 &tips,
                 default_ref.as_deref(),
                 true,
@@ -1456,7 +1489,7 @@ pub async fn start_branch_review(
                             facts::BranchBase {
                                 class: BaseClass::MergeBase,
                                 sha: crate::history::merge_base_of(
-                                    &repo_root,
+                                    &crate::git::roots::WorkTreeRoot::user_clone(&repo_root),
                                     &layer.base,
                                     &raw.tip_sha,
                                 ),
@@ -1467,9 +1500,11 @@ pub async fn start_branch_review(
                     }
                 }
             }
+            let work = crate::git::roots::WorkTreeRoot::user_clone(&repo_root);
             Ok((
                 facts::detect_base(
-                    &repo_root,
+                    &work,
+                    &work,
                     &raw,
                     default_ref.as_deref(),
                     default_sha.as_deref(),
