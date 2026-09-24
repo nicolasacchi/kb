@@ -20,18 +20,18 @@
 //!        - 2..=10 → Ambiguous { candidates }
 //!        - 11+    → Ambiguous { candidates: first 10, truncated: true }
 //!        - 0      → config ticket arm, then arm 5
-//!   4b. Config ticket arm, only when `[kb.<name>] id_patterns` is
-//!       non-empty. Token is bare digits, `#` plus digits, or `q`
-//!       matching one of those regexes (compiled once; an invalid
-//!       pattern is skipped and does not 500). Matched against title,
-//!       filename stem, and `kb-ticket` meta (HTML or frontmatter).
+//!          4b. Config ticket arm, only when `[kb.<name>] id_patterns` is
+//!          non-empty. Token is bare digits, `#` plus digits, or `q`
+//!          matching one of those regexes (compiled once; an invalid
+//!          pattern is skipped and does not 500). Matched against title,
+//!          filename stem, and `kb-ticket` meta (HTML or frontmatter).
 //!        - 1 hit → Exact, plus `"match": "ticket"`
 //!        - 0 or >1 → fall through. Empty `id_patterns` skips this arm,
 //!          so today's miss is unchanged.
 //!   5. Identifier token, closed patterns (not config):
-//!        ticket `^#?\d{3,}$` (`15715`, `#15715`) or a slug of ASCII
-//!        letters/digits/hyphens, length ≥ 6. Matched against title and
-//!        filename stem.
+//!      ticket `^#?\d{3,}$` (`15715`, `#15715`) or a slug of ASCII
+//!      letters/digits/hyphens, length ≥ 6. Matched against title and
+//!      filename stem.
 //!        - 1 hit → UniqueSuffix
 //!        - 0 or >1 → NotFound. Never Ambiguous and never 404, so a
 //!          non-unique token does not hard-miss a query ranked search

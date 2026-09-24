@@ -11783,6 +11783,17 @@ mod tests {
         assert_eq!(sid_b.len(), 1, "sid-b must not see sid-a's serves");
         assert_eq!(sid_b[0].artifact_id, "cap-9");
 
+        type RecallCols = (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+        );
         let (
             memory_kb,
             memory_id,
@@ -11793,17 +11804,7 @@ mod tests {
             pos,
             title,
             injected_chars,
-        ): (
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<i64>,
-            i64,
-            Option<i64>,
-            Option<String>,
-            Option<i64>,
-        ) = db
+        ): RecallCols = db
             .conn
             .query_row(
                 "SELECT memory_kb, memory_id, session_id, turn_id, recalled_at,

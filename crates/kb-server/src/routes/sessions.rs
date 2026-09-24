@@ -3859,8 +3859,8 @@ pub(crate) async fn recollect_compose(
     }) {
         let degraded = state
             .kbs
-            .iter()
-            .map(|(name, _)| {
+            .keys()
+            .map(|name| {
                 crate::routes::context::degraded_of(
                     name.as_str(),
                     "recollect",

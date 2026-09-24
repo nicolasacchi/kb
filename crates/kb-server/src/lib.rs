@@ -1033,7 +1033,7 @@ fn wants_compaction(rows: u64, fragments: u64, versions: u64, periodic: bool) ->
     if periodic {
         return false;
     }
-    let frag_per_row = if rows == 0 { 0 } else { fragments / rows };
+    let frag_per_row = fragments.checked_div(rows).unwrap_or(0);
     frag_per_row > COMPACT_FRAGMENTS_PER_ROW || versions > COMPACT_MAX_VERSIONS
 }
 
@@ -1077,7 +1077,6 @@ fn compact_backoff_skip(last_duration: Option<Duration>, elapsed: Duration) -> b
 /// A pass that would otherwise run is skipped while
 /// [`compact_backoff_skip`] is inside 10× the last successful duration
 /// recorded on the storage actor.
-
 async fn maybe_compact_kb(
     kb: &str,
     storage: &kb_core::storage::StorageHandle,

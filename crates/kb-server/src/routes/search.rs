@@ -1410,8 +1410,8 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     }) {
         let degraded = state
             .kbs
-            .iter()
-            .map(|(name, _)| {
+            .keys()
+            .map(|name| {
                 crate::routes::context::degraded_of(
                     name.as_str(),
                     "search",
