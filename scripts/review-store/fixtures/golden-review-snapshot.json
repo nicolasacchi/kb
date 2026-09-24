@@ -1,0 +1,329 @@
+{
+  "repos": [
+    "acme-widgets"
+  ],
+  "review_count": 1,
+  "reviews": [
+    {
+      "base_ref": "main",
+      "head_ref": "feature/spin-faster",
+      "id": "<REVIEW_ID>",
+      "patchsets": [
+        {
+          "base_sha_full": "dae4eaef98fe1767029807a0ffb5aca826975257",
+          "captured_at": "<TS>",
+          "comments": [
+            {
+              "comments": [
+                {
+                  "anchor_kind": "line",
+                  "author": "you",
+                  "body": "Should this call be memoized?",
+                  "body_refs": {
+                    "refs": [],
+                    "truncated": false
+                  },
+                  "created_at": "<TS>",
+                  "id": "<ID:0001>",
+                  "intent": "note",
+                  "path": "lib/widget.rb",
+                  "ps_number": 1,
+                  "replies": [],
+                  "resolution": {
+                    "confidence": "exact",
+                    "line": 2,
+                    "line_end": null,
+                    "orphaned": false,
+                    "resolved_against": {
+                      "ps": 1,
+                      "sha": "3c934b431ffd54a1745419f99dfab7394734ab1b"
+                    }
+                  },
+                  "resolved": false,
+                  "side": "new",
+                  "suggestion": null,
+                  "updated_at": "<TS>"
+                },
+                {
+                  "anchor_kind": "line",
+                  "author": "you",
+                  "body": "spin_faster has no test coverage",
+                  "body_refs": {
+                    "refs": [],
+                    "truncated": false
+                  },
+                  "created_at": "<TS>",
+                  "id": "<ID:0002>",
+                  "intent": "finding",
+                  "path": "lib/widget.rb",
+                  "ps_number": 2,
+                  "replies": [],
+                  "resolution": {
+                    "confidence": "exact",
+                    "line": 2,
+                    "line_end": null,
+                    "orphaned": false,
+                    "resolved_against": {
+                      "ps": 1,
+                      "sha": "3c934b431ffd54a1745419f99dfab7394734ab1b"
+                    }
+                  },
+                  "resolved": false,
+                  "side": "new",
+                  "suggestion": null,
+                  "updated_at": "<TS>"
+                }
+              ],
+              "in_diff": true,
+              "path": "lib/widget.rb"
+            }
+          ],
+          "commit_count": 1,
+          "files": [
+            {
+              "additions": 4,
+              "deletions": 0,
+              "new_blob_sha": "50e1ee5b64446c80cd5bf4b5c11179ada1046126",
+              "old_blob_sha": "f1fa37061436dc7a7e3c2e38ec5176b40af846b2",
+              "old_path": null,
+              "open_annotations": 2,
+              "path": "lib/widget.rb",
+              "status": "M"
+            }
+          ],
+          "findings": [
+            {
+              "act": "issue",
+              "annotation_id": "<ID:0002>",
+              "author": "you",
+              "blocking": false,
+              "category": "Correctness",
+              "cites": null,
+              "content_updated_at": null,
+              "created_at": "<TS>",
+              "disposition": {
+                "at": "<TS>",
+                "by": "you",
+                "note": "fixture: will add a spec",
+                "state": "agree"
+              },
+              "evidence": null,
+              "fingerprint": null,
+              "import_batch_id": "manual",
+              "location": {
+                "kind": "single",
+                "lines": [
+                  5
+                ],
+                "path": "lib/widget.rb",
+                "removed": false
+              },
+              "origin": "manual",
+              "own_ps": 2,
+              "published_at": null,
+              "published_state": "unpublished",
+              "published_url": null,
+              "rationale": "Fixture note: spin_faster calls spin but nothing asserts the result.",
+              "rationale_refs": {
+                "refs": [],
+                "truncated": false
+              },
+              "recommendation": null,
+              "resolution": {
+                "confidence": "exact",
+                "line": 2,
+                "line_end": null,
+                "orphaned": false
+              },
+              "severity": "concern",
+              "slug": "f-spin-faster-has-no-test-coverage",
+              "superseded": false,
+              "superseded_by": null,
+              "superseded_reason": null,
+              "thread_count": 0,
+              "title": "spin_faster has no test coverage",
+              "title_refs": {
+                "refs": [],
+                "truncated": false
+              },
+              "touched_in": [],
+              "touched_in_capped": false,
+              "unresolved_count": 0,
+              "updated_at": "<TS>"
+            }
+          ],
+          "ps_number": 1,
+          "tip_sha_full": "3c934b431ffd54a1745419f99dfab7394734ab1b"
+        },
+        {
+          "base_sha_full": "dae4eaef98fe1767029807a0ffb5aca826975257",
+          "captured_at": "<TS>",
+          "comments": [
+            {
+              "comments": [
+                {
+                  "anchor_kind": "line",
+                  "author": "you",
+                  "body": "Should this call be memoized?",
+                  "body_refs": {
+                    "refs": [],
+                    "truncated": false
+                  },
+                  "created_at": "<TS>",
+                  "id": "<ID:0001>",
+                  "intent": "note",
+                  "path": "lib/widget.rb",
+                  "ps_number": 1,
+                  "replies": [],
+                  "resolution": {
+                    "confidence": "exact",
+                    "line": 5,
+                    "line_end": null,
+                    "orphaned": false,
+                    "resolved_against": {
+                      "ps": 2,
+                      "sha": "dceb5398c8b3fbd845a65330028e36d322a155eb"
+                    }
+                  },
+                  "resolved": false,
+                  "side": "new",
+                  "suggestion": null,
+                  "updated_at": "<TS>"
+                },
+                {
+                  "anchor_kind": "line",
+                  "author": "you",
+                  "body": "spin_faster has no test coverage",
+                  "body_refs": {
+                    "refs": [],
+                    "truncated": false
+                  },
+                  "created_at": "<TS>",
+                  "id": "<ID:0002>",
+                  "intent": "finding",
+                  "path": "lib/widget.rb",
+                  "ps_number": 2,
+                  "replies": [],
+                  "resolution": {
+                    "confidence": "exact",
+                    "line": 5,
+                    "line_end": null,
+                    "orphaned": false,
+                    "resolved_against": {
+                      "ps": 2,
+                      "sha": "dceb5398c8b3fbd845a65330028e36d322a155eb"
+                    }
+                  },
+                  "resolved": false,
+                  "side": "new",
+                  "suggestion": null,
+                  "updated_at": "<TS>"
+                }
+              ],
+              "in_diff": true,
+              "path": "lib/widget.rb"
+            }
+          ],
+          "commit_count": 2,
+          "files": [
+            {
+              "additions": 0,
+              "deletions": 0,
+              "new_blob_sha": "9c79b39b8cd56eec4e9fa1d8e798109ead842e0b",
+              "old_blob_sha": "9c79b39b8cd56eec4e9fa1d8e798109ead842e0b",
+              "old_path": "README.md",
+              "open_annotations": 0,
+              "path": "docs/README.md",
+              "status": "R"
+            },
+            {
+              "additions": 7,
+              "deletions": 0,
+              "new_blob_sha": "a4585ef7c7ae534bc5b2b5ebced97a664b851ba5",
+              "old_blob_sha": "f1fa37061436dc7a7e3c2e38ec5176b40af846b2",
+              "old_path": null,
+              "open_annotations": 2,
+              "path": "lib/widget.rb",
+              "status": "M"
+            }
+          ],
+          "findings": [
+            {
+              "act": "issue",
+              "annotation_id": "<ID:0002>",
+              "author": "you",
+              "blocking": false,
+              "category": "Correctness",
+              "cites": null,
+              "content_updated_at": null,
+              "created_at": "<TS>",
+              "disposition": {
+                "at": "<TS>",
+                "by": "you",
+                "note": "fixture: will add a spec",
+                "state": "agree"
+              },
+              "evidence": null,
+              "fingerprint": null,
+              "import_batch_id": "manual",
+              "location": {
+                "kind": "single",
+                "lines": [
+                  5
+                ],
+                "path": "lib/widget.rb",
+                "removed": false
+              },
+              "origin": "manual",
+              "own_ps": 2,
+              "published_at": null,
+              "published_state": "unpublished",
+              "published_url": null,
+              "rationale": "Fixture note: spin_faster calls spin but nothing asserts the result.",
+              "rationale_refs": {
+                "refs": [],
+                "truncated": false
+              },
+              "recommendation": null,
+              "resolution": {
+                "confidence": "exact",
+                "line": 5,
+                "line_end": null,
+                "orphaned": false
+              },
+              "severity": "concern",
+              "slug": "f-spin-faster-has-no-test-coverage",
+              "superseded": false,
+              "superseded_by": null,
+              "superseded_reason": null,
+              "thread_count": 0,
+              "title": "spin_faster has no test coverage",
+              "title_refs": {
+                "refs": [],
+                "truncated": false
+              },
+              "touched_in": [],
+              "touched_in_capped": false,
+              "unresolved_count": 0,
+              "updated_at": "<TS>"
+            }
+          ],
+          "ps_number": 2,
+          "tip_sha_full": "dceb5398c8b3fbd845a65330028e36d322a155eb"
+        }
+      ],
+      "repo": "acme-widgets",
+      "session_id": null,
+      "state": "open",
+      "title": "widgets: spin faster",
+      "verdict": {
+        "at": "<TS>",
+        "note": "fixture: looks good",
+        "ps": 2,
+        "state": "approve"
+      },
+      "verdict_stale": false
+    }
+  ],
+  "schema": "kbrs-golden-review-snapshot/1"
+}
