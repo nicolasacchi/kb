@@ -17,10 +17,12 @@
 //! * `env_clear()` then an explicit allowlist: `PATH` (the daemon's),
 //!   `HOME`/`XDG_CONFIG_HOME` = a store-owned EMPTY dir, `LC_ALL=C`/
 //!   `LANG=C` (the classifier reads English), `GIT_CONFIG_NOSYSTEM=1`,
-//!   `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, empty
+//!   `GIT_CONFIG_GLOBAL=<git_home>/gitconfig` (kb-written; only
+//!   `safe.directory` for registered local sources), `GIT_TERMINAL_PROMPT=0`, empty
 //!   `GIT_ASKPASS`/`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=never`,
 //!   `GIT_OPTIONAL_LOCKS=0`, `GIT_ALLOW_PROTOCOL` = exactly the profile's
-//!   transports (never `ext`/`fd`), proxy variables passed through, and
+//!   transports (never `ext`/`fd`), proxy + CA-bundle variables passed
+//!   through, PATH minus empty/relative entries, and
 //!   `GIT_DIR` when the call targets the store. `GIT_SSH_COMMAND` is not
 //!   set here; the Phase-2 deploy-key profile will own it.
 //! * `-c` hardening in argv: every inherited `credential.helper` reset,
@@ -46,10 +48,11 @@
 //! For [`FetchAuth::Token`] the daemon creates a `pipe2(O_CLOEXEC)`,
 //! writes `username=…\npassword=…\n` into it, closes the write end, and
 //! clears `FD_CLOEXEC` on the read end ONLY inside the forked child
-//! (the pre-exec hook), so git — and only git's own process tree —
-//! inherits it. The configured helper is a fixed shell snippet that
-//! answers a `get` for exactly the scope's protocol + host (anything
-//! else: no answer) by `cat <&N`. The snippet contains the fd number and
+//! (the pre-exec hook, which `dup2`s it onto fd 3 so any POSIX `sh`,
+//! dash included, can redirect from it), so git — and only git's own
+//! process tree — inherits it. The configured helper is a fixed shell
+//! snippet that answers a `get` for exactly the scope's protocol + host
+//! (anything else: no answer) by `cat <&3`. The snippet contains the fd number and
 //! host only; the token exists in the daemon's memory, in the pipe
 //! buffer, and in git's memory — never in any `/proc/<pid>/cmdline` or
 //! `/proc/<pid>/environ`, never on disk. The pipe is one-shot: git caches
@@ -59,19 +62,24 @@
 //!
 //! Keeps the ambient environment (the user's ssh-agent, credential
 //! helpers, `~/.ssh/config` aliases), minus the git plumbing variables
-//! that would retarget a call (`GIT_DIR`, `GIT_WORK_TREE`, …). Adds
-//! `GIT_TERMINAL_PROMPT=0`, the same hardening flags except the helper
-//! reset, the timeout, and `GIT_SSH_COMMAND="ssh -o BatchMode=yes -o
-//! ConnectTimeout=10"` when neither `GIT_SSH_COMMAND`/`GIT_SSH` nor
-//! `core.sshCommand` is set.
+//! that would retarget a call (`GIT_DIR`, `GIT_WORK_TREE`, …), the
+//! prompting/debug ones (`GIT_ASKPASS`, `SSH_ASKPASS`, `DISPLAY`,
+//! `GIT_EXEC_PATH`, `GIT_TRACE*`, `GIT_CURL_VERBOSE`, `GIT_SSL_NO_VERIFY`).
+//! Adds `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=never`, the same
+//! hardening flags except the helper reset, the timeout, and
+//! `GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"` only when
+//! neither `GIT_SSH_COMMAND`/`GIT_SSH` is set AND a probe DEFINITIVELY
+//! found no `core.sshCommand` (env beats config, so an unknown answer
+//! never overrides; a failed probe is not cached).
 //!
 //! Synchronous: call it from `spawn_blocking`.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use zeroize::Zeroize;
@@ -103,6 +111,29 @@ const DETAIL_CAP: usize = 2048;
 
 const INHERIT_SSH_COMMAND: &str = "ssh -o BatchMode=yes -o ConnectTimeout=10";
 
+/// The descriptor the credential pipe is dup'ed onto in the child. A single
+/// digit on purpose: POSIX only guarantees `<&N` for N in 0–9, and dash
+/// (Debian's `/bin/sh`) rejects multi-digit redirections.
+const HELPER_FD: RawFd = 3;
+
+/// kb's own global git config inside `git_home` (replaces
+/// `GIT_CONFIG_GLOBAL=/dev/null`). Holds ONLY `safe.directory` entries for
+/// registered local sources — see [`StoreGit::allow_local_source`].
+const GLOBAL_CONFIG_NAME: &str = "gitconfig";
+
+/// Extra ambient variables `inherit` mode strips (beyond
+/// [`RETARGETING_VARS`] and every `GIT_TRACE*`): GUI/askpass prompting,
+/// a redirected exec path, and debug switches that dump headers.
+const INHERIT_STRIPPED_VARS: &[&str] = &[
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "GIT_EXEC_PATH",
+    "GIT_CURL_VERBOSE",
+    "GIT_SSL_NO_VERIFY",
+];
+
 /// git plumbing variables stripped even in `inherit` mode: any of them
 /// would silently retarget a store call at another repository.
 const RETARGETING_VARS: &[&str] = &[
@@ -119,8 +150,10 @@ const RETARGETING_VARS: &[&str] = &[
     "GIT_PREFIX",
 ];
 
-/// Proxy variables passed through the scrubbed environment.
-const PROXY_VARS: &[&str] = &[
+/// Proxy + CA-bundle variables passed through the scrubbed environment.
+const PASSTHROUGH_VARS: &[&str] = &[
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
     "HTTPS_PROXY",
     "https_proxy",
     "HTTP_PROXY",
@@ -373,22 +406,31 @@ impl StoreGitError {
 #[derive(Debug, Clone)]
 pub struct StoreGit {
     git_home: PathBuf,
+    /// The daemon's PATH with empty and relative entries dropped.
     path_env: Option<OsString>,
-    proxies: Vec<(OsString, OsString)>,
-    /// `inherit` only: whether the ambient config has `core.sshCommand`
-    /// (computed once, lazily).
-    inherit_has_ssh_command: Arc<OnceLock<bool>>,
+    passthrough: Vec<(OsString, OsString)>,
+    /// `<git_home>/gitconfig` — the scrubbed calls' `GIT_CONFIG_GLOBAL`.
+    global_config: PathBuf,
+    /// `safe.directory` entries written into `global_config`.
+    safe_dirs: Arc<Mutex<BTreeSet<String>>>,
+    /// `inherit` only: `Some(has core.sshCommand)` once a probe gave a
+    /// DEFINITIVE answer; `None` = never probed or the probe failed (a
+    /// failure is never cached — the next call probes again).
+    inherit_ssh_probe: Arc<Mutex<Option<bool>>>,
+    /// Test hook: the "ambient environment" `inherit` mode inspects.
+    ambient_override: Option<Arc<Vec<(OsString, OsString)>>>,
 }
 
 impl StoreGit {
     /// `git_home` becomes `HOME`/`XDG_CONFIG_HOME` for every scrubbed call;
-    /// it is created (0700) if missing and must stay EMPTY — nothing kb
-    /// writes belongs there.
+    /// it is created (0700) if missing. The only file kb keeps there is
+    /// its own `gitconfig` (`safe.directory` entries); nothing else
+    /// belongs there.
     pub fn new(git_home: impl Into<PathBuf>) -> std::io::Result<Self> {
         Self::with_env_fn(git_home, |k| std::env::var_os(k))
     }
 
-    /// As [`Self::new`], reading PATH/proxies through `get` (tests).
+    /// As [`Self::new`], reading PATH/proxies/CA vars through `get` (tests).
     pub fn with_env_fn(
         git_home: impl Into<PathBuf>,
         get: impl Fn(&str) -> Option<OsString>,
@@ -405,20 +447,96 @@ impl StoreGit {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&git_home, std::fs::Permissions::from_mode(0o700))?;
         }
-        let proxies = PROXY_VARS
+        let passthrough = PASSTHROUGH_VARS
             .iter()
             .filter_map(|k| get(k).map(|v| (OsString::from(k), v)))
             .collect();
-        Ok(Self {
+        let sg = Self {
+            global_config: git_home.join(GLOBAL_CONFIG_NAME),
             git_home,
-            path_env: get("PATH"),
-            proxies,
-            inherit_has_ssh_command: Default::default(),
-        })
+            path_env: get("PATH").and_then(|p| sanitize_path(&p)),
+            passthrough,
+            safe_dirs: Default::default(),
+            inherit_ssh_probe: Default::default(),
+            ambient_override: None,
+        };
+        sg.write_global_config(&BTreeSet::new())?;
+        Ok(sg)
     }
 
     pub fn git_home(&self) -> &Path {
         &self.git_home
+    }
+
+    /// The `git` a scrubbed call will execute (first executable `git` on
+    /// the sanitized PATH) — for the boot log line. `None` = not found.
+    pub fn resolved_git(&self) -> Option<PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.path_env.as_ref()?;
+        std::env::split_paths(path)
+            .map(|d| d.join("git"))
+            .find(|p| {
+                std::fs::metadata(p)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+    }
+
+    /// Trust a LOCAL source repository (a member clone the store seeds or
+    /// fetches from) that may be owned by another uid: adds it to
+    /// `safe.directory` in kb's own global config. Scoped to exactly the
+    /// registered paths — never `*`. `path` must be absolute; control
+    /// characters are refused (they would inject config lines).
+    pub fn allow_local_source(&self, path: &Path) -> std::io::Result<()> {
+        let s = path
+            .to_str()
+            .filter(|s| path.is_absolute() && !s.chars().any(|c| c.is_control()))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "safe.directory source must be an absolute path without control characters",
+                )
+            })?;
+        let mut dirs = self.safe_dirs.lock().unwrap_or_else(|p| p.into_inner());
+        if dirs.insert(s.to_string()) {
+            self.write_global_config(&dirs)?;
+        }
+        Ok(())
+    }
+
+    fn write_global_config(&self, dirs: &BTreeSet<String>) -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut body = String::from(
+            "# Written by kb-code (review store). Regenerated; do not edit.\n[safe]\n",
+        );
+        for d in dirs {
+            let esc = d.replace('\\', "\\\\").replace('"', "\\\"");
+            body.push_str(&format!("\tdirectory = \"{esc}\"\n"));
+        }
+        let tmp = self.git_home.join(format!("{GLOBAL_CONFIG_NAME}.tmp"));
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, &self.global_config)
+    }
+
+    /// Test hook: the ambient environment `inherit` mode inspects.
+    #[cfg(test)]
+    pub(crate) fn with_ambient_for_test(mut self, vars: Vec<(OsString, OsString)>) -> Self {
+        self.ambient_override = Some(Arc::new(vars));
+        self
+    }
+
+    fn ambient_vars(&self) -> Vec<(OsString, OsString)> {
+        match &self.ambient_override {
+            Some(v) => v.as_ref().clone(),
+            None => std::env::vars_os().collect(),
+        }
     }
 
     /// Build the `Command` (no spawn). `helper_fd` is the token pipe's read
@@ -428,12 +546,21 @@ impl StoreGit {
         let protocols = call.auth.protocols();
         let inherit = matches!(call.auth, FetchAuth::Inherit);
         if inherit {
-            for v in RETARGETING_VARS {
+            let ambient = self.ambient_vars();
+            for v in RETARGETING_VARS.iter().chain(INHERIT_STRIPPED_VARS) {
                 cmd.env_remove(v);
             }
-            let ambient_ssh = std::env::var_os("GIT_SSH_COMMAND").is_some()
-                || std::env::var_os("GIT_SSH").is_some();
-            if !ambient_ssh && !self.inherit_has_ssh_command() {
+            for (k, _) in &ambient {
+                if k.to_string_lossy().starts_with("GIT_TRACE") {
+                    cmd.env_remove(k);
+                }
+            }
+            cmd.env("SSH_ASKPASS_REQUIRE", "never");
+            let has = |k: &str| ambient.iter().any(|(a, _)| a == k);
+            // Only when we KNOW nothing else picks the ssh command: env
+            // beats `core.sshCommand`, so a guess would silently override
+            // the user's key selection.
+            if !has("GIT_SSH_COMMAND") && !has("GIT_SSH") && self.inherit_ssh_command_absent() {
                 cmd.env("GIT_SSH_COMMAND", INHERIT_SSH_COMMAND);
             }
         } else {
@@ -444,13 +571,13 @@ impl StoreGit {
             cmd.env("HOME", &self.git_home)
                 .env("XDG_CONFIG_HOME", &self.git_home)
                 .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_GLOBAL", &self.global_config)
                 .env("GIT_ASKPASS", "")
                 .env("SSH_ASKPASS", "")
                 .env("SSH_ASKPASS_REQUIRE", "never")
                 .env("GIT_OPTIONAL_LOCKS", "0")
                 .env("GIT_CEILING_DIRECTORIES", &self.git_home);
-            for (k, v) in &self.proxies {
+            for (k, v) in &self.passthrough {
                 cmd.env(k, v);
             }
         }
@@ -481,8 +608,8 @@ impl StoreGit {
         }
         cfg.push("gc.auto=0".into());
         cfg.push("maintenance.auto=false".into());
-        if let (FetchAuth::Token(c), Some(fd)) = (call.auth, helper_fd) {
-            cfg.push(format!("credential.helper={}", helper_snippet(fd, c)));
+        if let (FetchAuth::Token(c), Some(_)) = (call.auth, helper_fd) {
+            cfg.push(format!("credential.helper=!{}", helper_snippet(c)));
             cfg.push("credential.useHttpPath=false".into());
         }
         for c in cfg {
@@ -492,26 +619,36 @@ impl StoreGit {
         cmd
     }
 
-    fn inherit_has_ssh_command(&self) -> bool {
-        *self.inherit_has_ssh_command.get_or_init(|| {
-            let mut cmd = Command::new("git");
-            for v in RETARGETING_VARS {
-                cmd.env_remove(v);
-            }
-            cmd.env("GIT_TERMINAL_PROMPT", "0")
-                .env("LC_ALL", "C")
-                .current_dir(&self.git_home)
-                .args(["config", "--get", "core.sshCommand"]);
-            let spec = RunSpec {
-                timeout: Duration::from_secs(5),
-                stdout_cap: 4096,
-                stderr_cap: 4096,
-                stdin: None,
-            };
-            proc::run(&mut cmd, &spec)
-                .map(|c| c.status.is_some_and(|s| s.success()) && !c.stdout.is_empty())
-                .unwrap_or(false)
-        })
+    /// `true` only when a probe DEFINITIVELY found no `core.sshCommand`
+    /// in the ambient config. A failed/timed-out probe answers `false`
+    /// ("unknown: don't override") and is not cached.
+    fn inherit_ssh_command_absent(&self) -> bool {
+        let mut cached = self
+            .inherit_ssh_probe
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(has) = *cached {
+            return !has;
+        }
+        let mut cmd = Command::new("git");
+        for v in RETARGETING_VARS {
+            cmd.env_remove(v);
+        }
+        cmd.env("GIT_TERMINAL_PROMPT", "0")
+            .env("LC_ALL", "C")
+            .current_dir(&self.git_home)
+            .args(["config", "--get", "core.sshCommand"]);
+        let spec = RunSpec {
+            timeout: Duration::from_secs(5),
+            stdout_cap: 4096,
+            stderr_cap: 4096,
+            stdin: None,
+        };
+        let verdict = proc::run(&mut cmd, &spec).ok().and_then(|c| {
+            ssh_probe_verdict(c.timed_out, c.status.and_then(|s| s.code()), &c.stdout)
+        });
+        *cached = verdict;
+        verdict == Some(false)
     }
 
     /// Run one call. See the module doc for the contract.
@@ -763,10 +900,34 @@ pub fn parse_ref_lines(s: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The credential-helper shell snippet: answer `get` for exactly the
-/// credential's protocol + host by relaying the inherited pipe `fd`;
-/// consume and ignore anything else (`store`/`erase`, other hosts).
-fn helper_snippet(fd: RawFd, cred: &HttpsCredential) -> String {
+/// Interpret `git config --get core.sshCommand`: exit 0 with a value =
+/// set; exit 1 = definitively unset; anything else (timeout, error) =
+/// unknown (`None`, never cached).
+fn ssh_probe_verdict(timed_out: bool, code: Option<i32>, stdout: &[u8]) -> Option<bool> {
+    match (timed_out, code) {
+        (false, Some(0)) => Some(!stdout.iter().all(|b| b.is_ascii_whitespace())),
+        (false, Some(1)) => Some(false),
+        _ => None,
+    }
+}
+
+/// Drop empty and relative PATH entries (a relative entry resolves
+/// against the child's cwd — attacker-influenced in general).
+fn sanitize_path(p: &std::ffi::OsStr) -> Option<OsString> {
+    let kept: Vec<PathBuf> = std::env::split_paths(p)
+        .filter(|d| d.is_absolute())
+        .collect();
+    if kept.is_empty() {
+        return None;
+    }
+    std::env::join_paths(kept).ok()
+}
+
+/// The credential-helper shell snippet (without the leading `!`): answer
+/// `get` for exactly the credential's protocol + host by relaying the
+/// inherited pipe on [`HELPER_FD`]; consume and ignore anything else
+/// (`store`/`erase`, other hosts).
+fn helper_snippet(cred: &HttpsCredential) -> String {
     let proto = cred.scope().protocol().as_str();
     let host = cred.scope().authority();
     // Both come from a validated `RemoteUrl`; re-assert the alphabet the
@@ -776,26 +937,39 @@ fn helper_snippet(fd: RawFd, cred: &HttpsCredential) -> String {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b':')));
     assert!(proto.bytes().all(|c| c.is_ascii_lowercase()));
     format!(
-        "!f() {{ test \"$1\" = get || {{ cat >/dev/null; exit 0; }}; p=; h=; \
+        "f() {{ test \"$1\" = get || {{ cat >/dev/null; exit 0; }}; p=; h=; \
          while IFS= read -r l; do [ -z \"$l\" ] && break; case \"$l\" in \
          protocol=*) p=\"${{l#protocol=}}\";; host=*) h=\"${{l#host=}}\";; esac; done; \
-         [ \"$p\" = '{proto}' ] && [ \"$h\" = '{host}' ] || exit 0; cat <&{fd}; }}; f"
+         [ \"$p\" = '{proto}' ] && [ \"$h\" = '{host}' ] || exit 0; cat <&{fd}; }}; f",
+        fd = HELPER_FD
     )
 }
 
-/// Make `fd` (CLOEXEC in the daemon) survive exec in THIS child only.
+/// Make `fd` (CLOEXEC in the daemon) appear as [`HELPER_FD`] in THIS
+/// child only, surviving exec. Runs after stdio is set up (0–2), so fd 3
+/// is the first free slot; whatever the child had there (necessarily a
+/// CLOEXEC descriptor about to vanish on exec, or a stray inherited one we
+/// would not want git to see anyway) is replaced.
 fn inherit_fd_in_child(cmd: &mut Command, fd: RawFd) {
     use std::os::unix::process::CommandExt;
     let hook = move || -> std::io::Result<()> {
-        // SAFETY: `fcntl` is async-signal-safe and touches only `fd`,
-        // which the parent keeps open until after spawn returns.
-        if unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } == -1 {
+        // SAFETY: `dup2`/`fcntl` are async-signal-safe and touch only
+        // `fd` (kept open by the parent until spawn returns) and fd 3.
+        let rc = unsafe {
+            if fd == HELPER_FD {
+                libc::fcntl(fd, libc::F_SETFD, 0)
+            } else {
+                // dup2 clears FD_CLOEXEC on the new descriptor.
+                libc::dup2(fd, HELPER_FD)
+            }
+        };
+        if rc == -1 {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
     };
-    // SAFETY: the hook only calls `fcntl` (see above) — no allocation, no
-    // locks — as required between fork and exec.
+    // SAFETY: the hook only calls `dup2`/`fcntl` (see above) — no
+    // allocation, no locks — as required between fork and exec.
     unsafe {
         cmd.pre_exec(hook);
     }

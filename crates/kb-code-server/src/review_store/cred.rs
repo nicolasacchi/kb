@@ -32,10 +32,12 @@
 //! 7. `none`.
 //!
 //! Under `auto`, a rung that does not apply is skipped WITH a recorded
-//! reason ([`SkippedRung`]); the one exception is
-//! `credential-account-mismatch`, which stops the ladder: D12 makes it an
-//! error, and falling through to `anonymous` would turn it into a silent
-//! downgrade.
+//! reason ([`SkippedRung`]), with two exceptions that STOP the ladder with a
+//! typed error (D12 — falling through would silently swap the identity
+//! the store fetches as): `credential-account-mismatch`, and ANY gh-cli
+//! failure (logged out, gh missing, keyring locked, gh too old) once the
+//! store is bound to an account — `gh_user` pinned or a `cred_account`
+//! recorded.
 //!
 //! # `gh-cli` (D12)
 //!
@@ -851,19 +853,54 @@ pub fn read_token_file(
     username: &str,
     url: &RemoteUrl,
 ) -> Result<HttpsCredential, CredError> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let scope = CredentialScope::for_url(url)
         .ok_or_else(|| CredError::Refused("a token needs an https remote".into()))?;
-    if !crate::config::token_file_mode_ok(path) {
-        return Err(CredError::Unavailable(
-            "token_file is missing or not owner-only (0600/0400)".into(),
-        ));
+    let unavailable = |why: String| CredError::Unavailable(format!("token_file {why}"));
+    // open → fstat the SAME descriptor (no stat-then-open race), refuse a
+    // symlink outright.
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| unavailable(format!("unreadable: {}", e.kind())))?;
+    let meta = f
+        .metadata()
+        .map_err(|e| unavailable(format!("unreadable: {}", e.kind())))?;
+    if !meta.is_file() {
+        return Err(unavailable("is not a regular file".into()));
     }
-    let raw = Zeroizing::new(
-        std::fs::read_to_string(path)
-            .map_err(|e| CredError::Unavailable(format!("token_file unreadable: {}", e.kind())))?,
-    );
-    HttpsCredential::new(scope, username, SecretToken::new(&raw)?)
+    // SAFETY: geteuid has no preconditions.
+    if meta.uid() != unsafe { libc::geteuid() } {
+        return Err(unavailable("is not owned by the daemon user".into()));
+    }
+    if meta.mode() & 0o077 != 0 {
+        return Err(unavailable("is not owner-only (0600/0400)".into()));
+    }
+    let mut buf = Zeroizing::new(vec![0u8; TOKEN_FILE_MAX + 1]);
+    let mut n = 0;
+    loop {
+        let r = f
+            .read(&mut buf[n..])
+            .map_err(|e| unavailable(format!("unreadable: {}", e.kind())))?;
+        if r == 0 {
+            break;
+        }
+        n += r;
+        if n > TOKEN_FILE_MAX {
+            return Err(unavailable(format!(
+                "is larger than {TOKEN_FILE_MAX} bytes"
+            )));
+        }
+    }
+    let text = std::str::from_utf8(&buf[..n])
+        .map_err(|_| CredError::Invalid("token_file is not UTF-8"))?;
+    HttpsCredential::new(scope, username, SecretToken::new(text)?)
 }
+
+/// Upper bound on a token file (a PAT is < 100 bytes).
+const TOKEN_FILE_MAX: usize = 4096;
 
 /// Walk the fetch ladder for a store whose canonical remote is `url`.
 /// See the module doc for the rules.
@@ -952,7 +989,12 @@ pub fn resolve_fetch_credential(
         });
     }
 
-    // 2. gh-cli
+    // 2. gh-cli. With an account pinned (`gh_user`) or recorded
+    // (`cred_account`), the store is BOUND to that gh account (D12): any
+    // failure to produce it — logged out, gh missing, keyring locked, gh
+    // too old — stops the ladder. Falling through to token_file/anonymous/
+    // inherit would silently swap the identity the store fetches as.
+    let bound = cfg.gh_user.is_some() || cfg.recorded_account.is_some();
     match &https {
         Some(h) => {
             match probes.gh_cli(h, cfg.gh_user.as_deref(), cfg.recorded_account.as_deref()) {
@@ -962,8 +1004,14 @@ pub fn resolve_fetch_credential(
                 }
                 // D12: never a warning, never a fall-through.
                 Err(e @ CredError::AccountMismatch { .. }) => return Err(e),
+                Err(e) if bound => return Err(e),
                 Err(e) => skip(&mut skipped, ProfileKind::GhCli, &e),
             }
+        }
+        None if bound => {
+            return Err(CredError::Refused(
+                "gh account is pinned/recorded but the remote has no https form".into(),
+            ))
         }
         None => skip(
             &mut skipped,

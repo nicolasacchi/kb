@@ -80,6 +80,8 @@ fn spawn_reader<R: Read + Send + 'static>(
                 }
             }
         }
+        // The chunk may have carried a credential answer (`credential fill`).
+        zeroize::Zeroize::zeroize(&mut chunk);
     });
     (sink, h)
 }
@@ -100,6 +102,34 @@ pub(crate) fn kill_group(pgid: u32) {
     // SAFETY: plain syscall; a stale/absent group just returns ESRCH.
     unsafe {
         libc::killpg(pgid, libc::SIGKILL);
+    }
+}
+
+/// Has `pid` exited? Leaves it unreaped (`WNOWAIT`).
+fn exited_unreaped(pid: u32) -> std::io::Result<bool> {
+    let id = libc::id_t::try_from(pid)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "pid out of range"))?;
+    loop {
+        // SAFETY: zeroed siginfo_t is a valid out-buffer for waitid.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: plain syscall on our own child; WNOWAIT leaves it
+        // waitable for `Child::wait`.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                id,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc == 0 {
+            // SAFETY: waitid filled `info`; si_pid is 0 when nothing exited.
+            return Ok(unsafe { info.si_pid() } != 0);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::Interrupted {
+            return Err(e);
+        }
     }
 }
 
@@ -150,27 +180,39 @@ pub(crate) fn run(cmd: &mut Command, spec: &RunSpec) -> std::io::Result<Captured
 
     let deadline = start + spec.timeout;
     let mut sleep = Duration::from_millis(2);
+    // `exited_unreaped` observes the exit WITHOUT reaping (WNOWAIT), so
+    // the leader is a zombie holding its pid — and therefore the group id
+    // — whenever we `killpg`: the signal can never land on a recycled
+    // group. The group is killed on EVERY path (timeout, normal exit,
+    // wait error) so no descendant outlives the call.
     let (status, timed_out) = loop {
-        match child.try_wait()? {
-            Some(st) => break (Some(st), false),
-            None if Instant::now() >= deadline => {
-                // Still unreaped here, so `pgid` cannot have been recycled.
+        match exited_unreaped(pgid) {
+            Ok(true) => {
+                kill_group(pgid);
+                break (Some(child.wait()?), false);
+            }
+            Ok(false) if Instant::now() >= deadline => {
                 kill_group(pgid);
                 let _ = child.wait();
                 break (None, true);
             }
-            None => {
+            Ok(false) => {
                 std::thread::sleep(sleep);
                 sleep = (sleep * 2).min(Duration::from_millis(25));
+            }
+            Err(e) => {
+                // Never leak a child: kill and reap before reporting.
+                kill_group(pgid);
+                let _ = child.wait();
+                return Err(e);
             }
         }
     };
 
     if !wait_join(handles, Instant::now() + PIPE_DRAIN_GRACE) {
-        // A descendant outlived the leader and still holds a pipe. It is a
-        // member of the group (so the group id is still in use and cannot
-        // have been recycled) — kill it to release the readers.
-        kill_group(pgid);
+        // Only a process that escaped the group (setsid) can still hold a
+        // pipe here; the reader threads are detached and end with it.
+        tracing::warn!("a subprocess outside the killed group still holds a capture pipe");
     }
 
     let (stdout, stdout_truncated) = take(&out_sink);
@@ -237,6 +279,35 @@ mod tests {
         assert!(
             !alive(bg),
             "the backgrounded grandchild survived the group kill"
+        );
+    }
+
+    #[test]
+    fn a_normal_exit_still_kills_lingering_group_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("bg.pid");
+        let mut cmd = Command::new("sh");
+        // The backgrounded sleep closes the capture pipes, so only the
+        // group kill can end it.
+        cmd.arg("-c").arg(format!(
+            "sleep 60 >/dev/null 2>&1 </dev/null & echo $! > {}; exit 0",
+            pidfile.display()
+        ));
+        let got = run(&mut cmd, &spec(10_000)).unwrap();
+        assert!(got.status.unwrap().success());
+        assert!(!got.timed_out);
+        let bg: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while alive(bg) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !alive(bg),
+            "a lingering group member survived a normal exit"
         );
     }
 

@@ -307,13 +307,24 @@ impl RemoteUrl {
     }
 
     /// The HTTPS form of an ssh URL on the same host (README §8: "the
-    /// store's transport URL is the HTTPS form"). An explicit ssh PORT is
-    /// dropped (it is an ssh port, meaningless for https). `None` for a
-    /// local path. https URLs return themselves.
+    /// store's transport URL is the HTTPS form"). Only derived when the
+    /// mapping is unambiguous: an ssh URL on a NON-default port (e.g.
+    /// Bitbucket Server's `:7999`) or a home-relative (`~`) path has no
+    /// knowable https twin and yields `None` — the caller reports it as
+    /// unsupported rather than guessing. `None` for a local path; https
+    /// URLs return themselves.
     pub fn https_equivalent(&self) -> Option<RemoteUrl> {
         match self.protocol {
             Protocol::Https => Some(self.clone()),
             Protocol::Ssh => {
+                if let Some((_, port)) = self.authority.split_once(':') {
+                    if port != "22" {
+                        return None;
+                    }
+                }
+                if self.path.starts_with('~') {
+                    return None;
+                }
                 let path = if self.path.ends_with(".git") {
                     self.path.clone()
                 } else {
@@ -481,6 +492,15 @@ mod tests {
             .unwrap();
         assert_eq!(u.protocol(), Protocol::Ssh);
         assert_eq!(u.host(), "bitbucket.example.com");
+        // A non-default ssh port has no knowable https twin: flagged, not dropped.
+        assert!(u.https_equivalent().is_none());
+        let u = RemoteUrl::parse_remote("ssh://git@github.com:22/acme/widgets.git").unwrap();
+        assert_eq!(
+            u.https_equivalent().unwrap().as_str(),
+            "https://github.com/acme/widgets.git"
+        );
+        let u = RemoteUrl::parse_remote("git@github.com:~acme/widgets.git").unwrap();
+        assert!(u.https_equivalent().is_none());
         let u = RemoteUrl::parse_remote("git@github.com:acme/widgets.git").unwrap();
         assert_eq!(u.protocol(), Protocol::Ssh);
         assert_eq!(

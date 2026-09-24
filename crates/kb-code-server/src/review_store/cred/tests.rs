@@ -224,6 +224,23 @@ fn token_files_must_be_owner_only() {
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
     let c = read_token_file(&p, DEFAULT_TOKEN_USERNAME, &gh_url()).unwrap();
     assert_eq!(c.secret(), "ghp_FAKEfileXXXXXXXXXXXXXXXXXXXXXX");
+
+    // A symlink is refused even when its target is fine (O_NOFOLLOW).
+    let link = dir.path().join("link.token");
+    std::os::unix::fs::symlink(&p, &link).unwrap();
+    let err = read_token_file(&link, DEFAULT_TOKEN_USERNAME, &gh_url()).unwrap_err();
+    assert_eq!(err.class(), FailureClass::CredentialUnavailable);
+
+    // Oversized files are refused (bounded read).
+    let big = dir.path().join("big.token");
+    std::fs::write(&big, "a".repeat(4097)).unwrap();
+    std::fs::set_permissions(&big, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let err = read_token_file(&big, DEFAULT_TOKEN_USERNAME, &gh_url()).unwrap_err();
+    assert!(err.to_string().contains("larger than"), "{err}");
+
+    // A directory is not a token file.
+    let err = read_token_file(dir.path(), DEFAULT_TOKEN_USERNAME, &gh_url()).unwrap_err();
+    assert_eq!(err.class(), FailureClass::CredentialUnavailable);
 }
 
 #[test]
@@ -372,6 +389,71 @@ fn ladder_stops_on_an_account_mismatch() {
     let err = resolve_fetch_credential(&cfg(), &gh_url(), &p).unwrap_err();
     assert_eq!(err.class(), FailureClass::CredentialAccountMismatch);
     assert_eq!(*p.log.borrow(), ["gh"], "no fall-through to anonymous");
+}
+
+#[test]
+fn a_bound_account_stops_the_ladder_on_any_gh_failure() {
+    // Every way gh can fail to produce the bound account's token.
+    fn logged_out() -> Result<GhCliCredential, CredError> {
+        Err(CredError::GhNotLoggedIn {
+            host: "github.com".into(),
+        })
+    }
+    fn missing() -> Result<GhCliCredential, CredError> {
+        Err(CredError::GhNotInstalled)
+    }
+    fn locked() -> Result<GhCliCredential, CredError> {
+        Err(CredError::Unavailable(
+            "gh timed out (keyring locked?)".into(),
+        ))
+    }
+    fn too_old() -> Result<GhCliCredential, CredError> {
+        Err(CredError::Unavailable(
+            "gh auth status: unknown flag: --json".into(),
+        ))
+    }
+    for (bind_pin, bind_rec) in [(true, false), (false, true)] {
+        let failures: [fn() -> Result<GhCliCredential, CredError>; 4] =
+            [logged_out, missing, locked, too_old];
+        for gh in failures {
+            let p = Probes {
+                gh: Some(gh),
+                anon_ok: true,
+                token_ok: true,
+                ..Default::default()
+            };
+            let mut c = cfg();
+            c.allow_inherited_credentials = true;
+            c.token_file = Some(PathBuf::from("/x"));
+            if bind_pin {
+                c.gh_user = Some("alice".into());
+            }
+            if bind_rec {
+                c.recorded_account = Some("alice".into());
+            }
+            let err = resolve_fetch_credential(&c, &gh_url(), &p).unwrap_err();
+            assert_eq!(err.class(), FailureClass::CredentialUnavailable, "{err}");
+            assert_eq!(
+                *p.log.borrow(),
+                ["gh"],
+                "fell through past a bound gh-cli rung"
+            );
+        }
+    }
+    // Bound, but the remote has no https form (ssh on a custom port).
+    let p = Probes {
+        gh: Some(fake_gh_cred),
+        anon_ok: true,
+        ..Default::default()
+    };
+    let mut c = cfg();
+    c.gh_user = Some("alice".into());
+    let odd = RemoteUrl::parse_remote("ssh://git@git.example.com:7999/acme/widgets.git").unwrap();
+    assert!(matches!(
+        resolve_fetch_credential(&c, &odd, &p),
+        Err(CredError::Refused(_))
+    ));
+    assert!(p.log.borrow().is_empty());
 }
 
 #[test]
