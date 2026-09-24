@@ -476,7 +476,7 @@ pub(crate) fn confirm_derived_project(
     alias: Option<&str>,
 ) -> (Option<String>, Option<String>, Option<String>) {
     if let Some(name) = alias {
-        if known.iter().any(|n| *n == name) {
+        if known.contains(&name) {
             return (Some(name.to_string()), Some(format!("{slug},{name}")), None);
         }
     }
@@ -1734,7 +1734,6 @@ fn pick_memory_target_aliased(
 /// - any other `want`: unchanged from today — filtered against
 ///   `memory_scope`, so an unrecognized scope surfaces as the 0-match
 ///   error.
-
 fn pick_memory_target(kbs: &serde_json::Value, want: &str, slug: &str) -> Result<MemoryTarget> {
     let arr = kbs
         .as_array()
