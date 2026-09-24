@@ -442,6 +442,9 @@ pub mod review_jobs;
 pub mod review_legacy;
 pub mod review_map;
 pub mod review_pseudo;
+// RS-U2 — the internal review store's hardened git spawner + credential
+// profiles (`review_store::git::StoreGit`, `review_store::cred`).
+pub mod review_store;
 pub mod review_sweep;
 pub mod review_timeline;
 pub mod review_turns;

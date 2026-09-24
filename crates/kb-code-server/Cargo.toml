@@ -167,6 +167,14 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 
+# RS-U2 — `review_store::git`/`proc`: `pipe2(O_CLOEXEC)` + `fcntl` for the
+# inherited-pipe credential helper, and `killpg` for process-group
+# timeouts. Already in the lockfile (kb-core/kb-cli/kb-lip use it).
+libc = "0.2"
+# RS-U2 — `review_store::cred::SecretToken` wipes gh/token-file secrets on
+# drop. Already in the lockfile transitively (1.8.x); no new supply chain.
+zeroize = "1"
+
 [features]
 ts-export = ["dep:ts-rs"]
 

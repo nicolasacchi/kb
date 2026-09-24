@@ -705,6 +705,14 @@ fn token_from_file(cfg: &GithubSection) -> Option<String> {
 /// Credential ladder: `token_file` (0600) > env `KB_CODE_GITHUB_TOKEN` >
 /// CLI-supplied token > none. Pure in the env/cli arguments so tests do
 /// not have to mutate process environment.
+///
+/// RS-U2: this is the review store's API slot. The CLI-supplied rung
+/// (`--gh-token-from-cli` → `CreateReviewPrBody.gh_token`) is the
+/// CALLER-SUPPLIED api credential
+/// (`review_store::cred::ApiCredentialSource::CallerSupplied`) and stays
+/// exactly as it is; the daemon's own `gh-cli` read
+/// (`review_store::cred::ApiCredential::from_gh_cli`) is a new rung a later
+/// unit wires in here. Neither ever fills the store's FETCH slot.
 pub fn resolve_github_token(
     cfg: &GithubSection,
     env_token: Option<&str>,
