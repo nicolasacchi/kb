@@ -85,10 +85,10 @@ fn ivf_pq_partitions(rows: u64) -> Option<u32> {
 }
 
 fn kb_compaction_options() -> CompactionOptions {
-    let mut options = CompactionOptions::default();
-    // Lance default is 1024*1024 — every kb fragment stays a candidate.
-    options.target_rows_per_fragment = COMPACT_TARGET_ROWS_PER_FRAGMENT;
-    options
+    CompactionOptions {
+        target_rows_per_fragment: COMPACT_TARGET_ROWS_PER_FRAGMENT,
+        ..CompactionOptions::default()
+    }
 }
 
 /// (id, embedding) pair returned by `Storage::list_embeddings`. The embedding
@@ -168,8 +168,8 @@ impl LanceOptions {
 fn shared_lance_session(index_bytes: usize, metadata_bytes: usize) -> Arc<lancedb::Session> {
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
-    static SESSIONS: LazyLock<Mutex<HashMap<(usize, usize), Arc<lancedb::Session>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+    type SessionMap = HashMap<(usize, usize), Arc<lancedb::Session>>;
+    static SESSIONS: LazyLock<Mutex<SessionMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
     let map = &*SESSIONS;
     let mut guard = map.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     guard
@@ -5297,7 +5297,10 @@ mod tests {
         assert_eq!(ivf_pq_partitions(0), None);
         assert_eq!(ivf_pq_partitions(VECTOR_INDEX_MIN_ROWS - 1), None);
         let at = ivf_pq_partitions(VECTOR_INDEX_MIN_ROWS).expect("at the bar");
-        assert_ne!(at, 256, "must not train the library default of 256 centroids");
+        assert_ne!(
+            at, 256,
+            "must not train the library default of 256 centroids"
+        );
         let sqrt = (VECTOR_INDEX_MIN_ROWS as f64).sqrt().round() as u32;
         assert_eq!(at, sqrt);
         let bigger = ivf_pq_partitions(VECTOR_INDEX_MIN_ROWS * 4).unwrap();

@@ -1404,12 +1404,14 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     let mut total_embed_ms: u64 = 0;
     let mut any_cache_hit = false;
     let deadline = crate::routes::context::deadline_at(params.deadline_ms);
-    if deadline.is_some_and(|d| d.saturating_duration_since(std::time::Instant::now()).is_zero())
-    {
+    if deadline.is_some_and(|d| {
+        d.saturating_duration_since(std::time::Instant::now())
+            .is_zero()
+    }) {
         let degraded = state
             .kbs
-            .iter()
-            .map(|(name, _)| {
+            .keys()
+            .map(|name| {
                 crate::routes::context::degraded_of(
                     name.as_str(),
                     "search",

@@ -539,10 +539,7 @@ mod tests {
         assert!(msg.contains("no name"), "{msg}");
 
         let not_array = kb_names_from_api(&json!({"name": "docs"})).unwrap_err();
-        assert!(
-            not_array.to_string().contains("array"),
-            "{not_array}"
-        );
+        assert!(not_array.to_string().contains("array"), "{not_array}");
     }
 
     #[test]

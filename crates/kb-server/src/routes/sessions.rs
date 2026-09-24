@@ -3853,12 +3853,14 @@ pub(crate) async fn recollect_compose(
         .clamp(1, RECOLLECT_MAX_LIMIT) as usize;
 
     let deadline = crate::routes::context::deadline_at(params.deadline_ms);
-    if deadline.is_some_and(|d| d.saturating_duration_since(std::time::Instant::now()).is_zero())
-    {
+    if deadline.is_some_and(|d| {
+        d.saturating_duration_since(std::time::Instant::now())
+            .is_zero()
+    }) {
         let degraded = state
             .kbs
-            .iter()
-            .map(|(name, _)| {
+            .keys()
+            .map(|name| {
                 crate::routes::context::degraded_of(
                     name.as_str(),
                     "recollect",
@@ -3900,8 +3902,9 @@ pub(crate) async fn recollect_compose(
     }
     let q_ref = &q;
     let vbm = &vec_by_model;
-    let mut futs: Vec<super::CorpusFut<'_, (Vec<Hit>, Option<crate::routes::context::DegradedLane>)>> =
-        Vec::new();
+    let mut futs: Vec<
+        super::CorpusFut<'_, (Vec<Hit>, Option<crate::routes::context::DegradedLane>)>,
+    > = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
             let work = async move {

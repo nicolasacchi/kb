@@ -72,6 +72,7 @@ async fn boot(
             capture_dir: None,
             resurface: None,
             slo,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

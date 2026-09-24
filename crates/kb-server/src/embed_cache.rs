@@ -235,7 +235,8 @@ pub struct EmbedOutcome {
 /// polls. First population locks briefly and drops the guard before returning
 /// — never across an await (invariant 15). A dropped embedder's slot is swept
 /// on the next cold insert so a reused address cannot serve a stale name.
-static MODEL_NAME_SLOTS: LazyLock<Mutex<HashMap<usize, (Weak<Mutex<Embedder>>, &'static str)>>> =
+type ModelNameSlot = (Weak<Mutex<Embedder>>, &'static str);
+static MODEL_NAME_SLOTS: LazyLock<Mutex<HashMap<usize, ModelNameSlot>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Model name for `embedder`, without holding its mutex once known.
@@ -245,7 +246,7 @@ pub(crate) fn embedder_model_name(embedder: &Arc<Mutex<Embedder>>) -> &'static s
         let g = MODEL_NAME_SLOTS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((alive, name)) = g.get(&addr) {
             if alive.strong_count() > 0 {
-                return *name;
+                return name;
             }
         }
     }
@@ -631,9 +632,7 @@ done
             if std::time::Instant::now() > deadline {
                 drop(hold);
                 let _ = miss_thread.join();
-                panic!(
-                    "miss did not enter QueryLaneGuard before acquiring the embedder mutex"
-                );
+                panic!("miss did not enter QueryLaneGuard before acquiring the embedder mutex");
             }
             std::thread::sleep(Duration::from_millis(5));
         }

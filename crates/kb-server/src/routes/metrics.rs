@@ -22,12 +22,8 @@ use crate::state::{
     LATENCY_BUCKET_COUNT,
 };
 use axum::{
-    extract::State,
-    http::header,
-    middleware::from_fn_with_state,
-    response::IntoResponse,
-    routing::get as route_get,
-    Json, Router,
+    extract::State, http::header, middleware::from_fn_with_state, response::IntoResponse,
+    routing::get as route_get, Json, Router,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -473,12 +469,7 @@ fn emit_pipeline_index(out: &mut String, pipe: &kb_core::metrics::PipelineSnapsh
         "counter",
         "Documents passed to the index-side embedder.",
     );
-    sample(
-        out,
-        "kb_index_embed_docs_total",
-        &[],
-        pipe.embed_index.docs,
-    );
+    sample(out, "kb_index_embed_docs_total", &[], pipe.embed_index.docs);
 
     family(
         out,
@@ -504,12 +495,7 @@ fn emit_pipeline_storage(out: &mut String, pipe: &kb_core::metrics::PipelineSnap
         "Storage-actor operations by kind.",
     );
     for op in &pipe.storage {
-        sample(
-            out,
-            "kb_storage_ops_total",
-            &[("kind", op.kind)],
-            op.count,
-        );
+        sample(out, "kb_storage_ops_total", &[("kind", op.kind)], op.count);
     }
 
     family(
