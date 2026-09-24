@@ -2534,7 +2534,7 @@ mod tests {
         assert!(s.contains('⚠'));
         assert!(s.contains('○'));
         assert!(s.contains("fix: do x"));
-        assert!(s.contains("1 pass, 1 warn, 1 skip (3 checks total)"));
+        assert!(s.contains("1 pass, 1 warn, 0 fail, 1 skip (3 checks total)"));
         assert!(s.contains("harness scope"));
     }
 
