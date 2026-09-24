@@ -431,4 +431,108 @@ impl Store {
         )?;
         Ok(conn.last_insert_rowid())
     }
+
+    // --- RS-U3 (review store) — registration / seeding reads ------------
+
+    /// Distinct non-null `reviews.pr_repo_slug` values for `repo` — the
+    /// base-URL ladder's rung 3 (README §5.1: "the slug shared by the
+    /// repo's existing PR bindings").
+    pub fn review_pr_slugs(&self, repo: &str) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT pr_repo_slug FROM reviews
+             WHERE repo = ?1 AND pr_repo_slug IS NOT NULL AND pr_repo_slug != ''
+             ORDER BY pr_repo_slug",
+        )?;
+        let rows = stmt
+            .query_map(params![repo], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Every repo NAME that has at least one review (any state) — the boot
+    /// seeding job's scope (D4: "for repos that have reviews").
+    pub fn repos_with_reviews(&self) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT DISTINCT repo FROM reviews ORDER BY repo")?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `(id, repo, state, base_ref, base_branch)` of every review whose repo
+    /// is one of `repos` (a store's member names).
+    #[allow(clippy::type_complexity)]
+    pub fn reviews_for_repos(
+        &self,
+        repos: &[String],
+    ) -> Result<Vec<(i64, String, String, String, Option<String>)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, repo, state, base_ref, base_branch FROM reviews
+             WHERE repo = ?1 ORDER BY id",
+        )?;
+        let mut out = Vec::new();
+        for repo in repos {
+            let rows = stmt
+                .query_map(params![repo], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            out.extend(rows);
+        }
+        Ok(out)
+    }
+
+    /// `(review_id, ps_number, tip_sha, base_sha)` of every patchset of the
+    /// reviews of `repos` — the store's connectivity check (README §5.2
+    /// step 4).
+    pub fn patchsets_for_repos(&self, repos: &[String]) -> Result<Vec<(i64, i64, String, String)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT p.review_id, p.ps_number, p.tip_sha, p.base_sha
+             FROM review_patchsets p JOIN reviews r ON r.id = p.review_id
+             WHERE r.repo = ?1 ORDER BY p.review_id, p.ps_number",
+        )?;
+        let mut out = Vec::new();
+        for repo in repos {
+            let rows = stmt
+                .query_map(params![repo], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            out.extend(rows);
+        }
+        Ok(out)
+    }
+
+    /// Record a store's canonical base URL and the ladder rung it came from.
+    /// NEVER changes `store_key` (README §11: a disagreeing `base_url` is a
+    /// doctor error, never a re-key) — callers check the key first.
+    pub fn set_review_store_base_url(
+        &self,
+        id: i64,
+        base_url: Option<&str>,
+        base_url_source: Option<&str>,
+    ) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE review_stores SET base_url = ?2, base_url_source = ?3 WHERE id = ?1",
+            params![id, base_url, base_url_source],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Boot: a store left `seeding` by a process that died mid-seed goes
+    /// back to `absent` (its `.seed-*.tmp` is swept separately). Returns
+    /// how many rows changed.
+    pub fn reset_interrupted_seeding(&self) -> Result<usize> {
+        let n = self.lock().execute(
+            "UPDATE review_stores SET state = 'absent',
+                 state_json = json_object('code', 'seed-interrupted')
+             WHERE state = 'seeding'",
+            [],
+        )?;
+        Ok(n)
+    }
 }

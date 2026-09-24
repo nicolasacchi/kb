@@ -162,6 +162,9 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "review_store/git.rs",
     // RS-U2 — `#[cfg(test)]` fixture repos + raw-push/hostile-config probes.
     "review_store/git/tests.rs",
+    // RS-U3 — `#[cfg(test)]` fixture clones for the seeding/registration
+    // tests (synthetic acme/widgets; no caller-supplied values).
+    "review_store/seed/tests.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",
