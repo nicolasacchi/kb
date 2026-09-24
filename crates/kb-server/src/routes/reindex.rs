@@ -42,7 +42,7 @@ pub async fn post(
 
     let re_embed = match re_embed_requested(&params, &body) {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     spawn_walk(ctx, re_embed).await
 }
@@ -70,7 +70,7 @@ pub async fn kb_post(
     };
     let re_embed = match re_embed_requested(&params, &body) {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     spawn_walk(ctx, re_embed).await
 }
@@ -88,12 +88,14 @@ pub struct ReindexParams {
     re_embed: bool,
 }
 
-fn re_embed_requested(query: &ReindexParams, body: &[u8]) -> Result<bool, Response<Body>> {
+fn re_embed_requested(query: &ReindexParams, body: &[u8]) -> Result<bool, Box<Response<Body>>> {
     if body.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(query.re_embed);
     }
     let parsed: ReindexParams = serde_json::from_slice(body).map_err(|e| {
-        error_to_problem_json(&kb_core::Error::BadRequest(format!("reindex body: {e}")))
+        Box::new(error_to_problem_json(&kb_core::Error::BadRequest(format!(
+            "reindex body: {e}"
+        ))))
     })?;
     Ok(query.re_embed || parsed.re_embed)
 }
