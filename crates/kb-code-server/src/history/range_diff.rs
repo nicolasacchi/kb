@@ -52,8 +52,8 @@
 //! `modified`, verified) sets both sides to the same string.
 
 use super::{run_git_raw, Result};
+use crate::git::roots::GitRoot;
 use crate::git::RefRange;
-use std::path::Path;
 
 /// Pair-list cap — mirrors `compare::MAX_COMMITS`'s "plain fixed ceiling,
 /// not a paginated surface" convention.
@@ -167,7 +167,7 @@ pub fn parse_range_diff(text: &str) -> Vec<RangeDiffPair> {
 /// validates each endpoint as a `Revspec` and reassembles the argv token
 /// itself, so `--output=/tmp/x..main` is refused on the left-hand side
 /// while `main..topic` passes.
-pub fn range_diff(repo_root: &Path, old: &RefRange, new: &RefRange) -> Result<RangeDiff> {
+pub fn range_diff(repo_root: &dyn GitRoot, old: &RefRange, new: &RefRange) -> Result<RangeDiff> {
     let (old, new) = (old.as_arg(), new.as_arg());
     let out = run_git_raw(repo_root, &["range-diff", "--no-color", &old, &new])?;
     let text = String::from_utf8_lossy(&out);
@@ -182,6 +182,7 @@ pub fn range_diff(repo_root: &Path, old: &RefRange, new: &RefRange) -> Result<Ra
 mod tests {
     use super::*;
     use crate::history::HistoryError;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -375,7 +376,12 @@ mod tests {
 
         let old_range = RefRange::parse(&format!("{base_sha}..topic-v1")).unwrap();
         let new_range = RefRange::parse(&format!("{base_sha}..topic-v2")).unwrap();
-        let rd = range_diff(dir, &old_range, &new_range).unwrap();
+        let rd = range_diff(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &old_range,
+            &new_range,
+        )
+        .unwrap();
 
         assert!(!rd.truncated);
         assert_eq!(rd.pairs.len(), 2);
@@ -413,7 +419,12 @@ mod tests {
         git(dir, &["tag", "v1"]);
 
         let range = RefRange::parse(&format!("{base_sha}..v1")).unwrap();
-        let rd = range_diff(dir, &range, &range).unwrap();
+        let rd = range_diff(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &range,
+            &range,
+        )
+        .unwrap();
         assert!(!rd.pairs.is_empty());
         assert!(rd.pairs.iter().all(|p| p.disposition == "equal"));
     }
@@ -440,7 +451,7 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "c1"]);
 
         let err = range_diff(
-            dir,
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
             &RefRange::parse("main..nope").unwrap(),
             &RefRange::parse("main..also-nope").unwrap(),
         )

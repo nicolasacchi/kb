@@ -80,6 +80,7 @@
 
 use crate::config::RepoEntry;
 use crate::entities::RouteContract;
+use crate::git::roots::{GitCtx, GitRoot, WorkTreeRoot};
 use crate::git::{GitRepo, Revspec};
 use crate::history::{self, HistoryError};
 use crate::routes::{find_repo, safe_rel_path, ApiError};
@@ -327,10 +328,13 @@ pub fn dry_run_default_on(v: &Option<String>) -> bool {
     !matches!(v.as_deref(), Some("0") | Some("false") | Some("no"))
 }
 
-fn run_git(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, ReviewGitError> {
+/// RS-U4 — takes a classified [`GitRoot`], never a bare `&Path` (see
+/// `crate::git::roots`).
+fn run_git(repo_root: &dyn GitRoot, args: &[&str]) -> Result<Vec<u8>, ReviewGitError> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
+        .envs(crate::git::roots::alternates_env(repo_root))
         .args(args)
         .output()
         .map_err(ReviewGitError::Spawn)?;
@@ -344,7 +348,10 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, ReviewGitError> {
 }
 
 /// `git rev-parse --verify <spec>^{commit}` → full 40-hex sha.
-pub fn resolve_commit_sha(repo_root: &Path, spec: &Revspec) -> Result<String, ReviewGitError> {
+pub fn resolve_commit_sha(
+    repo_root: &dyn GitRoot,
+    spec: &Revspec,
+) -> Result<String, ReviewGitError> {
     // V70-A2 (SEC-17) — the `reject_user_ref(spec)?` line that used to
     // open this fn is now the CONSTRUCTOR of the type it takes: there is
     // no longer a guard a caller (or this fn) can forget, and the
@@ -368,7 +375,7 @@ pub fn resolve_commit_sha(repo_root: &Path, spec: &Revspec) -> Result<String, Re
 
 /// `git merge-base <a> <b>` — both sides must already be full shas.
 pub fn merge_base_sha(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     base_sha: &str,
     tip_sha: &str,
 ) -> Result<String, ReviewGitError> {
@@ -397,7 +404,7 @@ pub fn merge_base_sha(
 /// `sha` must be a full 40-hex string (validated BEFORE spawn). Never
 /// passes user text into the ref path or the sha position.
 pub fn update_patchset_ref(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     review_id: i64,
     ps_number: i64,
     sha: &str,
@@ -428,7 +435,7 @@ pub fn update_patchset_ref(
 
 /// `git update-ref -d refs/kbc/review/<id>/ps<n>`.
 pub fn delete_patchset_ref(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     review_id: i64,
     ps_number: i64,
 ) -> Result<(), ReviewGitError> {
@@ -441,7 +448,7 @@ pub fn delete_patchset_ref(
     // -d is a fixed flag we control; refname is digits-only.
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         .args(["update-ref", "-d", &refname])
         .output()
         .map_err(ReviewGitError::Spawn)?;
@@ -465,14 +472,14 @@ pub fn delete_patchset_ref(
 }
 
 /// `git update-ref -d refs/kbc/pr/<n>`. `n` is a `u32` so Display is digits.
-pub fn delete_pr_ref(repo_root: &Path, pr_number: u32) -> Result<(), ReviewGitError> {
+pub fn delete_pr_ref(repo_root: &dyn GitRoot, pr_number: u32) -> Result<(), ReviewGitError> {
     if pr_number < 1 {
         return Err(ReviewGitError::BadRef(format!("pr_number={pr_number}")));
     }
     let refname = pr_ref(pr_number);
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         .args(["update-ref", "-d", &refname])
         .output()
         .map_err(ReviewGitError::Spawn)?;
@@ -494,7 +501,7 @@ pub fn delete_pr_ref(repo_root: &Path, pr_number: u32) -> Result<(), ReviewGitEr
 }
 
 /// Delete a reconstructed [`KbcRef`] (never a caller-supplied string).
-pub fn delete_kbc_ref(repo_root: &Path, parsed: KbcRef) -> Result<(), ReviewGitError> {
+pub fn delete_kbc_ref(repo_root: &dyn GitRoot, parsed: KbcRef) -> Result<(), ReviewGitError> {
     match parsed {
         KbcRef::Pr { number } => delete_pr_ref(repo_root, number),
         KbcRef::Patchset {
@@ -507,7 +514,9 @@ pub fn delete_kbc_ref(repo_root: &Path, parsed: KbcRef) -> Result<(), ReviewGitE
 /// `git for-each-ref` over the two daemon-owned prefixes. Prefixes are
 /// hardcoded — not caller text. Each name is re-parsed via [`parse_kbc_ref`]
 /// before it can be deleted.
-pub fn list_kbc_refs(repo_root: &Path) -> Result<Vec<(KbcRef, String, String)>, ReviewGitError> {
+pub fn list_kbc_refs(
+    repo_root: &dyn GitRoot,
+) -> Result<Vec<(KbcRef, String, String)>, ReviewGitError> {
     let out = run_git(
         repo_root,
         &[
@@ -544,7 +553,7 @@ pub fn list_kbc_refs(repo_root: &Path) -> Result<Vec<(KbcRef, String, String)>, 
 
 /// `git rev-list --count <base>..<tip>` — both full shas.
 pub fn commit_count(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     base_sha: &str,
     tip_sha: &str,
 ) -> Result<u64, ReviewGitError> {
@@ -563,7 +572,11 @@ pub fn commit_count(
 /// Blob oid of `path` at `tip_sha`, or empty string if the path is absent
 /// (deleted file). Uses `git ls-tree <tip> -- <path>` so the path never
 /// sits in a revspec position.
-pub fn blob_sha_at(repo_root: &Path, tip_sha: &str, path: &str) -> Result<String, ReviewGitError> {
+pub fn blob_sha_at(
+    repo_root: &dyn GitRoot,
+    tip_sha: &str,
+    path: &str,
+) -> Result<String, ReviewGitError> {
     if !is_full_sha(tip_sha) {
         return Err(ReviewGitError::BadSha(tip_sha.to_string()));
     }
@@ -586,8 +599,11 @@ pub fn blob_sha_at(repo_root: &Path, tip_sha: &str, path: &str) -> Result<String
 }
 
 /// Diff files between two shas (`base_sha..tip_sha`) via `history::diff_files`.
+///
+/// RS-U4 (S6) — a review read: runs in the review store once it is ready,
+/// falling back to the member work tree (`GitCtx::read_with_fallback`).
 pub fn files_changed(
-    repo_root: &Path,
+    ctx: &GitCtx,
     base_sha: &str,
     tip_sha: &str,
 ) -> Result<Vec<crate::numstat::FileChange>, ReviewGitError> {
@@ -595,7 +611,8 @@ pub fn files_changed(
         return Err(ReviewGitError::BadSha(format!("{base_sha}..{tip_sha}")));
     }
     let range = format!("{base_sha}..{tip_sha}");
-    history::diff_files(repo_root, "diff", &["-M", &range]).map_err(Into::into)
+    ctx.read_with_fallback(|root| history::diff_files(root, "diff", &["-M", &range]))
+        .map_err(Into::into)
 }
 
 /// V80-M0 — the set of paths a diff touches, BOTH endpoints of a rename
@@ -620,7 +637,7 @@ pub fn changed_path_set_from(files: &[crate::numstat::FileChange]) -> HashSet<St
 /// block) and calls `changed_path_set_from` directly on that instead, so
 /// it never shells a SECOND `git diff` for the same patchset.
 pub fn changed_path_set(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     base_sha: &str,
     tip_sha: &str,
 ) -> Result<HashSet<String>, ReviewGitError> {
@@ -685,7 +702,7 @@ impl BaseSource {
 
 /// `git config --get remote.origin.url` exits 1 when the key is unset, so
 /// this is exactly "the repo has an `origin` remote configured".
-fn has_origin_remote(repo_root: &Path) -> bool {
+fn has_origin_remote(repo_root: &dyn GitRoot) -> bool {
     run_git(repo_root, &["config", "--get", "remote.origin.url"]).is_ok()
 }
 
@@ -696,7 +713,7 @@ fn has_origin_remote(repo_root: &Path) -> bool {
 /// refspec. `branch` is a validated [`Revspec`]; a `:` can never appear in
 /// a real branch name, so its presence here is refused outright rather than
 /// handed to git's refspec parser.
-fn fetch_remote_default(repo_root: &Path, branch: &Revspec) -> Result<(), ReviewGitError> {
+fn fetch_remote_default(repo_root: &dyn GitRoot, branch: &Revspec) -> Result<(), ReviewGitError> {
     let b = branch.as_str();
     if b.contains(':') {
         return Err(ReviewGitError::BadRef(b.to_string()));
@@ -711,7 +728,7 @@ fn fetch_remote_default(repo_root: &Path, branch: &Revspec) -> Result<(), Review
 /// Both endpoints are validated full shas, so the interpolated range token
 /// can only ever be `<hex>...<hex>`.
 fn ahead_behind(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     local_sha: &str,
     remote_sha: &str,
 ) -> Result<(u64, u64), ReviewGitError> {
@@ -765,7 +782,7 @@ fn ahead_behind(
 ///   mirror's local default branch) with `base_source: local-default` —
 ///   the PR fetch itself stays the load-bearing one.
 pub fn start_pr_base(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     explicit: Option<&str>,
     pr_head_sha: &str,
     repo_name: &str,
@@ -775,7 +792,7 @@ pub fn start_pr_base(
         reject_user_ref(b)?;
         return Ok((b.to_string(), BaseSource::Explicit));
     }
-    let local_default = default_base_ref(repo_root);
+    let local_default = default_base_ref(repo_root.git_path());
     if !has_origin_remote(repo_root) {
         return Ok((local_default, BaseSource::LocalDefault));
     }
@@ -1011,10 +1028,18 @@ pub(crate) fn parse_verdict_state(s: &str) -> Result<(), ApiError> {
 /// Steps: resolve tip of `head_ref` → skip if equals latest tip (when
 /// `skip_if_same`) → merge-base → GC oldest if over max → update-ref →
 /// insert row → emit `review.changed`.
+///
+/// RS-U4 — capture and the `refs/kbc/*` ref family (design §6 S4/S5: this
+/// fn, `start_pr_base`, `delete_review_with_refs`, the patchset GC, the
+/// refs list/gc routes) are classified `WorkTreeRoot` by every caller for
+/// now: they WRITE refs and resolve user branch names, and move to the
+/// review store only with the store ref family + capture units (U5/U6).
+/// Review READS elsewhere already go through `GitCtx`, whose work-tree
+/// fallback keeps them correct in the meantime.
 pub fn capture_patchset(
     store: &Store,
     bus: &EventBus,
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     review: &ReviewRow,
     max_patchsets: u32,
     skip_if_same: bool,
@@ -1081,7 +1106,7 @@ pub fn capture_patchset(
 pub fn delete_review_with_refs(
     store: &Store,
     bus: &EventBus,
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     review: &ReviewRow,
 ) -> Result<(), ReviewGitError> {
     let pss = store.list_patchsets(review.id).unwrap_or_default();
@@ -1144,7 +1169,11 @@ pub fn gc_patchsets(
             let Some(old) = store.oldest_patchset(review.id).ok().flatten() else {
                 break;
             };
-            let _ = delete_patchset_ref(&repo.path, review.id, old.ps_number);
+            let _ = delete_patchset_ref(
+                &WorkTreeRoot::user_clone(&repo.path),
+                review.id,
+                old.ps_number,
+            );
             if store
                 .delete_patchset(review.id, old.ps_number)
                 .unwrap_or(false)
@@ -1211,7 +1240,7 @@ pub fn spawn_auto_capture_worker(
                                 let root = repo_entry.path.clone();
                                 let head_ref = review.head_ref.clone();
                                 let tip = match tokio::task::spawn_blocking(move || {
-                                    resolve_commit_sha(&root, &parse_user_ref(&head_ref)?)
+                                    resolve_commit_sha(&WorkTreeRoot::user_clone(&root), &parse_user_ref(&head_ref)?)
                                 }).await {
                                     Ok(Ok(s)) => s,
                                     _ => continue,
@@ -1267,7 +1296,7 @@ pub fn spawn_auto_capture_worker(
                                 // Re-check tip still matches the pending one
                                 // and still differs from latest ps.
                                 let current = match parse_user_ref(&review.head_ref)
-                                    .and_then(|r| resolve_commit_sha(&repo.path, &r))
+                                    .and_then(|r| resolve_commit_sha(&WorkTreeRoot::user_clone(&repo.path), &r))
                                 {
                                     Ok(s) => s,
                                     Err(_) => return,
@@ -1280,7 +1309,7 @@ pub fn spawn_auto_capture_worker(
                                 if !should_auto_capture(true, true, equals, true) {
                                     return;
                                 }
-                                match capture_patchset(&store4, &bus4, &repo.path, &review, max, true) {
+                                match capture_patchset(&store4, &bus4, &WorkTreeRoot::user_clone(&repo.path), &review, max, true) {
                                     Ok(ps) => tracing::info!(
                                         review_id = id,
                                         ps = ps.ps_number,
@@ -1434,8 +1463,8 @@ pub(crate) async fn create_review_value(
     let head = body.head_ref.clone();
     let base = base_ref.clone();
     tokio::task::spawn_blocking(move || {
-        resolve_commit_sha(&root, &parse_user_ref(&head)?)?;
-        resolve_commit_sha(&root, &parse_user_ref(&base)?)?;
+        resolve_commit_sha(&WorkTreeRoot::user_clone(&root), &parse_user_ref(&head)?)?;
+        resolve_commit_sha(&WorkTreeRoot::user_clone(&root), &parse_user_ref(&base)?)?;
         Ok::<(), ReviewGitError>(())
     })
     .await
@@ -1472,7 +1501,14 @@ pub(crate) async fn create_review_value(
     let max = state.review.max_patchsets;
     let review2 = review.clone();
     let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(&store, &bus, &root, &review2, max, false)
+        capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(&root),
+            &review2,
+            max,
+            false,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -1505,7 +1541,14 @@ pub async fn snapshot_review(
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(&store, &bus, &root, &review, max, false)
+        capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(&root),
+            &review,
+            max,
+            false,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -1690,9 +1733,11 @@ pub async fn delete_review(
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
-    tokio::task::spawn_blocking(move || delete_review_with_refs(&store, &bus, &root, &review))
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    tokio::task::spawn_blocking(move || {
+        delete_review_with_refs(&store, &bus, &WorkTreeRoot::user_clone(&root), &review)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -1914,7 +1959,7 @@ pub async fn gc_reviews(
 /// `COUNT(*) … path IN (…)` call.
 pub fn compose_review_list_rows(
     store: &Store,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     repo_id: i64,
     rows: Vec<ReviewRow>,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
@@ -1952,7 +1997,11 @@ pub fn compose_review_list_rows(
             let key = (p.clone(), ps.tip_sha.clone());
             let sha = blob_sha_cache
                 .entry(key)
-                .or_insert_with(|| blob_sha_at(repo_root, &ps.tip_sha, p).unwrap_or_default())
+                .or_insert_with(|| {
+                    repo_root
+                        .read_with_fallback(|r| blob_sha_at(r, &ps.tip_sha, p))
+                        .unwrap_or_default()
+                })
                 .clone();
             blob_map.insert(p.clone(), sha);
         }
@@ -2043,7 +2092,7 @@ pub async fn list_reviews(
     }
     let repo_name = params.repo.clone();
     let state_filter = params.state.clone();
-    let root = repo.path.clone();
+    let root = GitCtx::resolve_entry(&state.store, &repo).await;
     // PF-K1 (2026-08-31 incident doc, store.rs) — the whole list compose
     // (store batch fan-out + per-review git diff + CPU-only aggregation)
     // is now ONE blocking-pool trip, down from one initial fetch plus up
@@ -2078,16 +2127,18 @@ pub async fn get_review(
         .store
         .run_blocking(move |store| store.list_patchsets(id))
         .await?;
-    let root = repo.path.clone();
+    let root = GitCtx::resolve_entry(&state.store, &repo).await;
     let mut patchsets = Vec::with_capacity(pss.len());
     for ps in pss {
         let root2 = root.clone();
         let base = ps.base_sha.clone();
         let tip = ps.tip_sha.clone();
-        let count = tokio::task::spawn_blocking(move || commit_count(&root2, &base, &tip))
-            .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .unwrap_or(0);
+        let count = tokio::task::spawn_blocking(move || {
+            root2.read_with_fallback(|r| commit_count(r, &base, &tip))
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or(0);
         patchsets.push(serde_json::json!({
             "ps_number": ps.ps_number,
             "tip_sha": short_sha(&ps.tip_sha),
@@ -2165,7 +2216,8 @@ pub async fn review_files(
         .store
         .run_blocking(move |store| resolve_ps(store, id, ps_param.as_deref()))
         .await?;
-    let root = repo.path.clone();
+    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = git_ctx.clone();
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let files = tokio::task::spawn_blocking(move || files_changed(&root, &base, &tip))
@@ -2191,13 +2243,15 @@ pub async fn review_files(
 
     let mut out = Vec::with_capacity(files.len());
     for f in &files {
-        let root = repo.path.clone();
+        let root = git_ctx.clone();
         let tip = ps.tip_sha.clone();
         let path = f.path.clone();
-        let blob = tokio::task::spawn_blocking(move || blob_sha_at(&root, &tip, &path))
-            .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .unwrap_or_default();
+        let blob = tokio::task::spawn_blocking(move || {
+            root.read_with_fallback(|r| blob_sha_at(r, &tip, &path))
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or_default();
         let viewed_blob = viewed_map.get(&f.path);
         let (viewed_flag, viewed_stale) = match viewed_blob {
             Some(vb) if vb == &blob => (true, false),
@@ -2261,7 +2315,7 @@ pub async fn review_interdiff(
         })
         .await?;
 
-    let root = repo.path.clone();
+    let root = GitCtx::resolve_entry(&state.store, &repo).await;
     let from_tip = from_ps.tip_sha.clone();
     let to_tip = to_ps.tip_sha.clone();
     let files = {
@@ -2274,7 +2328,8 @@ pub async fn review_interdiff(
                 return Err(ReviewGitError::BadSha(format!("{a}..{b}")));
             }
             let range = format!("{a}..{b}");
-            history::diff_files(&r, "diff", &["-M", &range]).map_err(Into::into)
+            r.read_with_fallback(|g| history::diff_files(g, "diff", &["-M", &range]))
+                .map_err(Into::into)
         })
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??
@@ -2297,7 +2352,7 @@ pub async fn review_interdiff(
             false,
         );
         tokio::task::spawn_blocking(move || {
-            history::range_diff::range_diff(&r, &old_range, &new_range)
+            r.read_with_fallback(|g| history::range_diff::range_diff(g, &old_range, &new_range))
         })
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -2348,7 +2403,7 @@ pub async fn review_annotations(
         .run_blocking(move |store| store.latest_patchset(id))
         .await?
         .ok_or_else(|| ApiError::not_found("review has no patchsets"))?;
-    let root = repo.path.clone();
+    let root = GitCtx::resolve_entry(&state.store, &repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let files = tokio::task::spawn_blocking(move || files_changed(&root, &base, &tip))
@@ -2437,7 +2492,7 @@ pub async fn review_risk_route(
         .store
         .run_blocking(move |store| resolve_ps(store, id, None))
         .await?;
-    let root = repo.path.clone();
+    let root = GitCtx::resolve_entry(&state.store, &repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let store = state.store.clone();
@@ -2467,7 +2522,7 @@ pub async fn review_risk_route(
 fn review_risk_sync(
     store: &Store,
     repo_id: i64,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     repo_name: &str,
     review_id: i64,
     ps_number: i64,
@@ -2498,7 +2553,7 @@ fn review_risk_sync(
 
     let mut file_out = Vec::with_capacity(files.len());
     for f in &files {
-        let loc = crate::behavioral::complexity_for_path(repo_root, &f.path).loc;
+        let loc = crate::behavioral::complexity_for_path(repo_root.work_tree().path(), &f.path).loc;
         let rel_churn = relative_churn(f.insertions as i64, f.deletions as i64, loc);
 
         let authors = store.author_stats_for(repo_id, &f.path).unwrap_or_default();
@@ -2762,7 +2817,14 @@ async fn reuse_pr_review(
     let max = state.review.max_patchsets;
     let review2 = review.clone();
     let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(&store, &bus, &root, &review2, max, true)
+        capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(&root),
+            &review2,
+            max,
+            true,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -2996,7 +3058,7 @@ pub(crate) async fn create_review_pr_value(
     let pr_for_base = body.pr_number;
     let (base_ref, base_source) = tokio::task::spawn_blocking(move || {
         start_pr_base(
-            &root_for_base,
+            &WorkTreeRoot::user_clone(&root_for_base),
             explicit_base.as_deref(),
             &head_for_base,
             &repo_for_base,
@@ -3011,7 +3073,10 @@ pub(crate) async fn create_review_pr_value(
     let root_for_resolve = repo.path.clone();
     let base_for_resolve = base_ref.clone();
     tokio::task::spawn_blocking(move || {
-        resolve_commit_sha(&root_for_resolve, &parse_user_ref(&base_for_resolve)?)
+        resolve_commit_sha(
+            &WorkTreeRoot::user_clone(&root_for_resolve),
+            &parse_user_ref(&base_for_resolve)?,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -3049,7 +3114,14 @@ pub(crate) async fn create_review_pr_value(
     let max = state.review.max_patchsets;
     let review2 = review.clone();
     let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(&store, &bus, &root, &review2, max, false)
+        capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(&root),
+            &review2,
+            max,
+            false,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -3591,20 +3663,24 @@ pub async fn pr_status_route(
             {
                 Ok(pull) => {
                     pr_head_sha = Some(pull.head_sha.clone());
-                    let root = repo.path.clone();
+                    // RS-U4 (S6) — the PR head and the base..head count are
+                    // review reads: store first once it is ready.
+                    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+                    let root = git_ctx.clone();
                     let head_sha = pull.head_sha.clone();
                     let resolved = tokio::task::spawn_blocking(move || {
                         // A GitHub-reported head sha — caller-adjacent
                         // text, so it goes through the same validator.
-                        resolve_commit_sha(&root, &parse_user_ref(&head_sha)?)
+                        let spec = parse_user_ref(&head_sha)?;
+                        root.read_with_fallback(|r| resolve_commit_sha(r, &spec))
                     })
                     .await
                     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                     if let Ok(resolved_sha) = resolved {
-                        let root2 = repo.path.clone();
+                        let root2 = git_ctx.clone();
                         let base = latest_local_ps_tip_sha.clone();
                         let count = tokio::task::spawn_blocking(move || {
-                            commit_count(&root2, &base, &resolved_sha)
+                            root2.read_with_fallback(|r| commit_count(r, &base, &resolved_sha))
                         })
                         .await
                         .map_err(|e| {
@@ -3730,9 +3806,10 @@ pub async fn list_review_refs(
     let (repo, _) = find_repo(&state, &params.repo)?;
     let root = repo.path.clone();
     let repo_name = params.repo.clone();
-    let listed = tokio::task::spawn_blocking(move || list_kbc_refs(&root))
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let listed =
+        tokio::task::spawn_blocking(move || list_kbc_refs(&WorkTreeRoot::user_clone(&root)))
+            .await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let (pr_bound, patch_keys) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -3777,7 +3854,7 @@ pub async fn gc_review_refs(
     let repo_name = params.repo.clone();
     let listed = {
         let root2 = root.clone();
-        tokio::task::spawn_blocking(move || list_kbc_refs(&root2))
+        tokio::task::spawn_blocking(move || list_kbc_refs(&WorkTreeRoot::user_clone(&root2)))
             .await
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??
     };
@@ -3801,7 +3878,7 @@ pub async fn gc_review_refs(
         let parsed: Vec<KbcRef> = orphans.iter().map(|r| r.parsed).collect();
         tokio::task::spawn_blocking(move || {
             for p in parsed {
-                delete_kbc_ref(&root2, p)?;
+                delete_kbc_ref(&WorkTreeRoot::user_clone(&root2), p)?;
             }
             Ok::<(), ReviewGitError>(())
         })
@@ -4103,7 +4180,8 @@ mod tests {
         lgit(dir, &["commit", "-q", "-m", "c1"]);
         let head = lgit_out(dir, &["rev-parse", "HEAD"]);
 
-        let (base_ref, source) = start_pr_base(dir, None, &head, "r", 1).unwrap();
+        let (base_ref, source) =
+            start_pr_base(&WorkTreeRoot::user_clone(dir), None, &head, "r", 1).unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);
     }
@@ -4112,7 +4190,8 @@ mod tests {
     fn start_pr_base_against_a_slightly_ahead_origin_uses_the_merge_base_rung() {
         let (_r, _b, _c, dir, base_sha, pr_sha, remote_tip) = ladder_fixture(7, 2);
 
-        let (base_ref, source) = start_pr_base(&dir, None, &pr_sha, "widget", 7).unwrap();
+        let (base_ref, source) =
+            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap();
         assert_eq!(source, BaseSource::MergeBase);
         assert_eq!(base_ref, "refs/remotes/origin/main");
         // The fetch really refreshed the remote-tracking ref…
@@ -4126,7 +4205,7 @@ mod tests {
         // pins the behaviour is that the merge-base ran against
         // `remote_tip`.
         assert_eq!(
-            merge_base_sha(&dir, &remote_tip, &pr_sha).unwrap(),
+            merge_base_sha(&WorkTreeRoot::user_clone(&dir), &remote_tip, &pr_sha).unwrap(),
             base_sha
         );
     }
@@ -4136,7 +4215,8 @@ mod tests {
         let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
         let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = ladder_fixture(7, extra as u32);
 
-        let err = start_pr_base(&dir, None, &pr_sha, "widget", 7).unwrap_err();
+        let err =
+            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap_err();
         assert_eq!(err.problem_type(), Some(ERR_STALE_MIRROR));
         assert_eq!(err.status_code(), StatusCode::CONFLICT);
         let msg = err.message().to_string();
@@ -4157,7 +4237,14 @@ mod tests {
         let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
         let (_r, _b, _c, dir, _base, pr_sha, _tip) = ladder_fixture(7, extra as u32);
 
-        let (base_ref, source) = start_pr_base(&dir, Some("main"), &pr_sha, "widget", 7).unwrap();
+        let (base_ref, source) = start_pr_base(
+            &WorkTreeRoot::user_clone(&dir),
+            Some("main"),
+            &pr_sha,
+            "widget",
+            7,
+        )
+        .unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::Explicit);
     }
@@ -4186,7 +4273,8 @@ mod tests {
             &["remote", "add", "origin", bare_dir.to_str().unwrap()],
         );
 
-        let (base_ref, source) = start_pr_base(&dir, None, &head, "r", 1).unwrap();
+        let (base_ref, source) =
+            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &head, "r", 1).unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);
     }
@@ -4337,7 +4425,15 @@ mod tests {
             .create_review("r", Some("t"), "main", "feature", None, 1)
             .unwrap();
         let review = store.get_review(id).unwrap().unwrap();
-        let ps1 = capture_patchset(&store, &bus, dir, &review, 50, false).unwrap();
+        let ps1 = capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(dir),
+            &review,
+            50,
+            false,
+        )
+        .unwrap();
         assert_eq!(ps1.ps_number, 1);
         // ref exists
         let show = Command::new("git")
@@ -4352,7 +4448,15 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "three\n").unwrap();
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-q", "--amend", "-m", "c2b"]);
-        let ps2 = capture_patchset(&store, &bus, dir, &review, 50, false).unwrap();
+        let ps2 = capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(dir),
+            &review,
+            50,
+            false,
+        )
+        .unwrap();
         assert_eq!(ps2.ps_number, 2);
         assert_ne!(ps1.tip_sha, ps2.tip_sha);
 
@@ -4360,7 +4464,15 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "four\n").unwrap();
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-q", "--amend", "-m", "c2c"]);
-        let ps3 = capture_patchset(&store, &bus, dir, &review, 1, false).unwrap();
+        let ps3 = capture_patchset(
+            &store,
+            &bus,
+            &WorkTreeRoot::user_clone(dir),
+            &review,
+            1,
+            false,
+        )
+        .unwrap();
         assert_eq!(ps3.ps_number, 3);
         assert!(store.get_patchset(id, 1).unwrap().is_none());
         let show1 = Command::new("git")

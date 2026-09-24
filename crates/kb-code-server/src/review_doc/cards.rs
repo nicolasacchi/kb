@@ -44,6 +44,7 @@
 
 use crate::annotations;
 use crate::entities;
+use crate::git::roots::GitCtx;
 use crate::git::{GitRepo, DEFAULT_BLOB_SIZE_CAP};
 use crate::highlight::Span;
 use crate::ingest::git_blob_hash;
@@ -53,7 +54,6 @@ use crate::review_doc::refs::Ref;
 use crate::store::{ReviewPatchsetRow, Store};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 pub const STATE_PINNED: &str = "pinned";
 pub const STATE_CARRIED: &str = "carried";
@@ -190,7 +190,10 @@ pub fn trust_for(state: &str, byte_identical: bool) -> Option<&'static str> {
 
 /// Everything a resolution pass needs that is not the store.
 pub struct CardCtx<'a> {
-    pub repo_root: &'a Path,
+    /// RS-U4 (design §6 S7) — the dual root: review reads (pinned blobs,
+    /// blob oids) go through the `GitCtx` chain; the zeitwerk inflection
+    /// read stays on `repo_root.work_tree()`.
+    pub repo_root: &'a GitCtx,
     pub repo_id: i64,
     pub review_id: i64,
     pub target_ps: &'a ReviewPatchsetRow,
@@ -428,9 +431,9 @@ fn resolve_code(
             ),
         );
     };
-    let old = match GitRepo::open(ctx.repo_root)
-        .and_then(|g| g.read_blob_by_oid(sha, DEFAULT_BLOB_SIZE_CAP))
-    {
+    let old = match ctx.repo_root.read_with_fallback(|root| {
+        GitRepo::open(root.git_path()).and_then(|g| g.read_blob_by_oid(sha, DEFAULT_BLOB_SIZE_CAP))
+    }) {
         Ok(bytes) => match String::from_utf8(bytes) {
             Ok(t) => t,
             Err(_) => {
@@ -693,7 +696,7 @@ fn resolve_ent(
     let row = &rows[0];
     // Borrow the entity index's OWN class; never mint one here
     // (kb-code-server/CLAUDE.md invariant 13).
-    let zw = entities::zeitwerk::zeitwerk_for(ctx.repo_root);
+    let zw = entities::zeitwerk::zeitwerk_for(ctx.repo_root.work_tree().path());
     let matched_via = if row.fqn == fqn {
         entities::MATCHED_VIA_NESTING
     } else {
@@ -963,7 +966,7 @@ fn sorted_list(set: &HashSet<i64>) -> String {
 // --- shared helpers ---------------------------------------------------------
 
 fn read_at_ps(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     path: &str,
     tip: &str,
     cache: &mut HashMap<String, Option<String>>,
@@ -977,7 +980,7 @@ fn read_at_ps(
 }
 
 fn blob_oid_at_ps(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     path: &str,
     tip: &str,
     cache: &mut HashMap<String, Option<String>>,
@@ -985,10 +988,12 @@ fn blob_oid_at_ps(
     if let Some(hit) = cache.get(path) {
         return hit.clone();
     }
-    let oid = GitRepo::open(repo_root)
-        .ok()
-        .and_then(|g| g.blob_oid(tip, path).ok())
-        .flatten();
+    let oid = repo_root.read_opt_with_fallback(|root| {
+        GitRepo::open(root.git_path())
+            .ok()
+            .and_then(|g| g.blob_oid(tip, path).ok())
+            .flatten()
+    });
     cache.insert(path.to_string(), oid.clone());
     oid
 }
@@ -1174,7 +1179,7 @@ mod tests {
             observed_at: Some(1_700_000_000),
         }];
         let ctx = CardCtx {
-            repo_root: Path::new("."),
+            repo_root: &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(".")),
             repo_id: 1,
             review_id: 1,
             target_ps: &ps,
@@ -1214,7 +1219,7 @@ mod tests {
         let changed_paths = HashSet::new();
         let checks: Vec<review_doc::CiCheck> = Vec::new();
         let ctx = CardCtx {
-            repo_root: Path::new("."),
+            repo_root: &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(".")),
             repo_id: 1,
             review_id: 1,
             target_ps: &ps,

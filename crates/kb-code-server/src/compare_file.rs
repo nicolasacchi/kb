@@ -10,7 +10,9 @@ use crate::entities::RouteContract;
 use crate::frames::{self, FrameClaim};
 use crate::git::Revspec;
 use crate::ingest;
-use crate::routes::{find_repo, parse_revspec, read_repo_file, safe_rel_path, ApiError};
+use crate::routes::{
+    find_repo, parse_revspec, read_repo_file, safe_rel_path, ApiError, RevResolver,
+};
 use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::http::header;
@@ -149,15 +151,42 @@ pub async fn compare_file_route(
     let a: Revspec = parse_revspec(&params.a)?;
     let b: Revspec = parse_revspec(&params.b)?;
 
-    let read_a = read_repo_file(repo, &path, Some(a.as_str()))?;
-    let read_b = read_repo_file(repo, &path, Some(b.as_str()))?;
+    // RS-U4 (S8 bridge) — a side naming a full sha / `refs/kbc/*` reads
+    // through the review store first once it is ready; the diff itself
+    // runs in the store only when BOTH sides are store-addressable (a name
+    // like `HEAD` means something else in a bare store).
+    let addressable = |s: &Revspec| crate::git::roots::is_store_addressable(s.as_str());
+    let git_ctx = if addressable(&a) || addressable(&b) {
+        Some(crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await)
+    } else {
+        None
+    };
+    let read_a = read_repo_file(
+        repo,
+        &path,
+        RevResolver::maybe_bridged(git_ctx.as_ref(), Some(a.as_str())),
+    )?;
+    let read_b = read_repo_file(
+        repo,
+        &path,
+        RevResolver::maybe_bridged(git_ctx.as_ref(), Some(b.as_str())),
+    )?;
 
-    let repo_root = repo.path.clone();
+    let repo_root = crate::git::roots::WorkTreeRoot::of_repo(repo);
+    let diff_ctx = git_ctx.filter(|_| addressable(&a) && addressable(&b));
     let path_for_task = path.clone();
     let a_for_task = a.clone();
     let b_for_task = b.clone();
-    let diff_text = tokio::task::spawn_blocking(move || {
-        diff_file(&repo_root, &a_for_task, Some(&b_for_task), &path_for_task)
+    let diff_text = tokio::task::spawn_blocking(move || match diff_ctx {
+        Some(ctx) => ctx.read_with_fallback(|r| {
+            diff_file(r.git_path(), &a_for_task, Some(&b_for_task), &path_for_task)
+        }),
+        None => diff_file(
+            repo_root.path(),
+            &a_for_task,
+            Some(&b_for_task),
+            &path_for_task,
+        ),
     })
     .await
     .map_err(|e| {

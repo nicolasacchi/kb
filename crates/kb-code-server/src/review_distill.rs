@@ -29,6 +29,7 @@
 //! calls kb and never writes anything — ONE call direction stays
 //! kb-code→kb, and this route doesn't even use that lane.
 
+use crate::git::roots::GitCtx;
 use crate::review_comments::build_comment_groups;
 use crate::reviews::{
     changed_path_set_from, files_changed, require_review, resolve_ps, verdict_block,
@@ -40,7 +41,6 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SCHEMA: &str = "review-distill/1";
@@ -63,7 +63,7 @@ pub async fn review_distill_route(
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (review, repo, _repo_id) = require_review(&state, id).await?;
-    let root = repo.path.clone();
+    let root = GitCtx::resolve_entry(&state.store, &repo).await;
 
     // `repo`'s borrow of `state` ends at the clone above, so `state`
     // itself (an `Arc`) can move into the closure — no extra clone.
@@ -84,7 +84,7 @@ pub async fn review_distill_route(
 fn compose_distill(
     state: &SharedState,
     review: &ReviewRow,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     latest_ps: &ReviewPatchsetRow,
 ) -> Result<serde_json::Value, ApiError> {
     let patchsets: Vec<serde_json::Value> = state

@@ -87,6 +87,11 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     "doclens/resolve_tests.rs",
     "doclens/sync_tests.rs",
     "git/commit.rs",
+    // RS-U4 — `StoreRoot`/`WorkTreeRoot`/`GitCtx`. Production code spawns
+    // nothing (it only classifies roots and sets the read-only alternates
+    // env on callers' own commands); the `Command::new("git")` is the
+    // `#[cfg(test)]` fixture builder (a work tree + an empty bare store).
+    "git/roots.rs",
     "git/tests.rs",
     // V70-A3X's working-tree status/tree reader. Audited when the lint first
     // caught it: it spawns `git` twice and takes NO caller-supplied REF, so
@@ -430,4 +435,80 @@ fn review_store_spawns_only_through_its_hardened_sites() {
         git.contains("libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC)"),
         "RS-U2: the credential pipe must be created O_CLOEXEC"
     );
+}
+
+/// RS-U4 — the review-store type split (`git::roots`) makes every caller of
+/// `files_changed`/`read_blob_text`/`run_git_raw`/`read_repo_file`/
+/// `reviews::run_git` classify its root or fail to compile. Two review
+/// reads never pass through any of those functions — they open a
+/// `GitRepo` straight onto the user clone — so no type can catch them:
+///
+/// * `prose_refs.rs` resolves `[[code:…]]` refs against a patchset tip via
+///   `Store::repo_root(id)` + `GitRepo::open`;
+/// * `refs_typeahead.rs` lists `refs/kbc/*` via `GitRepo::list_kbc_refs`.
+///
+/// This is the manual tripwire for them: the set of files reaching either
+/// door is PINNED. A new file on either list fails with instructions; a
+/// file dropping off (because it was migrated onto `GitCtx`) fails too, so
+/// the list is shrunk deliberately rather than silently rotting.
+#[test]
+fn review_store_bypass_tripwire() {
+    fn files_with(needle: &str, skip: &[&str]) -> BTreeSet<String> {
+        let mut files = Vec::new();
+        rust_files(&src_root(), &mut files);
+        files
+            .iter()
+            .filter(|p| {
+                std::fs::read_to_string(p)
+                    .map(|s| {
+                        s.lines()
+                            .filter(|l| !l.trim_start().starts_with("//"))
+                            .filter(|l| !skip.iter().any(|k| l.contains(k)))
+                            .any(|l| l.contains(needle))
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|p| rel(p))
+            .collect()
+    }
+
+    // `Store::repo_root(id)` — the user clone's path, straight from the DB.
+    // ingest.rs and resolve.rs are WORK-TREE reads (indexing, the live
+    // file); prose_refs.rs is the known REVIEW bypass.
+    let repo_root_callers = files_with(".repo_root(", &["fn repo_root("]);
+    let expected: BTreeSet<String> = ["ingest.rs", "prose_refs.rs", "resolve.rs"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        repo_root_callers, expected,
+        "RS-U4 tripwire: the set of files calling `Store::repo_root(id)` changed. \
+         A review/PR read must build a `git::roots::GitCtx` (GitCtx::for_repo / \
+         resolve_entry) instead of opening the user clone; a genuine work-tree \
+         read may be added here with a one-line classification."
+    );
+
+    // `GitRepo::list_kbc_refs()` — `refs/kbc/*` enumerated in the user
+    // clone. `reviews::list_kbc_refs(root)` (typed) is a different fn.
+    let kbc_ref_listers = files_with(".list_kbc_refs()", &["fn list_kbc_refs("]);
+    let expected: BTreeSet<String> = ["refs_typeahead.rs"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        kbc_ref_listers, expected,
+        "RS-U4 tripwire: the set of files listing `refs/kbc/*` through an \
+         untyped `GitRepo` changed. Review refs live in the review store once \
+         it is ready — go through `git::roots::GitCtx`."
+    );
+
+    // The two known bypass sites stay marked in the source, so a reader
+    // at the site sees the same warning this test gives.
+    for f in ["prose_refs.rs", "refs_typeahead.rs"] {
+        let src = std::fs::read_to_string(src_root().join(f)).unwrap();
+        assert!(
+            src.contains("RS-U4 bypass"),
+            "{f} lost its `RS-U4 bypass` marker comment"
+        );
+    }
 }

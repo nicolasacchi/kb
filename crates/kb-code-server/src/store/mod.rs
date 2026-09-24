@@ -289,6 +289,10 @@ pub struct Store {
     /// counter; `generation` keeps its original meaning ("the files/symbols
     /// candidate SET changed") untouched.
     opens_generation: AtomicU64,
+    /// RS-U4 — reads a `GitCtx` served from a user repo instead of a ready
+    /// review store (`crate::git::roots`). Shared (`Arc`) because every
+    /// `GitCtx` built against this store carries a handle to bump it.
+    git_fallbacks: std::sync::Arc<crate::git::roots::GitFallbackStats>,
 }
 
 /// The ONE sanctioned way to touch the store from async context — see the
@@ -407,7 +411,20 @@ impl Store {
             conn: Mutex::new(conn),
             generation: AtomicU64::new(0),
             opens_generation: AtomicU64::new(0),
+            git_fallbacks: Default::default(),
         })
+    }
+
+    /// RS-U4 — read-only view of the review-store fallback counters (the
+    /// Phase-1 gate "0 fallback hits after ready" reads `odb_miss`).
+    pub fn git_fallback_stats(&self) -> crate::git::roots::GitFallbackSnapshot {
+        self.git_fallbacks.snapshot()
+    }
+
+    pub(crate) fn git_fallbacks_handle(
+        &self,
+    ) -> std::sync::Arc<crate::git::roots::GitFallbackStats> {
+        std::sync::Arc::clone(&self.git_fallbacks)
     }
 
     fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {
