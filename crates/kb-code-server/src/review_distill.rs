@@ -63,7 +63,7 @@ pub async fn review_distill_route(
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (review, repo, _repo_id) = require_review(&state, id).await?;
-    let root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = GitCtx::resolve_entry(&state.store, repo).await;
 
     // `repo`'s borrow of `state` ends at the clone above, so `state`
     // itself (an `Arc`) can move into the closure — no extra clone.

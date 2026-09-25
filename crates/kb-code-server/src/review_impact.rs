@@ -181,7 +181,7 @@ pub async fn review_impact_route(
         .await?;
     let path = safe_rel_path(&params.path)?.to_string();
 
-    let root = crate::git::roots::GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
     let git_ctx = root.clone();
     let base = target_ps.base_sha.clone();
     let tip = target_ps.tip_sha.clone();

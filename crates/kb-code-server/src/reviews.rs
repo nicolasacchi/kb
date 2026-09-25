@@ -2092,7 +2092,7 @@ pub async fn list_reviews(
     }
     let repo_name = params.repo.clone();
     let state_filter = params.state.clone();
-    let root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = GitCtx::resolve_entry(&state.store, repo).await;
     // PF-K1 (2026-08-31 incident doc, store.rs) — the whole list compose
     // (store batch fan-out + per-review git diff + CPU-only aggregation)
     // is now ONE blocking-pool trip, down from one initial fetch plus up
@@ -2127,7 +2127,7 @@ pub async fn get_review(
         .store
         .run_blocking(move |store| store.list_patchsets(id))
         .await?;
-    let root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = GitCtx::resolve_entry(&state.store, repo).await;
     let mut patchsets = Vec::with_capacity(pss.len());
     for ps in pss {
         let root2 = root.clone();
@@ -2216,7 +2216,7 @@ pub async fn review_files(
         .store
         .run_blocking(move |store| resolve_ps(store, id, ps_param.as_deref()))
         .await?;
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let root = git_ctx.clone();
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
@@ -2315,7 +2315,7 @@ pub async fn review_interdiff(
         })
         .await?;
 
-    let root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = GitCtx::resolve_entry(&state.store, repo).await;
     let from_tip = from_ps.tip_sha.clone();
     let to_tip = to_ps.tip_sha.clone();
     let files = {
@@ -2403,7 +2403,7 @@ pub async fn review_annotations(
         .run_blocking(move |store| store.latest_patchset(id))
         .await?
         .ok_or_else(|| ApiError::not_found("review has no patchsets"))?;
-    let root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = GitCtx::resolve_entry(&state.store, repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let files = tokio::task::spawn_blocking(move || files_changed(&root, &base, &tip))
@@ -2492,7 +2492,7 @@ pub async fn review_risk_route(
         .store
         .run_blocking(move |store| resolve_ps(store, id, None))
         .await?;
-    let root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let root = GitCtx::resolve_entry(&state.store, repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let store = state.store.clone();
@@ -3665,7 +3665,7 @@ pub async fn pr_status_route(
                     pr_head_sha = Some(pull.head_sha.clone());
                     // RS-U4 (S6) — the PR head and the base..head count are
                     // review reads: store first once it is ready.
-                    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+                    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
                     let root = git_ctx.clone();
                     let head_sha = pull.head_sha.clone();
                     let resolved = tokio::task::spawn_blocking(move || {
