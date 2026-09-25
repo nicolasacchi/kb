@@ -1,0 +1,6 @@
+{
+  "number": "number",
+  "ref": "string",
+  "repo": "string",
+  "sha": "string"
+}
