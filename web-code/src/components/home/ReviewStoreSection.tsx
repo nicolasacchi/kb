@@ -10,13 +10,21 @@
 //
 // Both routes (`GET /api/repos/{name}/store` / `…/credentials`) already
 // exist (RS-U3) and return everything rendered here — nothing computed
-// client-side beyond `formatBytes` and the doctor-level → CSS-class map.
+// client-side beyond `formatBytes`, the doctor-level → CSS-class map, and
+// (RS-U9) `lib/reviewStore.ts`'s parse of the maintenance/GC facts riding
+// the opaque `state_json` blob (no route turns those into a typed field
+// or a doctor finding — see that module's own doc).
 import { useReviewCredentials, useReviewStoreCard } from "../../hooks/useReviewStore";
-import { formatBytes } from "../../lib/format";
+import { formatBytes, relativeTime } from "../../lib/format";
+import { parseLastGcApply, parseLastGcDryRun, parseLastMaint } from "../../lib/reviewStore";
 import MetaLine from "../MetaLine";
 
 export function ReviewStoreSection({ repo }: { repo: string }) {
   const storeQ = useReviewStoreCard(repo);
+  const stateJson = storeQ.data?.store?.state_json;
+  const lastMaint = parseLastMaint(stateJson);
+  const lastGcDryRun = parseLastGcDryRun(stateJson);
+  const lastGcApply = parseLastGcApply(stateJson);
 
   return (
     <section className="kbc-home-card__section" data-kbc-home-store>
@@ -46,9 +54,9 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
             ]}
           />
           {/* The store card's own doctor findings (`review_store/routes.rs::store_card`) — rendered
-              VERBATIM, never re-derived; this IS the store's maintenance/GC/objects-missing summary
-              when one exists (kb-code-server's own U9 maintenance unit hasn't landed yet, so today
-              this is mostly registration/credential/forge-verification notes). */}
+              VERBATIM, never re-derived: registration/credential/forge-verification/objects-missing
+              notes. The maintenance/GC summary below is a SEPARATE block — RS-U9 never turned those
+              facts into a doctor finding, so they're parsed from `state_json` instead. */}
           {storeQ.data.doctor.length > 0 && (
             <ul className="kbc-home-card__doctor" data-kbc-home-store-doctor>
               {/* `code` is NOT unique — `store_card` can push several
@@ -65,6 +73,40 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
                 </li>
               ))}
             </ul>
+          )}
+          {/* RS-U9's maintenance/GC facts (daily/weekly/monthly cadences,
+              the last GC dry-run/apply) — parsed from `state_json`
+              (`lib/reviewStore.ts`'s own doc on why that's a client-side
+              read rather than a server-typed field). Scheduled GC is
+              REPORT-ONLY in Phase 1 (operator ruling), so `lastGcApply`
+              in practice only ever comes from an explicit `store gc
+              --yes` — both render independently since they answer
+              different questions ("last time we scanned" vs. "last time
+              we actually deleted"). */}
+          {(lastMaint || lastGcDryRun || lastGcApply) && (
+            <div className="kbc-home-card__maint" data-kbc-home-store-maint>
+              {lastMaint && (
+                <MetaLine
+                  items={[
+                    lastMaint.daily != null ? `daily maint ${relativeTime(lastMaint.daily)}` : null,
+                    lastMaint.weekly != null ? `weekly ${relativeTime(lastMaint.weekly)}` : null,
+                    lastMaint.monthly != null ? `monthly ${relativeTime(lastMaint.monthly)}` : null,
+                  ]}
+                />
+              )}
+              {lastGcApply && (
+                <p className="kbc-home-card__muted" data-kbc-home-store-gc-apply>
+                  last GC apply: {lastGcApply.candidates} removed · {relativeTime(lastGcApply.at)}
+                </p>
+              )}
+              {lastGcDryRun && (
+                <p className="kbc-home-card__muted" data-kbc-home-store-gc-dryrun>
+                  last GC dry-run: {lastGcDryRun.candidates} candidate{lastGcDryRun.candidates === 1 ? "" : "s"} ·{" "}
+                  {relativeTime(lastGcDryRun.at)}
+                  {lastGcDryRun.partial ? " · partial — some members unresolved" : ""}
+                </p>
+              )}
+            </div>
           )}
         </>
       ) : (

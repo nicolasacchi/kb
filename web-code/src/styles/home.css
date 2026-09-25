@@ -376,6 +376,14 @@ a.kbc-home-card__head:hover {
 .kbc-home-card__doctor-row--error::before {
   background: var(--red);
 }
+/* RS-U9's maintenance/GC facts (`lib/reviewStore.ts`), a sibling block to
+   the doctor list above — same vertical rhythm, no new visual language. */
+.kbc-home-card__maint {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 
 .kbc-home-card__filelist {
   list-style: none;
