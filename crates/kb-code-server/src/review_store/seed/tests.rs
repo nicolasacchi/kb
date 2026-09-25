@@ -1131,8 +1131,9 @@ fn delete_review_with_refs_on_a_ready_store_removes_store_and_legacy_clone_refs(
         &["update-ref", &patchset_base_ref(id, 1), &e.fx.feat_tip],
     );
     git(&dir, &["update-ref", &pr_ref(9), &e.fx.feat_tip]);
-    // `capture_patchset` (unchanged until U6) still always writes into the
-    // work tree too — model that legacy leftover directly.
+    // Legacy leftovers in the work tree: refs a pre-store capture wrote
+    // there (RS-U6 capture writes only the store once it is ready) — model
+    // them directly.
     git(
         &e.fx.one,
         &["update-ref", &patchset_ref(id, 1), &e.fx.feat_tip],
