@@ -39,9 +39,9 @@ use std::path::{Path, PathBuf};
 use super::{
     classify_base, decide_kind, effective_base, pick_default_branch, resolve_non_pr_base,
     resolve_pr_base, valid_branch_name, warn, warning, BaseError, BaseMode, BasePolicy, BaseProbe,
-    BaseSource, BaseStatus, BaseWarningOut, EffectiveBase, NonPrChain, PatchsetKind, PrChain,
-    SetBy, URN_BASE_UNAVAILABLE, URN_CAPTURE_FAILED, URN_HEAD_UNAVAILABLE, URN_NO_MERGE_BASE,
-    URN_PR_FETCH_FAILED, URN_PR_REFS_UNSUPPORTED,
+    BaseSource, BaseStatus, BaseWarningOut, Classified, EffectiveBase, NonPrChain, PatchsetKind,
+    PrChain, SetBy, URN_BASE_UNAVAILABLE, URN_CAPTURE_FAILED, URN_HEAD_UNAVAILABLE,
+    URN_NO_MERGE_BASE, URN_PR_FETCH_FAILED, URN_PR_REFS_UNSUPPORTED,
 };
 use crate::git::roots::{GitRoot, StoreRoot, WorkTreeRoot};
 use crate::git::Revspec;
@@ -1092,6 +1092,16 @@ impl<'a> StoreCtx<'a> {
             fetch,
             status,
         })
+    }
+
+    /// The `--base` grammar against this member + store (for `retrack`,
+    /// RS-U7): `Ok(policy: None)` = `auto`. Blocking.
+    pub fn classify(&self, input: Option<&str>, is_pr: bool) -> Result<Classified, BaseError> {
+        let probe = StoreProbe {
+            ctx: self,
+            mapped: self.mapped_remotes(),
+        };
+        classify_base(input, is_pr, &probe)
     }
 
     /// Persist a policy + status on review `id`.
