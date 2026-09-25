@@ -27,10 +27,22 @@
 //! * [`boot`] — the background boot seeding job (D4);
 //! * [`routes`] — `GET /api/repos/{name}/store|credentials` and the
 //!   loopback-only `store/sync`, `store/base-url`, `credentials/test`.
+//!
+//! RS-U5 adds the store-WIDE ref family + GC on top of that (README §5.4):
+//!
+//! * [`gc`] — `keep_set`/`attribute`/`delete_candidates`/`apply`: the
+//!   store-wide GC engine, pure classification + one guarded
+//!   `update-ref --stdin` transaction. `crate::reviews::{parse_kbc_ref,
+//!   KbcRef, patchset_base_ref, prm_ref, hint_ref}` carry the ref-family
+//!   parser/builders (extended, not duplicated, per README §5.1/§5.3);
+//!   `crate::reviews::delete_review_with_refs`'s `PrRefScope` and
+//!   `crate::reviews::gc_patchsets` are the two write paths this unit
+//!   makes store-aware (via `GitCtx::primary`, RS-U4).
 
 pub mod boot;
 pub mod classify;
 pub mod cred;
+pub mod gc;
 pub mod git;
 pub mod key;
 pub mod ladder;
