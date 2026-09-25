@@ -1126,9 +1126,11 @@ pub fn slugify_findings(payload: &mut Value) -> Vec<(usize, Option<String>, Stri
 // --- start-pr / snapshot envelopes -------------------------------------------------
 
 /// The `base{…}` object every start/snapshot/sync envelope carries (README
-/// §12). Today's data fills `ref`, `branch` (the base ref when it is a
-/// name), `source` (start-pr's base ladder rung) and `merge_base`; `mode`
-/// and `state` stay `null` until RS-U6 lands the base model's columns.
+/// §12). RS-U6: when the daemon sends its own `base{mode, branch, set_by,
+/// source, state, merge_base, fetched_at, …}` block ([`daemon_base`]),
+/// that is what this carries (plus `ref`/`pinned`); an older daemon's
+/// body falls back to what `base_ref`/`base_source`/`base_sha` say, with
+/// `mode`/`state` `null`.
 pub fn base_block(base_ref: Option<&str>, source: Option<&str>, merge_base: Option<&str>) -> Value {
     let pinned = base_ref.is_some_and(kb_code_server::reviews::is_full_sha);
     json!({
@@ -1140,6 +1142,90 @@ pub fn base_block(base_ref: Option<&str>, source: Option<&str>, merge_base: Opti
         "merge_base": merge_base,
         "pinned": pinned,
     })
+}
+
+/// [`base_block`], preferring the daemon's own `base{…}` (RS-U6).
+pub fn daemon_base(
+    daemon: &Value,
+    base_ref: Option<&str>,
+    source: Option<&str>,
+    merge_base: Option<&str>,
+) -> Value {
+    let mut out = base_block(base_ref, source, merge_base);
+    if let Some(obj) = daemon.as_object() {
+        for (k, v) in obj {
+            out[k.as_str()] = v.clone();
+        }
+        out["pinned"] = json!(daemon["mode"].as_str() == Some("pin"));
+        if out["merge_base"].is_null() {
+            out["merge_base"] = json!(merge_base);
+        }
+    }
+    out
+}
+
+/// The daemon's `warnings[]` (RS-U6: `{code, message}` objects) as the
+/// envelope's `"code: message"` strings; `None` for an older daemon.
+fn daemon_warnings(body: &Value) -> Option<Vec<String>> {
+    body["warnings"].as_array().map(|ws| {
+        ws.iter()
+            .filter_map(|w| match (w["code"].as_str(), w["message"].as_str()) {
+                (Some(c), Some(m)) => Some(format!("{c}: {m}")),
+                (Some(c), None) => Some(c.to_string()),
+                _ => w.as_str().map(str::to_string),
+            })
+            .collect()
+    })
+}
+
+/// README §12's one stderr line for start / snapshot / fetch, e.g.
+/// `base: tracking main (forge api) · merge-base 7c1ed0c · fetched via
+/// gh-cli (someone)`. `None` when the daemon sent no `base{…}` block.
+pub fn base_line(base: &Value) -> Option<String> {
+    let obj = base.as_object()?;
+    obj.get("set_by")?;
+    let short = |s: &str| s.chars().take(7).collect::<String>();
+    let source = base["source"].as_str().map(|s| match s {
+        "forge-api" => "forge api".to_string(),
+        "default-assumed" => "default branch, assumed".to_string(),
+        "stack-parent" => "stack parent".to_string(),
+        "merge-ref" => "merge ref".to_string(),
+        "legacy" => "legacy row".to_string(),
+        other => other.to_string(),
+    });
+    let branch = base["branch"].as_str().unwrap_or("?");
+    let head = match base["mode"].as_str() {
+        Some("track") => format!("tracking {branch}"),
+        Some("local") => format!("local {branch}"),
+        Some("pin") => "pinned".to_string(),
+        _ => "legacy base".to_string(),
+    };
+    let mut parts = vec![match source {
+        Some(s) => format!("base: {head} ({s})"),
+        None => format!("base: {head}"),
+    }];
+    if let Some(mb) = base["merge_base"].as_str() {
+        parts.push(format!("merge-base {}", short(mb)));
+    }
+    match (base["last_fetch"].as_str(), base["fetched_via"].as_str()) {
+        (Some("fetched"), Some(via)) => parts.push(format!("fetched via {via}")),
+        (Some("fetched"), None) => parts.push("fetched".into()),
+        (Some("offline"), _) => parts.push("offline — cached base".into()),
+        (Some("failed"), _) => parts.push("fetch failed — cached base".into()),
+        (Some("cached"), _) => parts.push("cached".into()),
+        _ => {}
+    }
+    if base["mode"].as_str() == Some("pin") {
+        parts.push("will not follow rebases; use --base <branch>".into());
+    }
+    Some(parts.join(" · "))
+}
+
+/// Print [`base_line`] to stderr when the daemon sent a `base{…}` block.
+pub fn eprint_base_line(body: &Value) {
+    if let Some(line) = base_line(&body["base"]) {
+        eprintln!("{line}");
+    }
 }
 
 fn base_warnings(base_ref: Option<&str>) -> Vec<String> {
@@ -1160,7 +1246,7 @@ pub fn start_envelope(body: &Value) -> Value {
     let reused = body["reused"].as_bool().unwrap_or(false);
     let minted = body["minted"].as_bool().unwrap_or(!reused);
     let base_ref = body["base_ref"].as_str();
-    let mut warnings = base_warnings(base_ref);
+    let mut warnings = daemon_warnings(body).unwrap_or_else(|| base_warnings(base_ref));
     if !body["pr_meta_unavailable_reason"].is_null() {
         let r = &body["pr_meta_unavailable_reason"];
         let code = r["code"].as_str().or(r.as_str()).unwrap_or("unavailable");
@@ -1175,7 +1261,12 @@ pub fn start_envelope(body: &Value) -> Value {
             "reused": reused,
             "ps": body["latest_ps"],
             "tip_sha": body["tip_sha"],
-            "base": base_block(base_ref, body["base_source"].as_str(), body["base_sha"].as_str()),
+            "base": daemon_base(
+                &body["base"],
+                base_ref,
+                body["base_source"].as_str(),
+                body["base_sha"].as_str(),
+            ),
             "pr_number": body["pr_number"],
             "pr_head_sha": body["pr_head_sha"],
             "review": body,
@@ -1208,10 +1299,11 @@ pub fn snapshot_envelope(body: &Value, review: &Value) -> Value {
             "minted": minted,
             "ps": body["ps_number"],
             "tip_sha": body["tip_sha"],
-            "base": base_block(base_ref, None, body["base_sha"].as_str()),
+            "base": daemon_base(&body["base"], base_ref, None, body["base_sha"].as_str()),
             "captured_at": body["captured_at"],
+            "kind": body["kind"],
         }),
-        base_warnings(base_ref),
+        daemon_warnings(body).unwrap_or_else(|| base_warnings(base_ref)),
         false,
         None,
         vec![argv(&["kb-code", "review", "diff", &ps_s, "--stat"])],
@@ -1724,6 +1816,38 @@ mod tests {
         // An older daemon without `minted`: derived from `reused`.
         let legacy = json!({"id": 12, "reused": true, "latest_ps": 3});
         assert_eq!(start_envelope(&legacy)["data"]["minted"], false);
+    }
+
+    #[test]
+    fn the_daemon_base_block_and_warnings_win_and_render_one_stderr_line() {
+        let body = json!({"id": 3, "latest_ps": 2, "base_ref": "refs/remotes/origin/main",
+                          "base_sha": "7c1ed0cfdd00000000000000000000000000abcd",
+                          "minted": false,
+                          "base": {"mode": "track", "branch": "main", "set_by": "auto",
+                                   "source": "forge-api", "state": "ok",
+                                   "merge_base": "7c1ed0cfdd00000000000000000000000000abcd",
+                                   "fetched_at": 1, "last_fetch": "fetched",
+                                   "fetched_via": "gh-cli (someone)"},
+                          "warnings": [{"code": "pr-target-assumed", "message": "m"}]});
+        let v = start_envelope(&body);
+        assert_eq!(v["data"]["base"]["mode"], "track");
+        assert_eq!(v["data"]["base"]["state"], "ok");
+        assert_eq!(v["data"]["base"]["pinned"], false);
+        assert_eq!(v["data"]["minted"], false);
+        assert_eq!(v["warnings"][0], "pr-target-assumed: m");
+        assert_eq!(
+            base_line(&body["base"]).unwrap(),
+            "base: tracking main (forge api) · merge-base 7c1ed0c · fetched via gh-cli (someone)"
+        );
+        let pin = json!({"mode": "pin", "set_by": "legacy", "source": "legacy",
+                         "merge_base": "cc65611690000000000000000000000000000000"});
+        let line = base_line(&pin).unwrap();
+        assert!(
+            line.starts_with("base: pinned (legacy row) · merge-base cc65611"),
+            "{line}"
+        );
+        assert!(line.contains("will not follow rebases"), "{line}");
+        assert!(base_line(&Value::Null).is_none());
     }
 
     #[test]
