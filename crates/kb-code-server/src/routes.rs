@@ -6406,6 +6406,51 @@ pub async fn prs_fetch_route(
     let (repo, _repo_id) = find_repo(&state, &body.repo)?;
     let repo_root = repo.path.clone();
     let number = body.number;
+    // RS-U6 — a ready review store: the PR head is fetched INTO THE STORE
+    // (README §5.3 `pr fetch` trigger; the user clone is never written), and
+    // an open review bound to this PR gets its `pr_head_sha` synced.
+    if let Some(handle) = crate::reviews::admit_store(&state, &body.repo).await? {
+        let member = crate::reviews::store_member(&state, &body.repo)?;
+        let rep = crate::reviews::with_store_ctx(&state, handle, member, move |ctx| {
+            let access = ctx.access();
+            ctx.fetch_forge(access.as_ref().map_err(String::as_str), &[], Some(number))
+        })
+        .await?;
+        let Some(sha) = rep.pr_head else {
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "git fetch failed: PR #{number} could not be fetched into the review store ({})",
+                    rep.pr_error
+                        .as_deref()
+                        .or(rep.code.as_deref())
+                        .unwrap_or("failed")
+                ),
+            ));
+        };
+        let repo_name = body.repo.clone();
+        let sha_c = sha.clone();
+        state
+            .store
+            .run_blocking(move |store| -> Result<(), ApiError> {
+                if let Some(r) = store.get_review_by_pr_binding(&repo_name, number as i64)? {
+                    if r.state == "open" {
+                        store.set_review_pr_head_sha(r.id, &sha_c)?;
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+        return Ok((
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(PrFetchResponse {
+                repo: body.repo,
+                number,
+                ref_: crate::reviews::pr_ref(number),
+                sha,
+            }),
+        ));
+    }
     let (ref_, sha) =
         tokio::task::spawn_blocking(move || crate::github::fetch_pr_ref(&repo_root, number))
             .await

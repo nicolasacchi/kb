@@ -170,6 +170,11 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // RS-U3 — `#[cfg(test)]` fixture clones for the seeding/registration
     // tests (synthetic acme/widgets; no caller-supplied values).
     "review_store/seed/tests.rs",
+    // RS-U6 — `#[cfg(test)]` fixtures for the base model: a local bare
+    // "forge" (synthetic acme/widgets, `refs/pull/<n>/head` pushed by hand),
+    // a member clone and an author clone. Production base-model code spawns
+    // nothing: it goes through `StoreGit` and the `reviews.rs` helpers.
+    "review_base/tests.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",

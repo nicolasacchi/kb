@@ -411,10 +411,11 @@ async fn find_by_pr_and_start_pr_reports_minted() {
     assert_eq!(st, 200, "{diff}");
     assert_eq!(diff["files"][0]["path"], "feature.txt");
 
-    // Snapshot reports `minted` too (always true today; RS-U6's D13).
+    // Snapshot reports `minted` too (`force` mints even an unchanged pair,
+    // RS-U6's D13).
     let resp = client
         .post(format!("{base}/api/reviews/{id}/snapshot"))
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({"force": true}))
         .send()
         .await
         .unwrap();

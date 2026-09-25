@@ -718,14 +718,27 @@ pub fn resolve_github_token(
     env_token: Option<&str>,
     cli_token: Option<&str>,
 ) -> Option<String> {
+    resolve_github_token_with(cfg, env_token, None, cli_token)
+}
+
+/// RS-U6 — the full api-slot ladder (README §8): `token_file` > env
+/// `KB_CODE_GITHUB_TOKEN` > the daemon's own `gh-cli` read
+/// (`review_store::cred::ApiCredential`, pinned account, memory only) >
+/// the CALLER-supplied token (`--gh-token-from-cli`) > none.
+pub fn resolve_github_token_with(
+    cfg: &GithubSection,
+    env_token: Option<&str>,
+    gh_cli_token: Option<&str>,
+    cli_token: Option<&str>,
+) -> Option<String> {
     if let Some(t) = token_from_file(cfg) {
         return Some(t);
     }
-    if let Some(t) = env_token.map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    if let Some(t) = cli_token.map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
+    for t in [env_token, gh_cli_token, cli_token].into_iter().flatten() {
+        let t = t.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
     }
     None
 }
@@ -757,6 +770,9 @@ pub struct GithubClient {
     cfg: GithubSection,
     /// Set only by [`Self::with_cli_token`] for a single `start-pr` call.
     cli_token: Option<String>,
+    /// RS-U6 — the daemon's own `gh-cli` api credential, set only by
+    /// [`Self::with_api_credential`] for one request.
+    api_cred: Option<crate::review_store::ApiCredential>,
     client: std::result::Result<reqwest::Client, String>,
 }
 
@@ -768,6 +784,10 @@ impl std::fmt::Debug for GithubClient {
             .field(
                 "cli_token",
                 &self.cli_token.as_ref().map(|_| redact_secret("x")),
+            )
+            .field(
+                "api_cred",
+                &self.api_cred.as_ref().map(|c| c.source().clone()),
             )
             .finish()
     }
@@ -783,6 +803,7 @@ impl GithubClient {
         Self {
             cfg: cfg.clone(),
             cli_token: None,
+            api_cred: None,
             client,
         }
     }
@@ -793,14 +814,37 @@ impl GithubClient {
         Self {
             cfg: self.cfg.clone(),
             cli_token: token,
+            api_cred: self.api_cred.clone(),
             client: self.client.clone(),
         }
     }
 
-    /// Request-time credential resolution (file > env > cli).
+    /// RS-U6 — overlay the daemon's own `gh-cli` api credential (README
+    /// §8) for one request: below file/env, above the caller's token.
+    pub fn with_api_credential(&self, cred: Option<crate::review_store::ApiCredential>) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            cli_token: self.cli_token.clone(),
+            api_cred: cred,
+            client: self.client.clone(),
+        }
+    }
+
+    /// Is a file or env token configured (the rungs above `gh-cli`)?
+    pub fn has_ambient_token(&self) -> bool {
+        let env = std::env::var(GITHUB_TOKEN_ENV).ok();
+        resolve_github_token_with(&self.cfg, env.as_deref(), None, None).is_some()
+    }
+
+    /// Request-time credential resolution (file > env > gh-cli > cli).
     pub fn resolve_token(&self) -> Option<String> {
         let env = std::env::var(GITHUB_TOKEN_ENV).ok();
-        resolve_github_token(&self.cfg, env.as_deref(), self.cli_token.as_deref())
+        resolve_github_token_with(
+            &self.cfg,
+            env.as_deref(),
+            self.api_cred.as_ref().map(|c| c.bearer_token()),
+            self.cli_token.as_deref(),
+        )
     }
 
     pub fn has_credentials(&self) -> bool {

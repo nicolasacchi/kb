@@ -352,6 +352,32 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// RS-U6 — rewrite `reviews.base_ref` when a review's base POLICY
+    /// changes (retarget-follow, D15; an explicit re-base): the column stays
+    /// the git-resolvable display ref every legacy reader and the pre-store
+    /// fallback use (`review_base::BasePolicy::display_base_ref`). Returns
+    /// `false` when `id` does not exist.
+    pub fn set_review_base_ref(&self, id: i64, base_ref: &str) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE reviews SET base_ref = ?2 WHERE id = ?1",
+            params![id, base_ref],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// RS-U6 — sync `reviews.pr_head_sha` to a freshly FETCHED forge PR
+    /// head (README §1 defect 5: it used to be refreshed only by reuse and
+    /// sweep). Only ever called with a sha a successful PR-head fetch just
+    /// resolved — never with a locally moved ref. Leaves the PR metadata
+    /// snapshot alone.
+    pub fn set_review_pr_head_sha(&self, id: i64, pr_head_sha: &str) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE reviews SET pr_head_sha = ?2 WHERE id = ?1",
+            params![id, pr_head_sha],
+        )?;
+        Ok(n > 0)
+    }
+
     /// `NULL` (ok) | `objects-missing` | `legacy-unverified` — the per-review
     /// connectivity verdict a store's seeding/verification pass leaves
     /// behind (README §5.2 step 4). Pass `None` to clear it back to ok.
