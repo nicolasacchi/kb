@@ -25835,38 +25835,61 @@ fn backup_cmd(db: Option<&std::path::Path>, json: bool) -> Result<()> {
     let receipt =
         kb_code_server::backup::take_at_current_epoch(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
     // RS-U9 — also bundle-back up every `ready` review store (README
-    // §5.4/§8: "on ... `kb-code backup`"). Best-effort and side-channel
-    // only: a git-bundle failure never fails this command, and `--json`'s
-    // OUTPUT SHAPE stays exactly `receipt` (additive-only — bundle results
-    // go to stderr/stdout human lines, never into the JSON document).
+    // §5.4/§8: "on ... `kb-code backup`"). The sqlite snapshot above is
+    // this command's primary contract and always succeeds or fails on its
+    // own; the bundle pass is additive but its errors are SURFACED (nit:
+    // `--json` must carry them too) and this command exits non-zero when
+    // any store's bundle failed, so a script relying on `kb-code backup`
+    // for a full backup notices a partial one.
     let bundle_report = kb_code_server::review_store::maint::backup_all_ready_stores_at(&db);
-    match &bundle_report {
-        Ok(r) if !json && !r.stores.is_empty() => {
-            let written = r.stores.iter().filter(|s| s.written.is_some()).count();
-            let errored = r.stores.iter().filter(|s| s.error.is_some()).count();
-            println!("review stores: {written} bundle(s) written, {errored} error(s)");
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("warning: review-store bundle backup skipped: {e}"),
-    }
+    let bundle_errors: Vec<String> = match &bundle_report {
+        Ok(r) => r.stores.iter().filter_map(|s| s.error.clone()).collect(),
+        Err(e) => vec![e.clone()],
+    };
     if json {
-        println!("{}", serde_json::to_string_pretty(&receipt)?);
-        return Ok(());
+        let mut doc = serde_json::to_value(&receipt)?;
+        if let serde_json::Value::Object(map) = &mut doc {
+            map.insert(
+                "review_store_backup".to_string(),
+                serde_json::json!({
+                    "ok": bundle_errors.is_empty(),
+                    "stores": bundle_report.as_ref().ok().map(|r| &r.stores),
+                    "errors": bundle_errors,
+                }),
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+    } else {
+        match &bundle_report {
+            Ok(r) if !r.stores.is_empty() => {
+                let written = r.stores.iter().filter(|s| s.written.is_some()).count();
+                let errored = r.stores.iter().filter(|s| s.error.is_some()).count();
+                println!("review stores: {written} bundle(s) written, {errored} error(s)");
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("warning: review-store bundle backup skipped: {e}"),
+        }
+        for e in &bundle_errors {
+            eprintln!("error: review-store bundle backup: {e}");
+        }
+        println!(
+            "backup: {} -> {} ({} bytes, restores to schema epoch {})",
+            receipt.db_path,
+            receipt.backup_path,
+            receipt.bytes,
+            receipt
+                .volume_epoch
+                .map(|e| format!("V{e:04}"))
+                .unwrap_or_else(|| "none (unmigrated volume)".to_string()),
+        );
+        println!(
+            "receipt: {}",
+            kb_code_server::backup::marker_path(&db).display()
+        );
     }
-    println!(
-        "backup: {} -> {} ({} bytes, restores to schema epoch {})",
-        receipt.db_path,
-        receipt.backup_path,
-        receipt.bytes,
-        receipt
-            .volume_epoch
-            .map(|e| format!("V{e:04}"))
-            .unwrap_or_else(|| "none (unmigrated volume)".to_string()),
-    );
-    println!(
-        "receipt: {}",
-        kb_code_server::backup::marker_path(&db).display()
-    );
+    if !bundle_errors.is_empty() {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
