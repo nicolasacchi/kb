@@ -1129,7 +1129,11 @@ impl<'a> StoreCtx<'a> {
     /// Import what the base needs from the member (a `local` branch, a pin
     /// or legacy rev not yet in the store). Fetch lock only; call BEFORE
     /// taking the ops lock (fetch → ops, never the reverse).
-    fn import_base(&self, eff: &EffectiveBase) -> Result<(), BaseError> {
+    ///
+    /// `pub` (RS-U7) — `review_retrack`'s dry-run path calls this directly
+    /// (it classifies without ever reaching [`Self::capture_with`], which
+    /// is the only other caller).
+    pub fn import_base(&self, eff: &EffectiveBase) -> Result<(), BaseError> {
         match eff {
             EffectiveBase::Policy(p) => match p.mode {
                 BaseMode::Local if p.member.unwrap_or(self.member.id) == self.member.id => {
@@ -1327,7 +1331,6 @@ impl<'a> StoreCtx<'a> {
         forge_base_ref: Option<&str>,
         classified: Classified,
     ) -> Result<(BasePolicy, Vec<BaseWarningOut>), BaseError> {
-        self.import_work()?;
         let mapped = self.mapped_remotes();
         let has_forge = !matches!(self.forge(), Forge::None);
         if is_pr && !has_forge {
