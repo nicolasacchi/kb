@@ -147,7 +147,9 @@ pub struct AgentError {
     pub message: String,
     pub hint: Option<String>,
     pub next: Vec<NextArgv>,
-    pub candidates: Option<Value>,
+    /// Boxed so `Result<_, AgentError>` stays under clippy's
+    /// `result_large_err` threshold.
+    pub candidates: Option<Box<Value>>,
     pub exit: i32,
 }
 
@@ -183,7 +185,7 @@ impl AgentError {
             &self.message,
             self.hint.as_deref(),
             &self.next,
-            self.candidates.as_ref(),
+            self.candidates.as_deref(),
         )
     }
 
@@ -409,7 +411,7 @@ pub fn pick_from_find(
                 .map(|r| argv(&["kb-code", "review", "find", "--pr", &n, "--repo", r]))
                 .collect(),
         );
-        e.candidates = Some(Value::Array(candidates));
+        e.candidates = Some(Box::new(Value::Array(candidates)));
         return Err(e);
     }
     let r = &repos[0];
