@@ -965,6 +965,14 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // `/reviews/find` at `/reviews/{id}`'s depth (literals win, same
         // as `/reviews/inbox`). Bearer.
         .route("/reviews/find", get(crate::review_views::review_find_route))
+        // RS-U10b — `GET /api/reviews/{id}/status[?fetch=1]`: head moved?
+        // base state, file-count drift, verdict staleness (`crate::
+        // review_sync`). A bearer read; `?fetch=1` (writes the review
+        // store) refuses a non-loopback caller inside the handler.
+        .route(
+            "/reviews/{id}/status",
+            get(crate::review_sync::review_status_route),
+        )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
         // RS-U10a — the patchset's own git views, computed by the daemon
@@ -1337,6 +1345,11 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // snapshots), so loopback-only like the rest of this sub-router,
         // NOT `auth_bearer` (unlike its read-only sibling `pr-status`).
         .route("/reviews/sweep", post(review_sweep::sweep_route))
+        // RS-U10b — `review sync`: create-or-reuse + fetch + snapshot-if-
+        // the-pair-moved for one PR or every open PR (`crate::review_sync`).
+        // A WRITE (rows + store refs), so loopback-only like `/reviews/pr`;
+        // literal `/reviews/sync` beside it, ahead of `/reviews/{id}`.
+        .route("/reviews/sync", post(crate::review_sync::sync_route))
         // PRR-R3 — the ONE findings mutation that stays loopback-only (an
         // agent-side batch-reconcile verb, not a mobile-mutation candidate
         // — see the module doc above). `POST /reviews/{id}/findings`

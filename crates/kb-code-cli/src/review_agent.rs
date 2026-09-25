@@ -58,7 +58,7 @@ pub const VERIFY_SCHEMA: &str = "kbc-review-verify/1";
 pub const START_SCHEMA: &str = "kbc-review-start/1";
 pub const SNAPSHOT_SCHEMA: &str = "kbc-review-snapshot/1";
 
-fn argv(parts: &[&str]) -> NextArgv {
+pub(crate) fn argv(parts: &[&str]) -> NextArgv {
     parts.iter().map(|s| s.to_string()).collect()
 }
 
@@ -248,7 +248,7 @@ impl AgentError {
 
 // --- http ------------------------------------------------------------------------
 
-async fn get(
+pub(crate) async fn get(
     daemon: &str,
     path: &str,
     query: &[(&'static str, String)],
@@ -278,7 +278,7 @@ async fn get(
     Ok((status, body))
 }
 
-async fn get_ok(
+pub(crate) async fn get_ok(
     daemon: &str,
     path: &str,
     query: &[(&'static str, String)],
@@ -292,7 +292,7 @@ async fn get_ok(
     }
 }
 
-fn fill_id(template: &str, id: i64) -> String {
+pub(crate) fn fill_id(template: &str, id: i64) -> String {
     template.replace("{id}", &id.to_string())
 }
 

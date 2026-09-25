@@ -175,6 +175,10 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // a member clone and an author clone. Production base-model code spawns
     // nothing: it goes through `StoreGit` and the `reviews.rs` helpers.
     "review_base/tests.rs",
+    // RS-U10b — `#[cfg(test)]` fixtures for `review sync`'s store path
+    // (the same synthetic acme/widgets forge + member + author clones as
+    // `review_base/tests.rs`). `review_sync.rs` itself spawns nothing.
+    "review_sync/tests.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",
