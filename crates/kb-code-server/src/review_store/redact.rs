@@ -22,6 +22,7 @@
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
+use super::cred::MIN_SECRET_LEN;
 use regex::Regex;
 
 /// What every redacted span becomes.
@@ -71,7 +72,7 @@ pub fn redact(s: &str) -> String {
 /// output useless without protecting anything).
 pub fn redact_with(s: &str, secrets: &[&str]) -> String {
     let mut out: Cow<'_, str> = Cow::Borrowed(s);
-    for lit in secrets.iter().filter(|l| l.len() >= 8) {
+    for lit in secrets.iter().filter(|l| l.len() >= MIN_SECRET_LEN) {
         if out.contains(lit) {
             out = Cow::Owned(out.replace(lit, REDACTED));
         }

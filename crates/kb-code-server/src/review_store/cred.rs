@@ -147,10 +147,18 @@ impl CredError {
 // Secret material
 // ---------------------------------------------------------------------
 
+/// The shortest secret the redactor's known-literal pass will strip.
+/// `SecretToken::new` enforces it, so a token that could never be redacted
+/// is never created in the first place.
+pub const MIN_SECRET_LEN: usize = 8;
+
 /// A token held in memory only: zeroized on drop, `Debug`/`Display`
 /// print `[redacted]`, no `Serialize`. Rejects whitespace/control
 /// characters — a newline would inject lines into the credential
 /// protocol.
+///
+/// Also rejects anything under [`MIN_SECRET_LEN`] bytes, which is the
+/// floor below which the redactor's known-literal pass declines to match.
 #[derive(Clone)]
 pub struct SecretToken(Zeroizing<String>);
 
@@ -159,6 +167,15 @@ impl SecretToken {
         let t = raw.trim();
         if t.is_empty() {
             return Err(CredError::Invalid("empty token"));
+        }
+        // `redact_with` strips EXPLICIT known literals only when they are
+        // 8+ bytes (redact.rs:74) — redacting every `a` would make captured
+        // git stderr useless. A shorter "token" could therefore never be
+        // stripped by the one pass that knows the literal, so refuse it
+        // here: the validation and redaction contracts cannot then drift
+        // apart again. `8` is `redact_with`'s floor, not a policy choice.
+        if t.len() < MIN_SECRET_LEN {
+            return Err(CredError::Invalid("token too short"));
         }
         if t.len() > 1024 {
             return Err(CredError::Invalid("token too long"));

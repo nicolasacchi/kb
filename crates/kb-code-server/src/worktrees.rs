@@ -707,20 +707,73 @@ fn stash_list(repo_root: &Path) -> Result<Vec<String>, WorktreeError> {
 
 // ── lifecycle ────────────────────────────────────────────────────────
 
-fn main_checkout_path(
+/// The workspace's MAIN worktree ROW — the checkout `git worktree list`
+/// reports first, and the one every lifecycle verb below runs git in. It
+/// is the row (not just its path) because `row.repo` is the `[[repos]]`
+/// NAME this checkout resolves through, and a NAME is the only key a
+/// review store is ever looked up by.
+fn main_worktree_row(
     store: &crate::store::Store,
     workspace_id: &str,
-) -> Result<PathBuf, WorktreeError> {
-    let rows = store.worktrees_for_workspace(workspace_id)?;
-    rows.iter()
+) -> Result<WorktreeRow, WorktreeError> {
+    store
+        .worktrees_for_workspace(workspace_id)?
+        .into_iter()
         .find(|w| w.is_main)
-        .and_then(|w| w.path.as_deref())
-        .map(PathBuf::from)
         .ok_or_else(|| {
             WorktreeError::NotFound(format!(
                 "workspace {workspace_id} has no main worktree path"
             ))
         })
+}
+
+/// The checkout `row` records on disk. Split out of
+/// [`main_checkout_path`] so the `branch` arm of [`create_worktree`] can
+/// take the row ONCE and have both the path it runs git in and the repo
+/// NAME it resolves the store by.
+fn recorded_path(row: &WorktreeRow, workspace_id: &str) -> Result<PathBuf, WorktreeError> {
+    row.path.as_deref().map(PathBuf::from).ok_or_else(|| {
+        WorktreeError::NotFound(format!(
+            "workspace {workspace_id} has no main worktree path"
+        ))
+    })
+}
+
+/// RS-U8 — THE rule for "where is this workspace's review store", and it
+/// is deliberately the SAME one `routes::checkout_route` applies: resolve
+/// the REPO by NAME, then the store by that name. `GitCtx::for_entry`
+/// (`git/roots.rs`) is the one place that decision is made — the store
+/// comes back only when its row is `ready` AND this member's own import
+/// has landed, exactly as for the checkout route.
+///
+/// The name comes from the worktree ROW's `repo`, which
+/// `workspace::resolve_path` wrote when the workspace was enumerated
+/// (longest configured root wins, over canonicalized paths) — NOT from
+/// comparing `row.path` against a `[[repos]]` path. A path comparison is
+/// a SECOND rule, and any spelling difference (a trailing slash, a
+/// symlinked clone, a path recorded before a re-key) would quietly drop
+/// the store: `worktree add` would go clone-first while `POST
+/// /api/checkout` on the same repo name stayed store-first, and one ref
+/// would resolve to two different shas depending on the endpoint asked.
+/// `None` is the honest answer for a checkout under no configured root,
+/// and it lands on the same fallback (`resolve_target_via_store` with no
+/// store) the checkout route takes for a repo whose store is not ready.
+fn store_ctx_for_main(
+    store: &crate::store::Store,
+    repos: &[RepoEntry],
+    main: &WorktreeRow,
+) -> Option<GitCtx> {
+    let name = main.repo.as_deref()?;
+    let entry = repos.iter().find(|r| r.name == name)?;
+    Some(GitCtx::for_entry(store, entry))
+}
+
+fn main_checkout_path(
+    store: &crate::store::Store,
+    workspace_id: &str,
+) -> Result<PathBuf, WorktreeError> {
+    let row = main_worktree_row(store, workspace_id)?;
+    recorded_path(&row, workspace_id)
 }
 
 fn refresh_workspace(
@@ -763,7 +816,8 @@ pub fn create_worktree(
         }
         _ => {}
     }
-    let main = main_checkout_path(store, workspace_id)?;
+    let main_row = main_worktree_row(store, workspace_id)?;
+    let main = recorded_path(&main_row, workspace_id)?;
     if let Some(nb) = new_branch {
         run_git_path(&main, &["worktree", "add", "-b", nb.as_str()], path, &[])?;
     } else if let Some(b) = branch {
@@ -776,11 +830,10 @@ pub fn create_worktree(
         // `checkout::resolve_target_via_store`'s doc. `main` — the SHARED
         // object database every linked worktree of this workspace reads
         // from — is where the fetch has to land, not `path` (which does
-        // not exist yet).
-        let git_ctx = repos
-            .iter()
-            .find(|r| r.path == main)
-            .map(|r| GitCtx::for_entry(store, r));
+        // not exist yet). The store itself comes from `store_ctx_for_main`,
+        // i.e. the same by-name rule the checkout route uses, so both
+        // endpoints resolve one checkout target to ONE commit.
+        let git_ctx = store_ctx_for_main(store, repos, &main_row);
         let store_root = git_ctx.as_ref().and_then(GitCtx::store_root);
         let effective = crate::checkout::resolve_target_via_store(&main, store_root, b)?;
         run_git_path(&main, &["worktree", "add"], path, &[effective.as_str()])?;

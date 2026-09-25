@@ -7,13 +7,20 @@
 //! sentinel" (see "Cadence choices" and "Restore-guard design" below for
 //! the full accounting). [`run_pass_for_store`] (the scheduler, and
 //! `store maintain`) ALWAYS computes the GC candidate list as a dry run
-//! and records it (`state_json.last_gc_dry_run`); the ONLY path that ever
-//! calls [`super::gc::apply`] is the operator's explicit
-//! `kb-code store gc --repo R --yes` ([`run_gc_now`]), which first takes a
-//! fresh bundle backup, then re-checks readiness and the restore guard
-//! UNDER the ops lock, then an UNCONDITIONAL (never `--yes`-bypassable)
-//! DB-truth check that no candidate names a review id newer than this
-//! volume has ever assigned.
+//! and records it (`state_json.last_gc_dry_run`); NEITHER ever reaches
+//! [`super::gc::apply`]. That function has exactly ONE caller in the
+//! crate — [`apply_gc_candidates`] — and that has exactly TWO entry
+//! points, BOTH funnelling through [`run_gc_pass`]: the operator's
+//! explicit `kb-code store gc --repo R --yes` ([`run_gc_now`], which is
+//! what the `--yes` acknowledgement is for) and the legacy
+//! `kb-code review refs gc --repo R --apply` route
+//! ([`crate::reviews::gc_review_refs_inner`], which must NOT call
+//! [`super::gc::apply`] itself — it hands its candidates to
+//! [`run_gc_pass`]). Each takes the store's ops lock FIRST, re-checks
+//! readiness and the restore guard UNDER it, runs the UNCONDITIONAL
+//! (never `--yes`-bypassable) DB-truth check that no candidate names a
+//! review id newer than this volume has ever assigned, and only then
+//! takes the fresh bundle backup and applies.
 //!
 //! Four pieces, one file per the build plan's architecture table:
 //!
@@ -33,11 +40,16 @@
 //!   already built the recreate-or-flag logic this unit schedules rather
 //!   than reimplementing). Both run on the DAILY cadence (a design choice
 //!   — see "Cadence choices" below).
-//! * **Backup bundles** — `backups/store-<uuid>-<ts>.bundle`
-//!   (`refs/kbc/*` minus what `refs/remotes/base/*` reaches), written on a
+//! * **Backup bundles** — `backups/store-<uuid>-<ts>.bundle`, written on a
 //!   gated-epoch snapshot, `kb-code backup`, a detected restore, or
-//!   immediately before every real `kb-code store gc --yes` apply; the
-//!   last 3 per store are kept.
+//!   immediately before every real apply; the last 3 per store are kept.
+//!   The routine shape is `refs/kbc/*` minus what `refs/remotes/base/*`
+//!   reaches ([`write_bundle`]). The PRE-APPLY shape is that PLUS every ref
+//!   the apply is about to delete, whatever namespace it lives in
+//!   ([`apply_gc_candidates`] → `write_bundle_covering`) — because GC's
+//!   candidate set is not confined to `refs/kbc/*`. The invariant this
+//!   buys, and the reason the extra refs are there: **no ref is ever
+//!   deleted by an apply whose pre-apply bundle did not cover it.**
 //! * **The restore guard** — [`restore_guard`]'s epoch-rollback detector
 //!   plus a manual flag primitive, PER-STORE acknowledged (an operator
 //!   acknowledging store R's restore suspicion via `gc --repo R --yes`
@@ -93,7 +105,8 @@
 //! construction — there is no epoch delta to observe. Closed by an
 //! independent, unconditional mechanism that needs no epoch at all: see
 //! [`Store::reviews_high_water_id`] and the `restore-suspected` check in
-//! [`run_gc_now`]. (2) *restoring the whole state directory* also rolls
+//! [`apply_gc_candidates`] (reached from both [`run_gc_now`] and
+//! [`run_gc_pass`]). (2) *restoring the whole state directory* also rolls
 //! the sentinel FILE back, defeating the "outside the volume" asymmetry
 //! the design relies on. There is no filesystem-only fix for this (the
 //! sentinel is, definitionally, part of "the state directory"); the
@@ -282,7 +295,8 @@ pub mod restore_guard {
     //! See the parent module's doc ("Restore-guard design") for the full
     //! rationale, including the three review-found gaps this cut closes:
     //! same-epoch restores (closed elsewhere — see
-    //! [`crate::store::Store::reviews_high_water_id`] and [`super::run_gc_now`]),
+    //! [`crate::store::Store::reviews_high_water_id`] and
+    //! [`super::apply_gc_candidates`]),
     //! a restored state directory rolling this sentinel back too (same
     //! answer), and fail-OPEN on corruption/write failure (closed here:
     //! [`read`] now treats a corrupt/unreadable-but-PRESENT sentinel as
@@ -750,8 +764,9 @@ pub struct GcRunReport {
 /// unchanged from RS-U5): `keep_set` + `list_refs` + `attribute` +
 /// `delete_candidates`. Pure read — never mutates anything. Returns the
 /// dry-run report ALONGSIDE the raw candidates, so a caller that goes on
-/// to apply (only ever [`run_gc_now`]) can run its guard checks against
-/// the exact same classification rather than re-deriving it.
+/// to apply (only ever [`apply_gc_candidates`], reached from
+/// [`run_gc_pass`]) can run its guard checks against the exact same
+/// classification rather than re-deriving it.
 ///
 /// `registered_member_ids` MUST come from DB truth
 /// (`Store::store_members`), never from a config-filtered list (RS-U9
@@ -809,13 +824,18 @@ fn restore_suspected_review_id(
         })
 }
 
-/// [`gc_pass`]'s guard-checked apply half — the ONLY code path in this
-/// crate that calls [`super::gc::apply`]. In order: nothing to do →
+/// [`gc_pass`]'s guard-checked apply half — the ONLY function in this
+/// crate that calls [`super::gc::apply`], and therefore the ONLY place a
+/// ref-delete transaction can originate. Reached from exactly two entry
+/// points, both [`run_gc_pass`]: the operator's `store gc --yes` and the
+/// `review refs gc --apply` route. In order: nothing to do →
 /// sentinel restore-guard (bypassable only by the caller having already
 /// acknowledged THIS store, [`run_gc_now`]) → the UNCONDITIONAL,
 /// never-bypassable DB-truth `restore_suspected_review_id` check → a
 /// fresh bundle backup (the operator ruling: every real apply is preceded
-/// by a bundle of the pre-apply state) → the actual guarded
+/// by a bundle of the pre-apply state) that COVERS every ref in
+/// `candidates` — not merely the `refs/kbc/*` ones, since GC's candidate
+/// set also spans `refs/remotes/work-<id>/*` — → the actual guarded
 /// `update-ref --stdin` transaction. Call under the store's ops lock, with
 /// `report` fresh from [`gc_pass`] (same candidates the caller is about to
 /// apply — never re-derive between the two).
@@ -847,13 +867,54 @@ fn apply_gc_candidates(
         ));
         return Ok(report);
     }
-    match write_bundle(git, git_dir, &bundle_path(backups_dir, store_uuid, now)) {
+    // The bundle MUST cover every ref this apply is about to delete, not
+    // just the `refs/kbc/*` ones: `super::gc::attribute` also marks a
+    // de-registered member's `refs/remotes/work-<id>/*` mirror refs
+    // orphan, and `delete_candidates` has no `kind` filter, so those are
+    // in `candidates` too. A `refs/kbc/*`-only bundle would let a real
+    // apply delete refs nothing had backed up.
+    //
+    // `cover` carries `(oid, refname)` straight from `candidates` — the
+    // exact values this apply deletes, guarded by `old_oid` — so the
+    // bundle stays a point-in-time snapshot of the SAME classification
+    // `report` came from, with no second scan that could disagree with
+    // it. It is bounded by the candidate count, itself bounded by the
+    // store's ref count (the same bound the `refs/kbc/*` argv already
+    // relies on — see [`write_bundle`]'s ARG_MAX note).
+    let cover: Vec<(String, String)> = candidates
+        .iter()
+        .map(|c| (c.old_oid.clone(), c.refname.clone()))
+        .collect();
+    match write_bundle_covering(
+        git,
+        git_dir,
+        &bundle_path(backups_dir, store_uuid, now),
+        &cover,
+    ) {
         Ok(BundleOutcome::Written) => {
             if let Err(e) = prune_bundles(backups_dir, store_uuid, BUNDLES_KEPT) {
                 tracing::warn!(error = %e, store = store_uuid, "kb-code: bundle prune before gc apply failed (non-fatal)");
             }
         }
-        Ok(BundleOutcome::Skipped { .. }) => {} // no kbc refs at all: nothing a GC apply could touch either.
+        Ok(BundleOutcome::Skipped { reason: "no-refs" }) => {
+            // Structurally unreachable — `cover` is non-empty whenever
+            // `report.candidates` is (it IS that list, and the
+            // `nothing-to-do` arm above returned otherwise), so the
+            // bundle's ref list cannot be empty. Fail CLOSED rather than
+            // delete refs an empty bundle did not cover: this arm makes
+            // the invariant hold by construction, not by argument.
+            report.reason = "backup-failed";
+            report.detail = Some(
+                "bundle reported no-refs despite a non-empty delete candidate list".to_string(),
+            );
+            return Ok(report);
+        }
+        // `fully-reachable-from-base`: git refused a genuinely empty
+        // bundle because EVERY ref — the candidates included — is
+        // already reachable from `refs/remotes/base/*`. Deleting such a
+        // ref orphans no object, and the `.refs` manifest written beside
+        // the (absent) bundle still records every ref name and oid.
+        Ok(BundleOutcome::Skipped { .. }) => {}
         Err(e) => {
             report.reason = "backup-failed";
             report.detail = Some(e.to_string());
@@ -942,7 +1003,11 @@ pub fn bundle_path(backups_dir: &Path, uuid: &str, ts: i64) -> PathBuf {
 }
 
 /// Write ONE bundle: `refs/kbc/*` minus objects reachable from
-/// `refs/remotes/base/*` (README §5.4 / design-internal-store.md §8).
+/// `refs/remotes/base/*` (README §5.4 / design-internal-store.md §8) —
+/// the routine-backup shape ([`backup_all_ready_stores`], the boot /
+/// `kb-code backup` passes). GC's PRE-APPLY bundle is a different, wider
+/// shape: see `write_bundle_covering`.
+///
 /// `Skipped { reason: "no-refs" }` when the store has no `refs/kbc/*` yet
 /// (a freshly seeded store with no reviews) — `git bundle create` refuses
 /// an empty ref list, and an empty bundle is not a useful backup anyway.
@@ -967,8 +1032,58 @@ pub fn write_bundle(
     git_dir: &Path,
     dest: &Path,
 ) -> Result<BundleOutcome, MaintError> {
+    write_bundle_covering(git, git_dir, dest, &[])
+}
+
+/// [`write_bundle`] PLUS every ref in `cover` (`(oid, refname)` pairs) —
+/// the bundle shape [`apply_gc_candidates`] takes immediately before a
+/// real GC apply.
+///
+/// **Ref classes covered:** all `refs/kbc/*` (whatever their binding
+/// status) plus every ref the apply is about to delete, whatever its
+/// namespace. That second clause is load-bearing and is why this function
+/// exists at all: [`super::gc::attribute`] classifies
+/// `refs/remotes/work-<id>/<branch>` mirror refs as `kind: "work"`, and
+/// [`super::gc::delete_candidates`] filters on `status == "orphan"` with
+/// NO `kind` filter — so a de-registered member's mirror refs ARE delete
+/// candidates while living entirely outside `refs/kbc/*`. A
+/// `refs/kbc/*`-only bundle would let such an apply destroy refs that no
+/// backup had ever captured.
+///
+/// **Ref classes EXCLUDED, and why that is safe:** `refs/remotes/base/*`
+/// is passed as `^<ref>` (never a bundle head), per README §5.4 — those
+/// objects are re-fetchable from the base remote, so a bundle need not
+/// carry them. `refs/remotes/work-<id>/*` for a STILL-REGISTERED member
+/// is not a delete candidate, so it is covered only incidentally, when it
+/// also appears in `cover`. `refs/heads/*` and any other namespace this
+/// store's ref scan never classifies are likewise neither heads nor
+/// candidates. The invariant this maintains: **no ref is ever deleted by
+/// an apply whose pre-apply bundle did not cover it.**
+///
+/// `cover` is a point-in-time list supplied by the caller (the exact
+/// `(old_oid, refname)` the apply is guarded on), not a re-scan, so it
+/// cannot disagree with the classification that produced the apply. It
+/// is bounded by the store's ref count — the same bound the `refs/kbc/*`
+/// argv already relies on above.
+fn write_bundle_covering(
+    git: &StoreGit,
+    git_dir: &Path,
+    dest: &Path,
+    cover: &[(String, String)],
+) -> Result<BundleOutcome, MaintError> {
     let kbc_refs = super::seed::list_refs(git, git_dir, &["refs/kbc/"])?;
-    if kbc_refs.is_empty() {
+    // Union of the `refs/kbc/*` scan and the caller's `cover`, deduped by
+    // refname (a candidate in the `kbc` namespace is listed by both). The
+    // scan's own oid wins the duplicate: `git bundle create` resolves the
+    // ref by name anyway, so the manifest records the value the bundle
+    // actually carries.
+    let mut refs = kbc_refs;
+    for (oid, name) in cover {
+        if !refs.iter().any(|(_, existing)| existing == name) {
+            refs.push((oid.clone(), name.clone()));
+        }
+    }
+    if refs.is_empty() {
         return Ok(BundleOutcome::Skipped { reason: "no-refs" });
     }
     let base_refs = super::seed::list_refs(git, git_dir, &["refs/remotes/base/"])?;
@@ -986,9 +1101,9 @@ pub fn write_bundle(
         .end_of_options()
         .abs_path(dest)
         .map_err(|e| MaintError::Other(e.to_string()))?;
-    for (_, name) in &kbc_refs {
+    for (_, name) in &refs {
         let r = super::url::RefName::parse(name)
-            .map_err(|_| MaintError::Other(format!("unparseable kbc ref: {name}")))?;
+            .map_err(|_| MaintError::Other(format!("unparseable bundled ref: {name}")))?;
         args = args.refname(&r);
     }
     for (_, name) in &base_refs {
@@ -996,23 +1111,23 @@ pub fn write_bundle(
             .map_err(|_| MaintError::Other(format!("unparseable base ref: {name}")))?;
         args = args.exclude_ref(&r);
     }
-    // Should-fix: "nothing to bundle" (every kbc ref is already reachable
-    // from `refs/remotes/base/*`) is a recorded no-op, not an error — git
-    // refuses to write a genuinely empty bundle. Either way, a small refs
-    // manifest beside the bundle path keeps every ref NAME (and the oid it
-    // pointed at) on record, even for a ref whose tip needed no new
-    // objects because base already carries it.
+    // Should-fix: "nothing to bundle" (every covered ref is already
+    // reachable from `refs/remotes/base/*`) is a recorded no-op, not an
+    // error — git refuses to write a genuinely empty bundle. Either way, a
+    // small refs manifest beside the bundle path keeps every ref NAME (and
+    // the oid it pointed at) on record, even for a ref whose tip needed no
+    // new objects because base already carries it.
     match git.run(
         GitCall::new("bundle-create", args)
             .git_dir(git_dir)
             .timeout(MAINT_TIMEOUT),
     ) {
         Ok(_) => {
-            write_refs_manifest(dest, &kbc_refs)?;
+            write_refs_manifest(dest, &refs)?;
             Ok(BundleOutcome::Written)
         }
         Err(e) if e.detail.to_ascii_lowercase().contains("empty bundle") => {
-            write_refs_manifest(dest, &kbc_refs)?;
+            write_refs_manifest(dest, &refs)?;
             Ok(BundleOutcome::Skipped {
                 reason: "fully-reachable-from-base",
             })
@@ -1298,7 +1413,9 @@ pub struct MaintPassReport {
     pub invariant: Option<InvariantReport>,
     /// Always a DRY RUN — the scheduler (and `store maintain`) NEVER call
     /// [`super::gc::apply`] (operator ruling, see the module doc's top).
-    /// The only path that applies is [`run_gc_now`].
+    /// The only paths that apply are [`run_gc_now`] and [`run_gc_pass`]
+    /// (the `review refs gc --apply` route), and neither is reachable
+    /// from here.
     pub gc: Option<GcRunReport>,
     /// Would a real apply be blocked for THIS store right now (either the
     /// per-store restore guard, or a stale/not-ready row found when the
@@ -1487,20 +1604,38 @@ pub fn run_pass_for_store(
     report
 }
 
-/// `kb-code store gc --repo R [--yes]`'s core (route + CLI share this) —
-/// the ONLY path that ever calls [`super::gc::apply`]. `bypass_guard` is
-/// true ONLY for an explicit operator `--yes`; it acknowledges THIS
-/// store's restore-guard suspicion (never another store's) and, when the
-/// apply actually proceeds, that acknowledgement is what unblocks it.
-/// Takes the ops lock itself for the whole classify-guard-apply sequence.
-pub fn run_gc_now(
+/// THE store-wide GC entry point — the single funnel every store-backed
+/// apply goes through, and therefore the only route to
+/// [`super::gc::apply`]. Two callers, and they MUST stay the only two:
+///
+/// * [`run_gc_now`] — `kb-code store gc --repo R [--yes]`, the operator's
+///   explicit verb (route + CLI share it). Its `--yes` is what
+///   `bypass_guard` acknowledges.
+/// * [`crate::reviews::gc_review_refs_inner`] — the legacy
+///   `kb-code review refs gc --repo R --apply` route, which passes
+///   `bypass_guard = false` (it has no `--yes`) and MUST delegate here
+///   rather than call [`super::gc::apply`] itself: an unguarded apply on
+///   that route deleted store refs with no backup, no restore-guard check
+///   and no high-water check, and left `state_json.last_gc_apply`
+///   stale so the monthly cruft cooldown was judged from a lie.
+///
+/// `bypass_guard` is true ONLY for an explicit operator `--yes`; it
+/// acknowledges THIS store's restore-guard suspicion (never another
+/// store's) and, when the apply actually proceeds, that acknowledgement
+/// is what unblocks it. Takes the ops lock itself for the whole
+/// classify-guard-apply sequence.
+///
+/// Returns the report ALONGSIDE the classified candidates' refnames (the
+/// exact list the pass decided on — also what a refusal leaves intact),
+/// so a caller can render per-ref output without re-deriving anything.
+pub fn run_gc_pass(
     rs: &ReviewStores,
     store: &Store,
     row: &ReviewStoreRow,
     apply_requested: bool,
     bypass_guard: bool,
     now: i64,
-) -> Result<GcRunReport, String> {
+) -> Result<(GcRunReport, Vec<String>), String> {
     let Some(git) = rs.git() else {
         return Err("store git spawner unavailable".into());
     };
@@ -1556,6 +1691,9 @@ pub fn run_gc_now(
     } else {
         dry_run_report
     };
+    // The refnames this pass classified, captured BEFORE any decision was
+    // acted on: a guard refusal must still report what it refused.
+    let refnames: Vec<String> = candidates.iter().map(|c| c.refname.clone()).collect();
 
     let mut sj = state_json_value(&fresh);
     if final_report.applied {
@@ -1574,9 +1712,23 @@ pub fn run_gc_now(
         });
     }
     if let Err(e) = store.set_review_store_state(fresh.id, &fresh.state, Some(&sj.to_string())) {
-        log_state_write_failure(&fresh.uuid, "run_gc_now", &e);
+        log_state_write_failure(&fresh.uuid, "run_gc_pass", &e);
     }
-    Ok(final_report)
+    Ok((final_report, refnames))
+}
+
+/// `kb-code store gc --repo R [--yes]`'s core (route + CLI share this) —
+/// [`run_gc_pass`]'s report half, discarding the candidate refnames the
+/// operator verb has no use for.
+pub fn run_gc_now(
+    rs: &ReviewStores,
+    store: &Store,
+    row: &ReviewStoreRow,
+    apply_requested: bool,
+    bypass_guard: bool,
+    now: i64,
+) -> Result<GcRunReport, String> {
+    run_gc_pass(rs, store, row, apply_requested, bypass_guard, now).map(|(report, _)| report)
 }
 
 // ── background scheduler ────────────────────────────────────────────────

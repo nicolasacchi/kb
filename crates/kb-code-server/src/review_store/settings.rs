@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::cred::{CredentialPin, FetchCredentialConfig};
 use crate::config::{RepoEntry, ReviewSection};
+use crate::security::paths::canonicalize_lenient;
 
 /// Directory name of the default store root under the daemon's state dir.
 pub const DEFAULT_ROOT_DIR: &str = "git";
@@ -235,8 +236,23 @@ impl StoreSettings {
     }
 }
 
+/// Containment for the store-vs-repo overlap guard, at the same
+/// discipline as [`crate::security::paths::contained_abs_path`]:
+/// canonicalise BOTH sides, then compare.
+///
+/// `inner.starts_with(outer)` alone is LEXICAL and not a containment
+/// proof: `..` survives `Path::starts_with` as a `Component::ParentDir`
+/// (`/kb-git/../repos/widgets` does not start with `/kb-git` but DOES
+/// live under `/repos/widgets`), and a symlinked parent is never
+/// followed. `canonicalize_lenient` — the crate's existing helper from
+/// `security::paths` (the same one `contained_abs_path` uses, whose
+/// module doc carries the deepest-existing-ancestor rationale) — keeps
+/// the check working for a store root that does not exist yet, which a
+/// plain `canonicalize` would reject.
 fn contains(outer: &Path, inner: &Path) -> bool {
-    inner.starts_with(outer)
+    // Both directions of the caller's `find` need the canonical form: a
+    // repo reached through a symlink, and a root reached through one.
+    canonicalize_lenient(inner).starts_with(canonicalize_lenient(outer))
 }
 
 fn expand_tilde<P: AsRef<Path>>(p: P) -> PathBuf {

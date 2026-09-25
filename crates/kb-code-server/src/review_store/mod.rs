@@ -25,8 +25,10 @@
 //!   call (`handle_for_repo`, `admit_mutation`, `fetch_lock`, `ops_lock`,
 //!   `resolve_credential`, `fetch_base`);
 //! * [`boot`] — the background boot seeding job (D4);
-//! * [`routes`] — `GET /api/repos/{name}/store|credentials` and the
-//!   loopback-only `store/sync`, `store/base-url`, `credentials/test`.
+//! * [`routes`] — the bearer `GET /api/repos/{name}/credentials` and the
+//!   loopback-only `GET /api/repos/{name}/store` (the card reports the
+//!   store's absolute `git_dir`/`uuid`), `store/sync`, `store/base-url`,
+//!   `credentials/test`.
 //!
 //! RS-U5 adds the store-WIDE ref family + GC on top of that (README §5.4):
 //!

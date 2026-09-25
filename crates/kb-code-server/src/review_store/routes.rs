@@ -1,8 +1,13 @@
 //! RS-U3 — the review-store HTTP surface (README §12).
 //!
 //! * `GET  /api/repos/{name}/store` — the store card (`kbc-store/1`):
-//!   registration, state, members, disk facts, doctor findings. A bearer
-//!   read: it carries no secret and no repo content.
+//!   registration, state, members, disk facts, doctor findings.
+//!   LOOPBACK-ONLY, like every other route in the RS-U3 store family
+//!   below: the card reports `store.git_dir` — the ABSOLUTE path of the
+//!   daemon's internal state dir — plus `store.uuid` and internal store
+//!   row ids, and no bearer route in this crate hands out a kb-internal
+//!   path. It carries no secret and no repo content; the gate is about
+//!   the on-disk location, not the credentials.
 //! * `GET  /api/repos/{name}/credentials` — the fetch credential as last
 //!   RESOLVED (`kbc-credentials/1`): kind, account, reason, and the D9
 //!   "broader than needed" flag. Never secret bytes; never runs `gh`.
@@ -64,6 +69,11 @@ struct MemberView {
     remote: String,
 }
 
+/// The store row as the card reports it. `git_dir` and `uuid` are the
+/// store's ABSOLUTE on-disk location and its identity, so this view only
+/// ever reaches a LOOPBACK caller — see `store_show_route`. Everything
+/// secret-adjacent is still omitted: `cred_reason`, `cred_account`,
+/// `key_fingerprint` and `key_read_only` never leave the store DB.
 #[derive(Debug, Serialize)]
 struct StoreRowView {
     id: i64,
@@ -290,7 +300,9 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     })
 }
 
-/// `GET /api/repos/{name}/store`.
+/// `GET /api/repos/{name}/store` — LOOPBACK-ONLY (mounted on the
+/// `transcripts_api` sub-router beside the store family's mutations): the
+/// card carries `git_dir`/`uuid`, the daemon's internal state-dir path.
 pub async fn store_show_route(
     State(state): State<SharedState>,
     Path(name): Path<String>,

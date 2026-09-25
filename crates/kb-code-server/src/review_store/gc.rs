@@ -10,9 +10,11 @@
 //!   the DB, from WHICHEVER member it belongs to;
 //! * `refs/kbc/pr/<n>` and `refs/kbc/prm/<n>` are kept iff some OPEN review
 //!   in ANY member binds `(store, n)` — closed-only bindings do not keep
-//!   the ref (the legacy per-repo route, `reviews::gc_review_refs`, is
-//!   looser — any state — which is fine there because it only ever runs
-//!   pre-store, README §10 step 1's "exactly today's behaviour");
+//!   the ref. The legacy per-repo route (`reviews::gc_review_refs`) kept
+//!   ANY state, and did so over the requester's own CLONE refs; against a
+//!   store it is deliberately NOT a second, looser engine — it delegates
+//!   the whole pass to `super::maint::run_gc_pass`, so there is exactly
+//!   ONE store-wide keep-set and ONE apply path, whatever route asked.
 //! * `refs/remotes/work-<id>/*` (a member's mirrored heads) and the
 //!   store-only `refs/kbc/hint/<id>/*` cache are kept iff `id` is a
 //!   CURRENTLY REGISTERED member — removed only when unregistered, never
@@ -199,6 +201,12 @@ pub fn delete_candidates(attributed: &[AttributedStoreRef]) -> Vec<GcCandidate> 
 /// WHOLE transaction if any guard has gone stale (a fetch or a capture
 /// landed between [`attribute`] and this call), so a race never deletes a
 /// ref that just became live again. Call under the store's `ops` lock.
+///
+/// Deliberately UN-guarded — there is no bundle, no restore-guard check and
+/// no high-water check in here, only the old-value guards. Every apply
+/// MUST therefore go through `super::maint::apply_gc_candidates` (which
+/// installs all three) via `super::maint::run_gc_pass`; this function has
+/// no other caller.
 pub fn apply(git: &StoreGit, git_dir: &Path, delete: &[GcCandidate]) -> Result<(), StoreGitError> {
     if delete.is_empty() {
         return Ok(());

@@ -433,9 +433,16 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             }
             let report = &body["report"];
             let base_state = report["base"]["state"].as_str().unwrap_or("");
-            let partial = report["member_errors"]
-                .as_array()
-                .is_some_and(|a| !a.is_empty());
+            // `member_errors` and `member_problems` are siblings off the same
+            // `members_of` call and both mean a member was skipped: a
+            // `problems` member is dropped from `plan.members`, so its refs are
+            // neither imported nor connectivity-verified, yet the pass still
+            // reports `ready`. Ignoring it reported a store whose deleted
+            // worktree was never seeded as a clean sync. The GC path folds the
+            // same signal into its own `partial`.
+            let partial = ["member_errors", "member_problems"]
+                .iter()
+                .any(|k| report[*k].as_array().is_some_and(|a| !a.is_empty()));
             let upstream = base_state == "failed";
             if json {
                 envelope::print_ok("kbc-store-sync/1", &body, vec![], partial || upstream, None);
@@ -462,6 +469,12 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                         .map(|c| format!(" ({c})"))
                         .unwrap_or_default()
                 );
+                for e in report["member_errors"].as_array().into_iter().flatten() {
+                    println!("  member error: {}", s(e));
+                }
+                for p in report["member_problems"].as_array().into_iter().flatten() {
+                    println!("  member problem: {}", s(p));
+                }
                 let missing = report["objects_missing"].as_array().map_or(0, Vec::len);
                 if missing > 0 {
                     println!("  {missing} review(s) objects-missing");
@@ -654,19 +667,42 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             }
             let report = &body["report"];
             let partial = report["partial"] == true;
+            let applied = report["applied"] == true;
+            // Exit contract for agent callers: under `--yes` the route answers
+            // HTTP 200 for a REFUSED apply (`restore-guard`,
+            // `restore-suspected`, `backup-failed`), so `applied: false` with
+            // an exit 0 records a refused destructive apply as a successful
+            // one. Only `dry-run` (nothing requested) and `nothing-to-do`
+            // (nothing to delete) are benign no-apply outcomes; any other
+            // reason fails closed.
+            let refused = apply
+                && !applied
+                && !matches!(report["reason"].as_str(), Some("dry-run" | "nothing-to-do"));
             if json {
-                envelope::print_ok("kbc-store-gc/1", &body, vec![], partial, None);
+                envelope::print_ok("kbc-store-gc/1", &body, vec![], partial || refused, None);
+            } else if refused {
+                // Everything a stdout line here would carry reads like success
+                // ("gc restore-guard — 3 candidate(s)"), so a refused apply
+                // goes to stderr only.
+                eprintln!(
+                    "{}: gc REFUSED — {} ({} candidate(s); nothing deleted)",
+                    repo,
+                    s(&report["reason"]),
+                    s(&report["candidates"]),
+                );
+                if let Some(detail) = report["detail"].as_str() {
+                    eprintln!("  {detail}");
+                }
+                for p in report["member_problems"].as_array().into_iter().flatten() {
+                    eprintln!("  member problem: {}", s(p));
+                }
             } else {
                 println!(
                     "{}: gc {} — {} candidate(s){}{}",
                     repo,
                     s(&report["reason"]),
                     s(&report["candidates"]),
-                    if report["applied"] == true {
-                        ", applied"
-                    } else {
-                        ""
-                    },
+                    if applied { ", applied" } else { "" },
                     if partial {
                         " (partial — see member_problems)"
                     } else {
@@ -679,6 +715,14 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                 for p in report["member_problems"].as_array().into_iter().flatten() {
                     println!("  member problem: {}", s(p));
                 }
+            }
+            // Refusal outranks partial: a refused apply is never merely
+            // "partially done", it is not done.
+            if refused {
+                std::process::exit(envelope::EXIT_CONFLICT);
+            }
+            if partial {
+                std::process::exit(envelope::EXIT_PARTIAL);
             }
         }
         StoreCmd::Maintain {

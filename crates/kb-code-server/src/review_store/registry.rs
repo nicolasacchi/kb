@@ -14,6 +14,10 @@
 //!   OPS mutex (design §4.2), plus the lifetime `flock` per store
 //!   (`manifest::StoreLock`). `tokio::sync::Mutex`es: a fetch guard is held
 //!   across the `spawn_blocking` await of the fetch itself.
+//!   The two mutexes are per-process maps, so every path that WRITES a
+//!   store admits through the `flock` as well — [`ReviewStores::open`],
+//!   [`ReviewStores::seed`] and [`ReviewStores::import_pending_members`] —
+//!   which is what makes one-writer-per-store hold across daemons.
 //!
 //! # The API later units call
 //!
@@ -444,6 +448,11 @@ impl ReviewStores {
     /// import runs under that member's fetch lock; the ps-ref recreate
     /// step under the store's ops lock. Blocking (uses `blocking_lock`):
     /// call from `spawn_blocking`, never while holding either lock.
+    ///
+    /// Refused outright with `store-locked` when another process holds the
+    /// store: `configure_remote`/`update-ref` here would contend with
+    /// whichever daemon is driving it. The pending marker is only cleared
+    /// on success, so the next boot pass or route trigger retries.
     pub fn import_pending_members(
         &self,
         store: &Store,
@@ -463,6 +472,16 @@ impl ReviewStores {
         if row.state != "ready" {
             return Ok(vec![]);
         }
+        // The per-member fetch lock and the per-store ops lock are
+        // in-process maps, so they cannot see a second daemon writing the
+        // same store. Admit through the same `locked_elsewhere` predicate
+        // `open` uses, before touching a single ref or config.
+        if !is_store_uuid(&row.uuid) {
+            return Err(StoreUnavailable::Broken {
+                code: "bad-uuid".into(),
+            });
+        }
+        self.refuse_if_locked_elsewhere(&row.uuid)?;
         let dir = PathBuf::from(&row.git_dir);
         let (members, _) = self.members_of(store, store_id);
         let ops = self.ops_lock(store_id);
@@ -568,6 +587,33 @@ impl ReviewStores {
             Err(e) => Err(StoreUnavailable::Error {
                 detail: format!("store lock: {}", e.kind()),
             }),
+        }
+    }
+
+    /// The `locked_elsewhere` predicate for a caller about to WRITE a
+    /// store: `Err(StoreUnavailable::LockedElsewhere)` when another
+    /// process is the one holding it. Exactly the admission `open` and
+    /// `seed` use — our own lifetime flock if we have it, else the
+    /// `try_acquire` inside [`Self::acquire_lock`], which is what
+    /// maintains `locked_elsewhere` — so a store another daemon drives
+    /// is refused here as `open` refuses it, and a store nobody holds
+    /// goes on untouched.
+    ///
+    /// The claim is deliberately NOT kept: this refuses a write, it is
+    /// not a second way to admit a store. Holding it would leave the
+    /// uuid in `held` and so skip `open`'s manifest re-check on that
+    /// store's first open.
+    fn refuse_if_locked_elsewhere(&self, uuid: &str) -> Result<(), StoreUnavailable> {
+        let ours = self.held.lock().contains_key(uuid);
+        if ours {
+            return Ok(());
+        }
+        match self.acquire_lock(uuid) {
+            Ok(lock) => {
+                drop(lock);
+                Ok(())
+            }
+            Err(u) => Err(u),
         }
     }
 
@@ -1325,7 +1371,19 @@ impl ReviewStores {
             detail: e.to_string(),
         })?;
         self.apply_objects_state(store, &missing, &ok);
-        let mut sj: serde_json::Value = row
+        // Merged into a FRESH read, never the `row` snapshot taken above:
+        // the member fetches, base fetch and connectivity verify above run
+        // for MINUTES, and a `json_set` that lands meanwhile — the forge
+        // probe's `default_branch`, a backup pass's `last_backup` — would
+        // be silently dropped by a write derived from the stale copy. The
+        // read is here, immediately before the write, for that reason.
+        let fresh = store
+            .get_review_store(handle.id)
+            .map_err(|e| StoreUnavailable::Error {
+                detail: e.to_string(),
+            })?
+            .ok_or(StoreUnavailable::NotRegistered)?;
+        let mut sj: serde_json::Value = fresh
             .state_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())

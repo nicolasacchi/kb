@@ -44,10 +44,16 @@
 //! );
 //! ```
 //!
-//! Store resolution lives in exactly ONE place, [`GitCtx::for_repo`] (and
-//! its async twin [`GitCtx::resolve`]). Today no store is ever `ready` (the
-//! seeding job is a later unit), so every `GitCtx` resolves to the
-//! fallback and behaviour is byte-identical to before this split.
+//! `GitCtx` store resolution lives in exactly ONE place, the
+//! [`GitCtx::for_repo`] constructor (and its async twin
+//! [`GitCtx::resolve`]). With no `ready` store for the repo — not
+//! registered, still seeding, broken, the member's own import
+//! pending, or the whole store subsystem switched off for this boot —
+//! every `GitCtx` resolves to the fallback and behaviour is exactly what it
+//! was before this split. The store half is LIVE: the boot job seeds
+//! (`ReviewStores::seed` writes `state = "ready"`) and
+//! `mark_imported` sets `legacy_import_json`, so a normally seeded daemon
+//! resolves real store roots on the very next boot.
 //!
 //! Two sites read review data WITHOUT going through any of the typed
 //! helpers — `prose_refs.rs` and `refs_typeahead.rs` open a `GitRepo` on
@@ -206,8 +212,10 @@ impl GitRoot for BridgedWorkTree {
 
 /// Per-`Store` counters of reads that did NOT come from a review store.
 /// `unresolved`: a [`GitCtx`] was built for a repo with no `ready` store
-/// (every resolution today). `odb_miss`: a store WAS ready but the read had
-/// to be served by the user repo (the gate-3 number, README §14 (c)).
+/// (no row, seeding, broken, member import pending, or the store
+/// subsystem off for this boot). `odb_miss`: a store WAS ready but a
+/// content-addressed read had to be served by the user repo (the gate-3
+/// number, README §14 (c)).
 #[derive(Debug, Default)]
 pub struct GitFallbackStats {
     unresolved: AtomicU64,
@@ -349,7 +357,8 @@ impl GitCtx {
         self.store.as_ref()
     }
 
-    /// `true` when no ready store backs this context (every context today).
+    /// `true` when no ready store backs this context — the read falls back
+    /// to the member work tree.
     pub fn is_fallback(&self) -> bool {
         self.store.is_none()
     }
@@ -368,6 +377,11 @@ impl GitCtx {
     /// (the `ReviewOdb` chain of design §6 S1: store, then user ODB). With
     /// no ready store this is exactly one call against the work tree. A
     /// store miss served by the work tree is counted as `odb_miss`.
+    ///
+    /// CONTENT-ADDRESSED READS ONLY — the chain is sound because a full
+    /// sha means the same object in either ODB. A caller holding a rev
+    /// NAME must not come here; use [`Self::read_rev_with_fallback`],
+    /// which applies [`is_store_authoritative`].
     pub fn read_with_fallback<T, E>(
         &self,
         mut f: impl FnMut(&dyn GitRoot) -> Result<T, E>,
@@ -379,6 +393,38 @@ impl GitCtx {
             self.stats.odb_miss.fetch_add(1, Ordering::Relaxed);
         }
         f(&self.work)
+    }
+
+    /// Run a READ against the STORE ALONE — no retry, no `odb_miss`: once
+    /// ready, the store is the whole answer for a `refs/kbc/*` name. With
+    /// no ready store this is one call against the work tree, which is the
+    /// only place such a ref can be (a pre-store install).
+    pub fn read_store_only<T, E>(
+        &self,
+        mut f: impl FnMut(&dyn GitRoot) -> Result<T, E>,
+    ) -> Result<T, E> {
+        match &self.store {
+            Some(store) => f(store),
+            None => f(&self.work),
+        }
+    }
+
+    /// [`Self::read_with_fallback`] for a caller-supplied `rev` that
+    /// [`is_store_addressable`] admitted — the ONE place the
+    /// store-vs-work-tree rule is applied to a name. A content-addressed
+    /// sha takes the ODB chain; a `refs/kbc/*` NAME is
+    /// store-authoritative ([`is_store_authoritative`]) and a store miss
+    /// is returned as the error it is.
+    pub fn read_rev_with_fallback<T, E>(
+        &self,
+        rev: &str,
+        f: impl FnMut(&dyn GitRoot) -> Result<T, E>,
+    ) -> Result<T, E> {
+        if is_store_authoritative(rev) {
+            self.read_store_only(f)
+        } else {
+            self.read_with_fallback(f)
+        }
     }
 
     /// [`Self::read_with_fallback`] for `Option`-returning reads.
@@ -418,6 +464,19 @@ pub fn is_object_id(rev: &str) -> bool {
 /// the work tree: a full sha, or a kb-minted `refs/kbc/*` name.
 pub fn is_store_addressable(rev: &str) -> bool {
     is_object_id(rev) || rev.starts_with("refs/kbc/")
+}
+
+/// `true` for a store-ADDRESSABLE rev the store is AUTHORITATIVE for: a
+/// kb-minted `refs/kbc/*` name. Such a name names exactly one review, and
+/// a user clone may still carry a STALE ref of the same name — pre-store
+/// installs wrote `refs/kbc/*` into clones, and the clone-side copy
+/// outlives a delete until `store legacy-refs` sweeps it. So a store miss
+/// on a name is a miss, never a cue to read the clone: the same rule
+/// `crate::checkout::resolve_target_via_store` applies. A full sha is
+/// NOT authoritative (either ODB answers it identically), which is why
+/// this is `addressable && !is_object_id` and not just "not an oid".
+pub fn is_store_authoritative(rev: &str) -> bool {
+    is_store_addressable(rev) && !is_object_id(rev)
 }
 
 #[cfg(test)]
