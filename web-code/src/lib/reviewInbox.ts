@@ -191,7 +191,11 @@ export function reviewByPrNumber(reviews: readonly ReviewSummaryPr[]): Map<numbe
 /// `POST /api/reviews/pr` body for a given PR row — the ONE place "Start
 /// review" builds its request, shared by `Prs.tsx` and
 /// `UnreviewedPrsStrip.tsx` so the two CTAs can never drift on which fields
-/// they send.
-export function buildCreateReviewPrInput(repo: string, pr: Pick<PrOut, "number" | "base_ref">) {
-  return { repo, pr_number: pr.number, base_ref: pr.base_ref };
+/// they send. RS-U11 — this used to also send `base_ref: pr.base_ref`
+/// (the Explicit rung, skipping the whole resolution chain); the daemon
+/// now resolves the PR's target branch itself from the forge API
+/// (README §6 rung 2, followed on every fetch when `set_by=auto`), so
+/// this stays a bare `{repo, pr_number}` and lets it.
+export function buildCreateReviewPrInput(repo: string, pr: Pick<PrOut, "number">) {
+  return { repo, pr_number: pr.number };
 }

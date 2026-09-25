@@ -22,6 +22,9 @@ import type { AbsentLane } from "./generated/AbsentLane";
 import type { FactsOut } from "./generated/FactsOut";
 import type { SummaryBucket as LaneSummaryBucket } from "./generated/SummaryBucket";
 import type { SummaryOut as LanesSummaryOut } from "./generated/SummaryOut";
+// RS-U11 — the review base model's additive envelope fields (README §12).
+import type { ReviewBaseOut } from "./generated/ReviewBaseOut";
+import type { BaseWarningOut } from "./generated/BaseWarningOut";
 
 export type {
   HighlightClass,
@@ -37,6 +40,8 @@ export type {
   FactsOut,
   LaneSummaryBucket,
   LanesSummaryOut,
+  ReviewBaseOut,
+  BaseWarningOut,
 };
 export type PrMetaUnavailableReason = PrMetaUnavailable;
 
@@ -1925,6 +1930,15 @@ export interface ReviewPatchset {
   base_sha_full: string;
   captured_at: number;
   commit_count: number;
+  /// RS-U6 — why this patchset was minted (`initial`/`push`/`rebase`/
+  /// `base-moved`/`base-corrected`/`retarget`/`forced`); `null` on a
+  /// patchset captured before the base model landed (a legacy patchset —
+  /// `PatchsetStrip` shows no badge for it, never a guessed one).
+  kind: string | null;
+  /// RS-U6 — the resolved policy's tip at capture time. `null` on a
+  /// legacy patchset (fall back to `base_sha_full`/`base_sha`, the
+  /// merge-base every patchset has always carried).
+  base_tip_sha: string | null;
 }
 
 /// `GET /api/reviews/{id}` body.
@@ -1943,6 +1957,11 @@ export interface ReviewDetail {
   /// V4.C2 — same block as the list row.
   verdict: ReviewVerdict | null;
   verdict_stale: boolean;
+  /// RS-U6 — the review's base POLICY, additive (README §12): always
+  /// present on `GET /api/reviews/{id}` (`reviews.rs::get_review`), never
+  /// on the list row (`ReviewSummary` stays byte-identical).
+  base: ReviewBaseOut;
+  warnings: BaseWarningOut[];
 }
 
 /// One file row on `GET /api/reviews/{id}/files`.
@@ -2030,6 +2049,102 @@ export interface ReviewAnnotationsOut {
   repo: string;
   ps_number: number;
   groups: ReviewAnnotationGroup[];
+}
+
+// --- RS-U11 — the review store + fetch-credential cards (kbc-store/1,
+// kbc-credentials/1; `review_store/routes.rs`, no `ts-export` derive on
+// these — the routes build `serde_json::json!` bodies, so these are
+// hand-written mirrors, same convention as the rest of this file). ------
+
+/// `GET /api/repos/{name}/store`'s `store` row, when a store has been
+/// registered for the repo at all (`null` before that — RS-U3, §5.2).
+export interface ReviewStoreRow {
+  id: number;
+  uuid: string;
+  store_key: string;
+  git_dir: string;
+  base_url: string | null;
+  base_url_source: string | null;
+  forge_kind: string | null;
+  forge_host: string | null;
+  forge_slug: string | null;
+  /// `"verified"` (GitHub, D8) | `"unverified"` (every other forge).
+  forge_verified: string;
+  cred_kind: string;
+  /// `"absent"` | `"seeding"` | `"ready"` | `"broken"`.
+  state: string;
+  state_code: string | null;
+  state_json: unknown;
+  created_at: number;
+}
+
+export interface ReviewStoreMember {
+  repo_id: number;
+  /// `null` when this member repo id isn't (or is no longer) a
+  /// configured `[[repos]]` entry.
+  name: string | null;
+  remote: string;
+}
+
+/// How THIS repo's own registration into its store went (in-memory only
+/// — a refusal has no DB row to live in, README §5.1's base-URL ladder).
+export type ReviewStoreRegistration =
+  | { outcome: "member"; store_id: number; store_key: string; source: string; joined_existing: boolean }
+  | { outcome: "refused"; code: string; reason: string; candidates: string[] }
+  | { outcome: "error"; code: string; detail: string };
+
+export interface ReviewStoreDoctorFinding {
+  level: "error" | "warn" | "info";
+  code: string;
+  message: string;
+}
+
+export interface ReviewStoreDisk {
+  packs: number;
+  pack_bytes: number;
+  loose_objects: number;
+  total_bytes: number;
+}
+
+/// `GET /api/repos/{name}/store` body (`kbc-store/1`).
+export interface ReviewStoreCard {
+  schema: string;
+  repo: string;
+  store: ReviewStoreRow | null;
+  members: ReviewStoreMember[];
+  registration: ReviewStoreRegistration | null;
+  runtime: { seeding: boolean; locked_elsewhere: boolean };
+  disk: ReviewStoreDisk | null;
+  doctor: ReviewStoreDoctorFinding[];
+}
+
+/// `[[review.repos]] credential` pin (`review_store/cred.rs`'s
+/// `CredentialPin`).
+export type ReviewCredentialPin = "auto" | "gh-cli" | "deploy-key" | "token" | "anonymous" | "inherit" | "none";
+
+/// `GET /api/repos/{name}/credentials` body (`kbc-credentials/1`) — the
+/// fetch credential as last RESOLVED. Never secret bytes; never runs
+/// `gh` (that's `POST …/credentials/test`, loopback-only, not read here).
+export interface ReviewCredentialsOut {
+  schema: string;
+  repo: string;
+  fetch: {
+    cred_kind: string | null;
+    account: string | null;
+    /// The human reason, with the D9 "broader than needed" marker
+    /// already stripped — see `broader_than_needed` for that flag.
+    reason: string | null;
+    broader_than_needed: boolean;
+    amber: boolean;
+    resolved: boolean;
+    host: string | null;
+  };
+  config: {
+    credential: ReviewCredentialPin;
+    gh_user: string | null;
+    token_file_configured: boolean;
+    allow_inherited_credentials: boolean;
+  };
 }
 
 // --- V4.C1 / C4 — review-scoped comment threads (`review-comments/1`) ------
