@@ -174,15 +174,14 @@ pub fn switch_repo(
 ///   name means something different in a bare store than in the user
 ///   clone (design-internal-store.md §6), so the store is never even
 ///   asked.
-/// * Otherwise: if `repo_root` already has the object, `target` comes back
-///   unchanged (idempotent — a repeat checkout/worktree-add of an
-///   already-fetched review tip touches the store zero times). If not,
-///   and `target` is already a full sha, that sha is what gets fetched. If
-///   `target` is a `refs/kbc/*` NAME, it is resolved to a sha INSIDE the
-///   store first (`git rev-parse`); a miss there is not an error — the
-///   store simply has nothing to offer for that name, so `target` comes
-///   back unchanged and the caller's own switch/checkout produces the
-///   same "unknown revision" refusal it always would have.
+/// * Otherwise: a `refs/kbc/*` NAME is resolved to a sha INSIDE the store
+///   first (`git rev-parse`) — never against the clone, which may hold a
+///   stale legacy ref of the same name; a miss in the store is not an
+///   error — `target` comes back unchanged and the caller's own
+///   switch/checkout behaves exactly as it always would have. A full sha is
+///   used as is. The sha is fetched only if `repo_root` does not already
+///   have the object (idempotent: a repeat checkout of an already-fetched
+///   review tip does not fetch again), and the SHA is returned.
 ///
 /// The fetch itself is `git -C <repo_root> fetch --no-tags
 /// --no-write-fetch-head --no-auto-gc --no-auto-maintenance <store> <sha>`
@@ -213,9 +212,11 @@ pub(crate) fn resolve_target_via_store(
     if !crate::git::roots::is_store_addressable(target) {
         return Ok(target.to_string());
     }
-    if object_exists_locally(repo_root, target) {
-        return Ok(target.to_string());
-    }
+    // A `refs/kbc/*` NAME is resolved in the store FIRST: the store is
+    // authoritative, and a user clone may still carry a stale legacy ref of
+    // the same name (pre-store installs wrote `refs/kbc/*` into clones) —
+    // checking the name locally first would silently check out that stale
+    // commit. Only the resulting sha is ever looked up in the clone.
     let sha = if crate::git::roots::is_object_id(target) {
         target.to_string()
     } else {
@@ -224,7 +225,9 @@ pub(crate) fn resolve_target_via_store(
             None => return Ok(target.to_string()),
         }
     };
-    fetch_sha_no_ref(repo_root, store.git_dir(), &sha)?;
+    if !object_exists_locally(repo_root, &sha) {
+        fetch_sha_no_ref(repo_root, store.git_dir(), &sha)?;
+    }
     Ok(sha)
 }
 
@@ -580,6 +583,19 @@ mod tests {
         // The store-only NAME itself still does not exist locally — only
         // the object it pointed to does.
         assert!(!object_exists_locally(&user, "refs/kbc/review/1/ps1"));
+    }
+
+    #[test]
+    fn a_stale_legacy_ref_in_the_clone_never_shadows_the_store() {
+        let (_tmp, user, store, tip) = store_bridge_fixture();
+        // A pre-store install left `refs/kbc/review/1/ps1` in the clone,
+        // pointing at an older commit than the store's.
+        let stale = git_head_sha(&user);
+        assert_ne!(stale, tip);
+        git(&user, &["update-ref", "refs/kbc/review/1/ps1", &stale]);
+        let outcome = switch_repo(&user, &rs("refs/kbc/review/1/ps1"), Some(&store)).unwrap();
+        assert!(outcome.detached);
+        assert_eq!(git_head_sha(&user), tip, "the store is authoritative");
     }
 
     #[test]
