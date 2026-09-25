@@ -89,10 +89,12 @@ Stdlib only (no third-party deps — BUILDER-RULES / README §9).
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -143,18 +145,27 @@ def _get_json(
     req = urllib.request.Request(url, method="GET")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed http/https base, operator-supplied)
-            body = resp.read()
-    except urllib.error.HTTPError as e:
-        if ok_404 and e.code == 404:
-            return None
-        detail = e.read().decode("utf-8", "replace")[:500]
-        if ok_redacted and e.code == 403 and REDACTED_URN in detail:
-            return REDACTED
-        raise DaemonError(f"GET {path} -> HTTP {e.code}: {detail}") from None
-    except urllib.error.URLError as e:
-        raise DaemonError(f"GET {path} -> {e.reason}") from None
+    attempt = 0
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed http/https base, operator-supplied)
+                body = resp.read()
+            break
+        except urllib.error.HTTPError as e:
+            # A status code is an answer, never retried.
+            if ok_404 and e.code == 404:
+                return None
+            detail = e.read().decode("utf-8", "replace")[:500]
+            if ok_redacted and e.code == 403 and REDACTED_URN in detail:
+                return REDACTED
+            raise DaemonError(f"GET {path} -> HTTP {e.code}: {detail}") from None
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+            # Transport failure (dropped connection, timeout on a starved
+            # host): retry with backoff before giving up.
+            attempt += 1
+            if attempt > RETRIES:
+                raise DaemonError(f"GET {path} -> {getattr(e, 'reason', e)}") from None
+            time.sleep(min(60, 5 * 2 ** (attempt - 1)))
     if not body:
         return None
     return json.loads(body)
@@ -166,6 +177,9 @@ def _get_json(
 # aborting the whole snapshot.
 REDACTED_URN = "urn:kb:errors:redacted-by-policy"
 REDACTED = "<redacted-by-policy>"
+
+# Transport retries per request (not per status code).
+RETRIES = 4
 
 
 # --------------------------------------------------------------------------
@@ -320,17 +334,35 @@ def _discover_repos(base: str, token: str, timeout: float) -> list[str]:
 
 
 def build_snapshot(
-    base: str, token: str | None, timeout: float, repos: list[str] | None
+    base: str,
+    token: str | None,
+    timeout: float,
+    repos: list[str] | None,
+    cache_dir: str | None = None,
 ) -> dict:
+    """`cache_dir` keeps one JSON file per finished review so a run that
+    dies part-way (a starved host) resumes instead of starting over. Use a
+    fresh directory per snapshot: the cache is never invalidated."""
     repo_names = repos if repos else _discover_repos(base, token, timeout)
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
     all_reviews = []
     for repo in repo_names:
         q = urllib.parse.urlencode({"repo": repo})
         body = _get_json(base, f"/api/reviews?{q}", token, timeout)
         for r in body.get("reviews", []):
-            all_reviews.append(
-                _snapshot_review(base, token, timeout, repo, r["id"])
-            )
+            cached = os.path.join(cache_dir, f"review-{r['id']}.json") if cache_dir else None
+            if cached and os.path.exists(cached):
+                with open(cached, encoding="utf-8") as fh:
+                    all_reviews.append(json.load(fh))
+                continue
+            snap = _snapshot_review(base, token, timeout, repo, r["id"])
+            if cached:
+                tmp = cached + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(snap, fh)
+                os.replace(tmp, cached)
+            all_reviews.append(snap)
     all_reviews.sort(key=lambda r: (r["repo"] or "", r["id"] or 0))
     return {
         "schema": SCHEMA,
@@ -492,7 +524,7 @@ def diff_snapshots(before: dict, after: dict, allow_new_keys: bool) -> list[str]
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
     token = _read_token(args)
-    doc = build_snapshot(args.base, token, args.timeout, args.repo)
+    doc = build_snapshot(args.base, token, args.timeout, args.repo, args.cache_dir)
     if args.normalize_fixture:
         doc = normalize_for_fixture(doc)
     text = json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
@@ -534,6 +566,10 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--token-env", help="env var holding the bearer token (default KB_CODE_TOKEN)")
     ps.add_argument("--timeout", type=float, default=30.0)
     ps.add_argument("-o", "--out", help="output path (default: stdout)")
+    ps.add_argument(
+        "--cache-dir",
+        help="per-review resume cache (one fresh dir per snapshot; never invalidated)",
+    )
     ps.add_argument(
         "--normalize-fixture",
         action="store_true",
