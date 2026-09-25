@@ -3832,9 +3832,17 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Capture a new patchset (explicit snapshot).
+    /// Capture a new patchset (explicit snapshot). RS-U6 (D13): an
+    /// identical capture — the `(tip, merge-base)` pair unchanged — is
+    /// SKIPPED by default (`minted: false`); `--force` always mints.
     Snapshot {
         id: i64,
+        /// Mint even when nothing changed (the pre-RS-U6 behaviour).
+        #[arg(long)]
+        force: bool,
+        /// Skip the base/PR-head fetch a ready review store runs first.
+        #[arg(long = "no-fetch")]
+        no_fetch: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -6031,9 +6039,13 @@ async fn run(cli: Cli) -> Result<()> {
                 json,
             } => review_list_cmd(&daemon, &repo, state.as_deref(), json).await,
             ReviewCmd::Show { id, daemon, json } => review_show_cmd(&daemon, id, json).await,
-            ReviewCmd::Snapshot { id, daemon, json } => {
-                review_snapshot_cmd(&daemon, id, json).await
-            }
+            ReviewCmd::Snapshot {
+                id,
+                force,
+                no_fetch,
+                daemon,
+                json,
+            } => review_snapshot_cmd(&daemon, id, force, no_fetch, json).await,
             ReviewCmd::Files {
                 id,
                 ps,
@@ -15024,6 +15036,10 @@ async fn review_start_cmd(
     }
     let client = http_client()?;
     let (status, body) = post_json_raw(&client, daemon, "/api/reviews", &payload).await?;
+    if status.is_success() {
+        // RS-U6 — README §12's one stderr line.
+        review_agent::eprint_base_line(&body);
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
     }
@@ -15284,15 +15300,32 @@ async fn review_show_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn review_snapshot_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
+async fn review_snapshot_cmd(
+    daemon: &str,
+    id: i64,
+    force: bool,
+    no_fetch: bool,
+    json: bool,
+) -> Result<()> {
     let client = http_client()?;
+    let mut payload = serde_json::json!({});
+    if force {
+        payload["force"] = serde_json::json!(true);
+    }
+    if no_fetch {
+        payload["fetch"] = serde_json::json!(false);
+    }
     let (status, body) = post_json_raw(
         &client,
         daemon,
         &format!("/api/reviews/{id}/snapshot"),
-        &serde_json::json!({}),
+        &payload,
     )
     .await?;
+    if status.is_success() {
+        // RS-U6 — README §12's one stderr line (stdout stays JSON-only).
+        review_agent::eprint_base_line(&body);
+    }
     if json {
         // RS-U10a — `--json` is ALWAYS the typed envelope now: success is
         // `kbc-review-snapshot/1` (`id`, `minted`, `base`, `warnings[]`),
@@ -15311,6 +15344,13 @@ async fn review_snapshot_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
         return Err(annotation_api_error("snapshot review", status, &body));
     }
     if !json {
+        if body["minted"].as_bool() == Some(false) {
+            println!(
+                "= unchanged: ps{} already captures this head and base (pass --force to mint anyway)",
+                body["ps_number"]
+            );
+            return Ok(());
+        }
         println!(
             "✓ captured ps{} tip={}",
             body["ps_number"],
@@ -16943,6 +16983,8 @@ fn classify_start_pr_job(body: &serde_json::Value) -> StartPrJob {
 /// envelope pretty-printed, nothing else; the human line is the pre-V76
 /// one verbatim.
 fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
+    // RS-U6 — README §12's one stderr line (stdout stays JSON-only).
+    review_agent::eprint_base_line(body);
     if json {
         // RS-U10a — the `kbc-review-start/1` envelope: `id`, `minted`,
         // `base{…}`, `warnings[]`, with the daemon's full body kept under
