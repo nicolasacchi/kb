@@ -959,7 +959,7 @@ pub async fn import_findings_route(
 
     let (v1_act, v1_blocking, v1_cites, v1_fp, v1_supersedes) =
         store::ImportedFinding::v1_defaults();
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut imported = Vec::with_capacity(body.findings.len());
     for f in &body.findings {
@@ -1364,7 +1364,7 @@ async fn compose_document(
         })
         .await?;
 
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let prepared = doc_routes::prepare_doc(
         &state,
         id,
@@ -1798,7 +1798,7 @@ pub async fn create_manual_finding_route(
         // The pre-M5 path, unchanged in spirit: mint a fresh annotation
         // anchored from the request's own `location`.
         let location = body.location.clone().expect("validated required above");
-        let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+        let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
         let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
         let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &location)?;
         let new = store::NewReviewFinding {
@@ -1852,7 +1852,7 @@ pub async fn create_manual_finding_route(
 
     emit_findings_review_changed(&state.bus, id, &review.repo, "findings_import", Some(&slug));
 
-    let repo_root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
     let view = state
@@ -1918,7 +1918,7 @@ pub async fn list_findings_route(
         }
     }
 
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     // Pass 1: resolution + own_ps + the touched_in QUERY per finding — no
     // git work for touched_in yet, so the batch below shares its caches
@@ -2089,7 +2089,7 @@ pub async fn set_finding_disposition_route(
             Ok((target_ps, row))
         })
         .await?;
-    let repo_root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
     let view = state
@@ -2135,7 +2135,7 @@ pub async fn clear_finding_disposition_route(
             Ok((target_ps, row))
         })
         .await?;
-    let repo_root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
     let view = state

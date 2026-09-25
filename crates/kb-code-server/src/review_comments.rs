@@ -338,7 +338,7 @@ pub async fn review_comments(
     // groups` are all synchronous store work — one blocking-pool trip.
     let ps_param = params.ps.clone();
     let all = params.all;
-    let repo_root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let (target_ps, groups_out) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
