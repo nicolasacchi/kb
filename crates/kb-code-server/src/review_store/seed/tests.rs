@@ -39,6 +39,31 @@ fn commit(dir: &Path, file: &str, body: &str) -> String {
     git(dir, &["rev-parse", "HEAD"])
 }
 
+/// Write the objects HEAD introduced into a pack of their own, then drop the
+/// loose copies. `git repack` may consolidate packs depending on the git
+/// version and its defaults (CI's git left 2 packs for 6 repacks), so the
+/// many-pack fixture builds each pack explicitly with `pack-objects`.
+fn pack_head_objects(dir: &Path) {
+    let objects = git(dir, &["rev-list", "--objects", "HEAD", "--not", "HEAD~1"]);
+    let mut child = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .current_dir(dir)
+        .args(["pack-objects", "-q", ".git/objects/pack/pack"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(objects.as_bytes()).unwrap();
+        stdin.write_all(b"\n").unwrap();
+    }
+    assert!(child.wait().unwrap().success(), "pack-objects failed");
+    git(dir, &["prune-packed"]);
+}
+
 /// `widgets.01` (origin = acme/widgets, plus a personal fork remote) and
 /// `widgets.02` cloned from it (origin re-pointed at acme/widgets). No
 /// network is ever touched: the forge URLs are config only.
@@ -406,7 +431,7 @@ fn a_many_pack_source_seeds_one_pack() {
     let e = env();
     for i in 0..6 {
         commit(&e.fx.one, &format!("p{i}.txt"), &format!("{i}"));
-        git(&e.fx.one, &["repack", "-q"]);
+        pack_head_objects(&e.fx.one);
     }
     let packs = std::fs::read_dir(e.fx.one.join(".git/objects/pack"))
         .unwrap()
