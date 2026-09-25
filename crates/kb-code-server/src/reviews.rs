@@ -223,70 +223,149 @@ pub fn patchset_ref(review_id: i64, ps_number: i64) -> String {
     format!("refs/kbc/review/{review_id}/ps{ps_number}")
 }
 
+/// `refs/kbc/review/<id>/ps<n>-base` — the patchset's base-branch tip pin
+/// (README §5.4/§5.5: written whenever `base_tip_sha` is non-NULL, because
+/// unlike `base_sha` — the merge-base — it is not necessarily an ancestor
+/// of the tip and so needs its own keep-alive ref). Built only from
+/// daemon-generated integers, same discipline as [`patchset_ref`].
+pub fn patchset_base_ref(review_id: i64, ps_number: i64) -> String {
+    format!("refs/kbc/review/{review_id}/ps{ps_number}-base")
+}
+
 /// `refs/kbc/pr/<n>` — built only from a `u32` PR number (digits-only Display).
 pub fn pr_ref(pr_number: u32) -> String {
     format!("refs/kbc/pr/{pr_number}")
 }
 
-/// A ref under the daemon-owned `refs/kbc/` namespace. Parsed from
-/// `git for-each-ref` output; reconstructed via [`pr_ref`]/[`patchset_ref`]
-/// before any `update-ref -d` so a hostile ref name never reaches argv.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `refs/kbc/prm/<n>` — the forge's test-merge ref (README §5.3/§7: input to
+/// the Phase-2 target-branch inference; Phase 1 only needs it for store-wide
+/// GC attribution, README §5.4). Built only from a `u32` PR number.
+pub fn prm_ref(pr_number: u32) -> String {
+    format!("refs/kbc/prm/{pr_number}")
+}
+
+/// `refs/kbc/hint/<repo_id>/<branch>` — a member's cached remote-tracking
+/// branch, store-only (README §5.3 "via-work hint"). `repo_id` is a
+/// daemon-generated integer; `branch` is validated with
+/// `check-ref-format --branch` semantics (delegates to
+/// [`crate::review_store::url::RefName::branch`], the ONE place that rule
+/// lives — see `git/revspec.rs`'s module doc on why a validator must not be
+/// re-derived) before the ref name can be built at all. `None` for a
+/// branch that fails that check, or a non-positive `repo_id`.
+pub fn hint_ref(repo_id: i64, branch: &str) -> Option<String> {
+    if repo_id < 1 {
+        return None;
+    }
+    crate::review_store::url::RefName::branch(branch).ok()?;
+    Some(format!("refs/kbc/hint/{repo_id}/{branch}"))
+}
+
+/// A ref under the daemon-owned `refs/kbc/` namespace — the whole family
+/// (README §5.1/§5.3): `pr/<n>`, `prm/<n>`, `review/<id>/ps<n>`,
+/// `review/<id>/ps<n>-base`, `hint/<repo_id>/<branch>`. Parsed from
+/// `git for-each-ref` output; reconstructed via [`KbcRef::as_refname`]
+/// (which delegates to the `*_ref`/`hint_ref` builders) before any
+/// `update-ref` so a hostile ref name never reaches argv. Not `Copy` (the
+/// `Hint` branch name is caller-shaped text, not a daemon integer) —
+/// `Clone` where a caller needs to keep both the enum and its rendered
+/// name.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KbcRef {
     Pr { number: u32 },
+    Prm { number: u32 },
     Patchset { review_id: i64, ps_number: i64 },
+    PatchsetBase { review_id: i64, ps_number: i64 },
+    Hint { repo_id: i64, branch: String },
 }
 
 impl KbcRef {
-    pub fn as_refname(self) -> String {
+    pub fn as_refname(&self) -> String {
         match self {
-            KbcRef::Pr { number } => pr_ref(number),
+            KbcRef::Pr { number } => pr_ref(*number),
+            KbcRef::Prm { number } => prm_ref(*number),
             KbcRef::Patchset {
                 review_id,
                 ps_number,
-            } => patchset_ref(review_id, ps_number),
+            } => patchset_ref(*review_id, *ps_number),
+            KbcRef::PatchsetBase {
+                review_id,
+                ps_number,
+            } => patchset_base_ref(*review_id, *ps_number),
+            // `branch` was already validated by `parse_kbc_ref` (the only
+            // safe way to build a `Hint`, short of `hint_ref` itself), so
+            // this can only fail if that invariant is broken — fall back to
+            // an empty string rather than panic; callers reject an empty
+            // name the same way they reject any other malformed ref.
+            KbcRef::Hint { repo_id, branch } => hint_ref(*repo_id, branch).unwrap_or_default(),
         }
     }
 
-    pub fn kind(self) -> &'static str {
+    pub fn kind(&self) -> &'static str {
         match self {
             KbcRef::Pr { .. } => "pr",
+            KbcRef::Prm { .. } => "prm",
             KbcRef::Patchset { .. } => "patchset",
+            KbcRef::PatchsetBase { .. } => "patchset-base",
+            KbcRef::Hint { .. } => "hint",
         }
     }
 }
 
-/// Strict parse of a `refs/kbc/pr/<n>` or `refs/kbc/review/<id>/ps<n>` name.
-/// Digits-only, no leading zeros, n/id ≥ 1. Anything else is `None` — never
-/// a ref we will delete.
+/// Strict digits-only parse shared by every numeric `refs/kbc/*` component:
+/// no sign, no leading zero, `>= 1`. Anything else is `None` — never a
+/// number we will format back into a ref.
+fn parse_strict_u32(s: &str) -> Option<u32> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u32 = s.parse().ok()?;
+    (n >= 1 && s == n.to_string()).then_some(n)
+}
+
+/// [`parse_strict_u32`], `i64` form (review/repo ids).
+fn parse_strict_i64(s: &str) -> Option<i64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: i64 = s.parse().ok()?;
+    (n >= 1 && s == n.to_string()).then_some(n)
+}
+
+/// Strict parse of the whole daemon-owned `refs/kbc/` ref family (README
+/// §5.1/§5.3): `pr/<n>`, `prm/<n>`, `review/<id>/ps<n>`,
+/// `review/<id>/ps<n>-base`, `hint/<repo_id>/<branch>`. Digits-only, no
+/// leading zeros, n/id ≥ 1; `branch` is `check-ref-format --branch`-valid.
+/// Anything else is `None` — never a ref we will delete or attribute.
 pub fn parse_kbc_ref(name: &str) -> Option<KbcRef> {
     if let Some(rest) = name.strip_prefix("refs/kbc/pr/") {
-        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return parse_strict_u32(rest).map(|number| KbcRef::Pr { number });
+    }
+    if let Some(rest) = name.strip_prefix("refs/kbc/prm/") {
+        return parse_strict_u32(rest).map(|number| KbcRef::Prm { number });
+    }
+    if let Some(rest) = name.strip_prefix("refs/kbc/hint/") {
+        let (id_s, branch) = rest.split_once('/')?;
+        let repo_id = parse_strict_i64(id_s)?;
+        if branch.is_empty() {
             return None;
         }
-        let number: u32 = rest.parse().ok()?;
-        if number < 1 || rest != number.to_string() {
-            return None;
-        }
-        return Some(KbcRef::Pr { number });
+        crate::review_store::url::RefName::branch(branch).ok()?;
+        return Some(KbcRef::Hint {
+            repo_id,
+            branch: branch.to_string(),
+        });
     }
     let rest = name.strip_prefix("refs/kbc/review/")?;
     let (id_s, ps_s) = rest.split_once("/ps")?;
-    if id_s.is_empty()
-        || ps_s.is_empty()
-        || !id_s.bytes().all(|b| b.is_ascii_digit())
-        || !ps_s.bytes().all(|b| b.is_ascii_digit())
-    {
-        return None;
+    let review_id = parse_strict_i64(id_s)?;
+    if let Some(base_s) = ps_s.strip_suffix("-base") {
+        let ps_number = parse_strict_i64(base_s)?;
+        return Some(KbcRef::PatchsetBase {
+            review_id,
+            ps_number,
+        });
     }
-    let review_id: i64 = id_s.parse().ok()?;
-    let ps_number: i64 = ps_s.parse().ok()?;
-    if review_id < 1 || ps_number < 1 {
-        return None;
-    }
-    if id_s != review_id.to_string() || ps_s != ps_number.to_string() {
-        return None;
-    }
+    let ps_number = parse_strict_i64(ps_s)?;
     Some(KbcRef::Patchset {
         review_id,
         ps_number,
@@ -500,14 +579,45 @@ pub fn delete_pr_ref(repo_root: &dyn GitRoot, pr_number: u32) -> Result<(), Revi
     Ok(())
 }
 
+/// `git update-ref -d <refname>` for a RECONSTRUCTED ref name (never a
+/// caller-supplied string) — the mechanics don't depend on which `KbcRef`
+/// shape it came from, so [`delete_kbc_ref`]'s three newer variants share
+/// this rather than growing three more near-duplicate `delete_*_ref` fns.
+fn delete_ref_by_name(repo_root: &dyn GitRoot, refname: &str) -> Result<(), ReviewGitError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root.git_path())
+        .args(["update-ref", "-d", refname])
+        .output()
+        .map_err(ReviewGitError::Spawn)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+        if stderr.contains("unable to resolve")
+            || stderr.contains("no such")
+            || stderr.contains("cannot lock ref")
+            || stderr.contains("doesn't exist")
+        {
+            return Ok(());
+        }
+        return Err(ReviewGitError::GitFailed {
+            status: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Delete a reconstructed [`KbcRef`] (never a caller-supplied string).
 pub fn delete_kbc_ref(repo_root: &dyn GitRoot, parsed: KbcRef) -> Result<(), ReviewGitError> {
-    match parsed {
-        KbcRef::Pr { number } => delete_pr_ref(repo_root, number),
+    match &parsed {
+        KbcRef::Pr { number } => delete_pr_ref(repo_root, *number),
         KbcRef::Patchset {
             review_id,
             ps_number,
-        } => delete_patchset_ref(repo_root, review_id, ps_number),
+        } => delete_patchset_ref(repo_root, *review_id, *ps_number),
+        KbcRef::Prm { .. } | KbcRef::PatchsetBase { .. } | KbcRef::Hint { .. } => {
+            delete_ref_by_name(repo_root, &parsed.as_refname())
+        }
     }
 }
 
@@ -537,7 +647,8 @@ pub fn list_kbc_refs(
         let Some(parsed) = parse_kbc_ref(name) else {
             continue;
         };
-        rows.push((parsed, parsed.as_refname(), sha.trim().to_string()));
+        let refname = parsed.as_refname();
+        rows.push((parsed, refname, sha.trim().to_string()));
         if rows.len() > MAX_KBC_REFS {
             return Err(ReviewGitError::GitFailed {
                 status: -1,
@@ -1029,13 +1140,16 @@ pub(crate) fn parse_verdict_state(s: &str) -> Result<(), ApiError> {
 /// `skip_if_same`) → merge-base → GC oldest if over max → update-ref →
 /// insert row → emit `review.changed`.
 ///
-/// RS-U4 — capture and the `refs/kbc/*` ref family (design §6 S4/S5: this
-/// fn, `start_pr_base`, `delete_review_with_refs`, the patchset GC, the
-/// refs list/gc routes) are classified `WorkTreeRoot` by every caller for
-/// now: they WRITE refs and resolve user branch names, and move to the
-/// review store only with the store ref family + capture units (U5/U6).
-/// Review READS elsewhere already go through `GitCtx`, whose work-tree
-/// fallback keeps them correct in the meantime.
+/// RS-U4 — capture (this fn, `start_pr_base`) is classified `WorkTreeRoot`
+/// by every caller for now: it resolves USER branch names (`head_ref`),
+/// which only mean something in the work tree, and moves to the review
+/// store only with the base-model/capture unit (U6). Review READS
+/// elsewhere already go through `GitCtx`, whose work-tree fallback keeps
+/// them correct in the meantime. RS-U5 moves `delete_review_with_refs` and
+/// the refs list/gc routes onto the store (when ready) — see their own
+/// docs; the patchset GC (`gc_patchsets`, `kb-code review gc`) stays
+/// `WorkTreeRoot` (unchanged in this unit — it isn't reachable from the
+/// review-delete path U5 was asked to move).
 pub fn capture_patchset(
     store: &Store,
     bus: &EventBus,
@@ -1100,18 +1214,49 @@ pub fn capture_patchset(
         })
 }
 
+/// Where [`delete_review_with_refs`] deletes `refs/kbc/pr/<n>` from, if at
+/// all — RS-U5, since a shared store's `pr/<n>` is a CROSS-MEMBER namespace
+/// (README §5.1) and a single repo's binding count can no longer answer
+/// "is this ref still needed" once other members may bind it too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrRefScope {
+    /// Today's work-tree behaviour (V76-R1b): drop `refs/kbc/pr/<n>` when
+    /// no remaining review in `review.repo` still binds that PR (a `--new`
+    /// successor keeps the ref).
+    PerRepo,
+    /// A ready store: `refs/kbc/pr/<n>` is never touched here. "Don't
+    /// delete" is always the safe direction — the store-wide GC
+    /// (`review_store::gc::plan`/`apply`) computes the keep-set across
+    /// EVERY member and cleans up what this call correctly declined to.
+    StoreWide,
+}
+
 /// Delete every patchset ref for a review (best-effort), then the row.
 /// V76-R1b: also drop `refs/kbc/pr/<n>` when no remaining review in this
-/// repo still binds that PR (a `--new` successor keeps the PR ref).
+/// repo still binds that PR (a `--new` successor keeps the PR ref) — only
+/// under [`PrRefScope::PerRepo`]; see that type's doc for why a shared
+/// store skips it. RS-U5: `repo_root` may now be a
+/// [`crate::git::roots::StoreRoot`], and every patchset's `-base` pin
+/// (`KbcRef::PatchsetBase`, store-only, README §5.4/§8) is deleted
+/// alongside its `ps<n>` ref — a harmless no-op on a work tree, which
+/// never carries one.
 pub fn delete_review_with_refs(
     store: &Store,
     bus: &EventBus,
     repo_root: &dyn GitRoot,
     review: &ReviewRow,
+    pr_ref_scope: PrRefScope,
 ) -> Result<(), ReviewGitError> {
     let pss = store.list_patchsets(review.id).unwrap_or_default();
     for ps in &pss {
         let _ = delete_patchset_ref(repo_root, review.id, ps.ps_number);
+        let _ = delete_kbc_ref(
+            repo_root,
+            KbcRef::PatchsetBase {
+                review_id: review.id,
+                ps_number: ps.ps_number,
+            },
+        );
     }
     let pr_number = store
         .get_review_pr_binding(review.id)
@@ -1124,12 +1269,14 @@ pub fn delete_review_with_refs(
             status: -1,
             stderr: e.to_string(),
         })?;
-    if let Some(n) = pr_number {
-        let remaining = store
-            .count_reviews_by_pr_binding(&review.repo, n)
-            .unwrap_or(0);
-        if remaining == 0 && n > 0 && n <= u32::MAX as i64 {
-            let _ = delete_pr_ref(repo_root, n as u32);
+    if pr_ref_scope == PrRefScope::PerRepo {
+        if let Some(n) = pr_number {
+            let remaining = store
+                .count_reviews_by_pr_binding(&review.repo, n)
+                .unwrap_or(0);
+            if remaining == 0 && n > 0 && n <= u32::MAX as i64 {
+                let _ = delete_pr_ref(repo_root, n as u32);
+            }
         }
     }
     emit_review_changed(bus, review.id, &review.repo, "deleted", true);
@@ -1139,6 +1286,13 @@ pub fn delete_review_with_refs(
 /// GC oldest patchsets for one review (or every review when `review_id`
 /// is `None`) down to `max_patchsets`. Used by `kb-code review gc` and
 /// the capture path.
+///
+/// RS-U5 — one [`GitCtx`] per repo (the store, once ready; the work tree
+/// otherwise — never a user-clone write when the store is ready),
+/// memoized so N reviews of the same repo share one store lookup. Also
+/// drops the patchset's `-base` pin ([`KbcRef::PatchsetBase`]) alongside
+/// its `ps<n>` ref — a harmless no-op on a work tree, which never carries
+/// one (README §5.4).
 pub fn gc_patchsets(
     store: &Store,
     repos: &[RepoEntry],
@@ -1161,18 +1315,25 @@ pub fn gc_patchsets(
         }
         all
     };
+    let mut ctx_cache: HashMap<String, GitCtx> = HashMap::new();
     for review in reviews {
         let Some(repo) = repos.iter().find(|r| r.name == review.repo) else {
             continue;
         };
+        let ctx = ctx_cache.entry(repo.name.clone()).or_insert_with(|| {
+            GitCtx::for_repo(store, &repo.name, WorkTreeRoot::user_clone(&repo.path))
+        });
         while store.patchset_count(review.id).unwrap_or(0) as u32 > max {
             let Some(old) = store.oldest_patchset(review.id).ok().flatten() else {
                 break;
             };
-            let _ = delete_patchset_ref(
-                &WorkTreeRoot::user_clone(&repo.path),
-                review.id,
-                old.ps_number,
+            let _ = delete_patchset_ref(ctx.primary(), review.id, old.ps_number);
+            let _ = delete_kbc_ref(
+                ctx.primary(),
+                KbcRef::PatchsetBase {
+                    review_id: review.id,
+                    ps_number: old.ps_number,
+                },
             );
             if store
                 .delete_patchset(review.id, old.ps_number)
@@ -1736,9 +1897,19 @@ pub async fn delete_review(
     }
     let store = state.store.clone();
     let bus = state.bus.clone();
+    let repo_name = review.repo.clone();
     let root = repo.path.clone();
     tokio::task::spawn_blocking(move || {
-        delete_review_with_refs(&store, &bus, &WorkTreeRoot::user_clone(&root), &review)
+        // RS-U5 — the store, once ready (never a user-clone write when it
+        // is); the work tree otherwise, exactly as before. `GitCtx` is the
+        // ONE place that resolution runs (its own doc, RS-U4).
+        let ctx = GitCtx::for_repo(&store, &repo_name, WorkTreeRoot::user_clone(&root));
+        let scope = if ctx.is_fallback() {
+            PrRefScope::PerRepo
+        } else {
+            PrRefScope::StoreWide
+        };
+        delete_review_with_refs(&store, &bus, ctx.primary(), &review, scope)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -3787,8 +3958,8 @@ fn attribute_kbc_refs(
     }
     let mut out = Vec::with_capacity(listed.len());
     for (parsed, name, sha) in listed {
-        let (review_id, status) = match parsed {
-            KbcRef::Pr { number } => match pr_to_review.get(&(number as i64)) {
+        let (review_id, status) = match &parsed {
+            KbcRef::Pr { number } => match pr_to_review.get(&(*number as i64)) {
                 Some(id) => (Some(*id), "bound"),
                 None => (None, "orphan"),
             },
@@ -3796,11 +3967,21 @@ fn attribute_kbc_refs(
                 review_id,
                 ps_number,
             } => {
-                if patchset_keys.contains(&(review_id, ps_number)) {
-                    (Some(review_id), "bound")
+                if patchset_keys.contains(&(*review_id, *ps_number)) {
+                    (Some(*review_id), "bound")
                 } else {
                     (None, "orphan")
                 }
+            }
+            // RS-U5 — `prm/<n>`, `ps<n>-base` and `hint/<repo_id>/<branch>`
+            // are store-only namespaces (README §5.1/§5.3): a user clone
+            // never carries them, and `list_kbc_refs`'s work-tree listing
+            // queries only the `refs/kbc/pr/`/`refs/kbc/review/` prefixes,
+            // so this arm exists for match-exhaustiveness, not because it
+            // fires. The store-wide GC (`review_store::gc`) attributes
+            // these shapes for real, against the whole store.
+            KbcRef::Prm { .. } | KbcRef::PatchsetBase { .. } | KbcRef::Hint { .. } => {
+                (None, "orphan")
             }
         };
         out.push(AttributedRef {
@@ -3814,9 +3995,102 @@ fn attribute_kbc_refs(
     out
 }
 
-/// `GET /api/reviews/refs?repo=` — every `refs/kbc/pr/*` and
-/// `refs/kbc/review/*` in the mirror, attributed to a review or `orphan`.
-/// Bearer.
+/// The store row, its raw `refs/kbc/*` listing, and the store-wide
+/// [`crate::review_store::gc::GcKeepSet`] for `repo_name`'s store. `ctx`
+/// must NOT be a fallback (every caller checks `ctx.is_fallback()` first).
+/// Synchronous — call from `spawn_blocking`.
+#[allow(clippy::type_complexity)]
+fn store_refs_and_keep_set(
+    state: &SharedState,
+    repo_name: &str,
+    ctx: &GitCtx,
+) -> Result<
+    (
+        crate::store::ReviewStoreRow,
+        Vec<(String, String)>,
+        crate::review_store::gc::GcKeepSet,
+    ),
+    ApiError,
+> {
+    let row = state.store.store_for_repo_name(repo_name)?.ok_or_else(|| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "review store row vanished mid-request",
+        )
+    })?;
+    let git = state.review_stores.git().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "review store git spawner unavailable",
+        )
+    })?;
+    let store_root = ctx
+        .store_root()
+        .expect("caller already checked ctx is not a fallback");
+    let refs = crate::review_store::seed::list_refs(git, store_root.git_dir(), &["refs/kbc/"])
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let member_ids = state.store.store_members(row.id)?;
+    let member_names: Vec<String> = state
+        .review_stores
+        .repos()
+        .iter()
+        .filter(|r| member_ids.contains(&r.id))
+        .map(|r| r.name.clone())
+        .collect();
+    let keep = crate::review_store::gc::keep_set(&state.store, &member_names, &member_ids)?;
+    Ok((row, refs, keep))
+}
+
+/// The attributed rows, as [`list_review_refs`] and [`gc_review_refs`]'s
+/// dry-run half both render. RS-U5: the STORE, store-wide (README §5.4),
+/// once the repo's store is `ready` — every member's `refs/kbc/*`,
+/// attributed against every member's DB rows; the legacy per-repo work
+/// tree otherwise (today's behaviour, byte for byte). Synchronous — call
+/// from `spawn_blocking`.
+fn review_refs_view(
+    state: &SharedState,
+    repo_name: &str,
+    work_root: &Path,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let ctx = GitCtx::for_repo(&state.store, repo_name, WorkTreeRoot::user_clone(work_root));
+    if ctx.is_fallback() {
+        let listed = list_kbc_refs(&WorkTreeRoot::user_clone(work_root))?;
+        let pr_bound = state.store.list_pr_bound_reviews(repo_name)?;
+        let patch_keys = state.store.list_patchset_keys_for_repo(repo_name)?;
+        let patchset_keys: HashSet<(i64, i64)> = patch_keys.into_iter().collect();
+        let attributed = attribute_kbc_refs(listed, &pr_bound, &patchset_keys);
+        return Ok(attributed
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "ref": r.name,
+                    "sha": r.sha,
+                    "kind": r.parsed.kind(),
+                    "review_id": r.review_id,
+                    "status": r.status,
+                })
+            })
+            .collect());
+    }
+    let (_row, refs, keep) = store_refs_and_keep_set(state, repo_name, &ctx)?;
+    let attributed = crate::review_store::gc::attribute(&refs, &keep);
+    Ok(attributed
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "ref": r.refname,
+                "sha": r.oid,
+                "kind": r.kind,
+                "review_id": r.review_id,
+                "status": r.status,
+            })
+        })
+        .collect())
+}
+
+/// `GET /api/reviews/refs?repo=` — every `refs/kbc/*` ref, attributed to a
+/// review or `orphan`. Bearer. RS-U5: reads the store, store-wide, once
+/// the repo's store is `ready` — see [`review_refs_view`].
 pub async fn list_review_refs(
     State(state): State<SharedState>,
     Query(params): Query<ReviewRefsParams>,
@@ -3824,32 +4098,10 @@ pub async fn list_review_refs(
     let (repo, _) = find_repo(&state, &params.repo)?;
     let root = repo.path.clone();
     let repo_name = params.repo.clone();
-    let listed =
-        tokio::task::spawn_blocking(move || list_kbc_refs(&WorkTreeRoot::user_clone(&root)))
-            .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    let (pr_bound, patch_keys) = state
-        .store
-        .run_blocking(move |store| -> Result<_, ApiError> {
-            let pr_bound = store.list_pr_bound_reviews(&repo_name)?;
-            let keys = store.list_patchset_keys_for_repo(&repo_name)?;
-            Ok((pr_bound, keys))
-        })
-        .await?;
-    let patchset_keys: HashSet<(i64, i64)> = patch_keys.into_iter().collect();
-    let attributed = attribute_kbc_refs(listed, &pr_bound, &patchset_keys);
-    let refs: Vec<serde_json::Value> = attributed
-        .into_iter()
-        .map(|r| {
-            serde_json::json!({
-                "ref": r.name,
-                "sha": r.sha,
-                "kind": r.parsed.kind(),
-                "review_id": r.review_id,
-                "status": r.status,
-            })
-        })
-        .collect();
+    let st = state.clone();
+    let refs = tokio::task::spawn_blocking(move || review_refs_view(&st, &repo_name, &root))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -3860,8 +4112,66 @@ pub async fn list_review_refs(
     ))
 }
 
+/// Synchronous body of [`gc_review_refs`]. RS-U5: store-wide (README §5.4)
+/// when the repo's store is `ready` — the apply step runs under the
+/// store's `ops` lock and never writes into a user clone; the legacy
+/// per-repo work-tree GC otherwise, unchanged.
+fn gc_review_refs_inner(
+    state: &SharedState,
+    repo_name: &str,
+    work_root: &Path,
+    dry_run: bool,
+) -> Result<(Vec<String>, usize), ApiError> {
+    let ctx = GitCtx::for_repo(&state.store, repo_name, WorkTreeRoot::user_clone(work_root));
+    if ctx.is_fallback() {
+        let listed = list_kbc_refs(&WorkTreeRoot::user_clone(work_root))?;
+        let pr_bound = state.store.list_pr_bound_reviews(repo_name)?;
+        let patch_keys = state.store.list_patchset_keys_for_repo(repo_name)?;
+        let patchset_keys: HashSet<(i64, i64)> = patch_keys.into_iter().collect();
+        let attributed = attribute_kbc_refs(listed, &pr_bound, &patchset_keys);
+        let orphans: Vec<AttributedRef> = attributed
+            .into_iter()
+            .filter(|r| r.status == "orphan")
+            .collect();
+        let would: Vec<String> = orphans.iter().map(|r| r.name.clone()).collect();
+        if !dry_run {
+            for r in &orphans {
+                delete_kbc_ref(&WorkTreeRoot::user_clone(work_root), r.parsed.clone())?;
+            }
+        }
+        let n = would.len();
+        return Ok((would, n));
+    }
+    let (row, refs, keep) = store_refs_and_keep_set(state, repo_name, &ctx)?;
+    let attributed = crate::review_store::gc::attribute(&refs, &keep);
+    let delete = crate::review_store::gc::delete_candidates(&attributed);
+    let would: Vec<String> = delete.iter().map(|c| c.refname.clone()).collect();
+    if !dry_run && !delete.is_empty() {
+        let git = state.review_stores.git().ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "review store git spawner unavailable",
+            )
+        })?;
+        let store_root = ctx
+            .store_root()
+            .expect("caller already checked ctx is not a fallback");
+        // Under the store's `ops` lock (README §5.4/§4.2) — a blocking
+        // acquire is safe and expected here: we are already running inside
+        // `spawn_blocking` (`seed::verify_connectivity` does the same).
+        let ops = state.review_stores.ops_lock(row.id);
+        let _guard = ops.blocking_lock();
+        crate::review_store::gc::apply(git, store_root.git_dir(), &delete)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    let n = would.len();
+    Ok((would, n))
+}
+
 /// `POST /api/reviews/refs/gc?repo=&dry_run=` — delete orphan refs and
-/// refs of deleted reviews. LOOPBACK-ONLY. `dry_run` default ON.
+/// refs of deleted reviews. LOOPBACK-ONLY. `dry_run` default ON. RS-U5:
+/// store-wide once the repo's store is `ready` — see
+/// [`gc_review_refs_inner`].
 pub async fn gc_review_refs(
     State(state): State<SharedState>,
     Query(params): Query<ReviewRefsGcParams>,
@@ -3870,39 +4180,11 @@ pub async fn gc_review_refs(
     let dry_run = dry_run_default_on(&params.dry_run);
     let root = repo.path.clone();
     let repo_name = params.repo.clone();
-    let listed = {
-        let root2 = root.clone();
-        tokio::task::spawn_blocking(move || list_kbc_refs(&WorkTreeRoot::user_clone(&root2)))
+    let st = state.clone();
+    let (would, deleted_count) =
+        tokio::task::spawn_blocking(move || gc_review_refs_inner(&st, &repo_name, &root, dry_run))
             .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??
-    };
-    let (pr_bound, patch_keys) = state
-        .store
-        .run_blocking(move |store| -> Result<_, ApiError> {
-            let pr_bound = store.list_pr_bound_reviews(&repo_name)?;
-            let keys = store.list_patchset_keys_for_repo(&repo_name)?;
-            Ok((pr_bound, keys))
-        })
-        .await?;
-    let patchset_keys: HashSet<(i64, i64)> = patch_keys.into_iter().collect();
-    let attributed = attribute_kbc_refs(listed, &pr_bound, &patchset_keys);
-    let orphans: Vec<AttributedRef> = attributed
-        .into_iter()
-        .filter(|r| r.status == "orphan")
-        .collect();
-    let would: Vec<String> = orphans.iter().map(|r| r.name.clone()).collect();
-    if !dry_run {
-        let root2 = root.clone();
-        let parsed: Vec<KbcRef> = orphans.iter().map(|r| r.parsed).collect();
-        tokio::task::spawn_blocking(move || {
-            for p in parsed {
-                delete_kbc_ref(&WorkTreeRoot::user_clone(&root2), p)?;
-            }
-            Ok::<(), ReviewGitError>(())
-        })
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    }
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -3910,7 +4192,7 @@ pub async fn gc_review_refs(
             "repo": params.repo,
             "dry_run": dry_run,
             "deleted": would,
-            "deleted_count": would.len(),
+            "deleted_count": deleted_count,
         })),
     ))
 }
@@ -3985,6 +4267,111 @@ mod tests {
         ] {
             assert!(parse_kbc_ref(bad).is_none(), "{bad:?} must not parse");
         }
+    }
+
+    /// RS-U5 — the ref family `parse_kbc_ref` grew: `prm/<n>`,
+    /// `review/<id>/ps<n>-base`, `hint/<repo_id>/<branch>`. Every accepted
+    /// shape round-trips through `as_refname`; the existing `pr`/`ps<n>`
+    /// shapes (above) stay byte-compatible — this test only adds coverage,
+    /// it never loosens the old one.
+    #[test]
+    fn parse_kbc_ref_round_trips_every_new_shape() {
+        let cases: &[(&str, KbcRef)] = &[
+            ("refs/kbc/prm/42", KbcRef::Prm { number: 42 }),
+            (
+                "refs/kbc/review/3/ps2-base",
+                KbcRef::PatchsetBase {
+                    review_id: 3,
+                    ps_number: 2,
+                },
+            ),
+            (
+                "refs/kbc/hint/7/main",
+                KbcRef::Hint {
+                    repo_id: 7,
+                    branch: "main".into(),
+                },
+            ),
+            (
+                "refs/kbc/hint/7/release/2026.09",
+                KbcRef::Hint {
+                    repo_id: 7,
+                    branch: "release/2026.09".into(),
+                },
+            ),
+        ];
+        for (name, want) in cases {
+            let got = parse_kbc_ref(name).unwrap_or_else(|| panic!("{name} must parse"));
+            assert_eq!(&got, want, "{name}");
+            assert_eq!(got.as_refname(), *name, "{name} must round-trip");
+        }
+    }
+
+    /// The negative half of the same coverage: every shape a hostile or
+    /// malformed name could take, across every new prefix.
+    #[test]
+    fn parse_kbc_ref_rejects_every_malformed_new_shape() {
+        for bad in [
+            // prm: same digit discipline as pr.
+            "refs/kbc/prm/0",
+            "refs/kbc/prm/042",
+            "refs/kbc/prm/-1",
+            "refs/kbc/prm/",
+            "refs/kbc/prm/42/extra",
+            // ps<n>-base: the suffix must be exact, and the number strict.
+            "refs/kbc/review/3/ps-base",
+            "refs/kbc/review/3/ps02-base",
+            "refs/kbc/review/3/ps2-basex",
+            "refs/kbc/review/3/ps2-Base",
+            "refs/kbc/review/03/ps2-base",
+            // hint: repo_id strict, branch check-ref-format-valid.
+            "refs/kbc/hint/0/main",
+            "refs/kbc/hint/07/main",
+            "refs/kbc/hint/-1/main",
+            "refs/kbc/hint/7/",
+            "refs/kbc/hint/7",
+            "refs/kbc/hint/7/.hidden",
+            "refs/kbc/hint/7/a..b",
+            "refs/kbc/hint/7/a b",
+            "refs/kbc/hint/7/x.lock",
+            "refs/kbc/hint/foo/main",
+            // `pr/42m` must not be silently accepted as `pr/42`.
+            "refs/kbc/pr/42m",
+        ] {
+            assert!(parse_kbc_ref(bad).is_none(), "{bad:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn hint_ref_validates_the_branch_and_repo_id() {
+        assert_eq!(hint_ref(7, "main").as_deref(), Some("refs/kbc/hint/7/main"));
+        assert_eq!(
+            hint_ref(7, "release/2026.09").as_deref(),
+            Some("refs/kbc/hint/7/release/2026.09")
+        );
+        assert_eq!(hint_ref(0, "main"), None);
+        assert_eq!(hint_ref(-1, "main"), None);
+        assert_eq!(hint_ref(7, ""), None);
+        assert_eq!(hint_ref(7, ".hidden"), None);
+        assert_eq!(hint_ref(7, "a..b"), None);
+        assert_eq!(hint_ref(7, "a b"), None);
+        assert_eq!(hint_ref(7, "x.lock"), None);
+        // A branch shaped like an option is still safe: the assembled ref
+        // starts with `refs/`, never with `-` (see `RefName::branch`'s own
+        // test for why this is fine as a git argv token).
+        assert!(hint_ref(7, "--upload-pack=x")
+            .as_deref()
+            .is_some_and(|r| r.starts_with("refs/kbc/hint/7/")));
+    }
+
+    #[test]
+    fn patchset_base_ref_is_digits_only_namespace() {
+        assert_eq!(patchset_base_ref(3, 2), "refs/kbc/review/3/ps2-base");
+    }
+
+    #[test]
+    fn prm_ref_is_digits_only_namespace() {
+        assert_eq!(prm_ref(42), "refs/kbc/prm/42");
     }
 
     #[test]

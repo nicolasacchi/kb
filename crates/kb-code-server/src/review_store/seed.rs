@@ -35,7 +35,9 @@
 //!    whose commit survives); whatever is still missing marks that review
 //!    `objects-missing` — the store itself still goes `ready`. Present tips
 //!    whose `refs/kbc/review/<id>/ps<n>` ref is absent get it recreated
-//!    (create-only, README §5.4's integrity invariant).
+//!    (create-only, README §5.4's integrity invariant); RS-U5 extends the
+//!    same recreate to `refs/kbc/review/<id>/ps<n>-base` for every patchset
+//!    whose `base_tip_sha` is non-NULL and present.
 //! 5. Manifest written + fsynced, rename to `<uuid>.git`. ANY failure
 //!    before the rename removes the `.tmp` immediately.
 
@@ -365,6 +367,14 @@ pub fn is_review_ref(name: &str) -> bool {
 /// `refs/kbc/review/<id>/ps<n>`.
 pub fn patchset_ref(review_id: i64, ps_number: i64) -> String {
     format!("refs/kbc/review/{review_id}/ps{ps_number}")
+}
+
+/// `refs/kbc/review/<id>/ps<n>-base` — the patchset's base-branch tip pin
+/// (README §5.4/§8: `base_tip_sha` is not necessarily an ancestor of the
+/// tip, so it needs its own keep-alive ref, same integrity invariant as
+/// [`patchset_ref`]). RS-U5.
+pub fn patchset_base_ref(review_id: i64, ps_number: i64) -> String {
+    format!("refs/kbc/review/{review_id}/ps{ps_number}-base")
 }
 
 fn full_hex(s: &str) -> bool {
@@ -739,9 +749,9 @@ pub fn verify_connectivity(
     if recovered > 0 {
         missing = missing_objects(git, git_dir, &shas)?;
     }
-    // Recreate absent ps refs whose tip is present (create-only), under
-    // the store's ops lock (a capture writes the same ref family). Taken
-    // with `blocking_lock`: callers are on a blocking thread.
+    // Recreate absent ps/ps-base refs whose sha is present (create-only),
+    // under the store's ops lock (a capture writes the same ref family).
+    // Taken with `blocking_lock`: callers are on a blocking thread.
     let _ops = ops.map(|m| m.blocking_lock());
     let have: BTreeSet<String> = list_refs(git, git_dir, &["refs/kbc/review/"])?
         .into_iter()
@@ -754,6 +764,17 @@ pub fn verify_connectivity(
         if full_hex(&p.tip_sha) && !missing.contains(&p.tip_sha) && !have.contains(&r) {
             tx.push_str(&format!("create {r} {}\n", p.tip_sha));
             recreated += 1;
+        }
+        // RS-U5 — the `-base` pin (README §5.4/§8): recreated only when
+        // `base_tip_sha` is set AND its object is present. A patchset with
+        // no `base_tip_sha` (legacy row, or a `pin` review that never had
+        // one) gets no `-base` ref, same as today.
+        if let Some(bt) = &p.base_tip_sha {
+            let rb = patchset_base_ref(p.review_id, p.ps_number);
+            if full_hex(bt) && !missing.contains(bt) && !have.contains(&rb) {
+                tx.push_str(&format!("create {rb} {bt}\n"));
+                recreated += 1;
+            }
         }
     }
     if recreated > 0 {
