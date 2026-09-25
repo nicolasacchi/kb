@@ -380,6 +380,142 @@ async fn repair_after_a_moved_worktree_and_readiness_emits_commands() {
     assert!(ready["issues"].is_array());
 }
 
+// --- RS-U8: worktree materialize from the review store, by sha ------------
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// `for-each-ref` of `dir` — never lists `HEAD`, so byte-identical
+/// before/after is exactly "only HEAD (or the requested branch) moved, no
+/// ref was written" (BUILD-BRIEF U8's invariance test).
+fn ref_tree(dir: &Path) -> Vec<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .output()
+        .expect("git runs");
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_from_a_store_only_review_tip_fetches_by_sha_and_writes_no_refs_kbc() {
+    let _g = SERIAL.lock().await;
+    let fx = fixture();
+    let main = fx.path().join("main");
+    let boot = boot_with_repos(&[("acme", &main)]).await;
+    let ws_body = wait_for_rekey(&boot.base).await;
+    let ws = workspace_id(&ws_body);
+
+    // A commit that will exist ONLY inside a kb-owned review store — an
+    // unrelated repo, fetched into a bare store under a review-ref name
+    // that never touches `main`'s own refs (ancestry doesn't matter:
+    // `allowAnySHA1InWant` fetches by sha regardless).
+    let src = fx.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    common::init_repo(&src);
+    std::fs::write(src.join("b.txt"), "review tip\n").unwrap();
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "review tip"]);
+    let tip = git_out(&src, &["rev-parse", "HEAD"]);
+
+    let store_dir = fx.path().join("store.git");
+    git(
+        fx.path(),
+        &["init", "-q", "--bare", store_dir.to_str().unwrap()],
+    );
+    std::fs::write(
+        store_dir.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
+         [uploadpack]\n\tallowAnySHA1InWant = true\n",
+    )
+    .unwrap();
+    git(
+        &store_dir,
+        &[
+            "fetch",
+            "-q",
+            src.to_str().unwrap(),
+            "HEAD:refs/kbc/review/1/ps1",
+        ],
+    );
+
+    // Register a `ready` review store for repo "acme" directly on the
+    // daemon's own sqlite volume — the seeding job that would normally
+    // produce this row is a separate unit; this test only needs the DB
+    // shape a `ready` store leaves behind (the same precedent
+    // `tests/review/local_review_routes.rs::verdict_zero_patchset_is_400`
+    // uses for inserting a review row against a live daemon).
+    let db = boot.tmp.path().join("state/kb-code/index.db");
+    let store = kb_code_server::store::Store::open(&db).unwrap();
+    let repo_id = store
+        .upsert_repo(
+            "acme",
+            std::fs::canonicalize(&main).unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+    let store_id = store
+        .create_review_store(
+            "11111111-1111-1111-1111-111111111111",
+            "local:acme-rs-u8-test",
+            store_dir.to_str().unwrap(),
+            None,
+            None,
+            1,
+        )
+        .unwrap();
+    assert!(store
+        .set_review_store_state(store_id, "ready", None)
+        .unwrap());
+    store.add_repo_to_store(repo_id, store_id).unwrap();
+    drop(store);
+
+    let before = ref_tree(&main);
+
+    let created = fx.path().join("wt-review-tip");
+    let (status, body) = post(
+        &boot.base,
+        "/api/worktrees",
+        serde_json::json!({
+            "workspace_id": ws,
+            "path": created.to_str().unwrap(),
+            "branch": tip,
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["after"]["detached"], true);
+
+    // The linked worktree landed exactly at the review tip that, before
+    // this call, existed nowhere in `main`'s own ODB...
+    assert_eq!(git_out(&created, &["rev-parse", "HEAD"]), tip);
+    // ...and `main`'s own ref tree — shared by every linked worktree of
+    // this workspace — gained nothing: no `refs/kbc/*`, no ref of any
+    // kind besides the worktree's own (ref-less, detached) HEAD.
+    assert_eq!(
+        ref_tree(&main),
+        before,
+        "worktree materialize via the store bridge must write no ref"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inbox_worktrees_lane_degrades_when_empty_and_surfaces_when_ready() {
     let _g = SERIAL.lock().await;

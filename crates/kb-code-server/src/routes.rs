@@ -4692,15 +4692,24 @@ pub async fn checkout_route(
     // this route's wire shape is unchanged.
     let target = crate::git::Revspec::parse(&params.target)
         .map_err(|e| ApiError::bad_request(crate::checkout::CheckoutError::from(e).to_string()))?;
-    let result =
-        tokio::task::spawn_blocking(move || crate::checkout::switch_repo(&repo_root, &target))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("checkout task panicked: {e}"),
-                )
-            })?;
+    // RS-U8 — resolve which review store (if any, and if `ready`) backs
+    // this repo BEFORE the blocking git work. `GitCtx::resolve_entry` is
+    // the ONE place that decision is made (`git/roots.rs`'s own module
+    // doc) and it counts an unresolved/fallback hit for the "0 fallback
+    // after ready" acceptance gate; a repo whose store isn't `ready`
+    // resolves to `None` here, so `switch_repo` below is byte-identical to
+    // before this unit (README §10.1).
+    let git_ctx = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::checkout::switch_repo(&repo_root, &target, git_ctx.store_root())
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("checkout task panicked: {e}"),
+        )
+    })?;
 
     match result {
         Ok(outcome) => Ok((
