@@ -60,6 +60,8 @@ pub const URN_HEAD_UNAVAILABLE: &str = "urn:kb:errors:head-unavailable";
 pub const URN_BASE_UNAVAILABLE: &str = "urn:kb:errors:base-unavailable";
 /// Head and base share no history.
 pub const URN_NO_MERGE_BASE: &str = "urn:kb:errors:no-merge-base";
+/// A user-set (or legacy) base branch no longer exists on the forge.
+pub const URN_BASE_VANISHED: &str = "urn:kb:errors:base-vanished";
 /// The capture itself failed (git or DB).
 pub const URN_CAPTURE_FAILED: &str = "urn:kb:errors:capture-failed";
 
@@ -76,6 +78,8 @@ pub mod warn {
     pub const BASE_REFRESH_FAILED: &str = "base-refresh-failed";
     pub const BASE_OFFLINE: &str = "base-offline";
     pub const PR_REFRESH_FAILED: &str = "pr-refresh-failed";
+    pub const BASE_VANISHED: &str = "base-vanished";
+    pub const CREDENTIAL_ACCOUNT_MISMATCH: &str = "credential-account-mismatch";
 }
 
 /// One `warnings[]` entry on a review envelope.
@@ -849,6 +853,10 @@ pub enum PatchsetKind {
     BaseMoved,
     BaseCorrected,
     Retarget,
+    /// `snapshot --force` on an UNCHANGED `(tip, merge-base)` pair — the
+    /// old always-mint behaviour, marked as such rather than recorded as a
+    /// `push` that never happened.
+    Forced,
 }
 
 impl PatchsetKind {
@@ -860,6 +868,7 @@ impl PatchsetKind {
             Self::BaseMoved => "base-moved",
             Self::BaseCorrected => "base-corrected",
             Self::Retarget => "retarget",
+            Self::Forced => "forced",
         }
     }
 }
@@ -890,7 +899,7 @@ pub fn decide_kind(
         (true, false) => PatchsetKind::Push,
         (false, true) => PatchsetKind::BaseMoved,
         // force on an identical pair — the old always-mint snapshot.
-        (false, false) => PatchsetKind::Push,
+        (false, false) => PatchsetKind::Forced,
     })
 }
 
