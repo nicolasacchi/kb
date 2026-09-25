@@ -200,8 +200,13 @@ async fn checkout_of_a_store_only_review_tip_fetches_by_sha_and_writes_no_refs_k
     // A commit that will exist ONLY inside a kb-owned review store — an
     // unrelated repo, fetched into a bare store under a review-ref name
     // that never touches `dir`'s own refs (ancestry doesn't matter:
-    // `allowAnySHA1InWant` fetches by sha regardless).
-    let src = repo_tmp.path().join("src");
+    // `allowAnySHA1InWant` fetches by sha regardless). Built under a
+    // SEPARATE tempdir, never under `dir` itself — `dir` IS the checked-out
+    // repo's own working tree, and a stray subdirectory there would make
+    // `git status` see it as untracked and trip the dirty-tree refusal.
+    let scratch_tmp = tempfile::tempdir().unwrap();
+    let scratch = scratch_tmp.path();
+    let src = scratch.join("src");
     std::fs::create_dir_all(&src).unwrap();
     git(&src, &["init", "-q", "-b", "main"]);
     git(&src, &["config", "user.email", "test@example.com"]);
@@ -211,9 +216,9 @@ async fn checkout_of_a_store_only_review_tip_fetches_by_sha_and_writes_no_refs_k
     git(&src, &["commit", "-q", "-m", "review tip"]);
     let tip = git_out(&src, &["rev-parse", "HEAD"]);
 
-    let store_dir = repo_tmp.path().join("store.git");
+    let store_dir = scratch.join("store.git");
     git(
-        repo_tmp.path(),
+        scratch,
         &["init", "-q", "--bare", store_dir.to_str().unwrap()],
     );
     std::fs::write(
