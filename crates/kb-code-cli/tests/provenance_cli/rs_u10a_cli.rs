@@ -114,7 +114,7 @@ fn run(url: &str, args: &[&str]) -> (i32, String, String) {
     let out = Command::cargo_bin("kb-code")
         .unwrap()
         .env_remove("KB_CODE_TOKEN")
-        .args(&all)
+        .args(all)
         .output()
         .unwrap();
     (
