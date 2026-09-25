@@ -64,6 +64,25 @@ fn internal(e: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
+/// A `legacy_refs`/`export_legacy` computation failure, kept SMALL
+/// (`clippy::result_large_err` — `axum::http::Response` itself is well
+/// over the 128-byte threshold). `Response` construction happens ONCE, at
+/// the route handler that owns the `spawn_blocking` join, never at every
+/// fallible step inside the blocking computation.
+enum ApplyErr {
+    Store(super::registry::StoreUnavailable),
+    Internal(String),
+}
+
+impl ApplyErr {
+    fn into_response(self) -> Response {
+        match self {
+            ApplyErr::Store(u) => StoreRefusal(u).into_response(),
+            ApplyErr::Internal(m) => internal(m),
+        }
+    }
+}
+
 /// One user-clone ref, classified against the store's SAME name (D19).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LegacyRefStatus {
@@ -146,7 +165,7 @@ pub async fn legacy_refs_route(
     let dry_run = body.dry_run;
     match tokio::task::spawn_blocking(move || legacy_refs_apply(&st, &n, &repo, dry_run)).await {
         Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(r)) => r,
+        Ok(Err(e)) => e.into_response(),
         Err(e) => internal(e),
     }
 }
@@ -156,18 +175,19 @@ fn legacy_refs_apply(
     repo_name: &str,
     repo: &RepoRef,
     dry_run: bool,
-) -> Result<serde_json::Value, Response> {
+) -> Result<serde_json::Value, ApplyErr> {
     let handle = state
         .review_stores
         .handle_for_repo(&state.store, repo_name)
-        .map_err(|u| StoreRefusal(u).into_response())?;
+        .map_err(ApplyErr::Store)?;
     let git = state
         .review_stores
         .git()
-        .ok_or_else(|| internal("review store git spawner unavailable"))?;
-    let store_map = store_kbc_map(git, &handle.git_dir).map_err(|e| internal(e))?;
-    let user_refs =
-        reviews::list_kbc_refs(&WorkTreeRoot::user_clone(&repo.root)).map_err(|e| internal(e))?;
+        .ok_or_else(|| ApplyErr::Internal("review store git spawner unavailable".to_string()))?;
+    let store_map =
+        store_kbc_map(git, &handle.git_dir).map_err(|e| ApplyErr::Internal(e.to_string()))?;
+    let user_refs = reviews::list_kbc_refs(&WorkTreeRoot::user_clone(&repo.root))
+        .map_err(|e| ApplyErr::Internal(e.to_string()))?;
     let statuses = classify(&user_refs, &store_map);
 
     let deletable: Vec<(String, String)> = statuses
@@ -180,7 +200,7 @@ fn legacy_refs_apply(
     let mut new_state: Option<&str> = None;
     if !dry_run {
         reviews::delete_refs_transactional(&WorkTreeRoot::user_clone(&repo.root), &deletable)
-            .map_err(|e| internal(e))?;
+            .map_err(|e| ApplyErr::Internal(e.to_string()))?;
         // Never downgraded, never rewritten to anything but `cleaned`
         // (the column default is already `present`) — and only when the
         // clone genuinely carries nothing `refs/kbc/*`-shaped anymore.
@@ -217,7 +237,7 @@ pub async fn export_legacy_route(
     let n = name.clone();
     match tokio::task::spawn_blocking(move || export_legacy_apply(&st, &n, &repo)).await {
         Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(r)) => r,
+        Ok(Err(e)) => e.into_response(),
         Err(e) => internal(e),
     }
 }
@@ -226,15 +246,15 @@ fn export_legacy_apply(
     state: &SharedState,
     repo_name: &str,
     repo: &RepoRef,
-) -> Result<serde_json::Value, Response> {
+) -> Result<serde_json::Value, ApplyErr> {
     let handle = state
         .review_stores
         .handle_for_repo(&state.store, repo_name)
-        .map_err(|u| StoreRefusal(u).into_response())?;
+        .map_err(ApplyErr::Store)?;
     let git = state
         .review_stores
         .git()
-        .ok_or_else(|| internal("review store git spawner unavailable"))?;
+        .ok_or_else(|| ApplyErr::Internal("review store git spawner unavailable".to_string()))?;
 
     // This repo's OWN candidate refs (README §10 step 5): every PR
     // binding in ANY state (export restores history, not just what's
@@ -242,11 +262,11 @@ fn export_legacy_apply(
     let pr_bound = state
         .store
         .list_pr_bound_reviews(repo_name)
-        .map_err(|e| internal(e))?;
+        .map_err(|e| ApplyErr::Internal(e.to_string()))?;
     let patch_keys = state
         .store
         .list_patchset_keys_for_repo(repo_name)
-        .map_err(|e| internal(e))?;
+        .map_err(|e| ApplyErr::Internal(e.to_string()))?;
     let mut want: Vec<String> = Vec::new();
     for (_, pr_number, _) in &pr_bound {
         if (1..=i64::from(u32::MAX)).contains(pr_number) {
@@ -259,7 +279,8 @@ fn export_legacy_apply(
     want.sort();
     want.dedup();
 
-    let store_map = store_kbc_map(git, &handle.git_dir).map_err(|e| internal(e))?;
+    let store_map =
+        store_kbc_map(git, &handle.git_dir).map_err(|e| ApplyErr::Internal(e.to_string()))?;
     let candidates: Vec<(String, String)> = want
         .into_iter()
         .filter_map(|name| store_map.get(&name).cloned().map(|sha| (name, sha)))
