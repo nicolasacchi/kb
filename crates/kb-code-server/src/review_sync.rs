@@ -131,9 +131,11 @@ impl SyncReason {
     /// the pair unchanged (nothing minted, but the policy moved); otherwise
     /// an unminted capture is `unchanged`, and a minted one says why by its
     /// patchset `kind` (`push`/`rebase` → the head moved; `base-moved`/
-    /// `base-corrected` → only the merge-base moved). `kind` is read ONLY
-    /// when `minted` — an unminted capture reports the LATEST patchset's
-    /// old kind.
+    /// `base-corrected` → only the merge-base moved; `retarget` — also a
+    /// vanished `auto` base re-resolved — → retargeted; `forced`, a re-mint
+    /// of an IDENTICAL pair that sync itself never asks for, → unchanged:
+    /// nothing moved). `kind` is read ONLY when `minted` — an unminted
+    /// capture reports the LATEST patchset's old kind.
     pub fn from_capture(minted: bool, kind: Option<&str>, retargeted: bool) -> Self {
         if retargeted || (minted && kind == Some("retarget")) {
             return Self::Retargeted;
@@ -143,6 +145,7 @@ impl SyncReason {
         }
         match kind {
             Some("base-moved") | Some("base-corrected") => Self::BaseMoved,
+            Some("forced") => Self::Unchanged,
             _ => Self::HeadMoved,
         }
     }
