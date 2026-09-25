@@ -10,17 +10,23 @@ export interface StartReviewDialogProps {
   onClose: () => void;
   /// Called with the new review id on success (caller navigates).
   onCreated: (id: number) => void;
-  /// Optional first-open seeds (V4.L2 ranked-list CTA). Empty / omitted
-  /// keeps the existing head-branch / first-other-branch defaults.
+  /// Optional first-open seeds (V4.L2 ranked-list CTA). `initialHead`
+  /// empty/omitted keeps the first-other-branch default; `initialBase`
+  /// empty/omitted leaves the base field BLANK (RS-U11 — see the base
+  /// field's own seeding-effect comment below).
   initialHead?: string;
   initialBase?: string;
 }
 
 /// "Start review" dialog — head_ref picker fed by the same `GET /api/refs`
-/// data the RefPicker uses; base_ref defaults to the repo's HEAD branch
-/// (or `main`); title optional. Mutations are LOOPBACK-ONLY: a bare 404 is
-/// rendered as the same class of explanation Prs/Checkout surfaces, not a
-/// generic error toast.
+/// data the RefPicker uses; title optional. RS-U11 (README D14): base_ref
+/// is NEVER defaulted to the local HEAD branch here — it starts blank
+/// unless a caller passes `initialBase` (the ranked-list CTA's own
+/// explicit default-branch seed) or the operator types one, and a blank
+/// field sends no `base_ref` at all, so the daemon's own resolution chain
+/// picks it. Mutations are LOOPBACK-ONLY: a bare 404 is rendered as the
+/// same class of explanation Prs/Checkout surfaces, not a generic error
+/// toast.
 export default function StartReviewDialog({
   repo,
   onClose,
@@ -37,7 +43,6 @@ export default function StartReviewDialog({
     [refsData],
   );
   const branchNames = useMemo(() => branches.map((b) => b.name), [branches]);
-  const headBranch = branches.find((b) => b.is_head)?.name ?? "main";
   const otherBranches = branches.filter((b) => !b.is_head);
 
   const [headRef, setHeadRef] = useState(initialHead ?? "");
@@ -46,12 +51,21 @@ export default function StartReviewDialog({
   const [loopbackMsg, setLoopbackMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Seed defaults once refs load (and whenever the head branch identity
-  // changes, e.g. after a checkout).
+  // Seed the head default once refs load (and whenever the head branch
+  // identity changes, e.g. after a checkout). RS-U11 (README D14): the
+  // base field is deliberately left UNSEEDED here — this dialog used to
+  // default it to the local HEAD branch (usually "main"), which is
+  // exactly the "stale local main" README §1 names as the root cause of
+  // review 65's wrong diff. Leaving it blank sends no `base_ref` at all
+  // (`submit`, below), so the daemon runs the real resolution chain
+  // (forge API target, then caller, then the default branch) instead of
+  // this dialog's own guess. `initialBase` (the V4.L2 ranked-list CTA's
+  // OWN explicit seed — a caller-computed default branch, not a blind
+  // local-HEAD guess) is unaffected: it already seeded `baseRef` at
+  // mount, via `useState`'s initializer above.
   useEffect(() => {
-    if (!baseRef) setBaseRef(headBranch);
     if (!headRef && otherBranches[0]) setHeadRef(otherBranches[0].name);
-  }, [headBranch, otherBranches, baseRef, headRef]);
+  }, [otherBranches, headRef]);
 
   useEffect(() => {
     const dlg = dlgRef.current;
@@ -141,10 +155,13 @@ export default function StartReviewDialog({
                 value={baseRef}
                 onChange={setBaseRef}
                 items={branchNames}
-                placeholder={headBranch}
+                placeholder="auto"
                 aria-label="base ref"
                 inputProps={{ "data-kbc-start-review-base": "" }}
               />
+              <span className="kbc-start-review__hint">
+                Left blank, kb-code resolves it itself — the PR's own target branch, then the repo default.
+              </span>
             </label>
             <label className="kbc-start-review__field">
               <span>Title (optional)</span>

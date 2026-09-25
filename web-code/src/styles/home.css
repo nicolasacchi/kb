@@ -313,6 +313,70 @@ a.kbc-home-card__head:hover {
   font-size: 12px;
 }
 
+/* RS-U11 — the "Review store" / "Fetch credential" sections
+   (`ReviewStoreSection.tsx`). `--state` mirrors `ReviewStoreRow.state`
+   (`absent|seeding|ready|broken`, plus this component's own `none` for
+   "no store row yet" and the credential card's `amber` for D9's
+   "broader than needed" flag) — same small-badge shape as the intel
+   chips just above, not the Room's token-driven `.kbc-room-chip`. */
+.kbc-home-card__store-state {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.kbc-home-card__store-state--ready {
+  color: var(--green);
+}
+.kbc-home-card__store-state--seeding {
+  color: var(--blue);
+}
+.kbc-home-card__store-state--broken {
+  color: var(--warn);
+}
+.kbc-home-card__cred-amber {
+  margin: 4px 0 0;
+  color: var(--warn);
+  font-size: 11px;
+}
+.kbc-home-card__doctor {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kbc-home-card__doctor-row {
+  font-size: 11px;
+  color: var(--ink-dim);
+  padding-left: 10px;
+  position: relative;
+}
+.kbc-home-card__doctor-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-dim);
+}
+.kbc-home-card__doctor-row--warn::before {
+  background: var(--warn);
+}
+.kbc-home-card__doctor-row--error {
+  color: var(--red);
+}
+.kbc-home-card__doctor-row--error::before {
+  background: var(--red);
+}
+
 .kbc-home-card__filelist {
   list-style: none;
   margin: 0;
