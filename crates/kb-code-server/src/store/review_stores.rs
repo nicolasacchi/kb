@@ -609,6 +609,42 @@ impl Store {
         Ok(rows)
     }
 
+    /// The highest `reviews.id` this VOLUME has ever assigned, surviving a
+    /// delete (`reviews.id` is `INTEGER PRIMARY KEY AUTOINCREMENT`, so
+    /// sqlite tracks the high-water mark in `sqlite_sequence` regardless of
+    /// whether the highest-id row still exists — unlike `MAX(id)`, which
+    /// drops the moment that row is gone, the ordinary case store-wide GC
+    /// exists to clean up).
+    ///
+    /// RS-U9 review fix (BLOCKER 2) — the restore-guard SENTINEL (a file
+    /// beside `index.db`) misses a same-schema-epoch restore from an older
+    /// snapshot, since the epoch itself never regresses in that case. This
+    /// is the DB-truth complement: a `refs/kbc/review/<id>/*` ref naming an
+    /// id ABOVE this high-water mark can only mean the id was minted by a
+    /// database this volume has since been rolled BEHIND — never a normal
+    /// delete, which never raises the mark. Callers refuse the whole GC
+    /// apply on that signal (`restore-suspected`), unconditionally — no
+    /// `--yes` can bypass it, unlike the sentinel guard.
+    pub fn reviews_high_water_id(&self) -> Result<i64> {
+        let conn = self.lock();
+        let seq: Option<i64> = conn
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'reviews'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(seq) = seq {
+            return Ok(seq);
+        }
+        // No `sqlite_sequence` row yet (a fresh volume that has never
+        // inserted a review) — `MAX(id)` over an always-empty table is the
+        // honest 0, not a missing-row error (an aggregate query always
+        // returns exactly one row).
+        let max: Option<i64> = conn.query_row("SELECT MAX(id) FROM reviews", [], |r| r.get(0))?;
+        Ok(max.unwrap_or(0))
+    }
+
     /// Record a store's canonical base URL and the ladder rung it came from.
     /// NEVER changes `store_key` (README §11: a disagreeing `base_url` is a
     /// doctor error, never a re-key) — callers check the key first.
