@@ -32,6 +32,7 @@ mod review_routes;
 mod review_sweep;
 mod rs_u0_golden;
 mod rs_u10a_views;
+mod rs_u10b_sync;
 mod rs_u11a_golden_envelopes;
 mod shape_util;
 mod unified_inbox;
