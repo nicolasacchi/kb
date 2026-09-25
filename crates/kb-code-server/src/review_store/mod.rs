@@ -38,6 +38,13 @@
 //!   `crate::reviews::delete_review_with_refs`'s `PrRefScope` and
 //!   `crate::reviews::gc_patchsets` are the two write paths this unit
 //!   makes store-aware (via `GitCtx::primary`, RS-U4).
+//!
+//! RS-U9 adds scheduled housekeeping on top of that (README §5.4/§8):
+//!
+//! * [`maint`] — daily/weekly/monthly git-housekeeping cadences, the
+//!   scheduled store-wide GC + ref invariant pass, `backups/store-<uuid>-
+//!   <ts>.bundle` backup bundles, and `maint::restore_guard`'s post-
+//!   restore dry-run-only gate on scheduled GC.
 
 pub mod boot;
 pub mod classify;
@@ -46,6 +53,7 @@ pub mod gc;
 pub mod git;
 pub mod key;
 pub mod ladder;
+pub mod maint;
 pub mod manifest;
 mod proc;
 pub mod redact;

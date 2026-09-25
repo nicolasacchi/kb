@@ -356,6 +356,16 @@ impl Store {
         // semantics.
         conn.set_prepared_statement_cache_capacity(128);
 
+        // RS-U9 — the review-store restore guard's automatic detector reads
+        // the volume's epoch BEFORE anything below touches it (the same
+        // point `refuse_if_volume_ahead`/`ensure_for_epoch_crossing` read
+        // it from, for the same reason: after the migration runner below,
+        // every volume reads back at `schema_epoch()` regardless of
+        // whether THIS boot's starting point was a restored older
+        // snapshot — see `review_store::maint::restore_guard`'s module
+        // doc). A read-only probe; never itself an error.
+        let volume_epoch_at_boot = kb_core::sibling::volume_epoch(&conn).ok().flatten();
+
         // kb-sibling/1 — HARD schema-epoch guard, BEFORE the migration run
         // (same posture, same helper, as `kb_core::storage::sqlite::Db::
         // open`): refinery only ever migrates FORWARD, so an older binary
@@ -379,6 +389,62 @@ impl Store {
         // succeeds — a failed migration must still have its rollback target.
         let pre_migration = crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
             .map_err(|e| StoreError::BackupRequired(e.to_string()))?;
+
+        // RS-U9 — the restore guard's automatic detector, plus a
+        // belt-and-suspenders review-store bundle backup: on a gated-epoch
+        // snapshot (`pre_migration.is_some()`) OR a freshly detected
+        // restore (`just_flagged`), bundle-back up every `ready` store
+        // NOW, before any scheduled GC gets a chance to touch a ref
+        // (design-internal-store.md §8 / README §5.4's "on a gated-epoch
+        // snapshot … or a restore"). Best-effort: `review_stores` may not
+        // exist yet on the FIRST V0045 crossing itself
+        // (`backup_all_ready_stores` checks and no-ops), and any failure
+        // here is a warning, never a boot refusal — a backup pass is a
+        // safety net, not a precondition for opening the volume.
+        {
+            let state_dir = path.parent().unwrap_or_else(|| Path::new("."));
+            let guard_path = crate::review_store::maint::restore_guard::path_for(state_dir);
+            let guard = crate::review_store::maint::restore_guard::observe_boot_epoch(
+                &guard_path,
+                volume_epoch_at_boot,
+                chrono::Utc::now().timestamp(),
+            );
+            if guard.just_flagged {
+                tracing::warn!(
+                    reason = ?guard.flagged_reason,
+                    "kb-code: review-store restore guard flagged — scheduled ref GC stays \
+                     dry-run-only until an operator runs `kb-code store gc --repo R --yes`"
+                );
+            }
+            if pre_migration.is_some() || guard.just_flagged {
+                let git_home = state_dir.join(crate::review_store::settings::GIT_HOME_DIR);
+                match crate::review_store::git::StoreGit::new(&git_home) {
+                    Ok(git) => {
+                        let report = crate::review_store::maint::backup_all_ready_stores(
+                            &conn,
+                            &git,
+                            state_dir,
+                            chrono::Utc::now().timestamp(),
+                        );
+                        let errors: Vec<&str> = report
+                            .stores
+                            .iter()
+                            .filter_map(|s| s.error.as_deref())
+                            .collect();
+                        if !errors.is_empty() {
+                            tracing::warn!(
+                                ?errors,
+                                "kb-code: review-store boot-time bundle backup had errors"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "kb-code: review-store boot-time bundle backup: could not build the store git spawner"
+                    ),
+                }
+            }
+        }
 
         // V72-B1 — one-time, narrowly-targeted repair for the ONE migration
         // checksum a 2026-09 public-repo scrub diverged. MUST run after the
