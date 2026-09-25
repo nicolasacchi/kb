@@ -352,7 +352,11 @@ impl FetchReport {
     pub fn fetched(&self) -> bool {
         self.state == "fetched"
     }
-    fn warnings(&self) -> Vec<BaseWarningOut> {
+    /// RS-U7 — `pub` so `review_retrack`'s dry-run path (which fetches but
+    /// never captures, so it never sees these through [`Recaptured`]) can
+    /// surface an offline/refresh-failed fetch honestly instead of silently
+    /// classifying against stale data.
+    pub fn warnings(&self) -> Vec<BaseWarningOut> {
         let mut w = Vec::new();
         match self.state.as_str() {
             "offline" => w.push(warning(
@@ -1302,6 +1306,63 @@ impl<'a> StoreCtx<'a> {
             fetch,
             status,
         })
+    }
+
+    /// RS-U7 — the resolution CHAIN only (README §6), no fetch, no
+    /// capture: what [`prepare_new`] runs for a brand-new review's policy,
+    /// factored out so `retrack` (README §10 step 4/§12) can re-run the
+    /// SAME chain against an EXISTING review's current head, when the
+    /// caller passed no explicit `--base` (bare retrack, or `--base auto`
+    /// — [`classify`] already collapses both to `explicit.policy: None`,
+    /// exactly the "run the chain" case). `classified` is [`classify`]'s
+    /// own answer, so this never re-parses the grammar. Mirrors
+    /// `prepare_new`'s `Some(_)`/`None` match byte-for-byte — kept as its
+    /// own method rather than folding into `prepare_new` (which stays a
+    /// RS-U6-shipped, tested entry point this unit does not touch).
+    pub fn resolve_chain(
+        &self,
+        is_pr: bool,
+        head_ref: &str,
+        pr_head_branch: Option<&str>,
+        forge_base_ref: Option<&str>,
+        classified: Classified,
+    ) -> Result<(BasePolicy, Vec<BaseWarningOut>), BaseError> {
+        self.import_work()?;
+        let mapped = self.mapped_remotes();
+        let has_forge = !matches!(self.forge(), Forge::None);
+        if is_pr && !has_forge {
+            return Err(BaseError::new(
+                400,
+                URN_PR_REFS_UNSUPPORTED,
+                "this repo has no forge remote to fetch PR refs from",
+            ));
+        }
+        let access = if has_forge { Some(self.access()) } else { None };
+        let access_ok = access.as_ref().and_then(|a| a.as_ref().ok());
+        if is_pr {
+            let head_branch = pr_head_branch.map(str::to_string);
+            let chain = PrChain {
+                explicit: Some(classified),
+                forge_api: forge_base_ref.map(str::to_string),
+                caller: None,
+                head_branch: head_branch.clone(),
+            };
+            resolve_pr_base(&chain, || {
+                self.default_branch(access_ok, head_branch.as_deref())
+            })
+        } else {
+            let head_branch = branch_of_head(head_ref);
+            let chain = NonPrChain {
+                explicit: Some(classified),
+                stack_parent: None,
+                upstream: self.upstream_of(head_branch.as_deref(), &mapped),
+                head_branch: head_branch.clone(),
+                has_forge,
+            };
+            resolve_non_pr_base(&chain, || {
+                self.default_branch(access_ok, head_branch.as_deref())
+            })
+        }
     }
 
     /// The `--base` grammar against this member + store (for `retrack`,

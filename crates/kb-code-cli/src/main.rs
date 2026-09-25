@@ -194,6 +194,10 @@ mod store_cmd;
 // RS-U10a — the agent-facing review verbs (find/diff/log/cat/verify) and
 // the JSON contract they share.
 mod review_agent;
+// RS-U7 — `kb-code review retrack` (single + `--all`). Its own file (not
+// `review_agent.rs`) so it never touches the same lines RS-U10b's `review
+// sync`/`status` land on.
+mod retrack_cmd;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -3848,6 +3852,11 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code review retrack <ID|pr:N> [--base SPEC] [--dry-run]` /
+    /// `kb-code review retrack --all [--repo R] [--pinned|--legacy]
+    /// --dry-run|--yes` — RS-U7 (README §10 step 4/§12, D17/D20). See
+    /// `retrack_cmd`'s own module doc.
+    Retrack(retrack_cmd::RetrackArgs),
     /// Files changed in a patchset (`--ps N` or latest).
     Files {
         id: i64,
@@ -4356,12 +4365,15 @@ enum ReviewCmd {
         json: bool,
     },
     /// `kb-code review sweep [--repo R | --all-repos] [--include-closed]
-    /// [--json]` — PRR-R8: `POST /api/reviews/sweep` (design-addendum-2
-    /// §B). LOOPBACK-ONLY. Walks every PR-bound review (default
-    /// `state=open`) and reconciles it against live GitHub — the cron/
-    /// agent entry point for "every PR the LLM touched." `--repo`/
+    /// [--close [--yes]] [--json]` — PRR-R8: `POST /api/reviews/sweep`
+    /// (design-addendum-2 §B). LOOPBACK-ONLY. Walks every PR-bound review
+    /// (default `state=open`) and reconciles it against live GitHub — the
+    /// cron/agent entry point for "every PR the LLM touched." `--repo`/
     /// `--all-repos` are mutually exclusive; exactly one is required (same
-    /// guard as `review inbox`).
+    /// guard as `review inbox`). RS-U7 (D18): `--close` applies the
+    /// merged/closed-PR auto-close this sweep already computes as
+    /// `suggest_close` — a dry run (report only, the default) unless
+    /// `--yes` is also given.
     Sweep {
         #[arg(long)]
         repo: Option<String>,
@@ -4369,6 +4381,12 @@ enum ReviewCmd {
         all_repos: bool,
         #[arg(long = "include-closed")]
         include_closed: bool,
+        /// Close every `suggest_close` review whose PR is merged/closed.
+        #[arg(long)]
+        close: bool,
+        /// Required alongside `--close` — there is no prompt.
+        #[arg(long)]
+        yes: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -6046,6 +6064,7 @@ async fn run(cli: Cli) -> Result<()> {
                 daemon,
                 json,
             } => review_snapshot_cmd(&daemon, id, force, no_fetch, json).await,
+            ReviewCmd::Retrack(a) => retrack_cmd::run(a).await,
             ReviewCmd::Files {
                 id,
                 ps,
@@ -6405,9 +6424,24 @@ async fn run(cli: Cli) -> Result<()> {
                 repo,
                 all_repos,
                 include_closed,
+                close,
+                yes,
                 daemon,
                 json,
-            } => review_sweep_cmd(&daemon, repo.as_deref(), all_repos, include_closed, json).await,
+            } => {
+                if close && !yes {
+                    anyhow::bail!("review sweep --close requires --yes (there is no prompt)");
+                }
+                review_sweep_cmd(
+                    &daemon,
+                    repo.as_deref(),
+                    all_repos,
+                    include_closed,
+                    close && yes,
+                    json,
+                )
+                .await
+            }
             ReviewCmd::Analytics {
                 repo,
                 from,
@@ -19139,13 +19173,17 @@ async fn review_sweep_cmd(
     repo: Option<&str>,
     all_repos: bool,
     include_closed: bool,
+    apply_close: bool,
     json: bool,
 ) -> Result<()> {
     if repo.is_some() == all_repos {
         anyhow::bail!("review sweep: pass exactly one of --repo NAME or --all-repos");
     }
-    let mut payload =
-        serde_json::json!({ "all_repos": all_repos, "include_closed": include_closed });
+    let mut payload = serde_json::json!({
+        "all_repos": all_repos,
+        "include_closed": include_closed,
+        "apply": apply_close,
+    });
     if let Some(r) = repo {
         payload["repo"] = serde_json::json!(r);
     }
@@ -19162,8 +19200,12 @@ async fn review_sweep_cmd(
     }
     let summary = &body["summary"];
     println!(
-        "swept={}  refreshed={}  unavailable={}  suggest_close={}",
-        summary["swept"], summary["refreshed"], summary["unavailable"], summary["suggest_close"],
+        "swept={}  refreshed={}  unavailable={}  suggest_close={}  closed={}",
+        summary["swept"],
+        summary["refreshed"],
+        summary["unavailable"],
+        summary["suggest_close"],
+        summary["closed"],
     );
     let rows = body["rows"].as_array().cloned().unwrap_or_default();
     for r in &rows {
@@ -19175,7 +19217,9 @@ async fn review_sweep_cmd(
             continue;
         }
         let checks = &r["checks"];
-        let flag = if r["suggest_close"].as_bool().unwrap_or(false) {
+        let flag = if r["closed"].as_bool().unwrap_or(false) {
+            "  CLOSED"
+        } else if r["suggest_close"].as_bool().unwrap_or(false) {
             "  SUGGEST-CLOSE"
         } else {
             ""

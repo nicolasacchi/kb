@@ -462,6 +462,7 @@ use crate::review_impact;
 use crate::review_inbox;
 use crate::review_map;
 use crate::review_pseudo;
+use crate::review_retrack;
 use crate::review_sweep;
 use crate::review_timeline;
 use crate::reviews;
@@ -1337,6 +1338,13 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // snapshots), so loopback-only like the rest of this sub-router,
         // NOT `auth_bearer` (unlike its read-only sibling `pr-status`).
         .route("/reviews/sweep", post(review_sweep::sweep_route))
+        // RS-U7 (D17) — bulk retrack. Same literal-before-param family as
+        // `/reviews/gc`/`/reviews/pr`/`/reviews/sweep` just above; a WRITE
+        // (persists a base policy + may mint patchsets), loopback-only.
+        .route(
+            "/reviews/retrack-bulk",
+            post(review_retrack::retrack_all_route),
+        )
         // PRR-R3 — the ONE findings mutation that stays loopback-only (an
         // agent-side batch-reconcile verb, not a mobile-mutation candidate
         // — see the module doc above). `POST /reviews/{id}/findings`
@@ -1363,6 +1371,8 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             post(crate::branches::start_branch_review),
         )
         .route("/reviews/{id}/snapshot", post(reviews::snapshot_review))
+        // RS-U7 (D17/D20) — single retrack: see `review_retrack`'s module doc.
+        .route("/reviews/{id}/retrack", post(review_retrack::retrack_route))
         .route(
             "/reviews/{id}",
             patch(reviews::patch_review).delete(reviews::delete_review),
@@ -1499,6 +1509,19 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/repos/{name}/credentials/test",
             post(crate::review_store::routes::credential_test_route),
+        )
+        // RS-U7 (D19) — `store legacy-refs`/`store export-legacy`: the
+        // ONE OTHER sanctioned user-clone ref write besides `checkout::
+        // switch_repo` (see `review_store::legacy_refs`'s module doc).
+        // MANUAL ONLY, same loopback-only family as the store/credential
+        // mutations just above.
+        .route(
+            "/repos/{name}/store/legacy-refs",
+            post(crate::review_store::legacy_refs::legacy_refs_route),
+        )
+        .route(
+            "/repos/{name}/store/export-legacy",
+            post(crate::review_store::legacy_refs::export_legacy_route),
         )
         .layer(from_fn_with_state(
             auth.clone(),
