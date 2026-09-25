@@ -109,6 +109,15 @@ impl StoreRoot {
         &self.git_dir
     }
 
+    /// RS-U6 — the store a ready [`crate::review_store::StoreHandle`]
+    /// names (a handle is itself only ever built from a `review_stores`
+    /// row, `ReviewStores::open`).
+    pub fn from_handle(handle: &crate::review_store::StoreHandle) -> Self {
+        Self {
+            git_dir: handle.git_dir.clone(),
+        }
+    }
+
     /// `<store>/objects` — what the S8 bridges hand a USER-repo git
     /// invocation as a per-process, read-only
     /// `GIT_ALTERNATE_OBJECT_DIRECTORIES` (design §6 S8, blame).
