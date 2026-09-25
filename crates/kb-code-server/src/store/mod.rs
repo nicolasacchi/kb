@@ -356,6 +356,16 @@ impl Store {
         // semantics.
         conn.set_prepared_statement_cache_capacity(128);
 
+        // RS-U9 — the review-store restore guard's automatic detector reads
+        // the volume's epoch BEFORE anything below touches it (the same
+        // point `refuse_if_volume_ahead`/`ensure_for_epoch_crossing` read
+        // it from, for the same reason: after the migration runner below,
+        // every volume reads back at `schema_epoch()` regardless of
+        // whether THIS boot's starting point was a restored older
+        // snapshot — see `review_store::maint::restore_guard`'s module
+        // doc). A read-only probe; never itself an error.
+        let volume_epoch_at_boot = kb_core::sibling::volume_epoch(&conn).ok().flatten();
+
         // kb-sibling/1 — HARD schema-epoch guard, BEFORE the migration run
         // (same posture, same helper, as `kb_core::storage::sqlite::Db::
         // open`): refinery only ever migrates FORWARD, so an older binary
@@ -379,6 +389,47 @@ impl Store {
         // succeeds — a failed migration must still have its rollback target.
         let pre_migration = crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
             .map_err(|e| StoreError::BackupRequired(e.to_string()))?;
+
+        // RS-U9 — the restore guard's automatic detector: filesystem only
+        // (a sentinel read/write), no git, no network. Should-fix review
+        // finding — "NO git I/O on the boot path": the actual bundle
+        // backup this MAY warrant (a gated-epoch snapshot or a freshly
+        // detected restore, design-internal-store.md §8 / README §5.4's
+        // "on a gated-epoch snapshot … or a restore") is deferred to
+        // `spawn_boot_bundle_backup` (`lib.rs`, spawned AFTER the daemon
+        // binds) via a marker file — this function only ever WRITES that
+        // marker, never runs git itself.
+        {
+            let state_dir = path.parent().unwrap_or_else(|| Path::new("."));
+            let guard_path = crate::review_store::maint::restore_guard::path_for(state_dir);
+            let guard = crate::review_store::maint::restore_guard::observe_boot_epoch(
+                &guard_path,
+                volume_epoch_at_boot,
+                chrono::Utc::now().timestamp(),
+            );
+            if guard.just_flagged {
+                tracing::warn!(
+                    reason = ?guard.flagged_reason,
+                    "kb-code: review-store restore guard flagged — a real GC apply stays \
+                     refused per-store until an operator runs `kb-code store gc --repo R --yes`"
+                );
+            }
+            if pre_migration.is_some() || guard.just_flagged {
+                let reason = if pre_migration.is_some() {
+                    "gated-epoch-snapshot"
+                } else {
+                    "restore-detected"
+                };
+                if let Err(e) =
+                    crate::review_store::maint::mark_boot_backup_pending(state_dir, reason)
+                {
+                    tracing::warn!(
+                        error = %e,
+                        "kb-code: could not mark a boot-time review-store bundle backup pending"
+                    );
+                }
+            }
+        }
 
         // V72-B1 — one-time, narrowly-targeted repair for the ONE migration
         // checksum a 2026-09 public-repo scrub diverged. MUST run after the
