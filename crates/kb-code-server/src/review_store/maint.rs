@@ -531,12 +531,12 @@ pub fn gc_pass(
     store: &Store,
     git: &StoreGit,
     git_dir: &Path,
-    member_names: &[String],
+    store_id: i64,
     registered_member_ids: &[i64],
     apply: bool,
 ) -> Result<GcRunReport, String> {
-    let keep = super::gc::keep_set(store, member_names, registered_member_ids)
-        .map_err(|e| e.to_string())?;
+    let keep =
+        super::gc::keep_set(store, store_id, registered_member_ids).map_err(|e| e.to_string())?;
     let refs = super::seed::list_refs(git, git_dir, &[]).map_err(|e| e.to_string())?;
     let attributed = super::gc::attribute(&refs, &keep);
     let candidates = super::gc::delete_candidates(&attributed);
@@ -559,23 +559,28 @@ pub fn gc_pass(
     })
 }
 
-/// The member names/ids/patchsets a store-wide pass needs, gathered with
-/// NO git calls (unlike [`ReviewStores::plan_for`], which also reads each
-/// member's remotes — unneeded here and wasteful on a routine pass).
+/// [`gather_store_scope`]'s result: everything a store-wide pass needs,
+/// gathered with NO git calls (unlike [`ReviewStores::plan_for`], which
+/// also reads each member's remotes — unneeded here and wasteful on a
+/// routine pass). No member NAMES here on purpose: `keep_set` is
+/// `store_id`-keyed since RS-U5's review fix (name-filtering a keep-set
+/// is unsafe — see that function's own doc), and `registered_ids` is all
+/// the invariant check + GC pass need beyond `patchsets`.
+struct StoreScope {
+    registered_ids: Vec<i64>,
+    seed_members: Vec<SeedMember>,
+    patchsets: Vec<ExpectedPatchset>,
+}
+
 fn gather_store_scope(
     rs: &ReviewStores,
     store: &Store,
     store_id: i64,
-) -> Result<
-    (
-        Vec<String>,
-        Vec<i64>,
-        Vec<SeedMember>,
-        Vec<ExpectedPatchset>,
-    ),
-    String,
-> {
+) -> Result<StoreScope, String> {
     let (members, _problems) = rs.members_of(store, store_id);
+    // `Store::patchsets_for_repos` is still name-keyed (unlike
+    // `gc::keep_set`) — a purely LOCAL name list, never stored or handed
+    // to the keep-set query.
     let member_names: Vec<String> = members.iter().map(|(r, _)| r.name.clone()).collect();
     let registered_ids: Vec<i64> = members.iter().map(|(r, _)| r.id).collect();
     let seed_members: Vec<SeedMember> = members.into_iter().map(|(_, m)| m).collect();
@@ -593,7 +598,11 @@ fn gather_store_scope(
             },
         )
         .collect();
-    Ok((member_names, registered_ids, seed_members, patchsets))
+    Ok(StoreScope {
+        registered_ids,
+        seed_members,
+        patchsets,
+    })
 }
 
 // ── backup bundles ──────────────────────────────────────────────────────
@@ -689,7 +698,7 @@ pub fn prune_bundles(backups_dir: &Path, uuid: &str, keep: usize) -> std::io::Re
         };
         found.push((ts, entry.path()));
     }
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|b| std::cmp::Reverse(b.0));
     let mut removed = Vec::new();
     for (_, path) in found.into_iter().skip(keep) {
         if std::fs::remove_file(&path).is_ok() {
@@ -858,8 +867,8 @@ pub fn run_pass_for_store(
             Err(e) => report.errors.push(format!("daily: {e}")),
         }
         match gather_store_scope(rs, store, row.id) {
-            Ok((member_names, registered_ids, seed_members, patchsets)) => {
-                match invariant_check(store, git, dir, &seed_members, &patchsets) {
+            Ok(scope) => {
+                match invariant_check(store, git, dir, &scope.seed_members, &scope.patchsets) {
                     Ok(inv) => report.invariant = Some(inv),
                     Err(e) => report.errors.push(format!("invariant: {e}")),
                 }
@@ -867,7 +876,7 @@ pub fn run_pass_for_store(
                 // still runs and is still reported, so a flagged store is
                 // never silent about what GC would have done.
                 let apply = gc_apply_requested && !guard.flagged;
-                match gc_pass(store, git, dir, &member_names, &registered_ids, apply) {
+                match gc_pass(store, git, dir, row.id, &scope.registered_ids, apply) {
                     Ok(mut g) => {
                         if gc_apply_requested && guard.flagged {
                             g.reason = "restore-guard";
@@ -933,8 +942,11 @@ pub fn run_gc_now(
     let guard = restore_guard::read(guard_path);
     let blocked = guard.flagged && !bypass_guard;
     let apply = apply_requested && !blocked;
-    let (member_names, registered_ids, _, _) = gather_store_scope(rs, store, row.id)?;
-    let mut report = gc_pass(store, git, dir, &member_names, &registered_ids, apply)?;
+    // Only `registered_ids` is needed here (`keep_set` is `store_id`-keyed
+    // since RS-U5's review fix) — no `gather_store_scope` (which also
+    // computes patchsets this pass never reads).
+    let registered_ids = store.store_members(row.id).map_err(|e| e.to_string())?;
+    let mut report = gc_pass(store, git, dir, row.id, &registered_ids, apply)?;
     if apply_requested && blocked {
         report.reason = "restore-guard";
     }
@@ -1084,14 +1096,18 @@ fn audit(route: &'static str, repo: &str, status: StatusCode) {
     );
 }
 
-fn store_row_for(state: &SharedState, name: &str) -> Result<ReviewStoreRow, Response> {
+/// `Box`ed error per `clippy::result_large_err` — a bare `axum::http::
+/// Response<Body>` is 128+ bytes, too large to carry unboxed in a
+/// `Result` (`reviews::normalize_report_shape`'s own doc names the same
+/// convention this crate's lint gate already enforces elsewhere).
+fn store_row_for(state: &SharedState, name: &str) -> Result<ReviewStoreRow, Box<Response>> {
     match state.review_stores.handle_for_repo(&state.store, name) {
         Ok(h) => state
             .store
             .get_review_store(h.id)
-            .map_err(|e| internal(e))?
-            .ok_or_else(|| internal("store row vanished between open and read")),
-        Err(u) => Err(super::registry::StoreRefusal(u).into_response()),
+            .map_err(internal)?
+            .ok_or_else(|| Box::new(internal("store row vanished between open and read"))),
+        Err(u) => Err(Box::new(super::registry::StoreRefusal(u).into_response())),
     }
 }
 
@@ -1127,7 +1143,8 @@ async fn store_gc_route_inner(state: SharedState, name: String, body: GcBody) ->
         let _guard = ops.blocking_lock();
         let now = chrono::Utc::now().timestamp();
         run_gc_now(&st.review_stores, &st.store, &row, body.yes, body.yes, now)
-            .map_err(|e| internal(e))
+            .map_err(internal)
+            .map_err(Box::new)
     })
     .await;
     match res {
@@ -1137,7 +1154,7 @@ async fn store_gc_route_inner(state: SharedState, name: String, body: GcBody) ->
             "report": report,
         }))
         .into_response(),
-        Ok(Err(resp)) => resp,
+        Ok(Err(resp)) => *resp,
         Err(e) => internal(e),
     }
 }
@@ -1198,7 +1215,7 @@ async fn store_maintain_route_inner(
                 due_tasks(now, LastMaint::from_state_json(state_json_val.as_ref()))
             }
         };
-        Ok::<_, Response>(run_pass_for_store(
+        Ok::<_, Box<Response>>(run_pass_for_store(
             &st.review_stores,
             &st.store,
             &row,
@@ -1215,7 +1232,7 @@ async fn store_maintain_route_inner(
             "report": report,
         }))
         .into_response(),
-        Ok(Err(resp)) => resp,
+        Ok(Err(resp)) => *resp,
         Err(e) => internal(e),
     }
 }
