@@ -429,10 +429,8 @@ async fn find_by_pr_and_start_pr_reports_minted() {
     }
 }
 
-// Ignored on this branch ONLY: compose on the RS-U4 base still trips the
-// `prose_refs` byte tokenizer on `à` (the "à panic"), fixed on rs/u3 by
-// 539e2fc. This test is its end-to-end regression — un-ignore on restack.
-#[ignore = "needs the prose_refs non-ASCII fix (rs/u3 539e2fc); un-ignore on restack"]
+// End-to-end regression for the "à panic": compose used to trip the
+// `prose_refs` byte tokenizer on `à` (fixed in prose_refs, 539e2fc).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compose_with_non_ascii_titles_and_derived_slugs_never_panics() {
     let repo = fixture();
