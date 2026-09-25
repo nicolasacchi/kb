@@ -429,6 +429,10 @@ fn missing_tips_mark_reviews_while_the_store_goes_ready() {
 #[test]
 fn a_many_pack_source_seeds_one_pack() {
     let e = env();
+    // Commits trigger auto-gc / auto-maintenance, which on some git versions
+    // consolidates small packs (CI's git merged 6 into 4): switch both off.
+    git(&e.fx.one, &["config", "gc.auto", "0"]);
+    git(&e.fx.one, &["config", "maintenance.auto", "false"]);
     for i in 0..6 {
         commit(&e.fx.one, &format!("p{i}.txt"), &format!("{i}"));
         pack_head_objects(&e.fx.one);
