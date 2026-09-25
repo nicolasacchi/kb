@@ -877,6 +877,8 @@ mod tests {
             .chain(crate::prose_refs::V76_B3_ROUTES.iter())
             // RS-U10a — the review git views + PR lookup.
             .chain(crate::review_views::RS_U10A_ROUTES.iter())
+            // RS-U10b — `GET /api/reviews/{id}/status`.
+            .chain(crate::review_sync::RS_U10B_ROUTES.iter())
         {
             let nested = c
                 .path
