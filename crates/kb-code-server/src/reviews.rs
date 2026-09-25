@@ -1526,18 +1526,18 @@ pub enum PrRefScope {
 /// `refs/kbc/pr/<n>` is only ever deleted under [`PrRefScope::PerRepo`]
 /// (see that type's doc).
 ///
-/// `legacy_work_tree` — RS-U5 review fix, temporary until U6 makes
-/// `capture_patchset` store-aware: capture ALWAYS writes `ps<n>` into the
-/// work tree today, regardless of the review's store readiness, and
-/// `github.rs`'s PR-head fetch likewise still writes `refs/kbc/pr/<n>`
-/// there. So a store-primary delete that only touched the store would
-/// leak the work-tree copies forever (unreachable by any list/gc route
-/// once the store is ready). Pass `Some` whenever `repo_root` is the
-/// store; refs are then ALSO deleted from the work tree — the PR ref's
-/// work-tree copy is always safe to clean up on `remaining == 0`
-/// regardless of `pr_ref_scope`, since a work-tree ref is inherently
-/// this-repo-only, never shared across members. Pass `None` when
-/// `repo_root` already IS the work tree (nothing to duplicate).
+/// `legacy_work_tree` — RS-U5 review fix. RS-U6: capture and the PR-head
+/// fetch now write ONLY the store once it is ready, so the delete route no
+/// longer passes it (a ready store's delete never writes the user clone —
+/// legacy copies wait for the explicit `store legacy-refs`, D19); the
+/// parameter stays for an explicit legacy cleanup caller. Its original
+/// rationale: before RS-U6 capture ALWAYS wrote `ps<n>` into the work tree
+/// and `github.rs`'s PR-head fetch still wrote `refs/kbc/pr/<n>`
+/// there. With `Some`, refs are ALSO deleted from that work tree — the PR
+/// ref's work-tree copy on `remaining == 0` regardless of `pr_ref_scope`,
+/// since a work-tree ref is inherently this-repo-only. Pass `None` when
+/// `repo_root` already IS the work tree, or when the user clone must not
+/// be written (every store-primary route).
 pub fn delete_review_with_refs(
     store: &Store,
     bus: &EventBus,
@@ -1605,12 +1605,14 @@ pub fn delete_review_with_refs(
 /// otherwise — never a user-clone write when the store is ready),
 /// memoized so N reviews of the same repo share one store lookup. Also
 /// drops the patchset's `-base` pin ([`KbcRef::PatchsetBase`]) alongside
-/// its `ps<n>` ref. RS-U5 review fix: when the store is primary, the SAME
-/// refs are also deleted from the work tree — `capture_patchset` still
-/// always writes `ps<n>` there until U6 lands (see
-/// [`delete_review_with_refs`]'s `legacy_work_tree` doc for the full
-/// rationale) — and each review's delete loop runs under that store's
+/// its `ps<n>` ref. Each review's delete loop runs under that store's
 /// `ops` lock (`review_stores`), so a concurrent capture/GC can't race it.
+///
+/// RS-U6: with capture now writing ONLY the store once it is ready, the
+/// RS-U5 interim "also delete the work-tree copy" is gone — GC never
+/// writes a user clone when the store is primary (BUILD-BRIEF §3 gate 2
+/// lists GC). Legacy `refs/kbc/*` copies captured before the store was
+/// ready stay in the clone until the explicit `store legacy-refs` (D19).
 pub fn gc_patchsets(
     store: &Store,
     review_stores: &crate::review_store::ReviewStores,
@@ -1663,16 +1665,6 @@ pub fn gc_patchsets(
                     ps_number: old.ps_number,
                 },
             );
-            if store_primary {
-                let _ = delete_patchset_ref(ctx.work_tree(), review.id, old.ps_number);
-                let _ = delete_kbc_ref(
-                    ctx.work_tree(),
-                    KbcRef::PatchsetBase {
-                        review_id: review.id,
-                        ps_number: old.ps_number,
-                    },
-                );
-            }
             if store
                 .delete_patchset(review.id, old.ps_number)
                 .unwrap_or(false)
@@ -2517,15 +2509,11 @@ pub async fn delete_review(
             .flatten()
             .map(|row| review_stores.ops_lock(row.id));
         let _ops_guard = ops_lock.as_ref().map(|l| l.blocking_lock());
-        let legacy_work_tree = store_primary.then(|| ctx.work_tree().clone());
-        delete_review_with_refs(
-            &store,
-            &bus,
-            ctx.primary(),
-            legacy_work_tree.as_ref(),
-            &review,
-            scope,
-        )
+        // RS-U6 — capture writes only the store once it is ready, so the
+        // RS-U5 interim work-tree dual-delete is no longer passed: a ready
+        // store's review delete never writes the user clone (legacy copies
+        // wait for the explicit `store legacy-refs`, D19).
+        delete_review_with_refs(&store, &bus, ctx.primary(), None, &review, scope)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
