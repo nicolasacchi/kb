@@ -903,6 +903,70 @@ pub fn decide_kind(
     })
 }
 
+// --- retrack classification (RS-U7, README D17/§10 step 4) ---------------------
+
+/// `review retrack`'s dry-run class (README §10 step 4; design-general.md
+/// "retrack --all" table). Computed against a FRESHLY resolved target `T`
+/// (the auto chain, or an explicit `--base`) and the pair a capture against
+/// it would produce — never the review's currently-stored `merge_base`,
+/// which is exactly the stale value retrack exists to correct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetrackClass {
+    /// Nothing would be minted — `decide_kind` over `(current tip, fresh
+    /// merge-base)` against the latest patchset's own pair is unchanged.
+    /// This is the ONLY class every base mode can land in (`track`/`local`
+    /// too): a review already pointed at the right thing.
+    Equivalent,
+    /// The review's CURRENT base is a `pin`, that pin IS an ancestor of
+    /// `T`, and something would mint — the exact review-65 shape (D17):
+    /// a frozen sha that a fast-forward `merge-base(T, tip)` would correct
+    /// with no lost history. The only class `--all --yes` ever applies.
+    StalePin,
+    /// The review's CURRENT base is a `pin` that is NOT an ancestor of
+    /// `T` — hand-chosen, unrelated history. Never suggested for
+    /// `--all --yes`; a human must look.
+    Custom,
+    /// Something would mint, but the CURRENT base isn't a `pin` at all
+    /// (`track`/`local`, already tracking a branch) — the
+    /// equivalent/stale-pin/custom vocabulary is about FROZEN bases
+    /// specifically (design-general.md's own framing); a `track`/`local`
+    /// review that would mint is simply a normal capture, not a retrack
+    /// finding, so it is reported honestly rather than mis-labelled.
+    Unknown,
+}
+
+impl RetrackClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Equivalent => "equivalent",
+            Self::StalePin => "stale-pin",
+            Self::Custom => "custom",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Pure classifier. `current_mode` is the review's base mode BEFORE
+/// retrack (`None` for a legacy verbatim row that isn't even a
+/// recognisable pin). `would_mint` is `decide_kind(..).is_some()` for the
+/// fresh `(tip, merge_base(T, tip))` pair against the latest patchset's
+/// own. `pin_is_ancestor_of_target` is `None` when `current_mode` isn't
+/// `Pin` (never computed — nothing to check ancestry of).
+pub fn classify_retrack(
+    current_mode: Option<BaseMode>,
+    would_mint: bool,
+    pin_is_ancestor_of_target: Option<bool>,
+) -> RetrackClass {
+    if !would_mint {
+        return RetrackClass::Equivalent;
+    }
+    match (current_mode, pin_is_ancestor_of_target) {
+        (Some(BaseMode::Pin), Some(true)) => RetrackClass::StalePin,
+        (Some(BaseMode::Pin), Some(false)) => RetrackClass::Custom,
+        _ => RetrackClass::Unknown,
+    }
+}
+
 // --- stored status + envelope DTOs ----------------------------------------------------
 
 /// `reviews.base_status` JSON (README §5.5).

@@ -46,6 +46,8 @@ pub mod gc;
 pub mod git;
 pub mod key;
 pub mod ladder;
+// RS-U7 — `store legacy-refs` / `store export-legacy` (README §10 step 5, D19).
+pub mod legacy_refs;
 pub mod manifest;
 mod proc;
 pub mod redact;

@@ -443,6 +443,8 @@ pub mod review_jobs;
 pub mod review_legacy;
 pub mod review_map;
 pub mod review_pseudo;
+// RS-U7 — `review retrack` single + bulk (README §10 step 4/§12, D17/D20).
+pub mod review_retrack;
 // RS-U2 — the internal review store's hardened git spawner + credential
 // profiles (`review_store::git::StoreGit`, `review_store::cred`).
 pub mod review_store;
