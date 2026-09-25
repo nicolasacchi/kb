@@ -1247,6 +1247,126 @@ impl GithubClient {
     }
 }
 
+// ── RS-U10b (review sync/status) — begin ──
+
+/// RS-U10b — the PR facts `kb-code review sync` / `review status` compare a
+/// review against: GitHub's own state, target, head and file count. NOT
+/// ts-exported (it rides the sync/status `serde_json` envelopes, whose
+/// shapes are documented in `crate::review_sync`), so adding it changes no
+/// generated binding. `changed_files` is `None` on a LIST answer (GitHub
+/// only computes it on the single-PR endpoint).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PrSyncOut {
+    pub number: u64,
+    pub title: String,
+    /// `open` | `closed` (GitHub's own field; merged PRs are `closed` +
+    /// `merged: true`).
+    pub state: String,
+    pub merged: bool,
+    pub merged_at: Option<String>,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub changed_files: Option<u64>,
+}
+
+/// `GET /repos/{o}/{r}/pulls/{n}` AND each element of the list endpoint,
+/// read for [`PrSyncOut`]. Every field beyond the identity is defaulted so
+/// the one struct serves both endpoints (the list omits `merged` and
+/// `changed_files`; `merged_at` is on both).
+#[derive(Debug, Deserialize)]
+struct GhPullSync {
+    number: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    merged: Option<bool>,
+    #[serde(default)]
+    merged_at: Option<String>,
+    head: GhPullDetailHead,
+    base: GhRef,
+    #[serde(default)]
+    changed_files: Option<u64>,
+}
+
+impl From<GhPullSync> for PrSyncOut {
+    fn from(p: GhPullSync) -> Self {
+        // The list endpoint carries no `merged` flag: `merged_at` set IS
+        // the merge on that shape.
+        let merged = p.merged.unwrap_or(p.merged_at.is_some());
+        Self {
+            number: p.number,
+            title: p.title,
+            state: p.state,
+            merged,
+            merged_at: p.merged_at,
+            head_sha: p.head.sha,
+            head_ref: p.head.r,
+            base_ref: p.base.r,
+            changed_files: p.changed_files,
+        }
+    }
+}
+
+/// How many PRs one `review sync --open` listing reads at most (per state).
+pub const MAX_SYNC_PULLS: usize = 300;
+
+impl GithubClient {
+    /// RS-U10b — `GET {api_base}/repos/{owner}/{repo}/pulls/{n}` as
+    /// [`PrSyncOut`] (incl. `changed_files`, `merged_at`). Same
+    /// degrade/refusal classification as [`Self::get_pull`].
+    pub async fn get_pull_sync(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> ApiResult<PrSyncOut> {
+        let client = self.client()?;
+        let path = format!("/repos/{owner}/{repo}/pulls/{number}");
+        let url = format!("{}{}", self.cfg.api_base.trim_end_matches('/'), path);
+        let resp = self
+            .get(client, &path)
+            .send()
+            .await
+            .map_err(|e| GithubApiError::Unreachable(url, e.to_string()))?;
+        Self::classify_status(&resp)?;
+        let p: GhPullSync = resp
+            .json()
+            .await
+            .map_err(|e| GithubApiError::Parse(e.to_string()))?;
+        Ok(p.into())
+    }
+
+    /// RS-U10b — the PR LIST for `review sync --open`: `state` is `open`
+    /// or `closed` (`closed` is sorted most-recently-updated first, so a
+    /// `--merged-since` window is at the head of the list). Follows
+    /// `Link: rel="next"` up to [`MAX_SYNC_PULLS`]; `truncated` says more
+    /// existed.
+    pub async fn list_pulls_sync(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: &str,
+    ) -> ApiResult<(Vec<PrSyncOut>, bool)> {
+        let client = self.client()?;
+        let state = if state == "closed" { "closed" } else { "open" };
+        let path = if state == "closed" {
+            format!(
+                "/repos/{owner}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100"
+            )
+        } else {
+            format!("/repos/{owner}/{repo}/pulls?state=open&per_page=100")
+        };
+        let (rows, truncated): (Vec<GhPullSync>, bool) =
+            self.fetch_paginated(client, &path, MAX_SYNC_PULLS).await?;
+        Ok((rows.into_iter().map(PrSyncOut::from).collect(), truncated))
+    }
+}
+
+// ── RS-U10b — end ──
+
 #[cfg(test)]
 mod tests {
     use super::*;

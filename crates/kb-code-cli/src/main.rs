@@ -194,6 +194,8 @@ mod store_cmd;
 // RS-U10a — the agent-facing review verbs (find/diff/log/cat/verify) and
 // the JSON contract they share.
 mod review_agent;
+// RS-U10b — `review sync` / `review status`.
+mod review_sync;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -4414,6 +4416,22 @@ enum ReviewCmd {
     /// and the verdict sits on the latest patchset. Exit 3 when any check
     /// fails.
     Verify(review_agent::VerifyArgs),
+    /// `kb-code review sync --repo R {--pr N [--title T] [--base SPEC] |
+    /// --open [--merged-since DATE]} [--dry-run] [--wait[=SECS]]
+    /// [--gh-token-from-cli] [--json]` — RS-U10b: ONE idempotent daemon
+    /// operation per PR (`POST /api/reviews/sync`, a polled job): create
+    /// the review if missing, fetch base + head into the store, snapshot
+    /// only when (tip, merge-base) changed; a merged PR is final. Reports
+    /// `reason: created|head-moved|base-moved|retargeted|unchanged|
+    /// merged-final`. `--open` runs it for every open PR (exit 7 when some
+    /// failed). LOOPBACK-ONLY.
+    Sync(review_sync::SyncArgs),
+    /// `kb-code review status <REF> [--fetch] [--json]` — RS-U10b: has the
+    /// PR head moved past the LATEST patchset tip? base state, file-count
+    /// drift against GitHub, verdict staleness, open findings (`GET
+    /// /api/reviews/{id}/status`). Read-only; `--fetch` (loopback-only)
+    /// fetches into the review store first.
+    Status(review_sync::StatusArgs),
     /// `kb-code review compose ID {--from-file FILE|--stdin} [--json]` —
     /// V70-R: `POST /api/reviews/{id}/compose` (design doc D9 scoped to
     /// v0). LOOPBACK-ONLY. The one-shot authoring call: a `kbc-compose/1`
@@ -6424,6 +6442,8 @@ async fn run(cli: Cli) -> Result<()> {
             ReviewCmd::Log(a) => review_agent::log_cmd(a).await,
             ReviewCmd::Cat(a) => review_agent::cat_cmd(a).await,
             ReviewCmd::Verify(a) => review_agent::verify_cmd(a).await,
+            ReviewCmd::Sync(a) => review_sync::sync_cmd(a).await,
+            ReviewCmd::Status(a) => review_sync::status_cmd(a).await,
             ReviewCmd::Doc {
                 id,
                 ps,
@@ -16829,20 +16849,21 @@ async fn review_start_pr_cmd(
             }
             return Ok(());
         }
-        let terminal = match poll_review_job(&client, daemon, job_id, budget, json).await? {
-            Some(t) => t,
-            None => review_agent::AgentError::new(
-                "job-running",
-                format!(
+        let terminal =
+            match poll_review_job(&client, daemon, job_id, budget, json, "start-pr").await? {
+                Some(t) => t,
+                None => review_agent::AgentError::new(
+                    "job-running",
+                    format!(
                     "start-pr job {job_id} still running after {} s — the daemon is still working",
                     budget.as_secs()
                 ),
-                envelope::EXIT_CONFLICT,
-            )
-            .with_hint("re-run the same start-pr: it attaches to the running job")
-            .with_next(vec![rerun])
-            .emit(json),
-        };
+                    envelope::EXIT_CONFLICT,
+                )
+                .with_hint("re-run the same start-pr: it attaches to the running job")
+                .with_next(vec![rerun])
+                .emit(json),
+            };
         return match classify_start_pr_job(&terminal) {
             StartPrJob::Done(result) => print_start_pr_envelope(&result, json),
             StartPrJob::Failed { error, error_type } => {
@@ -17058,6 +17079,7 @@ async fn poll_review_job(
     job_id: &str,
     budget: Duration,
     json: bool,
+    label: &str,
 ) -> Result<Option<serde_json::Value>> {
     let deadline = std::time::Instant::now() + budget;
     let mut last_stage = String::new();
@@ -17080,7 +17102,7 @@ async fn poll_review_job(
         match classify_start_pr_job(&body) {
             StartPrJob::Running(stage) => {
                 if !json && stage != last_stage {
-                    eprintln!("start-pr: {stage}…");
+                    eprintln!("{label}: {stage}…");
                     last_stage = stage;
                 }
             }
@@ -29372,6 +29394,8 @@ mod tests {
             review_agent::review_diff_request(Some(1), "patch", Some("src"), Some(100)),
             review_agent::review_log_request(Some(1)),
             review_agent::review_cat_request("src/lib.rs", Some(1), "old"),
+            // RS-U10b — `review status`.
+            review_sync::review_status_request(true),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -29468,7 +29492,9 @@ mod tests {
             // V76-B3 — `POST /api/prose/resolve`, same walk.
             .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter())
             // RS-U10a — the review git views + PR lookup, same walk.
-            .chain(kb_code_server::review_views::RS_U10A_ROUTES.iter());
+            .chain(kb_code_server::review_views::RS_U10A_ROUTES.iter())
+            // RS-U10b — `review status`, same walk.
+            .chain(kb_code_server::review_sync::RS_U10B_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
