@@ -133,6 +133,31 @@ pub enum StoreCmd {
         #[arg(long)]
         json: bool,
     },
+    /// RS-U7 (D19) — delete a member clone's `refs/kbc/{pr,review}/*` ONLY
+    /// where the store holds the SAME ref name at the SAME commit. MANUAL
+    /// ONLY; `--dry-run` (the default) reports without writing. Loopback-only.
+    LegacyRefs {
+        #[arg(long)]
+        repo: String,
+        /// Apply the delete. There is no prompt.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// RS-U7 (D19) — the reverse of `legacy-refs`: write the store's
+    /// `refs/kbc/{pr,review}/*` for this repo's own reviews back into the
+    /// clone, CREATE-ONLY (never overwrites an existing ref). Loopback-only.
+    ExportLegacy {
+        #[arg(long)]
+        repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn enc(repo: &str) -> String {
@@ -655,6 +680,78 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             }
             if errors > 0 {
                 std::process::exit(envelope::EXIT_PARTIAL);
+            }
+        }
+        StoreCmd::LegacyRefs {
+            repo,
+            yes,
+            daemon,
+            json,
+        } => {
+            let (st, body) = post(
+                &daemon,
+                &format!("/api/repos/{}/store/legacy-refs", enc(&repo)),
+                &serde_json::json!({ "dry_run": !yes }),
+                Duration::from_secs(60),
+            )
+            .await?;
+            if !st.is_success() {
+                fail(json, st, &body);
+            }
+            if json {
+                envelope::print_ok("kbc-store-legacy-refs/1", &body, vec![], false, None);
+            } else {
+                println!(
+                    "{repo}: {} total, {} deletable, {} kept{}",
+                    s(&body["total"]),
+                    s(&body["deletable"]),
+                    s(&body["kept"]),
+                    if yes {
+                        format!(" — deleted {}", s(&body["deleted"]))
+                    } else {
+                        " (dry run)".to_string()
+                    }
+                );
+                for r in body["refs"].as_array().into_iter().flatten() {
+                    let mark = if r["deletable"] == true {
+                        "DEL"
+                    } else {
+                        "keep"
+                    };
+                    println!(
+                        "  [{mark}] {} {}{}",
+                        s(&r["kind"]),
+                        s(&r["ref"]),
+                        r["reason"]
+                            .as_str()
+                            .map(|x| format!(" ({x})"))
+                            .unwrap_or_default(),
+                    );
+                }
+            }
+        }
+        StoreCmd::ExportLegacy { repo, daemon, json } => {
+            let (st, body) = post(
+                &daemon,
+                &format!("/api/repos/{}/store/export-legacy", enc(&repo)),
+                &Value::Null,
+                Duration::from_secs(60),
+            )
+            .await?;
+            if !st.is_success() {
+                fail(json, st, &body);
+            }
+            if json {
+                envelope::print_ok("kbc-store-export-legacy/1", &body, vec![], false, None);
+            } else {
+                println!(
+                    "{repo}: {} candidate(s), {} created",
+                    s(&body["candidates"]),
+                    s(&body["created"]),
+                );
+                for r in body["refs"].as_array().into_iter().flatten() {
+                    println!("  + {}", s(r));
+                }
             }
         }
     }

@@ -484,6 +484,37 @@ pub fn merge_base_sha(
     Ok(sha)
 }
 
+/// RS-U7 — `git merge-base --is-ancestor <a> <b>`: does `a` (a candidate
+/// pin) sit in `b`'s (the retrack target's) history? Exit 0/1 are the
+/// well-defined true/false answer; anything else (a bad object, an
+/// unrelated history with no shared root at all) is a genuine error, never
+/// silently folded into `false` — [`review_base::classify_retrack`] (RS-U7)
+/// needs the three-way distinction to tell `custom` (unrelated pin) apart
+/// from "could not even ask".
+pub fn is_ancestor(repo_root: &dyn GitRoot, a: &str, b: &str) -> Result<bool, ReviewGitError> {
+    if !is_full_sha(a) {
+        return Err(ReviewGitError::BadSha(a.to_string()));
+    }
+    if !is_full_sha(b) {
+        return Err(ReviewGitError::BadSha(b.to_string()));
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root.git_path())
+        .envs(crate::git::roots::alternates_env(repo_root))
+        .args(["merge-base", "--is-ancestor", a, b])
+        .output()
+        .map_err(ReviewGitError::Spawn)?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(ReviewGitError::GitFailed {
+            status: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }),
+    }
+}
+
 /// `git update-ref refs/kbc/review/<id>/ps<n> <sha>`.
 ///
 /// `review_id` / `ps_number` are daemon integers (Display → digits only);
@@ -739,6 +770,97 @@ pub fn delete_kbc_ref(repo_root: &dyn GitRoot, parsed: KbcRef) -> Result<(), Rev
             delete_ref_by_name(repo_root, &parsed.as_refname())
         }
     }
+}
+
+/// RS-U7 — `git update-ref --stdin` in a WORK TREE (README D19): the ONE
+/// sanctioned user-clone ref WRITE besides `checkout::switch_repo`
+/// (`router.rs:163`'s own doc names that the sole prior exception — this
+/// is the second). Every `delete` line is old-value-guarded with the sha
+/// the caller observed, so the WHOLE transaction refuses atomically if a
+/// concurrent `git fetch`/checkout in the same clone moved any of them —
+/// never a partial, silently-wrong delete. `deletes` entries are
+/// `(refname, old_sha)`; both were already produced by
+/// [`list_kbc_refs`]/[`parse_kbc_ref`] (a reconstructed name, a sha read
+/// straight off `for-each-ref`), never caller text.
+pub fn delete_refs_transactional(
+    repo_root: &dyn GitRoot,
+    deletes: &[(String, String)],
+) -> Result<(), ReviewGitError> {
+    if deletes.is_empty() {
+        return Ok(());
+    }
+    let mut tx = String::new();
+    for (name, old) in deletes {
+        if !is_full_sha(old) {
+            return Err(ReviewGitError::BadSha(old.clone()));
+        }
+        tx.push_str(&format!("delete {name} {old}\n"));
+    }
+    run_git_stdin(repo_root, &["update-ref", "--stdin"], tx.into_bytes())?;
+    Ok(())
+}
+
+/// RS-U7 — `git update-ref <ref> <new> ''` (README §10 step 5,
+/// `export-legacy`): the explicit empty old-value asserts the ref does
+/// NOT currently exist, so this is create-only by construction — never an
+/// overwrite, even racily (a ref that appears between the caller's own
+/// pre-scan and this call just fails this one line, exactly like an
+/// already-existing one). Each candidate is applied independently (never
+/// one atomic transaction): every ref is a standalone restoration, so one
+/// already-existing name must never sink the rest of the batch. Returns
+/// the refnames actually created.
+pub fn create_only_refs(repo_root: &dyn GitRoot, candidates: &[(String, String)]) -> Vec<String> {
+    let mut created = Vec::with_capacity(candidates.len());
+    for (name, sha) in candidates {
+        if !is_full_sha(sha) {
+            continue;
+        }
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root.git_path())
+            .envs(crate::git::roots::alternates_env(repo_root))
+            .args(["update-ref", name, sha, ""])
+            .output();
+        if matches!(output, Ok(o) if o.status.success()) {
+            created.push(name.clone());
+        }
+    }
+    created
+}
+
+/// `run_git` with an stdin payload (`update-ref --stdin`'s transaction
+/// script) — the one shape [`run_git`] itself doesn't support.
+fn run_git_stdin(
+    repo_root: &dyn GitRoot,
+    args: &[&str],
+    stdin: Vec<u8>,
+) -> Result<Vec<u8>, ReviewGitError> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo_root.git_path())
+        .envs(crate::git::roots::alternates_env(repo_root))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(ReviewGitError::Spawn)?;
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(&stdin)
+        .map_err(ReviewGitError::Spawn)?;
+    let output = child.wait_with_output().map_err(ReviewGitError::Spawn)?;
+    if !output.status.success() {
+        return Err(ReviewGitError::GitFailed {
+            status: output.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(output.stdout)
 }
 
 /// `git for-each-ref` over the two daemon-owned prefixes. Prefixes are
@@ -1142,6 +1264,40 @@ pub(crate) fn verdict_block(
         }),
         stale,
     )
+}
+
+/// RS-U7 (D20) — a SECOND, additive verdict signal alongside
+/// [`verdict_block`]'s `verdict_stale`: `true` iff a verdict is set, a
+/// later patchset exists (`verdict_ps < latest_ps`, [`verdict_block`]'s own
+/// staleness condition), AND that later patchset carries the SAME tip —
+/// i.e. only the BASE moved (a `retrack`/`base-moved` capture), the diff's
+/// CONTENT didn't. `verdict_stale`'s own definition is untouched (this
+/// function changes no existing behaviour; a caller that ignores it sees
+/// byte-identical output) — design-general.md's "Verdicts" section
+/// documents the same fact ("a later patchset with the same tip sets
+/// `verdict_scope_changed=true` instead [of stale]"), but RS-U6 shipped
+/// only the tip-agnostic `verdict_stale`, so this is surfaced as a NEW
+/// field rather than a change to `verdict_block`'s tuple, keeping every
+/// existing call site (list rows, distill, sweep, inbox) untouched.
+/// `verdict_tip` / `latest_tip` are the two patchsets' OWN `tip_sha` —
+/// callers that already loaded the patchset list (`get_review`, retrack's
+/// own response) pass them through with no extra query.
+pub(crate) fn verdict_scope_changed(
+    review: &ReviewRow,
+    latest_ps: Option<i64>,
+    verdict_tip: Option<&str>,
+    latest_tip: Option<&str>,
+) -> bool {
+    let (Some(vp), Some(lp)) = (review.verdict_ps, latest_ps) else {
+        return false;
+    };
+    if vp >= lp {
+        return false;
+    }
+    match (verdict_tip, latest_tip) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// PRR-R4 — the R2-leftover additive fields every review READ surface
@@ -3092,6 +3248,22 @@ pub async fn get_review(
         .and_then(|p| p.get("ps_number"))
         .and_then(|v| v.as_i64());
     let (verdict, verdict_stale) = verdict_block(&review, latest_ps);
+    // RS-U7 (D20) — additive; see `verdict_scope_changed`'s own doc. Both
+    // tips come from the SAME `patchsets` vec built above, so this costs no
+    // extra query.
+    let verdict_tip = review.verdict_ps.and_then(|vp| {
+        patchsets
+            .iter()
+            .find(|p| p.get("ps_number").and_then(|v| v.as_i64()) == Some(vp))
+            .and_then(|p| p.get("tip_sha_full"))
+            .and_then(|v| v.as_str())
+    });
+    let latest_tip = patchsets
+        .last()
+        .and_then(|p| p.get("tip_sha_full"))
+        .and_then(|v| v.as_str());
+    let verdict_scope_changed_val =
+        verdict_scope_changed(&review, latest_ps, verdict_tip, latest_tip);
     // PRR-R4 (R2 leftover) — see `pr_binding_and_report_fields`'s own doc.
     let (binding, report) = state
         .store
@@ -3115,6 +3287,7 @@ pub async fn get_review(
         "patchsets": patchsets,
         "verdict": verdict,
         "verdict_stale": verdict_stale,
+        "verdict_scope_changed": verdict_scope_changed_val,
     });
     merge_pr_binding_and_report_fields(&mut body, &binding, &report);
     attach_live_pr_meta_reason(&mut body, state.github.has_credentials());
