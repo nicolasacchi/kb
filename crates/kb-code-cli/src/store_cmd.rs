@@ -529,7 +529,22 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             daemon,
             json,
         } => {
-            let apply = yes && !dry_run;
+            // Nit: `--yes --dry-run` is a contradiction the operator must
+            // resolve, never a silent "dry-run wins" — a usage error, not
+            // a daemon round trip.
+            if yes && dry_run {
+                if json {
+                    envelope::print_err(
+                        "usage",
+                        "--yes and --dry-run are contradictory",
+                        Some("pass exactly one"),
+                    );
+                } else {
+                    eprintln!("error: --yes and --dry-run are contradictory; pass exactly one");
+                }
+                std::process::exit(envelope::EXIT_USAGE);
+            }
+            let apply = yes;
             let (st, body) = post(
                 &daemon,
                 &format!("/api/repos/{}/store/gc", enc(&repo)),
@@ -540,12 +555,13 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             if !st.is_success() {
                 fail(json, st, &body);
             }
+            let report = &body["report"];
+            let partial = report["partial"] == true;
             if json {
-                envelope::print_ok("kbc-store-gc/1", &body, vec![], false, None);
+                envelope::print_ok("kbc-store-gc/1", &body, vec![], partial, None);
             } else {
-                let report = &body["report"];
                 println!(
-                    "{}: gc {} — {} candidate(s){}",
+                    "{}: gc {} — {} candidate(s){}{}",
                     repo,
                     s(&report["reason"]),
                     s(&report["candidates"]),
@@ -553,8 +569,19 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                         ", applied"
                     } else {
                         ""
+                    },
+                    if partial {
+                        " (partial — see member_problems)"
+                    } else {
+                        ""
                     }
                 );
+                if let Some(detail) = report["detail"].as_str() {
+                    println!("  {detail}");
+                }
+                for p in report["member_problems"].as_array().into_iter().flatten() {
+                    println!("  member problem: {}", s(p));
+                }
             }
         }
         StoreCmd::Maintain {
@@ -600,15 +627,23 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                 }
                 if let Some(gc) = report.get("gc").filter(|v| !v.is_null()) {
                     println!(
-                        "  gc: {} — {} candidate(s){}",
+                        "  gc: {} — {} candidate(s){}{}",
                         s(&gc["reason"]),
                         s(&gc["candidates"]),
                         if gc["applied"] == true {
                             ", applied"
                         } else {
                             ""
+                        },
+                        if gc["partial"] == true {
+                            " (partial)"
+                        } else {
+                            ""
                         }
                     );
+                    if let Some(detail) = gc["detail"].as_str() {
+                        println!("    {detail}");
+                    }
                 }
                 let swept = report["swept_tmp_pack"].as_u64().unwrap_or(0);
                 if swept > 0 {

@@ -237,6 +237,45 @@ fn a_missing_or_malformed_last_maint_reads_as_never_run() {
     assert_eq!(LastMaint::from_state_json(Some(&sj)), LastMaint::default());
 }
 
+/// Should-fix review finding: a failed task must not be retried every
+/// single scheduler tick.
+#[test]
+fn a_failed_task_backs_off_and_a_success_clears_the_backoff() {
+    let mut last = LastMaint::default();
+    last.set(MaintTask::Daily, 1000); // a prior success
+                                      // Now due again (a full day later) — but it FAILS.
+    let t = 1000 + DAY_SECS;
+    assert!(due_tasks(t, last).contains(&MaintTask::Daily));
+    last.record_failure(MaintTask::Daily, t);
+    // Immediately after the failure, NOT due — even though the period
+    // condition is still satisfied.
+    assert!(!due_tasks(t + 1, last).contains(&MaintTask::Daily));
+    assert!(!due_tasks(t + TASK_RETRY_BACKOFF_SECS - 1, last).contains(&MaintTask::Daily));
+    // Due again once the backoff elapses.
+    assert!(due_tasks(t + TASK_RETRY_BACKOFF_SECS, last).contains(&MaintTask::Daily));
+    // A SUCCESS clears the backoff for that cadence.
+    last.set(MaintTask::Daily, t + TASK_RETRY_BACKOFF_SECS);
+    assert_eq!(last.daily_retry_after, None);
+}
+
+// ── B3: monthly cruft expiration gating (pure) ──────────────────────────
+
+#[test]
+fn cruft_never_expires_with_no_recorded_gc_apply() {
+    let sj = serde_json::json!({});
+    assert!(!cruft_allow_expire(&sj, 10_000_000));
+}
+
+#[test]
+fn cruft_never_expires_within_the_cooldown_of_the_last_apply() {
+    let sj = serde_json::json!({ "last_gc_apply": { "at": 1000 } });
+    assert!(!cruft_allow_expire(
+        &sj,
+        1000 + CRUFT_EXPIRE_COOLDOWN_SECS - 1
+    ));
+    assert!(cruft_allow_expire(&sj, 1000 + CRUFT_EXPIRE_COOLDOWN_SECS));
+}
+
 // ── restore guard (filesystem only) ─────────────────────────────────────
 
 #[test]
@@ -255,7 +294,7 @@ fn an_epoch_that_only_ever_increases_never_flags() {
 }
 
 #[test]
-fn an_epoch_regression_flags_exactly_once_until_acknowledged() {
+fn an_epoch_regression_flags_exactly_once_and_acknowledgement_is_per_store() {
     let tmp = tempfile::tempdir().unwrap();
     let p = restore_guard::path_for(tmp.path());
     restore_guard::observe_boot_epoch(&p, Some(45), 100);
@@ -273,13 +312,56 @@ fn an_epoch_regression_flags_exactly_once_until_acknowledged() {
     assert!(s3.flagged);
     assert!(!s3.just_flagged);
 
-    let s4 = restore_guard::acknowledge(&p, 400).unwrap();
-    assert!(!s4.flagged);
+    // Acknowledging store "r" (review finding B2, Should-fix: PER STORE)
+    // never clears the GLOBAL flag and never unblocks a different store.
+    let s4 = restore_guard::acknowledge(&p, "r", 400).unwrap();
+    assert!(s4.flagged, "the flag itself is never cleared by an ack");
     assert_eq!(s4.cleared_at, Some(400));
+    assert!(!s4.blocks("r"));
+    assert!(s4.blocks("s"), "store s was never acknowledged");
+
     // Acknowledging a not-flagged guard is a harmless no-op.
-    let s5 = restore_guard::acknowledge(&p, 500).unwrap();
-    assert!(!s5.flagged);
-    assert_eq!(s5.cleared_at, Some(400), "unchanged: nothing to clear");
+    let other_tmp = tempfile::tempdir().unwrap();
+    let other_p = restore_guard::path_for(other_tmp.path());
+    let never_flagged = restore_guard::acknowledge(&other_p, "r", 1).unwrap();
+    assert!(!never_flagged.flagged);
+    assert_eq!(never_flagged.cleared_at, None);
+}
+
+/// RS-U9 review finding B2: a NEW flagging incident (a second, different
+/// regression) must not let a PREVIOUS incident's acknowledgements carry
+/// over — that would silently unblock a store nobody has looked at for
+/// THIS incident.
+#[test]
+fn a_new_flagging_incident_clears_previous_acknowledgements() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::observe_boot_epoch(&p, Some(45), 100);
+    restore_guard::observe_boot_epoch(&p, Some(40), 200); // incident 1
+    restore_guard::acknowledge(&p, "r", 300).unwrap();
+    assert!(!restore_guard::read(&p).blocks("r"));
+
+    // A SECOND, later regression (e.g. epoch 40 -> a still-lower 35, or in
+    // practice a fresh `flag_manual` incident) must not inherit "r"'s old
+    // acknowledgement.
+    let s = restore_guard::flag_manual(&p, "a second, unrelated incident", 400).unwrap();
+    assert!(s.just_flagged);
+    assert!(
+        restore_guard::read(&p).blocks("r"),
+        "the previous incident's acknowledgement must not carry over"
+    );
+}
+
+/// RS-U9 review finding B2: a corrupt (present but unparseable) sentinel
+/// must read as FLAGGED, never silently unflagged.
+#[test]
+fn a_corrupt_sentinel_reads_as_flagged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"{ not valid json").unwrap();
+    let s = restore_guard::read(&p);
+    assert!(s.flagged, "a corrupt sentinel must fail CLOSED: {s:?}");
 }
 
 #[test]
@@ -349,7 +431,8 @@ fn maintenance_tasks_run_and_leave_the_store_valid() {
 
     run_daily(git_spawner, dir).expect("daily tasks");
     run_weekly(git_spawner, dir).expect("weekly tasks");
-    run_monthly(git_spawner, dir).expect("monthly tasks");
+    run_monthly(git_spawner, dir, true).expect("monthly tasks (expiring)");
+    run_monthly(git_spawner, dir, false).expect("monthly tasks (never-expire)");
 
     // The store is still a valid, connected object graph, and the ref this
     // test cares about survived every task untouched.
@@ -358,7 +441,7 @@ fn maintenance_tasks_run_and_leave_the_store_valid() {
 }
 
 #[test]
-fn run_pass_for_store_persists_last_maint_and_last_gc() {
+fn run_pass_for_store_persists_last_maint_and_last_gc_dry_run() {
     let e = env();
     review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
     let row = ready_row(&e);
@@ -367,7 +450,6 @@ fn run_pass_for_store_persists_last_maint_and_last_gc() {
         &e.store,
         &row,
         &[MaintTask::Daily, MaintTask::Weekly, MaintTask::Monthly],
-        true,
         12_345,
     );
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -377,8 +459,10 @@ fn run_pass_for_store_persists_last_maint_and_last_gc() {
         "{report:?}"
     );
     assert!(report.invariant.is_some());
-    assert!(report.gc.is_some());
-    assert!(!report.restore_guard_flagged);
+    let gc = report.gc.as_ref().expect("a gc report");
+    assert!(!gc.applied, "the scheduler must NEVER apply: {gc:?}");
+    assert_eq!(gc.reason, "dry-run");
+    assert!(!report.restore_guard_blocks_apply);
 
     let refreshed = e
         .store
@@ -390,7 +474,11 @@ fn run_pass_for_store_persists_last_maint_and_last_gc() {
     assert_eq!(sj["last_maint"]["daily"], 12345);
     assert_eq!(sj["last_maint"]["weekly"], 12345);
     assert_eq!(sj["last_maint"]["monthly"], 12345);
-    assert!(sj["last_gc"]["at"].is_i64());
+    assert!(sj["last_gc_dry_run"]["at"].is_i64());
+    assert!(
+        sj.get("last_gc_apply").is_none(),
+        "a dry-run pass must never write last_gc_apply: {sj}"
+    );
     // state stays `ready` — the merge must never change it.
     assert_eq!(refreshed.state, "ready");
 }
@@ -398,7 +486,7 @@ fn run_pass_for_store_persists_last_maint_and_last_gc() {
 // ── restore guard blocks scheduled GC apply, not the dry-run scan ──────
 
 #[test]
-fn scheduled_gc_stays_dry_run_while_the_restore_guard_is_flagged() {
+fn scheduled_gc_never_applies_while_the_restore_guard_is_flagged_and_yes_acks_only_this_store() {
     let e = env();
     let r1 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
     let row = ready_row(&e);
@@ -413,21 +501,39 @@ fn scheduled_gc_stays_dry_run_while_the_restore_guard_is_flagged() {
     let guard_path = &e.rs.settings().restore_guard_path;
     restore_guard::flag_manual(guard_path, "test", 1).unwrap();
 
-    let report = run_pass_for_store(&e.rs, &e.store, &row, &[MaintTask::Daily], true, 2);
+    // The scheduler's own pass: candidates are still SCANNED and reported,
+    // but the reason is a plain "dry-run" — the operator ruling is that
+    // the scheduler NEVER applies at all, flagged or not.
+    let report = run_pass_for_store(&e.rs, &e.store, &row, &[MaintTask::Daily], 2);
     let gc = report.gc.expect("a gc report");
     assert!(!gc.applied, "{gc:?}");
-    assert_eq!(gc.reason, "restore-guard");
+    assert_eq!(gc.reason, "dry-run");
     assert_eq!(gc.candidates, 1, "the orphaned ref was still SCANNED");
+    assert!(report.restore_guard_blocks_apply);
     // Nothing was actually deleted.
     assert!(store_refs(dir).contains(&seed::patchset_ref(r1, 1)));
 
+    // A dry-run `run_gc_now` (no --yes) is ALSO blocked-but-reported, same
+    // shape as the scheduler.
+    let dry = run_gc_now(&e.rs, &e.store, &row, false, false, 3).unwrap();
+    assert!(!dry.applied);
+    assert_eq!(dry.reason, "dry-run");
+
     // An explicit operator `--yes` (run_gc_now with bypass_guard=true)
-    // both applies AND clears the flag.
-    let gc2 = run_gc_now(&e.rs, &e.store, &row, true, true, 3).unwrap();
+    // acknowledges THIS store and applies.
+    let gc2 = run_gc_now(&e.rs, &e.store, &row, true, true, 4).unwrap();
     assert!(gc2.applied, "{gc2:?}");
     assert_eq!(gc2.reason, "applied");
     assert!(!store_refs(dir).contains(&seed::patchset_ref(r1, 1)));
-    assert!(!restore_guard::read(guard_path).flagged, "cleared by --yes");
+    let after = restore_guard::read(guard_path);
+    assert!(
+        after.flagged,
+        "the GLOBAL flag is never cleared by a per-store ack"
+    );
+    assert!(
+        !after.blocks(&row.uuid),
+        "but THIS store is now acknowledged"
+    );
 }
 
 #[test]
@@ -443,6 +549,59 @@ fn run_gc_now_default_is_a_dry_run() {
     assert_eq!(report.reason, "dry-run");
     assert_eq!(report.candidates, 1);
     assert!(store_refs(dir).contains(&seed::patchset_ref(r1, 1)));
+}
+
+/// RS-U9 review finding B2's core new mechanism: a delete candidate whose
+/// refname encodes a review id ABOVE this volume's high-water mark can
+/// only mean the id was minted by a database this volume has since been
+/// rolled BEHIND (a same-schema-epoch restore, invisible to the sentinel).
+/// This check is UNCONDITIONAL — `bypass_guard: true` (an operator's
+/// `--yes`) does not override it.
+#[test]
+fn an_impossible_review_id_refuses_the_whole_apply_even_with_yes() {
+    let e = env();
+    review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip); // review id 1
+    let row = ready_row(&e);
+    let dir = Path::new(&row.git_dir);
+
+    let high_water = e.store.reviews_high_water_id().unwrap();
+    assert_eq!(
+        high_water, 1,
+        "fixture sanity: exactly one review minted so far"
+    );
+    let impossible_ref = seed::patchset_ref(high_water + 1000, 1);
+    git(dir, &["update-ref", &impossible_ref, &e.fx.feat_tip]);
+
+    // bypass_guard=true (an operator's --yes): the SENTINEL guard is not
+    // even flagged here, so nothing blocks on that axis — this isolates
+    // the DB-truth check.
+    let report = run_gc_now(&e.rs, &e.store, &row, true, true, 2).unwrap();
+    assert!(!report.applied, "{report:?}");
+    assert_eq!(report.reason, "restore-suspected");
+    assert!(report
+        .detail
+        .as_deref()
+        .is_some_and(|d| d.contains(&(high_water + 1000).to_string())));
+    // Nothing was deleted — not even the refs that WOULD have been
+    // legitimate candidates alongside the impossible one.
+    assert!(store_refs(dir).contains(&impossible_ref));
+}
+
+/// RS-U9 review finding B2: acknowledging store R's restore suspicion via
+/// `gc --repo R --yes` must never silently clear it for a DIFFERENT store
+/// S nobody has looked at yet.
+#[test]
+fn an_acknowledgement_for_one_store_never_unblocks_a_different_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::flag_manual(&p, "test", 1).unwrap();
+    restore_guard::acknowledge(&p, "store-r-uuid", 2).unwrap();
+    let state = restore_guard::read(&p);
+    assert!(!state.blocks("store-r-uuid"));
+    assert!(
+        state.blocks("store-s-uuid"),
+        "a DIFFERENT store stays blocked"
+    );
 }
 
 // ── backup bundles ──────────────────────────────────────────────────────
@@ -474,6 +633,45 @@ fn bundle_contains_exactly_the_kbc_refs_and_excludes_nothing_it_should_not() {
     assert_eq!(head_refs, vec![seed::patchset_ref(r1, 1)], "{heads:?}");
     // The base ref is never a head of the bundle (it is the EXCLUSION).
     assert!(!heads.contains("refs/remotes/base/main"));
+    // Should-fix: the refs manifest carries every ref name even when the
+    // bundle itself IS written.
+    let manifest = PathBuf::from(format!("{}.refs", dest.display()));
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    assert!(text.contains(&seed::patchset_ref(r1, 1)), "{text}");
+}
+
+/// Should-fix review finding: "nothing to bundle" (every kbc ref already
+/// reachable from `refs/remotes/base/*`) is a recorded no-op, not a hard
+/// error — and the ref NAME survives in the manifest either way.
+#[test]
+fn a_bundle_fully_reachable_from_base_is_a_recorded_no_op_not_an_error() {
+    let e = env();
+    // tip == base: the patchset ref names EXACTLY the commit base/main
+    // will point at, so there is nothing new for the bundle to carry.
+    let r1 = review_with_patchset(&e, &e.fx.main_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let dir = Path::new(&row.git_dir);
+    git(
+        dir,
+        &["update-ref", "refs/remotes/base/main", &e.fx.main_tip],
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("out.bundle");
+    let outcome = write_bundle(e.rs.git().unwrap(), dir, &dest).unwrap();
+    assert_eq!(
+        outcome,
+        BundleOutcome::Skipped {
+            reason: "fully-reachable-from-base"
+        }
+    );
+    assert!(
+        !dest.exists(),
+        "git never wrote a genuinely empty bundle file"
+    );
+    let manifest = PathBuf::from(format!("{}.refs", dest.display()));
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    assert!(text.contains(&seed::patchset_ref(r1, 1)), "{text}");
 }
 
 #[test]
@@ -575,6 +773,20 @@ fn backup_all_ready_stores_is_a_quiet_no_op_before_v0045_lands() {
     assert!(report.stores.is_empty());
 }
 
+/// Should-fix review finding: NO git I/O on the boot path — `Store::open`
+/// only ever WRITES this marker (filesystem only); the actual bundle pass
+/// runs later, off `spawn_boot_bundle_backup`.
+#[test]
+fn mark_boot_backup_pending_writes_a_readable_marker() {
+    let tmp = tempfile::tempdir().unwrap();
+    mark_boot_backup_pending(tmp.path(), "gated-epoch-snapshot").unwrap();
+    let marker = tmp.path().join(BOOT_BACKUP_PENDING_FILE);
+    assert_eq!(
+        std::fs::read_to_string(marker).unwrap(),
+        "gated-epoch-snapshot"
+    );
+}
+
 // ── repack after a multi-member seed (RS-U3's follow-up) ────────────────
 
 #[test]
@@ -654,6 +866,121 @@ fn a_multi_member_seed_leaves_the_store_at_one_pack() {
     let row = store.store_for_repo_name("widgets-01").unwrap().unwrap();
     let stats = seed::store_stats(Path::new(&row.git_dir));
     assert_eq!(stats.packs, 1, "{stats:?}");
+}
+
+/// RS-U9 review finding B1 (data-loss blocker): `gc_pass`'s membership
+/// MUST be DB truth (`Store::store_members`), never `ReviewStores::
+/// members_of`'s config-filtered list — a member whose clone/config this
+/// PROCESS currently cannot resolve is still a live member in the DB, and
+/// its `refs/remotes/work-<id>/*` must survive a GC pass untouched, with
+/// the pass reporting itself `partial` rather than silently "complete".
+#[test]
+fn a_member_unresolvable_this_process_keeps_its_refs_and_reports_partial() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("state");
+    let one = tmp.path().join("work/widgets-01");
+    let two = tmp.path().join("work/widgets-02");
+    std::fs::create_dir_all(&one).unwrap();
+    git(&one, &["init", "-q", "-b", "main"]);
+    commit(&one, "a.txt", "a");
+    git(
+        &one,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-local",
+            one.to_str().unwrap(),
+            two.to_str().unwrap(),
+        ],
+    );
+    git(
+        &two,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    commit(&two, "b.txt", "b");
+
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(&home.join("index.db")).unwrap();
+    let repos = vec![
+        RepoEntry {
+            name: "widgets-01".into(),
+            path: one.clone(),
+        },
+        RepoEntry {
+            name: "widgets-02".into(),
+            path: two.clone(),
+        },
+    ];
+    let mut ids = HashMap::new();
+    for r in &repos {
+        ids.insert(
+            r.name.clone(),
+            store
+                .upsert_repo(&r.name, &r.path.to_string_lossy())
+                .unwrap(),
+        );
+    }
+    let id_two = ids["widgets-02"];
+    let rs = ReviewStores::new(&ReviewSection::default(), &home, &repos, &ids);
+    let sid = member_id(&rs.register_repo(&store, "widgets-02", None));
+    member_id(&rs.register_repo(&store, "widgets-01", None));
+    rs.seed(&store, sid, false).unwrap();
+    let row = store.store_for_repo_name("widgets-01").unwrap().unwrap();
+    let dir = Path::new(&row.git_dir);
+    let work_two_prefix = format!("refs/remotes/work-{id_two}/");
+    assert!(
+        store_refs(dir)
+            .iter()
+            .any(|r| r.starts_with(&work_two_prefix)),
+        "fixture sanity: widgets-02 must have a work ref before the test begins"
+    );
+
+    // Simulate widgets-02 becoming unresolvable THIS PROCESS ONLY (its
+    // clone path moved, or it left [[repos]]) — a SECOND ReviewStores over
+    // the SAME (still fully DB-registered) store, with a `repos` list that
+    // omits it. DB membership (`repo_stores`) is untouched.
+    let repos_missing_two = vec![RepoEntry {
+        name: "widgets-01".into(),
+        path: one.clone(),
+    }];
+    let rs_degraded = ReviewStores::new(&ReviewSection::default(), &home, &repos_missing_two, &ids);
+
+    let report = run_pass_for_store(&rs_degraded, &store, &row, &[MaintTask::Daily], 100);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let gc = report.gc.expect("a gc report");
+    assert!(gc.partial, "must self-report partial: {gc:?}");
+    assert!(
+        !gc.member_problems.is_empty(),
+        "must name the unresolvable member: {gc:?}"
+    );
+    // The actual data-loss check: widgets-02's work ref is NOT a delete
+    // candidate (it would show up in `report` as orphaned/deleted, and
+    // it is still on disk either way since the scheduler never applies —
+    // but the classification itself, exercised via `run_gc_now`, must
+    // never orphan it).
+    let gc_now = run_gc_now(&rs_degraded, &store, &row, false, false, 101).unwrap();
+    assert!(gc_now.partial);
+    assert_eq!(
+        gc_now.candidates, 0,
+        "widgets-02's work ref must be KEPT (DB truth), not classified as a candidate: {gc_now:?}"
+    );
+    assert!(store_refs(dir)
+        .iter()
+        .any(|r| r.starts_with(&work_two_prefix)));
 }
 
 #[test]
