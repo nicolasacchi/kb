@@ -929,7 +929,13 @@ fn a_present_base_tip_gets_its_base_ref_recreated() {
             1,
         )
         .unwrap();
-    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    // widgets-01 alone carries TWO forge remotes (`origin` + `mine`), so it
+    // cannot resolve on its own; register widgets-02 (a single remote)
+    // FIRST to mint the store unambiguously, then widgets-01 joins by
+    // matching membership (README §5.1 "Joining") — same order
+    // `missing_tips_mark_reviews_while_the_store_goes_ready` uses.
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
     let rep = e.rs.seed(&e.store, sid, false).unwrap();
     assert!(rep.objects_missing.is_empty(), "{:?}", rep.objects_missing);
     let refs = store_refs(Path::new(&row_for(&e, "widgets-01").git_dir));
@@ -1017,8 +1023,12 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
     let two_tip = git(&e.fx.two, &["rev-parse", "only-in-two"]);
     let r2 = review_in(&e, "widgets-02", &e.fx.two, &two_tip, &e.fx.main_tip);
 
-    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
-    member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    // widgets-01 alone carries TWO forge remotes and cannot resolve on its
+    // own; register widgets-02 (a single remote) FIRST to mint the store
+    // unambiguously, then widgets-01 joins by matching membership (README
+    // §5.1 "Joining").
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
     let rep = e.rs.seed(&e.store, sid, false).unwrap();
     assert!(rep.objects_missing.is_empty(), "{:?}", rep.objects_missing);
     let row = row_for(&e, "widgets-01");
@@ -1071,7 +1081,12 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
 #[test]
 fn delete_review_with_refs_on_a_ready_store_removes_store_refs_never_the_clone() {
     let e = env();
-    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    // widgets-01 alone carries TWO forge remotes and cannot resolve on its
+    // own; register widgets-02 (a single remote) FIRST to mint the store
+    // unambiguously, then widgets-01 joins by matching membership (README
+    // §5.1 "Joining").
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
     let rep = e.rs.seed(&e.store, sid, false).unwrap();
     assert!(rep.objects_missing.is_empty(), "{:?}", rep.objects_missing);
 
