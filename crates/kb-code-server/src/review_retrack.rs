@@ -272,7 +272,6 @@ fn retrack_sync(
         // which is for legacy auto-upgrades, not a deliberate retrack).
         policy_override: Some(policy.clone()),
         api_warnings,
-        ..Recapture::default()
     };
     let r = ctx.recapture(review, &rc)?;
     warnings.extend(r.warnings.clone());
