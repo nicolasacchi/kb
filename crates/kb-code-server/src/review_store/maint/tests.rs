@@ -155,6 +155,20 @@ fn store_refs(dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// `git fsck --no-dangling`, tolerant of the store's OWN deliberate HEAD
+/// placeholder (`write_store_config` in `seed.rs` points HEAD at
+/// `refs/kbc/none`, which resolves nowhere by design — a store has no
+/// natural "current branch"). Without `-c fsck.badHeadTarget=ignore`,
+/// fsck reports that as `HEAD: badHeadTarget: …` and exits non-zero even
+/// though the object graph itself is perfectly sound — this asserts the
+/// object graph, not the placeholder.
+fn fsck(dir: &Path) {
+    git(
+        dir,
+        &["-c", "fsck.badHeadTarget=ignore", "fsck", "--no-dangling"],
+    );
+}
+
 // ── due_tasks (pure) ────────────────────────────────────────────────────
 
 #[test]
@@ -339,7 +353,7 @@ fn maintenance_tasks_run_and_leave_the_store_valid() {
 
     // The store is still a valid, connected object graph, and the ref this
     // test cares about survived every task untouched.
-    git(dir, &["fsck", "--no-dangling"]);
+    fsck(dir);
     assert!(store_refs(dir).contains(&seed::patchset_ref(rid, 1)));
 }
 
@@ -680,7 +694,7 @@ fn repack_full_consolidates_an_explicitly_many_pack_store() {
     let after = seed::store_stats(dir);
     assert_eq!(after.packs, 1, "{after:?}");
     // Every object survives the repack (fsck stays clean).
-    git(dir, &["fsck", "--no-dangling"]);
+    fsck(dir);
 }
 
 /// Write ONE loose blob (content varies by `i`) into a bare repo and
