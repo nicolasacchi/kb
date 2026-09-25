@@ -1561,6 +1561,10 @@ pub async fn snapshot_review(
             "tip_sha": ps.tip_sha,
             "base_sha": ps.base_sha,
             "captured_at": ps.captured_at,
+            // RS-U10a — additive. An explicit snapshot always captures
+            // today (`skip_if_same = false`); RS-U6's pair dedup (D13)
+            // makes this `false` for an unchanged `(tip, merge-base)`.
+            "minted": true,
         })),
     ))
 }
@@ -2811,6 +2815,16 @@ async fn reuse_pr_review(
         })
         .await?;
 
+    // RS-U10a — `minted`: did this reuse capture a NEW patchset, or did
+    // `capture_patchset`'s same-tip skip hand back the existing latest?
+    // Derived from today's data (latest ps number before vs after); RS-U6
+    // replaces it with the `(tip, merge-base)` pair dedup's own answer.
+    let prior_latest_ps = state
+        .store
+        .run_blocking(move |store| store.latest_patchset(id))
+        .await?
+        .map(|p| p.ps_number);
+
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
@@ -2882,6 +2896,8 @@ async fn reuse_pr_review(
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": serde_json::Value::Null,
             "reused": true,
+            // RS-U10a — additive (see `prior_latest_ps` above).
+            "minted": prior_latest_ps != Some(ps.ps_number),
         }),
     ))
 }
@@ -3240,6 +3256,8 @@ pub(crate) async fn create_review_pr_value(
             "pr_head_sha": fetched_sha,
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": pr_meta_unavailable_reason,
+            // RS-U10a — additive: a fresh review always captures ps1.
+            "minted": true,
         }),
     ))
 }

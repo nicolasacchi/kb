@@ -191,6 +191,9 @@ mod token;
 mod tools;
 // RS-U3 (review store) — `kb-code store …`.
 mod store_cmd;
+// RS-U10a — the agent-facing review verbs (find/diff/log/cat/verify) and
+// the JSON contract they share.
+mod review_agent;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -4045,6 +4048,18 @@ enum ReviewCmd {
         /// Print the payload with the token redacted; do not POST.
         #[arg(long = "dry-run")]
         dry_run: bool,
+        /// RS-U10a — how long to wait on the daemon-side job, in seconds
+        /// (`--wait` alone = 600, the default when omitted). `--wait=0`
+        /// returns at once with the job id; re-running the same start-pr
+        /// attaches to the running job instead of fetching twice.
+        #[arg(
+            long,
+            value_name = "SECS",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "600"
+        )]
+        wait: Option<u64>,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4368,6 +4383,29 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code review find --pr N [--repo R] [--json]` — RS-U10a: every
+    /// review bound to PR N (`GET /api/reviews/find`), across every
+    /// configured repo unless `--repo` narrows it.
+    Find(review_agent::FindArgs),
+    /// `kb-code review diff <REF> [--ps N] [--stat|--name-only|--patch]
+    /// [--path P] [--budget TOKENS] [--json]` — RS-U10a: the patchset's
+    /// change set against its OWN base, computed by the daemon (`GET
+    /// /api/reviews/{id}/diff`) — works with no `refs/kbc/*` in the clone.
+    /// REF is `<id>`, `<id>/ps<n>` or `pr:<N>`.
+    Diff(review_agent::DiffArgs),
+    /// `kb-code review log <REF> [--ps N] [--json]` — RS-U10a: the
+    /// patchset's commits (`GET /api/reviews/{id}/log`).
+    Log(review_agent::LogArgs),
+    /// `kb-code review cat <REF> <PATH> [--ps N] [--side old|new] [--json]`
+    /// — RS-U10a: one file at the patchset's base (`old`) or tip (`new`)
+    /// (`GET /api/reviews/{id}/cat`). Secret-denylisted paths are refused.
+    Cat(review_agent::CatArgs),
+    /// `kb-code review verify <REF> [--ps N] [--min-findings N] [--json]` —
+    /// RS-U10a: the post-compose gate. Checks the document is present and
+    /// lints clean, counts findings, checks every finding anchor resolves
+    /// and the verdict sits on the latest patchset. Exit 3 when any check
+    /// fails.
+    Verify(review_agent::VerifyArgs),
     /// `kb-code review compose ID {--from-file FILE|--stdin} [--json]` —
     /// V70-R: `POST /api/reviews/{id}/compose` (design doc D9 scoped to
     /// v0). LOOPBACK-ONLY. The one-shot authoring call: a `kbc-compose/1`
@@ -4490,6 +4528,12 @@ pub struct ReviewComposeArgs {
     /// Lint + resolve only — nothing is written and no event fires.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+    /// RS-U10a — give every finding without a valid slug the ASCII
+    /// `f-<kebab>` slug kb derives from its title (uniquified within the
+    /// batch, deterministic), instead of the whole batch 400ing on
+    /// `invalid_slug`. Author-written valid slugs are never changed.
+    #[arg(long)]
+    pub slugify: bool,
     /// The V0 `kbc-compose/1` JSON body (summary + a `kbc-findings/1`
     /// block). Mutually exclusive with `--doc`.
     #[arg(long = "from-file")]
@@ -6074,6 +6118,7 @@ async fn run(cli: Cli) -> Result<()> {
                 new,
                 gh_token_from_cli,
                 dry_run,
+                wait,
                 daemon,
                 json,
             } => {
@@ -6088,6 +6133,7 @@ async fn run(cli: Cli) -> Result<()> {
                     new,
                     gh_token_from_cli,
                     dry_run,
+                    wait,
                     json,
                 )
                 .await
@@ -6361,6 +6407,11 @@ async fn run(cli: Cli) -> Result<()> {
                 review_github_threads_cmd(&daemon, id, json).await
             }
             ReviewCmd::Compose(args) => review_compose_cmd(*args).await,
+            ReviewCmd::Find(a) => review_agent::find_cmd(a).await,
+            ReviewCmd::Diff(a) => review_agent::diff_cmd(a).await,
+            ReviewCmd::Log(a) => review_agent::log_cmd(a).await,
+            ReviewCmd::Cat(a) => review_agent::cat_cmd(a).await,
+            ReviewCmd::Verify(a) => review_agent::verify_cmd(a).await,
             ReviewCmd::Doc {
                 id,
                 ps,
@@ -15243,7 +15294,18 @@ async fn review_snapshot_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
     )
     .await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&body)?);
+        // RS-U10a — `--json` is ALWAYS the typed envelope now: success is
+        // `kbc-review-snapshot/1` (`id`, `minted`, `base`, `warnings[]`),
+        // failure the `{ok:false, error:{code, …}}` document on stderr.
+        if !status.is_success() {
+            review_agent::AgentError::from_http(status.as_u16(), &body, "review snapshot")
+                .emit(true);
+        }
+        let review = get_json(&client, daemon, &format!("/api/reviews/{id}"), &[])
+            .await
+            .unwrap_or(serde_json::Value::Null);
+        envelope::print_value(&review_agent::snapshot_envelope(&body, &review));
+        return Ok(());
     }
     if !status.is_success() {
         return Err(annotation_api_error("snapshot review", status, &body));
@@ -16609,6 +16671,7 @@ async fn review_start_pr_cmd(
     new: bool,
     gh_token_from_cli: bool,
     dry_run: bool,
+    wait: Option<u64>,
     json: bool,
 ) -> Result<()> {
     let mut payload = serde_json::json!({ "repo": repo, "pr_number": pr_number });
@@ -16688,13 +16751,64 @@ async fn review_start_pr_cmd(
         if body["attached"].as_bool().unwrap_or(false) && !json {
             eprintln!("start-pr: attached to already-running job {job_id}");
         }
-        let terminal = poll_start_pr_job(&client, daemon, job_id, json).await?;
+        let budget = wait
+            .map(Duration::from_secs)
+            .unwrap_or(START_PR_POLL_BUDGET);
+        // Re-running the same start-pr attaches to the running job (the
+        // daemon dedupes on (repo, pr)), so that IS the "poll again" verb.
+        let rerun = vec![
+            "kb-code".to_string(),
+            "review".into(),
+            "start-pr".into(),
+            "--repo".into(),
+            repo.to_string(),
+            "--pr".into(),
+            pr_number.to_string(),
+            "--wait=600".into(),
+        ];
+        if budget.is_zero() {
+            // RS-U10a — `--wait=0`: hand back the job, do not poll.
+            if json {
+                envelope::print_value(&envelope::ok_value(
+                    "kbc-review-job/1",
+                    serde_json::json!({
+                        "job_id": job_id,
+                        "status": "running",
+                        "attached": body["attached"],
+                        "poll": kb_code_server::review_jobs::REVIEW_JOB_ROUTE
+                            .path
+                            .replace("{id}", job_id),
+                    }),
+                    vec![],
+                    false,
+                    None,
+                    vec![rerun],
+                ));
+            } else {
+                println!("start-pr: job {job_id} running (re-run with --wait to attach)");
+            }
+            return Ok(());
+        }
+        let terminal = match poll_review_job(&client, daemon, job_id, budget, json).await? {
+            Some(t) => t,
+            None => review_agent::AgentError::new(
+                "job-running",
+                format!(
+                    "start-pr job {job_id} still running after {} s — the daemon is still working",
+                    budget.as_secs()
+                ),
+                envelope::EXIT_CONFLICT,
+            )
+            .with_hint("re-run the same start-pr: it attaches to the running job")
+            .with_next(vec![rerun])
+            .emit(json),
+        };
         return match classify_start_pr_job(&terminal) {
             StartPrJob::Done(result) => print_start_pr_envelope(&result, json),
             StartPrJob::Failed { error, error_type } => {
                 start_pr_failed(&error, error_type.as_deref(), &terminal, json)
             }
-            StartPrJob::Running(_) => unreachable!("poll_start_pr_job returns on a terminal state"),
+            StartPrJob::Running(_) => unreachable!("poll_review_job returns on a terminal state"),
         };
     }
     // A pre-V76 daemon has no job mode and answers the POST synchronously
@@ -16830,7 +16944,10 @@ fn classify_start_pr_job(body: &serde_json::Value) -> StartPrJob {
 /// one verbatim.
 fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(body)?);
+        // RS-U10a — the `kbc-review-start/1` envelope: `id`, `minted`,
+        // `base{…}`, `warnings[]`, with the daemon's full body kept under
+        // `data.review`.
+        envelope::print_value(&review_agent::start_envelope(body));
     } else {
         print_start_pr_human(body);
     }
@@ -16872,7 +16989,7 @@ fn print_start_pr_human(body: &serde_json::Value) {
 }
 
 /// `GET /api/reviews/jobs/{id}` — the declared path carries the `{id}`
-/// placeholder; [`poll_start_pr_job`] substitutes the real one. The route
+/// placeholder; [`poll_review_job`] substitutes the real one. The route
 /// takes no query params, so the pair is empty — the builder exists so the
 /// CLI half of invariant 15's dead-surface walk covers the route, and the
 /// poll loop below builds its path from the SAME declaration rather than
@@ -16882,38 +16999,37 @@ fn review_job_request() -> (&'static str, Vec<(&'static str, String)>) {
 }
 
 /// Poll `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
-/// until the job settles or [`START_PR_POLL_BUDGET`] is spent. Progress
-/// goes to STDERR (never stdout — `--json` output must stay parseable,
-/// and even the human path keeps stdout to the one final line), and only
-/// when the stage CHANGES, so a long fetch prints one line, not 300.
-async fn poll_start_pr_job(
+/// until the job settles (`Ok(Some(body))`) or `budget` is spent
+/// (`Ok(None)` — the caller decides how to report a still-running job).
+/// Progress goes to STDERR (never stdout — `--json` output must stay
+/// parseable, and even the human path keeps stdout to the one final line),
+/// and only when the stage CHANGES, so a long fetch prints one line, not
+/// 300.
+///
+/// RS-U10a — generalized from the V76-R1a start-pr poller for
+/// `--wait[=SECS]`: any daemon-side review job (`crate::review_jobs`) is
+/// polled through here, so RS-U10b's `review sync` reuses it rather than
+/// inventing a second pattern.
+async fn poll_review_job(
     client: &reqwest::Client,
     daemon: &str,
     job_id: &str,
+    budget: Duration,
     json: bool,
-) -> Result<serde_json::Value> {
-    let deadline = std::time::Instant::now() + START_PR_POLL_BUDGET;
+) -> Result<Option<serde_json::Value>> {
+    let deadline = std::time::Instant::now() + budget;
     let mut last_stage = String::new();
     loop {
-        tokio::time::sleep(START_PR_POLL_INTERVAL).await;
-        if std::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "review start-pr: job {job_id} still running after {} s — the daemon is \
-                 still working; poll it by hand with GET /api/reviews/jobs/{job_id}",
-                START_PR_POLL_BUDGET.as_secs()
-            );
-        }
+        tokio::time::sleep(START_PR_POLL_INTERVAL.min(budget)).await;
         let (declared_path, _) = review_job_request();
         let path = declared_path.replace("{id}", job_id);
         let (status, body) = get_json_raw(client, daemon, &path, &[]).await?;
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!(
-                "review start-pr: job {job_id} vanished (unknown or swept past its 1 h TTL)"
-            );
+            anyhow::bail!("review job {job_id} vanished (unknown or swept past its 1 h TTL)");
         }
         if !status.is_success() {
             return Err(loopback_or_api_error(
-                "review start-pr (job poll)",
+                "review job poll",
                 daemon,
                 status,
                 &body,
@@ -16926,7 +17042,10 @@ async fn poll_start_pr_job(
                     last_stage = stage;
                 }
             }
-            _ => return Ok(body),
+            _ => return Ok(Some(body)),
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(None);
         }
     }
 }
@@ -17555,6 +17674,7 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         verdict,
         verdict_note,
         dry_run,
+        slugify,
         from_file,
         stdin,
         daemon,
@@ -17612,6 +17732,26 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         };
         serde_json::from_str(&text).context("parse compose payload as JSON")?
     };
+    let mut payload = payload;
+    if slugify {
+        // RS-U10a — the doc form's sidecar rides under `findings_v2`; the
+        // V0 body carries `findings.findings[]`.
+        let target = if payload.get("findings_v2").is_some() {
+            &mut payload["findings_v2"]
+        } else {
+            &mut payload
+        };
+        let changes = review_agent::slugify_findings(target);
+        for (i, old, new) in &changes {
+            eprintln!(
+                "slugify: finding #{i}: {} -> {new}",
+                old.as_deref().unwrap_or("(none)")
+            );
+        }
+        if changes.is_empty() {
+            eprintln!("slugify: every finding already carries a valid slug");
+        }
+    }
 
     let client = http_client()?;
     let path = format!("/api/reviews/{id}/compose");
@@ -29185,6 +29325,11 @@ mod tests {
             // V76-B3 — `POST /api/prose/resolve`. Body fields ride as the
             // walk's pairs so a required key the CLI omits fails HERE.
             prose_resolve_request("repo", "hello"),
+            // RS-U10a — the review git views + PR lookup.
+            review_agent::review_find_request(7, Some("repo")),
+            review_agent::review_diff_request(Some(1), "patch", Some("src"), Some(100)),
+            review_agent::review_log_request(Some(1)),
+            review_agent::review_cat_request("src/lib.rs", Some(1), "old"),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -29279,7 +29424,9 @@ mod tests {
             // V76-R3d — scrub/1 stops + at.
             .chain(kb_code_server::history::scrub::V76_R3D_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`, same walk.
-            .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter());
+            .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter())
+            // RS-U10a — the review git views + PR lookup, same walk.
+            .chain(kb_code_server::review_views::RS_U10A_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
