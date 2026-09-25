@@ -185,21 +185,10 @@ pub fn resolve(input: &LadderInput<'_>) -> LadderOutcome {
         remote: Some(r.name.clone()),
     };
 
-    // Membership: exactly one distinct existing key among the remotes.
-    let mut member_keys: Vec<&String> = forge
-        .iter()
-        .map(|(_, k)| k)
-        .filter(|k| input.existing_keys.iter().any(|e| e == *k))
-        .collect();
-    member_keys.sort();
-    member_keys.dedup();
-    if member_keys.len() == 1 {
-        let key = member_keys[0];
-        let (r, k) = forge.iter().find(|(_, k)| k == key).expect("present");
-        return resolved(r, k, BaseUrlSource::Member);
-    }
-
-    // Rung 3: the slug every PR binding of this repo agrees on.
+    // Rung 3 FIRST: the slug every PR binding of this repo agrees on is
+    // direct evidence of which project its reviews belong to, so it beats
+    // "some remote matches an existing store" — a store minted first for a
+    // personal FORK must never capture a clone whose PRs target the org.
     let mut slugs: Vec<&str> = input.pr_slugs.iter().map(|s| s.trim()).collect();
     slugs.sort_unstable();
     slugs.dedup();
@@ -214,6 +203,31 @@ pub fn resolve(input: &LadderInput<'_>) -> LadderOutcome {
         if let [hit] = hits.as_slice() {
             let (r, k) = forge.iter().find(|(_, k)| k == *hit).expect("present");
             return resolved(r, k, BaseUrlSource::PrSlug);
+        }
+    }
+
+    // Membership: exactly one distinct existing key among the remotes —
+    // and, when the repo names more than one forge project, only if that
+    // key is on `origin` or the `gh-resolved = base` remote. A match on
+    // some other remote (a fork, a mirror) is not evidence enough to join;
+    // the ladder continues and may refuse, which the operator resolves.
+    let mut distinct_all: Vec<&String> = forge.iter().map(|(_, k)| k).collect();
+    distinct_all.sort();
+    distinct_all.dedup();
+    let mut member_keys: Vec<&String> = distinct_all
+        .iter()
+        .copied()
+        .filter(|k| input.existing_keys.iter().any(|e| e == *k))
+        .collect();
+    member_keys.dedup();
+    if let [key] = member_keys.as_slice() {
+        let primary = distinct_all.len() == 1
+            || forge.iter().any(|(r, k)| {
+                k == *key && (r.name == "origin" || r.gh_resolved.as_deref() == Some("base"))
+            });
+        if primary {
+            let (r, k) = forge.iter().find(|(_, k)| k == *key).expect("present");
+            return resolved(r, k, BaseUrlSource::Member);
         }
     }
 
@@ -427,6 +441,46 @@ mod tests {
     fn rung3_slug_with_no_matching_remote_does_not_decide() {
         let o = run(None, None, &["elsewhere/widgets"], &fork_pair(), &[], None);
         assert!(matches!(o, LadderOutcome::Refused { .. }));
+    }
+
+    /// Review fix 4: a store minted first for a personal fork must not
+    /// capture a clone whose PR bindings target the org.
+    #[test]
+    fn pr_slug_beats_a_fork_store_that_exists_first() {
+        let o = run(
+            None,
+            None,
+            &["acme/widgets"],
+            &fork_pair(),
+            &["github.com/someone/widgets"],
+            None,
+        );
+        assert_eq!(source(&o), BaseUrlSource::PrSlug);
+        assert_eq!(key(&o), "github.com/acme/widgets");
+    }
+
+    #[test]
+    fn a_fork_remote_match_alone_does_not_join() {
+        // Only the fork's store exists; the fork is not `origin`.
+        let o = run(
+            None,
+            None,
+            &[],
+            &fork_pair(),
+            &["github.com/someone/widgets"],
+            None,
+        );
+        assert!(matches!(
+            o,
+            LadderOutcome::Refused {
+                code: BASE_URL_AMBIGUOUS,
+                ..
+            }
+        ));
+        // A single-project repo still joins by membership.
+        let single = vec![remote("upstream", "git@github.com:acme/widgets.git")];
+        let o = run(None, None, &[], &single, &["github.com/acme/widgets"], None);
+        assert_eq!(source(&o), BaseUrlSource::Member);
     }
 
     #[test]
