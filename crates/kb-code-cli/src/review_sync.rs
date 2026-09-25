@@ -46,8 +46,9 @@ pub struct SyncArgs {
     #[arg(long)]
     pub open: bool,
     /// With `--open`: also sync PRs merged since DATE (`YYYY-MM-DD` or
-    /// RFC 3339).
-    #[arg(long = "merged-since", value_name = "DATE", requires = "open")]
+    /// RFC 3339). (Checked by [`check_args`]: clap's `requires` is always
+    /// satisfied by a `SetTrue` flag's implicit `false` default.)
+    #[arg(long = "merged-since", value_name = "DATE")]
     pub merged_since: Option<String>,
     /// Title for a review this sync creates (default: the PR title).
     #[arg(long, conflicts_with = "open")]
@@ -98,6 +99,18 @@ pub struct StatusArgs {
 }
 
 // --- request builders ----------------------------------------------------------
+
+/// Flag combinations clap cannot express. Pure.
+pub fn check_args(a: &SyncArgs) -> Result<(), AgentError> {
+    if a.merged_since.is_some() && !a.open {
+        return Err(
+            AgentError::usage("--merged-since applies only with --open").with_next(vec![argv(&[
+                "kb-code", "review", "sync", "--repo", &a.repo, "--open", "--json",
+            ])]),
+        );
+    }
+    Ok(())
+}
 
 /// The sync body (never carries a token — that is added by the caller).
 pub fn sync_payload(a: &SyncArgs) -> Value {
@@ -390,6 +403,7 @@ pub async fn sync_cmd(a: SyncArgs) -> anyhow::Result<()> {
 }
 
 async fn sync_run(a: &SyncArgs) -> Result<i32, AgentError> {
+    check_args(a)?;
     let mut payload = sync_payload(a);
     if a.gh_token_from_cli {
         payload["gh_token"] = json!(gh_token()?);
@@ -744,13 +758,19 @@ mod tests {
         let bads: Vec<Vec<&str>> = vec![
             vec!["--repo", "w"],
             vec!["--repo", "w", "--pr", "7", "--open"],
-            vec!["--repo", "w", "--pr", "7", "--merged-since", "2026-09-24"],
             vec!["--repo", "w", "--open", "--base", "main"],
             vec!["--repo", "w", "--pr", "-3"],
         ];
         for bad in &bads {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
+        // `--merged-since` without `--open` parses, then refuses typed.
+        let a = parse(&["--repo", "w", "--pr", "7", "--merged-since", "2026-09-24"]).unwrap();
+        let e = check_args(&a).unwrap_err();
+        assert_eq!(e.exit, envelope::EXIT_USAGE);
+        assert!(!e.next.is_empty());
+        let a = parse(&["--repo", "w", "--open", "--merged-since", "2026-09-24"]).unwrap();
+        assert!(check_args(&a).is_ok());
         let s = StatusCli::try_parse_from(["status", "pr:7", "--fetch", "--json"]).unwrap();
         assert!(s.a.fetch && s.a.json);
         assert_eq!(s.a.target, "pr:7");
