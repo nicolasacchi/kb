@@ -442,11 +442,12 @@ async fn create_review_pr_sync_snapshot_list_show_files_and_pr_status_golden_env
         problems.push(e);
     }
 
-    // --- snapshot: a second patchset (capture_patchset always mints one,
-    // dedup-on-unchanged-tip is the FUTURE `minted` behaviour U11 adds) ---
+    // --- snapshot: a second patchset. RS-U6 (D13) skips an unchanged
+    // `(tip, merge-base)` pair by default; `force` keeps the old always-mint
+    // behaviour this golden was pinned with. ---
     let resp = client
         .post(format!("{base}/api/reviews/{id}/snapshot"))
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({"force": true}))
         .send()
         .await
         .unwrap();

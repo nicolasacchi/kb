@@ -164,12 +164,16 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
     let scopes = config.scopes.clone();
     let scip_cfg = config.scip.clone();
     let review_cfg = config.review.clone();
+    let review_stores = std::sync::Arc::new(kb_code_server::review_store::ReviewStores::disabled(
+        "starvation fixture",
+    ));
     let _auto_capture = kb_code_server::reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),
         config.repos.clone(),
         review_cfg.max_patchsets,
         review_cfg.patchset_capture,
+        review_stores.clone(),
     );
     let doclens_cfg = config.doclens.clone();
     let behavioral_cfg = config.behavioral.clone();
@@ -235,9 +239,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
             kb_code_server::history::facts::BaseCache::default(),
         )),
         review_jobs: std::sync::Arc::new(kb_code_server::review_jobs::ReviewJobs::default()),
-        review_stores: std::sync::Arc::new(kb_code_server::review_store::ReviewStores::disabled(
-            "starvation fixture",
-        )),
+        review_stores,
     }))
 }
 

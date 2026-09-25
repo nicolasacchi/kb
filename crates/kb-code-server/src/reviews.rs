@@ -83,6 +83,13 @@ use crate::entities::RouteContract;
 use crate::git::roots::{GitCtx, GitRoot, WorkTreeRoot};
 use crate::git::{GitRepo, Revspec};
 use crate::history::{self, HistoryError};
+use crate::review_base::capture::{
+    pr_of_head, read_mapped_remotes, CaptureOpts, CaptureOutcome, Member, NewReview, Recapture,
+    StoreCtx,
+};
+use crate::review_base::{
+    base_out, effective_base, BaseStatus, BaseWarningOut, EffectiveBase, ReviewBaseOut,
+};
 use crate::routes::{find_repo, safe_rel_path, ApiError};
 use crate::state::SharedState;
 use crate::store::{
@@ -512,6 +519,76 @@ pub fn update_patchset_ref(
     Ok(())
 }
 
+/// RS-U6 — `git update-ref refs/kbc/review/<id>/ps<n>-base <sha>`: the
+/// patchset's base-branch tip pin (README §5.4: every `base_tip_sha` has
+/// its `ps<n>-base` ref). Same shape discipline as [`update_patchset_ref`]:
+/// daemon integers for the name, a verified full sha for the value.
+pub fn update_patchset_base_ref(
+    repo_root: &dyn GitRoot,
+    review_id: i64,
+    ps_number: i64,
+    sha: &str,
+) -> Result<(), ReviewGitError> {
+    if !is_full_sha(sha) {
+        return Err(ReviewGitError::BadSha(sha.to_string()));
+    }
+    if review_id < 1 || ps_number < 1 {
+        return Err(ReviewGitError::BadRef(format!(
+            "review_id={review_id} ps_number={ps_number}"
+        )));
+    }
+    let verified = run_git(
+        repo_root,
+        &["rev-parse", "--verify", &format!("{sha}^{{commit}}")],
+    )?;
+    if String::from_utf8_lossy(&verified).trim() != sha {
+        return Err(ReviewGitError::BadSha(sha.to_string()));
+    }
+    let refname = patchset_base_ref(review_id, ps_number);
+    run_git(repo_root, &["update-ref", &refname, sha])?;
+    Ok(())
+}
+
+/// RS-U6 — a member clone's remotes as `(name, url)`, read from its own
+/// config (`remote.<name>.url`; read-only). Empty when it has none.
+pub fn member_remotes(repo_root: &dyn GitRoot) -> Vec<(String, String)> {
+    let Ok(out) = run_git(repo_root, &["config", "--get-regexp", r"^remote\..*\.url$"]) else {
+        return Vec::new();
+    };
+    let mut rows: Vec<(String, String)> = Vec::new();
+    for line in String::from_utf8_lossy(&out).lines() {
+        let Some((k, v)) = line.split_once(' ') else {
+            continue;
+        };
+        let Some(name) = k
+            .strip_prefix("remote.")
+            .and_then(|r| r.strip_suffix(".url"))
+        else {
+            continue;
+        };
+        // First url wins (git's own rule for a multi-valued `url`).
+        if !rows.iter().any(|(n, _)| n == name) {
+            rows.push((name.to_string(), v.trim().to_string()));
+        }
+    }
+    rows
+}
+
+/// RS-U6 — `refs/heads/<branch>`'s configured upstream as a full ref
+/// (`refs/remotes/origin/main`, `refs/heads/dev`), via `for-each-ref
+/// --format=%(upstream)` (read-only). `None` when unset or `branch` is not
+/// a valid branch name.
+pub fn branch_upstream(repo_root: &dyn GitRoot, branch: &str) -> Option<String> {
+    let r = crate::review_store::url::RefName::branch(branch).ok()?;
+    let out = run_git(
+        repo_root,
+        &["for-each-ref", "--format=%(upstream)", r.as_str()],
+    )
+    .ok()?;
+    let up = String::from_utf8_lossy(&out).trim().to_string();
+    (!up.is_empty() && !up.contains('\n')).then_some(up)
+}
+
 /// `git update-ref -d refs/kbc/review/<id>/ps<n>`.
 pub fn delete_patchset_ref(
     repo_root: &dyn GitRoot,
@@ -897,95 +974,79 @@ fn ahead_behind(
 }
 
 /// V76-R1a — the `start-pr` base ladder: **explicit > merge-base >
-/// local-default**. Returns the `base_ref` to store on the review row plus
-/// the [`BaseSource`] for the envelope. Spawns git — call it from the
-/// blocking pool.
+/// local-default**, for a repo whose review store is NOT ready yet (the
+/// pre-store fallback; a ready store runs `review_base`'s resolution chain
+/// instead). Returns the `base_ref` to store on the review row, the
+/// [`BaseSource`] for the envelope, and `warnings[]`. Spawns git — call it
+/// from the blocking pool.
 ///
-/// - `explicit` (`--base`) wins outright, is validated exactly as before,
-///   and BYPASSES the stale-mirror refusal: an operator who named a base
-///   has already answered the question the refusal asks.
+/// - `explicit` (`--base`) wins outright and is validated exactly as before.
 /// - Otherwise, when the repo has an `origin` remote, the remote default
 ///   branch is FETCHED first (`git fetch origin +refs/heads/<d>:refs/
 ///   remotes/origin/<d>`) and the stored `base_ref` becomes
-///   `refs/remotes/origin/<d>` — so ps1's `base_sha` (merge-based in
-///   [`capture_patchset`] as always) is the merge-base of the PR head
-///   against the FRESH remote tip, not whatever months-old local `main`
-///   the mirror last saw. Before that answer is accepted, the stale-mirror
-///   check runs: a LOCAL default branch behind the fetched tip by more
-///   than [`STALE_MIRROR_BEHIND_LIMIT`] commits refuses with
-///   [`ERR_STALE_MIRROR`] (409), the message naming the exact retry
-///   command and the ahead/behind numbers.
+///   `refs/remotes/origin/<d>` — so ps1's `base_sha` is the merge-base of
+///   the PR head against the FRESH remote tip, never the mirror's local
+///   branch.
+/// - RS-U6: the old stale-mirror REFUSAL (409 [`ERR_STALE_MIRROR`]) is gone
+///   — the base above already comes from the freshly fetched remote tip, so
+///   a stale local default branch no longer affects the diff. It is
+///   reported as a `stale-mirror` WARNING instead (design-general
+///   "Envelopes"); the URN constant stays for older clients.
 /// - A repo without an `origin` remote, a failed default-branch fetch, or
 ///   a remote that lacks the branch degrades to the pre-V76 answer (the
-///   mirror's local default branch) with `base_source: local-default` —
-///   the PR fetch itself stays the load-bearing one.
+///   mirror's local default branch) with `base_source: local-default`.
 pub fn start_pr_base(
     repo_root: &dyn GitRoot,
     explicit: Option<&str>,
-    pr_head_sha: &str,
-    repo_name: &str,
-    pr_number: u32,
-) -> Result<(String, BaseSource), ApiError> {
+    _pr_head_sha: &str,
+    _repo_name: &str,
+    _pr_number: u32,
+) -> Result<(String, BaseSource, Vec<BaseWarningOut>), ApiError> {
     if let Some(b) = explicit {
         reject_user_ref(b)?;
-        return Ok((b.to_string(), BaseSource::Explicit));
+        return Ok((b.to_string(), BaseSource::Explicit, vec![]));
     }
     let local_default = default_base_ref(repo_root.git_path());
     if !has_origin_remote(repo_root) {
-        return Ok((local_default, BaseSource::LocalDefault));
+        return Ok((local_default, BaseSource::LocalDefault, vec![]));
     }
     let branch = match parse_user_ref(&local_default) {
         Ok(b) => b,
         // A default branch name this crate's own validator cannot carry
         // never reaches a fetch argv — degrade, naming the source.
-        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault, vec![])),
     };
     if fetch_remote_default(repo_root, &branch).is_err() {
-        return Ok((local_default, BaseSource::LocalDefault));
+        return Ok((local_default, BaseSource::LocalDefault, vec![]));
     }
     let remote_ref = format!("refs/remotes/origin/{}", branch.as_str());
     let remote_spec = match parse_user_ref(&remote_ref) {
         Ok(s) => s,
-        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault, vec![])),
     };
     let remote_sha = match resolve_commit_sha(repo_root, &remote_spec) {
         Ok(s) => s,
-        Err(_) => return Ok((local_default, BaseSource::LocalDefault)),
+        Err(_) => return Ok((local_default, BaseSource::LocalDefault, vec![])),
     };
-    // The stale-mirror refusal. A LOCAL default branch that cannot be
-    // resolved at all (unborn/missing) has nothing to compare — the
-    // merge-base default against the fresh remote tip is then the only
-    // sane answer and stands.
+    let mut warnings = Vec::new();
     let local_ref = format!("refs/heads/{}", branch.as_str());
     if let Ok(local_spec) = parse_user_ref(&local_ref) {
         if let Ok(local_sha) = resolve_commit_sha(repo_root, &local_spec) {
             if let Ok((ahead, behind)) = ahead_behind(repo_root, &local_sha, &remote_sha) {
                 if behind > STALE_MIRROR_BEHIND_LIMIT {
-                    // The hint's `--base` is the merge-base the refusal is
-                    // about — retrying with it explicit reproduces exactly
-                    // the patchset this base WOULD have produced. With no
-                    // merge-base at all (unrelated histories) the fetched
-                    // remote tip is the most honest suggestion left.
-                    let hint_base = merge_base_sha(repo_root, &remote_sha, pr_head_sha)
-                        .unwrap_or_else(|_| remote_sha.clone());
-                    return Err(ApiError::new(
-                        StatusCode::CONFLICT,
+                    warnings.push(crate::review_base::warning(
+                        crate::review_base::warn::STALE_MIRROR,
                         format!(
-                            "stale mirror: the local default branch {branch:?} is {behind} \
-                             commits behind the fetched origin/{branch} ({ahead} ahead, \
-                             {behind} behind; refusal limit {STALE_MIRROR_BEHIND_LIMIT}). \
-                             ps1 would be based on its merge-base with the PR head; to \
-                             proceed against that base explicitly, run:\n  \
-                             kb-code review start-pr --repo {repo_name} --pr {pr_number} \
-                             --base {hint_base}"
+                            "the local default branch {branch:?} is {behind} commits behind the \
+                             fetched origin/{branch} ({ahead} ahead); ps1 is based on the fetched \
+                             origin/{branch}, not the local branch"
                         ),
-                    )
-                    .with_problem_type(ERR_STALE_MIRROR));
+                    ));
                 }
             }
         }
     }
-    Ok((remote_ref, BaseSource::MergeBase))
+    Ok((remote_ref, BaseSource::MergeBase, warnings))
 }
 
 fn now_unix() -> i64 {
@@ -1161,22 +1222,18 @@ pub(crate) fn parse_verdict_state(s: &str) -> Result<(), ApiError> {
 
 // --- capture core ----------------------------------------------------------
 
-/// Capture a new patchset for `review_id`. Returns the new `ps_number`.
+/// Capture a patchset for `review` in the MEMBER clone — the pre-store
+/// fallback (README §10 step 1: until a repo's review store is `ready`,
+/// capture is exactly today's work-tree behaviour). Returns the new (or,
+/// when nothing was minted, the latest) patchset row.
 ///
-/// Steps: resolve tip of `head_ref` → skip if equals latest tip (when
-/// `skip_if_same`) → merge-base → GC oldest if over max → update-ref →
-/// insert row → emit `review.changed`.
-///
-/// RS-U4 — capture (this fn, `start_pr_base`) is classified `WorkTreeRoot`
-/// by every caller for now: it resolves USER branch names (`head_ref`),
-/// which only mean something in the work tree, and moves to the review
-/// store only with the base-model/capture unit (U6). Review READS
-/// elsewhere already go through `GitCtx`, whose work-tree fallback keeps
-/// them correct in the meantime. RS-U5 moves `delete_review_with_refs` and
-/// the refs list/gc routes onto the store (when ready) — see their own
-/// docs; the patchset GC (`gc_patchsets`, `kb-code review gc`) stays
-/// `WorkTreeRoot` (unchanged in this unit — it isn't reachable from the
-/// review-delete path U5 was asked to move).
+/// RS-U6: the merge-base is computed FIRST and dedup is on the
+/// `(tip, merge-base)` PAIR (README D13), through the one capture
+/// primitive [`crate::review_base::capture::capture_at`];
+/// `skip_if_same = false` keeps the old always-mint behaviour (review
+/// creation, `snapshot --force`). A ready store captures through
+/// [`crate::review_base::capture::StoreCtx`] instead and never writes the
+/// user clone.
 pub fn capture_patchset(
     store: &Store,
     bus: &EventBus,
@@ -1185,60 +1242,259 @@ pub fn capture_patchset(
     max_patchsets: u32,
     skip_if_same: bool,
 ) -> Result<ReviewPatchsetRow, ReviewGitError> {
+    capture_patchset_outcome(store, bus, repo_root, review, max_patchsets, !skip_if_same)
+        .map(|o| o.ps)
+}
+
+/// [`capture_patchset`], returning the full outcome (`minted`, `kind`).
+pub fn capture_patchset_outcome(
+    store: &Store,
+    bus: &EventBus,
+    repo_root: &dyn GitRoot,
+    review: &ReviewRow,
+    max_patchsets: u32,
+    force: bool,
+) -> Result<CaptureOutcome, ReviewGitError> {
     let tip_sha = resolve_commit_sha(repo_root, &parse_user_ref(&review.head_ref)?)?;
-    if skip_if_same {
-        if let Ok(Some(latest)) = store.latest_patchset(review.id) {
-            if latest.tip_sha == tip_sha {
-                return Ok(latest);
-            }
-        }
-    }
-    // Resolve base_ref for merge-base (may be a branch name).
     let base_resolved = resolve_commit_sha(repo_root, &parse_user_ref(&review.base_ref)?)?;
-    let base_sha = merge_base_sha(repo_root, &base_resolved, &tip_sha)?;
+    crate::review_base::capture::capture_at(
+        store,
+        bus,
+        repo_root,
+        review,
+        &tip_sha,
+        &base_resolved,
+        false,
+        &CaptureOpts {
+            force,
+            kind_hint: None,
+        },
+        max_patchsets,
+    )
+}
 
-    // Reserve the next ps_number BEFORE GC so numbers stay monotonic even
-    // when every retained patchset is deleted to make room (max=1 + count=2
-    // would otherwise re-mint ps1 after MAX collapses to NULL).
-    let ps_number = store
-        .next_ps_number(review.id)
-        .map_err(|e| ReviewGitError::GitFailed {
-            status: -1,
-            stderr: e.to_string(),
-        })?;
+// --- RS-U6 — store-mode plumbing -------------------------------------------
 
-    // GC oldest while at/over capacity so the insert below lands within
-    // max_patchsets (ps_number itself is already reserved above).
-    while store.patchset_count(review.id).unwrap_or(0) as u32 >= max_patchsets.max(1) {
-        if let Ok(Some(old)) = store.oldest_patchset(review.id) {
-            let _ = delete_patchset_ref(repo_root, review.id, old.ps_number);
-            let _ = store.delete_patchset(review.id, old.ps_number);
-        } else {
-            break;
-        }
+fn join_error(e: tokio::task::JoinError) -> ApiError {
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+/// A store refusal (seeding, locked by another daemon) as an [`ApiError`]
+/// (RFC 7807 `urn:kb:errors:store-*`).
+pub(crate) fn store_refusal_error(r: crate::review_store::StoreRefusal) -> ApiError {
+    use crate::review_store::StoreUnavailable as U;
+    match r.0 {
+        U::Seeding => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "the review store for this repo is seeding; retry in {}s",
+                crate::review_store::SEEDING_RETRY_AFTER_SECS
+            ),
+        )
+        .with_problem_type(crate::review_store::URN_STORE_SEEDING),
+        U::LockedElsewhere => ApiError::new(
+            StatusCode::CONFLICT,
+            "the review store is held by another kb-code daemon",
+        )
+        .with_problem_type("urn:kb:errors:store-locked"),
+        other => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("review store unavailable: {}", other.code()),
+        )
+        .with_problem_type("urn:kb:errors:store-error"),
     }
+}
 
-    update_patchset_ref(repo_root, review.id, ps_number, &tip_sha)?;
-    let captured_at = now_unix();
-    store
-        .insert_patchset(review.id, ps_number, &tip_sha, &base_sha, captured_at)
-        .map_err(|e| ReviewGitError::GitFailed {
-            status: -1,
-            stderr: e.to_string(),
-        })?;
+/// RS-U6 — mutation admission (README §10 steps 1–2): `Some(handle)` when
+/// the repo's review store is ready (and this member imported) — capture
+/// runs in the store; `None` = today's work-tree behaviour; a seeding
+/// store refuses with 503 `store-seeding`.
+pub(crate) async fn admit_store(
+    state: &SharedState,
+    repo: &str,
+) -> Result<Option<crate::review_store::StoreHandle>, ApiError> {
+    let st = state.clone();
+    let name = repo.to_string();
+    tokio::task::spawn_blocking(move || st.review_stores.admit_mutation(&st.store, &name))
+        .await
+        .map_err(join_error)?
+        .map_err(store_refusal_error)
+}
 
-    emit_review_changed(bus, review.id, &review.repo, "patchset", false);
-
-    store
-        .get_patchset(review.id, ps_number)
-        .map_err(|e| ReviewGitError::GitFailed {
-            status: -1,
-            stderr: e.to_string(),
-        })?
-        .ok_or_else(|| ReviewGitError::GitFailed {
-            status: -1,
-            stderr: "patchset row missing after insert".into(),
+pub(crate) fn store_member(state: &SharedState, repo: &str) -> Result<Member, ApiError> {
+    state
+        .review_stores
+        .repo(repo)
+        .map(|r| Member {
+            id: r.id,
+            name: r.name.clone(),
+            root: r.root.clone(),
         })
+        .ok_or_else(|| ApiError::not_found(format!("unknown repo: {repo}")))
+}
+
+/// Run `f` against a [`StoreCtx`] on the blocking pool.
+pub(crate) async fn with_store_ctx<T, F>(
+    state: &SharedState,
+    handle: crate::review_store::StoreHandle,
+    member: Member,
+    f: F,
+) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce(&StoreCtx<'_>) -> T + Send + 'static,
+{
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let ctx = StoreCtx {
+            rs: &st.review_stores,
+            store: &st.store,
+            bus: &st.bus,
+            handle: &handle,
+            member,
+            max_patchsets: st.review.max_patchsets,
+        };
+        f(&ctx)
+    })
+    .await
+    .map_err(join_error)
+}
+
+/// RS-U6 — the additive `base{…}` block + `warnings[]` for a stored review
+/// (README §12). A legacy row is classified ON READ ([`effective_base`] →
+/// `legacy_spec`) and nothing is written. Blocking.
+pub(crate) fn review_base_block(
+    store: &Store,
+    review: &ReviewRow,
+    root: &Path,
+    merge_base: Option<&str>,
+) -> (ReviewBaseOut, Vec<BaseWarningOut>) {
+    let base_row = store.get_review_base(review.id).ok().flatten();
+    let binding = store
+        .get_review_pr_binding(review.id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let meta_base: Option<String> = binding
+        .pr_meta_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("base_ref")
+                .and_then(|b| b.as_str())
+                .map(str::to_string)
+        });
+    let mapped = read_mapped_remotes(store, &review.repo, root);
+    let status = BaseStatus::parse(base_row.as_ref().and_then(|b| b.base_status.as_deref()));
+    let set_by = base_row
+        .as_ref()
+        .map(|b| b.base_set_by.clone())
+        .unwrap_or_else(|| "legacy".into());
+    let class = effective_base(
+        &review.base_ref,
+        base_row.as_ref().and_then(|b| b.base_mode.as_deref()),
+        base_row.as_ref().and_then(|b| b.base_branch.as_deref()),
+        base_row.as_ref().and_then(|b| b.base_member),
+        &set_by,
+        status.source.as_deref(),
+        pr_of_head(&review.head_ref).is_some(),
+        meta_base.as_deref(),
+        &mapped,
+    );
+    (
+        base_out(&class.effective, &set_by, &status, merge_base),
+        class.warnings,
+    )
+}
+
+/// [`review_base_block`] from async context.
+async fn review_base_block_async(
+    state: &SharedState,
+    review: &ReviewRow,
+    root: &Path,
+    merge_base: Option<String>,
+) -> (ReviewBaseOut, Vec<BaseWarningOut>) {
+    let review = review.clone();
+    let root = root.to_path_buf();
+    state
+        .store
+        .run_blocking(move |store| review_base_block(store, &review, &root, merge_base.as_deref()))
+        .await
+}
+
+/// RS-U6 — the api slot's `gh-cli` rung (README §8, D12): when no
+/// file/env token is configured and the review store's forge is GitHub
+/// with an `auto`/`gh-cli` credential, the daemon's own `gh` login answers
+/// GETs (pinned `gh_user`, the store's recorded account). Held in memory
+/// for this request only; never logged, never persisted.
+pub(crate) async fn github_with_gh_cli(
+    state: &SharedState,
+    github: crate::github::GithubClient,
+    handle: &crate::review_store::StoreHandle,
+    repo_name: &str,
+) -> crate::github::GithubClient {
+    use crate::review_store::{ApiCredential, CredentialPin, GhCli, RemoteUrl};
+    if github.has_ambient_token() || handle.forge_kind.as_deref() != Some("github") {
+        return github;
+    }
+    let Some(url) = handle
+        .base_url
+        .as_deref()
+        .and_then(|u| RemoteUrl::parse_remote(u).ok())
+    else {
+        return github;
+    };
+    let settings = state.review_stores.settings().repo(repo_name);
+    if !matches!(
+        settings.credential,
+        CredentialPin::Auto | CredentialPin::GhCli
+    ) {
+        return github;
+    }
+    let st = state.clone();
+    let id = handle.id;
+    let cred = tokio::task::spawn_blocking(move || {
+        let recorded = st
+            .store
+            .get_review_store(id)
+            .ok()
+            .flatten()
+            .and_then(|r| r.cred_account);
+        ApiCredential::from_gh_cli(
+            &GhCli::from_process_env(),
+            &url,
+            settings.gh_user.as_deref(),
+            recorded.as_deref(),
+        )
+        .ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    github.with_api_credential(cred)
+}
+
+/// RS-U6 — the forge API's `base.ref` for PR `n` (the PR target rung,
+/// README §6; D15 retarget-follow reads it on every fetch). `None` when the
+/// origin is not GitHub or the API cannot answer.
+async fn forge_pr_base_ref(
+    state: &SharedState,
+    repo: &RepoEntry,
+    handle: &crate::review_store::StoreHandle,
+    n: u32,
+    github: crate::github::GithubClient,
+) -> Option<String> {
+    let root = repo.path.clone();
+    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&root))
+        .await
+        .ok()?
+        .ok()?;
+    let github = github_with_gh_cli(state, github, handle, &repo.name).await;
+    github
+        .get_pull(&gh_repo.owner, &gh_repo.name, n as u64)
+        .await
+        .ok()
+        .map(|p| p.base_ref)
 }
 
 /// Where [`delete_review_with_refs`] deletes `refs/kbc/pr/<n>` from, if at
@@ -1436,12 +1692,19 @@ pub fn gc_patchsets(
 /// auto-captures patchsets for open reviews on that repo, debounced.
 /// Capture work is spawn_blocking so it never sits on the mirror's hot
 /// path (the mirror only publishes the event; we consume it here).
+///
+/// RS-U6 — a repo whose review store is ready captures IN THE STORE
+/// ([`StoreCtx::recapture`] with `network: false`: the member's
+/// `work-<id>` heads are imported locally, the base comes from what the
+/// store already holds — auto-capture never touches the network, README
+/// §5.3); a seeding store is skipped (the next head move retries).
 pub fn spawn_auto_capture_worker(
     store: Arc<Store>,
     bus: Arc<EventBus>,
     repos: Vec<RepoEntry>,
     max_patchsets: u32,
     patchset_capture: bool,
+    review_stores: Arc<crate::review_store::ReviewStores>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if !patchset_capture {
@@ -1524,6 +1787,7 @@ pub fn spawn_auto_capture_worker(
                         let store4 = store.clone();
                         let bus4 = bus.clone();
                         let repos4 = repos.clone();
+                        let rs4 = review_stores.clone();
                         let max = max_patchsets;
                         tokio::spawn(async move {
                             let _ = tokio::task::spawn_blocking(move || {
@@ -1551,6 +1815,43 @@ pub fn spawn_auto_capture_worker(
                                 let equals = latest.as_ref().map(|p| p.tip_sha.as_str()) == Some(tip.as_str());
                                 if !should_auto_capture(true, true, equals, true) {
                                     return;
+                                }
+                                match rs4.admit_mutation(&store4, &review.repo) {
+                                    Ok(Some(handle)) => {
+                                        let Some(r) = rs4.repo(&review.repo) else {
+                                            return;
+                                        };
+                                        let ctx = StoreCtx {
+                                            rs: &rs4,
+                                            store: &store4,
+                                            bus: &bus4,
+                                            handle: &handle,
+                                            member: Member {
+                                                id: r.id,
+                                                name: r.name.clone(),
+                                                root: r.root.clone(),
+                                            },
+                                            max_patchsets: max,
+                                        };
+                                        match ctx.recapture(&review, &Recapture::default()) {
+                                            Ok(out) if out.outcome.minted => tracing::info!(
+                                                review_id = id,
+                                                ps = out.outcome.ps.ps_number,
+                                                tip = %short_sha(&out.outcome.ps.tip_sha),
+                                                "kb-code: auto-captured review patchset in the review store"
+                                            ),
+                                            Ok(_) => {}
+                                            Err(e) => tracing::warn!(
+                                                review_id = id,
+                                                error = %e,
+                                                "kb-code: auto-capture in the review store failed"
+                                            ),
+                                        }
+                                        return;
+                                    }
+                                    Ok(None) => {}
+                                    // Seeding / held elsewhere: skip; the next head move retries.
+                                    Err(_) => return,
                                 }
                                 match capture_patchset(&store4, &bus4, &WorkTreeRoot::user_clone(&repo.path), &review, max, true) {
                                     Ok(ps) => tracing::info!(
@@ -1694,6 +1995,12 @@ pub(crate) async fn create_review_value(
     let state = state.clone();
     let (repo, _repo_id) = find_repo(&state, &body.repo)?;
     reject_user_ref(&body.head_ref)?;
+    // RS-U6 — a ready review store: the `--base` grammar + resolution
+    // chain, fetch into the store, capture there (the user clone is never
+    // written). A seeding store refuses with 503 `store-seeding`.
+    if let Some(handle) = admit_store(&state, &body.repo).await? {
+        return create_review_in_store(&state, handle, body).await;
+    }
     if let Some(b) = body.base_ref.as_deref() {
         reject_user_ref(b)?;
     }
@@ -1743,18 +2050,21 @@ pub(crate) async fn create_review_value(
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let review2 = review.clone();
-    let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(
+    let out = tokio::task::spawn_blocking(move || {
+        capture_patchset_outcome(
             &store,
             &bus,
             &WorkTreeRoot::user_clone(&root),
             &review2,
             max,
-            false,
+            true,
         )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let (base, warnings) =
+        review_base_block_async(&state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
+    let ps = out.ps;
 
     Ok(serde_json::json!({
         "schema": SCHEMA,
@@ -1770,46 +2080,251 @@ pub(crate) async fn create_review_value(
         "latest_ps": ps.ps_number,
         "tip_sha": ps.tip_sha,
         "base_sha": ps.base_sha,
+        // RS-U6 — additive (README §12).
+        "base": base,
+        "warnings": warnings,
+        "minted": out.minted,
+        "kind": out.kind,
+        "base_tip_sha": out.base_tip_sha,
     }))
+}
+
+/// RS-U6 — [`create_review_value`] against a ready review store.
+async fn create_review_in_store(
+    state: &SharedState,
+    handle: crate::review_store::StoreHandle,
+    body: CreateReviewBody,
+) -> Result<serde_json::Value, ApiError> {
+    let member = store_member(state, &body.repo)?;
+    let nr = NewReview {
+        head_ref: body.head_ref.clone(),
+        base_input: body.base_ref.clone(),
+        ..NewReview::default()
+    };
+    let prepared = with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
+        ctx.prepare_new(&nr)
+    })
+    .await??;
+    let review = insert_store_review(
+        state,
+        &body.repo,
+        body.title.clone(),
+        &prepared,
+        body.head_ref.clone(),
+        body.session_id.clone(),
+    )
+    .await?;
+    let out = capture_new_in_store(state, handle, member, &review, &prepared).await?;
+    let base = base_out(
+        &EffectiveBase::Policy(prepared.policy.clone()),
+        prepared.policy.set_by.as_str(),
+        &prepared.status,
+        Some(&out.ps.base_sha),
+    );
+    Ok(serde_json::json!({
+        "schema": SCHEMA,
+        "id": review.id,
+        "repo": review.repo,
+        "title": review.title,
+        "base_ref": review.base_ref,
+        "head_ref": review.head_ref,
+        "session_id": review.session_id,
+        "state": review.state,
+        "created_at": review.created_at,
+        "updated_at": review.updated_at,
+        "latest_ps": out.ps.ps_number,
+        "tip_sha": out.ps.tip_sha,
+        "base_sha": out.ps.base_sha,
+        "base": base,
+        "warnings": prepared.warnings,
+        "minted": out.minted,
+        "kind": out.kind,
+        "base_tip_sha": out.base_tip_sha,
+    }))
+}
+
+/// Insert a store-mode review row with its resolved policy (one blocking
+/// trip: insert + policy + re-read).
+async fn insert_store_review(
+    state: &SharedState,
+    repo: &str,
+    title: Option<String>,
+    prepared: &crate::review_base::capture::Prepared,
+    head_ref: String,
+    session_id: Option<String>,
+) -> Result<ReviewRow, ApiError> {
+    let now = now_unix();
+    let repo_name = repo.to_string();
+    let base_ref = prepared.base_ref.clone();
+    let policy = prepared.policy.clone();
+    let status_json = prepared.status.to_json();
+    state
+        .store
+        .run_blocking(move |store| -> Result<ReviewRow, ApiError> {
+            let id = store.create_review(
+                &repo_name,
+                title.as_deref(),
+                &base_ref,
+                &head_ref,
+                session_id.as_deref(),
+                now,
+            )?;
+            store.set_review_base(
+                id,
+                policy.mode.as_str(),
+                policy.branch.as_deref(),
+                policy.member,
+                policy.set_by.as_str(),
+                Some(&status_json),
+            )?;
+            store
+                .get_review(id)?
+                .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "review vanished"))
+        })
+        .await
+}
+
+/// Capture ps1 of a just-inserted store-mode review; a failure deletes the
+/// row again so no half-created review survives.
+async fn capture_new_in_store(
+    state: &SharedState,
+    handle: crate::review_store::StoreHandle,
+    member: Member,
+    review: &ReviewRow,
+    prepared: &crate::review_base::capture::Prepared,
+) -> Result<CaptureOutcome, ApiError> {
+    let review2 = review.clone();
+    let eff = EffectiveBase::Policy(prepared.policy.clone());
+    let res = with_store_ctx(state, handle, member, move |ctx| {
+        ctx.capture(
+            &review2,
+            &eff,
+            &CaptureOpts {
+                force: true,
+                kind_hint: None,
+            },
+        )
+    })
+    .await?;
+    match res {
+        Ok(out) => Ok(out),
+        Err(e) => {
+            let id = review.id;
+            let _ = state
+                .store
+                .run_blocking(move |store| store.delete_review(id))
+                .await;
+            Err(e.into())
+        }
+    }
+}
+
+/// `POST /api/reviews/{id}/snapshot` body (all optional; an empty body is
+/// accepted). RS-U6 (README D13): a snapshot SKIPS an identical capture
+/// (the `(tip, merge-base)` pair is unchanged) by default — `force: true`
+/// keeps the old always-mint behaviour; `fetch: false` skips the network
+/// base/PR-head fetch a ready review store otherwise runs first.
+#[derive(Debug, Default, Deserialize)]
+pub struct SnapshotBody {
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub fetch: Option<bool>,
 }
 
 /// `POST /api/reviews/{id}/snapshot` — explicit capture. Loopback-only.
 pub async fn snapshot_review(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
+    raw: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
+    let opts: SnapshotBody = if raw.iter().all(u8::is_ascii_whitespace) {
+        SnapshotBody::default()
+    } else {
+        serde_json::from_slice(&raw)
+            .map_err(|e| ApiError::bad_request(format!("invalid snapshot body: {e}")))?
+    };
     let (review, repo, _) = require_review(&state, id).await?;
-    let store = state.store.clone();
-    let bus = state.bus.clone();
-    let root = repo.path.clone();
-    let max = state.review.max_patchsets;
-    let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(
-            &store,
-            &bus,
-            &WorkTreeRoot::user_clone(&root),
-            &review,
-            max,
-            false,
-        )
+    let body = if let Some(handle) = admit_store(&state, &review.repo).await? {
+        let network = opts.fetch.unwrap_or(true);
+        let forge_base_ref = match (network, pr_of_head(&review.head_ref)) {
+            (true, Some(n)) => {
+                forge_pr_base_ref(&state, repo, &handle, n, state.github.with_cli_token(None)).await
+            }
+            _ => None,
+        };
+        let member = store_member(&state, &review.repo)?;
+        let review2 = review.clone();
+        let rc = Recapture {
+            network,
+            force: opts.force,
+            forge_base_ref,
+            ..Recapture::default()
+        };
+        let r = with_store_ctx(&state, handle, member, move |ctx| {
+            ctx.recapture(&review2, &rc)
+        })
+        .await??;
+        let set_by = r
+            .effective
+            .policy()
+            .map(|p| p.set_by.as_str())
+            .unwrap_or("legacy");
+        let base = base_out(
+            &r.effective,
+            set_by,
+            &r.status,
+            Some(&r.outcome.ps.base_sha),
+        );
+        snapshot_json(id, &r.outcome, serde_json::json!(base), r.warnings)
+    } else {
+        let store = state.store.clone();
+        let bus = state.bus.clone();
+        let root = repo.path.clone();
+        let max = state.review.max_patchsets;
+        let review2 = review.clone();
+        let force = opts.force;
+        let out = tokio::task::spawn_blocking(move || {
+            capture_patchset_outcome(
+                &store,
+                &bus,
+                &WorkTreeRoot::user_clone(&root),
+                &review2,
+                max,
+                force,
+            )
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+        let (base, warnings) =
+            review_base_block_async(&state, &review, &repo.path, Some(out.ps.base_sha.clone()))
+                .await;
+        snapshot_json(id, &out, serde_json::json!(base), warnings)
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
+}
+
+fn snapshot_json(
+    id: i64,
+    out: &CaptureOutcome,
+    base: serde_json::Value,
+    warnings: Vec<BaseWarningOut>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": SCHEMA,
+        "review_id": id,
+        "ps_number": out.ps.ps_number,
+        "tip_sha": out.ps.tip_sha,
+        "base_sha": out.ps.base_sha,
+        "captured_at": out.ps.captured_at,
+        // RS-U6 (README D13) — `false` when the `(tip, merge-base)` pair
+        // was unchanged and nothing was minted (`force` overrides).
+        "minted": out.minted,
+        "kind": out.kind,
+        "base_tip_sha": out.base_tip_sha,
+        "base": base,
+        "warnings": warnings,
     })
-    .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
-            "schema": SCHEMA,
-            "review_id": id,
-            "ps_number": ps.ps_number,
-            "tip_sha": ps.tip_sha,
-            "base_sha": ps.base_sha,
-            "captured_at": ps.captured_at,
-            // RS-U10a — additive. An explicit snapshot always captures
-            // today (`skip_if_same = false`); RS-U6's pair dedup (D13)
-            // makes this `false` for an unchanged `(tip, merge-base)`.
-            "minted": true,
-        })),
-    ))
 }
 
 /// `PATCH /api/reviews/{id}` — title / state. Loopback-only.
@@ -2417,6 +2932,16 @@ pub async fn get_review(
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .unwrap_or(0);
+        // RS-U6 — additive per-patchset `kind` / `base_tip_sha` (NULL on a
+        // legacy patchset).
+        let n = ps.ps_number;
+        let fields = state
+            .store
+            .run_blocking(move |store| store.get_patchset_base(id, n))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         patchsets.push(serde_json::json!({
             "ps_number": ps.ps_number,
             "tip_sha": short_sha(&ps.tip_sha),
@@ -2425,6 +2950,8 @@ pub async fn get_review(
             "base_sha_full": ps.base_sha,
             "captured_at": ps.captured_at,
             "commit_count": count,
+            "kind": fields.kind,
+            "base_tip_sha": fields.base_tip_sha,
         }));
     }
     let latest_ps = patchsets
@@ -2458,6 +2985,16 @@ pub async fn get_review(
     });
     merge_pr_binding_and_report_fields(&mut body, &binding, &report);
     attach_live_pr_meta_reason(&mut body, state.github.has_credentials());
+    // RS-U6 — additive `base{…}` + `warnings[]` (README §12). Legacy rows
+    // are classified on read, never rewritten.
+    let latest_mb = patchsets
+        .last()
+        .and_then(|p| p.get("base_sha_full"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let (base, warnings) = review_base_block_async(&state, &review, &repo.path, latest_mb).await;
+    body["base"] = serde_json::json!(base);
+    body["warnings"] = serde_json::json!(warnings);
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
 }
 
@@ -2989,6 +3526,12 @@ pub struct CreateReviewPrBody {
     #[serde(default)]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub session_id: Option<String>,
+    /// RS-U6 — the PR's target branch as the CALLER knows it (an agent
+    /// that already holds `gh`): the resolution chain's `caller` rung,
+    /// below the forge API and above the assumed default branch.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub caller_base_ref: Option<String>,
     /// V76-R1c — the CLI `--gh-token-from-cli` path. The CLI runs
     /// `gh auth token` itself and sends the value here. Loopback-only,
     /// never persisted, never logged. Refused off loopback even if this
@@ -3026,15 +3569,19 @@ impl StartPrParams {
 }
 
 /// Reuse an existing PR-bound review: optionally reopen, fetch the PR ref,
-/// capture a patchset if the head moved (`skip_if_same`), stamp `pr_head_sha`.
-/// Returns 200 with `reused: true`. Lives inside [`create_review_pr_value`]
-/// so the async job path gets the same behaviour.
+/// capture a patchset if the `(tip, merge-base)` pair moved, stamp
+/// `pr_head_sha`. Returns 200 with `reused: true`. Lives inside
+/// [`create_review_pr_value`] so the async job path gets the same
+/// behaviour. RS-U6: with a ready review store the fetch (base branch + PR
+/// head) lands in the store, a PR retarget is followed when `set_by=auto`
+/// (D15), and `minted` is the pair dedup's own answer.
 async fn reuse_pr_review(
     state: &SharedState,
     repo: &RepoEntry,
     existing: ReviewRow,
     pr_number: u32,
     reopen: bool,
+    github: &crate::github::GithubClient,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let id = existing.id;
     if reopen && existing.state != "open" {
@@ -3067,6 +3614,48 @@ async fn reuse_pr_review(
         emit_review_changed(&state.bus, id, &existing.repo, "meta", false);
     }
 
+    if let Some(handle) = admit_store(state, &existing.repo).await? {
+        let review = state
+            .store
+            .run_blocking(move |store| {
+                store
+                    .get_review(id)?
+                    .ok_or_else(|| ApiError::not_found(format!("no such review: {id}")))
+            })
+            .await?;
+        let forge_base_ref = forge_pr_base_ref(
+            state,
+            repo,
+            &handle,
+            pr_number,
+            github.with_api_credential(None),
+        )
+        .await;
+        let member = store_member(state, &review.repo)?;
+        let review2 = review.clone();
+        let rc = Recapture {
+            network: true,
+            forge_base_ref,
+            ..Recapture::default()
+        };
+        let r = with_store_ctx(state, handle, member, move |ctx| {
+            ctx.recapture(&review2, &rc)
+        })
+        .await??;
+        let set_by = r
+            .effective
+            .policy()
+            .map(|p| p.set_by.as_str())
+            .unwrap_or("legacy");
+        let base = base_out(
+            &r.effective,
+            set_by,
+            &r.status,
+            Some(&r.outcome.ps.base_sha),
+        );
+        return reuse_envelope(state, id, pr_number, &r.outcome, base, r.warnings).await;
+    }
+
     let root_for_fetch = repo.path.clone();
     let (_target_ref, fetched_sha) = tokio::task::spawn_blocking(move || {
         crate::github::fetch_pr_ref(&root_for_fetch, pr_number)
@@ -3089,29 +3678,19 @@ async fn reuse_pr_review(
         })
         .await?;
 
-    // RS-U10a — `minted`: did this reuse capture a NEW patchset, or did
-    // `capture_patchset`'s same-tip skip hand back the existing latest?
-    // Derived from today's data (latest ps number before vs after); RS-U6
-    // replaces it with the `(tip, merge-base)` pair dedup's own answer.
-    let prior_latest_ps = state
-        .store
-        .run_blocking(move |store| store.latest_patchset(id))
-        .await?
-        .map(|p| p.ps_number);
-
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let review2 = review.clone();
-    let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(
+    let out = tokio::task::spawn_blocking(move || {
+        capture_patchset_outcome(
             &store,
             &bus,
             &WorkTreeRoot::user_clone(&root),
             &review2,
             max,
-            true,
+            false,
         )
     })
     .await
@@ -3131,7 +3710,20 @@ async fn reuse_pr_review(
             )
         })
         .await?;
+    let (base, warnings) =
+        review_base_block_async(state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
+    reuse_envelope(state, id, pr_number, &out, base, warnings).await
+}
 
+/// The 200 `reused: true` envelope (shared by both reuse paths).
+async fn reuse_envelope(
+    state: &SharedState,
+    id: i64,
+    pr_number: u32,
+    out: &CaptureOutcome,
+    base: ReviewBaseOut,
+    warnings: Vec<BaseWarningOut>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let (updated, binding) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -3161,17 +3753,21 @@ async fn reuse_pr_review(
             "state": updated.state,
             "created_at": updated.created_at,
             "updated_at": updated.updated_at,
-            "latest_ps": ps.ps_number,
-            "tip_sha": ps.tip_sha,
-            "base_sha": ps.base_sha,
+            "latest_ps": out.ps.ps_number,
+            "tip_sha": out.ps.tip_sha,
+            "base_sha": out.ps.base_sha,
             "pr_number": pr_number,
             "pr_repo_slug": binding.pr_repo_slug,
-            "pr_head_sha": fetched_sha,
+            "pr_head_sha": binding.pr_head_sha,
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": serde_json::Value::Null,
             "reused": true,
-            // RS-U10a — additive (see `prior_latest_ps` above).
-            "minted": prior_latest_ps != Some(ps.ps_number),
+            // RS-U6 (D13) — the `(tip, merge-base)` pair dedup's answer.
+            "minted": out.minted,
+            "kind": out.kind,
+            "base_tip_sha": out.base_tip_sha,
+            "base": base,
+            "warnings": warnings,
         }),
     ))
 }
@@ -3278,14 +3874,14 @@ pub(crate) async fn create_review_pr_value(
         .await?
     {
         if existing.state == "open" {
-            return reuse_pr_review(state, repo, existing, body.pr_number, false).await;
+            return reuse_pr_review(state, repo, existing, body.pr_number, false, &github).await;
         }
         match on_closed {
             None => {
                 return Ok((StatusCode::CONFLICT, review_closed_error_body(existing.id)));
             }
             Some(OnClosed::Reopen) => {
-                return reuse_pr_review(state, repo, existing, body.pr_number, true).await;
+                return reuse_pr_review(state, repo, existing, body.pr_number, true, &github).await;
             }
             Some(OnClosed::New) => {
                 // Fall through and mint a new review id. The closed row
@@ -3315,6 +3911,15 @@ pub(crate) async fn create_review_pr_value(
         Err(_) => (None, "unknown".to_string()),
     };
 
+    // RS-U6 — a ready review store: forge API first (the PR target rung,
+    // README §6), then the resolution chain + ONE fetch of base branch and
+    // PR head into the store, capture there. The user clone is never
+    // written.
+    if let Some(handle) = admit_store(state, &body.repo).await? {
+        return create_review_pr_in_store(state, body, job, handle, github, gh_repo, pr_repo_slug)
+            .await;
+    }
+
     // The git fetch is LOAD-BEARING — 400 on failure, before any row is
     // written (design doc §2 row 1). Deliberately NOT `?` through
     // `impl From<GithubError> for ApiError` (that impl maps `FetchFailed`
@@ -3338,15 +3943,14 @@ pub(crate) async fn create_review_pr_value(
 
     // V76-R1a — the base ladder (explicit > merge-base > local-default),
     // [`start_pr_base`]. Runs in the blocking pool: it spawns git (the
-    // remote-default fetch, the ahead/behind probe, the refusal hint's
-    // merge-base). The stale-mirror refusal (`urn:kb:errors:stale-mirror`,
-    // 409) surfaces from here; an explicit `--base` bypasses it.
+    // remote-default fetch, the ahead/behind probe). RS-U6: a stale local
+    // default branch is a `stale-mirror` WARNING now, never a 409.
     let root_for_base = repo.path.clone();
     let explicit_base = body.base_ref.clone();
     let head_for_base = fetched_sha.clone();
     let repo_for_base = body.repo.clone();
     let pr_for_base = body.pr_number;
-    let (base_ref, base_source) = tokio::task::spawn_blocking(move || {
+    let (base_ref, base_source, base_warnings) = tokio::task::spawn_blocking(move || {
         start_pr_base(
             &WorkTreeRoot::user_clone(&root_for_base),
             explicit_base.as_deref(),
@@ -3403,14 +4007,14 @@ pub(crate) async fn create_review_pr_value(
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let review2 = review.clone();
-    let ps = tokio::task::spawn_blocking(move || {
-        capture_patchset(
+    let out = tokio::task::spawn_blocking(move || {
+        capture_patchset_outcome(
             &store,
             &bus,
             &WorkTreeRoot::user_clone(&root),
             &review2,
             max,
-            false,
+            true,
         )
     })
     .await
@@ -3418,72 +4022,208 @@ pub(crate) async fn create_review_pr_value(
 
     crate::review_jobs::set_stage(&job, "enrich");
 
-    // Best-effort GitHub metadata enrichment (design doc §2 row 1 /
-    // §1.2's `pr_meta_json` shape). Only attempted when the origin
-    // resolved as GitHub; any failure (including "not GitHub") degrades to
-    // `pr_meta_json=null` + a reason — the review is already created either
-    // way.
     let had_credentials = github.has_credentials();
-    let (pr_meta_json, pr_meta_unavailable_reason) = if let Some(ref gh) = gh_repo {
-        match github.get_pull(&gh.owner, &gh.name, number as u64).await {
-            Ok(pull) => {
-                let checks = match github
-                    .list_checks(&gh.owner, &gh.name, &pull.head_sha)
-                    .await
-                {
-                    Ok(mut list) => {
-                        list.truncate(crate::github::MAX_CHECKS);
-                        list
-                    }
-                    // Checks are a SUB-part of the enrichment snapshot — a
-                    // failure here degrades to an empty checks array rather
-                    // than sinking the whole (already-successful) PR
-                    // metadata fetch.
-                    Err(_) => Vec::new(),
-                };
-                let meta = serde_json::json!({
-                    "title": pull.title,
-                    "author": pull.author,
-                    "head_ref": pull.head_ref,
-                    "base_ref": pull.base_ref,
-                    "draft": pull.draft,
-                    "state": pull.state,
-                    "merged": pull.merged,
-                    "labels": pull.labels,
-                    "merge_state_status": pull.merge_state_status,
-                    // V70-A3X — kept in lock-step with `review_sweep.rs`'s
-                    // own `meta` snapshot below.
-                    "body": pull.body,
-                    "checks": checks,
-                    // V76-R1a — the daemon-recorded base ladder answer
-                    // (NOT GitHub metadata; `review_sweep` carries it
-                    // forward across refreshes for that reason).
-                    "base_source": base_source.as_str(),
-                });
-                let meta_str = serde_json::to_string(&meta)
-                    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                (Some(meta_str), None)
-            }
-            Err(e) => (None, Some(e.to_pr_meta_unavailable(had_credentials))),
-        }
-    } else {
-        (
+    let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
+        &github,
+        gh_repo.as_ref(),
+        None,
+        number,
+        had_credentials,
+        base_source.as_str(),
+    )
+    .await?;
+    let (base, mut warnings) =
+        review_base_block_async(state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
+    warnings.extend(base_warnings);
+    bind_pr_and_respond(
+        state,
+        &review,
+        number,
+        &pr_repo_slug,
+        &fetched_sha,
+        pr_meta_json,
+        pr_meta_unavailable_reason,
+        base_source.as_str(),
+        &out,
+        serde_json::json!(base),
+        warnings,
+    )
+    .await
+}
+
+/// RS-U6 — [`create_review_pr_value`] against a ready review store.
+#[allow(clippy::too_many_arguments)]
+async fn create_review_pr_in_store(
+    state: &SharedState,
+    body: CreateReviewPrBody,
+    job: Option<crate::review_jobs::JobHandle>,
+    handle: crate::review_store::StoreHandle,
+    github: crate::github::GithubClient,
+    gh_repo: Option<crate::github::GithubRepo>,
+    pr_repo_slug: String,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let number = body.pr_number;
+    crate::review_jobs::set_stage(&job, "base");
+    let github = github_with_gh_cli(state, github, &handle, &body.repo).await;
+    let had_credentials = github.has_credentials();
+    let pull = match &gh_repo {
+        Some(gh) => Some(github.get_pull(&gh.owner, &gh.name, number as u64).await),
+        None => None,
+    };
+    let (forge_base_ref, pr_head_branch) = match &pull {
+        Some(Ok(p)) => (Some(p.base_ref.clone()), Some(p.head_ref.clone())),
+        _ => (None, None),
+    };
+    let member = store_member(state, &body.repo)?;
+    let nr = NewReview {
+        pr: Some(number),
+        base_input: body.base_ref.clone(),
+        forge_base_ref,
+        caller_base_ref: body.caller_base_ref.clone(),
+        pr_head_branch,
+        ..NewReview::default()
+    };
+    let prepared = with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
+        ctx.prepare_new(&nr)
+    })
+    .await??;
+    let review = insert_store_review(
+        state,
+        &body.repo,
+        body.title.clone(),
+        &prepared,
+        pr_ref(number),
+        body.session_id.clone(),
+    )
+    .await?;
+    crate::review_jobs::set_stage(&job, "patchset");
+    let out = capture_new_in_store(state, handle, member, &review, &prepared).await?;
+    crate::review_jobs::set_stage(&job, "enrich");
+    let base_source = prepared.policy.legacy_base_source();
+    let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
+        &github,
+        gh_repo.as_ref(),
+        pull,
+        number,
+        had_credentials,
+        base_source,
+    )
+    .await?;
+    let base = base_out(
+        &EffectiveBase::Policy(prepared.policy.clone()),
+        prepared.policy.set_by.as_str(),
+        &prepared.status,
+        Some(&out.ps.base_sha),
+    );
+    bind_pr_and_respond(
+        state,
+        &review,
+        number,
+        &pr_repo_slug,
+        &prepared.head_sha,
+        pr_meta_json,
+        pr_meta_unavailable_reason,
+        base_source,
+        &out,
+        serde_json::json!(base),
+        prepared.warnings.clone(),
+    )
+    .await
+}
+
+/// Best-effort GitHub metadata enrichment (design doc §2 row 1 / §1.2's
+/// `pr_meta_json` shape). Only attempted when the origin resolved as
+/// GitHub; any failure (including "not GitHub") degrades to
+/// `pr_meta_json=null` + a reason — the review is already created either
+/// way. `pull` = an already-made `get_pull` answer (RS-U6: the store path
+/// reads the API BEFORE base resolution and reuses it here).
+async fn pr_enrichment(
+    github: &crate::github::GithubClient,
+    gh_repo: Option<&crate::github::GithubRepo>,
+    pull: Option<Result<crate::github::PrDetailOut, crate::github::GithubApiError>>,
+    number: u32,
+    had_credentials: bool,
+    base_source: &str,
+) -> Result<(Option<String>, Option<crate::github::PrMetaUnavailable>), ApiError> {
+    let Some(gh) = gh_repo else {
+        return Ok((
             None,
             Some(crate::github::PrMetaUnavailable::not_found(
                 "repo origin is not a recognized GitHub remote; metadata enrichment skipped",
             )),
-        )
+        ));
     };
+    let pull = match pull {
+        Some(p) => p,
+        None => github.get_pull(&gh.owner, &gh.name, number as u64).await,
+    };
+    match pull {
+        Ok(pull) => {
+            let checks = match github
+                .list_checks(&gh.owner, &gh.name, &pull.head_sha)
+                .await
+            {
+                Ok(mut list) => {
+                    list.truncate(crate::github::MAX_CHECKS);
+                    list
+                }
+                // Checks are a SUB-part of the enrichment snapshot — a
+                // failure here degrades to an empty checks array rather
+                // than sinking the whole (already-successful) PR
+                // metadata fetch.
+                Err(_) => Vec::new(),
+            };
+            let meta = serde_json::json!({
+                "title": pull.title,
+                "author": pull.author,
+                "head_ref": pull.head_ref,
+                "base_ref": pull.base_ref,
+                "draft": pull.draft,
+                "state": pull.state,
+                "merged": pull.merged,
+                "labels": pull.labels,
+                "merge_state_status": pull.merge_state_status,
+                // V70-A3X — kept in lock-step with `review_sweep.rs`'s
+                // own `meta` snapshot below.
+                "body": pull.body,
+                "checks": checks,
+                // V76-R1a — the daemon-recorded base ladder answer
+                // (NOT GitHub metadata; `review_sweep` carries it
+                // forward across refreshes for that reason).
+                "base_source": base_source,
+            });
+            let meta_str = serde_json::to_string(&meta)
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok((Some(meta_str), None))
+        }
+        Err(e) => Ok((None, Some(e.to_pr_meta_unavailable(had_credentials)))),
+    }
+}
 
-    // `pr_head_sha` is always the LOCALLY fetched ref's sha (guaranteed
-    // available — the fetch above is load-bearing) rather than solely
-    // GitHub's own reported `head.sha`: they are the same commit by
-    // construction (`refs/pull/<n>/head` IS the PR head), and this way the
-    // column is never null just because metadata enrichment degraded.
+/// Bind the PR to a just-created review and compose the 201 envelope.
+/// `pr_head_sha` is always the FETCHED ref's sha (guaranteed available —
+/// the fetch is load-bearing) rather than solely GitHub's own reported
+/// `head.sha`: they are the same commit by construction, and this way the
+/// column is never null just because metadata enrichment degraded.
+#[allow(clippy::too_many_arguments)]
+async fn bind_pr_and_respond(
+    state: &SharedState,
+    review: &ReviewRow,
+    number: u32,
+    pr_repo_slug: &str,
+    fetched_sha: &str,
+    pr_meta_json: Option<String>,
+    pr_meta_unavailable_reason: Option<crate::github::PrMetaUnavailable>,
+    base_source: &str,
+    out: &CaptureOutcome,
+    base: serde_json::Value,
+    warnings: Vec<BaseWarningOut>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let now = now_unix();
     let review_id = review.id;
     let pr_number_c = number as i64;
-    let pr_repo_slug_c = pr_repo_slug.clone();
-    let fetched_sha_c = fetched_sha.clone();
+    let pr_repo_slug_c = pr_repo_slug.to_string();
+    let fetched_sha_c = fetched_sha.to_string();
     let pr_meta_json_c = pr_meta_json.clone();
     state
         .store
@@ -3518,20 +4258,24 @@ pub(crate) async fn create_review_pr_value(
             "state": review.state,
             "created_at": review.created_at,
             "updated_at": review.updated_at,
-            "latest_ps": ps.ps_number,
-            "tip_sha": ps.tip_sha,
-            "base_sha": ps.base_sha,
+            "latest_ps": out.ps.ps_number,
+            "tip_sha": out.ps.tip_sha,
+            "base_sha": out.ps.base_sha,
             // V76-R1a — which rung of the base ladder produced
             // `base_ref`/`base_sha` (`explicit` > `merge-base` >
-            // `local-default`).
-            "base_source": base_source.as_str(),
+            // `local-default`; RS-U6 maps the new sources onto these).
+            "base_source": base_source,
             "pr_number": number,
             "pr_repo_slug": pr_repo_slug,
             "pr_head_sha": fetched_sha,
             "pr_meta": pr_meta_value,
             "pr_meta_unavailable_reason": pr_meta_unavailable_reason,
-            // RS-U10a — additive: a fresh review always captures ps1.
-            "minted": true,
+            // A fresh review always captures ps1.
+            "minted": out.minted,
+            "kind": out.kind,
+            "base_tip_sha": out.base_tip_sha,
+            "base": base,
+            "warnings": warnings,
         }),
     ))
 }
@@ -4754,7 +5498,7 @@ mod tests {
         lgit(dir, &["commit", "-q", "-m", "c1"]);
         let head = lgit_out(dir, &["rev-parse", "HEAD"]);
 
-        let (base_ref, source) =
+        let (base_ref, source, _) =
             start_pr_base(&WorkTreeRoot::user_clone(dir), None, &head, "r", 1).unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);
@@ -4764,8 +5508,9 @@ mod tests {
     fn start_pr_base_against_a_slightly_ahead_origin_uses_the_merge_base_rung() {
         let (_r, _b, _c, dir, base_sha, pr_sha, remote_tip) = ladder_fixture(7, 2);
 
-        let (base_ref, source) =
+        let (base_ref, source, warnings) =
             start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(source, BaseSource::MergeBase);
         assert_eq!(base_ref, "refs/remotes/origin/main");
         // The fetch really refreshed the remote-tracking ref…
@@ -4785,24 +5530,24 @@ mod tests {
     }
 
     #[test]
-    fn start_pr_base_refuses_a_stale_mirror_with_the_retry_hint() {
+    fn start_pr_base_warns_on_a_stale_mirror_instead_of_refusing() {
+        // RS-U6 — the old 409 is gone: the base already comes from the
+        // freshly fetched remote tip, so a stale LOCAL default branch is a
+        // `stale-mirror` warning, never a refusal.
         let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
-        let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+        let (_r, _b, _c, dir, _base_sha, pr_sha, _tip) = ladder_fixture(7, extra as u32);
 
-        let err =
-            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap_err();
-        assert_eq!(err.problem_type(), Some(ERR_STALE_MIRROR));
-        assert_eq!(err.status_code(), StatusCode::CONFLICT);
-        let msg = err.message().to_string();
-        // The ahead/behind numbers…
-        assert!(msg.contains("0 ahead"), "{msg}");
-        assert!(msg.contains(&format!("{extra} behind")), "{msg}");
-        // …and the exact retry command with the merge-base sha.
+        let (base_ref, source, warnings) =
+            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap();
+        assert_eq!(base_ref, "refs/remotes/origin/main");
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, crate::review_base::warn::STALE_MIRROR);
         assert!(
-            msg.contains(&format!(
-                "kb-code review start-pr --repo widget --pr 7 --base {base_sha}"
-            )),
-            "{msg}"
+            warnings[0]
+                .message
+                .contains(&format!("{extra} commits behind")),
+            "{warnings:?}"
         );
     }
 
@@ -4811,7 +5556,7 @@ mod tests {
         let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
         let (_r, _b, _c, dir, _base, pr_sha, _tip) = ladder_fixture(7, extra as u32);
 
-        let (base_ref, source) = start_pr_base(
+        let (base_ref, source, _) = start_pr_base(
             &WorkTreeRoot::user_clone(&dir),
             Some("main"),
             &pr_sha,
@@ -4847,7 +5592,7 @@ mod tests {
             &["remote", "add", "origin", bare_dir.to_str().unwrap()],
         );
 
-        let (base_ref, source) =
+        let (base_ref, source, _) =
             start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &head, "r", 1).unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);

@@ -422,6 +422,7 @@ pub mod rekey;
 pub mod repo_state;
 pub mod resolve;
 pub mod review_analytics;
+pub mod review_base;
 pub mod review_comments;
 pub mod review_distill;
 /// V73-K1 — `kbc-review/1`: the review document, its refs, cards, lint and
@@ -1073,13 +1074,9 @@ pub async fn bind_and_spawn(
     // `repo.head_moved` on the bus; capture work is spawn_blocking and
     // deliberately OUT of the mirror/sink hot loop).
     let review_cfg = config.review.clone();
-    let _auto_capture = reviews::spawn_auto_capture_worker(
-        store.clone(),
-        bus.clone(),
-        config.repos.clone(),
-        review_cfg.max_patchsets,
-        review_cfg.patchset_capture,
-    );
+    // RS-U6 — the auto-capture worker needs the review stores (built below,
+    // before `config.repos` moves); its spawn follows them.
+    let auto_capture_repos = config.repos.clone();
     // V3.2-B1 — behavioral incremental worker (subscribes to
     // `repo.head_moved`; spawn_blocking off the mirror hot loop).
     let doclens_cfg = config.doclens.clone();
@@ -1132,6 +1129,14 @@ pub async fn bind_and_spawn(
         &config.repos,
         &repo_ids,
     ));
+    let _auto_capture = reviews::spawn_auto_capture_worker(
+        store.clone(),
+        bus.clone(),
+        auto_capture_repos,
+        review_cfg.max_patchsets,
+        review_cfg.patchset_capture,
+        review_stores.clone(),
+    );
     let state = Arc::new(AppState {
         version: version(),
         started_at,
@@ -1435,12 +1440,19 @@ pub(crate) async fn build_state_for_test(
     let scopes = config.scopes.clone();
     let scip_cfg = config.scip.clone();
     let review_cfg = config.review.clone();
+    let review_stores = Arc::new(review_store::ReviewStores::new(
+        &config_for_security.review,
+        &paths.state,
+        &config_for_security.repos,
+        &review_store_repo_ids,
+    ));
     let _auto_capture = reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),
         config.repos.clone(),
         review_cfg.max_patchsets,
         review_cfg.patchset_capture,
+        review_stores.clone(),
     );
     let doclens_cfg = config.doclens.clone();
     let behavioral_cfg = config.behavioral.clone();
@@ -1513,12 +1525,7 @@ pub(crate) async fn build_state_for_test(
         review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
         // RS-U3 (review store) — built from the same config; the fixture
         // never spawns the boot job (tests drive `boot::run_boot` directly).
-        review_stores: Arc::new(review_store::ReviewStores::new(
-            &config_for_security.review,
-            &paths.state,
-            &config_for_security.repos,
-            &review_store_repo_ids,
-        )),
+        review_stores,
     }))
 }
 
