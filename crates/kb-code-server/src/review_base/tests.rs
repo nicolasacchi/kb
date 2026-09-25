@@ -1275,3 +1275,157 @@ fn auto_capture_never_fetches_the_forge() {
         "auto-capture never fetched the forge"
     );
 }
+
+// =====================================================================
+// route glue: start-pr / snapshot / show against a ready store
+// =====================================================================
+
+async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// The HTTP-facing flows on a READY store: `start-pr` (no forge API → the
+/// default branch, loudly assumed), an unchanged `snapshot` (minted:false),
+/// a PR push + `snapshot` (kind push), `GET /api/reviews/{id}` carrying
+/// `base{}`/`warnings[]`/per-patchset `kind` — and the member clone's refs
+/// are byte-identical before and after (user-clone invariance).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_and_snapshot_routes_capture_in_the_store_not_the_clone() {
+    use axum::extract::{Path as AxumPath, State};
+    use axum::response::IntoResponse;
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    let tip0 = fx.push_pr(&fx.m1, &["a.rs"], "v1");
+    let cfg = crate::config::KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: REPO.into(),
+            path: fx.clone.clone(),
+        }],
+        kb_daemon: crate::config::KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        },
+        transcripts: crate::config::TranscriptsSection {
+            enabled: false,
+            ..crate::config::TranscriptsSection::default()
+        },
+        ..crate::config::KbCodeConfig::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "kb-code");
+    let state = crate::build_state_for_test(cfg, paths).await.unwrap();
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let id = match st.review_stores.register_repo(&st.store, REPO, None) {
+            Registration::Member { store_id, .. } => store_id,
+            other => panic!("registration: {other:?}"),
+        };
+        st.review_stores.seed(&st.store, id, false).expect("seed");
+    })
+    .await
+    .unwrap();
+    let before = fx.clone_refs();
+
+    let body: crate::reviews::CreateReviewPrBody =
+        serde_json::from_value(serde_json::json!({"repo": REPO, "pr_number": PR})).unwrap();
+    let (status, created) = crate::reviews::create_review_pr_value(&state, body, None, None)
+        .await
+        .unwrap_or_else(|e| panic!("start-pr: {e:?}"));
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+    assert_eq!(created["tip_sha"], tip0.as_str(), "{created}");
+    assert_eq!(created["base_sha"], fx.m1.as_str(), "{created}");
+    assert_eq!(created["pr_head_sha"], tip0.as_str());
+    assert_eq!(created["minted"], true);
+    assert_eq!(created["kind"], "initial");
+    assert_eq!(created["base_ref"], "refs/remotes/origin/main");
+    assert_eq!(created["base_source"], "merge-base");
+    assert_eq!(created["base"]["mode"], "track", "{created}");
+    assert_eq!(created["base"]["branch"], "main");
+    assert_eq!(created["base"]["source"], "default-assumed");
+    assert_eq!(created["base"]["state"], "ok");
+    assert_eq!(created["base"]["fetched_via"], "local");
+    assert!(
+        created["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == warn::PR_TARGET_ASSUMED),
+        "{created}"
+    );
+    let id = created["id"].as_i64().unwrap();
+
+    let snap = |force: bool| {
+        let state = state.clone();
+        async move {
+            let raw = if force {
+                axum::body::Bytes::from_static(br#"{"force": true}"#)
+            } else {
+                axum::body::Bytes::new()
+            };
+            let resp = crate::reviews::snapshot_review(State(state), AxumPath(id), raw)
+                .await
+                .unwrap_or_else(|e| panic!("snapshot: {e:?}"))
+                .into_response();
+            body_json(resp).await
+        }
+    };
+    let s = snap(false).await;
+    assert_eq!(
+        (s["minted"].as_bool(), s["ps_number"].as_i64()),
+        (Some(false), Some(1)),
+        "{s}"
+    );
+    fx.advance_main(1, "r");
+    let s = snap(false).await;
+    assert_eq!(
+        s["minted"], false,
+        "a base branch merely advancing never mints: {s}"
+    );
+    git(&fx.author, &["checkout", "-q", "pr"]);
+    let tip1 = commit(&fx.author, "b.rs", "b");
+    git(
+        &fx.author,
+        &[
+            "push",
+            "-q",
+            "-f",
+            "origin",
+            &format!("HEAD:refs/pull/{PR}/head"),
+        ],
+    );
+    git(&fx.author, &["checkout", "-q", "main"]);
+    let s = snap(false).await;
+    assert_eq!(
+        (s["minted"].as_bool(), s["kind"].as_str()),
+        (Some(true), Some("push")),
+        "{s}"
+    );
+    assert_eq!(s["tip_sha"], tip1.as_str());
+    let s = snap(true).await;
+    assert_eq!(s["minted"], true, "--force always mints: {s}");
+
+    let resp = crate::reviews::get_review(State(state.clone()), AxumPath(id))
+        .await
+        .unwrap_or_else(|e| panic!("show: {e:?}"))
+        .into_response();
+    let show = body_json(resp).await;
+    assert_eq!(show["base"]["mode"], "track", "{show}");
+    let kinds: Vec<&str> = show["patchsets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["kind"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(kinds, vec!["initial", "push", "push"], "{show}");
+    assert_eq!(
+        show["pr_head_sha"],
+        tip1.as_str(),
+        "pr_head_sha synced on fetch"
+    );
+
+    assert_eq!(fx.clone_refs(), before, "the user clone was never written");
+}
