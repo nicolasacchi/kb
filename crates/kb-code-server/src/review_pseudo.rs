@@ -401,7 +401,7 @@ pub async fn load_set(
     ps_param: Option<&str>,
 ) -> Result<PseudoSet, ApiError> {
     let (_review, repo, _repo_id) = crate::reviews::require_review(state, id).await?;
-    let repo_root = crate::git::roots::GitCtx::resolve_entry(&state.store, &repo).await;
+    let repo_root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
     let owned = ps_param.map(str::to_string);
     let (ps, binding, doc, findings) = state
         .store

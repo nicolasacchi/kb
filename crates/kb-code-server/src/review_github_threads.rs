@@ -62,7 +62,7 @@ pub async fn github_threads_route(
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (review, repo, _repo_id) = require_review(&state, id).await?;
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     // 2026-08-31 incident (store.rs module doc): two separate blocking-pool
     // trips (not merged) so the pr_number 400 still short-circuits BEFORE
     // the latest_patchset lookup, byte-identical to the pre-fix ordering.

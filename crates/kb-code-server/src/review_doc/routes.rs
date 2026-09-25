@@ -336,7 +336,7 @@ pub async fn load_doc_out(
         )
     })?;
 
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let inputs = repo_inputs(&git_ctx, &ps).await?;
     let out = build_doc_out(
         state,
@@ -620,7 +620,7 @@ pub async fn lint_review_doc(
             ps.ps_number
         )));
     };
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let inputs = repo_inputs(&git_ctx, &ps).await?;
     let tier = Tier::parse(&row.tier).unwrap_or(Tier::Minimal);
     let out = lint_document(

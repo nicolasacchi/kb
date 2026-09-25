@@ -515,7 +515,7 @@ pub async fn turns_for_hunk(
         .await?;
 
     let repo_root = repo.path.clone();
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let repo_name = repo.name.clone();
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();

@@ -296,7 +296,7 @@ pub async fn export_github_route(
             _ => (None, Some("no_verdict_set")),
         };
 
-    let git_ctx = GitCtx::resolve_entry(&state.store, &repo).await;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut comments: Vec<serde_json::Value> = Vec::new();
     let mut general_comments: Vec<serde_json::Value> = Vec::new();
@@ -474,7 +474,7 @@ pub async fn publish_finding_route(
             Ok((target_ps, row))
         })
         .await?;
-    let repo_root = GitCtx::resolve_entry(&state.store, &repo).await;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let view = state
         .store
         .run_blocking(move |store| {
