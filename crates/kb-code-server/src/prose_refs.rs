@@ -671,8 +671,11 @@ pub fn extract(text: &str) -> FieldRefs {
     // family; edge trim peels sentence punctuation and emphasis markers.
     let mut claimed: Vec<(usize, usize)> = Vec::new();
     let bytes = text.as_bytes();
+    // ASCII-only: `(b as char)` on a UTF-8 continuation byte is a Latin-1
+    // char, and 0x85/0xA0 (NEL/NBSP) count as whitespace — `à` is C3 A0 —
+    // which split tokens mid-character and panicked the slice below.
     let is_delim = |b: u8| -> bool {
-        (b as char).is_whitespace()
+        (b.is_ascii() && (b as char).is_whitespace())
             || matches!(
                 b,
                 b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'"' | b'\'' | b'`' | b';'
