@@ -1522,6 +1522,16 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/repos/{name}/store/export-legacy",
             post(crate::review_store::legacy_refs::export_legacy_route),
+        // RS-U9 — store-wide GC and the scheduled-maintenance manual
+        // trigger, the SAME loopback-only + audited posture as the store/
+        // credential mutations directly above (README §5.4/§8).
+        .route(
+            "/repos/{name}/store/gc",
+            post(crate::review_store::maint::store_gc_route),
+        )
+        .route(
+            "/repos/{name}/store/maintain",
+            post(crate::review_store::maint::store_maintain_route),
         )
         .layer(from_fn_with_state(
             auth.clone(),
