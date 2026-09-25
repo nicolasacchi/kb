@@ -592,9 +592,20 @@ fn delete_ref_by_name(repo_root: &dyn GitRoot, refname: &str) -> Result<(), Revi
         .map_err(ReviewGitError::Spawn)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+        if stderr.contains("cannot lock ref") {
+            // RS-U5 review fix (nit) — unlike "ref never existed" (the
+            // other three tolerated cases below), this means something
+            // else is HOLDING the ref right now: real contention, not a
+            // benign no-op. Still treated as success (best-effort delete,
+            // same as always), but no longer silently.
+            tracing::warn!(
+                refname = refname,
+                "kb-code: delete_ref_by_name: cannot lock ref (contention)"
+            );
+            return Ok(());
+        }
         if stderr.contains("unable to resolve")
             || stderr.contains("no such")
-            || stderr.contains("cannot lock ref")
             || stderr.contains("doesn't exist")
         {
             return Ok(());
@@ -624,6 +635,19 @@ pub fn delete_kbc_ref(repo_root: &dyn GitRoot, parsed: KbcRef) -> Result<(), Rev
 /// `git for-each-ref` over the two daemon-owned prefixes. Prefixes are
 /// hardcoded — not caller text. Each name is re-parsed via [`parse_kbc_ref`]
 /// before it can be deleted.
+///
+/// RS-U5 review fix — this is the WORK-TREE-scoped lister (the pre-store
+/// legacy path, `list_review_refs`/`gc_review_refs`'s fallback branch).
+/// `parse_kbc_ref` now also recognises `prm/<n>`, `ps<n>-base` and
+/// `hint/<repo_id>/<branch>` — all STORE-ONLY shapes (README §5.1/§5.3)
+/// that must stay exactly as invisible to a work-tree scan as an
+/// unparseable name always was, or the fallback path (required to be
+/// byte-identical to its pre-RS-U5 behaviour) would start reporting AND
+/// deleting a `-base` ref that happens to sit in `refs/kbc/review/`'s
+/// prefix match (the other two shapes structurally can't: neither
+/// `refs/kbc/prm/`/`refs/kbc/hint/` is a prefix of the two globs below).
+/// Only `Pr`/`Patchset` — the two shapes this function ever produced
+/// before the ref family grew — are kept.
 pub fn list_kbc_refs(
     repo_root: &dyn GitRoot,
 ) -> Result<Vec<(KbcRef, String, String)>, ReviewGitError> {
@@ -647,6 +671,9 @@ pub fn list_kbc_refs(
         let Some(parsed) = parse_kbc_ref(name) else {
             continue;
         };
+        if !matches!(parsed, KbcRef::Pr { .. } | KbcRef::Patchset { .. }) {
+            continue;
+        }
         let refname = parsed.as_refname();
         rows.push((parsed, refname, sha.trim().to_string()));
         if rows.len() > MAX_KBC_REFS {
@@ -1224,26 +1251,42 @@ pub enum PrRefScope {
     /// no remaining review in `review.repo` still binds that PR (a `--new`
     /// successor keeps the ref).
     PerRepo,
-    /// A ready store: `refs/kbc/pr/<n>` is never touched here. "Don't
-    /// delete" is always the safe direction — the store-wide GC
-    /// (`review_store::gc::plan`/`apply`) computes the keep-set across
-    /// EVERY member and cleans up what this call correctly declined to.
+    /// A ready store: the store's OWN (shared) `refs/kbc/pr/<n>` is never
+    /// touched here. "Don't delete" is always the safe direction — the
+    /// store-wide GC (`review_store::gc::{attribute, delete_candidates,
+    /// apply}`) computes the keep-set across EVERY member and cleans up
+    /// what this call correctly declined to.
     StoreWide,
 }
 
 /// Delete every patchset ref for a review (best-effort), then the row.
 /// V76-R1b: also drop `refs/kbc/pr/<n>` when no remaining review in this
-/// repo still binds that PR (a `--new` successor keeps the PR ref) — only
-/// under [`PrRefScope::PerRepo`]; see that type's doc for why a shared
-/// store skips it. RS-U5: `repo_root` may now be a
-/// [`crate::git::roots::StoreRoot`], and every patchset's `-base` pin
-/// (`KbcRef::PatchsetBase`, store-only, README §5.4/§8) is deleted
-/// alongside its `ps<n>` ref — a harmless no-op on a work tree, which
-/// never carries one.
+/// repo still binds that PR (a `--new` successor keeps the PR ref).
+///
+/// RS-U5: `repo_root` may now be a [`crate::git::roots::StoreRoot`], and
+/// every patchset's `-base` pin (`KbcRef::PatchsetBase`, store-only,
+/// README §5.4/§8) is deleted alongside its `ps<n>` ref — a harmless
+/// no-op on a work tree, which never carries one. The store's shared
+/// `refs/kbc/pr/<n>` is only ever deleted under [`PrRefScope::PerRepo`]
+/// (see that type's doc).
+///
+/// `legacy_work_tree` — RS-U5 review fix, temporary until U6 makes
+/// `capture_patchset` store-aware: capture ALWAYS writes `ps<n>` into the
+/// work tree today, regardless of the review's store readiness, and
+/// `github.rs`'s PR-head fetch likewise still writes `refs/kbc/pr/<n>`
+/// there. So a store-primary delete that only touched the store would
+/// leak the work-tree copies forever (unreachable by any list/gc route
+/// once the store is ready). Pass `Some` whenever `repo_root` is the
+/// store; refs are then ALSO deleted from the work tree — the PR ref's
+/// work-tree copy is always safe to clean up on `remaining == 0`
+/// regardless of `pr_ref_scope`, since a work-tree ref is inherently
+/// this-repo-only, never shared across members. Pass `None` when
+/// `repo_root` already IS the work tree (nothing to duplicate).
 pub fn delete_review_with_refs(
     store: &Store,
     bus: &EventBus,
     repo_root: &dyn GitRoot,
+    legacy_work_tree: Option<&WorkTreeRoot>,
     review: &ReviewRow,
     pr_ref_scope: PrRefScope,
 ) -> Result<(), ReviewGitError> {
@@ -1257,6 +1300,16 @@ pub fn delete_review_with_refs(
                 ps_number: ps.ps_number,
             },
         );
+        if let Some(wt) = legacy_work_tree {
+            let _ = delete_patchset_ref(wt, review.id, ps.ps_number);
+            let _ = delete_kbc_ref(
+                wt,
+                KbcRef::PatchsetBase {
+                    review_id: review.id,
+                    ps_number: ps.ps_number,
+                },
+            );
+        }
     }
     let pr_number = store
         .get_review_pr_binding(review.id)
@@ -1269,13 +1322,18 @@ pub fn delete_review_with_refs(
             status: -1,
             stderr: e.to_string(),
         })?;
-    if pr_ref_scope == PrRefScope::PerRepo {
-        if let Some(n) = pr_number {
+    if let Some(n) = pr_number {
+        if n > 0 && n <= u32::MAX as i64 {
             let remaining = store
                 .count_reviews_by_pr_binding(&review.repo, n)
                 .unwrap_or(0);
-            if remaining == 0 && n > 0 && n <= u32::MAX as i64 {
-                let _ = delete_pr_ref(repo_root, n as u32);
+            if remaining == 0 {
+                if pr_ref_scope == PrRefScope::PerRepo {
+                    let _ = delete_pr_ref(repo_root, n as u32);
+                }
+                if let Some(wt) = legacy_work_tree {
+                    let _ = delete_pr_ref(wt, n as u32);
+                }
             }
         }
     }
@@ -1291,10 +1349,15 @@ pub fn delete_review_with_refs(
 /// otherwise — never a user-clone write when the store is ready),
 /// memoized so N reviews of the same repo share one store lookup. Also
 /// drops the patchset's `-base` pin ([`KbcRef::PatchsetBase`]) alongside
-/// its `ps<n>` ref — a harmless no-op on a work tree, which never carries
-/// one (README §5.4).
+/// its `ps<n>` ref. RS-U5 review fix: when the store is primary, the SAME
+/// refs are also deleted from the work tree — `capture_patchset` still
+/// always writes `ps<n>` there until U6 lands (see
+/// [`delete_review_with_refs`]'s `legacy_work_tree` doc for the full
+/// rationale) — and each review's delete loop runs under that store's
+/// `ops` lock (`review_stores`), so a concurrent capture/GC can't race it.
 pub fn gc_patchsets(
     store: &Store,
+    review_stores: &crate::review_store::ReviewStores,
     repos: &[RepoEntry],
     review_id: Option<i64>,
     max_patchsets: u32,
@@ -1323,6 +1386,15 @@ pub fn gc_patchsets(
         let ctx = ctx_cache.entry(repo.name.clone()).or_insert_with(|| {
             GitCtx::for_repo(store, &repo.name, WorkTreeRoot::user_clone(&repo.path))
         });
+        let store_primary = !ctx.is_fallback();
+        // One ops-lock acquisition per review's delete loop below — cheap
+        // (`blocking_lock`, we're already on a blocking thread) and holds
+        // for exactly the span it protects.
+        let ops_lock = store_primary
+            .then(|| store.store_for_repo_name(&repo.name).ok().flatten())
+            .flatten()
+            .map(|row| review_stores.ops_lock(row.id));
+        let _ops_guard = ops_lock.as_ref().map(|l| l.blocking_lock());
         while store.patchset_count(review.id).unwrap_or(0) as u32 > max {
             let Some(old) = store.oldest_patchset(review.id).ok().flatten() else {
                 break;
@@ -1335,6 +1407,16 @@ pub fn gc_patchsets(
                     ps_number: old.ps_number,
                 },
             );
+            if store_primary {
+                let _ = delete_patchset_ref(ctx.work_tree(), review.id, old.ps_number);
+                let _ = delete_kbc_ref(
+                    ctx.work_tree(),
+                    KbcRef::PatchsetBase {
+                        review_id: review.id,
+                        ps_number: old.ps_number,
+                    },
+                );
+            }
             if store
                 .delete_patchset(review.id, old.ps_number)
                 .unwrap_or(false)
@@ -1896,20 +1978,39 @@ pub async fn delete_review(
         return Ok(review_verdict_published_error(id));
     }
     let store = state.store.clone();
+    let review_stores = state.review_stores.clone();
     let bus = state.bus.clone();
     let repo_name = review.repo.clone();
     let root = repo.path.clone();
     tokio::task::spawn_blocking(move || {
-        // RS-U5 — the store, once ready (never a user-clone write when it
-        // is); the work tree otherwise, exactly as before. `GitCtx` is the
-        // ONE place that resolution runs (its own doc, RS-U4).
+        // RS-U5 — the store, once ready (never a user-clone-ONLY write when
+        // it is); the work tree otherwise, exactly as before. `GitCtx` is
+        // the ONE place that resolution runs (its own doc, RS-U4).
         let ctx = GitCtx::for_repo(&store, &repo_name, WorkTreeRoot::user_clone(&root));
-        let scope = if ctx.is_fallback() {
-            PrRefScope::PerRepo
-        } else {
+        let store_primary = !ctx.is_fallback();
+        let scope = if store_primary {
             PrRefScope::StoreWide
+        } else {
+            PrRefScope::PerRepo
         };
-        delete_review_with_refs(&store, &bus, ctx.primary(), &review, scope)
+        // RS-U5 review fix — hold the store's `ops` lock across the whole
+        // delete when the store is primary: a capture/GC racing this
+        // review's deletion must not interleave with it (same discipline
+        // as the store-wide GC route).
+        let ops_lock = store_primary
+            .then(|| store.store_for_repo_name(&repo_name).ok().flatten())
+            .flatten()
+            .map(|row| review_stores.ops_lock(row.id));
+        let _ops_guard = ops_lock.as_ref().map(|l| l.blocking_lock());
+        let legacy_work_tree = store_primary.then(|| ctx.work_tree().clone());
+        delete_review_with_refs(
+            &store,
+            &bus,
+            ctx.primary(),
+            legacy_work_tree.as_ref(),
+            &review,
+            scope,
+        )
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -2086,12 +2187,14 @@ pub async fn gc_reviews(
     Json(body): Json<GcBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let store = state.store.clone();
+    let review_stores = state.review_stores.clone();
     let repos = state.repos.clone();
     let max = state.review.max_patchsets;
-    let deleted =
-        tokio::task::spawn_blocking(move || gc_patchsets(&store, &repos, body.review_id, max))
-            .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let deleted = tokio::task::spawn_blocking(move || {
+        gc_patchsets(&store, &review_stores, &repos, body.review_id, max)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -3975,11 +4078,12 @@ fn attribute_kbc_refs(
             }
             // RS-U5 — `prm/<n>`, `ps<n>-base` and `hint/<repo_id>/<branch>`
             // are store-only namespaces (README §5.1/§5.3): a user clone
-            // never carries them, and `list_kbc_refs`'s work-tree listing
-            // queries only the `refs/kbc/pr/`/`refs/kbc/review/` prefixes,
-            // so this arm exists for match-exhaustiveness, not because it
-            // fires. The store-wide GC (`review_store::gc`) attributes
-            // these shapes for real, against the whole store.
+            // never carries them, and `list_kbc_refs` (this function's ONLY
+            // caller) explicitly drops these three shapes even when its
+            // `refs/kbc/review/` prefix scan happens to match one — see its
+            // own doc. This arm exists for match-exhaustiveness, never
+            // because it fires; the store-wide GC (`review_store::gc`)
+            // attributes these shapes for real, against the whole store.
             KbcRef::Prm { .. } | KbcRef::PatchsetBase { .. } | KbcRef::Hint { .. } => {
                 (None, "orphan")
             }
@@ -3995,29 +4099,23 @@ fn attribute_kbc_refs(
     out
 }
 
-/// The store row, its raw `refs/kbc/*` listing, and the store-wide
-/// [`crate::review_store::gc::GcKeepSet`] for `repo_name`'s store. `ctx`
-/// must NOT be a fallback (every caller checks `ctx.is_fallback()` first).
-/// Synchronous — call from `spawn_blocking`.
-#[allow(clippy::type_complexity)]
+/// The raw `refs/kbc/*` listing and the store-wide
+/// [`crate::review_store::gc::GcKeepSet`] for `row`'s store. `ctx` must
+/// NOT be a fallback (every caller checks `ctx.is_fallback()` first). The
+/// caller already resolved `row` (RS-U5 review fix: so it can take the
+/// store's `ops` lock, keyed on `row.id`, BEFORE calling this — see
+/// [`gc_review_refs_inner`]). Synchronous — call from `spawn_blocking`.
+///
+/// RS-U5 review fix (BLOCKER 1) — `crate::review_store::gc::keep_set` is
+/// DB-only (`row.id` + `Store::store_members`), never resolving member
+/// repo NAMEs by filtering the live `[[repos]]` config: a member whose
+/// `repo_stores` row (and reviews) still exist but has since left config
+/// must never be dropped from the keep-set. See `keep_set`'s own doc.
 fn store_refs_and_keep_set(
     state: &SharedState,
-    repo_name: &str,
+    row: &crate::store::ReviewStoreRow,
     ctx: &GitCtx,
-) -> Result<
-    (
-        crate::store::ReviewStoreRow,
-        Vec<(String, String)>,
-        crate::review_store::gc::GcKeepSet,
-    ),
-    ApiError,
-> {
-    let row = state.store.store_for_repo_name(repo_name)?.ok_or_else(|| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "review store row vanished mid-request",
-        )
-    })?;
+) -> Result<(Vec<(String, String)>, crate::review_store::gc::GcKeepSet), ApiError> {
     let git = state.review_stores.git().ok_or_else(|| {
         ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4030,15 +4128,24 @@ fn store_refs_and_keep_set(
     let refs = crate::review_store::seed::list_refs(git, store_root.git_dir(), &["refs/kbc/"])
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let member_ids = state.store.store_members(row.id)?;
-    let member_names: Vec<String> = state
-        .review_stores
-        .repos()
-        .iter()
-        .filter(|r| member_ids.contains(&r.id))
-        .map(|r| r.name.clone())
-        .collect();
-    let keep = crate::review_store::gc::keep_set(&state.store, &member_names, &member_ids)?;
-    Ok((row, refs, keep))
+    let keep = crate::review_store::gc::keep_set(&state.store, row.id, &member_ids)?;
+    Ok((refs, keep))
+}
+
+/// The store row for `repo_name`, or a `500` naming the DB desync (a
+/// `GitCtx` that just resolved this repo's store as `ready` implies a
+/// `review_stores` row exists — a `None` here means it vanished between
+/// the two reads, extremely unlikely but never silently swallowed).
+fn require_store_row(
+    state: &SharedState,
+    repo_name: &str,
+) -> Result<crate::store::ReviewStoreRow, ApiError> {
+    state.store.store_for_repo_name(repo_name)?.ok_or_else(|| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "review store row vanished mid-request",
+        )
+    })
 }
 
 /// The attributed rows, as [`list_review_refs`] and [`gc_review_refs`]'s
@@ -4072,7 +4179,8 @@ fn review_refs_view(
             })
             .collect());
     }
-    let (_row, refs, keep) = store_refs_and_keep_set(state, repo_name, &ctx)?;
+    let row = require_store_row(state, repo_name)?;
+    let (refs, keep) = store_refs_and_keep_set(state, &row, &ctx)?;
     let attributed = crate::review_store::gc::attribute(&refs, &keep);
     Ok(attributed
         .into_iter()
@@ -4113,9 +4221,17 @@ pub async fn list_review_refs(
 }
 
 /// Synchronous body of [`gc_review_refs`]. RS-U5: store-wide (README §5.4)
-/// when the repo's store is `ready` — the apply step runs under the
-/// store's `ops` lock and never writes into a user clone; the legacy
-/// per-repo work-tree GC otherwise, unchanged.
+/// when the repo's store is `ready`; the legacy per-repo work-tree GC
+/// otherwise, unchanged.
+///
+/// RS-U5 review fix (BLOCKER 2) — the store's `ops` lock is taken BEFORE
+/// [`store_refs_and_keep_set`] (the list + keep-set gather) and held
+/// through classification AND `apply`: a capture minting a patchset ref,
+/// or `start-pr` binding a new PR, racing the scan must not invalidate a
+/// decision this pass already made (old-value guards in `apply`'s
+/// transaction protect the WRITE, but nothing protected the READ this
+/// pass's DELETE decision was based on until now). A dry run takes the
+/// lock too — a torn snapshot would make for a dishonest report.
 fn gc_review_refs_inner(
     state: &SharedState,
     repo_name: &str,
@@ -4142,7 +4258,14 @@ fn gc_review_refs_inner(
         let n = would.len();
         return Ok((would, n));
     }
-    let (row, refs, keep) = store_refs_and_keep_set(state, repo_name, &ctx)?;
+    let row = require_store_row(state, repo_name)?;
+    // Held for the WHOLE list -> keep-set -> classify -> apply sequence —
+    // a blocking acquire is safe and expected here: we are already
+    // running inside `spawn_blocking` (`seed::verify_connectivity` does
+    // the same).
+    let ops = state.review_stores.ops_lock(row.id);
+    let _guard = ops.blocking_lock();
+    let (refs, keep) = store_refs_and_keep_set(state, &row, &ctx)?;
     let attributed = crate::review_store::gc::attribute(&refs, &keep);
     let delete = crate::review_store::gc::delete_candidates(&attributed);
     let would: Vec<String> = delete.iter().map(|c| c.refname.clone()).collect();
@@ -4156,11 +4279,6 @@ fn gc_review_refs_inner(
         let store_root = ctx
             .store_root()
             .expect("caller already checked ctx is not a fallback");
-        // Under the store's `ops` lock (README §5.4/§4.2) — a blocking
-        // acquire is safe and expected here: we are already running inside
-        // `spawn_blocking` (`seed::verify_connectivity` does the same).
-        let ops = state.review_stores.ops_lock(row.id);
-        let _guard = ops.blocking_lock();
         crate::review_store::gc::apply(git, store_root.git_dir(), &delete)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
@@ -4437,6 +4555,57 @@ mod tests {
         assert_eq!(out[1].review_id, Some(9));
         assert_eq!(out[2].status, "orphan");
         assert_eq!(out[2].review_id, None);
+    }
+
+    /// RS-U5 review fix — the fallback (pre-store) path must stay
+    /// byte-identical: a `-base` ref (store-only, README §5.4/§8, never
+    /// legitimately written into a work tree) must stay INVISIBLE to
+    /// `list_kbc_refs`, exactly as it was before `parse_kbc_ref` learned to
+    /// recognise the shape — not newly surfaced and deleted as an orphan.
+    #[test]
+    fn list_kbc_refs_never_surfaces_store_only_shapes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        fn git(dir: &Path, args: &[&str]) {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "user.email", "t@e.com"]);
+        git(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let sha = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        git(dir, &["update-ref", &patchset_ref(3, 1), &sha]);
+        git(dir, &["update-ref", &patchset_base_ref(3, 1), &sha]);
+        let listed = list_kbc_refs(&WorkTreeRoot::user_clone(dir)).unwrap();
+        let names: Vec<String> = listed.iter().map(|(_, name, _)| name.clone()).collect();
+        assert!(names.contains(&patchset_ref(3, 1)), "{names:?}");
+        assert!(
+            !names.contains(&patchset_base_ref(3, 1)),
+            "a -base ref must stay invisible to the work-tree lister: {names:?}"
+        );
     }
 
     // --- V76-R1a: start_pr_base (the base ladder) ---------------------------

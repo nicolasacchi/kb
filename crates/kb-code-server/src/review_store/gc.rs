@@ -77,29 +77,34 @@ pub struct GcKeepSet {
     pub registered_members: BTreeSet<i64>,
 }
 
-/// Gather [`GcKeepSet`] for a store whose members are `member_names` (repo
-/// NAMEs — `reviews.repo` is a name, not `repos.id`, the G2 two-hop join)
-/// and whose CURRENTLY REGISTERED member ids are `registered_member_ids`.
+/// Gather [`GcKeepSet`] for store `store_id`, whose CURRENTLY REGISTERED
+/// member ids are `registered_member_ids`.
+///
+/// RS-U5 review fix (BLOCKER 1) — this is DB-only, via
+/// [`Store::review_ids_for_store`]/[`Store::pr_bound_reviews_for_store`]'s
+/// `repo_stores -> repos.name -> reviews.repo` join: it must NEVER resolve
+/// member repo NAMEs by filtering a live `[[repos]] config list against
+/// `registered_member_ids`, because a member whose `repo_stores` row (and
+/// reviews) still exist but has since left config would then be silently
+/// excluded — and store-wide GC would delete its still-live review refs as
+/// "orphan". `registered_member_ids` itself stays DB-only too (the
+/// caller's `Store::store_members(store_id)`), so this function never
+/// touches config at all.
 pub fn keep_set(
     store: &Store,
-    member_names: &[String],
+    store_id: i64,
     registered_member_ids: &[i64],
 ) -> StoreResult<GcKeepSet> {
-    let mut review_ids = BTreeSet::new();
-    for (id, _repo, _state, _base_ref, _base_branch) in store.reviews_for_repos(member_names)? {
-        review_ids.insert(id);
-    }
+    let review_ids: BTreeSet<i64> = store.review_ids_for_store(store_id)?.into_iter().collect();
     let mut open_pr_numbers = BTreeSet::new();
     let mut open_pr_review = BTreeMap::new();
-    for name in member_names {
-        for (review_id, pr_number, state) in store.list_pr_bound_reviews(name)? {
-            if state != "open" || !(1..=i64::from(u32::MAX)).contains(&pr_number) {
-                continue;
-            }
-            let n = pr_number as u32;
-            open_pr_numbers.insert(n);
-            open_pr_review.entry(n).or_insert(review_id);
+    for (review_id, pr_number, state) in store.pr_bound_reviews_for_store(store_id)? {
+        if state != "open" || !(1..=i64::from(u32::MAX)).contains(&pr_number) {
+            continue;
         }
+        let n = pr_number as u32;
+        open_pr_numbers.insert(n);
+        open_pr_review.entry(n).or_insert(review_id);
     }
     Ok(GcKeepSet {
         review_ids,
@@ -354,5 +359,55 @@ mod tests {
         ];
         let attributed = attribute(&refs, &keep);
         assert!(attributed.is_empty(), "{attributed:?}");
+    }
+
+    /// RS-U5 review fix (BLOCKER 1), DB-only regression: `keep_set` must
+    /// never depend on a live `[[repos]]` config list. Model "member B
+    /// removed from config" by never mentioning config at all — two repos,
+    /// both members of one store via `repo_stores`, each with a review;
+    /// `keep_set` must see BOTH review ids from the DB alone, and the
+    /// resulting GC decision must keep both members' refs.
+    #[test]
+    fn keep_set_sees_a_members_reviews_even_when_absent_from_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&tmp.path().join("kbc.sqlite")).unwrap();
+        let a = store.upsert_repo("widgets-a", "/a").unwrap();
+        let b = store.upsert_repo("widgets-b", "/b").unwrap();
+        let store_id = store
+            .create_review_store(
+                "22222222-2222-4222-8222-222222222222",
+                "github.com/acme/widgets",
+                "/store.git",
+                None,
+                None,
+                1,
+            )
+            .unwrap();
+        store.add_repo_to_store(a, store_id).unwrap();
+        store.add_repo_to_store(b, store_id).unwrap();
+        let review_a = store
+            .create_review("widgets-a", None, "main", "x", None, 1)
+            .unwrap();
+        let review_b = store
+            .create_review("widgets-b", None, "main", "y", None, 1)
+            .unwrap();
+        let member_ids = store.store_members(store_id).unwrap();
+        let keep = keep_set(&store, store_id, &member_ids).unwrap();
+        assert!(keep.review_ids.contains(&review_a), "{:?}", keep.review_ids);
+        assert!(
+            keep.review_ids.contains(&review_b),
+            "member B's review must be in the keep-set even though nothing \
+             here ever named B via config: {:?}",
+            keep.review_ids
+        );
+        let refs = vec![
+            ("a".repeat(40), format!("refs/kbc/review/{review_a}/ps1")),
+            ("b".repeat(40), format!("refs/kbc/review/{review_b}/ps1")),
+        ];
+        let attributed = attribute(&refs, &keep);
+        assert!(
+            attributed.iter().all(|r| r.status == "bound"),
+            "{attributed:?}"
+        );
     }
 }

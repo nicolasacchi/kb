@@ -511,6 +511,50 @@ impl Store {
         Ok(out)
     }
 
+    /// Every review id belonging to ANY member of store `store_id` — the
+    /// two-hop join `repo_stores -> repos.name -> reviews.repo` (G2, DB
+    /// only). RS-U5 review fix: this is deliberately independent of which
+    /// repos are configured in THIS process's `[[repos]]` — a member whose
+    /// `repo_stores` row still exists (and still has reviews) but is no
+    /// longer configured (removed, renamed) must never be silently dropped
+    /// from a keep-set, or store-wide GC would delete its still-live
+    /// review refs.
+    pub fn review_ids_for_store(&self, store_id: i64) -> Result<Vec<i64>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r.id FROM reviews r
+             JOIN repos p ON p.name = r.repo
+             JOIN repo_stores rs ON rs.repo_id = p.id
+             WHERE rs.store_id = ?1
+             ORDER BY r.id",
+        )?;
+        let rows = stmt
+            .query_map(params![store_id], |row| row.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// `(review_id, pr_number, state)` for every review with a PR binding
+    /// belonging to any member of store `store_id` — same DB-only two-hop
+    /// join as [`Self::review_ids_for_store`], for the same reason.
+    pub fn pr_bound_reviews_for_store(&self, store_id: i64) -> Result<Vec<(i64, i64, String)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.pr_number, r.state FROM reviews r
+             JOIN repos p ON p.name = r.repo
+             JOIN repo_stores rs ON rs.repo_id = p.id
+             WHERE rs.store_id = ?1 AND r.pr_number IS NOT NULL
+             ORDER BY CASE WHEN r.state = 'open' THEN 0 ELSE 1 END,
+                      r.updated_at DESC, r.id DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![store_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Record a store's canonical base URL and the ladder rung it came from.
     /// NEVER changes `store_key` (README §11: a disagreeing `base_url` is a
     /// doctor error, never a re-key) — callers check the key first.
