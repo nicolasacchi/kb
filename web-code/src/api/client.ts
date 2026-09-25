@@ -2722,3 +2722,20 @@ export function fetchLaneFacts(
 export function fetchLanesSummary(repo: string): Promise<LanesSummaryOut> {
   return getJson<LanesSummaryOut>("/api/lanes/summary", { repo });
 }
+
+// ── RS-U11 ── the review store + fetch-credential cards (own import
+// statement, same PRR-U3/PRR-U56 precedent above — this unit's diff never
+// touches the shared `import type {...}` block at the top of the file).
+import type { ReviewCredentialsOut, ReviewStoreCard } from "./types";
+
+/// `GET /api/repos/{name}/store` — `kbc-store/1` (`review_store/routes.rs`).
+/// Bearer: carries no secret and no repo content.
+export function fetchReviewStoreCard(repo: string): Promise<ReviewStoreCard> {
+  return getJson<ReviewStoreCard>(`/api/repos/${encodeURIComponent(repo)}/store`, {});
+}
+
+/// `GET /api/repos/{name}/credentials` — `kbc-credentials/1`. The fetch
+/// credential as last RESOLVED; never secret bytes, never runs `gh`.
+export function fetchReviewCredentials(repo: string): Promise<ReviewCredentialsOut> {
+  return getJson<ReviewCredentialsOut>(`/api/repos/${encodeURIComponent(repo)}/credentials`, {});
+}

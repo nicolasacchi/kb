@@ -79,6 +79,8 @@ const review: ReviewDetailPr = {
   schema: "review/1", id: reviewId, repo, title: "Review", base_ref: "main", head_ref: "feature-x",
   session_id: null, state: "open", created_at: 1, updated_at: 1, patchsets: [],
   verdict: null, verdict_stale: false,
+  base: { mode: null, branch: null, set_by: "legacy", source: null, state: null, merge_base: null, fetched_at: null, last_fetch: null, fetched_via: null },
+  warnings: [],
 };
 
 function reportMarkup(report: ReviewReport) {

@@ -207,11 +207,10 @@ describe("boundPrNumbers / unreviewedPrs / reviewByPrNumber", () => {
 });
 
 describe("buildCreateReviewPrInput", () => {
-  it("carries repo, pr_number, and base_ref straight from the PR row", () => {
+  it("carries repo + pr_number only — RS-U11 stopped sending base_ref, the daemon resolves it", () => {
     expect(buildCreateReviewPrInput("acme/widgets", pr({ number: 7, base_ref: "develop" }))).toEqual({
       repo: "acme/widgets",
       pr_number: 7,
-      base_ref: "develop",
     });
   });
 });

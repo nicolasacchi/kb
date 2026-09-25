@@ -244,6 +244,28 @@ export const queryClient = new QueryClient({
 //                                          file's SECTION expands, `useReview
 //                                          Impact`'s own doc), default
 //                                          `staleTime` under the same prefix.
+//
+// ── RS-U11 ── the review store + fetch-credential cards ────────────────────
+//   ["review-store", repo]                 GET /api/repos/{name}/store
+//                                          (`hooks/useReviewStore.ts`) — the
+//                                          review header's `forge-unverified`
+//                                          chip and the Home dashboard's
+//                                          "Review store" section share this
+//                                          ONE cached read. `repo` at
+//                                          position [1] means the generic
+//                                          per-repo bridge below
+//                                          (`queryKey[1] === repo`) already
+//                                          invalidates it on `mirror.updated`/
+//                                          `repo.head_moved` — a harmless
+//                                          bonus refetch, not the real
+//                                          freshness mechanism (no store/
+//                                          credential-specific SSE event
+//                                          exists yet; default `staleTime`
+//                                          otherwise holds it until the next
+//                                          repo-scoped event or a reload).
+//   ["review-credentials", repo]           GET /api/repos/{name}/credentials
+//                                          — same bridge coverage, same
+//                                          caveat, as the row above.
 
 // --- W4.5 / Wave E — the live-mirror registry ------------------------------
 //

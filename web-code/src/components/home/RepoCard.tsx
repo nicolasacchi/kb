@@ -12,6 +12,7 @@ import { splitPath } from "../../lib/workingSet";
 import MetaLine from "../MetaLine";
 import AttributionCard from "../history/AttributionCard";
 import { BranchAhead, BranchBehind } from "../history/BranchAheadBehind";
+import { ReviewCredentialSection, ReviewStoreSection } from "./ReviewStoreSection";
 
 const RECENT_FILES_LIMIT = 4;
 const CONTINUE_READING_LIMIT = 3;
@@ -216,6 +217,12 @@ export default function RepoCard({ repo }: RepoCardProps) {
           <p className="kbc-home-card__muted">No other branches.</p>
         )}
       </section>
+
+      {/* RS-U11 — README §12's "Settings" cards; web-code has no
+          dedicated Settings page, so they ride this per-repo dashboard
+          card (`ReviewStoreSection.tsx`'s own module doc). */}
+      <ReviewStoreSection repo={repo.name} />
+      <ReviewCredentialSection repo={repo.name} />
 
       {/* V80-R1 fix — the six footer links are a `MetaLine` (its own
           "·"-separated caption row) INSIDE the `<footer>` that used to wrap
