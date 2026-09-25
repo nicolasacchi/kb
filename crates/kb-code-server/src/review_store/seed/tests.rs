@@ -1036,6 +1036,15 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
     let before = store_refs(&dir);
     assert!(before.contains(&patchset_ref(r1, 1)), "{before:?}");
     assert!(before.contains(&patchset_ref(r2, 1)), "{before:?}");
+    // `review_in` pinned `patchset_ref(r1, 1)`/`(r2, 1)` in each CLONE as
+    // fixture setup (so seeding's member import had something to pick up)
+    // — those refs stay in the clones forever; GC never reaches a clone at
+    // all. The invariance check below is therefore "unchanged", not
+    // "absent": snapshot both clones NOW, before GC runs.
+    let clone_refs_before: Vec<String> = [&e.fx.one, &e.fx.two]
+        .into_iter()
+        .map(|c| git(c, &["for-each-ref", "--format=%(refname) %(objectname)"]))
+        .collect();
 
     // r1 "goes away" (deleted through some other path, refs left behind —
     // exactly the shape GC exists to reconcile).
@@ -1065,11 +1074,14 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
     let (i1, i2) = (e.ids["widgets-01"], e.ids["widgets-02"]);
     assert!(after.contains(&format!("refs/remotes/work-{i1}/main")));
     assert!(after.contains(&format!("refs/remotes/work-{i2}/main")));
-    // Neither member clone was ever written to by the GC.
-    for clone in [&e.fx.one, &e.fx.two] {
-        assert!(
-            !git(clone, &["for-each-ref", "--format=%(refname)"]).contains(&patchset_ref(r1, 1))
+    // Neither member clone was written to by the GC: byte-identical
+    // for-each-ref before and after (invariance, not absence — see above).
+    for (clone, want) in [&e.fx.one, &e.fx.two].into_iter().zip(&clone_refs_before) {
+        let got = git(
+            clone,
+            &["for-each-ref", "--format=%(refname) %(objectname)"],
         );
+        assert_eq!(&got, want, "{clone:?} was written to by the GC");
     }
 }
 
